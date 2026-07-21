@@ -18,6 +18,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { toast } from "sonner";
 import type {
   HostInstallResult,
   IHostManagement,
@@ -78,12 +79,23 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => authMock,
 }));
 
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    message: vi.fn(),
+  },
+}));
+
 interface FakeDesktopMenu {
   handler: ((payload: DesktopMenuCommandPayload) => void) | null;
   onCommand(handler: (payload: DesktopMenuCommandPayload) => void): {
     dispose(): void;
   };
-  emit(command: DesktopMenuCommandPayload["command"]): void;
+  emit(
+    command: DesktopMenuCommandPayload["command"],
+    hostUpdateVersion: string | null,
+  ): void;
 }
 
 interface FakeDesktopWindows {
@@ -115,8 +127,8 @@ function createMenu(): FakeDesktopMenu {
         },
       };
     },
-    emit(command) {
-      this.handler?.({ command, windowId: "window-1" });
+    emit(command, hostUpdateVersion) {
+      this.handler?.({ command, windowId: "window-1", hostUpdateVersion });
     },
   };
 }
@@ -176,6 +188,7 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       fileDrops: {
         resolveDroppedFilePaths: () => Promise.resolve([]),
         copyDroppedFilePaths: (paths) => Promise.resolve(paths),
+        readNativeClipboardFilePaths: () => Promise.resolve([]),
       },
       tokenStore: {
         get: () => Promise.resolve(null),
@@ -333,6 +346,8 @@ describe("<MenuCommandListener />", () => {
     navigateMock.mockClear();
     authMock.signIn.mockClear();
     authMock.signOut.mockClear();
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.error).mockClear();
     routerState.pathname = "/";
     resetStores();
     useDesktopDialogStore.getState().close();
@@ -359,12 +374,12 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("app.openSettings");
-      menu.emit("app.signIn");
-      menu.emit("app.openLogs");
-      menu.emit("app.aboutDetails");
-      menu.emit("epic.openInNewWindow");
-      menu.emit("epic.newWindow");
+      menu.emit("app.openSettings", null);
+      menu.emit("app.signIn", null);
+      menu.emit("app.openLogs", null);
+      menu.emit("app.aboutDetails", null);
+      menu.emit("epic.openInNewWindow", null);
+      menu.emit("epic.newWindow", null);
     });
 
     expect(navigateMock).toHaveBeenCalledWith({ to: "/settings/general" });
@@ -381,13 +396,13 @@ describe("<MenuCommandListener />", () => {
     renderMenuCommandListener(menu);
 
     act(() => {
-      menu.emit("app.reportIssue");
+      menu.emit("app.reportIssue", null);
     });
     expect(useDesktopDialogStore.getState().activeDialog).toBeNull();
 
     useDesktopDialogStore.setState({ reportIssueAvailable: true });
     act(() => {
-      menu.emit("app.reportIssue");
+      menu.emit("app.reportIssue", null);
     });
     expect(useDesktopDialogStore.getState().activeDialog).toBe("report-issue");
   });
@@ -405,7 +420,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("window.closeWindow");
+      menu.emit("window.closeWindow", null);
     });
 
     expect(runnerHost.windows.requestClose).toHaveBeenCalledWith("window-1");
@@ -421,9 +436,9 @@ describe("<MenuCommandListener />", () => {
     renderMenuCommandListener(menu);
 
     act(() => {
-      menu.emit("view.findInPage");
-      menu.emit("view.findNext");
-      menu.emit("view.findPrevious");
+      menu.emit("view.findInPage", null);
+      menu.emit("view.findNext", null);
+      menu.emit("view.findPrevious", null);
     });
 
     expect(
@@ -453,7 +468,7 @@ describe("<MenuCommandListener />", () => {
     renderMenuCommandListener(menu);
 
     act(() => {
-      menu.emit("view.findInPage");
+      menu.emit("view.findInPage", null);
     });
 
     const blankUi =
@@ -478,8 +493,8 @@ describe("<MenuCommandListener />", () => {
     renderMenuCommandListener(menu);
 
     act(() => {
-      menu.emit("view.findInPage");
-      menu.emit("view.findNext");
+      menu.emit("view.findInPage", null);
+      menu.emit("view.findNext", null);
     });
 
     expect(
@@ -504,7 +519,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("epic.closeTab");
+      menu.emit("epic.closeTab", null);
     });
 
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
@@ -528,7 +543,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("epic.closeTab");
+      menu.emit("epic.closeTab", null);
     });
 
     expect(
@@ -615,13 +630,19 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("host.installUpdate");
+      menu.emit("host.installUpdate", "1.4.2");
     });
 
     await waitFor(() => {
       expect(updateHost).toHaveBeenCalledTimes(1);
     });
-    expect(updateHost).toHaveBeenCalledWith({ onProgress: null });
+    // The version the native menu/tray row displayed is pinned as
+    // `expectedVersion`, so the shell installs exactly what the user clicked
+    // even if the release channel changed in the meantime.
+    expect(updateHost).toHaveBeenCalledWith({
+      expectedVersion: "1.4.2",
+      onProgress: null,
+    });
   });
 
   it("opens a confirmation dialog for host.restart and only respawns after confirm", async () => {
@@ -640,7 +661,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("host.restart");
+      menu.emit("host.restart", null);
     });
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
@@ -649,6 +670,153 @@ describe("<MenuCommandListener />", () => {
 
     fireEvent.click(screen.getByTestId("confirm-action"));
 
+    await waitFor(() => {
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("closes the restart dialog optimistically on confirm - before the up-to-~180s respawn settles - and surfaces a later rejection via toast", async () => {
+    const menu = createMenu();
+    let rejectRespawn: (error: Error) => void = () => undefined;
+    const requestHostRespawn = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectRespawn = reject;
+        }),
+    );
+    const runnerHost = Object.assign(createRunnerHost(menu), {
+      requestHostRespawn,
+    });
+
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      menu.emit("host.restart", null);
+    });
+
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // Closes synchronously at confirm time - this surface's mutation can
+    // legitimately run up to ~180s, so the dialog must not wait for it.
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    await waitFor(() => {
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      rejectRespawn(new Error("host did not become reachable after restart"));
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't restart host",
+        expect.objectContaining({
+          description: "host did not become reachable after restart",
+        }),
+      );
+    });
+  });
+
+  it("does not reopen the restart dialog while a restart is still pending, but does once it has settled", async () => {
+    const menu = createMenu();
+    let resolveRespawn: () => void = () => undefined;
+    const requestHostRespawn = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRespawn = resolve;
+        }),
+    );
+    const runnerHost = Object.assign(createRunnerHost(menu), {
+      requestHostRespawn,
+    });
+
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      menu.emit("host.restart", null);
+    });
+    await screen.findByTestId("confirm-destructive-dialog");
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    await waitFor(() => {
+      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+    });
+
+    // The mutation is still pending here - a repeated command must not
+    // reopen the dialog, since it would mount with isPending=true and lock
+    // Cancel/Esc for the rest of the mutation's lifetime.
+    act(() => {
+      menu.emit("host.restart", null);
+    });
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      resolveRespawn();
+    });
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Host restart requested");
+    });
+
+    // Once settled, the guard is scoped to "pending", not permanent - the
+    // command must be able to reopen the dialog again.
+    act(() => {
+      menu.emit("host.restart", null);
+    });
+    await screen.findByTestId("confirm-destructive-dialog");
+    expect(requestHostRespawn).toHaveBeenCalledTimes(1);
+  });
+
+  // Review P2: the reopen guard must close the race BEFORE any render/effect
+  // runs - a native command queued in the same turn as confirm (no `await`
+  // between them) must still be blocked. Reading `queryClient.isMutating`
+  // (which reflects `mutate()` synchronously) rather than a ref synced from
+  // an effect is what closes this specific window.
+  it("does not reopen the restart dialog for a duplicate command delivered in the same turn as confirm", async () => {
+    const menu = createMenu();
+    const requestHostRespawn = vi.fn(() => new Promise<void>(() => {}));
+    const runnerHost = Object.assign(createRunnerHost(menu), {
+      requestHostRespawn,
+    });
+
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      menu.emit("host.restart", null);
+    });
+    await screen.findByTestId("confirm-destructive-dialog");
+
+    act(() => {
+      // No `await`/`waitFor` between the confirm click and the duplicate
+      // command - both happen inside the same `act()` batch, before React
+      // has re-rendered or run any effect.
+      fireEvent.click(screen.getByTestId("confirm-action"));
+      menu.emit("host.restart", null);
+    });
+
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    // `mutate()` invokes the mutation function on a later microtask, so
+    // assert the eventual call count rather than immediately after the
+    // synchronous act() block above.
     await waitFor(() => {
       expect(requestHostRespawn).toHaveBeenCalledTimes(1);
     });
@@ -694,7 +862,7 @@ describe("<MenuCommandListener />", () => {
     );
 
     act(() => {
-      menu.emit("epic.closeTab");
+      menu.emit("epic.closeTab", null);
     });
 
     expect(useLandingDraftStore.getState().drafts).toEqual([]);

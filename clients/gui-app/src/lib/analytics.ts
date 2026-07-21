@@ -127,6 +127,7 @@ export type AnalyticsProvider =
 export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
+  | "allowPrereleaseUpdates"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "codeFontFamily"
@@ -799,6 +800,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>([
 ]);
 
 const ANALYTICS_SETTINGS = new Set<string>([
+  "allowPrereleaseUpdates",
   "artifactIconColorMode",
   "artifactIconColors",
   "codeFontFamily",

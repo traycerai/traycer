@@ -668,7 +668,7 @@ describe("WorktreesList delete flow", () => {
   it("disables delete for an in-use worktree", () => {
     renderDefault();
     const busyButton = screen.getByRole("button", {
-      name: /in use by an active chat or agent/i,
+      name: /in use by an active agent/i,
     });
     expect(busyButton.hasAttribute("disabled")).toBe(true);
   });
@@ -1571,11 +1571,11 @@ describe("WorktreesList delete flow", () => {
     confirmDelete("feat-clean");
     act(() => {
       streamMock.callbacks?.onFailed(
-        "Worktree /wt/clean is in use by an active chat session",
+        "Worktree /wt/clean is in use by an active agent session",
       );
     });
     expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
-      "in use by an active chat session",
+      "in use by an active agent session",
     );
     expect(streamMock.closeCount).toBe(1);
   });

@@ -16,6 +16,16 @@ export enum ContextType {
   Review = "review",
   WorkflowCommand = "workflow_command",
   Chat = "chat",
+  /**
+   * A referenceable Agent that uses the Terminal interface.
+   *
+   * Additive sibling of `Chat`, NOT a replacement: `Chat` is a released token
+   * carried by persisted mentions and must keep its value. Agent is the durable
+   * entity and Chat/Terminal are its interfaces, so both members serialize to
+   * the same interface-agnostic `@agent:` reference form for the coding agent -
+   * referring to an Agent means the same thing either way (Core Flows, Flow 3).
+   */
+  TerminalAgent = "terminal-agent",
   Execution = "execution",
   User = "user",
 }
@@ -289,9 +299,15 @@ export function formatMentionForDisplayQuery(attrs: MentionAttrs): string {
       const name = attrs.commandName || attrs.label || "";
       return `workflow:${name}`;
     }
-    case ContextType.Chat: {
+    // Agent is the durable entity a human reads here; Chat and Terminal are
+    // only the interfaces used to reach one. Both arms therefore project as
+    // `agent:` - prefixing by interface (`chat:` / `terminal-agent:`) would
+    // render the two as sibling entity types, which is the model this replaces.
+    // The enum values stay `chat` / `terminal-agent`; only the projection moved.
+    case ContextType.Chat:
+    case ContextType.TerminalAgent: {
       const title = attrs.label || attrs.id || "";
-      return `chat:${title}`;
+      return `agent:${title}`;
     }
     case ContextType.Execution: {
       const title = attrs.label || attrs.id || "";
@@ -401,7 +417,14 @@ function formatMentionForLLMQuery(
       const cmdName = attrs.commandName || "";
       return cmdName ? `workflow:${wfId}/${cmdName}` : `workflow:${wfId}`;
     }
-    case ContextType.Chat: {
+    // Both Agent interfaces share this arm deliberately. "Refer to Agent B"
+    // must mean the same thing to the coding agent whether B uses the Chat or
+    // the Terminal interface, so both emit the interface-agnostic `@agent:`
+    // marker plus the durable id the agent needs for `traycer_send_message` /
+    // `traycer_get_transcript`. Falling through to `default:` dropped the id
+    // entirely and handed the runtime a bare title.
+    case ContextType.Chat:
+    case ContextType.TerminalAgent: {
       const agentId = attrs.id || "";
       const title = attrs.label || "untitled";
       return agentId.length === 0

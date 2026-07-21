@@ -1,12 +1,20 @@
 /**
- * Opener "Chats" sub-page: pinned "Create new chat" (opens the shared New
- * Conversation modal in chat mode, placing the result into this pane's target
- * group on submit) on top, then existing chats from the live projection (each
- * opens a fresh instance into the target group).
+ * Chat-interface half of the opener's unified **Agents** sub-page (see
+ * `agents-subpage.ts`): the "New agent (Chat)" creation leaf plus the Task's
+ * existing chat-interface Agents from the live projection (each opens a fresh
+ * instance into the bound target group).
+ *
+ * Returns the creation leaf SEPARATELY from the records so the merged sub-page
+ * can group both interfaces' creation entries at the top instead of
+ * interleaving them - which would read as two entity collections again.
+ *
+ * The `open:chats:*` leaf ids are load-bearing beyond routing: the palette maps
+ * that prefix to the `open_chat` analytics command
+ * (`palette-cmdk-controller.ts`), so they survive the category merge unchanged.
  */
 import { useMemo } from "react";
 import { v4 as uuidv4 } from "uuid";
-import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
+import { displayTitle } from "@/lib/display-title";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
@@ -16,19 +24,18 @@ import {
   openerExistingLeaf,
 } from "@/lib/commands/sources/open/open-leaf";
 import { useActiveEpicProjection } from "@/lib/commands/sources/open/use-active-epic-projection";
-import type { CommandContext, CommandItem } from "@/lib/commands/types";
+import type { OpenerInterfaceItems } from "@/lib/commands/sources/open/agents-subpage";
+import type { CommandContext } from "@/lib/commands/types";
 
-export function useChatsOpenerItems(
-  ctx: CommandContext,
-): ReadonlyArray<CommandItem> {
+export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
   const defaultHostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
   const projection = useActiveEpicProjection(ctx.activeEpicId);
 
-  return useMemo<ReadonlyArray<CommandItem>>(() => {
+  return useMemo<OpenerInterfaceItems>(() => {
     const newChat = openerActionLeaf({
       id: "open:chats:new",
-      label: "Create new chat",
-      keywords: ["new", "chat", "create"],
+      label: "New agent (Chat)",
+      keywords: ["new", "chat", "agent", "create"],
       run: () => {
         if (ctx.activeEpicId === null || ctx.activeTabId === null) return;
         if (ctx.targetGroupId === null) return;
@@ -43,17 +50,19 @@ export function useChatsOpenerItems(
         });
       },
     });
-    if (projection === null) return [newChat];
+    if (projection === null) return { create: newChat, existing: [] };
     const existing = projection.chats.allIds.map((id) => {
       const chat = projection.chats.byId[id];
       return openerExistingLeaf("chats", ctx, {
         id: chat.id,
         instanceId: uuidv4(),
         type: "chat",
-        name: chat.title.length > 0 ? chat.title : DEFAULT_EPIC_NODE_NAMES.chat,
+        // Read surface: an untitled Agent renders the render-tier "Untitled
+        // agent" fallback, NOT the creation-tier "New chat" default title.
+        name: displayTitle(chat.title, "agent"),
         hostId: chat.hostId ?? defaultHostId,
       });
     });
-    return [newChat, ...existing];
+    return { create: newChat, existing };
   }, [ctx, projection, defaultHostId]);
 }

@@ -14,7 +14,7 @@ import type {
   EpicResourceSnapshotWire,
   HostTreeResourceSnapshotWire,
   OtherResourceSnapshotWire,
-  OwnerResourceSnapshotWire,
+  OwnerResourceSnapshotWireV13,
   ResourceProcessSnapshotWire,
   ResourceOwnerKindWire,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -38,7 +38,7 @@ export type ResourcesStreamClientFactory = (
   callbacks: ResourcesStreamCallbacks,
 ) => ResourcesStreamClientHandle;
 
-export type OwnerResourceUsage = OwnerResourceSnapshotWire;
+export type OwnerResourceUsage = OwnerResourceSnapshotWireV13;
 export type EpicResourceUsage = EpicResourceSnapshotWire;
 export type AppResourceUsage = AppResourceSnapshotWire;
 export type HostTreeResourceUsage = HostTreeResourceSnapshotWire;
@@ -76,7 +76,7 @@ export interface ResourcesState {
    * map is "not currently tracked" - callers must treat that as unknown, never
    * as zero use.
    */
-  readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWire>;
+  readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWireV13>;
   /** Host-app usage sampled alongside the owner projection. */
   readonly app: AppResourceSnapshotWire | null;
   /** Whole host-process-tree aggregate, available from resources.subscribe@1.2. */
@@ -101,7 +101,8 @@ export interface ResourcesStoreHandle {
   readonly dispose: () => void;
 }
 
-const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWire> = new Map();
+const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWireV13> =
+  new Map();
 const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWire> = new Map();
 
 // Compare only the fields a chip renders. `sampledAt`/`rootPids` move on every
@@ -110,8 +111,8 @@ const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWire> = new Map();
 // projection is resent each update, but only owners whose metrics actually moved
 // get a new reference (and re-render their chip).
 function ownerUsageEqual(
-  a: OwnerResourceSnapshotWire,
-  b: OwnerResourceSnapshotWire,
+  a: OwnerResourceSnapshotWireV13,
+  b: OwnerResourceSnapshotWireV13,
 ): boolean {
   return (
     a.cpuPercent === b.cpuPercent &&
@@ -197,12 +198,12 @@ function otherUsageEqual(
 }
 
 function mergeOwners(
-  previous: ReadonlyMap<string, OwnerResourceSnapshotWire>,
+  previous: ReadonlyMap<string, OwnerResourceSnapshotWireV13>,
   payload: ResourcesProjectionPayload,
   scope: ResourcesStreamScope,
-): ReadonlyMap<string, OwnerResourceSnapshotWire> {
+): ReadonlyMap<string, OwnerResourceSnapshotWireV13> {
   if (payload.owners.length === 0) return EMPTY_OWNERS;
-  const next = new Map<string, OwnerResourceSnapshotWire>();
+  const next = new Map<string, OwnerResourceSnapshotWireV13>();
   for (const owner of payload.owners) {
     const key =
       scope.kind === "global"

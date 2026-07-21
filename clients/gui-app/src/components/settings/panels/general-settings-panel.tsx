@@ -12,12 +12,14 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { Switch } from "@/components/ui/switch";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerUninstallTraycer } from "@/hooks/runner/use-runner-uninstall-traycer-mutation";
+import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   hostQueryKeys,
   runnerMutationKeys,
+  runnerQueryKeys,
   snapshotsMutationKeys,
 } from "@/lib/query-keys";
 import { clearAllPersistedStores } from "@/lib/persist";
@@ -106,9 +108,10 @@ export function GeneralSettingsPanel() {
 
   return (
     <SettingsPanelShell title="General">
+      <PrereleaseUpdatesRow />
       <SettingsRow
         label="Prevent sleep while running"
-        description="Keep the computer awake while a chat or terminal agent is running, so work continues when you step away."
+        description="Keep the computer awake while an agent is running, so work continues when you step away."
         control={
           <Switch
             checked={preventSleepWhileRunning}
@@ -231,6 +234,68 @@ export function GeneralSettingsPanel() {
   );
 }
 
+function PrereleaseUpdatesRow() {
+  const runnerHost = useRunnerHost();
+  const management = runnerHost.hostManagement;
+  const queryClient = useQueryClient();
+  const { bridge, snapshot } = useDesktopAppUpdates();
+  const preferenceMutation = useMutation({
+    mutationKey: runnerMutationKeys.setAllowPrereleaseUpdates(),
+    mutationFn: (allowPrerelease: boolean) => {
+      if (bridge === null) {
+        return Promise.reject(new Error("Desktop updates are unavailable"));
+      }
+      return bridge.setAllowPrerelease(allowPrerelease);
+    },
+    // Only a durably-persisted change reaches here - main raises a mutation
+    // error when it refuses the switch (an update already downloading/staged),
+    // so a refusal never tracks analytics or invalidates Host state.
+    //
+    // Main has already force-refreshed the Host registry and broadcast the new
+    // channel's state to *every* window and the native menu/tray before this
+    // resolves; these invalidations only nudge this window's channel-scoped
+    // caches, which is why renderer-local invalidation alone was insufficient.
+    onSuccess: () => {
+      trackGeneralSetting("allowPrereleaseUpdates");
+      if (management === null) return;
+      void queryClient.invalidateQueries({
+        queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: runnerQueryKeys.hostRegistryUpdateScope(management),
+      });
+    },
+    onError: (error) =>
+      toastFromRunnerError(error, "Couldn't update the release channel."),
+  });
+
+  if (bridge === null) return null;
+
+  return (
+    <SettingsRow
+      label="Release candidate updates"
+      description="Allow Traycer Desktop and Host update checks to install RC releases. Stable releases remain eligible."
+      control={
+        <div className="flex items-center gap-2">
+          {preferenceMutation.isPending ? (
+            <AgentSpinningDots
+              className="size-3"
+              testId="release-channel-pending-indicator"
+              variant={undefined}
+            />
+          ) : null}
+          <Switch
+            checked={snapshot.allowPrerelease}
+            disabled={preferenceMutation.isPending}
+            onCheckedChange={(value) => preferenceMutation.mutate(value)}
+            aria-label="Allow release candidate updates"
+          />
+        </div>
+      }
+    />
+  );
+}
+
 // Destructive local actions live inline so the settings panel keeps one
 // rounded outer border while each action still reads as its own row.
 function DangerZoneSection() {
@@ -261,7 +326,7 @@ function DangerZoneSection() {
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
           title="Remove Traycer from this device?"
-          description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your chats, history, and credentials stay on this device - you can reinstall anytime from Settings."
+          description="This stops and removes Traycer's background host and services and won't reinstall them automatically. Your agents, history, and credentials stay on this device - you can reinstall anytime from Settings."
           cascadeSummary={null}
           actionLabel="Remove Traycer"
           isPending={uninstall.isPending}
@@ -289,7 +354,7 @@ function RemoveTraycerDangerRow(props: {
     return (
       <SettingsRow
         label="Traycer removed"
-        description="Background components were removed. Your chats, history, and credentials are preserved on this device. To finish, quit Traycer and drag it from Applications to the Trash."
+        description="Background components were removed. Your agents, history, and credentials are preserved on this device. To finish, quit Traycer and drag it from Applications to the Trash."
         control={
           <Button
             type="button"
@@ -310,7 +375,7 @@ function RemoveTraycerDangerRow(props: {
   return (
     <SettingsRow
       label="Remove Traycer"
-      description="Stops the background host and services and removes the installed components from this device. Your chats and history are preserved, and the host won't reinstall itself."
+      description="Stops the background host and services and removes the installed components from this device. Your agents and history are preserved, and the host won't reinstall itself."
       control={
         <Button
           type="button"
@@ -432,7 +497,7 @@ function SettingsFileEditSnapshotsSection() {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Clear file edit snapshots?"
-        description="Cleared snapshots cannot be restored. Existing chat history and checkpoint records remain visible, but Undo will be disabled for your past turns on this device."
+        description="Cleared snapshots cannot be restored. Existing conversation history and checkpoint records remain visible, but Undo will be disabled for your past turns on this device."
         cascadeSummary={null}
         actionLabel="Clear file edit snapshots"
         isPending={clearSnapshotsMutation.isPending}

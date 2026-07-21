@@ -89,6 +89,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={null}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -111,12 +112,74 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
 
     expect(screen.getByText("Fix login redirect bug")).toBeTruthy();
     expect(screen.getByText("Epic: Auth revamp")).toBeTruthy();
+  });
+
+  it("leads with the disabled notice above the description", async () => {
+    const listRef = makeListRef(makeActiveRow());
+    const preview: MentionPreview = {
+      kind: "text",
+      primary: "Free up context by summarizing the conversation so far",
+      secondary: null,
+      mono: false,
+    };
+    render(
+      <MentionPreviewPanel
+        panelRef={makePanelRef()}
+        listRef={listRef}
+        activeIndex={0}
+        preview={preview}
+        disabledReason="This command is only allowed at the start of the message"
+      />,
+    );
+    await flush();
+
+    const notice = document.querySelector<HTMLElement>(
+      '[data-slot="mention-preview-panel-disabled"]',
+    );
+    expect(notice).not.toBeNull();
+    expect(notice?.textContent).toContain("Disabled");
+    expect(notice?.textContent).toContain(
+      "This command is only allowed at the start of the message",
+    );
+    // The reason must read before the description, not as a footnote to it.
+    expect(
+      notice?.compareDocumentPosition(
+        screen.getByText(
+          "Free up context by summarizing the conversation so far",
+        ),
+      ) ?? 0,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("omits the disabled notice when the row is selectable", async () => {
+    const listRef = makeListRef(makeActiveRow());
+    const preview: MentionPreview = {
+      kind: "text",
+      primary: "Review the current diff",
+      secondary: null,
+      mono: false,
+    };
+    render(
+      <MentionPreviewPanel
+        panelRef={makePanelRef()}
+        listRef={listRef}
+        activeIndex={0}
+        preview={preview}
+        disabledReason={null}
+      />,
+    );
+    await flush();
+
+    expect(
+      document.querySelector('[data-slot="mention-preview-panel-disabled"]'),
+    ).toBeNull();
   });
 
   it("omits the secondary line when null", async () => {
@@ -133,6 +196,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -156,6 +220,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -178,6 +243,7 @@ describe("MentionPreviewPanel", () => {
         listRef={titleListRef}
         activeIndex={0}
         preview={titlePreview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -204,6 +270,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -228,6 +295,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -257,6 +325,7 @@ describe("MentionPreviewPanel", () => {
           secondary: null,
           mono: false,
         }}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -273,6 +342,7 @@ describe("MentionPreviewPanel", () => {
           secondary: "second row detail",
           mono: false,
         }}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -295,6 +365,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -332,6 +403,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -366,6 +438,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -400,6 +473,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -426,6 +500,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -451,6 +526,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();
@@ -479,6 +555,7 @@ describe("MentionPreviewPanel", () => {
         listRef={listRef}
         activeIndex={0}
         preview={preview}
+        disabledReason={null}
       />,
     );
     await flush();

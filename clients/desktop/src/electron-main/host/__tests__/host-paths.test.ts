@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getHostFsLayout, labelForEnvironment } from "../host-paths";
+import {
+  getHostFsLayout,
+  labelForEnvironment,
+  smAppServiceAgentLabelId,
+} from "../host-paths";
+import {
+  serviceLabelFor,
+  smAppServiceAgentLabelId as cliSmAppServiceAgentLabelId,
+} from "../../../../../traycer-cli/src/service/label";
 import { withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
 
 /**
@@ -132,5 +140,35 @@ describe("labelForEnvironment", () => {
     expect(label.id).toBe("ai.traycer.host.staging");
     expect(label.displayName).toBe("Traycer Host (Staging)");
     expect(label.appSupportDirName).toBe("Traycer-Staging");
+  });
+});
+
+/**
+ * The desktop and the CLI each derive the SMAppService agent label
+ * (`<cli-label>.agent`) with their own copy of the rule - separate bundles,
+ * so neither can import the other at runtime. Unlike the injector/installer
+ * copies (pinned by packaging tests against real bundles), this pair had no
+ * parity guard, and its drift would be the quietest failure: the CLI would
+ * silently probe a label nobody registers, so `service install` stops
+ * refusing on Desktop machines and status/uninstall stop seeing the agent.
+ * This test imports the REAL CLI derivation across the workspace boundary
+ * and pins the two rules - and the underlying label ids - together.
+ */
+describe("smAppServiceAgentLabelId", () => {
+  it("derives `<cli-label>.agent`", () => {
+    expect(smAppServiceAgentLabelId("ai.traycer.host")).toBe(
+      "ai.traycer.host.agent",
+    );
+    expect(smAppServiceAgentLabelId("ai.traycer.host.staging")).toBe(
+      "ai.traycer.host.staging.agent",
+    );
+  });
+
+  it("stays in lockstep with the CLI's derivation for every environment", () => {
+    for (const environment of ["production", "staging", "dev"]) {
+      expect(
+        smAppServiceAgentLabelId(labelForEnvironment(environment).id),
+      ).toBe(cliSmAppServiceAgentLabelId(serviceLabelFor(environment)));
+    }
   });
 });

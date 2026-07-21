@@ -6,6 +6,10 @@ import {
 } from "../../ipc-contracts/ipc-channels";
 import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import {
+  buildFileDropsBridge,
+  createNativeClipboardReadGate,
+} from "../file-drops-bridge";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -147,6 +151,7 @@ interface PreloadBridge {
     getPathForFile(file: File): string;
     writeTemporaryFile(input: unknown): Promise<string>;
     copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
+    readNativeClipboardFilePaths(): Promise<readonly string[]>;
     saveFile(input: unknown): Promise<string | null>;
   };
   requestHostRespawn(): Promise<void>;
@@ -157,6 +162,11 @@ interface PreloadBridge {
     getSnapshot(): Promise<unknown>;
     revealLog(target: unknown): Promise<unknown>;
     tailLog(input: unknown): Promise<unknown>;
+  };
+  hostManagement: {
+    onRegistryUpdateState(handler: (state: unknown) => void): {
+      dispose: () => void;
+    };
   };
 }
 
@@ -442,6 +452,13 @@ describe("preload new-capability wiring", () => {
     );
 
     await expect(
+      bridge.fileDrops.readNativeClipboardFilePaths(),
+    ).resolves.toEqual([]);
+    expect(invokeFn).not.toHaveBeenCalledWith(
+      RunnerHostInvoke.fileDropReadNativeClipboardPaths,
+    );
+
+    await expect(
       bridge.fileDrops.saveFile({
         name: "diagram.png",
         type: "image/png",
@@ -453,6 +470,31 @@ describe("preload new-capability wiring", () => {
       type: "image/png",
       bytes,
     });
+  });
+
+  it("limits native clipboard reads to a recent trusted paste", async () => {
+    let now = 1_000;
+    const invokeFn = vi.fn(() => Promise.resolve(["/repo/notes.txt"]));
+    fakeElectron.invokeFn = invokeFn;
+    const gate = createNativeClipboardReadGate(() => now);
+    const bridge = buildFileDropsBridge(gate);
+
+    await expect(bridge.readNativeClipboardFilePaths()).resolves.toEqual([]);
+    expect(invokeFn).not.toHaveBeenCalled();
+
+    // jsdom-created events are always untrusted, so exercise the same
+    // capture-listener callback through its trusted-event boundary.
+    gate.observePaste({ isTrusted: true });
+    await expect(bridge.readNativeClipboardFilePaths()).resolves.toEqual([
+      "/repo/notes.txt",
+    ]);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.fileDropReadNativeClipboardPaths,
+    );
+
+    now += 2_001;
+    await expect(bridge.readNativeClipboardFilePaths()).resolves.toEqual([]);
+    expect(invokeFn).toHaveBeenCalledOnce();
   });
 
   it("exposes menu-command and support bridges", async () => {
@@ -671,5 +713,109 @@ describe("preload new-capability wiring", () => {
         email: "user@example.com",
       },
     });
+  });
+});
+
+// Cold-review #9: preload rejects registry-update payloads that lack a
+// boolean `includePreReleases` (query-key discriminator) so malformed/older
+// pushes cannot file under `undefined` and clobber the live channel key.
+describe("preload hostManagement registry-update-state guard", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  function validRegistryState(
+    includePreReleases: boolean,
+  ): Record<string, unknown> {
+    return {
+      checkedAt: "2026-07-20T00:00:00.000Z",
+      latestVersion: "1.6.0-rc.1",
+      installedVersion: "1.4.2",
+      updateAvailable: true,
+      reachable: true,
+      errorMessage: null,
+      includePreReleases,
+    };
+  }
+
+  it("delivers HostRegistryUpdateState payloads with includePreReleases true and false", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    const observed: unknown[] = [];
+    const subscription = bridge.hostManagement.onRegistryUpdateState(
+      (state) => {
+        observed.push(state);
+      },
+    );
+
+    const withTrue = validRegistryState(true);
+    const withFalse = validRegistryState(false);
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withTrue);
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withFalse);
+
+    expect(observed).toEqual([withTrue, withFalse]);
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withTrue);
+    expect(observed).toEqual([withTrue, withFalse]);
+  });
+
+  it("rejects payloads missing includePreReleases or with a non-boolean value", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    const observed: unknown[] = [];
+    const subscription = bridge.hostManagement.onRegistryUpdateState(
+      (state) => {
+        observed.push(state);
+      },
+    );
+
+    const missing = {
+      checkedAt: "2026-07-20T00:00:00.000Z",
+      latestVersion: "1.6.0-rc.1",
+      installedVersion: "1.4.2",
+      updateAvailable: true,
+      reachable: true,
+      errorMessage: null,
+    };
+    const nonBoolean = {
+      ...missing,
+      includePreReleases: "true",
+    };
+    const nullValue = {
+      ...missing,
+      includePreReleases: null,
+    };
+
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, missing);
+    fakeElectron.emit(
+      RunnerHostEvent.hostRegistryUpdateStateChange,
+      nonBoolean,
+    );
+    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, nullValue);
+
+    expect(observed).toEqual([]);
+    subscription.dispose();
+    fakeElectron.emit(
+      RunnerHostEvent.hostRegistryUpdateStateChange,
+      validRegistryState(true),
+    );
+    expect(observed).toEqual([]);
   });
 });

@@ -155,6 +155,7 @@ function buildFakeBridge(
       },
       copyTemporaryFiles: async (paths) =>
         paths.map((path) => `/tmp/copied/${path.split("/").pop() ?? ""}`),
+      readNativeClipboardFilePaths: async () => [],
       saveFile: async (input) => {
         temporaryWrites.push(input);
         return input.name;
@@ -168,6 +169,7 @@ function buildFakeBridge(
         sequence: 0,
         status: "idle",
         currentVersion: "0.0.0-test",
+        allowPrerelease: false,
         latestVersion: null,
         downloadProgress: null,
         installBlockedReason: null,
@@ -180,6 +182,7 @@ function buildFakeBridge(
         sequence: 1,
         status: "up-to-date",
         currentVersion: "0.0.0-test",
+        allowPrerelease: false,
         latestVersion: null,
         downloadProgress: null,
         installBlockedReason: null,
@@ -188,10 +191,24 @@ function buildFakeBridge(
         lastCheckedAt: null,
         lastCheckIntent: "manual",
       }),
+      setAllowPrerelease: async (allowPrerelease) => ({
+        sequence: 2,
+        status: "idle",
+        currentVersion: "0.0.0-test",
+        allowPrerelease,
+        latestVersion: null,
+        downloadProgress: null,
+        installBlockedReason: null,
+        installGuidance: null,
+        errorMessage: null,
+        lastCheckedAt: null,
+        lastCheckIntent: null,
+      }),
       downloadUpdate: async () => ({
         sequence: 2,
         status: "downloading",
         currentVersion: "0.0.0-test",
+        allowPrerelease: false,
         latestVersion: "1.2.3",
         downloadProgress: 0,
         installBlockedReason: null,
@@ -204,6 +221,7 @@ function buildFakeBridge(
         sequence: 0,
         status: "idle",
         currentVersion: "0.0.0-test",
+        allowPrerelease: false,
         latestVersion: null,
         downloadProgress: null,
         installBlockedReason: null,
@@ -455,6 +473,7 @@ function buildFakeBridge(
         updateAvailable: false,
         reachable: false,
         errorMessage: null,
+        includePreReleases: false,
       }),
       onRegistryUpdateState: () => ({ dispose: () => undefined }),
       getOperationStatus: async () => null,
@@ -776,18 +795,25 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     expect(fake.temporaryWrites[0]?.name).toBe("screenshot.png");
   });
 
-  it("copies ephemeral dropped paths into stable temp paths", async () => {
+  it("preserves stable URI paths and copies only ephemeral dropped paths", async () => {
     const fake = buildFakeBridge(null);
     const host = new DesktopRunnerHost({
       bridge: fake.bridge,
       signInUrl: "https://auth.example.invalid/sign-in",
     });
+    const copyTemporaryFiles = vi.spyOn(
+      fake.bridge.fileDrops,
+      "copyTemporaryFiles",
+    );
+    const stablePath = "/repo/src/index.ts";
+    const ephemeralPath =
+      "/var/folders/x/TemporaryItems/screencaptureui_1/Screenshot.png";
 
     await expect(
-      host.fileDrops.copyDroppedFilePaths([
-        "/var/folders/x/TemporaryItems/screencaptureui_1/Screenshot.png",
-      ]),
-    ).resolves.toEqual(["/tmp/copied/Screenshot.png"]);
+      host.fileDrops.copyDroppedFilePaths([stablePath, ephemeralPath]),
+    ).resolves.toEqual([stablePath, "/tmp/copied/Screenshot.png"]);
+    expect(copyTemporaryFiles).toHaveBeenCalledOnce();
+    expect(copyTemporaryFiles).toHaveBeenCalledWith([ephemeralPath]);
     await expect(host.fileDrops.copyDroppedFilePaths([])).resolves.toEqual([]);
   });
 

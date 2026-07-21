@@ -13,6 +13,7 @@ import type {
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
+  HostOperationKind,
   HostOperationStatus,
   HostProgressEvent,
   HostRegistryUpdateState,
@@ -38,6 +39,7 @@ export interface HostManagementBridgeSurface {
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
   }): Promise<HostInstallResult>;
   updateHost(input: {
+    readonly expectedVersion: string | null;
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
   }): Promise<HostInstallResult>;
   uninstallHost(input: { readonly all: boolean }): Promise<HostUninstallResult>;
@@ -131,10 +133,10 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         { version },
         onProgress,
       ),
-    updateHost: ({ onProgress }) =>
+    updateHost: ({ expectedVersion, onProgress }) =>
       withOperationListener<HostInstallResult>(
         RunnerHostInvoke.traycerHostUpdate,
-        null,
+        { expectedVersion },
         onProgress,
       ),
     uninstallHost: ({ all }) =>
@@ -252,13 +254,40 @@ function isHostRegistryUpdateState(
   const latestVersion = candidate.latestVersion;
   const installedVersion = candidate.installedVersion;
   const errorMessage = candidate.errorMessage;
+  // `includePreReleases` is the query-key discriminator for registry state
+  // (channel-scoped cache). Accepting a payload without a boolean would let
+  // older/malformed pushes file under `undefined` and clobber the live key
+  // (cold-review #9).
   return (
     (typeof checkedAt === "string" || checkedAt === null) &&
     (typeof latestVersion === "string" || latestVersion === null) &&
     (typeof installedVersion === "string" || installedVersion === null) &&
     typeof candidate.updateAvailable === "boolean" &&
     typeof candidate.reachable === "boolean" &&
-    (typeof errorMessage === "string" || errorMessage === null)
+    (typeof errorMessage === "string" || errorMessage === null) &&
+    typeof candidate.includePreReleases === "boolean"
+  );
+}
+
+// `Record<HostOperationKind, true>` requires a key for every member of the
+// union - if `HostOperationKind` ever gains a member without a matching key
+// added here, this object literal fails to compile instead of silently
+// dropping that kind's broadcasts at runtime (the exact bug: `restart` and
+// `free-port-and-restart` were added to the shared type without updating
+// this preload's validation, so `onOperationStatus` rejected main's
+// broadcasts for them before they ever reached the query cache).
+const HOST_OPERATION_KINDS: Record<HostOperationKind, true> = {
+  install: true,
+  update: true,
+  "register-service": true,
+  ensure: true,
+  restart: true,
+  "free-port-and-restart": true,
+};
+
+function isHostOperationKind(value: unknown): value is HostOperationKind {
+  return (
+    typeof value === "string" && Object.hasOwn(HOST_OPERATION_KINDS, value)
   );
 }
 
@@ -275,10 +304,7 @@ function isHostOperationStatusOrNull(
   const message = candidate.message;
   return (
     typeof candidate.operationId === "string" &&
-    (candidate.kind === "install" ||
-      candidate.kind === "update" ||
-      candidate.kind === "register-service" ||
-      candidate.kind === "ensure") &&
+    isHostOperationKind(candidate.kind) &&
     (typeof stage === "string" || stage === null) &&
     (typeof percent === "number" || percent === null) &&
     (typeof bytes === "number" || bytes === null) &&

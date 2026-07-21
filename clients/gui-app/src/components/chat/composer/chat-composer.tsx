@@ -15,9 +15,13 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -144,6 +148,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     mentionRoots,
     fallbackToGlobalMentionRoots,
   );
+  const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
@@ -232,12 +237,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // Rate-limit switch prompt: purely informational + user-confirmed, so it
   // never blocks send the way the reauth gate does. Scoped to the selected
   // model - a limit gating only another model family stays silent here.
-  const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
+  const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
     harnessId,
     profileId,
     selectedModel,
-    isActive,
-  );
+    active: isActive,
+    client: hostClient,
+  });
   // Keeps the switch prompt's own `providers.list` read converging with a
   // turn's passive rate-limit capture: without this, a turn that just pushed
   // this harness's profile into near/hard limit wouldn't surface the banner
@@ -283,10 +289,14 @@ function ChatComposerImpl(props: ChatComposerProps) {
     onDragEnter,
     onDragLeave,
     attachImageFiles,
-    isDraggingFiles,
+    dragOverlayVariant,
     isIngestingImages,
-  } = useComposerPaste(editorRef);
-  const attachmentPending = isIngestingImages;
+    isResolvingFilePaths,
+  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+  const attachmentPending = isAttachmentIngestPending({
+    isIngestingImages,
+    isResolvingFilePaths,
+  });
 
   const submitDraft = useChatComposerSubmit({
     taskId,
@@ -363,6 +373,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   profiles={rateLimitPrompt.profiles}
                   destinations={rateLimitPrompt.destinations}
                   primaryTarget={rateLimitPrompt.primaryTarget}
+                  probeTarget={rateLimitPrompt.probeTarget}
                   runTargetHostId={tabHostId}
                   onSwitchProfile={onSwitchProfile}
                   affectedChatCount={taskProfileSwitch.affectedChatCount}
@@ -413,7 +424,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
               onDrop={onDrop}
               onDragEnter={onDragEnter}
               onDragLeave={onDragLeave}
-              isDraggingFiles={isDraggingFiles}
+              dragOverlayVariant={dragOverlayVariant}
               attachmentsStrip={
                 <ChatComposerAttachmentsStrip
                   content={draftContent}

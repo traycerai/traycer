@@ -402,6 +402,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
       },
       env: null,
       timeoutMs: 5_000,
+      invocation: null,
     });
     expect(capturedArgs).toContain("--json");
     expect(progressEvents).toEqual([
@@ -437,6 +438,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
         onEvent: () => undefined,
         env: null,
         timeoutMs: 5_000,
+        invocation: null,
       });
     } catch (err) {
       thrown = err;

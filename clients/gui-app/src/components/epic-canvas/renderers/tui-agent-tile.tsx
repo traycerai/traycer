@@ -236,6 +236,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     return (
       <TerminalDeadTileBanner
         hostLabel={reachability.hostLabel}
+        ownerKind="agent"
         onClose={closeCanvasTile}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
