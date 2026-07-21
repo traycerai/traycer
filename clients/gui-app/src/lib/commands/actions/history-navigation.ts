@@ -102,7 +102,9 @@ function navigateHistory(router: HistoryNavRouter, direction: -1 | 1): void {
  *    not bump the session's MRU recency). Neither "no session live" NOR "a
  *    session exists but its snapshot hasn't loaded yet" (freshly
  *    (re)acquired handle, `tree` still empty) can prove the record is gone,
- *    so - matching this codebase's conservative
+ *    or a payload captured while its record was still pending projection can
+ *    prove the record is gone (the cache keeps that pending marker until the
+ *    create flow explicitly clears it). Matching this codebase's conservative
  *    destroy-only-what-a-store-proves-dead liveness rule (`liveness.ts`) -
  *    both are treated as live rather than blocking the restore. A REMOTE
  *    deletion with no live session and no local tombstone is unknowable here
@@ -136,7 +138,7 @@ function reopenClosedTilePreview(href: string): void {
   if (preserved === undefined) {
     return;
   }
-  if (state.selfDeletedArtifactIds.has(preserved.id)) {
+  if (state.selfDeletedArtifactIds.has(preserved.node.id)) {
     state.discardClosedTilePayload(epicTab.tabId, nestedTarget.tileInstanceId);
     return;
   }
@@ -147,8 +149,9 @@ function reopenClosedTilePreview(href: string): void {
           Object.hasOwn(epicHandle.store.getState().tree.nodeById, id)
       : () => true;
   if (
+    !preserved.pendingCreate &&
     !isTileRefRecordLive(
-      preserved,
+      preserved.node,
       state.pendingCreateArtifactIds,
       hasLiveRecord,
     )
@@ -161,7 +164,11 @@ function reopenClosedTilePreview(href: string): void {
     findPaneById(canvas.root, nestedTarget.paneId) !== null
       ? nestedTarget.paneId
       : null;
-  state.restoreClosedTilePreview(epicTab.tabId, preferredPaneId, preserved);
+  state.restoreClosedTilePreview(
+    epicTab.tabId,
+    preferredPaneId,
+    preserved.node,
+  );
 }
 
 type HistoryNavigationDirection = "back" | "forward";

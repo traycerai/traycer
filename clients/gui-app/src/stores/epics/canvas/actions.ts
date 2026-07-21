@@ -540,6 +540,35 @@ export function openTile(
     };
   }
 
+  return insertTileInPane(state, target, node, preview);
+}
+
+/**
+ * Restore one exact historical tile instance as a preview. Unlike
+ * {@link openTile}, this deliberately bypasses content-id dedup: opener paths
+ * can create two views of the same content under different instance ids, and
+ * history must recreate the specific instance addressed by the landing URL.
+ */
+export function restoreTilePreview(
+  state: EpicCanvasState,
+  node: EpicCanvasTileRef,
+  preferredPaneId: string | null,
+): EpicCanvasState {
+  if (state.root === null) return seedRootPane(node, true);
+  const preferredPane =
+    preferredPaneId === null ? null : findPaneById(state.root, preferredPaneId);
+  const target = preferredPane ?? activePaneOrFirst(state);
+  if (target === null) return state;
+  return insertTileInPane(state, target, node, true);
+}
+
+function insertTileInPane(
+  state: EpicCanvasState,
+  target: TilePane,
+  node: EpicCanvasTileRef,
+  preview: boolean,
+): EpicCanvasState {
+  if (state.root === null) return seedRootPane(node, preview);
   const inserted = insertTabInstance(
     target,
     node.instanceId,

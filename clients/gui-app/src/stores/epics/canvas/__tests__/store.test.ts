@@ -1186,13 +1186,40 @@ describe("closedTilePayloadsByTabId", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_A);
     expect(
       useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
         SPEC_A.instanceId
       ],
     ).toBeUndefined();
+  });
+
+  it("keeps pending-create state with a cached tile until the create flow unmarks it", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-pending-payload", "Pending Payload");
+    store.markArtifactPendingCreate(SPEC_A.id);
+    store.openTileInTab(tabId, SPEC_A);
+    store.openTileInTab(tabId, SPEC_B);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    const afterClose = useEpicCanvasStore.getState();
+    expect(afterClose.pendingCreateArtifactIds.has(SPEC_A.id)).toBe(false);
+    expect(
+      afterClose.closedTilePayloadsByTabId[tabId]?.[SPEC_A.instanceId]
+        ?.pendingCreate,
+    ).toBe(true);
+
+    store.unmarkArtifactPendingCreate(SPEC_A.id);
+
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.pendingCreate,
+    ).toBe(false);
   });
 
   it("discardClosedTilePayload drops a single cached entry", () => {
@@ -1206,7 +1233,7 @@ describe("closedTilePayloadsByTabId", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_A);
 
     store.discardClosedTilePayload(tabId, SPEC_A.instanceId);
@@ -1214,7 +1241,7 @@ describe("closedTilePayloadsByTabId", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toBeUndefined();
   });
 
@@ -1238,7 +1265,7 @@ describe("closedTilePayloadsByTabId", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_A);
     expect(
       useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
@@ -1264,7 +1291,7 @@ describe("closedTilePayloadsByTabId", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_A);
   });
 
@@ -1334,14 +1361,14 @@ describe("closedTilePayloadsByTabId", () => {
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId] ?? {};
     expect(Object.keys(cached)).toHaveLength(20);
     expect(cached["inst-fifo-0"]).toBeUndefined();
-    expect(cached["inst-fifo-1"]).toEqual({
+    expect(cached["inst-fifo-1"]?.node).toEqual({
       id: "art-fifo-1",
       instanceId: "inst-fifo-1",
       type: "spec",
       name: "FIFO 1",
       hostId: TEST_HOST_ID,
     });
-    expect(cached["inst-fifo-20"]).toEqual({
+    expect(cached["inst-fifo-20"]?.node).toEqual({
       id: "art-fifo-20",
       instanceId: "inst-fifo-20",
       type: "spec",
@@ -1399,7 +1426,7 @@ describe("closedTilePayloadsByTabId", () => {
     };
     store.openTilePreviewInTab(tabId, previewTile);
 
-    store.restoreClosedTilePreview(tabId, paneId, restoredPayload);
+    store.restoreClosedTilePreview(tabId, paneId, restoredPayload.node);
 
     const cached =
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId] ?? {};
@@ -1407,14 +1434,14 @@ describe("closedTilePayloadsByTabId", () => {
     // still exactly 20, not 19 (an over-eviction) and not 21.
     expect(Object.keys(cached)).toHaveLength(20);
     expect(cached[beingRestored]).toBeUndefined();
-    expect(cached[oldest]).toEqual({
+    expect(cached[oldest]?.node).toEqual({
       id: "art-fifo-0",
       instanceId: oldest,
       type: "spec",
       name: "FIFO 0",
       hostId: TEST_HOST_ID,
     });
-    expect(cached[previewTile.instanceId]).toEqual(previewTile);
+    expect(cached[previewTile.instanceId]?.node).toEqual(previewTile);
   });
 
   it("is session-only: not written into the zustand persist partialize surface", async () => {
@@ -1428,7 +1455,7 @@ describe("closedTilePayloadsByTabId", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_A);
 
     // Flush any pending persist write.
@@ -1467,10 +1494,10 @@ describe("restoreClosedTilePreview", () => {
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
       ];
-    expect(preserved).toEqual(SPEC_A);
+    expect(preserved?.node).toEqual(SPEC_A);
     if (preserved === undefined) return;
 
-    store.restoreClosedTilePreview(tabId, paneId, preserved);
+    store.restoreClosedTilePreview(tabId, paneId, preserved.node);
 
     const canvas = requireCanvas(tabId);
     expect(canvas.activePaneId).toBe(paneId);
@@ -1478,7 +1505,7 @@ describe("restoreClosedTilePreview", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toBeUndefined();
   });
 
@@ -1494,6 +1521,42 @@ describe("restoreClosedTilePreview", () => {
     const canvas = requireCanvas(tabId);
     expect(canvas.activePaneId).toBe(activePaneId);
     expect(canvas.tilesByInstanceId[SPEC_B.instanceId]).toEqual(SPEC_B);
+  });
+
+  it("restores the exact instance when the same content is already open elsewhere", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-restore-duplicate", "Duplicate");
+    store.openTileInTab(tabId, SPEC_A);
+    const paneId = requireCanvas(tabId).activePaneId;
+    if (paneId === null) throw new Error("expected pane");
+
+    // Explicit-pane opens intentionally bypass content dedup and mint another
+    // instance for the same content id.
+    store.openTileInPane(tabId, paneId, SPEC_A);
+    const withDuplicate = requirePane(requireCanvas(tabId), paneId);
+    const duplicateInstanceId = withDuplicate.tabInstanceIds.find(
+      (instanceId) => instanceId !== SPEC_A.instanceId,
+    );
+    if (duplicateInstanceId === undefined) {
+      throw new Error("expected duplicate content instance");
+    }
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    const preserved =
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ];
+    if (preserved === undefined) throw new Error("expected cached payload");
+    store.restoreClosedTilePreview(tabId, paneId, preserved.node);
+
+    const canvas = requireCanvas(tabId);
+    const pane = requirePane(canvas, paneId);
+    expect(pane.tabInstanceIds).toContain(duplicateInstanceId);
+    expect(pane.tabInstanceIds).toContain(SPEC_A.instanceId);
+    expect(pane.activeTabId).toBe(SPEC_A.instanceId);
+    expect(pane.previewTabId).toBe(SPEC_A.instanceId);
+    expect(canvas.tilesByInstanceId[duplicateInstanceId]?.id).toBe(SPEC_A.id);
+    expect(canvas.tilesByInstanceId[SPEC_A.instanceId]).toEqual(SPEC_A);
   });
 
   it("captures the evicted preview tile into the cache while restoring another", () => {
@@ -1517,7 +1580,7 @@ describe("restoreClosedTilePreview", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_A);
     const canvas = requireCanvas(tabId);
     expect(canvas.tilesByInstanceId[SPEC_A.instanceId]).toBeUndefined();

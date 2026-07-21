@@ -57,6 +57,7 @@ import {
   promotePreview,
   renameArtifact,
   renameTerminalTiles,
+  restoreTilePreview as restoreTilePreviewCanvas,
   resizeSplit,
   setActivePane,
   setActiveTab as setActiveTileTabCanvas,
@@ -183,6 +184,11 @@ export interface TabSplitArgs {
   readonly position: EdgeDropPosition;
 }
 
+export interface ClosedTilePayload {
+  readonly node: EpicCanvasTileRef;
+  readonly pendingCreate: boolean;
+}
+
 export interface EpicCanvasStore {
   /**
    * Durable tab records keyed by tab id. A tab can remain here even when it is
@@ -210,7 +216,7 @@ export interface EpicCanvasStore {
   readonly closedTilePayloadsByTabId: Readonly<
     Record<
       string,
-      Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
+      Readonly<Record<string, ClosedTilePayload | undefined>> | undefined
     >
   >;
   /**
@@ -764,14 +770,14 @@ function withoutClosedTilePayloadsByTabIds(
   record: Readonly<
     Record<
       string,
-      Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
+      Readonly<Record<string, ClosedTilePayload | undefined>> | undefined
     >
   >,
   ids: ReadonlySet<string>,
 ): Readonly<
   Record<
     string,
-    Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
+    Readonly<Record<string, ClosedTilePayload | undefined>> | undefined
   >
 > {
   if (ids.size === 0) return record;
@@ -792,13 +798,17 @@ const MAX_CLOSED_TILE_PAYLOADS_PER_TAB = 20;
 /** Adds `ref` to a tab's closed-tile payload map, FIFO-evicting the oldest
  * entry once the per-tab cap is exceeded. */
 function withClosedTilePayload(
-  forTab: Readonly<Record<string, EpicCanvasTileRef | undefined>>,
+  forTab: Readonly<Record<string, ClosedTilePayload | undefined>>,
   ref: EpicCanvasTileRef,
-): Readonly<Record<string, EpicCanvasTileRef | undefined>> {
+  pendingCreate: boolean,
+): Readonly<Record<string, ClosedTilePayload | undefined>> {
   const withoutDuplicate = Object.entries(forTab).filter(
     ([instanceId]) => instanceId !== ref.instanceId,
   );
-  const entries = [...withoutDuplicate, [ref.instanceId, ref] as const];
+  const entries = [
+    ...withoutDuplicate,
+    [ref.instanceId, { node: ref, pendingCreate }] as const,
+  ];
   const bounded =
     entries.length > MAX_CLOSED_TILE_PAYLOADS_PER_TAB
       ? entries.slice(entries.length - MAX_CLOSED_TILE_PAYLOADS_PER_TAB)
@@ -809,9 +819,9 @@ function withClosedTilePayload(
 /** Drops a single `instanceId` entry from a tab's closed-tile payload map -
  * used once `restoreClosedTilePreview` brings it back to life. */
 function withoutClosedTilePayload(
-  forTab: Readonly<Record<string, EpicCanvasTileRef | undefined>>,
+  forTab: Readonly<Record<string, ClosedTilePayload | undefined>>,
   instanceId: string,
-): Readonly<Record<string, EpicCanvasTileRef | undefined>> {
+): Readonly<Record<string, ClosedTilePayload | undefined>> {
   return Object.fromEntries(
     Object.entries(forTab).filter(([id]) => id !== instanceId),
   );
@@ -826,30 +836,62 @@ function withoutClosedTilePayload(
  * relies on.
  */
 function captureClosedTilePayloads(
-  closedTilePayloadsByTabId: Readonly<
-    Record<
-      string,
-      Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
-    >
-  >,
+  state: EpicCanvasStore,
   tabId: string,
   before: TilesByInstanceId,
   after: TilesByInstanceId,
-): Readonly<
-  Record<
-    string,
-    Readonly<Record<string, EpicCanvasTileRef | undefined>> | undefined
-  >
-> {
+): EpicCanvasStore["closedTilePayloadsByTabId"] {
   const removed = Object.entries(before).flatMap(([instanceId, ref]) =>
     ref !== undefined && after[instanceId] === undefined ? [ref] : [],
   );
-  if (removed.length === 0) return closedTilePayloadsByTabId;
+  if (removed.length === 0) return state.closedTilePayloadsByTabId;
   const nextForTab = removed.reduce(
-    (forTab, ref) => withClosedTilePayload(forTab, ref),
-    closedTilePayloadsByTabId[tabId] ?? {},
+    (forTab, ref) =>
+      withClosedTilePayload(
+        forTab,
+        ref,
+        state.pendingCreateArtifactIds.has(ref.id),
+      ),
+    state.closedTilePayloadsByTabId[tabId] ?? {},
   );
-  return { ...closedTilePayloadsByTabId, [tabId]: nextForTab };
+  return { ...state.closedTilePayloadsByTabId, [tabId]: nextForTab };
+}
+
+function clearClosedTilePendingCreate(
+  closedTilePayloadsByTabId: EpicCanvasStore["closedTilePayloadsByTabId"],
+  artifactId: string,
+): EpicCanvasStore["closedTilePayloadsByTabId"] {
+  const entries = Object.entries(closedTilePayloadsByTabId).map(
+    ([tabId, forTab]) => {
+      if (forTab === undefined) {
+        return { entry: [tabId, forTab] as const, changed: false };
+      }
+      const payloads = Object.entries(forTab).map(([instanceId, payload]) => {
+        if (
+          payload === undefined ||
+          !payload.pendingCreate ||
+          payload.node.id !== artifactId
+        ) {
+          return {
+            entry: [instanceId, payload] as const,
+            changed: false,
+          };
+        }
+        return {
+          entry: [instanceId, { ...payload, pendingCreate: false }] as const,
+          changed: true,
+        };
+      });
+      const changed = payloads.some((payload) => payload.changed);
+      const nextForTab = changed
+        ? Object.fromEntries(payloads.map((payload) => payload.entry))
+        : forTab;
+      return { entry: [tabId, nextForTab] as const, changed };
+    },
+  );
+  return entries.some((entry) => entry.changed)
+    ? Object.fromEntries(entries.map((entry) => entry.entry))
+    : closedTilePayloadsByTabId;
 }
 
 function withoutRecentTabIds(
@@ -959,7 +1001,7 @@ function updateTabCanvas(
       [tabId]: next,
     },
     closedTilePayloadsByTabId: captureClosedTilePayloads(
-      state.closedTilePayloadsByTabId,
+      state,
       tabId,
       current.tilesByInstanceId,
       next.tilesByInstanceId,
@@ -1497,7 +1539,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             closedTilePayloadsByTabId: withoutRestored,
           };
           const canvasUpdate = updateTabCanvas(baseState, tabId, (canvas) =>
-            openTile(canvas, node, true, preferredPaneId),
+            restoreTilePreviewCanvas(canvas, node, preferredPaneId),
           );
           if (canvasUpdate === baseState) {
             return withoutRestored === state.closedTilePayloadsByTabId
@@ -2195,9 +2237,17 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       unmarkArtifactPendingCreate: (artifactId) => {
         set((s) => {
           const next = withoutId(s.pendingCreateArtifactIds, artifactId);
-          return next === s.pendingCreateArtifactIds
+          const nextClosedTilePayloads = clearClosedTilePendingCreate(
+            s.closedTilePayloadsByTabId,
+            artifactId,
+          );
+          return next === s.pendingCreateArtifactIds &&
+            nextClosedTilePayloads === s.closedTilePayloadsByTabId
             ? s
-            : { pendingCreateArtifactIds: next };
+            : {
+                pendingCreateArtifactIds: next,
+                closedTilePayloadsByTabId: nextClosedTilePayloads,
+              };
         });
       },
 

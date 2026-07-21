@@ -420,7 +420,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_A);
     expect(
       useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
@@ -524,7 +524,9 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     useEpicCanvasStore.setState((state) => ({
       closedTilePayloadsByTabId: {
         ...state.closedTilePayloadsByTabId,
-        [tabId]: { [SPEC_B.instanceId]: SPEC_B },
+        [tabId]: {
+          [SPEC_B.instanceId]: { node: SPEC_B, pendingCreate: false },
+        },
       },
     }));
 
@@ -573,12 +575,12 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_A);
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_B.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_B);
 
     const hrefA = nestedHref("e1", tabId, paneId, SPEC_A.instanceId);
@@ -717,7 +719,7 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
         SPEC_A.instanceId
-      ],
+      ]?.node,
     ).toEqual(SPEC_A);
 
     // A live, FULLY LOADED session for "e1" exists, and its projected tree
@@ -756,6 +758,36 @@ describe("goBack / goForward — preview-reopen closed sub-tabs", () => {
     store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
 
     seedLiveEpicSession("e1", [SPEC_A.id], true);
+
+    const landing = nestedHref("e1", tabId, paneId, SPEC_A.instanceId);
+    const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
+    vi.spyOn(history, "go").mockImplementation(() => {});
+
+    goBack({ history });
+
+    expect(requirePreviewTabId(tabId)).toBe(SPEC_A.instanceId);
+  });
+
+  it("restores a closed pending-create tile before its record projects", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("e1", "Task");
+    store.markArtifactPendingCreate(SPEC_A.id);
+    store.openTileInTab(tabId, SPEC_A);
+    const paneId = requirePaneId(tabId);
+    store.closeCanvasTab(tabId, paneId, SPEC_A.instanceId);
+
+    // closeCanvasTab intentionally clears the live pending set, but capture
+    // retains the marker with the cached payload until the create flow
+    // explicitly unmarks it.
+    expect(
+      useEpicCanvasStore.getState().pendingCreateArtifactIds.has(SPEC_A.id),
+    ).toBe(false);
+    expect(
+      useEpicCanvasStore.getState().closedTilePayloadsByTabId[tabId]?.[
+        SPEC_A.instanceId
+      ]?.pendingCreate,
+    ).toBe(true);
+    seedLiveEpicSession("e1", [], true);
 
     const landing = nestedHref("e1", tabId, paneId, SPEC_A.instanceId);
     const history = seedPersistentHistory([landing, `/epics/e1/${tabId}`], 1);
