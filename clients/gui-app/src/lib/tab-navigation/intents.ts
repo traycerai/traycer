@@ -9,7 +9,8 @@
  */
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 export interface EpicRouteFocus {
   readonly focusedAt: number | undefined;
@@ -18,6 +19,17 @@ export interface EpicRouteFocus {
   readonly migrationSource: "phase" | undefined;
 }
 
+export type EpicPostResolvePreparation =
+  | {
+      readonly kind: "open-tile";
+      readonly node: EpicCanvasTileRef;
+    }
+  | {
+      readonly kind: "activate-tile";
+      readonly paneId: string;
+      readonly tileTabId: string;
+    };
+
 export type TabNavigationIntent =
   | {
       readonly kind: "epic";
@@ -25,19 +37,54 @@ export type TabNavigationIntent =
       readonly tabId: string;
       readonly focus: EpicRouteFocus;
       /**
-       * Store-prepared pane/tile target for a CROSS-ROUTE opener that already
-       * mutated the target tab's canvas before navigating (the canvas store
-       * is global and keyed by tabId, so preparing a background tab is
-       * valid). `null` for every plain tab-switch intent (duplicate, close,
-       * command palette, etc.) - those intentionally wipe nested search and
-       * let route-sync canonicalization refill it from the tab's own current
-       * focus. Only `existingEpicTabIntentWithNestedFocus` sets this.
+       * Pane/tile target prepared after the controller resolves the exact tab
+       * and before it issues the correlated route navigation. `null` for plain
+       * tab switches, which intentionally clear nested route focus.
        */
       readonly nestedFocus: NestedFocusTarget | null;
     }
   | { readonly kind: "draft"; readonly draftId: string }
   | { readonly kind: "history" }
   | { readonly kind: "settings"; readonly section: SettingsSectionId };
+
+/**
+ * Requests that need source resolution are deliberately distinct from canonical
+ * route intents. The navigation controller resolves them after taking its
+ * rollback snapshot, then delegates only a canonical intent to tab descriptors.
+ */
+export type TabActivationIntent =
+  | TabNavigationIntent
+  | {
+      readonly kind: "complete-epic-migration";
+      readonly sourceEpicId: string;
+      readonly epicId: string;
+      readonly tabId: string;
+      readonly focus: EpicRouteFocus;
+      readonly nestedFocus: NestedFocusTarget | null;
+    }
+  | {
+      readonly kind: "open-epic";
+      readonly epicId: string;
+      readonly tabId: string | null;
+      readonly focus: EpicRouteFocus | undefined;
+      /**
+       * Title for a freshly-materialized epic tab (the row the user clicked).
+       * `undefined` falls back to "Untitled epic" at resolution time.
+       */
+      readonly name: string | undefined;
+      /**
+       * When set, the controller swaps this empty draft for the resolved epic
+       * AT THE DRAFT'S STRIP SLOT (the epic-list "replace empty draft in place"
+       * UX). Resolution runs INSIDE the controller, after it snapshots the true
+       * pre-command selection, so a rejected navigation still rolls back to the
+       * tab the user actually started on. `null` for every other opener.
+       */
+      readonly replaceEmptyDraftId: string | null;
+      /** Canvas work that needs the exact resolved tab id. */
+      readonly preparation: EpicPostResolvePreparation | null;
+      readonly includeNestedFocus: boolean;
+    }
+  | { readonly kind: "new-draft"; readonly settings: ChatRunSettings | null };
 
 const DEFAULT_EPIC_FOCUS: EpicRouteFocus = {
   focusedAt: undefined,
@@ -84,24 +131,111 @@ export function existingEpicTabIntentWithNestedFocus(input: {
   };
 }
 
-export function openOrFocusEpicIntent(input: {
-  readonly epicId: string;
-  readonly focus: EpicRouteFocus | undefined;
-}): Extract<TabNavigationIntent, { kind: "epic" }> {
-  const tabId = useEpicCanvasStore
-    .getState()
-    .resolveTargetTabForEpic(input.epicId, undefined);
-  return existingEpicTabIntent({
-    epicId: input.epicId,
-    tabId,
-    focus: input.focus,
-  });
-}
-
 export function draftTabIntent(
   draftId: string,
 ): Extract<TabNavigationIntent, { kind: "draft" }> {
   return { kind: "draft", draftId };
+}
+
+export function newDraftTabIntent(
+  settings: ChatRunSettings | null,
+): Extract<TabActivationIntent, { kind: "new-draft" }> {
+  return { kind: "new-draft", settings };
+}
+
+export function openEpicTabIntent(input: {
+  readonly epicId: string;
+  readonly focus: EpicRouteFocus | undefined;
+}): Extract<TabActivationIntent, { kind: "open-epic" }> {
+  return {
+    kind: "open-epic",
+    epicId: input.epicId,
+    tabId: null,
+    focus: input.focus,
+    name: undefined,
+    replaceEmptyDraftId: null,
+    preparation: null,
+    includeNestedFocus: false,
+  };
+}
+
+/**
+ * Epic-list opener variant: carries the row's title and the id of an empty
+ * draft to replace in place. The controller captures its rollback snapshot
+ * BEFORE resolving/creating the epic, so a rejected navigation restores the
+ * genuine prior tab rather than the just-opened epic.
+ */
+export function openEpicFromListIntent(input: {
+  readonly epicId: string;
+  readonly focus: EpicRouteFocus | undefined;
+  readonly name: string | undefined;
+  readonly replaceEmptyDraftId: string | null;
+}): Extract<TabActivationIntent, { kind: "open-epic" }> {
+  return {
+    kind: "open-epic",
+    epicId: input.epicId,
+    tabId: null,
+    focus: input.focus,
+    name: input.name,
+    replaceEmptyDraftId: input.replaceEmptyDraftId,
+    preparation: null,
+    includeNestedFocus: false,
+  };
+}
+
+export function resourceEpicTabIntent(input: {
+  readonly epicId: string;
+  readonly tabId: string | null;
+  readonly name: string | undefined;
+  readonly focus: EpicRouteFocus;
+  readonly preparation: EpicPostResolvePreparation;
+  readonly includeNestedFocus: boolean;
+}): Extract<TabActivationIntent, { kind: "open-epic" }> {
+  return {
+    kind: "open-epic",
+    epicId: input.epicId,
+    tabId: input.tabId,
+    focus: input.focus,
+    name: input.name,
+    replaceEmptyDraftId: null,
+    preparation: input.preparation,
+    includeNestedFocus: input.includeNestedFocus,
+  };
+}
+
+export function openExactEpicTabIntent(input: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly name: string | undefined;
+  readonly focus: EpicRouteFocus | undefined;
+}): Extract<TabActivationIntent, { kind: "open-epic" }> {
+  return {
+    kind: "open-epic",
+    epicId: input.epicId,
+    tabId: input.tabId,
+    focus: input.focus,
+    name: input.name,
+    replaceEmptyDraftId: null,
+    preparation: null,
+    includeNestedFocus: false,
+  };
+}
+
+export function completeEpicMigrationIntent(input: {
+  readonly sourceEpicId: string;
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly focus: EpicRouteFocus;
+  readonly nestedFocus: NestedFocusTarget | null;
+}): Extract<TabActivationIntent, { kind: "complete-epic-migration" }> {
+  return {
+    kind: "complete-epic-migration",
+    sourceEpicId: input.sourceEpicId,
+    epicId: input.epicId,
+    tabId: input.tabId,
+    focus: input.focus,
+    nestedFocus: input.nestedFocus,
+  };
 }
 
 export function historyTabIntent(): Extract<

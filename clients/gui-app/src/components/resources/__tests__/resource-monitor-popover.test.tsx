@@ -57,6 +57,10 @@ vi.mock("@/lib/host/stream-runtime-context", () => ({
 type MockEpicIntentInput = Readonly<Record<string, unknown>>;
 type MockEpicIntent = MockEpicIntentInput & { readonly kind: "epic" };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 const routerMock = vi.hoisted(() => ({
   navigate: vi.fn(),
   pathname: "/epics/epic-1/tab-1",
@@ -97,13 +101,13 @@ vi.mock("@/lib/history-navigation/use-history-nav-available", () => ({
 }));
 
 const tabNavigationMock = vi.hoisted(() => ({
-  existingEpicTabIntentWithNestedFocus: vi.fn(
+  resourceEpicTabIntent: vi.fn(
     (input: MockEpicIntentInput): MockEpicIntent => ({
       kind: "epic",
       ...input,
     }),
   ),
-  navigateToTabIntent: vi.fn(),
+  activateTabIntent: vi.fn(),
 }));
 
 vi.mock("@/lib/tab-navigation", () => tabNavigationMock);
@@ -430,8 +434,8 @@ afterEach(() => {
     ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
     name: "Agent Chat",
   };
-  tabNavigationMock.existingEpicTabIntentWithNestedFocus.mockClear();
-  tabNavigationMock.navigateToTabIntent.mockClear();
+  tabNavigationMock.resourceEpicTabIntent.mockClear();
+  tabNavigationMock.activateTabIntent.mockClear();
   canvasMock.prepareOpenTileInTabFocusTarget.mockReset();
   canvasMock.prepareSetActiveTileTabFocusTarget.mockReset();
   canvasMock.resolveTargetTabForEpic.mockReset();
@@ -956,10 +960,8 @@ describe("ResourceMonitorPopover", () => {
       "pane-1",
       "tile-term-1",
     );
-    expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).not.toHaveBeenCalled();
-    expect(tabNavigationMock.navigateToTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
   });
 
   it("commits an already-open owner in ANOTHER tab through a single cross-route navigation", async () => {
@@ -995,24 +997,26 @@ describe("ResourceMonitorPopover", () => {
     // Cross-route: the current-route boundary must NOT be used - the owner's
     // tab (tab-2) differs from the active route (tab-1).
     expect(navigateNestedMock).not.toHaveBeenCalled();
-    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
-      "tab-2",
-      "pane-2",
-      "tile-term-2",
-    );
     expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).toHaveBeenCalledWith(
+      canvasMock.prepareSetActiveTileTabFocusTarget,
+    ).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledWith(
       expect.objectContaining({
         epicId: "epic-1",
         tabId: "tab-2",
-        nestedFocus: { paneId: "pane-2", tileInstanceId: "tile-term-2" },
+        preparation: {
+          kind: "activate-tile",
+          paneId: "pane-2",
+          tileTabId: "tile-term-2",
+        },
+        includeNestedFocus: true,
       }),
     );
-    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledWith(
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledWith(
       routerMock.navigate,
       expect.objectContaining({ tabId: "tab-2" }),
+      undefined,
     );
   });
 
@@ -1046,26 +1050,24 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     fireEvent.click(await screen.findByText("Background Terminal"));
 
-    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
-      "tab-closed",
-      "pane-closed",
-      "tile-term-closed",
-    );
     expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).toHaveBeenCalledWith(
+      canvasMock.prepareSetActiveTileTabFocusTarget,
+    ).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledWith(
       expect.objectContaining({
         epicId: "epic-2",
         tabId: "tab-closed",
-        nestedFocus: {
+        preparation: {
+          kind: "activate-tile",
           paneId: "pane-closed",
-          tileInstanceId: "tile-term-closed",
+          tileTabId: "tile-term-closed",
         },
       }),
     );
-    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledWith(
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledWith(
       routerMock.navigate,
       expect.objectContaining({ tabId: "tab-closed" }),
+      undefined,
     );
   });
 
@@ -1100,29 +1102,28 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     fireEvent.click(await screen.findByText("Agent Chat"));
 
-    expect(canvasMock.resolveTargetTabForEpic).toHaveBeenCalledWith(
-      "epic-1",
-      expect.any(String),
-    );
-    expect(canvasMock.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
-      "tab-2",
-      expect.objectContaining({
-        id: "chat-1",
-        type: "chat",
-        hostId: "host-1",
-      }),
-    );
+    expect(canvasMock.resolveTargetTabForEpic).not.toHaveBeenCalled();
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).not.toHaveBeenCalled();
     expect(navigateNestedMock).not.toHaveBeenCalled();
-    expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({
-        epicId: "epic-1",
-        tabId: "tab-2",
-        nestedFocus: { paneId: "pane-2", tileInstanceId: "instance-new" },
-      }),
-    );
-    expect(tabNavigationMock.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledTimes(1);
+    const input = tabNavigationMock.resourceEpicTabIntent.mock.calls[0]?.[0];
+    expect(isRecord(input)).toBe(true);
+    if (!isRecord(input)) throw new Error("expected resource intent input");
+    expect(input.epicId).toBe("epic-1");
+    expect(input.tabId).toBeNull();
+    expect(isRecord(input.preparation)).toBe(true);
+    if (!isRecord(input.preparation)) {
+      throw new Error("expected resource preparation");
+    }
+    expect(input.preparation.kind).toBe("open-tile");
+    expect(isRecord(input.preparation.node)).toBe(true);
+    if (!isRecord(input.preparation.node)) {
+      throw new Error("expected resource tile node");
+    }
+    expect(input.preparation.node.id).toBe("chat-1");
+    expect(input.preparation.node.type).toBe("chat");
+    expect(input.preparation.node.hostId).toBe("host-1");
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
   it("does not carry a prepared nested focus target on browser builds (no persistent history)", async () => {
@@ -1156,18 +1157,16 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     fireEvent.click(await screen.findByText("Terminal Beta"));
 
-    // The canvas mutation still happens (owner still gets focused), but no
-    // nested search params are written to the URL - matches every other
-    // desktop-only-gated opener's browser-build behavior.
-    expect(canvasMock.prepareSetActiveTileTabFocusTarget).toHaveBeenCalledWith(
-      "tab-2",
-      "pane-2",
-      "tile-term-2",
-    );
+    // Preparation is deferred to the controller; browser builds omit only the
+    // nested route-search projection.
     expect(
-      tabNavigationMock.existingEpicTabIntentWithNestedFocus,
-    ).toHaveBeenCalledWith(
-      expect.objectContaining({ tabId: "tab-2", nestedFocus: null }),
+      canvasMock.prepareSetActiveTileTabFocusTarget,
+    ).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tabId: "tab-2",
+        includeNestedFocus: false,
+      }),
     );
   });
 

@@ -1,6 +1,10 @@
 import { v4 as uuidv4 } from "uuid";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { releaseOpenEpicSessionIfUnused } from "@/lib/registries/epic-session-registry";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  resolveTabIdForEpic,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
   isRegisteredTabKind,
@@ -12,6 +16,8 @@ import {
   createLayoutItem,
   findStripItemForRef,
   flattenLayoutRefs,
+  focusLayoutRef,
+  focusSplitSide,
   removeLayoutRef,
   repairLayout,
   replaceFillableSide,
@@ -59,6 +65,46 @@ export interface ReplaceDraftWithEpicCommand {
   readonly epicId: string;
   readonly epicTabId: string;
   readonly epicName: string | undefined;
+}
+
+export type CoordinatedTabActivationTarget =
+  | { readonly kind: "ref"; readonly ref: TabRef }
+  | {
+      readonly kind: "draft";
+      readonly draftId: string | null;
+      readonly settings: ChatRunSettings | null;
+      readonly create: boolean;
+    }
+  | {
+      readonly kind: "epic";
+      readonly epicId: string;
+      readonly tabId: string | null;
+      readonly name: string | undefined;
+    }
+  | {
+      readonly kind: "migrated-epic";
+      readonly sourceEpicId: string;
+      readonly epicId: string;
+      readonly tabId: string;
+    }
+  | {
+      readonly kind: "system";
+      readonly systemKind: "history" | "settings";
+      readonly name: string;
+      readonly lastPath: string;
+    };
+
+export interface CoordinatedTabSelection {
+  readonly items: ReadonlyArray<StripItem>;
+  readonly activeItemId: string | null;
+  readonly focusedSide: SplitSideName | null;
+  readonly focusedRef: TabRef | null;
+}
+
+export interface CoordinatedTabActivation {
+  readonly ref: TabRef;
+  readonly priorSelection: CoordinatedTabSelection;
+  readonly ownedSelection: CoordinatedTabSelection;
 }
 
 export interface SeparateBeforeMoveResult {
@@ -209,6 +255,61 @@ function focusedRef(layout: PersistedTabStripLayout): TabRef | null {
   if (active.kind === "tab") return active.ref;
   const side = active.focusedSide === "left" ? active.left : active.right;
   return side.kind === "tab" ? side.ref : null;
+}
+
+function coordinatedSelection(
+  layout: PersistedTabStripLayout,
+): CoordinatedTabSelection {
+  const active = layout.items.find((item) => item.id === layout.activeItemId);
+  return {
+    items: layout.items,
+    activeItemId: layout.activeItemId,
+    focusedSide: active?.kind === "split" ? active.focusedSide : null,
+    focusedRef: focusedRef(layout),
+  };
+}
+
+function selectionsEqual(
+  left: CoordinatedTabSelection,
+  right: CoordinatedTabSelection,
+): boolean {
+  const refsMatch =
+    left.focusedRef === null
+      ? right.focusedRef === null
+      : right.focusedRef !== null &&
+        tabRefKey(left.focusedRef) === tabRefKey(right.focusedRef);
+  return (
+    left.items === right.items &&
+    left.activeItemId === right.activeItemId &&
+    left.focusedSide === right.focusedSide &&
+    refsMatch
+  );
+}
+
+function restoreCoordinatedSelection(
+  layout: PersistedTabStripLayout,
+  selection: CoordinatedTabSelection,
+): PersistedTabStripLayout | null {
+  const priorItem = layout.items.find(
+    (item) => item.id === selection.activeItemId,
+  );
+  if (priorItem === undefined) return null;
+  if (selection.focusedSide !== null) {
+    if (priorItem.kind !== "split") return null;
+    return focusSplitSide(layout, {
+      splitId: priorItem.id,
+      side: selection.focusedSide,
+    });
+  }
+  if (selection.focusedRef === null) return null;
+  return focusLayoutRef(layout, selection.focusedRef);
+}
+
+interface ResolvedCoordinatedActivation {
+  readonly ref: TabRef;
+  readonly layout: PersistedTabStripLayout;
+  readonly reservedAdditions: ReadonlyArray<TabRef>;
+  readonly applySources: () => void;
 }
 
 function layoutWithRemovedRef(
@@ -395,6 +496,246 @@ export class TabCommandCoordinator {
       applyRemovals: () => undefined,
     });
     return ref;
+  }
+
+  /**
+   * Reservation-first activation boundary for ordinary top-level navigation.
+   * Resolution is read-only until `execute` installs the ledger; a ref absent
+   * from the prior layout is always present in `reservedAdditions` before its
+   * source is created/reopened and before the layout can expose it.
+   */
+  activateTab(
+    target: CoordinatedTabActivationTarget,
+  ): CoordinatedTabActivation | null {
+    const priorLayout = currentLayout();
+    const priorSelection = coordinatedSelection(priorLayout);
+    const resolved = this.resolveCoordinatedActivation(target, priorLayout);
+    if (resolved === null) return null;
+    this.execute({
+      layout: resolved.layout,
+      reservedAdditions: resolved.reservedAdditions,
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        this.applyExpectedSourceMutation(resolved.applySources);
+      },
+      applyRemovals: () => undefined,
+    });
+    return {
+      ref: resolved.ref,
+      priorSelection,
+      ownedSelection: coordinatedSelection(currentLayout()),
+    };
+  }
+
+  /**
+   * Restores selection only while the caller still owns the exact structural
+   * result of `activateTab`. Newly-created membership intentionally remains.
+   */
+  restoreTabActivation(activation: CoordinatedTabActivation): boolean {
+    const layout = currentLayout();
+    if (
+      !selectionsEqual(coordinatedSelection(layout), activation.ownedSelection)
+    ) {
+      return false;
+    }
+    const restored = restoreCoordinatedSelection(
+      layout,
+      activation.priorSelection,
+    );
+    if (restored === null) return false;
+    this.execute({
+      layout: restored,
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
+  private resolveCoordinatedActivation(
+    target: CoordinatedTabActivationTarget,
+    layout: PersistedTabStripLayout,
+  ): ResolvedCoordinatedActivation | null {
+    switch (target.kind) {
+      case "system":
+        return this.resolveSystemActivation(target, layout);
+      case "draft":
+        return this.resolveDraftActivation(target, layout);
+      case "epic":
+        return this.resolveEpicActivation(target, layout);
+      case "migrated-epic":
+        return this.resolveMigratedEpicActivation(target, layout);
+      case "ref":
+        return this.resolveRefActivation(target.ref, layout);
+    }
+  }
+
+  private resolveSystemActivation(
+    target: Extract<CoordinatedTabActivationTarget, { kind: "system" }>,
+    layout: PersistedTabStripLayout,
+  ): ResolvedCoordinatedActivation {
+    const ref: TabRef = {
+      kind: target.systemKind,
+      id: target.systemKind,
+    };
+    const withSystem = {
+      ...layout,
+      systemTabs: {
+        ...layout.systemTabs,
+        [target.systemKind]: {
+          id: target.systemKind,
+          kind: target.systemKind,
+          name: target.name,
+          lastPath: target.lastPath,
+        },
+      },
+    };
+    const wasPresent = findStripItemForRef(layout, ref) !== null;
+    const next = focusLayoutRef(createLayoutItem(withSystem, ref), ref);
+    return {
+      ref,
+      layout: next,
+      reservedAdditions: wasPresent ? [] : [ref],
+      applySources: () => undefined,
+    };
+  }
+
+  private resolveDraftActivation(
+    target: Extract<CoordinatedTabActivationTarget, { kind: "draft" }>,
+    layout: PersistedTabStripLayout,
+  ): ResolvedCoordinatedActivation | null {
+    const draftId = target.draftId ?? (target.create ? uuidv4() : null);
+    if (draftId === null) return null;
+    const exists = useLandingDraftStore
+      .getState()
+      .drafts.some((draft) => draft.id === draftId);
+    if (!target.create && !exists) return null;
+    const ref: TabRef = { kind: "draft", id: draftId };
+    return this.activationForRef(layout, ref, () => {
+      if (!exists) {
+        useLandingDraftStore
+          .getState()
+          .createDraftWithId(draftId, target.settings);
+        return;
+      }
+      useLandingDraftStore.getState().setActiveDraft(draftId);
+    });
+  }
+
+  private resolveEpicActivation(
+    target: Extract<CoordinatedTabActivationTarget, { kind: "epic" }>,
+    layout: PersistedTabStripLayout,
+  ): ResolvedCoordinatedActivation | null {
+    const canvas = useEpicCanvasStore.getState();
+    const resolvedId =
+      target.tabId ?? resolveTabIdForEpic(canvas, target.epicId) ?? uuidv4();
+    const existing = canvas.tabsById[resolvedId];
+    if (existing !== undefined && existing.epicId !== target.epicId)
+      return null;
+    const ref: TabRef = { kind: "epic", id: resolvedId };
+    return this.activationForRef(layout, ref, () => {
+      if (existing === undefined) {
+        useEpicCanvasStore
+          .getState()
+          .openEpicTabWithId(
+            resolvedId,
+            target.epicId,
+            target.name ?? "Untitled epic",
+          );
+        return;
+      }
+      useEpicCanvasStore.getState().setActiveTab(resolvedId);
+    });
+  }
+
+  private resolveMigratedEpicActivation(
+    target: Extract<CoordinatedTabActivationTarget, { kind: "migrated-epic" }>,
+    layout: PersistedTabStripLayout,
+  ): ResolvedCoordinatedActivation | null {
+    const existing = useEpicCanvasStore.getState().tabsById[target.tabId];
+    if (
+      existing === undefined ||
+      (existing.epicId !== target.sourceEpicId &&
+        existing.epicId !== target.epicId)
+    ) {
+      return null;
+    }
+    const ref: TabRef = { kind: "epic", id: target.tabId };
+    return this.activationForRef(layout, ref, () => {
+      useEpicCanvasStore.setState((state) => {
+        const current = state.tabsById[target.tabId];
+        if (
+          current === undefined ||
+          (current.epicId !== target.sourceEpicId &&
+            current.epicId !== target.epicId)
+        ) {
+          return state;
+        }
+        const mostRecentTabIdByEpicId = {
+          ...state.mostRecentTabIdByEpicId,
+          [target.epicId]: target.tabId,
+        };
+        if (
+          target.sourceEpicId !== target.epicId &&
+          mostRecentTabIdByEpicId[target.sourceEpicId] === target.tabId
+        ) {
+          delete mostRecentTabIdByEpicId[target.sourceEpicId];
+        }
+        return {
+          tabsById: {
+            ...state.tabsById,
+            [target.tabId]: { ...current, epicId: target.epicId },
+          },
+          openTabOrder: state.openTabOrder.includes(target.tabId)
+            ? state.openTabOrder
+            : [...state.openTabOrder, target.tabId],
+          activeTabId: target.tabId,
+          mostRecentTabIdByEpicId,
+        };
+      });
+    });
+  }
+
+  private resolveRefActivation(
+    ref: TabRef,
+    layout: PersistedTabStripLayout,
+  ): ResolvedCoordinatedActivation | null {
+    if (ref.kind === "epic") {
+      const tab = useEpicCanvasStore.getState().tabsById[ref.id];
+      if (tab === undefined) return null;
+      return this.activationForRef(layout, ref, () => {
+        useEpicCanvasStore.getState().setActiveTab(ref.id);
+      });
+    }
+    if (ref.kind === "draft") {
+      const exists = useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === ref.id);
+      if (!exists) return null;
+      return this.activationForRef(layout, ref, () => {
+        useLandingDraftStore.getState().setActiveDraft(ref.id);
+      });
+    }
+    if (layout.systemTabs[ref.kind] === null) return null;
+    return this.activationForRef(layout, ref, () => undefined);
+  }
+
+  private activationForRef(
+    layout: PersistedTabStripLayout,
+    ref: TabRef,
+    applySources: () => void,
+  ): ResolvedCoordinatedActivation {
+    const wasPresent = findStripItemForRef(layout, ref) !== null;
+    const next = focusLayoutRef(createLayoutItem(layout, ref), ref);
+    return {
+      ref,
+      layout: next,
+      reservedAdditions: wasPresent ? [] : [ref],
+      applySources,
+    };
   }
 
   replaceDraftWithEpic(command: ReplaceDraftWithEpicCommand): TabRef | null {

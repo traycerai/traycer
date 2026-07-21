@@ -20,6 +20,7 @@ import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -226,6 +227,9 @@ function registerChatSession(epicId: string, chatId: string): void {
 }
 
 function resetStores(): void {
+  // This unit router omits the permanent root bridge. Production releases the
+  // controller's hydration gate through that bridge before strip commands run.
+  __resetTabNavigationControllerForTesting();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });

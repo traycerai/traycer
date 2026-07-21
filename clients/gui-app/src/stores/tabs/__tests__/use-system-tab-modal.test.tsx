@@ -25,6 +25,7 @@ import {
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 function GuardedRoot() {
   useSystemTabModalRefreshGuard();
@@ -138,6 +139,7 @@ function buildActionRouter() {
 
 describe("settings section is store-backed, not URL-backed", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     modalProbe.current = null;
     actionProbeRenderSpy.mockClear();
     useSettingsSectionStore.setState({ section: null });
@@ -145,6 +147,7 @@ describe("settings section is store-backed, not URL-backed", () => {
   });
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     useSettingsSectionStore.setState({ section: null });
   });
 
@@ -201,6 +204,7 @@ describe("settings section is store-backed, not URL-backed", () => {
 
 describe("useSystemTabModalRefreshGuard", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     // The cold-load latch is module-scoped ("once per renderer boot"), not
     // per-hook-instance, so tests must reset it explicitly between cases -
     // otherwise a prior test's boot consumes it and the redirect below never
@@ -210,6 +214,7 @@ describe("useSystemTabModalRefreshGuard", () => {
   });
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     useTabsStore.setState({ systemTabs: { history: null, settings: null } });
   });
 

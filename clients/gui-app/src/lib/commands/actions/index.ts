@@ -5,7 +5,7 @@
  * source's `run` handler imports from here instead of reaching
  * into stores directly.
  */
-export { openNewEpic, openNewEpicDraft } from "./new-epic";
+export { openNewEpic, openNewEpicIntent } from "./new-epic";
 export { duplicateEpicTab } from "./duplicate-tab";
 export { goBack, goForward, type HistoryNavRouter } from "./history-navigation";
 export {
@@ -22,6 +22,8 @@ export {
 export {
   ensureHistoryTab,
   ensureSettingsTab,
+  resolveHistoryTabIntent,
+  resolveSettingsTabIntent,
   type OpenSettingsOpts,
 } from "./open-system-tab";
 export {

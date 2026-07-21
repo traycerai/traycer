@@ -23,6 +23,7 @@ import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { useTabsStore } from "@/stores/tabs/store";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 
@@ -57,9 +58,6 @@ vi.mock("@/components/layout/dialogs/system-tab-modal-host", () => ({
 }));
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
-}));
-vi.mock("@/stores/tabs/use-deep-link-tab-sync", () => ({
-  useDeepLinkTabSync: () => undefined,
 }));
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
@@ -181,6 +179,10 @@ function seedTabs(tabIds: ReadonlyArray<readonly [string, string]>): void {
       tabIds.map(([, epicId]) => [epicId, []]),
     ),
   });
+  useTabsStore.setState((state) => ({
+    ...state,
+    stripOrder: tabIds.map(([tabId]) => ({ kind: "epic", id: tabId })),
+  }));
 }
 
 function renderAt(pathname: string) {
@@ -229,6 +231,7 @@ describe("EpicTabHost keep-alive", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
     useLeftPanelStore.setState({ mainCollapsedByTabId: {} });
     seedSignedInAuth();
     // Past the one-time tour, so RootComponent's onboarding render gate is inert.
@@ -239,6 +242,7 @@ describe("EpicTabHost keep-alive", () => {
     cleanup();
     useAuthStore.getState().setSignedOut();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
     useLeftPanelStore.setState({ mainCollapsedByTabId: {} });
     useOnboardingStore.setState({ completedAt: null, step: 0 });
   });
@@ -560,6 +564,11 @@ describe("EpicTabHost keep-alive", () => {
       throw new Error("expected first created tab");
     }
 
+    // A live committed route is external navigation authority in T3, so it
+    // correctly reopens a preserved ref if a source-only test mutation closes
+    // it underneath that route. Unmount first to model the later revisit of a
+    // stale persisted entry rather than a malformed live close.
+    cleanup();
     act(() => {
       useEpicCanvasStore.getState().closeTab(firstCreatedTabId);
     });
@@ -568,7 +577,6 @@ describe("EpicTabHost keep-alive", () => {
     );
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
 
-    cleanup();
     const revisitedRouter = renderAt("/epics/epic-a/stale-tab");
 
     await waitFor(() => {

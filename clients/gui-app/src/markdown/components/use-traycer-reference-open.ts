@@ -134,6 +134,7 @@ export function useTraycerReferenceOpenHandler(input: {
                 migrationSource: undefined,
               },
             }),
+            undefined,
           );
           return;
       }

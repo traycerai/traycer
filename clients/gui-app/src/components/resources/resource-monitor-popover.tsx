@@ -78,8 +78,9 @@ import {
   readActiveEpicTabIdFromPath,
 } from "@/lib/routes";
 import {
-  existingEpicTabIntentWithNestedFocus,
-  navigateToTabIntent,
+  activateTabIntent,
+  resourceEpicTabIntent,
+  type EpicPostResolvePreparation,
   type EpicRouteFocus,
 } from "@/lib/tab-navigation";
 import { cn } from "@/lib/utils";
@@ -270,15 +271,6 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
   });
   const activeEpicId = readActiveEpicIdFromPath(activePathname);
   const activeTabId = readActiveEpicTabIdFromPath(activePathname);
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (state) => state.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareSetActiveTileTabFocusTarget = useEpicCanvasStore(
-    (state) => state.prepareSetActiveTileTabFocusTarget,
-  );
-  const resolveTargetTabForEpic = useEpicCanvasStore(
-    (state) => state.resolveTargetTabForEpic,
-  );
   const desktopApp = useDesktopAppResourceUsage();
   const supportsHostTree = resourcesSubscribeV12Supported(resourcesVersion);
   const summary = useMemo(
@@ -350,9 +342,6 @@ function ResourceMonitorContent(props: { readonly onClose: () => void }) {
       row,
       canvas,
       epicTitleById,
-      prepareOpenTileInTabFocusTarget,
-      prepareSetActiveTileTabFocusTarget,
-      resolveTargetTabForEpic,
       navigate,
       navigateNested,
       activeEpicId,
@@ -1441,19 +1430,6 @@ function openResourceOwner(args: {
   readonly row: OwnerDisplayRow;
   readonly canvas: CanvasResourceSnapshot;
   readonly epicTitleById: ReadonlyMap<string, string>;
-  readonly prepareOpenTileInTabFocusTarget: (
-    tabId: string,
-    node: EpicCanvasTileRef,
-  ) => NestedFocusTarget | null;
-  readonly prepareSetActiveTileTabFocusTarget: (
-    tabId: string,
-    paneId: string,
-    tileTabId: string,
-  ) => NestedFocusTarget | null;
-  readonly resolveTargetTabForEpic: (
-    epicId: string,
-    name: string | undefined,
-  ) => string;
   readonly navigate: NavigateFn;
   readonly navigateNested: NavigateNestedFocus;
   readonly activeEpicId: string | null;
@@ -1465,13 +1441,13 @@ function openResourceOwner(args: {
     commitOwnerFocus({
       epicId: location.epicId,
       tabId: location.tabId,
+      name: undefined,
       focus: focusForOwner(args.row.snapshot),
-      prepare: () =>
-        args.prepareSetActiveTileTabFocusTarget(
-          location.tabId,
-          location.paneId,
-          location.tileTabId,
-        ),
+      preparation: {
+        kind: "activate-tile",
+        paneId: location.paneId,
+        tileTabId: location.tileTabId,
+      },
       navigate: args.navigate,
       navigateNested: args.navigateNested,
       activeEpicId: args.activeEpicId,
@@ -1492,22 +1468,21 @@ function openResourceOwner(args: {
   if (record === null) return false;
   const recordType = record.type;
   if (recordType !== "chat" && recordType !== "terminal-agent") return false;
-  const targetTabId = args.resolveTargetTabForEpic(
-    snapshot.owner.epicId,
-    taskLabel(snapshot.owner.epicId, args.canvas, args.epicTitleById),
-  );
   commitOwnerFocus({
     epicId: snapshot.owner.epicId,
-    tabId: targetTabId,
+    tabId: null,
+    name: taskLabel(snapshot.owner.epicId, args.canvas, args.epicTitleById),
     focus: focusForOwner(snapshot),
-    prepare: () =>
-      args.prepareOpenTileInTabFocusTarget(targetTabId, {
+    preparation: {
+      kind: "open-tile",
+      node: {
         id: record.id,
         instanceId: uuidv4(),
         type: recordType,
         name: record.name,
         hostId: record.hostId,
-      }),
+      },
+    },
     navigate: args.navigate,
     navigateNested: args.navigateNested,
     activeEpicId: args.activeEpicId,
@@ -1525,38 +1500,60 @@ function openResourceOwner(args: {
  * and desktop-only gating stay identical to every other in-place focus
  * change in the app.
  *
- * Cross-route (the owner lives in a different tab, or a different epic, than
- * the active route) prepares the canvas mutation directly - the canvas store
- * is global and keyed by tabId, so preparing a background tab is valid -
- * then commits ONE top-level navigation carrying the prepared nested focus.
- * Arrival then paints the right pane immediately instead of wiping nested
- * search and waiting on route-sync canonicalization to self-heal it back in
- * on a second, asynchronous pass.
+ * Cross-route passes an unresolved preparation payload to the top-level
+ * navigation controller. The controller resolves/creates and activates the
+ * exact header tab first, then prepares nested focus and issues one correlated
+ * route navigation carrying that target.
  */
 function commitOwnerFocus(args: {
   readonly epicId: string;
-  readonly tabId: string;
+  readonly tabId: string | null;
+  readonly name: string | undefined;
   readonly focus: EpicRouteFocus;
-  readonly prepare: () => NestedFocusTarget | null;
+  readonly preparation: EpicPostResolvePreparation;
   readonly navigate: NavigateFn;
   readonly navigateNested: NavigateNestedFocus;
   readonly activeEpicId: string | null;
   readonly activeTabId: string | null;
   readonly desktopNestedFocusEnabled: boolean;
 }): void {
-  if (args.epicId === args.activeEpicId && args.tabId === args.activeTabId) {
-    args.navigateNested(args.epicId, args.tabId, args.prepare);
+  if (
+    args.tabId !== null &&
+    args.epicId === args.activeEpicId &&
+    args.tabId === args.activeTabId
+  ) {
+    const tabId = args.tabId;
+    args.navigateNested(args.epicId, tabId, () =>
+      prepareResourceTarget(tabId, args.preparation),
+    );
     return;
   }
-  const nestedFocus = args.prepare();
-  navigateToTabIntent(
+  activateTabIntent(
     args.navigate,
-    existingEpicTabIntentWithNestedFocus({
+    resourceEpicTabIntent({
       epicId: args.epicId,
       tabId: args.tabId,
+      name: args.name,
       focus: args.focus,
-      nestedFocus: args.desktopNestedFocusEnabled ? nestedFocus : null,
+      preparation: args.preparation,
+      includeNestedFocus: args.desktopNestedFocusEnabled,
     }),
+    undefined,
+  );
+}
+
+function prepareResourceTarget(
+  tabId: string,
+  preparation: EpicPostResolvePreparation,
+): NestedFocusTarget | null {
+  const canvas = useEpicCanvasStore.getState();
+  if (preparation.kind === "open-tile") {
+    return canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
+  }
+  return canvas.prepareSetActiveTileTabFocusTarget(
+    tabId,
+    preparation.paneId,
+    preparation.tileTabId,
   );
 }
 

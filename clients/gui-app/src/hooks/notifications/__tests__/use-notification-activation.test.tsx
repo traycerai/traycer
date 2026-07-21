@@ -6,6 +6,8 @@ import type { ReactNode } from "react";
 type CapturedNavigate = {
   readonly to: string;
   readonly params: { readonly epicId: string; readonly tabId: string };
+  readonly replace: boolean;
+  readonly state: unknown;
   readonly search: {
     readonly focusedAt: number;
     readonly focusArtifactId: string | undefined;
@@ -38,6 +40,7 @@ vi.mock("@/lib/host", () => ({
 
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -63,6 +66,7 @@ function createWrapper(): (props: {
 
 describe("useNotificationActivation", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     navigateSpy.mockReset();
     requestMock.mockReset();
     requestMock.mockResolvedValue({
@@ -243,9 +247,11 @@ describe("useNotificationActivation", () => {
       });
     });
 
-    expect(navigateSpy.mock.calls[0][0]).toEqual({
+    const [navigation] = navigateSpy.mock.calls[0];
+    expect(navigation).toMatchObject({
       to: "/epics/$epicId/$tabId",
       params: { epicId: "epic-terminal", tabId },
+      replace: false,
       search: {
         focusedAt: 901,
         focusArtifactId: undefined,
@@ -255,12 +261,82 @@ describe("useNotificationActivation", () => {
         focusTileInstanceId: "terminal-instance",
       },
     });
+    expect(navigation.state).toEqual(expect.any(Function));
 
     await waitFor(() => {
       expect(requestMock).toHaveBeenCalledWith("epic.listCollaborators", {
         epicId: "epic-terminal",
       });
     });
+  });
+
+  // F8 (closure): a retained CLOSED tab that owns the terminal must be reopened
+  // by the EXACT payload tabId - never resolved by epic, which prefers the
+  // active/MRU same-epic sibling and lands on the wrong tab.
+  it("reopens the exact retained tab that owns the terminal, not an MRU sibling", () => {
+    const store = useEpicCanvasStore.getState();
+    const ownerTabId = store.openEpicTab("epic-dup", "Owner");
+    store.openTileInTab(ownerTabId, {
+      id: "setup:owner:repo:branch",
+      instanceId: "owner-terminal-instance",
+      type: "terminal",
+      name: "Setup terminal",
+      titleSource: "manual",
+      hostId: "host-1",
+      cwd: "/repo",
+    });
+    const ownerCanvas = useEpicCanvasStore.getState().canvasByTabId[ownerTabId];
+    if (ownerCanvas === undefined || ownerCanvas.activePaneId === null) {
+      throw new Error("expected owner terminal canvas");
+    }
+    const ownerPaneId = ownerCanvas.activePaneId;
+
+    // A second tab for the SAME epic becomes the active/MRU sibling, then the
+    // owner tab is closed (retained in tabsById, dropped from openTabOrder).
+    const siblingTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-dup", "Sibling");
+    useEpicCanvasStore.getState().closeTab(ownerTabId);
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(
+      ownerTabId,
+    );
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(siblingTabId);
+    // Confirm the resolver WOULD pick the sibling (the exact trap F8 fixes).
+    expect(useEpicCanvasStore.getState().resolveTabIdForEpic("epic-dup")).toBe(
+      siblingTabId,
+    );
+
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "terminal",
+          epicId: "epic-dup",
+          terminalId: "setup:owner:repo:branch",
+          tabId: ownerTabId,
+          paneId: ownerPaneId,
+          tileInstanceId: "owner-terminal-instance",
+        },
+        receivedAt: 903,
+        onActivated: null,
+      });
+    });
+
+    const [navigation] = navigateSpy.mock.calls[0];
+    // Reopens the EXACT owner tab, not the MRU sibling.
+    expect(navigation.params).toEqual({
+      epicId: "epic-dup",
+      tabId: ownerTabId,
+    });
+    expect(navigation.search).toMatchObject({
+      focusPaneId: ownerPaneId,
+      focusTileInstanceId: "owner-terminal-instance",
+    });
+    // The owner tab is reopened into the visible strip by the activation.
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(ownerTabId);
   });
 
   it("routes persisted legacy terminal rows to their open canvas tile", () => {
@@ -305,5 +381,77 @@ describe("useNotificationActivation", () => {
         focusTileInstanceId: "legacy-terminal-instance",
       },
     });
+  });
+
+  // Cold review #8: retained closed epic tab records must reopen (via
+  // coordinator resolve) before nested-focus preparation + activation.
+  it("reopens a retained closed terminal tab before nested-focus activation", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-retained", "Retained terminal epic");
+    store.openTileInTab(tabId, {
+      id: "setup:chat-retained:repo:branch",
+      instanceId: "retained-terminal-instance",
+      type: "terminal",
+      name: "Setup terminal",
+      titleSource: "manual",
+      hostId: "host-1",
+      cwd: "/repo",
+    });
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected retained terminal canvas");
+    }
+    const paneId = canvas.activePaneId;
+
+    // Close hides from openTabOrder but keeps tabsById + canvas (retained).
+    store.closeTab(tabId);
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
+    expect(useEpicCanvasStore.getState().tabsById[tabId]?.epicId).toBe(
+      "epic-retained",
+    );
+    expect(
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+        "retained-terminal-instance"
+      ],
+    ).toBeDefined();
+
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "terminal",
+          epicId: "epic-retained",
+          terminalId: "setup:chat-retained:repo:branch",
+          tabId,
+          paneId,
+          tileInstanceId: "retained-terminal-instance",
+        },
+        receivedAt: 903,
+        onActivated: null,
+      });
+    });
+
+    // Reopened (or resolved) tab is source-open again and navigation targets
+    // the retained terminal's nested focus — not a silent no-op.
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
+    expect(navigateSpy).toHaveBeenCalled();
+    const [navigation] = navigateSpy.mock.calls[0];
+    expect(navigation).toMatchObject({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-retained", tabId },
+      search: {
+        focusedAt: 903,
+        focusArtifactId: undefined,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+        focusPaneId: paneId,
+        focusTileInstanceId: "retained-terminal-instance",
+      },
+    });
+    // Envelope is required so the reopen is an owned controller navigation.
+    expect(navigation.state).toEqual(expect.any(Function));
   });
 });

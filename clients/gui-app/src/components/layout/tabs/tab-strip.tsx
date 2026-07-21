@@ -19,11 +19,11 @@ import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabDuplicate, tabMatchesPath } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
-import { openNewEpicDraft } from "@/lib/commands/actions/new-epic";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { TabStripSkeleton } from "@/components/layout/tabs/tab-strip-skeleton";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
-import { draftTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
+import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
@@ -85,15 +85,14 @@ function TabStripBody() {
   });
 
   const handleNewTab = useCallback(() => {
-    const draftId = openNewEpicDraft();
-    navigateToTabIntent(navigate, draftTabIntent(draftId));
+    navigateToTabIntent(navigate, openNewEpicIntent(), undefined);
   }, [navigate]);
 
   const handleDuplicateTab = useCallback(
     (tab: HeaderTab) => {
       const intent = tabDuplicate(tab);
       if (intent === null) return;
-      navigateToTabIntent(navigate, intent);
+      navigateToTabIntent(navigate, intent, undefined);
     },
     [navigate],
   );

@@ -233,7 +233,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
 
   const activateTab = useCallback(() => {
     if (rename.isEditing) return;
-    navigateToTabIntent(navigate, tabResolveIntent(tab));
+    navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
   }, [navigate, rename.isEditing, tab]);
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {

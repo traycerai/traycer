@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../../../__tests__/test-browser-apis";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 const landingMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
@@ -83,6 +84,7 @@ const UNKNOWN_WORKSPACE_PATH = "/tmp/unknown-workspace";
 
 describe("useLandingComposerActions", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     window.localStorage.clear();
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
@@ -128,6 +130,7 @@ describe("useLandingComposerActions", () => {
   });
 
   afterEach(() => {
+    __resetTabNavigationControllerForTesting();
     cleanup();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();

@@ -37,6 +37,7 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import {
   type NotificationEntry,
@@ -325,6 +326,7 @@ async function selectTab(testId: string) {
 
 describe("NotificationsPopover click routing", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     hostBindingState.current = null;
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
@@ -338,6 +340,7 @@ describe("NotificationsPopover click routing", () => {
 
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
   });

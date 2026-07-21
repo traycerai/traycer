@@ -51,10 +51,6 @@ vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));
 
-vi.mock("@/stores/tabs/use-deep-link-tab-sync", () => ({
-  useDeepLinkTabSync: () => undefined,
-}));
-
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
 }));

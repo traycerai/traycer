@@ -12,14 +12,13 @@ import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { existingEpicTabIntent } from "@/lib/tab-navigation";
-import { tabActivate } from "@/stores/tabs/registry";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type {
   OpenSettingsModalOpts,
   SystemOverlayKind,
 } from "@/stores/tabs/system-overlay-types";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabItemId } from "@/stores/tabs/layout";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import type { SettingsSectionId } from "@/lib/settings-sections";
@@ -68,6 +67,7 @@ function canvasTabIds(tabId: string): ReadonlyArray<string> {
 }
 
 function buildRouter(initialPath: string): MockRouter {
+  synchronizeLayoutForRoute(initialPath);
   const calls: Array<NavigateCall> = [];
   let pathname = initialPath;
   const router: KeybindingRouter = {
@@ -100,6 +100,15 @@ function buildRouter(initialPath: string): MockRouter {
       if (intent.kind === "epic") {
         calls.push({ kind: "epic", epicId: intent.epicId, sectionId: null });
         pathname = `/epics/${intent.epicId}/${intent.tabId}`;
+      } else if (intent.kind === "open-epic") {
+        calls.push({ kind: "epic", epicId: intent.epicId, sectionId: null });
+        pathname = `/epics/${intent.epicId}`;
+      } else if (intent.kind === "complete-epic-migration") {
+        calls.push({ kind: "epic", epicId: intent.epicId, sectionId: null });
+        pathname = `/epics/${intent.epicId}/${intent.tabId}`;
+      } else if (intent.kind === "new-draft") {
+        calls.push({ kind: "home", epicId: null, sectionId: null });
+        pathname = "/";
       } else if (intent.kind === "draft") {
         calls.push({ kind: "home", epicId: null, sectionId: null });
         pathname = "/";
@@ -129,6 +138,25 @@ function buildRouter(initialPath: string): MockRouter {
     pathname = next;
   };
   return { router, calls, setPath };
+}
+
+function synchronizeLayoutForRoute(pathname: string): void {
+  const match = /^\/epics\/[^/]+\/([^/]+)$/.exec(pathname);
+  const tabId = match?.[1];
+  if (tabId === undefined) return;
+  const openTabIds = useEpicCanvasStore.getState().openTabOrder;
+  if (!openTabIds.includes(tabId)) return;
+  useTabsStore.setState((state) => ({
+    ...state,
+    version: 2,
+    items: openTabIds.map((id) => ({
+      kind: "tab" as const,
+      id: tabItemId({ kind: "epic", id }),
+      ref: { kind: "epic" as const, id },
+    })),
+    activeItemId: tabItemId({ kind: "epic", id: tabId }),
+    stripOrder: openTabIds.map((id) => ({ kind: "epic" as const, id })),
+  }));
 }
 
 describe("dispatchAction", () => {
@@ -313,13 +341,12 @@ describe("dispatchAction", () => {
     useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
     useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-b"));
     useLandingDraftStore.getState().createDraft(null);
-    tabActivate(
-      existingEpicTabIntent({
-        epicId: "epic-route-active",
-        tabId,
-        focus: undefined,
-      }),
-    );
+    // Re-activate the epic tab over the just-created draft, mirroring exactly
+    // what activateTabIntent does (legacy source projection + layout focus),
+    // without importing raw tabActivate: draft cleared, epic focused.
+    useEpicCanvasStore.getState().setActiveTab(tabId);
+    useLandingDraftStore.getState().clearActiveDraft();
+    useTabsStore.getState().focusRef({ kind: "epic", id: tabId });
 
     const { router } = buildRouter(`/epics/epic-route-active/${tabId}`);
     const fired = dispatchAction("tab.close", router);
@@ -436,10 +463,56 @@ describe("leader digit dispatch (global scope)", () => {
   });
 
   it("settings section digit navigates to the Nth section", () => {
+    // The section leader now gates on the actual focused ref, not just the
+    // /settings pathname, so seed the Settings tab as the focused layout item -
+    // the real state when the flat Settings tab owns the screen.
+    useTabsStore.getState().openSystemTab({
+      kind: "settings",
+      name: "Settings",
+      lastPath: "/settings/general",
+    });
     const { router, calls } = buildRouter("/settings/general");
     expect(fireDigit(router, 2, "alt")).toBe(true);
     expect(calls[0].kind).toBe("section");
     expect(calls[0].sectionId).toBe("appearance");
+  });
+
+  it("settings section digit no-ops when [Settings | empty] is focused on empty", () => {
+    // F4 (closure): the section leader was pathname-owned. With the empty side
+    // of a [Settings | empty] split focused, routeBackingSide keeps the URL on
+    // /settings, but Settings does NOT own focus - an Alt-digit section command
+    // must no-op instead of stealing focus back to Settings.
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-settings",
+          left: { kind: "tab", ref: { kind: "settings", id: "settings" } },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-settings",
+      stripOrder: [{ kind: "settings", id: "settings" }],
+      systemTabs: {
+        history: null,
+        settings: {
+          id: "settings",
+          kind: "settings",
+          name: "Settings",
+          lastPath: "/settings/general",
+        },
+      },
+    });
+
+    const { router, calls } = buildRouter("/settings/general");
+    fireDigit(router, 2, "alt");
+    // No settings-section navigation is dispatched - the section leader is
+    // inactive because the focused ref is the empty side, not Settings.
+    expect(calls.some((call) => call.kind === "section")).toBe(false);
   });
 });
 

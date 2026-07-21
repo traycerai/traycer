@@ -11,6 +11,7 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { createAppRouter, type AppRouter } from "@/router";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import {
@@ -264,10 +265,8 @@ function advance(ms: number): void {
 
 function resetStores(): void {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useTabsStore.setState({
-    stripOrder: [],
-    systemTabs: { history: null, settings: null },
-  });
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
+  __resetTabNavigationControllerForTesting();
 }
 
 function seedEpicTabCount(count: number): ReadonlyArray<string> {
@@ -284,6 +283,10 @@ function seedEpicTabCount(count: number): ReadonlyArray<string> {
       .getState()
       .openTabOrder.map((id) => ({ kind: "epic", id })),
   }));
+  // Make the first epic the active/focused layout item (the state a committed
+  // /epics/e1 route leaves behind); focusRef rebuilds `items` from `stripOrder`
+  // and points `activeItemId` at it.
+  useTabsStore.getState().focusRef({ kind: "epic", id: tabIds[0] });
   return tabIds;
 }
 

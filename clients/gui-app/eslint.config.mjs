@@ -230,18 +230,10 @@ export default tseslint.config(
     },
   },
   {
-    // Tab navigation seam + store definitions own the primitives the
-    // codebase-wide rules ban; only the type-safety + full-store bans apply.
-    files: [
-      "src/lib/tab-navigation.ts",
-      "src/lib/routes.ts",
-      "src/stores/epics/canvas/store.ts",
-      "src/stores/home/landing-draft-store.ts",
-      "src/stores/tabs/kinds/draft.tsx",
-      "src/stores/tabs/kinds/epic.tsx",
-      "src/stores/tabs/kinds/history.tsx",
-      "src/stores/tabs/kinds/settings.tsx",
-    ],
+    // The activation module owns raw tabActivate. Every other caller reaches
+    // activateTabIntent, which binds the coordinated layout commit to the
+    // history-entry envelope before navigating.
+    files: ["src/lib/tab-navigation.ts"],
     rules: {
       "no-restricted-syntax": [
         "error",
@@ -251,14 +243,80 @@ export default tseslint.config(
     },
   },
   {
+    // Plan §2/§3 puts source activation inside this reservation-first command.
+    // The coordinator may call the two legacy source selectors while its
+    // ledger is installed; raw registry.tabActivate remains banned here.
+    files: ["src/stores/tabs/tab-command-coordinator.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions.filter(
+          (restriction) => !tabNavigationStoreActionBans.includes(restriction),
+        ),
+        ...tabNavigationStoreActionRestrictions([
+          "useEpicCanvasStore.setActiveTab",
+          "useLandingDraftStore.setActiveDraft",
+        ]),
+      ],
+    },
+  },
+  {
+    // These kind descriptors implement the source half of tab-navigation's
+    // single activation boundary. Keep raw tabActivate restricted here while
+    // allowing only the descriptor's own legacy projection action.
+    files: ["src/stores/tabs/kinds/draft.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions.filter(
+          (restriction) => !tabNavigationStoreActionBans.includes(restriction),
+        ),
+        ...tabNavigationStoreActionRestrictions([
+          "useLandingDraftStore.setActiveDraft",
+        ]),
+      ],
+    },
+  },
+  {
+    // The Epic descriptor owns its canonical route construction and source
+    // projection; callers still cannot access raw tabActivate here.
+    files: ["src/stores/tabs/kinds/epic.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions.filter(
+          (restriction) =>
+            !tabNavigationStoreActionBans.includes(restriction) &&
+            restriction !== epicTabRouteConstructionBan,
+        ),
+        ...tabNavigationStoreActionRestrictions([
+          "useEpicCanvasStore.setActiveTab",
+        ]),
+      ],
+    },
+  },
+  {
     // Test fixtures construct the full router interface and seed stores via
-    // setActiveTab / setActiveDraft as part of arrange / act setup.
+    // setActiveTab / setActiveDraft as part of arrange / act setup, so ONLY
+    // those two legacy source actions are allowed here. Raw `tabActivate`
+    // access stays banned - tests must activate through activateTabIntent like
+    // production, so a raw `tabActivate` call can never lint clean in a test.
     files: ["src/**/__tests__/**/*.{ts,tsx}", "**/__tests__/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-syntax": [
         "error",
         ...traycerTypeSafetyRestrictions,
         noFullStoreSubscription,
+        ...tabNavigationStoreActionRestrictions([
+          "useEpicCanvasStore.setActiveTab",
+          "useLandingDraftStore.setActiveDraft",
+        ]),
       ],
     },
   },

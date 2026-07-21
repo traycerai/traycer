@@ -2,6 +2,8 @@ import { useCallback, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { useTabsStore } from "@/stores/tabs/store";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import {
   tabMatchesPath,
@@ -71,16 +73,24 @@ export function useCloseTabFlow(): CloseTabFlow {
           description: "Close those tabs individually to discard their edits.",
         });
       }
-      navigateToTabIntent(navigate, tabResolveIntent(target));
+      navigateToTabIntent(navigate, tabResolveIntent(target), undefined);
     },
     [closeTab, navigate],
   );
 
   const closeActiveTab = useCallback(() => {
+    const focusedRef = selectHostFocusedRef(useTabsStore.getState());
+    if (focusedRef === null) return;
     const active = getHeaderTabs().find((t) =>
       tabMatchesPath(t, activePathname),
     );
-    if (active !== undefined) requestCloseTab(active);
+    if (
+      active !== undefined &&
+      active.kind === focusedRef.kind &&
+      active.id === focusedRef.id
+    ) {
+      requestCloseTab(active);
+    }
   }, [activePathname, requestCloseTab]);
 
   return {

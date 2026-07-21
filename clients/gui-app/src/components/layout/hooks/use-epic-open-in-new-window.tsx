@@ -104,6 +104,7 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
               tabId: fallbackTab.tabId,
               focus: undefined,
             }),
+            undefined,
           );
         });
     },

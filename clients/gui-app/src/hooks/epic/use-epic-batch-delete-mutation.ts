@@ -139,7 +139,11 @@ export function useEpicBatchDelete(): UseMutationResult<
           if (navigationTarget === null) {
             void navigate(LANDING_ROUTE);
           } else {
-            navigateToTabIntent(navigate, tabResolveIntent(navigationTarget));
+            navigateToTabIntent(
+              navigate,
+              tabResolveIntent(navigationTarget),
+              undefined,
+            );
           }
         }
         const epicToast = epicDeleteToastParts({

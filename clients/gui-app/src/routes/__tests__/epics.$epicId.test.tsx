@@ -70,6 +70,7 @@ function mountPhaseMigrationGate() {
     component: () => (
       <PhaseToEpicMigrationGate
         phaseId="phase-1"
+        tabId="tab-phase-1"
         search={{
           focusedAt: undefined,
           focusArtifactId: undefined,

@@ -41,6 +41,7 @@ import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-owners
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -356,12 +357,17 @@ describe("<EpicsListPanel />", () => {
     testState.fetchNextPage.mockReset();
     testState.activityByEpicId.clear();
     queryClient.clear();
+    // This fixture renders the panel without the application root bridge. The
+    // bridge releases the controller's hydration gate in production, so make
+    // that production precondition explicit here before exercising a row-open.
+    __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
 
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     setDesktopEpicOwnershipBridge(null);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });

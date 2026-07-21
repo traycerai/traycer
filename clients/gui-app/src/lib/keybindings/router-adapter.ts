@@ -59,6 +59,7 @@ export function routerAdapterFor(
       navigateToTabIntent(
         router.navigate,
         openOrFocusEpicIntent({ epicId, focus: undefined }),
+        undefined,
       );
     },
     navigateToEpicTab: (tab) => {
@@ -69,6 +70,7 @@ export function routerAdapterFor(
           tabId: tab.tabId,
           focus: undefined,
         }),
+        undefined,
       );
     },
     navigateToEpicList: () => {
@@ -92,10 +94,16 @@ export function routerAdapterFor(
     },
     navigateToTabIntent: (intent) => {
       const api = getSystemTabModalApi();
-      if (api !== null && routeIntentViaModalBridge(intent, api)) {
+      if (
+        api !== null &&
+        intent.kind !== "open-epic" &&
+        intent.kind !== "new-draft" &&
+        intent.kind !== "complete-epic-migration" &&
+        routeIntentViaModalBridge(intent, api)
+      ) {
         return;
       }
-      navigateToTabIntent(router.navigate, intent);
+      navigateToTabIntent(router.navigate, intent, undefined);
     },
     navigateNestedFocus: (epicId, tabId, prepare) =>
       navigateNestedFocus(

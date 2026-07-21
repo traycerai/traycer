@@ -18,8 +18,17 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
-const navigateMock = vi.hoisted(() => vi.fn());
+interface CapturedNavigate {
+  readonly to: string;
+  readonly replace: boolean;
+  readonly state: unknown;
+}
+
+const navigateMock = vi.hoisted(() =>
+  vi.fn<(options: CapturedNavigate) => void>(),
+);
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
@@ -224,10 +233,12 @@ function renderListener(host: IRunnerHost): QueryClient {
 
 describe("<HostTrayCommandListener /> - mounted in __root", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     navigateMock.mockClear();
   });
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
   });
 
   it("subscribes to hostTray.onCommand and navigates on openSettingsHost", () => {
@@ -239,7 +250,12 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
       tray.emit({ kind: "openSettingsHost" });
     });
 
-    expect(navigateMock).toHaveBeenCalledWith({ to: "/settings/host" });
+    const call = navigateMock.mock.calls.at(-1);
+    if (call === undefined) throw new Error("expected navigation");
+    const [navigation] = call;
+    expect(navigation.to).toBe("/settings/host");
+    expect(navigation.replace).toBe(false);
+    expect(navigation.state).toEqual(expect.any(Function));
   });
 
   it("opens a confirmation dialog for restartHost and only invokes restartHost after confirm", async () => {

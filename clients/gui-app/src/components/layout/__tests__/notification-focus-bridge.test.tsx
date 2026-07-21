@@ -3,7 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-const navigateSpy = vi.fn();
+interface CapturedNavigate {
+  readonly to: string;
+  readonly params: { readonly epicId: string; readonly tabId: string };
+  readonly search: Record<string, unknown>;
+  readonly replace: boolean;
+  readonly state: unknown;
+}
+
+const navigateSpy = vi.fn<(options: CapturedNavigate) => void>();
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateSpy,
@@ -13,6 +21,7 @@ import { NotificationFocusBridge } from "@/components/layout/bridges/notificatio
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -31,8 +40,24 @@ function renderBridge(): void {
   );
 }
 
+function expectEpicNavigation(
+  epicId: string,
+  tabId: string,
+  search: Record<string, unknown>,
+): void {
+  const call = navigateSpy.mock.calls.at(-1);
+  if (call === undefined) throw new Error("expected an Epic navigation");
+  const [navigation] = call;
+  expect(navigation.to).toBe("/epics/$epicId/$tabId");
+  expect(navigation.params).toEqual({ epicId, tabId });
+  expect(navigation.replace).toBe(false);
+  expect(navigation.search).toMatchObject(search);
+  expect(navigation.state).toEqual(expect.any(Function));
+}
+
 describe("NotificationFocusBridge", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     vi.useFakeTimers();
     vi.setSystemTime(1_777_768_800_000);
     navigateSpy.mockReset();
@@ -48,6 +73,7 @@ describe("NotificationFocusBridge", () => {
 
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     vi.useRealTimers();
     useNotificationEventsStore.getState().clear();
     useNotificationsPopoverStore.getState().setOpen(false);
@@ -64,15 +90,11 @@ describe("NotificationFocusBridge", () => {
     });
 
     expect(useNotificationsPopoverStore.getState().open).toBe(true);
-    expect(navigateSpy).toHaveBeenCalledWith({
-      to: "/epics/$epicId/$tabId",
-      params: { epicId: "epic-1", tabId },
-      search: {
-        focusedAt: 1_777_768_800_000,
-        focusArtifactId: undefined,
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
+    expectEpicNavigation("epic-1", tabId, {
+      focusedAt: 1_777_768_800_000,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      migrationSource: undefined,
     });
   });
 
@@ -90,15 +112,11 @@ describe("NotificationFocusBridge", () => {
     });
 
     expect(useNotificationsPopoverStore.getState().open).toBe(true);
-    expect(navigateSpy).toHaveBeenCalledWith({
-      to: "/epics/$epicId/$tabId",
-      params: { epicId: "epic-2", tabId },
-      search: {
-        focusedAt: 1_777_768_800_000,
-        focusArtifactId: "artifact-7",
-        focusThreadId: "thread-3",
-        migrationSource: undefined,
-      },
+    expectEpicNavigation("epic-2", tabId, {
+      focusedAt: 1_777_768_800_000,
+      focusArtifactId: "artifact-7",
+      focusThreadId: "thread-3",
+      migrationSource: undefined,
     });
   });
 
@@ -113,15 +131,11 @@ describe("NotificationFocusBridge", () => {
     });
 
     expect(useNotificationsPopoverStore.getState().open).toBe(true);
-    expect(navigateSpy).toHaveBeenCalledWith({
-      to: "/epics/$epicId/$tabId",
-      params: { epicId: "epic-9", tabId },
-      search: {
-        focusedAt: 1_777_768_800_000,
-        focusArtifactId: "chat-1",
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
+    expectEpicNavigation("epic-9", tabId, {
+      focusedAt: 1_777_768_800_000,
+      focusArtifactId: "chat-1",
+      focusThreadId: undefined,
+      migrationSource: undefined,
     });
   });
 
@@ -143,15 +157,11 @@ describe("NotificationFocusBridge", () => {
     });
 
     expect(useNotificationsPopoverStore.getState().open).toBe(false);
-    expect(navigateSpy).toHaveBeenCalledWith({
-      to: "/epics/$epicId/$tabId",
-      params: { epicId: "epic-in-app", tabId },
-      search: {
-        focusedAt: 1_777_768_800_123,
-        focusArtifactId: "chat-in-app",
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
+    expectEpicNavigation("epic-in-app", tabId, {
+      focusedAt: 1_777_768_800_123,
+      focusArtifactId: "chat-in-app",
+      focusThreadId: undefined,
+      migrationSource: undefined,
     });
   });
 
@@ -186,17 +196,13 @@ describe("NotificationFocusBridge", () => {
     });
 
     expect(useNotificationsPopoverStore.getState().open).toBe(true);
-    expect(navigateSpy).toHaveBeenCalledWith({
-      to: "/epics/$epicId/$tabId",
-      params: { epicId: "epic-terminal", tabId },
-      search: {
-        focusedAt: 1_777_768_800_000,
-        focusArtifactId: undefined,
-        focusThreadId: undefined,
-        migrationSource: undefined,
-        focusPaneId: paneId,
-        focusTileInstanceId: "terminal-instance-1",
-      },
+    expectEpicNavigation("epic-terminal", tabId, {
+      focusedAt: 1_777_768_800_000,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      migrationSource: undefined,
+      focusPaneId: paneId,
+      focusTileInstanceId: "terminal-instance-1",
     });
   });
 

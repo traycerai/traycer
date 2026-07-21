@@ -34,6 +34,56 @@ function matchingFiles(pattern: RegExp): readonly string[] {
 }
 
 describe("epic tab architecture contracts", () => {
+  // Cold review #5 / #9: route render adapters must not re-assert layout via
+  // synchronizeExternalRef; missing/stale Epic resolution must go through the
+  // enveloped activateTabIntent seam (not a raw un-enveloped navigate).
+  it("Epic and Draft route adapters do not call synchronizeExternalRef", () => {
+    const epicRoute = productionSourceEntries().find(([filePath]) =>
+      filePath.endsWith("epic-tab-route-components.tsx"),
+    );
+    const draftRoute = productionSourceEntries().find(([filePath]) =>
+      filePath.endsWith("draft-route-components.tsx"),
+    );
+    expect(epicRoute, "epic route component source").toBeDefined();
+    expect(draftRoute, "draft route component source").toBeDefined();
+    if (epicRoute === undefined || draftRoute === undefined) {
+      throw new Error("missing route adapter sources");
+    }
+    expect(epicRoute[1]).not.toMatch(/\bsynchronizeExternalRef\b/);
+    expect(draftRoute[1]).not.toMatch(/\bsynchronizeExternalRef\b/);
+  });
+
+  it("keeps missing/stale Epic resolution in the permanent controller, not the render adapter", () => {
+    const epicRoute = productionSourceEntries().find(([filePath]) =>
+      filePath.endsWith("epic-tab-route-components.tsx"),
+    );
+    const controller = productionSourceEntries().find(([filePath]) =>
+      filePath.endsWith("lib/tab-navigation.ts"),
+    );
+    expect(epicRoute, "epic route component source").toBeDefined();
+    expect(controller, "navigation controller source").toBeDefined();
+    if (epicRoute === undefined || controller === undefined) {
+      throw new Error("missing navigation authority sources");
+    }
+    const source = epicRoute[1];
+    const adapterStart = source.indexOf("function EpicRouteTabSync");
+    const adapterEnd = source.indexOf(
+      "export function PhaseToEpicMigrationGate",
+    );
+    expect(adapterStart).toBeGreaterThanOrEqual(0);
+    expect(adapterEnd).toBeGreaterThan(adapterStart);
+    const adapter = source.slice(adapterStart, adapterEnd);
+    expect(adapter).not.toMatch(
+      /\b(?:activateTabIntent|openOrFocusEpicIntent|synchronizeExternalRef|navigate)\b/,
+    );
+
+    // Missing/stale routes are instead resolved by the continuously mounted
+    // controller, which can correlate any canonical replace it issues.
+    expect(controller[1]).toMatch(/\bresolveExternalEpic\b/);
+    expect(controller[1]).toMatch(/\bissueCorrection\b/);
+    expect(controller[1]).toMatch(/tabCommandCoordinator\.activateTab\(/);
+  });
+
   it("keeps /epics/$epicId/$tabId as the only concrete epic route", () => {
     const routeFileNames = Object.keys(routeSources);
 

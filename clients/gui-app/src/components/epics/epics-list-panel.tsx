@@ -90,7 +90,7 @@ import {
   type HistorySearchController,
 } from "@/hooks/home/use-history-search-state";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { phaseMigrationRoute } from "@/lib/routes";
+import { activateTabIntent, openOrFocusEpicIntent } from "@/lib/tab-navigation";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { openEpicFromList as openEpicFromCommand } from "@/lib/commands/actions/open-epic-from-list";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -1046,7 +1046,23 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const openEpic = useCallback(() => {
     onSelectEpic?.(item.epicId);
     if (isPhase) {
-      void navigate(phaseMigrationRoute(item.epicId));
+      // Route the Phase deep link through the canonical activation boundary so
+      // the controller snapshots first (a rejected navigation restores the prior
+      // tab) instead of a raw navigate over a route builder that mutated source
+      // selection. `migrationSource: "phase"` threads through the epic search.
+      activateTabIntent(
+        navigate,
+        openOrFocusEpicIntent({
+          epicId: item.epicId,
+          focus: {
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            migrationSource: "phase",
+          },
+        }),
+        undefined,
+      );
       return;
     }
     // Passing the row's title threads it through tab creation so the

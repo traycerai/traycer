@@ -44,9 +44,12 @@ import {
   unmarkEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
 import {
+  activateTabIntent,
   existingEpicTabIntent,
   navigateToTabIntent,
+  openExactEpicTabIntent,
 } from "@/lib/tab-navigation";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   buildSubmittedChatJSONContent,
   extractPlainTextFromComposerJSONContent,
@@ -316,28 +319,46 @@ export function useLandingComposerActions(): LandingComposerActions {
       // Stored untitled; the displayed label is derived at render via
       // `epicDisplayTitle`.
       const epicTitle = "";
-      const tabId = useEpicCanvasStore
-        .getState()
-        .openEpicTab(epicId, epicTitle);
+      const tabId = uuidv4();
       // Mark before navigation so the epic-tab existence reconciler never
       // force-closes this tab while `epic.listTasks` still lags `epic.create`.
       markEpicCreatedThisSession(epicId);
       // Spinner anchor is the pre-generation title (empty here); it clears once
       // a non-empty title is projected or the backstop fires.
-      useEpicCanvasStore.getState().markEpicTitlePending(epicId, epicTitle);
       const activeDraftId = useLandingDraftStore.getState().activeDraftId;
-      if (activeDraftId !== null) {
-        useLandingDraftStore.getState().closeDraft(activeDraftId);
-      }
+      const replaced =
+        activeDraftId === null
+          ? null
+          : tabCommandCoordinator.replaceDraftWithEpic({
+              draftId: activeDraftId,
+              epicId,
+              epicTabId: tabId,
+              epicName: epicTitle,
+            });
+      useEpicCanvasStore.getState().markEpicTitlePending(epicId, epicTitle);
       useLandingComposerStore.getState().reset();
       editor.clear();
       // Submit closed the active draft + reset the live mirror, so the sent
       // image's hashes may now be orphaned — reclaim them (debounced).
       scheduleLandingImageReconcile();
-      navigateToTabIntent(
-        navigate,
-        existingEpicTabIntent({ epicId, tabId, focus: undefined }),
-      );
+      if (replaced === null) {
+        activateTabIntent(
+          navigate,
+          openExactEpicTabIntent({
+            epicId,
+            tabId,
+            name: epicTitle,
+            focus: undefined,
+          }),
+          undefined,
+        );
+      } else {
+        navigateToTabIntent(
+          navigate,
+          existingEpicTabIntent({ epicId, tabId, focus: undefined }),
+          undefined,
+        );
+      }
 
       const initialMessage =
         userId !== null
@@ -530,22 +551,40 @@ export function useLandingComposerActions(): LandingComposerActions {
       // agent…" for the whole setup wait, so the user lands on the epic
       // immediately instead of the landing page freezing on the ~3-4s
       // `agent.tui.prepareLaunch` round-trip.
-      const tabId = useEpicCanvasStore
-        .getState()
-        .openEpicTab(epicId, epicTitle);
+      const tabId = uuidv4();
       // Terminal-agent create registers no initial-chat handoff, so this
       // synchronous marker is what keeps the existence reconciler from
       // force-closing the tab before `epic.listTasks` reflects the new epic.
       markEpicCreatedThisSession(epicId);
       const activeDraftId = useLandingDraftStore.getState().activeDraftId;
-      if (activeDraftId !== null) {
-        useLandingDraftStore.getState().closeDraft(activeDraftId);
-      }
+      const replaced =
+        activeDraftId === null
+          ? null
+          : tabCommandCoordinator.replaceDraftWithEpic({
+              draftId: activeDraftId,
+              epicId,
+              epicTabId: tabId,
+              epicName: epicTitle,
+            });
       useLandingComposerStore.getState().reset();
-      navigateToTabIntent(
-        navigate,
-        existingEpicTabIntent({ epicId, tabId, focus: undefined }),
-      );
+      if (replaced === null) {
+        activateTabIntent(
+          navigate,
+          openExactEpicTabIntent({
+            epicId,
+            tabId,
+            name: epicTitle,
+            focus: undefined,
+          }),
+          undefined,
+        );
+      } else {
+        navigateToTabIntent(
+          navigate,
+          existingEpicTabIntent({ epicId, tabId, focus: undefined }),
+          undefined,
+        );
+      }
 
       // Create the epic, then the tui-agent off the navigation critical
       // path. Chaining preserves the host ordering the blocking flow

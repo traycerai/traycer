@@ -22,6 +22,7 @@ import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-j
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 const homeMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -175,6 +176,7 @@ import { HomePage } from "@/components/home/home-page";
 
 describe("<HomePage />", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     window.localStorage.clear();
     homeMocks.systemModalOpen = false;
     homeMocks.navigate.mockReset();

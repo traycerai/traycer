@@ -81,6 +81,72 @@ export const TAB_NAVIGATION_STORE_ACTION_BANS = [
   },
 ];
 
+const TAB_ACTIVATE_IMPORT_MESSAGE =
+  "Do not import tabActivate outside lib/tab-navigation.ts. Use activateTabIntent so layout activation and the exact-entry navigation envelope stay coupled.";
+const TAB_ACTIVATE_ACCESS_MESSAGE =
+  "Do not access tabActivate outside lib/tab-navigation.ts. Use activateTabIntent so layout activation and the exact-entry navigation envelope stay coupled.";
+const TAB_ACTIVATE_DESTRUCTURE_MESSAGE =
+  "Do not destructure tabActivate outside lib/tab-navigation.ts. Use activateTabIntent so layout activation and the exact-entry navigation envelope stay coupled.";
+
+const RAW_TAB_ACTIVATION_RESTRICTIONS = [
+  {
+    // Named import: import { tabActivate } / import { tabActivate as x }.
+    selector:
+      "ImportSpecifier[imported.type='Identifier'][imported.name='tabActivate']",
+    message: TAB_ACTIVATE_IMPORT_MESSAGE,
+  },
+  {
+    // Quoted named import: import { "tabActivate" as x }. `imported` is a Literal
+    // here, not an Identifier, so the selector above misses it.
+    selector:
+      "ImportSpecifier[imported.type='Literal'][imported.value='tabActivate']",
+    message: TAB_ACTIVATE_IMPORT_MESSAGE,
+  },
+  {
+    // Dot member: registry.tabActivate.
+    selector: "MemberExpression[computed=false][property.name='tabActivate']",
+    message: TAB_ACTIVATE_ACCESS_MESSAGE,
+  },
+  {
+    // String-computed member: registry["tabActivate"].
+    selector:
+      "MemberExpression[computed=true][property.type='Literal'][property.value='tabActivate']",
+    message: TAB_ACTIVATE_ACCESS_MESSAGE,
+  },
+  {
+    // Template-computed member: registry[`tabActivate`]. A no-substitution
+    // template literal is NOT a Literal node.
+    selector:
+      "MemberExpression[computed=true][property.type='TemplateLiteral'][property.quasis.0.value.cooked='tabActivate']",
+    message: TAB_ACTIVATE_ACCESS_MESSAGE,
+  },
+  {
+    // ANY destructuring that extracts a `tabActivate` binding - declaration
+    // (`const { tabActivate } = ...`), assignment (`({ tabActivate } = ...)`),
+    // OR function parameter (`function f({ tabActivate }) {}`). `ObjectPattern`
+    // only occurs in destructuring positions, so anchoring on it (not on
+    // VariableDeclarator/AssignmentExpression) covers every context at once.
+    // Matches shorthand and renamed-binding forms; `key.name` is the extracted
+    // property, never a renamed local, so `{ x: tabActivate }` (binding named
+    // tabActivate, extracting `x`) is correctly NOT flagged.
+    selector:
+      "ObjectPattern > Property[key.type='Identifier'][key.name='tabActivate']",
+    message: TAB_ACTIVATE_DESTRUCTURE_MESSAGE,
+  },
+  {
+    // String-literal key: { ["tabActivate"]: x } / { "tabActivate": x }.
+    selector:
+      "ObjectPattern > Property[key.type='Literal'][key.value='tabActivate']",
+    message: TAB_ACTIVATE_DESTRUCTURE_MESSAGE,
+  },
+  {
+    // Template-literal key: { [`tabActivate`]: x }.
+    selector:
+      "ObjectPattern > Property[key.type='TemplateLiteral'][key.quasis.0.value.cooked='tabActivate']",
+    message: TAB_ACTIVATE_DESTRUCTURE_MESSAGE,
+  },
+];
+
 function storeActionRestrictions(storeName, actionNames, message) {
   if (actionNames.length === 0) return [];
 
@@ -157,7 +223,7 @@ export function nestedFocusBoundaryRestrictions(allowedNames) {
 }
 
 export function tabNavigationStoreActionRestrictions(allowedStoreActions) {
-  return TAB_NAVIGATION_STORE_ACTION_BANS.flatMap((ban) =>
+  const storeRestrictions = TAB_NAVIGATION_STORE_ACTION_BANS.flatMap((ban) =>
     storeActionRestrictions(
       ban.storeName,
       ban.actionNames.filter(
@@ -167,4 +233,5 @@ export function tabNavigationStoreActionRestrictions(allowedStoreActions) {
       ban.message,
     ),
   );
+  return [...storeRestrictions, ...RAW_TAB_ACTIVATION_RESTRICTIONS];
 }

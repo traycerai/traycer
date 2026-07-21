@@ -1,5 +1,4 @@
 import type { NavigateOptions } from "@tanstack/react-router";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 
 export const LANDING_ROUTE: NavigateOptions = { to: "/" };
@@ -31,16 +30,6 @@ const DEFAULT_EPIC_SEARCH = {
   focusThreadId: undefined,
   migrationSource: undefined,
 } as const;
-export function phaseMigrationRoute(phaseId: string): NavigateOptions {
-  const tabId = useEpicCanvasStore
-    .getState()
-    .resolveTargetTabForEpic(phaseId, undefined);
-  return {
-    to: "/epics/$epicId/$tabId",
-    params: { epicId: phaseId, tabId },
-    search: { ...DEFAULT_EPIC_SEARCH, migrationSource: "phase" },
-  };
-}
 
 export function epicTabRoute(
   tab: Pick<EpicViewTab, "epicId" | "tabId">,

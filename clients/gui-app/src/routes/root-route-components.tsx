@@ -9,12 +9,12 @@ import { NotificationEmissionController } from "@/components/layout/bridges/noti
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
+import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
-import { useDeepLinkTabSync } from "@/stores/tabs/use-deep-link-tab-sync";
 
 export function RootComponent() {
   const authStatus = useAuthStore((state) => state.status);
@@ -43,6 +43,10 @@ export function RootComponent() {
       <MenuCommandListener />
       <DesktopDialogHost />
       <NotificationEmissionController />
+      {/* This is the permanent route -> layout authority. It must observe
+          commits while HostReadyGate swaps its children; only materialization
+          is hydration-gated inside the controller. */}
+      {authStatus === "signed-in" ? <TabNavigationRouteBridge /> : null}
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
           mount timing it had when the gate wrapped the whole RouterProvider -
           these bridges + the page only mount once the host is reachable (or the
@@ -52,7 +56,6 @@ export function RootComponent() {
         <PreventSleepController />
         <TrayOpenEpicBridge />
         <NotificationFocusBridge />
-        <DeepLinkTabSync />
         <EpicAccessCoordinator />
         <ProviderProfileAddFlowHost />
         <RootSurface
@@ -76,9 +79,4 @@ function RootSurface(props: {
       <Outlet />
     </AppShell>
   );
-}
-
-function DeepLinkTabSync() {
-  useDeepLinkTabSync();
-  return null;
 }

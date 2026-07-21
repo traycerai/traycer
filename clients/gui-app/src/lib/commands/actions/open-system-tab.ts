@@ -8,13 +8,13 @@
  * own navigation strategy (TanStack `useNavigate`, `KeybindingRouter`,
  * etc.) without this module taking a router dependency.
  */
-import { useTabsStore } from "@/stores/tabs/store";
 import {
   historyTabIntent,
   settingsSectionFromPath,
   settingsTabIntent,
   type TabNavigationIntent,
 } from "@/lib/tab-navigation";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   defaultHistoryTabName,
   historyDefaultPath,
@@ -28,20 +28,26 @@ import {
 import type { SettingsSectionId } from "@/lib/settings-sections";
 
 /**
- * Ensure the History tab exists (or focus it) and return the path the
- * caller should navigate to. The remembered `lastPath` is preserved
- * across sessions; new opens land at it when present.
+ * Select the History route the caller should open. The navigation controller
+ * materializes the system tab after recording its rollback snapshot.
  */
+export function resolveHistoryTabIntent(): Extract<
+  TabNavigationIntent,
+  { kind: "history" }
+> {
+  return historyTabIntent();
+}
+
+/** Legacy store-only helper for committed deep-link synchronization. */
 export function ensureHistoryTab(): TabNavigationIntent {
   const store = useTabsStore.getState();
-  const existing = store.systemTabs.history;
-  const target = existing?.lastPath ?? historyDefaultPath();
+  const target = store.systemTabs.history?.lastPath ?? historyDefaultPath();
   store.openSystemTab({
     kind: "history",
     name: defaultHistoryTabName(),
     lastPath: target,
   });
-  return historyTabIntent();
+  return resolveHistoryTabIntent();
 }
 
 export interface OpenSettingsOpts {
@@ -55,26 +61,34 @@ export interface OpenSettingsOpts {
 }
 
 /**
- * Ensure the Settings tab exists and return the path the caller should
- * navigate to. Resolution order:
+ * Select the Settings route the caller should open. The navigation controller
+ * materializes the system tab after recording its rollback snapshot. Resolution order:
  *  1. `opts.subSection` - explicit target wins.
  *  2. `opts.resetToGeneral` - snap to `/settings/general`.
  *  3. Existing `lastPath` - focus the tab where it left off.
  *  4. Default `/settings/general`.
  */
-export function ensureSettingsTab(opts: OpenSettingsOpts): TabNavigationIntent {
+export function resolveSettingsTabIntent(
+  opts: OpenSettingsOpts,
+): Extract<TabNavigationIntent, { kind: "settings" }> {
   const store = useTabsStore.getState();
   const existing = store.systemTabs.settings;
   const target = resolveSettingsTarget(
     opts,
     normalizeSettingsPath(existing?.lastPath ?? null),
   );
-  store.openSystemTab({
+  return settingsTabIntent(settingsSectionFromPath(target));
+}
+
+/** Legacy store-only helper for committed deep-link synchronization. */
+export function ensureSettingsTab(opts: OpenSettingsOpts): TabNavigationIntent {
+  const intent = resolveSettingsTabIntent(opts);
+  useTabsStore.getState().openSystemTab({
     kind: "settings",
     name: defaultSettingsTabName(),
-    lastPath: target,
+    lastPath: settingsSectionPath(intent.section),
   });
-  return settingsTabIntent(settingsSectionFromPath(target));
+  return intent;
 }
 
 function resolveSettingsTarget(

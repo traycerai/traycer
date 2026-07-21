@@ -27,6 +27,7 @@ import {
 } from "vitest";
 import * as TabNav from "@/lib/tab-navigation";
 import {
+  dispatchAction,
   matchDigitAction,
   registerBaseLeaderScope,
   type KeybindingRouter,
@@ -34,11 +35,12 @@ import {
 import {
   existingEpicTabIntent,
   draftTabIntent,
-  type TabNavigationIntent,
+  type TabActivationIntent,
 } from "@/lib/tab-navigation/intents";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabItemId } from "@/stores/tabs/layout";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
@@ -50,6 +52,7 @@ function resetStores(): void {
     stripOrder: [],
     systemTabs: { history: null, settings: null },
   });
+  TabNav.__resetTabNavigationControllerForTesting();
 }
 
 // Fire Alt+digit through the leader-scope stack the way the provider does:
@@ -82,12 +85,12 @@ function asNavigate(mock: NavigateMock): UseNavigateResult<string> {
 
 interface RecordedRouter {
   readonly router: KeybindingRouter;
-  readonly intents: TabNavigationIntent[];
+  readonly intents: TabActivationIntent[];
   setPathname: (path: string) => void;
 }
 
 function buildRecordingRouter(initialPath: string): RecordedRouter {
-  const intents: TabNavigationIntent[] = [];
+  const intents: TabActivationIntent[] = [];
   let pathname = initialPath;
   const router: KeybindingRouter = {
     getPathname: () => pathname,
@@ -137,6 +140,7 @@ describe("tab navigation single-path contract", () => {
         tabId,
         focus: undefined,
       }),
+      undefined,
     );
 
     expect(setActiveSpy).toHaveBeenCalledWith(tabId);
@@ -157,6 +161,7 @@ describe("tab navigation single-path contract", () => {
         tabId,
         focus: undefined,
       }),
+      undefined,
     );
 
     expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
@@ -211,5 +216,106 @@ describe("tab navigation single-path contract", () => {
 
     expect(seamSpy).not.toHaveBeenCalled();
     expect(recorded.intents).toHaveLength(1);
+  });
+
+  // Cold review #4: empty/fillable focus must still allow strip digit +
+  // next/prev traversal, while member-specific close no-ops when host focus
+  // is not on a concrete epic member.
+  it("fillable empty focus still allows digit strip selection", () => {
+    const tabId = useEpicCanvasStore.getState().openEpicTab("epic-4", "Delta");
+    const epicRef = { kind: "epic" as const, id: tabId };
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-empty",
+          left: { kind: "tab", ref: epicRef },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-empty",
+      stripOrder: [epicRef],
+      systemTabs: { history: null, settings: null },
+    });
+    const recorded = buildRecordingRouter(`/epics/epic-4/${tabId}`);
+
+    const handled = dispatchEpicDigit(recorded.router, 1);
+
+    expect(handled).toBe(true);
+    expect(recorded.intents).toHaveLength(1);
+    expect(recorded.intents[0]).toMatchObject({
+      kind: "epic",
+      epicId: "epic-4",
+      tabId,
+    });
+  });
+
+  it("fillable empty focus allows epic.next traversal via route backing", () => {
+    const a = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
+    const b = useEpicCanvasStore.getState().openEpicTab("epic-b", "B");
+    const refA = { kind: "epic" as const, id: a };
+    const refB = { kind: "epic" as const, id: b };
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-empty",
+          left: { kind: "tab", ref: refA },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+        { kind: "tab", id: tabItemId(refB), ref: refB },
+      ],
+      activeItemId: "split-empty",
+      stripOrder: [refA, refB],
+      systemTabs: { history: null, settings: null },
+    });
+    const recorded = buildRecordingRouter(`/epics/epic-a/${a}`);
+
+    expect(dispatchAction("epic.next", recorded.router)).toBe(true);
+    expect(recorded.intents).toHaveLength(1);
+    expect(recorded.intents[0]).toMatchObject({
+      kind: "epic",
+      epicId: "epic-b",
+      tabId: b,
+    });
+  });
+
+  it("member-specific epic.close no-ops when fillable empty side owns focus", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-5", "Epsilon");
+    const epicRef = { kind: "epic" as const, id: tabId };
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-empty",
+          left: { kind: "tab", ref: epicRef },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-empty",
+      stripOrder: [epicRef],
+      systemTabs: { history: null, settings: null },
+    });
+    const recorded = buildRecordingRouter(`/epics/epic-5/${tabId}`);
+    const closeSpy = vi.spyOn(useEpicCanvasStore.getState(), "closeTab");
+
+    expect(dispatchAction("epic.close", recorded.router)).toBe(false);
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
+    expect(recorded.intents).toHaveLength(0);
   });
 });

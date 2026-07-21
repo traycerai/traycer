@@ -1,104 +1,52 @@
 import "../../../__tests__/test-browser-apis";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
-import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useTabsStore } from "@/stores/tabs/store";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render } from "@testing-library/react";
 
-const mocks = vi.hoisted(() => ({
-  navigate: vi.fn(),
-  createDraftAndReplaceRoute: vi.fn(),
+const navigationMock = vi.hoisted(() => ({
+  failed: false,
+  listener: null as (() => void) | null,
 }));
 
-vi.mock("@/lib/draft-entry-route", () => ({
-  createDraftAndReplaceRoute: mocks.createDraftAndReplaceRoute,
+vi.mock("@tanstack/react-router", () => ({
+  useRouterState: (options: {
+    readonly select: (state: {
+      readonly location: { readonly state: unknown };
+    }) => unknown;
+  }) => options.select({ location: { state: { __TSR_key: "draft-new" } } }),
 }));
 
-vi.mock("@tanstack/react-router", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@tanstack/react-router")>();
-  return { ...actual, useNavigate: () => mocks.navigate };
-});
+vi.mock("@/lib/tab-navigation", () => ({
+  subscribeTabNavigationResolutionFailure: (listener: () => void) => {
+    navigationMock.listener = listener;
+    return () => {
+      navigationMock.listener = null;
+    };
+  },
+  tabNavigationResolutionFailed: () => navigationMock.failed,
+}));
+
+vi.mock("@/components/layout/root-landing-page", () => ({
+  RootLandingPage: () => <div data-testid="draft-new-fallback" />,
+}));
 
 import { DraftNewRoute } from "@/routes/draft-new-route-components";
 
-function renderGated(hasHydrated: boolean) {
-  return render(
-    <WindowsBridgeContext.Provider value={{ bridge: null, hasHydrated }}>
-      <DraftNewRoute />
-    </WindowsBridgeContext.Provider>,
-  );
-}
-
-beforeEach(() => {
-  mocks.navigate.mockReset();
-  mocks.createDraftAndReplaceRoute.mockReset();
-  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  useTabsStore.setState({
-    stripOrder: [],
-    systemTabs: { history: null, settings: null },
-  });
-});
-
 afterEach(() => {
   cleanup();
+  navigationMock.failed = false;
+  navigationMock.listener = null;
 });
 
-describe("DraftNewRoute hydration gate", () => {
-  it("does not mint a draft or navigate until the windows bridge has hydrated", () => {
-    renderGated(false);
-
-    expect(mocks.createDraftAndReplaceRoute).not.toHaveBeenCalled();
-    expect(mocks.navigate).not.toHaveBeenCalled();
+describe("DraftNewRoute render-only adapter", () => {
+  it("renders a passive progress surface while the root bridge resolves the entry", () => {
+    const view = render(<DraftNewRoute />);
+    expect(view.container.firstElementChild).not.toBeNull();
+    expect(view.queryByTestId("draft-new-fallback")).toBeNull();
   });
 
-  it("mints a draft once hydrated when no tabs were restored", async () => {
-    renderGated(true);
-
-    await waitFor(() => {
-      expect(mocks.createDraftAndReplaceRoute).toHaveBeenCalledTimes(1);
-    });
-    expect(mocks.navigate).not.toHaveBeenCalled();
-  });
-
-  it("routes back to the restored workspace instead of minting when hydration reveals a restored tab", async () => {
-    useTabsStore.setState({
-      stripOrder: [{ kind: "history", id: "history" }],
-      systemTabs: {
-        history: {
-          id: "history",
-          kind: "history",
-          name: "History",
-          lastPath: null,
-        },
-        settings: null,
-      },
-    });
-
-    renderGated(true);
-
-    await waitFor(() => {
-      expect(mocks.navigate).toHaveBeenCalledWith({ to: "/", replace: true });
-    });
-    expect(mocks.createDraftAndReplaceRoute).not.toHaveBeenCalled();
-  });
-
-  it("defers the decision through a pending→hydrated transition (no draft while pending)", async () => {
-    const view = renderGated(false);
-    expect(mocks.createDraftAndReplaceRoute).not.toHaveBeenCalled();
-
-    view.rerender(
-      <WindowsBridgeContext.Provider
-        value={{ bridge: null, hasHydrated: true }}
-      >
-        <DraftNewRoute />
-      </WindowsBridgeContext.Provider>,
-    );
-
-    await waitFor(() => {
-      expect(mocks.createDraftAndReplaceRoute).toHaveBeenCalledTimes(1);
-    });
+  it("renders the deterministic fallback after the controller exhausts correction", () => {
+    navigationMock.failed = true;
+    const view = render(<DraftNewRoute />);
+    expect(view.getByTestId("draft-new-fallback")).toBeDefined();
   });
 });

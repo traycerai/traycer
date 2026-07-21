@@ -261,6 +261,7 @@ export function openResolvedArtifact(
         migrationSource: undefined,
       },
     }),
+    undefined,
   );
 }
 

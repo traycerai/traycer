@@ -322,6 +322,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
                 tabId: result.tabId,
                 focus: undefined,
               }),
+              undefined,
             );
           }
         } else {

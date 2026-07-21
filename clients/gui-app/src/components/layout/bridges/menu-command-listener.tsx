@@ -23,6 +23,8 @@ import {
   advanceActiveTileFind,
   openActiveTileFind,
 } from "@/lib/commands/tile-find";
+import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
+import { activateTabIntent } from "@/lib/tab-navigation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
@@ -159,7 +161,14 @@ export function MenuCommandListener() {
       handleMenuCommand(payload, {
         authService,
         navigateSettings: () => {
-          void navigate({ to: "/settings/general" });
+          activateTabIntent(
+            navigate,
+            resolveSettingsTabIntent({
+              subSection: "general",
+              resetToGeneral: true,
+            }),
+            undefined,
+          );
         },
         openAboutDetails,
         closeActiveTab: closeTabFlow.closeActiveTab,
