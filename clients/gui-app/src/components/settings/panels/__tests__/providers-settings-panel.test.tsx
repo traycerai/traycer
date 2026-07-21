@@ -1263,11 +1263,13 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(manageProfileButton.getAttribute("data-variant")).toBe("outline");
     expect(manageProfileButton.getAttribute("data-size")).toBe("xs");
-    const profileSummaryActions = manageProfileButton.closest(".flex-wrap");
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
     if (!(profileSummaryActions instanceof HTMLElement)) {
       throw new Error("Expected profile summary and actions row");
     }
-    expect(within(profileSummaryActions).getByText("No plan")).toBeDefined();
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
     fireEvent.focus(manageProfileButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "Change the profile name and accent color, sign in again, or remove this profile.",
@@ -1722,7 +1724,29 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Signed out, Signed out" }),
     );
-    expect(screen.getAllByText("Signed out").length).toBeGreaterThan(0);
+    const manageProfileButton = screen.getByRole("button", {
+      name: "Manage profile",
+    });
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
+    if (!(profileSummaryActions instanceof HTMLElement)) {
+      throw new Error("Expected signed-out profile summary and actions row");
+    }
+    expect(
+      within(profileSummaryActions).getByText("Signed out", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", { name: "Sign in" }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", {
+        name: "Manage profile",
+      }),
+    ).toBe(manageProfileButton);
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
   });
 
   it("redacts a profile's email by default and reveals it on toggle", () => {

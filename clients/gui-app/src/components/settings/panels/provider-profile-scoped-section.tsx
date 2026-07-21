@@ -214,7 +214,10 @@ export function ProviderProfileScopedSection(
           onCloseAutoFocus={null}
           usagePresentation={null}
         />
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div
+          data-slot="profile-summary-actions"
+          className="flex min-w-0 items-center justify-end gap-2"
+        >
           <ProfileSummary
             key={selectedProfile.profileId}
             profile={selectedProfile}
@@ -224,6 +227,7 @@ export function ProviderProfileScopedSection(
               type="button"
               size="xs"
               variant="secondary"
+              className="shrink-0"
               disabled={!canAddProfile}
               title={
                 canAddProfile
@@ -246,6 +250,7 @@ export function ProviderProfileScopedSection(
               type="button"
               size="xs"
               variant="outline"
+              className="shrink-0"
               onClick={openProfileEditor}
             >
               <Settings2 data-icon="inline-start" />
@@ -347,11 +352,11 @@ function ProfileSummary({
   }
   const tier = profile.identity?.tier;
   const planText =
-    tier === null || tier === undefined || tier.length === 0 ? "No plan" : tier;
+    tier === null || tier === undefined || tier.length === 0 ? null : tier;
 
   return (
-    <div className="grid min-w-[75%] flex-1 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 text-ui-xs text-muted-foreground">
-      <div className="flex min-w-0 items-center gap-1">
+    <div className="flex min-w-0 flex-1 items-center gap-2 text-ui-xs text-muted-foreground">
+      <div className="flex min-w-0 flex-1 items-center gap-1">
         <span className="min-w-0 truncate" title={email ?? undefined}>
           {emailText}
         </span>
@@ -375,16 +380,18 @@ function ProfileSummary({
           </button>
         ) : null}
       </div>
-      <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+      <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">
         {profileAuthStatusText(profile)}
       </Badge>
-      <Badge
-        variant="outline"
-        className="h-5 max-w-[min(28vw,14rem)] px-1.5 text-[10px]"
-        title={planText}
-      >
-        <span className="truncate">{planText}</span>
-      </Badge>
+      {planText !== null ? (
+        <Badge
+          variant="outline"
+          className="h-5 max-w-[min(28vw,14rem)] shrink-0 px-1.5 text-[10px]"
+          title={planText}
+        >
+          <span className="truncate">{planText}</span>
+        </Badge>
+      ) : null}
     </div>
   );
 }
