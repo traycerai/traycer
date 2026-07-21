@@ -3,13 +3,14 @@
  *
  * The focused `notification-focus-bridge.test.tsx` mocks
  * `useNotificationActivation` entirely, which is exactly what hid the
- * bug: after a deferred preflight settles, the mutation state transition
- * changes `activate`'s identity, the effect re-runs, and without the
- * processed-event ref the still-resident `notificationEvent` was
- * redispatched indefinitely.
+ * bug: `activate`'s identity is not guaranteed stable across renders
+ * (host binding changes, etc.), so the effect can re-run while the
+ * still-resident `notificationEvent` remains in the store - without the
+ * processed-event ref it would redispatch indefinitely.
  *
  * This file mounts the REAL activation hook against a real HostClient so
- * that pending → settled lifecycle is genuine.
+ * a genuine activate -> onResult path runs, then forces unrelated
+ * re-renders to prove the guard holds.
  */
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -164,10 +165,6 @@ function RerenderableBridge(props: { readonly queryClient: QueryClient }): {
 }
 
 describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
-  let resolvePreflight: (value: {
-    collaborators: [];
-    collaboratorsAvailable: true;
-  }) => void = () => undefined;
   let messenger: MockHostMessenger<HostRpcRegistry>;
   let client: HostClient<HostRpcRegistry>;
   let queryClient: QueryClient;
@@ -177,17 +174,12 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
     vi.setSystemTime(1_777_768_800_000);
     navigateSpy.mockReset();
     markAsRead.mockReset();
-    resolvePreflight = () => undefined;
     queryClient = createTestQueryClient();
     let requestSeq = 0;
     messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `replay-${++requestSeq}`,
       handlers: {
-        "epic.listCollaborators": () =>
-          new Promise((resolve) => {
-            resolvePreflight = resolve;
-          }),
         "host.notifications.markRead": () => ({}),
       },
     });
@@ -235,7 +227,7 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
     });
   }
 
-  it("dispatches a native V1 click exactly once across preflight settle and extra rerenders", async () => {
+  it("dispatches a native V1 click exactly once across extra rerenders", async () => {
     const { bump } = RerenderableBridge({ queryClient });
 
     act(() => {
@@ -244,31 +236,16 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
         .recordClick(originValidEnvelope("n-replay", "epic-replay"));
     });
 
-    await waitFor(() => {
-      expect(navigateSpy).toHaveBeenCalledTimes(1);
-      expect(
-        messenger.calls.filter(
-          (call) => call.method === "epic.listCollaborators",
-        ),
-      ).toHaveLength(1);
-    });
-
-    await act(async () => {
-      resolvePreflight({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      });
-      await Promise.resolve();
-    });
-
+    // Activation completes synchronously: route + markAsRead in the same
+    // click -> effect -> activate() chain. No preflight to settle.
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       expect(markAsRead).toHaveBeenCalledTimes(1);
       expect(markAsRead).toHaveBeenCalledWith("host:n-replay");
     });
 
-    // Mutation settle already re-rendered the bridge (activate identity
-    // change). Force more unrelated re-renders; the stored click must not
-    // redispatch.
+    // Force unrelated re-renders; the stored click must not redispatch even
+    // if activate's identity changes across those renders.
     bump();
     bump();
     bump();
@@ -278,11 +255,6 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
     });
 
     expect(navigateSpy).toHaveBeenCalledTimes(1);
-    expect(
-      messenger.calls.filter(
-        (call) => call.method === "epic.listCollaborators",
-      ),
-    ).toHaveLength(1);
     expect(markAsRead).toHaveBeenCalledTimes(1);
     expect(useNotificationsPopoverStore.getState().open).toBe(false);
   });
@@ -296,22 +268,7 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
         .recordClick(originValidEnvelope("n-1", "epic-1"));
     });
 
-    await waitFor(() => {
-      expect(
-        messenger.calls.filter(
-          (call) => call.method === "epic.listCollaborators",
-        ),
-      ).toHaveLength(1);
-    });
-
-    await act(async () => {
-      resolvePreflight({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      });
-      await Promise.resolve();
-    });
-
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
     await waitFor(() => {
       expect(markAsRead).toHaveBeenCalledTimes(1);
     });
@@ -322,23 +279,7 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
         .recordClick(originValidEnvelope("n-2", "epic-2"));
     });
 
-    await waitFor(() => {
-      expect(navigateSpy).toHaveBeenCalledTimes(2);
-      expect(
-        messenger.calls.filter(
-          (call) => call.method === "epic.listCollaborators",
-        ),
-      ).toHaveLength(2);
-    });
-
-    await act(async () => {
-      resolvePreflight({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      });
-      await Promise.resolve();
-    });
-
+    expect(navigateSpy).toHaveBeenCalledTimes(2);
     await waitFor(() => {
       expect(markAsRead).toHaveBeenCalledTimes(2);
       expect(markAsRead).toHaveBeenLastCalledWith("host:n-2");

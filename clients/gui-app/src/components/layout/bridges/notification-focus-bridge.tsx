@@ -64,11 +64,11 @@ export function NotificationFocusBridge(): null {
     parsed?.kind === "v1" ? feedIdFromEnvelopeFeed(parsed.envelope.feed) : null;
   const candidateRow = useMergedNotificationRow(candidateFeedId ?? "");
 
-  // `activate`'s identity changes across a preflight's pending -> settled
-  // transition (it closes over the activation hook's own mutation state),
-  // and `notificationEvent` stays resident in the store rather than being
-  // cleared after dispatch - so this effect legitimately reruns on a
-  // dependency change alone, with the SAME stored click still present. Track
+  // `activate`'s identity is not guaranteed stable across renders (it closes
+  // over the host client/navigate function), and `notificationEvent` stays
+  // resident in the store rather than being cleared after dispatch - so this
+  // effect legitimately reruns on a dependency change alone, with the SAME
+  // stored click still present. Track
   // which event object this bridge has already dispatched so a rerun can
   // never redispatch it; only a genuinely new `recordClick()` produces a new
   // `notificationEvent` reference and clears this guard.

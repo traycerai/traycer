@@ -27,12 +27,6 @@ import {
 
 interface NotificationRowProps {
   readonly feedId: string;
-  /** True while this exact row is mid-activation (routed, awaiting host
-   * preflight). Only the activating row is ever pending - every other row
-   * stays fully interactive. Disabling here never changes the row's DOM
-   * structure/size, so the T04 frozen-geometry outer rect holds across
-   * pending/failure transitions. */
-  readonly isPending: boolean;
   /** Attention rows always carry the rail, regardless of read state - an
    * unresolved prompt must keep drawing the eye even after activation marks
    * it read (needs_action attention membership is keyed on `resolvedAt`,
@@ -65,7 +59,6 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   if (row === null) return null;
   const isRead = row.readAt !== null;
   const isNavigable = row.payload !== null;
-  const isPending = props.isPending;
   const showRail = props.alwaysShowRail || !isRead;
   const glyph = notificationRowGlyph(row);
   const Icon = glyph.icon;
@@ -82,7 +75,6 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       data-notification-id={row.feedId}
       data-notification-read={isRead ? "true" : "false"}
       data-notification-severity={row.severity}
-      data-notification-pending={isPending ? "true" : "false"}
     >
       {showRail ? (
         <span
@@ -101,12 +93,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         <button
           type="button"
           onClick={() => props.onActivate(row)}
-          disabled={isPending}
-          aria-busy={isPending}
-          className={cn(
-            "min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-            isPending && "pointer-events-none opacity-60",
-          )}
+          className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <NotificationRowBody row={row} isRead={isRead} />
         </button>
@@ -121,7 +108,6 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
           row={row}
           isNavigable={isNavigable}
           isRead={isRead}
-          isPending={isPending}
           onAcknowledge={props.onAcknowledge}
         />
       </div>
@@ -133,7 +119,6 @@ interface NotificationRowAcknowledgeControlProps {
   readonly row: MergedNotificationRow;
   readonly isNavigable: boolean;
   readonly isRead: boolean;
-  readonly isPending: boolean;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
 }
 
@@ -158,17 +143,13 @@ function NotificationRowAcknowledgeControl(
       <button
         type="button"
         onClick={() => props.onAcknowledge(props.row)}
-        disabled={props.isPending}
         aria-label={label}
         data-testid={
           props.isNavigable
             ? "notification-mark-read"
             : "notification-acknowledge"
         }
-        className={cn(
-          "inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-          props.isPending && "pointer-events-none opacity-60",
-        )}
+        className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <Check className="size-3.5" aria-hidden />
       </button>

@@ -138,9 +138,8 @@ function PopoverShell(props: { readonly onNavigate: () => void }): ReactNode {
 
 function buildRouterWithCapture(target: TargetCapture, onNavigate: () => void) {
   // Keep the center mounted across in-app navigation the way the real app
-  // shell does: routeNotification may change the route while preflight is
-  // still pending, but the center itself must stay mounted so pending-row
-  // state remains observable until success closes it via onNavigate.
+  // shell does: routeNotification may change the route while the center is
+  // still open; the shell itself must stay mounted until onNavigate closes it.
   const rootRoute = createRootRoute({
     component: () => (
       <>
@@ -386,12 +385,6 @@ function bindHostClient(): void {
 }
 
 function defaultHostRequest(method: string): Promise<unknown> {
-  if (method === "epic.listCollaborators") {
-    return Promise.resolve({
-      collaborators: [],
-      collaboratorsAvailable: true,
-    });
-  }
   if (method === "host.notifications.markRead") {
     return Promise.resolve({ ok: true });
   }
@@ -1010,22 +1003,15 @@ describe("NotificationsPopover", () => {
     });
   });
 
-  it("disables only the activating row while preflight is pending and keeps it unread", async () => {
+  it("closes the center on dispatch even when markRead never resolves", async () => {
     bindHostClient();
-    let resolvePreflight: (value: {
-      collaborators: [];
-      collaboratorsAvailable: true;
-    }) => void = () => undefined;
+    // markRead is a background write after onResult("success"); the center
+    // must close on route dispatch and never wait for this mutation.
     hostRequestMock.mockImplementation((method: string) => {
-      if (method === "epic.listCollaborators") {
-        return new Promise((resolve) => {
-          resolvePreflight = resolve;
-        });
-      }
       if (method === "host.notifications.markRead") {
-        return Promise.resolve({ ok: true });
+        return new Promise(() => undefined);
       }
-      return Promise.resolve({});
+      return defaultHostRequest(method);
     });
 
     applyHostSnapshot(
@@ -1054,30 +1040,23 @@ describe("NotificationsPopover", () => {
       throw new Error("expected both host rows");
     }
 
-    await act(async () => {
+    act(() => {
       fireEvent.click(activateButtonFor(rowA));
-      await Promise.resolve();
     });
 
-    await waitFor(() => {
-      expect(rowA.dataset.notificationPending).toBe("true");
-    });
-    expect(activateButtonFor(rowA).disabled).toBe(true);
-    expect(rowA.dataset.notificationRead).toBe("false");
-    expect(rowB.dataset.notificationPending).toBe("false");
+    // Synchronous close on dispatch - no waitFor for a preflight gate.
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    // No pending/disabled row state (activation is synchronous).
+    expect(rowA.dataset.notificationPending).toBeUndefined();
+    expect(activateButtonFor(rowA).disabled).toBe(false);
     expect(activateButtonFor(rowB).disabled).toBe(false);
-    expect(onNavigate).not.toHaveBeenCalled();
-
-    await act(async () => {
-      resolvePreflight({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      });
-      await Promise.resolve();
-    });
-
+    // markRead is a background mutation - it fires after onResult, but the
+    // never-resolving handler must not block close (already asserted above).
     await waitFor(() => {
-      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.markRead",
+        expect.objectContaining({ ids: ["row-a"] }),
+      );
     });
   });
 
@@ -1137,14 +1116,14 @@ describe("NotificationsPopover", () => {
     trackSpy.mockRestore();
   });
 
-  it("on preflight failure restores the row unread and keeps the center open", async () => {
+  it("on markRead failure leaves the row unread after the center already closed", async () => {
     const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
     bindHostClient();
     hostRequestMock.mockImplementation((method: string) => {
-      if (method === "epic.listCollaborators") {
-        return Promise.reject(new Error("preflight failed"));
+      if (method === "host.notifications.markRead") {
+        return Promise.reject(new Error("markRead failed"));
       }
-      return Promise.resolve({});
+      return defaultHostRequest(method);
     });
 
     applyHostSnapshot([hostDone("fail-row", 20, null)], {
@@ -1163,37 +1142,44 @@ describe("NotificationsPopover", () => {
     renderRouter(router);
 
     const row = await screen.findByTestId("notification-entry");
-    await act(async () => {
+    act(() => {
       fireEvent.click(activateButtonFor(row));
-      await Promise.resolve();
-      await Promise.resolve();
     });
 
+    // Dispatch succeeds and closes immediately; markRead is decoupled.
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
+      ),
+    ).toHaveLength(1);
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
+      ),
+    ).toHaveLength(1);
+
+    // markHostRead has no optimistic local flip - only onSuccess writes
+    // markReadLocally. A rejected mutation leaves readAt untouched.
     await waitFor(() => {
-      expect(row.dataset.notificationPending).toBe("false");
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.markRead",
+        expect.objectContaining({ ids: ["fail-row"] }),
+      );
     });
-    expect(row.dataset.notificationRead).toBe("false");
-    expect(activateButtonFor(row).disabled).toBe(false);
-    expect(onNavigate).not.toHaveBeenCalled();
-    expect(hostRequestMock).not.toHaveBeenCalledWith(
-      "host.notifications.markRead",
-      expect.anything(),
-    );
-
-    const activatedCalls = trackSpy.mock.calls.filter(
-      (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
-    );
-    const markedCalls = trackSpy.mock.calls.filter(
-      (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
-    );
-    expect(activatedCalls).toHaveLength(1);
-    expect(activatedCalls[0]?.[1]).toEqual({
-      category: "task",
-      section: "recent",
-      surface: "center",
-      outcome: "failure",
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
     });
-    expect(markedCalls).toHaveLength(0);
+    const failEntry = useHostNotificationsStore.getState().byId["fail-row"];
+    expect(failEntry).toBeDefined();
+    expect(failEntry.readAt).toBeNull();
+    const live = screen
+      .queryAllByTestId("notification-entry")
+      .find((entry) => entry.dataset.notificationId === "host:fail-row");
+    if (live !== undefined) {
+      expect(live.dataset.notificationRead).toBe("false");
+    }
     trackSpy.mockRestore();
   });
 
@@ -1297,77 +1283,6 @@ describe("NotificationsPopover", () => {
     expect(markAllCalls[0]?.[1]).toEqual({
       affected_count_bucket: "2-5",
     });
-    trackSpy.mockRestore();
-  });
-
-  it("ignores a second click while preflight is pending and emits analytics once on settle", async () => {
-    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
-    bindHostClient();
-    let resolvePreflight: (value: {
-      collaborators: [];
-      collaboratorsAvailable: true;
-    }) => void = () => undefined;
-    hostRequestMock.mockImplementation((method: string) => {
-      if (method === "epic.listCollaborators") {
-        return new Promise((resolve) => {
-          resolvePreflight = resolve;
-        });
-      }
-      return defaultHostRequest(method);
-    });
-
-    applyHostSnapshot([hostDone("pending-once", 20, null)], {
-      unreadCount: 1,
-      attentionCount: 0,
-    });
-
-    const onNavigate = vi.fn();
-    const captured: TargetCapture = {
-      epicId: null,
-      tabId: null,
-      focusArtifactId: null,
-      focusThreadId: null,
-    };
-    const { router } = buildRouterWithCapture(captured, onNavigate);
-    renderRouter(router);
-
-    const row = await screen.findByTestId("notification-entry");
-    await act(async () => {
-      fireEvent.click(activateButtonFor(row));
-      await Promise.resolve();
-    });
-    await waitFor(() => {
-      expect(row.dataset.notificationPending).toBe("true");
-    });
-
-    // Second click while pending is ignored by the activation guard.
-    await act(async () => {
-      fireEvent.click(activateButtonFor(row));
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      resolvePreflight({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      });
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(onNavigate).toHaveBeenCalledTimes(1);
-    });
-    expect(
-      trackSpy.mock.calls.filter(
-        (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
-      ),
-    ).toHaveLength(1);
-    expect(
-      trackSpy.mock.calls.filter(
-        (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
-      ),
-    ).toHaveLength(1);
     trackSpy.mockRestore();
   });
 

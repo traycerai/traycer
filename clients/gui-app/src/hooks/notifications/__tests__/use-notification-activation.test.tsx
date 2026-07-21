@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -26,14 +26,12 @@ type CapturedNavigate = {
 const navigateSpy = vi.hoisted(() =>
   vi.fn<(options: CapturedNavigate) => void>(),
 );
-const requestMock = vi.hoisted(() => vi.fn());
 const activeHostIdStub: { value: string | null } = vi.hoisted(() => ({
   value: "stub-host",
 }));
 const bindingState = vi.hoisted<{
   current: {
     readonly hostClient: {
-      readonly request: (...args: never[]) => unknown;
       readonly getActiveHostId: () => string | null;
     };
   } | null;
@@ -83,7 +81,6 @@ function createWrapper(): (props: {
 function bindStubClient(): void {
   bindingState.current = {
     hostClient: {
-      request: requestMock,
       getActiveHostId: () => activeHostIdStub.value,
     },
   };
@@ -92,11 +89,7 @@ function bindStubClient(): void {
 describe("useNotificationActivation", () => {
   beforeEach(() => {
     navigateSpy.mockReset();
-    requestMock.mockReset();
-    requestMock.mockResolvedValue({
-      collaborators: [],
-      collaboratorsAvailable: true,
-    });
+    navigateSpy.mockImplementation(() => undefined);
     activeHostIdStub.value = "stub-host";
     bindStubClient();
     useEpicCanvasStore.setState({
@@ -107,7 +100,7 @@ describe("useNotificationActivation", () => {
     });
   });
 
-  it("reports no-preflight success synchronously when no host runtime is mounted", () => {
+  it("reports success synchronously when no host runtime is mounted", () => {
     bindingState.current = null;
     const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
@@ -128,10 +121,8 @@ describe("useNotificationActivation", () => {
       });
     });
 
-    expect(requestMock).not.toHaveBeenCalled();
     expect(onResult).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledWith("success");
-    expect(hook.result.current.pendingFeedId).toBeNull();
     const navigateArg = navigateSpy.mock.calls[0][0];
     expect(navigateArg.to).toBe("/epics/$epicId/$tabId");
     expect(navigateArg.params.epicId).toBe("epic-browser");
@@ -145,19 +136,7 @@ describe("useNotificationActivation", () => {
     });
   });
 
-  it("routes shared epic notifications once, then reports success after preflight", async () => {
-    const preflightResponse = {
-      collaborators: [],
-      collaboratorsAvailable: true,
-    };
-    let resolvePreflight: (value: typeof preflightResponse) => void = () =>
-      undefined;
-    requestMock.mockImplementation(
-      () =>
-        new Promise<typeof preflightResponse>((resolve) => {
-          resolvePreflight = resolve;
-        }),
-    );
+  it("routes then reports success synchronously with no host RPC", () => {
     const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
@@ -172,166 +151,42 @@ describe("useNotificationActivation", () => {
       });
     });
 
+    // Same tick: route + onResult, no waitFor / no RPC gate.
     expect(navigateSpy).toHaveBeenCalledTimes(1);
     const navigateArg = navigateSpy.mock.calls[0][0];
     expect(navigateArg.to).toBe("/epics/$epicId/$tabId");
     expect(navigateArg.params.epicId).toBe("epic-shared");
     expect(navigateArg.search.focusedAt).toBe(123);
-    expect(onResult).not.toHaveBeenCalled();
-
-    await waitFor(() => {
-      expect(requestMock).toHaveBeenCalledWith("epic.listCollaborators", {
-        epicId: "epic-shared",
-      });
-      expect(hook.result.current.pendingFeedId).toBe("host:n-1");
-    });
-
-    await act(async () => {
-      resolvePreflight(preflightResponse);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(onResult).toHaveBeenCalledTimes(1);
-      expect(onResult).toHaveBeenCalledWith("success");
-    });
-    expect(hook.result.current.pendingFeedId).toBeNull();
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("success");
   });
 
-  it("reports failure when preflight rejects and leaves pending cleared", async () => {
-    requestMock.mockRejectedValue(new Error("preflight failed"));
-    const onResult = vi.fn();
+  it("fires onResult synchronously after routing (no async gate)", () => {
+    const callOrder: string[] = [];
+    navigateSpy.mockImplementation(() => {
+      callOrder.push("navigate");
+    });
+    const onResult = vi.fn(() => {
+      callOrder.push("onResult");
+    });
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
     });
 
     act(() => {
       hook.result.current.activate({
-        payload: { kind: "chat", epicId: "epic-fail", chatId: "chat-1" },
+        payload: { kind: "chat", epicId: "epic-sync", chatId: "chat-1" },
         receivedAt: 10,
-        feedId: "host:fail-1",
+        feedId: "host:sync-1",
         onResult,
       });
     });
 
-    expect(navigateSpy).toHaveBeenCalledTimes(1);
-    await waitFor(() => {
-      expect(onResult).toHaveBeenCalledTimes(1);
-      expect(onResult).toHaveBeenCalledWith("failure");
-    });
-    expect(hook.result.current.pendingFeedId).toBeNull();
+    expect(callOrder).toEqual(["navigate", "onResult"]);
+    expect(onResult).toHaveBeenCalledWith("success");
   });
 
-  it("ignores a second activate while preflight is pending (route-once + no second onResult)", async () => {
-    let resolvePreflight: (value: {
-      collaborators: [];
-      collaboratorsAvailable: true;
-    }) => void = () => undefined;
-    requestMock.mockImplementation(
-      () =>
-        new Promise<{
-          collaborators: [];
-          collaboratorsAvailable: true;
-        }>((resolve) => {
-          resolvePreflight = resolve;
-        }),
-    );
-    const onResultFirst = vi.fn();
-    const onResultSecond = vi.fn();
-    const hook = renderHook(() => useNotificationActivation(), {
-      wrapper: createWrapper(),
-    });
-
-    act(() => {
-      hook.result.current.activate({
-        payload: { kind: "epic", epicId: "epic-a" },
-        receivedAt: 1,
-        feedId: "host:a",
-        onResult: onResultFirst,
-      });
-      hook.result.current.activate({
-        payload: { kind: "epic", epicId: "epic-b" },
-        receivedAt: 2,
-        feedId: "host:b",
-        onResult: onResultSecond,
-      });
-    });
-
-    expect(navigateSpy).toHaveBeenCalledTimes(1);
-    expect(navigateSpy.mock.calls[0][0].params.epicId).toBe("epic-a");
-    expect(onResultSecond).not.toHaveBeenCalled();
-
-    await waitFor(() => {
-      expect(hook.result.current.pendingFeedId).toBe("host:a");
-      expect(requestMock).toHaveBeenCalledTimes(1);
-    });
-
-    await act(async () => {
-      resolvePreflight({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      });
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(onResultFirst).toHaveBeenCalledTimes(1);
-      expect(onResultFirst).toHaveBeenCalledWith("success");
-    });
-    expect(onResultSecond).not.toHaveBeenCalled();
-    expect(requestMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("deduplicates completion so a resolved preflight only fires onResult once", async () => {
-    const onResult = vi.fn();
-    const hook = renderHook(() => useNotificationActivation(), {
-      wrapper: createWrapper(),
-    });
-
-    act(() => {
-      hook.result.current.activate({
-        payload: {
-          kind: "approval",
-          epicId: "epic-approval",
-          chatId: "chat-approval",
-          approvalId: "approval-1",
-          sessionId: undefined,
-          artifactId: undefined,
-        },
-        receivedAt: 789,
-        feedId: "host:approval-1",
-        onResult,
-      });
-    });
-
-    await waitFor(() => {
-      expect(onResult).toHaveBeenCalledTimes(1);
-      expect(onResult).toHaveBeenCalledWith("success");
-    });
-
-    // A second click after the first completed is a new activation, not a
-    // double-complete of the first. The in-flight guard only applies while
-    // pending; once complete, a fresh activate is allowed.
-    act(() => {
-      hook.result.current.activate({
-        payload: { kind: "epic", epicId: "epic-next" },
-        receivedAt: 790,
-        feedId: "host:next",
-        onResult,
-      });
-    });
-
-    await waitFor(() => {
-      expect(onResult).toHaveBeenCalledTimes(2);
-    });
-    expect(navigateSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("completes each sequential activation exactly once (no double onResult)", async () => {
-    // The in-flight guard forbids two concurrent preflights, so a "stale
-    // mutation callback race" in practice is: activation A settles (one
-    // onResult), activation B starts, and A must not fire again. Sequential
-    // preflights cover that observable contract.
+  it("completes each sequential activation independently", () => {
     const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
@@ -344,13 +199,6 @@ describe("useNotificationActivation", () => {
         feedId: "host:1",
         onResult,
       });
-    });
-    await waitFor(() => {
-      expect(onResult).toHaveBeenCalledTimes(1);
-      expect(onResult).toHaveBeenLastCalledWith("success");
-    });
-
-    act(() => {
       hook.result.current.activate({
         payload: { kind: "epic", epicId: "epic-2" },
         receivedAt: 2,
@@ -358,14 +206,16 @@ describe("useNotificationActivation", () => {
         onResult,
       });
     });
-    await waitFor(() => {
-      expect(onResult).toHaveBeenCalledTimes(2);
-      expect(onResult).toHaveBeenLastCalledWith("success");
-    });
+
     expect(navigateSpy).toHaveBeenCalledTimes(2);
+    expect(navigateSpy.mock.calls[0][0].params.epicId).toBe("epic-1");
+    expect(navigateSpy.mock.calls[1][0].params.epicId).toBe("epic-2");
+    expect(onResult).toHaveBeenCalledTimes(2);
+    expect(onResult).toHaveBeenNthCalledWith(1, "success");
+    expect(onResult).toHaveBeenNthCalledWith(2, "success");
   });
 
-  it("routes terminal notifications to the exact canvas tile", async () => {
+  it("routes terminal notifications to the exact canvas tile", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-terminal", "Terminal epic");
     store.openTileInTab(tabId, {
@@ -415,12 +265,8 @@ describe("useNotificationActivation", () => {
         focusTileInstanceId: "terminal-instance",
       },
     });
-
-    await waitFor(() => {
-      expect(requestMock).toHaveBeenCalledWith("epic.listCollaborators", {
-        epicId: "epic-terminal",
-      });
-    });
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("success");
   });
 
   it("routes persisted legacy terminal rows to their open canvas tile", () => {
@@ -467,6 +313,7 @@ describe("useNotificationActivation", () => {
         focusTileInstanceId: "legacy-terminal-instance",
       },
     });
+    expect(onResult).toHaveBeenCalledWith("success");
   });
 });
 
@@ -478,26 +325,18 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     label: "Switched Host B",
   };
 
-  let resolvePreflight: (value: {
-    collaborators: [];
-    collaboratorsAvailable: true;
-  }) => void = () => undefined;
   let messenger: MockHostMessenger<HostRpcRegistry>;
   let client: HostClient<HostRpcRegistry>;
 
   beforeEach(() => {
     navigateSpy.mockReset();
-    resolvePreflight = () => undefined;
-    let requestSeq = 0;
+    navigateSpy.mockImplementation(() => undefined);
     const queryClient = createTestQueryClient();
+    let requestSeq = 0;
     messenger = new MockHostMessenger<HostRpcRegistry>({
       registry: hostRpcRegistry,
       requestId: () => `origin-guard-${++requestSeq}`,
       handlers: {
-        "epic.listCollaborators": () =>
-          new Promise((resolve) => {
-            resolvePreflight = resolve;
-          }),
         "host.notifications.markRead": () => ({}),
       },
     });
@@ -522,8 +361,13 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     });
   });
 
-  it("reports failure when the active host rebinds mid-preflight for a host feed", async () => {
+  it("reports failure when the active host rebinds during routing for a host feed", () => {
     const onResult = vi.fn();
+    // Capture-before-route / check-after-route: rebind as a side effect of
+    // navigate so the post-route active-host check sees host B.
+    navigateSpy.mockImplementation(() => {
+      client.bind(hostB);
+    });
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
     });
@@ -539,46 +383,19 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(hook.result.current.pendingFeedId).toBe("host:n-1");
-      expect(
-        messenger.calls.some(
-          (call) => call.method === "epic.listCollaborators",
-        ),
-      ).toBe(true);
-    });
-
-    // In-place rebind of the SAME HostClient instance mid-preflight - the
-    // reviewer's repro shape. Origin was host A at activate(); completion
-    // must refuse to report success against host B.
-    act(() => {
-      client.bind(hostB);
-    });
     expect(client.getActiveHostId()).toBe(hostB.hostId);
-
-    await act(async () => {
-      resolvePreflight({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      });
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(onResult).toHaveBeenCalledTimes(1);
-      expect(onResult).toHaveBeenCalledWith("failure");
-    });
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("failure");
     // The hook itself never issues markRead; callers only mark on success.
-    // Confirm nothing on this client path leaked a host markRead either.
     expect(
       messenger.calls.some(
         (call) => call.method === "host.notifications.markRead",
       ),
     ).toBe(false);
-    expect(hook.result.current.pendingFeedId).toBeNull();
   });
 
-  it("reports success when the active host stays put through preflight (control)", async () => {
+  it("reports success when the active host stays put during routing (control)", () => {
     const onResult = vi.fn();
     const hook = renderHook(() => useNotificationActivation(), {
       wrapper: createWrapper(),
@@ -593,24 +410,10 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(hook.result.current.pendingFeedId).toBe("host:n-1");
-    });
-
     expect(client.getActiveHostId()).toBe(hostA.hostId);
-
-    await act(async () => {
-      resolvePreflight({
-        collaborators: [],
-        collaboratorsAvailable: true,
-      });
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(onResult).toHaveBeenCalledTimes(1);
-      expect(onResult).toHaveBeenCalledWith("success");
-    });
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledTimes(1);
+    expect(onResult).toHaveBeenCalledWith("success");
     expect(
       messenger.calls.some(
         (call) => call.method === "host.notifications.markRead",

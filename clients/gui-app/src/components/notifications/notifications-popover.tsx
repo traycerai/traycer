@@ -97,7 +97,7 @@ export function NotificationsPopover(
   const unreadCount = useMergedNotificationUnreadCount();
   const actions = useMergedNotificationsActions();
   const hostState = useNotificationCenterHostState();
-  const { activate, pendingFeedId } = useNotificationActivation();
+  const { activate } = useNotificationActivation();
   const { openSettings } = useSystemTabModalActions();
   const unreadOnly = useNotificationsPopoverStore((state) => state.unreadOnly);
   const categories = useNotificationsPopoverStore((state) => state.categories);
@@ -175,19 +175,15 @@ export function NotificationsPopover(
   const handleActivate = useCallback(
     (row: MergedNotificationRow) => {
       if (row.payload === null) return;
-      // Only the activating row goes pending; a click landing while another
-      // row is already mid-activation is ignored rather than starting a
-      // second one (the hook enforces this too, but the row-level guard
-      // avoids leaning on that alone).
-      if (pendingFeedId !== null) return;
       activate({
         payload: row.payload,
         receivedAt: Date.now(),
         feedId: row.feedId,
-        // Fires only after activation preflight succeeds, so a failed
-        // preflight neither acknowledges the row nor closes the center - it
-        // stays pending-free, unread, and the center stays open with the
-        // host error already surfaced by the hook.
+        // Fires synchronously right after routing, so the center closes on
+        // dispatch (`onSuccess: onNavigate`). The origin-host guard inside
+        // the hook can still settle this as `"failure"` (no toast, nothing
+        // actually failed) - in that case the center stays open and the row
+        // stays unread, same as before.
         onResult: activationResultHandler({
           row,
           feedId: row.feedId,
@@ -197,7 +193,7 @@ export function NotificationsPopover(
         }),
       });
     },
-    [actions, activate, onNavigate, pendingFeedId],
+    [actions, activate, onNavigate],
   );
 
   const handleAcknowledge = useCallback(
@@ -407,7 +403,6 @@ export function NotificationsPopover(
                       <NotificationRow
                         key={id}
                         feedId={id}
-                        isPending={id === pendingFeedId}
                         alwaysShowRail
                         onActivate={handleActivate}
                         onAcknowledge={handleAcknowledge}
@@ -431,7 +426,6 @@ export function NotificationsPopover(
                 <RecentSectionBody
                   recentIds={recentIds}
                   isFilteredEmpty={isRecentFilteredEmpty}
-                  pendingFeedId={pendingFeedId}
                   onActivate={handleActivate}
                   onAcknowledge={handleAcknowledge}
                   onResetFilters={resetFilters}
@@ -482,7 +476,6 @@ function OriginUnavailableBanner(): ReactNode {
 interface RecentSectionBodyProps {
   readonly recentIds: ReadonlyArray<string>;
   readonly isFilteredEmpty: boolean;
-  readonly pendingFeedId: string | null;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   readonly onResetFilters: () => void;
@@ -493,7 +486,6 @@ function RecentSectionBody(props: RecentSectionBodyProps): ReactNode {
     return (
       <RecentRowList
         ids={props.recentIds}
-        pendingFeedId={props.pendingFeedId}
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
       />
@@ -514,7 +506,6 @@ function RecentSectionBody(props: RecentSectionBodyProps): ReactNode {
 
 interface RecentRowListProps {
   readonly ids: ReadonlyArray<string>;
-  readonly pendingFeedId: string | null;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
 }
@@ -534,7 +525,6 @@ function RecentRowList(props: RecentRowListProps): ReactNode {
           feedId={id}
           previousFeedId={index === 0 ? null : props.ids[index - 1]}
           now={now}
-          isPending={id === props.pendingFeedId}
           onActivate={props.onActivate}
           onAcknowledge={props.onAcknowledge}
         />
@@ -547,7 +537,6 @@ interface RecentRowProps {
   readonly feedId: string;
   readonly previousFeedId: string | null;
   readonly now: number;
-  readonly isPending: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
 }
@@ -573,7 +562,6 @@ function RecentRow(props: RecentRowProps): ReactNode {
       )}
       <NotificationRow
         feedId={props.feedId}
-        isPending={props.isPending}
         alwaysShowRail={false}
         onActivate={props.onActivate}
         onAcknowledge={props.onAcknowledge}
