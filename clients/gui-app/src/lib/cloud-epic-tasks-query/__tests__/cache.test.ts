@@ -13,6 +13,7 @@ import {
 import {
   readEpicTitlesFromCloudTaskCaches,
   removeDeletedEpicsFromCloudTaskCaches,
+  setEpicPinnedInCloudTaskCaches,
   updateEpicTitleInCloudTaskCaches,
   updateEpicTitleInTaskContextsCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
@@ -260,6 +261,66 @@ describe("updateEpicTitleInTaskContextsCaches", () => {
     expect(
       queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks,
     ).toEqual({ "epic-missing": null });
+  });
+});
+
+describe("setEpicPinnedInCloudTaskCaches", () => {
+  it("patches matching list and exact task-context caches", () => {
+    const queryClient = new QueryClient();
+    const listKey = cloudEpicTasksQueryKey(
+      "host-a",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const batchKey = hostQueryKeys.epicTaskContexts("host-a", "user-1", [
+      "epic-a",
+      "epic-b",
+    ]);
+    const otherUserBatchKey = hostQueryKeys.epicTaskContexts(
+      "host-a",
+      "user-2",
+      ["epic-a"],
+    );
+    queryClient.setQueryData<ListTasksResponse>(listKey, {
+      tasks: [taskLight("epic-a", "Alpha", "traycer/gui-app", "user-1")],
+      hasMore: false,
+    });
+    queryClient.setQueryData<GetTaskContextsResponse>(batchKey, {
+      tasks: {
+        "epic-a": listTaskLight("epic-a", "Alpha", "user-1"),
+        "epic-b": listTaskLight("epic-b", "Beta", "user-1"),
+      },
+    });
+    queryClient.setQueryData<GetTaskContextsResponse>(otherUserBatchKey, {
+      tasks: {
+        "epic-a": listTaskLight("epic-a", "Alpha", "user-2"),
+      },
+    });
+
+    setEpicPinnedInCloudTaskCaches(
+      queryClient,
+      { hostId: "host-a", userId: "user-1" },
+      "epic-a",
+      true,
+    );
+
+    expect(
+      queryClient.getQueryData<ListTasksResponse>(listKey)?.tasks[0]?.pinned,
+    ).toBe(true);
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks[
+        "epic-a"
+      ]?.pinned,
+    ).toBe(true);
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(batchKey)?.tasks[
+        "epic-b"
+      ]?.pinned,
+    ).toBe(false);
+    expect(
+      queryClient.getQueryData<GetTaskContextsResponse>(otherUserBatchKey)
+        ?.tasks["epic-a"]?.pinned,
+    ).toBe(false);
   });
 });
 
