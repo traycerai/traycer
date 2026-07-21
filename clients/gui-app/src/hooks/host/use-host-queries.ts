@@ -8,10 +8,11 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
-import type {
-  HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
+import {
+  toHostRpcError,
+  type HostRpcError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
@@ -169,7 +170,8 @@ export function useHostQueriesWithResponseMap<
     getConditionPollEpisodeCoordinator(queryClient);
   const readiness = useReactiveHostReadiness(client);
   const baseOptions = options ?? {};
-  const { meta, poll, ...queryOptionsWithoutReservedFields } = baseOptions;
+  const { meta, poll, select, ...queryOptionsWithoutReservedFields } =
+    baseOptions;
 
   const queries = requests.map((request) => {
     const queryKey: QueryKey = [
@@ -225,6 +227,20 @@ export function useHostQueriesWithResponseMap<
     return queryOptions<TData, HostRpcError, TData>({
       ...queryOptionsWithoutReservedFields,
       ...tablePollingOptions,
+      // A throw inside a caller-supplied `select` is stored by the observer as
+      // `result.error` - the same `HostRpcError`-typed channel the queryFn
+      // boundary protects - so it must be normalized too. Mirrors
+      // `useHostQueryWithResponseMap` in `use-host-query.ts`.
+      select:
+        select === undefined
+          ? undefined
+          : (data) => {
+              try {
+                return select(data);
+              } catch (error) {
+                throw toHostRpcError(error, request.method);
+              }
+            },
       queryKey,
       queryFn: fetcher,
       // Reserved key wins over caller meta; the coordinator latches it once.

@@ -318,10 +318,6 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
   }
 
   private enqueue(queue: HostRequestQueue, job: HostRequestJob): void {
-    if (queue.active === null && queue.queued.length === 0) {
-      queue.queued.push(job);
-      return;
-    }
     queue.queued.push(job);
   }
 
