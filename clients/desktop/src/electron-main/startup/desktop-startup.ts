@@ -1,4 +1,4 @@
-import { app, nativeImage, type BrowserWindow } from "electron";
+import { app, nativeImage } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { initLogger, log } from "../app/logger";
@@ -44,7 +44,10 @@ import {
   maybePromptRelocateToApplications,
   UPDATE_BLOCKED_LOCATION_REASON,
 } from "../app/relocate-to-applications";
-import { WindowRegistry } from "../windows/window-registry";
+import {
+  WindowRegistry,
+  type RegistryManagedWindow,
+} from "../windows/window-registry";
 import {
   DesktopStateStore,
   resolveDesktopStateFilePath,
@@ -1016,12 +1019,17 @@ async function createTraySafe(
 // resolves via `focusMru()` rather than the registry's first-inserted
 // record) - both just need "the window the user last used", so one proxy
 // backs both call sites. Exported so tests can exercise this exact proxy
-// against a real `WindowRegistry` instead of a hand-rolled copy.
-export function createMruWindowProxy(
-  registry: WindowRegistry,
-): TrayManagedWindow & ShortcutTargetWindow {
-  const current = (): BrowserWindow | null =>
-    registry.getMruRecord()?.window ?? null;
+// against a real `WindowRegistry` instead of a hand-rolled copy. Generic over
+// `TWindow` (rather than hardcoding the default `BrowserWindow`) so a test's
+// `WindowRegistry<FakeRegistryWindow>` can be passed directly - the bound is
+// exactly the surface this function actually calls, nothing Electron-specific.
+export function createMruWindowProxy<
+  TWindow extends RegistryManagedWindow & {
+    isMinimized(): boolean;
+    restore(): void;
+  },
+>(registry: WindowRegistry<TWindow>): TrayManagedWindow & ShortcutTargetWindow {
+  const current = (): TWindow | null => registry.getMruRecord()?.window ?? null;
   return {
     isDestroyed: () => {
       const window = current();

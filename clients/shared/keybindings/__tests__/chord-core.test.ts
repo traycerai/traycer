@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toAccelerator } from "../chord-core";
+import { isValidChordString, toAccelerator } from "../chord-core";
 
 describe("toAccelerator", () => {
   it("maps a lone `mod` to the cross-platform CommandOrControl token on both platforms", () => {
@@ -39,5 +39,39 @@ describe("toAccelerator", () => {
 
   it("returns the chord unchanged when it fails to parse", () => {
     expect(toAccelerator("", "mac")).toBe("");
+  });
+});
+
+describe("isValidChordString", () => {
+  it("rejects a trailing plus with an empty key", () => {
+    expect(isValidChordString("mod+")).toBe(false);
+  });
+
+  it("rejects non-canonical modifier token order", () => {
+    // Parses fine (mod=true, shift=true, key='a'), but `formatChord` always
+    // reorders to mod+ctrl+shift+alt+key, so this fails the round-trip check.
+    expect(isValidChordString("shift+mod+a")).toBe(false);
+  });
+
+  it("rejects an unsupported named key", () => {
+    expect(isValidChordString("mod+shift+foobar")).toBe(false);
+  });
+
+  it("rejects an uppercase single-letter key", () => {
+    // Round-trips fine (formatChord doesn't case-convert), but "A" fails the
+    // supported-key-vocabulary check (only lowercase a-z/0-9 are supported).
+    expect(isValidChordString("mod+shift+A")).toBe(false);
+  });
+
+  it("rejects an empty string", () => {
+    expect(isValidChordString("")).toBe(false);
+  });
+
+  it("accepts the default chord and other canonical chords", () => {
+    expect(isValidChordString("mod+shift+space")).toBe(true);
+    expect(isValidChordString("mod+alt+k")).toBe(true);
+    expect(isValidChordString("ctrl+shift+m")).toBe(true);
+    expect(isValidChordString("mod+f5")).toBe(true);
+    expect(isValidChordString("mod+,")).toBe(true);
   });
 });

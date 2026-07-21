@@ -323,6 +323,91 @@ describe("applyGlobalShortcutIntent (transactional rebind)", () => {
     });
   });
 
+  // Review P3 blind spot: the prior concurrency test above made the FIRST
+  // operation the rejected, non-persisting one and held only the SECOND
+  // (accepted) operation's persistence open. That leaves a real hole -
+  // moving just the persistence call outside `withGlobalShortcutsQueue`
+  // would still pass it, since nothing there proves an ACCEPTED
+  // transaction's OWN persistence write is inside the queue. This test
+  // flips the roles: op1 is accepted (OS grants it) with its persistence
+  // write held open, and while that write is still pending, op2 fires. If
+  // the queue only serialized the disk write path shallowly (or somehow let
+  // a second transaction's trial reconcile slip in during op1's held-open
+  // write), op2's `globalShortcut.register` would fire before op1's
+  // persistence settles.
+  it("holds an accepted transaction's own persistence write inside the queue: a second transaction cannot attempt OS registration until it releases", async () => {
+    const shortcuts = await import("../shortcuts");
+    await shortcuts.reconcileGlobalShortcuts({});
+    expect(shortcuts.getRegisteredAccelerator("summon")).toBe(
+      DEFAULT_ACCELERATOR,
+    );
+
+    const op1Accelerator = toAccelerator("mod+alt+e", platform);
+    const op2Accelerator = toAccelerator("mod+alt+f", platform);
+
+    let op1PersistResolved = false;
+    let op2RegisterAttemptedBeforeOp1PersistResolved = false;
+    electron.register.mockImplementation((accelerator: string) => {
+      if (accelerator === op2Accelerator && !op1PersistResolved) {
+        op2RegisterAttemptedBeforeOp1PersistResolved = true;
+      }
+      return true;
+    });
+
+    const op1Persist: { release: (() => void) | null } = { release: null };
+    const op1PersistHeldOpen = new Promise<void>((resolve) => {
+      op1Persist.release = resolve;
+    });
+    preferences.set.mockImplementation(
+      async (id: string, intent: GlobalShortcutIntent) => {
+        if (intent.chord === "mod+alt+e") {
+          // Op1's own accepted-path persistence write, held open - if the
+          // queue didn't cover this step, op2's trial reconcile could slip
+          // in through this exact gap.
+          await op1PersistHeldOpen;
+          op1PersistResolved = true;
+        }
+        preferences.intents[id] = intent;
+      },
+    );
+
+    const p1 = shortcuts.applyGlobalShortcutIntent("summon", {
+      enabled: true,
+      chord: "mod+alt+e",
+    });
+    const p2 = shortcuts.applyGlobalShortcutIntent("summon", {
+      enabled: true,
+      chord: "mod+alt+f",
+    });
+
+    // Flush microtasks: op1's trial register + persist-call-start should have
+    // run, but op1's persistence promise is still held open, so op2's
+    // operation must not have started its own trial reconcile yet.
+    for (let i = 0; i < 20; i += 1) {
+      await Promise.resolve();
+    }
+    expect(electron.register).toHaveBeenCalledWith(
+      op1Accelerator,
+      expect.any(Function),
+    );
+    expect(op2RegisterAttemptedBeforeOp1PersistResolved).toBe(false);
+    expect(electron.register).not.toHaveBeenCalledWith(
+      op2Accelerator,
+      expect.any(Function),
+    );
+
+    op1Persist.release?.();
+    const [status1, status2] = await Promise.all([p1, p2]);
+
+    expect(status1.status).toBe("registered");
+    expect(status2.status).toBe("registered");
+    expect(electron.register).toHaveBeenCalledWith(
+      op2Accelerator,
+      expect.any(Function),
+    );
+    expect(shortcuts.getRegisteredAccelerator("summon")).toBe(op2Accelerator);
+  });
+
   // P2's "failed rollback can strand the user" scenario, at its actual edge:
   // if nothing has ever been registered yet (fresh startup, no prior
   // reconcile), a rejected trial's "revert to previous" is not a no-op - it
