@@ -10,7 +10,11 @@
  * of a fatal handshake mismatch.
  */
 import { z } from "zod";
-import { defineRpcContract } from "@traycer/protocol/framework/index";
+import {
+  defineDowngradePath,
+  defineRpcContract,
+  defineUpgradePath,
+} from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/common/schemas";
 import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -122,14 +126,12 @@ export const agentGetProviderProfileRateLimitsV10 = defineRpcContract({
   responseSchema: agentGetProviderProfileRateLimitsResponseSchema,
 });
 
-// ─── `agent.configure@1.0` ─────────────────────────────────────────────────
+// ─── `agent.configure@1.0` / `2.0` ─────────────────────────────────────────
 //
-// Atomically switches the provider, profile, and model an existing local GUI
-// agent uses for future turns. Carries the full target run tuple rather than
-// a partial patch: `permissionMode` and `agentMode` are deliberately absent
-// from the request (the resolver preserves the target chat's current values)
-// but appear in the response's committed `settings` alongside everything the
-// caller did specify.
+// Released v1.0 atomically switches provider/profile/model while preserving
+// the target's permission mode. V2.0 adds an explicit permission choice to the
+// full future-run tuple. `null` is compatibility-only and is produced by the
+// v1->v2 upgrade so old callers retain the preserve-current behavior.
 
 export const agentConfigureRequestSchema = z.object({
   epicId: z.string(),
@@ -142,6 +144,14 @@ export const agentConfigureRequestSchema = z.object({
   fastMode: z.boolean(),
 });
 export type AgentConfigureRequest = z.infer<typeof agentConfigureRequestSchema>;
+
+export const agentConfigureRequestSchemaV20 =
+  agentConfigureRequestSchema.extend({
+    permissionMode: permissionModeSchema.nullable(),
+  });
+export type AgentConfigureRequestV20 = z.infer<
+  typeof agentConfigureRequestSchemaV20
+>;
 
 export const agentConfigureSettingsSchema = z.object({
   harnessId: guiHarnessIdSchema,
@@ -169,4 +179,38 @@ export const agentConfigureV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: agentConfigureRequestSchema,
   responseSchema: agentConfigureResponseSchema,
+});
+
+export const agentConfigureV20 = defineRpcContract({
+  method: "agent.configure",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: agentConfigureRequestSchemaV20,
+  responseSchema: agentConfigureResponseSchema,
+});
+
+export const agentConfigureUpgradeV10ToV20 = defineUpgradePath<
+  typeof agentConfigureV10,
+  typeof agentConfigureV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, permissionMode: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const agentConfigureDowngradeV20ToV10 = defineDowngradePath<
+  typeof agentConfigureV20,
+  typeof agentConfigureV10
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: () => ({
+    ok: false,
+    error: {
+      code: "DOWNGRADE_UNSUPPORTED",
+      message:
+        "Selecting an agent permission mode requires a newer Traycer host. Upgrade the host before configuring this agent.",
+    },
+  }),
+  downgradeResponse: (response) => ({ ok: true, value: response }),
 });

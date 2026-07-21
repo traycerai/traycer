@@ -8,8 +8,12 @@ import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/ve
 import {
   agentCreateV10,
   agentCreateV20,
+  agentCreateV30,
   agentCreateDowngradeV20ToV10,
+  agentCreateDowngradeV30ToV10,
+  agentCreateDowngradeV30ToV20,
   agentCreateUpgradeV10ToV20,
+  agentCreateUpgradeV20ToV30,
   agentGetTranscriptV10,
   agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
@@ -37,7 +41,10 @@ import {
   agentStopV10,
 } from "@traycer/protocol/host/agent/contracts";
 import {
+  agentConfigureDowngradeV20ToV10,
   agentConfigureV10,
+  agentConfigureV20,
+  agentConfigureUpgradeV10ToV20,
   agentGetProviderProfileRateLimitsV10,
   agentListProviderProfilesV10,
 } from "@traycer/protocol/host/agent/profiles";
@@ -2446,6 +2453,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: { 1: agentCreateDowngradeV20ToV10 },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentCreateV30,
+          upgradeFromPreviousVersion: agentCreateUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentCreateDowngradeV30ToV10,
+        2: agentCreateDowngradeV30ToV20,
+      },
+    },
   },
   "agent.selectionGuide": {
     1: {
@@ -4039,6 +4059,16 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV20,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentConfigureDowngradeV20ToV10 },
     },
   },
 } as const;
