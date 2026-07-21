@@ -579,12 +579,17 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.hostPickerRequestClose,
         RunnerHostInvoke.hostPickerRequestOpen,
         RunnerHostInvoke.workspaceFoldersPick,
-        RunnerHostInvoke.validateAuthToken,
         RunnerHostInvoke.validateAuthTokenIdentity,
         RunnerHostInvoke.deviceFlowStart,
         RunnerHostInvoke.deviceFlowPollNow,
         RunnerHostInvoke.deviceFlowCancel,
-        RunnerHostInvoke.refreshAuthToken,
+        // §3 FileTokenStore IPC seam (get/signIn/rotate/delete); §6 adds the
+        // one-time legacy→file migration channel.
+        RunnerHostInvoke.authTokenStoreGet,
+        RunnerHostInvoke.authTokenStoreSignIn,
+        RunnerHostInvoke.authTokenStoreRotate,
+        RunnerHostInvoke.authTokenStoreDelete,
+        RunnerHostInvoke.authTokenStoreMigrateLegacy,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,
         RunnerHostInvoke.getRegisteredUrlSchemes,
@@ -639,8 +644,6 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerConfigEnvList,
         RunnerHostInvoke.traycerConfigEnvSet,
         RunnerHostInvoke.traycerConfigEnvDelete,
-        RunnerHostInvoke.traycerCliLogin,
-        RunnerHostInvoke.traycerCliLogout,
         RunnerHostInvoke.migrationAnnounceRunning,
         RunnerHostInvoke.migrationGetRunningSnapshot,
         // Native-packaging host-management bridge (Flow 4 / Flow 6).
@@ -2480,61 +2483,6 @@ describe("RunnerIpcBridge", () => {
       { channel: RunnerHostEvent.hostPickerChange, payload: true },
       { channel: RunnerHostEvent.hostPickerChange, payload: false },
     ]);
-    bridge.dispose();
-  });
-
-  it("validates auth tokens through the main-process HTTP helper", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              user: {
-                name: "Desktop User",
-                providerHandle: "desktop-user",
-                email: "desktop@example.com",
-              },
-            }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            },
-          ),
-        ),
-      ),
-    );
-
-    const mod = await import("../register-runner-ipc");
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      window: buildWindow(),
-    });
-    bridge.install();
-
-    const validateHandler = ipcMainState.handlers.get(
-      RunnerHostInvoke.validateAuthToken,
-    );
-    if (validateHandler === undefined) {
-      throw new Error("validateAuthToken handler missing");
-    }
-
-    await expect(
-      validateHandler(bareEvent(), "jwt-abc", "jwt-abc-refresh"),
-    ).resolves.toEqual({
-      kind: "valid",
-      profile: {
-        userId: "",
-        userName: "Desktop User",
-        email: "desktop@example.com",
-      },
-    });
-
     bridge.dispose();
   });
 

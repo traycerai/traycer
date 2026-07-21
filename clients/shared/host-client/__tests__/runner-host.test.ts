@@ -266,7 +266,7 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
     expect("remoteHosts" in host).toBe(false);
   });
 
-  it("round-trips the tokenStore through set/get/delete", async () => {
+  it("round-trips the tokenStore through signIn/get/delete", async () => {
     const host = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",
       authnBaseUrl: "http://localhost:5005",
@@ -279,61 +279,20 @@ describe("MockRunnerHost - IRunnerHost contract", () => {
 
     await expect(host.tokenStore.get()).resolves.toBe(null);
 
-    await host.tokenStore.set({ token: "foo", refreshToken: "foo-refresh" });
+    await host.tokenStore.signIn(
+      { token: "foo", refreshToken: "foo-refresh" },
+      { id: "u1", email: "u1@example.com", name: "U One" },
+    );
     await expect(host.tokenStore.get()).resolves.toEqual({
       token: "foo",
       refreshToken: "foo-refresh",
+      authnBaseUrl: "http://localhost:5005",
+      savedAt: expect.any(String),
+      user: { id: "u1", email: "u1@example.com", name: "U One" },
     });
 
     await host.tokenStore.delete();
     await expect(host.tokenStore.get()).resolves.toBe(null);
-  });
-
-  it("validates auth tokens through the shared HTTP helper", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              user: {
-                id: "mock-user-id",
-                name: "Mock User",
-                providerHandle: "mock-user",
-                email: "mock@example.com",
-              },
-            }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            },
-          ),
-        ),
-      ),
-    );
-
-    const host = new MockRunnerHost({
-      signInUrl: "https://auth.traycer.invalid/sign-in",
-      authnBaseUrl: "http://localhost:5005",
-      localHost: null,
-      hosts: [],
-      workspaceFolderPickerPaths: undefined,
-      hasLocalHost: undefined,
-      traycerCli: undefined,
-    });
-
-    await expect(host.validateAuthToken("jwt-1", "refresh-1")).resolves.toEqual(
-      {
-        kind: "valid",
-        profile: {
-          userId: "mock-user-id",
-          userName: "Mock User",
-          email: "mock@example.com",
-        },
-      },
-    );
-
-    vi.unstubAllGlobals();
   });
 
   it("resolves requestHostRespawn and increments the test counter", async () => {

@@ -136,11 +136,8 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       signInUrl: "https://auth.example.invalid/sign-in",
       authnBaseUrl: "https://auth.example.invalid",
       hasLocalHost: true,
-      validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
       validateAuthTokenIdentity: () =>
         Promise.resolve({ kind: "rejected" as const }),
-      refreshAuthToken: () =>
-        Promise.resolve({ kind: "network-error" as const }),
       openExternalLink: () => Promise.resolve(),
       getRegisteredUrlSchemes: () => Promise.resolve([]),
       requestMicrophoneAccess: () => Promise.resolve("granted" as const),
@@ -180,8 +177,13 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       },
       tokenStore: {
         get: () => Promise.resolve(null),
-        set: () => Promise.resolve(),
+        signIn: () => Promise.resolve(),
+        rotate: () =>
+          Promise.resolve({ outcome: "deleted" as const, pair: null }),
         delete: () => Promise.resolve(),
+        subscribe: () => ({ dispose: () => undefined }),
+        migrateLegacyCredentials: () =>
+          Promise.resolve("identity-unknown" as const),
       },
       onLocalHostChange: () => ({ dispose: () => undefined }),
       onSystemResumed: () => ({ dispose: () => undefined }),

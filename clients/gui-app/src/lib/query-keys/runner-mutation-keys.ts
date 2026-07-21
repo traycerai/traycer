@@ -16,7 +16,6 @@ export const runnerMutationKeys = {
   traycerShellRevertArgs: () => ["runner.traycer.shellRevertArgs"] as const,
   traycerEnvOverrideSet: () => ["runner.traycer.envOverrideSet"] as const,
   traycerEnvOverrideDelete: () => ["runner.traycer.envOverrideDelete"] as const,
-  traycerCliLogin: () => ["runner.traycer.cliLogin"] as const,
   // Host-management mutations consumed by the host gate, update banner,
   // Settings → Host, and the Doctor failure card.
   hostInstallVersion: () => ["runner.host.installVersion"] as const,

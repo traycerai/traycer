@@ -82,6 +82,7 @@ import {
 import { EpicWindowOwnership } from "../windows/epic-window-ownership";
 import { PerWindowState } from "../windows/per-window-state";
 import { DesktopAuthSession } from "../auth/desktop-auth-session";
+import { FileTokenStore } from "../auth/file-token-store";
 import { DesktopSupportService } from "../app/support";
 import { MenuController } from "../menu/menu-controller";
 import { initialRouteForWindowSnapshot } from "./window-initial-route";
@@ -474,6 +475,12 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const ownership = new EpicWindowOwnership(desktopStateStore);
   const perWindowState = new PerWindowState(desktopStateStore);
   const authSession = new DesktopAuthSession();
+  // Owner of the single machine-local credentials file (tech plan §3). ENV-scoped
+  // (shared across dev slots + the CLI), never slot-scoped. The bridge disposes it.
+  const authTokenStore = new FileTokenStore({
+    environment: config.environment,
+    authnBaseUrl: config.authnBaseUrl,
+  });
 
   const hostLabel = labelForEnvironment(config.environment);
   const hostLayout = getHostFsLayout(config.environment);
@@ -518,6 +525,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     host,
     hostController,
     authnBaseUrl: config.authnBaseUrl,
+    authTokenStore,
     // Device flow is the only login - there is no loopback redirect_uri to
     // snapshot - so the renderer always falls back to the custom-scheme
     // sign-in URL composition.

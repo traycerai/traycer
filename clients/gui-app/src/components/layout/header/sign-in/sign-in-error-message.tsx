@@ -4,6 +4,7 @@ import {
   AUTH_ERROR_LAUNCH_FAILED,
   AUTH_ERROR_SESSION_EXPIRED,
   AUTH_ERROR_SIGN_IN_FAILED,
+  AUTH_ERROR_STORE_UNAVAILABLE,
 } from "@/lib/auth/auth-service";
 import { cn } from "@/lib/utils";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -70,6 +71,9 @@ function messageForError(error: string): string {
   }
   if (error === AUTH_ERROR_DEVICE_EXPIRED) {
     return "The code expired - start again.";
+  }
+  if (error === AUTH_ERROR_STORE_UNAVAILABLE) {
+    return "Could not read saved credentials. Please try again.";
   }
   return "Sign in failed. Please try again.";
 }

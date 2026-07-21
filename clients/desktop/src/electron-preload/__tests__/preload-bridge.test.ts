@@ -4,7 +4,6 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
-import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 
 /**
@@ -128,7 +127,6 @@ interface PreloadBridge {
       onChange(handler: (snapshot: unknown) => void): { dispose: () => void };
     };
   };
-  validateAuthToken(token: string): Promise<AuthTokenValidationResult>;
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
@@ -394,38 +392,6 @@ describe("preload new-capability wiring", () => {
     });
 
     expect("status" in bridge.service).toBe(false);
-  });
-
-  it("forwards validateAuthToken through ipcRenderer.invoke", async () => {
-    const bridge = await loadPreload({
-      authnApiUrl: undefined,
-      desktopDev: undefined,
-      initialRouteArg: undefined,
-      invokeFn: (channel, token) => {
-        if (channel !== RunnerHostInvoke.validateAuthToken) {
-          throw new Error(`unexpected channel ${channel}`);
-        }
-        expect(token).toBe("jwt-123");
-        return Promise.resolve({
-          kind: "valid",
-          profile: {
-            userId: "test-user",
-            userName: "Test User",
-            email: "test@example.com",
-          },
-        } satisfies AuthTokenValidationResult);
-      },
-      sendSyncFn: undefined,
-    });
-
-    await expect(bridge.validateAuthToken("jwt-123")).resolves.toEqual({
-      kind: "valid",
-      profile: {
-        userId: "test-user",
-        userName: "Test User",
-        email: "test@example.com",
-      },
-    });
   });
 
   it("forwards validateAuthTokenIdentity through ipcRenderer.invoke", async () => {

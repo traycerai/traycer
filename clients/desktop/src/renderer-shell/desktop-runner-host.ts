@@ -2,8 +2,6 @@ import type {
   ActivateInstalledOk,
   ApplyStagedOk,
   ApplyStagedTrigger,
-  AuthTokenRefreshResult,
-  AuthTokenValidationResult,
   CliInstallManifestSnapshot,
   ConvergeReadyOk,
   DeviceFlowSession,
@@ -78,19 +76,6 @@ export type {
   Vibrancy as DesktopVibrancy,
 };
 
-/**
- * Single logical entry inside the renderer-side encrypted localStorage.
- * Mirrors the prior `DESKTOP_AUTH_TOKEN_STORAGE_KEY = "traycer.token"` so
- * existing dev installs keep their token across the upgrade.
- */
-// The bearer and refresh token are stored in SEPARATE encrypted slots, each a
-// plain string. Do NOT pack them as JSON into one slot: `encrypt-storage`'s
-// `getItem` deserializes its value, so a stored JSON string round-trips back to
-// an object and `readEncryptedItem` (which only returns strings) yields null -
-// dropping the whole session on every restart. A raw-string slot round-trips
-// exactly (the pre-cutover behavior), which is why the bearer must stay a string.
-const DESKTOP_AUTH_TOKEN_KEY = "traycer.token";
-const DESKTOP_AUTH_REFRESH_TOKEN_KEY = "traycer.refresh-token";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
@@ -131,18 +116,12 @@ export interface DesktopPreloadBridge {
   readonly authRedirectUri: string;
   readonly initialRoute: string | null;
   readonly sentryRendererDsn: string;
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult>;
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult>;
+  // Credentials-file token store (tech plan §3): an IPC client of the main
+  // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
+  tokenStore: ITokenStore;
   openExternalLink(url: string): Promise<void>;
   getRegisteredUrlSchemes(
     schemes: readonly string[],
@@ -402,11 +381,6 @@ export interface DesktopTraycerCliBridge {
     readonly value: string | null;
   }): Promise<void>;
   envOverrideDelete(input: { readonly key: string }): Promise<void>;
-  cliLogin(input: {
-    readonly token: string;
-    readonly refreshToken: string;
-  }): Promise<void>;
-  cliLogout(): Promise<void>;
 }
 
 export interface DesktopServiceBridge {
@@ -585,11 +559,9 @@ export class DesktopRunnerHost implements IRunnerHost {
       }),
     );
 
-    // Credentials never round-trip through Electron main any more - the
-    // renderer reads/writes them directly via `encrypt-storage` on top of
-    // `window.localStorage`. See `secure-local-storage.ts` for the full
-    // rationale; the short version is "no OS-keychain prompt on first
-    // launch" while still avoiding plaintext-on-disk for casual snooping.
+    // `secureStorage` stays renderer-local encrypted localStorage (no
+    // OS-keychain prompt on first launch, and it has non-token consumers). See
+    // `secure-local-storage.ts` for the full rationale.
     this.secureStorage = {
       get: (key) => Promise.resolve(readEncryptedItem(key)),
       set: (key, value) => {
@@ -602,35 +574,12 @@ export class DesktopRunnerHost implements IRunnerHost {
       },
     };
 
-    this.tokenStore = {
-      get: () => {
-        const token = readEncryptedItem(DESKTOP_AUTH_TOKEN_KEY);
-        if (token === null || token.length === 0) {
-          return Promise.resolve(null);
-        }
-        const refreshToken =
-          readEncryptedItem(DESKTOP_AUTH_REFRESH_TOKEN_KEY) ?? "";
-        return Promise.resolve({ token, refreshToken });
-      },
-      set: (tokens) => {
-        writeEncryptedItem(DESKTOP_AUTH_TOKEN_KEY, tokens.token);
-        // An empty slot reads back as null, so clear rather than store "".
-        if (tokens.refreshToken.length > 0) {
-          writeEncryptedItem(
-            DESKTOP_AUTH_REFRESH_TOKEN_KEY,
-            tokens.refreshToken,
-          );
-        } else {
-          removeEncryptedItem(DESKTOP_AUTH_REFRESH_TOKEN_KEY);
-        }
-        return Promise.resolve();
-      },
-      delete: () => {
-        removeEncryptedItem(DESKTOP_AUTH_TOKEN_KEY);
-        removeEncryptedItem(DESKTOP_AUTH_REFRESH_TOKEN_KEY);
-        return Promise.resolve();
-      },
-    };
+    // Credentials-file token store (tech plan §3): the auth token store now
+    // round-trips through Electron main - it is the single machine-local
+    // credentials file owned by `FileTokenStore` (lock + WAL), shared with the
+    // CLI and read by the host, reached here over IPC. The old renderer-local
+    // encrypted-localStorage token slots are retired (their migration is §6).
+    this.tokenStore = options.bridge.tokenStore;
 
     this.notifications = {
       show: (title, body, payload, replaceKey, deliveryKey) =>
@@ -685,9 +634,6 @@ export class DesktopRunnerHost implements IRunnerHost {
       envOverrideSet: (input) => this.bridge.traycerCli.envOverrideSet(input),
       envOverrideDelete: (input) =>
         this.bridge.traycerCli.envOverrideDelete(input),
-      cliLogin: (token, refreshToken) =>
-        this.bridge.traycerCli.cliLogin({ token, refreshToken }),
-      cliLogout: () => this.bridge.traycerCli.cliLogout(),
     };
     this.migration = {
       announceRunning: (snapshot) =>
@@ -755,25 +701,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.getRegisteredUrlSchemes(schemes);
   }
 
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult> {
-    return this.bridge.validateAuthToken(token, refreshToken);
-  }
-
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult> {
-    return this.bridge.validateAuthTokenIdentity(token, refreshToken);
-  }
-
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult> {
-    return this.bridge.refreshAuthToken(token, refreshToken);
+    return this.bridge.validateAuthTokenIdentity(token);
   }
 
   beginAuthAttempt(): void {

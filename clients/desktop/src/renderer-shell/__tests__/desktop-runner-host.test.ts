@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  AuthTokenValidationResult,
   HostControllerStatus,
+  HostRegistryUpdateState,
+  ITokenStore,
   LocalHostSnapshot,
+  StoredCredentials,
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -73,16 +75,28 @@ function buildFakeBridge(
     authRedirectUri: "",
     initialRoute: "/",
     sentryRendererDsn: "",
-    validateAuthToken: async (): Promise<AuthTokenValidationResult> => ({
-      kind: "valid",
-      profile: {
-        userId: "test-user",
-        userName: "Test User",
-        email: "test@example.com",
-      },
-    }),
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
-    refreshAuthToken: async () => ({ kind: "network-error" as const }),
+    tokenStore: ((): ITokenStore => {
+      let stored: StoredCredentials | null = null;
+      return {
+        get: async () => stored,
+        signIn: async (tokens, identity) => {
+          stored = {
+            token: tokens.token,
+            refreshToken: tokens.refreshToken,
+            authnBaseUrl: "http://localhost:5005",
+            savedAt: new Date().toISOString(),
+            user: identity,
+          };
+        },
+        rotate: async () => ({ outcome: "deleted", pair: null }),
+        delete: async () => {
+          stored = null;
+        },
+        subscribe: () => ({ dispose: () => undefined }),
+        migrateLegacyCredentials: async () => "identity-unknown" as const,
+      };
+    })(),
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,
@@ -360,8 +374,6 @@ function buildFakeBridge(
       envOverrideList: async () => [],
       envOverrideSet: async () => undefined,
       envOverrideDelete: async () => undefined,
-      cliLogin: async () => undefined,
-      cliLogout: async () => undefined,
     },
     migration: {
       announceRunning: async () => undefined,
@@ -655,46 +667,26 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     expect(host.authnBaseUrl).toBe("http://localhost:5005");
   });
 
-  it("delegates tokenStore.{get,set,delete} to the bridge", async () => {
+  it("delegates tokenStore.{get,signIn,delete} to the bridge", async () => {
     const fake = buildFakeBridge(null);
     const host = new DesktopRunnerHost({
       bridge: fake.bridge,
       signInUrl: "https://auth.example.invalid/sign-in",
     });
     expect(await host.tokenStore.get()).toBeNull();
-    await host.tokenStore.set({ token: "jwt-1", refreshToken: "refresh-1" });
+    await host.tokenStore.signIn(
+      { token: "jwt-1", refreshToken: "refresh-1" },
+      { id: "u1", email: "u1@example.com", name: "U One" },
+    );
     expect(await host.tokenStore.get()).toEqual({
       token: "jwt-1",
       refreshToken: "refresh-1",
-    });
-    // A bearer-only credential (empty refresh token) must round-trip, not be
-    // dropped on read - else the session is lost on every restart.
-    await host.tokenStore.set({ token: "jwt-2", refreshToken: "" });
-    expect(await host.tokenStore.get()).toEqual({
-      token: "jwt-2",
-      refreshToken: "",
+      authnBaseUrl: "http://localhost:5005",
+      savedAt: expect.any(String),
+      user: { id: "u1", email: "u1@example.com", name: "U One" },
     });
     await host.tokenStore.delete();
     expect(await host.tokenStore.get()).toBeNull();
-  });
-
-  it("delegates validateAuthToken to the bridge", async () => {
-    const fake = buildFakeBridge(null);
-    const host = new DesktopRunnerHost({
-      bridge: fake.bridge,
-      signInUrl: "https://auth.example.invalid/sign-in",
-    });
-
-    await expect(host.validateAuthToken("jwt-1", "refresh-1")).resolves.toEqual(
-      {
-        kind: "valid",
-        profile: {
-          userId: "test-user",
-          userName: "Test User",
-          email: "test@example.com",
-        },
-      },
-    );
   });
 
   it("delegates validateAuthTokenIdentity to the bridge", async () => {
@@ -704,9 +696,7 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
       signInUrl: "https://auth.example.invalid/sign-in",
     });
 
-    await expect(
-      host.validateAuthTokenIdentity("jwt-1", "refresh-1"),
-    ).resolves.toEqual({
+    await expect(host.validateAuthTokenIdentity("jwt-1")).resolves.toEqual({
       kind: "rejected",
     });
   });
