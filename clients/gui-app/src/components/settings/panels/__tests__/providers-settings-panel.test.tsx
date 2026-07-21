@@ -1364,6 +1364,9 @@ describe("<ProvidersSettingsPanel />", () => {
       throw new Error("Expected profile summary and actions row");
     }
     expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
     fireEvent.focus(manageProfileButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "Change the profile name and accent color, sign in again, or remove this profile.",
@@ -1841,6 +1844,9 @@ describe("<ProvidersSettingsPanel />", () => {
       }),
     ).toBe(manageProfileButton);
     expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
   });
 
   it("redacts a profile's email by default and reveals it on toggle", () => {
