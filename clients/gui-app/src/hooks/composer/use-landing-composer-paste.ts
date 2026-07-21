@@ -33,6 +33,7 @@ import {
  * differs. Chat / new-conversation keep using `useComposerPaste` (base64).
  */
 async function landingImageAttrsFromFiles(
+  draftId: string | null,
   files: ReadonlyArray<File>,
   signal: AbortSignal,
 ): Promise<ImageAttachmentAttrs[]> {
@@ -44,13 +45,13 @@ async function landingImageAttrsFromFiles(
     });
   });
   if (accepted.length === 0) return [];
-  // Make room (evict oldest inactive drafts) before storing bytes; a paste that
-  // can't fit even after eviction is blocked here (toast shown by the budget).
+  // Reserve against this draft's roots before storing bytes. A capacity miss
+  // rejects only this attachment; GC never discards another draft to make room.
   const incomingBytes = accepted.reduce(
     (sum, file) => sum + (file.size > 0 ? file.size : 0),
     0,
   );
-  if (!reserveLandingImageBudget(incomingBytes)) {
+  if (!reserveLandingImageBudget(draftId, incomingBytes)) {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
       kind: "image",
       surface: "draft",
@@ -76,12 +77,15 @@ async function landingImageAttrsFromFiles(
   );
 }
 
-export function useLandingComposerPaste(editorRef: {
-  readonly current: ComposerPasteEditorHandle | null;
-}): UseComposerPasteResult {
+export function useLandingComposerPaste(
+  editorRef: { readonly current: ComposerPasteEditorHandle | null },
+  draftId: string | null,
+  disabled: boolean,
+): UseComposerPasteResult {
   const onFiles = useCallback(
-    (files: ReadonlyArray<File>, signal: AbortSignal) =>
-      landingImageAttrsFromFiles(files, signal)
+    (files: ReadonlyArray<File>, signal: AbortSignal) => {
+      if (disabled) return Promise.resolve();
+      return landingImageAttrsFromFiles(draftId, files, signal)
         .then((attrs) => {
           if (attrs.length === 0) return;
           const handle = editorRef.current;
@@ -128,8 +132,9 @@ export function useLandingComposerPaste(editorRef: {
             );
           }
           scheduleLandingImageReconcile();
-        }),
-    [editorRef],
+        });
+    },
+    [disabled, draftId, editorRef],
   );
   return useComposerPasteEvents(onFiles);
 }

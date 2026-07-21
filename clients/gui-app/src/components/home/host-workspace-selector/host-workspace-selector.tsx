@@ -200,6 +200,8 @@ export type HostWorkspaceSelectorSurface =
 
 interface HostWorkspaceSelectorProps {
   readonly surface: HostWorkspaceSelectorSurface;
+  /** A draft create owns the snapshot until it settles. */
+  readonly disabled?: boolean;
 }
 
 export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
@@ -229,7 +231,12 @@ export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
     (directoryList.data === undefined ? hostLabel : "Unavailable");
 
   if (props.surface.kind === "home") {
-    return <HomeSurface draftId={props.surface.draftId} />;
+    return (
+      <HomeSurface
+        draftId={props.surface.draftId}
+        disabled={props.disabled === true}
+      />
+    );
   }
   return (
     <InEpicSurface
@@ -244,6 +251,7 @@ export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
 
 interface HomeSurfaceProps {
   readonly draftId: string | null;
+  readonly disabled?: boolean;
 }
 
 function HomeSurface(props: HomeSurfaceProps) {
@@ -259,6 +267,7 @@ function HomeSurface(props: HomeSurfaceProps) {
       seedIntent={null}
       seedIntentOverride={null}
       hostScope={{ kind: "active" }}
+      disabled={props.disabled}
     />
   );
 }
@@ -295,12 +304,14 @@ type ActiveHostWorkspaceControlsProps = {
   // file-tree-style Host list above a Workspaces section, no trailing chip.
   readonly layout: "inline" | "stacked";
   readonly hostScope: HostWorkspaceControlsHostScope;
+  readonly disabled?: boolean;
 };
 
 export function ActiveHostWorkspaceControls(
   props: ActiveHostWorkspaceControlsProps,
 ) {
   const directoryList = useHostDirectoryList();
+  const disabled = props.disabled === true;
   const directoryEntries = directoryList.data ?? [];
   const reactiveActiveHostId = useReactiveActiveHostId();
   const activeHostId =
@@ -325,9 +336,25 @@ export function ActiveHostWorkspaceControls(
             fixedUnavailableHostEntry(props.hostScope.hostId, hostLabel),
         ]
       : directoryEntries;
-  const workspaceSource = useHomeWorkspaceSource(
+  const homeWorkspaceSource = useHomeWorkspaceSource(
     props.stagingKey,
     props.workspaceSeed,
+  );
+  const workspaceSource = useMemo<HomeWorkspaceSource>(
+    () =>
+      disabled
+        ? {
+            ...homeWorkspaceSource,
+            addResolvedFolders: () => undefined,
+            removeFolder: () => ({
+              primaryChanged: false,
+              newPrimaryName: null,
+            }),
+            setPrimaryFolder: () => undefined,
+            stageEntry: () => undefined,
+          }
+        : homeWorkspaceSource,
+    [disabled, homeWorkspaceSource],
   );
   // Resolve repo-identifier → path against the scope-correct host: the
   // default host in active scope, the source agent's FIXED host in the
@@ -337,6 +364,7 @@ export function ActiveHostWorkspaceControls(
     activeHostClient,
   );
   const handleSelectHost = (hostId: string): void => {
+    if (disabled) return;
     if (props.hostScope.kind === "fixed") return;
     if (binding === null) return;
     binding.directory.selectById(hostId);
@@ -371,6 +399,7 @@ export function ActiveHostWorkspaceControls(
             seedIntentOverride={props.seedIntentOverride}
             restingMode="rows"
             hostSlot={null}
+            disabled={disabled}
           />
         </section>
       </div>
@@ -387,6 +416,7 @@ export function ActiveHostWorkspaceControls(
       mode="editable"
       onSelect={handleSelectHost}
       loading={false}
+      disabled={disabled}
     />
   );
   return (
@@ -399,6 +429,7 @@ export function ActiveHostWorkspaceControls(
       seedIntentOverride={props.seedIntentOverride}
       restingMode="summary"
       hostSlot={deviceSelect}
+      disabled={disabled}
     />
   );
 }
@@ -434,6 +465,7 @@ function HomeWorkspaceRows(props: {
   readonly seedIntentOverride: SeedIntentOverride | null;
   readonly restingMode: "rows" | "summary";
   readonly hostSlot: ReactNode;
+  readonly disabled: boolean;
 }) {
   const {
     workspaceSource,
@@ -505,8 +537,14 @@ function HomeWorkspaceRows(props: {
     [queryableFolderPaths, summariesByPath],
   );
   useLayoutEffect(() => {
+    if (props.disabled) return;
     setSuspendedWorkspacePaths(stagingKey, unresolvedMetadataPaths);
-  }, [setSuspendedWorkspacePaths, stagingKey, unresolvedMetadataPaths]);
+  }, [
+    props.disabled,
+    setSuspendedWorkspacePaths,
+    stagingKey,
+    unresolvedMetadataPaths,
+  ]);
   const gitSummaries = useMemo<ReadonlyArray<WorktreeWorkspaceSummaryV13>>(
     () =>
       resolvedFolders.flatMap((entry) => {
@@ -726,14 +764,22 @@ function HomeWorkspaceRows(props: {
   const [scriptsTargetPath, setScriptsTargetPath] = useState<string | null>(
     null,
   );
-  const handleEditEnvironment = useCallback((path: string): void => {
-    // Keep the picker open: the scripts modal stacks on top of it, so closing
-    // the modal returns to the still-open picker.
-    Analytics.getInstance().track(AnalyticsEvent.SetupScriptsOpened, {
-      source: "direct_ui",
-    });
-    setScriptsTargetPath(path);
-  }, []);
+  const handleEditEnvironment = useCallback(
+    (path: string): void => {
+      if (props.disabled) return;
+      // Keep the picker open: the scripts modal stacks on top of it, so closing
+      // the modal returns to the still-open picker.
+      Analytics.getInstance().track(AnalyticsEvent.SetupScriptsOpened, {
+        source: "direct_ui",
+      });
+      setScriptsTargetPath(path);
+    },
+    [props.disabled],
+  );
+  const addFolders = useCallback(async (): Promise<boolean> => {
+    if (props.disabled) return false;
+    return pickAndAddFolders();
+  }, [pickAndAddFolders, props.disabled]);
   const scriptsTarget = useMemo<WorktreeScriptsTarget | null>(() => {
     if (scriptsTargetPath === null) return null;
     const summary = summariesByPath.get(scriptsTargetPath);
@@ -760,17 +806,18 @@ function HomeWorkspaceRows(props: {
           items={items}
           hostSlot={props.hostSlot}
           addFolderPending={addFolderPending}
-          onAddFolder={pickAndAddFolders}
+          onAddFolder={addFolders}
           onEditEnvironment={handleEditEnvironment}
+          disabled={props.disabled}
         />
       ) : (
         <WorkspaceFolderRows
           items={items}
           trailingSlot={null}
           addFolderPending={addFolderPending}
-          addFolderDisabled={false}
+          addFolderDisabled={props.disabled}
           addFolderDisabledReason={null}
-          onAddFolder={pickAndAddFolders}
+          onAddFolder={addFolders}
           // Landing has no live PTY to resume: edits apply inline, no Update.
           onUpdate={null}
           updateEnabled={false}
@@ -804,6 +851,7 @@ function HomeWorkspaceSummaryControl(props: {
   readonly addFolderPending: boolean;
   readonly onAddFolder: AddFolderHandler;
   readonly onEditEnvironment: (workspacePath: string) => void;
+  readonly disabled: boolean;
 }) {
   return (
     <div
@@ -821,7 +869,7 @@ function HomeWorkspaceSummaryControl(props: {
           readOnly={false}
           bindingResolved
           addFolderPending={props.addFolderPending}
-          addFolderDisabled={false}
+          addFolderDisabled={props.disabled}
           addFolderDisabledReason={null}
           onAddFolder={props.onAddFolder}
           onUpdate={null}
@@ -844,13 +892,14 @@ function HostOnlySelect(props: {
   readonly mode: "editable" | "clone-on-switch" | "locked";
   readonly onSelect: (hostId: string) => void;
   readonly loading: boolean;
+  readonly disabled: boolean;
 }) {
   const options = hostSelectOptions(
     props.entries,
     props.activeHostId,
     props.hostLabel,
   );
-  const disabled = props.mode === "locked";
+  const disabled = props.mode === "locked" || props.disabled;
   return (
     <Select
       value={props.activeHostId ?? undefined}
@@ -2087,6 +2136,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
             mode={surface.kind === "chat" ? "clone-on-switch" : "locked"}
             onSelect={handleSelectHostForChat}
             loading={metadataPending}
+            disabled={false}
           />
         </div>
         <div className="min-w-0 flex-[1_1_auto] max-w-[min(100%,34rem)] overflow-hidden">

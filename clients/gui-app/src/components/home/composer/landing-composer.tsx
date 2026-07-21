@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -31,9 +32,11 @@ import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
-  useLandingComposerStore,
-  flushPendingLandingDraftContent,
-} from "@/stores/composer/landing-composer-store";
+  draftRuntimeRegistry,
+  EMPTY_DRAFT_RUNTIME_CONTENT,
+  imageHashes,
+  type DraftRuntimeState,
+} from "@/stores/home/draft-runtime-registry";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
   deriveFolderlessAllowedWorkspaceAvailability,
@@ -53,28 +56,34 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 interface LandingComposerProps {
   readonly draftId: string | null;
   readonly initialSettings: ChatRunSettings | null;
-  readonly workspaceControls: ReactNode;
+  readonly workspaceControls: (disabled: boolean) => ReactNode;
 }
 
 export function LandingComposer(props: LandingComposerProps) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const createdUnboundDraftIdRef = useRef<string | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
   const hostClient = useHostBinding()?.hostClient ?? null;
   const activityEnabled = useSurfaceActivity();
-  const [initialContent] = useState<JsonContent>(() =>
-    useLandingComposerStore.getState().openDraft(props.draftId),
+  const runtime = draftRuntimeRegistry.getOrHydrate(props.draftId);
+  const [unboundRuntime] = useState(() =>
+    createStore<DraftRuntimeState>(() => ({
+      content: EMPTY_DRAFT_RUNTIME_CONTENT,
+      selection: null,
+      contentRevision: 0,
+      attachmentRoots: new Set<string>(),
+      isSubmitting: false,
+    })),
   );
+  const runtimeStore = runtime?.store ?? unboundRuntime;
+  const runtimeState = useStore(runtimeStore);
+  const [initialContent] = useState<JsonContent>(() => runtimeState.content);
   // Restore the caret to where it was when the draft was last persisted (decision
   // A3). Read once at mount; the composer is keyed by draft id, so each draft
   // mounts fresh and `composer-prompt-editor` applies `initialSelection` once.
-  const [initialSelection] = useState<DraftSelection | null>(() => {
-    if (props.draftId === null) return null;
-    return (
-      useLandingDraftStore
-        .getState()
-        .drafts.find((draft) => draft.id === props.draftId)?.selection ?? null
-    );
-  });
+  const [initialSelection] = useState<DraftSelection | null>(
+    () => runtimeState.selection,
+  );
   const draftId = props.draftId;
   const globalComposerMode = useSettingsStore((state) => state.composerMode);
   const setGlobalComposerMode = useSettingsStore(
@@ -94,9 +103,9 @@ export function LandingComposer(props: LandingComposerProps) {
 
   useEffect(() => {
     return () => {
-      flushPendingLandingDraftContent();
+      draftRuntimeRegistry.flush(props.draftId);
     };
-  }, []);
+  }, [props.draftId]);
 
   const globalLastRunSettings = useComposerRunSettingsStore(
     (state) => state.globalLastRunSettings,
@@ -156,12 +165,12 @@ export function LandingComposer(props: LandingComposerProps) {
 
   const createEpic = useEpicCreate();
   const terminalAgentCreate = useCreateTuiAgent();
-  const isSubmitting = createEpic.isPending || terminalAgentCreate.isPending;
+  const isSubmitting =
+    runtimeState.isSubmitting ||
+    createEpic.isPending ||
+    terminalAgentCreate.isPending;
 
-  const setSnapshot = useLandingComposerStore((s) => s.setSnapshot);
-  const hasSubmittableContent = useLandingComposerStore((s) =>
-    contentIsSubmittable(s.currentContent),
-  );
+  const hasSubmittableContent = contentIsSubmittable(runtimeState.content);
   const draftWorkspace = useLandingDraftStore((state) => {
     if (draftId === null) return null;
     return (
@@ -187,7 +196,7 @@ export function LandingComposer(props: LandingComposerProps) {
     ],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
-  const paste = useLandingComposerPaste(editorRef);
+  const paste = useLandingComposerPaste(editorRef, draftId, isSubmitting);
   const attachmentPending = paste.isIngestingImages;
   const canSubmit =
     !isSubmitting &&
@@ -203,9 +212,35 @@ export function LandingComposer(props: LandingComposerProps) {
 
   const handleSnapshot = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
-      setSnapshot(draftId, content, selection);
+      if (runtime !== null) {
+        runtime.setSnapshot(content, selection);
+        return;
+      }
+      unboundRuntime.setState((current) => ({
+        content,
+        selection,
+        contentRevision: current.contentRevision + 1,
+        attachmentRoots: imageHashes(content),
+      }));
+      if (!contentIsSubmittable(content)) return;
+      const existingDraftId = createdUnboundDraftIdRef.current;
+      if (existingDraftId !== null) {
+        useLandingDraftStore
+          .getState()
+          .setDraftContent(existingDraftId, content, selection);
+        return;
+      }
+      const createdDraftId = useLandingDraftStore
+        .getState()
+        .createDraft(
+          useComposerRunSettingsStore.getState().globalLastRunSettings,
+        );
+      createdUnboundDraftIdRef.current = createdDraftId;
+      useLandingDraftStore
+        .getState()
+        .setDraftContent(createdDraftId, content, selection);
     },
-    [draftId, setSnapshot],
+    [runtime, unboundRuntime],
   );
 
   const handleSubmit = useCallback(() => {
@@ -213,6 +248,7 @@ export function LandingComposer(props: LandingComposerProps) {
     const toolbar = toolbarStore.getState();
     if (toolbar.selection.modelSlug.length === 0) return;
     actions.submit({
+      draftId,
       editor: editorRef.current,
       toolbar: {
         selection: toolbar.selection,
@@ -222,23 +258,27 @@ export function LandingComposer(props: LandingComposerProps) {
         agentMode: toolbar.agentMode,
       },
     });
-  }, [actions, canSubmit, toolbarStore]);
+  }, [actions, canSubmit, draftId, toolbarStore]);
 
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
-      if (!workspaceCanStart) return;
-      actions.selectTerminalAgent(launch);
+      if (!workspaceCanStart || isSubmitting) return;
+      actions.selectTerminalAgent(launch, draftId);
     },
-    [actions, workspaceCanStart],
+    [actions, draftId, isSubmitting, workspaceCanStart],
   );
 
-  const handleRemoveImage = useCallback((id: string) => {
-    Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
-      kind: "image",
-      surface: "draft",
-    });
-    editorRef.current?.removeImageAttachmentById(id);
-  }, []);
+  const handleRemoveImage = useCallback(
+    (id: string) => {
+      if (isSubmitting) return;
+      Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
+        kind: "image",
+        surface: "draft",
+      });
+      editorRef.current?.removeImageAttachmentById(id);
+    },
+    [isSubmitting],
+  );
 
   const switcher = (
     <button
@@ -249,6 +289,7 @@ export function LandingComposer(props: LandingComposerProps) {
           : "Switch to chat mode"
       }
       className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      disabled={isSubmitting}
       onClick={() => {
         const next = nextComposerMode(composerMode);
         setGlobalComposerMode(next);
@@ -278,9 +319,12 @@ export function LandingComposer(props: LandingComposerProps) {
       workspaceDisabledHint={workspaceAvailability.disabledHint}
       header={<div className="flex justify-end">{switcher}</div>}
       attachmentsStrip={
-        <LandingComposerAttachmentStrip onRemoveImage={handleRemoveImage} />
+        <LandingComposerAttachmentStrip
+          content={runtimeState.content}
+          onRemoveImage={handleRemoveImage}
+        />
       }
-      workspaceControls={props.workspaceControls}
+      workspaceControls={props.workspaceControls(isSubmitting)}
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
@@ -293,13 +337,13 @@ export function LandingComposer(props: LandingComposerProps) {
 }
 
 function LandingComposerAttachmentStrip(props: {
+  readonly content: JsonContent;
   readonly onRemoveImage: (id: string) => void;
 }): ReactNode {
-  const currentContent = useLandingComposerStore((s) => s.currentContent);
   const fetcher = useLandingImageFetcher();
   return (
     <AttachmentStrip
-      content={currentContent}
+      content={props.content}
       onRemoveImage={props.onRemoveImage}
       fetcher={fetcher}
       sessionObjectUrl={sessionObjectUrl}

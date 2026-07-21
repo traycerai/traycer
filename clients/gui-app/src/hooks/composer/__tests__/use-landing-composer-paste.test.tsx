@@ -87,6 +87,27 @@ function makeHandle(inserted: ImageAttachmentAttrs[][]): {
 }
 
 describe("useLandingComposerPaste", () => {
+  it("rejects a new paste while the exact draft submission is pending", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const { handle } = makeHandle(inserted);
+    const editorRef = { current: handle };
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, "draft-submitting", true),
+    );
+
+    act(() => {
+      result.current.attachImageFiles([
+        new File(["late"], "late.png", { type: "image/png" }),
+      ]);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(inserted).toEqual([]);
+    expect(await imageHashKeys()).toEqual([]);
+  });
+
   it("does not report an attachment when a non-null editor is not ready", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const track = vi.spyOn(Analytics.getInstance(), "track");
@@ -98,7 +119,9 @@ describe("useLandingComposerPaste", () => {
         focus: () => undefined,
       },
     };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, null, false),
+    );
 
     act(() => {
       result.current.attachImageFiles([
@@ -120,7 +143,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle, focusCalls } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, null, false),
+    );
 
     const file = new File(["hello"], "shot.png", { type: "image/png" });
     act(() => {
@@ -154,7 +179,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, null, false),
+    );
 
     const first = new File(["same"], "a.png", { type: "image/png" });
     const second = new File(["same"], "b.png", { type: "image/png" });
@@ -178,7 +205,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, null, false),
+    );
 
     const png = new File(["img"], "shot.png", { type: "image/png" });
     const pdf = new File(["doc"], "doc.pdf", { type: "application/pdf" });
@@ -196,7 +225,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, null, false),
+    );
 
     // Force `putImage` (its `sha256Hex`) to reject so the whole ingest rejects —
     // the partial-paste failure path. The `.catch` must surface a toast (and
@@ -237,7 +268,7 @@ describe("useLandingComposerPaste", () => {
     );
 
     const { result, unmount } = renderHook(() =>
-      useLandingComposerPaste(editorRef),
+      useLandingComposerPaste(editorRef, null, false),
     );
     const file = new File(["hello"], "shot.png", { type: "image/png" });
     act(() => {
@@ -264,7 +295,9 @@ describe("useLandingComposerPaste", () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const { handle } = makeHandle(inserted);
     const editorRef = { current: handle };
-    const { result } = renderHook(() => useLandingComposerPaste(editorRef));
+    const { result } = renderHook(() =>
+      useLandingComposerPaste(editorRef, null, false),
+    );
 
     const oversized = new File(["x"], "big.png", { type: "image/png" });
     Object.defineProperty(oversized, "size", { value: 10 * 1024 * 1024 });

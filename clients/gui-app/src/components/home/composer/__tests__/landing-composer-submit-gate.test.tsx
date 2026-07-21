@@ -17,7 +17,10 @@ const testState = vi.hoisted(() => ({
   submit: vi.fn(),
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
+  snapshot: null as (() => void) | null,
   ingesting: false,
+  createPending: false,
+  pasteDisabled: false,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -28,34 +31,24 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
+      testState.snapshot = () => {
+        props.onSnapshot(DIRTY_CONTENT, { from: 1, to: 1 });
+      };
       return React.createElement(
-        "button",
-        { type: "button", onClick: props.onSubmit },
-        "Submit landing",
+        React.Fragment,
+        null,
+        React.createElement(
+          "button",
+          {
+            type: "button",
+            disabled: props.isSubmitting,
+            onClick: props.onSubmit,
+          },
+          "Submit landing",
+        ),
+        props.workspaceControls,
       );
     },
-  };
-});
-
-vi.mock("@/stores/composer/landing-composer-store", () => {
-  const dirtyContent = {
-    type: "doc",
-    content: [
-      { type: "paragraph", content: [{ type: "text", text: "dirty" }] },
-    ],
-  };
-  const state = {
-    currentContent: dirtyContent,
-    setSnapshot: vi.fn(),
-    openDraft: () => dirtyContent,
-  };
-  const useLandingComposerStore = Object.assign(
-    (selector: (value: typeof state) => unknown) => selector(state),
-    { getState: () => state },
-  );
-  return {
-    useLandingComposerStore,
-    flushPendingLandingDraftContent: vi.fn(),
   };
 });
 
@@ -72,10 +65,15 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     drafts: [],
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    createDraft: vi.fn(() => "draft-for-test"),
+    setDraftContent: vi.fn(),
   };
+  const useLandingDraftStore = Object.assign(
+    (selector: (value: typeof state) => unknown) => selector(state),
+    { getState: () => state },
+  );
   return {
-    useLandingDraftStore: (selector: (value: typeof state) => unknown) =>
-      selector(state),
+    useLandingDraftStore,
   };
 });
 
@@ -84,9 +82,12 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
     globalLastRunSettings: null,
     setGlobalRunSettings: vi.fn(),
   };
+  const useComposerRunSettingsStore = Object.assign(
+    (selector: (value: typeof state) => unknown) => selector(state),
+    { getState: () => state },
+  );
   return {
-    useComposerRunSettingsStore: (selector: (value: typeof state) => unknown) =>
-      selector(state),
+    useComposerRunSettingsStore,
   };
 });
 
@@ -113,16 +114,23 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
 }));
 
 vi.mock("@/hooks/composer/use-landing-composer-paste", () => ({
-  useLandingComposerPaste: () => ({
-    onPaste: vi.fn(),
-    onDrop: vi.fn(),
-    onDragOver: vi.fn(),
-    onDragEnter: vi.fn(),
-    onDragLeave: vi.fn(),
-    attachImageFiles: vi.fn(),
-    isDraggingFiles: false,
-    isIngestingImages: testState.ingesting,
-  }),
+  useLandingComposerPaste: (
+    _editorRef: unknown,
+    _draftId: unknown,
+    disabled: boolean,
+  ) => {
+    testState.pasteDisabled = disabled;
+    return {
+      onPaste: vi.fn(),
+      onDrop: vi.fn(),
+      onDragOver: vi.fn(),
+      onDragEnter: vi.fn(),
+      onDragLeave: vi.fn(),
+      attachImageFiles: vi.fn(),
+      isDraggingFiles: false,
+      isIngestingImages: testState.ingesting,
+    };
+  },
 }));
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
@@ -155,7 +163,7 @@ vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
   useLandingImageFetcher: () => vi.fn(),
 }));
 vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
-  useEpicCreate: () => ({ isPending: false }),
+  useEpicCreate: () => ({ isPending: testState.createPending }),
 }));
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgent: () => ({ isPending: false }),
@@ -170,22 +178,51 @@ afterEach(() => {
   testState.submit.mockClear();
   testState.bodySubmit = null;
   testState.installEditor = null;
+  testState.snapshot = null;
   testState.ingesting = false;
+  testState.createPending = false;
+  testState.pasteDisabled = false;
 });
 
 describe("LandingComposer direct submit gate", () => {
+  it("locks editor input, paste ingestion, and workspace controls during a submission", () => {
+    testState.createPending = true;
+    render(
+      <LandingComposer
+        draftId={null}
+        initialSettings={null}
+        workspaceControls={(disabled) => (
+          <button type="button" disabled={disabled}>
+            Change workspace
+          </button>
+        )}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Submit landing" }),
+    ).toHaveProperty("disabled", true);
+    expect(testState.pasteDisabled).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Change workspace" }),
+    ).toHaveProperty("disabled", true);
+  });
+
   it("blocks the actual landing submit path while image ingestion is pending", () => {
     testState.ingesting = true;
     const view = render(
       <LandingComposer
         draftId={null}
         initialSettings={null}
-        workspaceControls={null}
+        workspaceControls={() => null}
       />,
     );
     const installEditor = testState.installEditor;
     if (installEditor === null) throw new Error("expected ComposerBody seam");
     installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
     expect(testState.submit).not.toHaveBeenCalled();
@@ -195,7 +232,7 @@ describe("LandingComposer direct submit gate", () => {
       <LandingComposer
         draftId={null}
         initialSettings={null}
-        workspaceControls={null}
+        workspaceControls={() => null}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));

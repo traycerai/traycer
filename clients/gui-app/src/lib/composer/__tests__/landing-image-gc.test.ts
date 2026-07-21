@@ -69,7 +69,7 @@ type Modules = {
   readonly gc: typeof import("@/lib/composer/landing-image-gc");
   readonly store: typeof import("@/lib/composer/landing-image-store");
   readonly draft: typeof import("@/stores/home/landing-draft-store");
-  readonly composer: typeof import("@/stores/composer/landing-composer-store");
+  readonly runtime: typeof import("@/stores/home/draft-runtime-registry");
   readonly idb: typeof import("idb-keyval");
 };
 
@@ -87,14 +87,11 @@ async function loadModules(opts: {
   const store = await import("@/lib/composer/landing-image-store");
   const gc = await import("@/lib/composer/landing-image-gc");
   const draft = await import("@/stores/home/landing-draft-store");
-  const composer = await import("@/stores/composer/landing-composer-store");
+  const runtime = await import("@/stores/home/draft-runtime-registry");
   const idb = await import("idb-keyval");
   draft.useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-  composer.useLandingComposerStore.setState({
-    currentContent: EMPTY_DOC,
-    createdDraftId: null,
-  });
-  return { gc, store, draft, composer, idb };
+  runtime.draftRuntimeRegistry.resetForTesting();
+  return { gc, store, draft, runtime, idb };
 }
 
 function makeDraft(
@@ -204,17 +201,24 @@ describe("landing-image-gc", () => {
     m.gc.markLandingDraftsReady();
     await flush();
 
-    // Pasted image: bytes in IDB + session, node synchronously in the live editor.
+    // Pasted image: bytes in IDB + session, node synchronously in this draft's
+    // keyed live runtime.
     const pasted = await m.store.putImage(bytesOf([10, 11, 12]));
-    m.composer.useLandingComposerStore.setState({
-      currentContent: docWithImages(imageNode(pasted, 3)),
-      createdDraftId: null,
+    m.draft.useLandingDraftStore.setState({
+      drafts: [
+        makeDraft(m, { id: "live", content: EMPTY_DOC, lastTouchedAt: 1 }),
+      ],
+      activeDraftId: "live",
     });
+    const runtime = m.runtime.draftRuntimeRegistry.getOrHydrate("live");
+    if (runtime === null) throw new Error("expected live draft runtime");
+    runtime.setSnapshot(docWithImages(imageNode(pasted, 3)), null);
 
     // An unrelated, image-free draft is closed → triggers a reconcile.
     m.draft.useLandingDraftStore.setState({
       drafts: [
-        makeDraft(m, { id: "other", content: EMPTY_DOC, lastTouchedAt: 1 }),
+        makeDraft(m, { id: "live", content: EMPTY_DOC, lastTouchedAt: 1 }),
+        makeDraft(m, { id: "other", content: EMPTY_DOC, lastTouchedAt: 2 }),
       ],
       activeDraftId: "other",
     });
@@ -326,7 +330,7 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).not.toContain(hash);
   });
 
-  it("budget eviction never targets the active draft, even when it is the oldest", async () => {
+  it("budget rejection never closes an active or inactive draft", async () => {
     const m = await loadModules({ desktop: true });
     m.gc.markLandingDraftsReady();
     await flush();
@@ -353,20 +357,20 @@ describe("landing-image-gc", () => {
     });
 
     // 80 MB referenced + a tiny paste exceeds the 64 MB budget.
-    const allowed = m.gc.reserveLandingImageBudget(1024);
+    const allowed = m.gc.reserveLandingImageBudget(null, 1024);
     await flush();
 
-    expect(allowed).toBe(true);
+    expect(allowed).toBe(false);
     const draftIds = m.draft.useLandingDraftStore
       .getState()
       .drafts.map((d) => d.id);
-    expect(draftIds).toEqual(["active"]);
+    expect(draftIds).toEqual(["active", "inactive"]);
     const keys = await m.store.imageHashKeys();
     expect(keys).toContain(activeHash);
-    expect(keys).not.toContain(inactiveHash);
+    expect(keys).toContain(inactiveHash);
   });
 
-  it("budget eviction picks the oldest inactive draft and reclaims its bytes", async () => {
+  it("budget rejection preserves every durable draft and its bytes", async () => {
     const m = await loadModules({ desktop: true });
     m.gc.markLandingDraftsReady();
     await flush();
@@ -397,19 +401,19 @@ describe("landing-image-gc", () => {
       activeDraftId: "active",
     });
 
-    // 90 MB referenced; evicting the single oldest inactive draft (30 MB) drops
-    // it to 60 MB ≤ 64 MB, so only "old" is evicted.
-    const allowed = m.gc.reserveLandingImageBudget(1024);
+    // 90 MB referenced. The incoming attachment is rejected; no draft becomes
+    // an image-budget victim.
+    const allowed = m.gc.reserveLandingImageBudget(null, 1024);
     await flush();
 
-    expect(allowed).toBe(true);
-    expect(toastInfo).toHaveBeenCalledTimes(1);
+    expect(allowed).toBe(false);
+    expect(toastInfo).not.toHaveBeenCalled();
     const draftIds = m.draft.useLandingDraftStore
       .getState()
       .drafts.map((d) => d.id);
-    expect(draftIds).toEqual(["mid", "active"]);
+    expect(draftIds).toEqual(["old", "mid", "active"]);
     const keys = await m.store.imageHashKeys();
-    expect(keys).not.toContain(oldHash);
+    expect(keys).toContain(oldHash);
     expect(keys).toContain(midHash);
     expect(keys).toContain(activeHash);
   });
@@ -440,7 +444,7 @@ describe("landing-image-gc", () => {
 
     // Deduped referenced bytes = 40 MB; +10 MB = 50 MB ≤ 64 MB → allowed, no
     // eviction. (Double-counting would read 80 MB and evict draft "a".)
-    const allowed = m.gc.reserveLandingImageBudget(10 * 1024 * 1024);
+    const allowed = m.gc.reserveLandingImageBudget(null, 10 * 1024 * 1024);
     await flush();
 
     expect(allowed).toBe(true);
@@ -469,7 +473,7 @@ describe("landing-image-gc", () => {
 
     // Active alone is 60 MB; a 10 MB paste exceeds 64 MB and there is nothing
     // inactive to evict → block.
-    const allowed = m.gc.reserveLandingImageBudget(10 * 1024 * 1024);
+    const allowed = m.gc.reserveLandingImageBudget(null, 10 * 1024 * 1024);
     await flush();
 
     expect(allowed).toBe(false);
@@ -505,7 +509,7 @@ describe("landing-image-gc", () => {
       activeDraftId: null,
     });
 
-    const allowed = m.gc.reserveLandingImageBudget(1024);
+    const allowed = m.gc.reserveLandingImageBudget(null, 1024);
     await flush();
 
     expect(allowed).toBe(false);

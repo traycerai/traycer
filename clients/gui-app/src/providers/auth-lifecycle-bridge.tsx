@@ -4,6 +4,7 @@ import { disposeAllChatSessions } from "@/lib/registries/chat-session-registry";
 import { disposeAllTerminalSessions } from "@/lib/registries/terminal-session-registry";
 import { disposeAllOpenEpicSessions } from "@/lib/registries/epic-session-registry";
 import { clearSessionCreatedEpics } from "@/lib/epics/session-created-epics";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -36,6 +37,10 @@ export function EpicSessionLifecycleBridge(
       disposeAllOpenEpicSessions();
       disposeAllChatSessions();
       disposeAllTerminalSessions();
+      // Draft mirrors are renderer-local and can contain an unflushed writer
+      // or a pre-create request. Flush/abort them with the outgoing identity;
+      // durable drafts remain governed by the existing per-window source.
+      draftRuntimeRegistry.teardown();
       // Drop the "created this session" markers so a new identity's persisted
       // tabs are reconciled normally instead of being protected by the prior
       // identity's create markers.

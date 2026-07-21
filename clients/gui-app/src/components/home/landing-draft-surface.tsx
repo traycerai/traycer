@@ -30,7 +30,7 @@ export function LandingDraftSurface() {
     [draftId],
   );
   const workspaceControls = useMemo(
-    () => <HostWorkspaceSelector surface={workspaceSurface} />,
+    () => renderLandingWorkspaceControls.bind(null, workspaceSurface),
     [workspaceSurface],
   );
 
@@ -74,4 +74,11 @@ export function LandingDraftSurface() {
       </div>
     </div>
   );
+}
+
+function renderLandingWorkspaceControls(
+  surface: { readonly kind: "home"; readonly draftId: string | null },
+  disabled: boolean,
+) {
+  return <HostWorkspaceSelector surface={surface} disabled={disabled} />;
 }

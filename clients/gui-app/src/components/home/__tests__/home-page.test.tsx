@@ -13,11 +13,8 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import {
-  useLandingComposerStore,
-  flushPendingLandingDraftContent,
-} from "@/stores/composer/landing-composer-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
@@ -104,10 +101,10 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
     // HomePage); the mock mirrors that so the gating stays observable.
     const activityEnabled = useSurfaceActivity();
     const actions = useLandingComposerActions();
-    const setSnapshot = useLandingComposerStore((s) => s.setSnapshot);
     const draftId = props.draftId;
     const handleClick = (): void => {
       actions.submit({
+        draftId,
         editor: editorHandleForPrompt("Plan the GUI migration"),
         toolbar: {
           selection: {
@@ -123,8 +120,13 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
       });
     };
     const handlePromptChangeTwice = (): void => {
-      setSnapshot(draftId, jsonContentForPrompt("first draft"), null);
-      setSnapshot(draftId, jsonContentForPrompt("second draft"), null);
+      const exactDraftId =
+        draftId ?? useLandingDraftStore.getState().createDraft(null);
+      const runtime = draftRuntimeRegistry.getOrHydrate(exactDraftId);
+      if (runtime === null) throw new Error("expected keyed draft runtime");
+      runtime.setSnapshot(jsonContentForPrompt("first draft"), null);
+      runtime.setSnapshot(jsonContentForPrompt("second draft"), null);
+      draftRuntimeRegistry.flush(exactDraftId);
     };
     return (
       <div
@@ -202,9 +204,7 @@ describe("<HomePage />", () => {
       contextMetadata: { userId: "test-user", username: "alice" },
     });
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
-    // Reset the composer's binding/session state so a draft created in one
-    // test can't route a later test's null-binding snapshots.
-    useLandingComposerStore.getState().reset();
+    draftRuntimeRegistry.resetForTesting();
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -288,10 +288,8 @@ describe("<HomePage />", () => {
     );
 
     fireEvent.click(screen.getByTestId("landing-change-twice"));
-    // The draft is created synchronously on the first snapshot, but subsequent
-    // content writes are debounced (landing-composer-store); flush so the assert
-    // sees the coalesced latest content rather than a mid-debounce value.
-    flushPendingLandingDraftContent();
+    // The runtime owns this draft's writer; the mock flushes its exact id so the
+    // assertion observes the latest independent mirror.
 
     const drafts = useLandingDraftStore.getState().drafts;
     expect(drafts).toHaveLength(1);
@@ -416,12 +414,9 @@ describe("<HomePage />", () => {
     });
 
     await waitFor(() => {
-      expect(homeMocks.navigate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: "/epics/$epicId/$tabId",
-        }),
-      );
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
+    expect(homeMocks.navigate).not.toHaveBeenCalled();
 
     // `useEpicCreate` refetches the new epic's workspace listings so the chat
     // tile's folder chip reflects the attached folders once the epic exists,

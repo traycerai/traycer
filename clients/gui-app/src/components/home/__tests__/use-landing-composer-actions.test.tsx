@@ -5,6 +5,10 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { tabItemId } from "@/stores/tabs/layout";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
@@ -59,6 +63,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
+    info: vi.fn(),
   },
 }));
 
@@ -68,12 +73,18 @@ const imageStoreMocks = vi.hoisted(() => ({
     Promise.resolve(undefined),
   ),
   imageHashKeys: vi.fn<() => Promise<string[]>>(() => Promise.resolve([])),
+  sessionHashKeys: vi.fn<() => ReadonlySet<string>>(() => new Set<string>()),
+  deleteImage: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+  releaseSession: vi.fn(),
 }));
 
 vi.mock("@/lib/composer/landing-image-store", () => ({
   sessionImageBytes: imageStoreMocks.sessionImageBytes,
   getImageBytes: imageStoreMocks.getImageBytes,
   imageHashKeys: imageStoreMocks.imageHashKeys,
+  sessionHashKeys: imageStoreMocks.sessionHashKeys,
+  deleteImage: imageStoreMocks.deleteImage,
+  releaseSession: imageStoreMocks.releaseSession,
 }));
 
 const SUBMITTED_PROMPT = "Plan the host chat bootstrap";
@@ -82,9 +93,21 @@ const DRAFT_WORKSPACE_PATH = "/tmp/draft-workspace";
 const GLOBAL_WORKSPACE_PATH = "/tmp/global-workspace";
 const UNKNOWN_WORKSPACE_PATH = "/tmp/unknown-workspace";
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 describe("useLandingComposerActions", () => {
   beforeEach(() => {
     __resetTabNavigationControllerForTesting();
+    draftRuntimeRegistry.resetForTesting();
     window.localStorage.clear();
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
@@ -103,6 +126,7 @@ describe("useLandingComposerActions", () => {
       status: "available",
     });
     vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.info).mockClear();
     imageStoreMocks.sessionImageBytes.mockReset();
     imageStoreMocks.sessionImageBytes.mockReturnValue(null);
     imageStoreMocks.getImageBytes.mockReset();
@@ -116,6 +140,12 @@ describe("useLandingComposerActions", () => {
     });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabsStore.setState({
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+      stripOrder: [],
+    });
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -131,6 +161,7 @@ describe("useLandingComposerActions", () => {
 
   afterEach(() => {
     __resetTabNavigationControllerForTesting();
+    draftRuntimeRegistry.resetForTesting();
     cleanup();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
@@ -141,6 +172,12 @@ describe("useLandingComposerActions", () => {
     });
     useWorktreeIntentStagingStore.getState().resetForTests();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabsStore.setState({
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+      stripOrder: [],
+    });
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -159,6 +196,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: defaultToolbar(),
       });
@@ -181,7 +219,10 @@ describe("useLandingComposerActions", () => {
         worktreeIntent: null,
       },
     });
-    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
+    });
     expect(toast.error).not.toHaveBeenCalled();
 
     queryClient.clear();
@@ -219,6 +260,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: defaultToolbar(),
       });
@@ -241,6 +283,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: {
           ...defaultToolbar(),
@@ -277,14 +320,17 @@ describe("useLandingComposerActions", () => {
     });
 
     act(() => {
-      result.current.selectTerminalAgent({
-        harnessId: "claude",
-        agentMode: "regular",
-        model: null,
-        reasoningEffort: null,
-        terminalAgentArgs: "",
-        profileId: null,
-      });
+      result.current.selectTerminalAgent(
+        {
+          harnessId: "claude",
+          agentMode: "regular",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: null,
+        },
+        null,
+      );
     });
 
     await waitFor(() => {
@@ -325,14 +371,17 @@ describe("useLandingComposerActions", () => {
     });
 
     act(() => {
-      result.current.selectTerminalAgent({
-        harnessId: "claude",
-        agentMode: "regular",
-        model: null,
-        reasoningEffort: null,
-        terminalAgentArgs: "",
-        profileId: "work-profile",
-      });
+      result.current.selectTerminalAgent(
+        {
+          harnessId: "claude",
+          agentMode: "regular",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: "work-profile",
+        },
+        null,
+      );
     });
 
     await waitFor(() => {
@@ -365,6 +414,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: {
           ...defaultToolbar(),
@@ -403,6 +453,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: defaultToolbar(),
       });
@@ -427,8 +478,9 @@ describe("useLandingComposerActions", () => {
     });
 
     await waitFor(() => {
-      expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
 
     const tabIds = useEpicCanvasStore.getState().openTabOrder;
     expect(tabIds).toHaveLength(1);
@@ -476,14 +528,15 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForHashImage("hash-same-session", "look here"),
         toolbar: defaultToolbar(),
       });
     });
 
-    // The session fast path resolves bytes without an await, so navigation fires
-    // synchronously inside the act() and IndexedDB is never read.
-    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    // The session fast path resolves bytes without an await, but placement waits
+    // for the one-shot create response and never steals foreground focus.
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
     expect(imageStoreMocks.getImageBytes).not.toHaveBeenCalled();
 
     await waitFor(() => {
@@ -511,6 +564,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForHashImage("hash-restored", "restored draft"),
         toolbar: defaultToolbar(),
       });
@@ -521,8 +575,9 @@ describe("useLandingComposerActions", () => {
     expect(landingMocks.navigate).not.toHaveBeenCalled();
 
     await waitFor(() => {
-      expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
     expect(imageStoreMocks.getImageBytes).toHaveBeenCalledWith("hash-restored");
 
     await waitFor(() => {
@@ -550,6 +605,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForHashImage("hash-missing", "wiped image"),
         toolbar: defaultToolbar(),
       });
@@ -584,6 +640,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForHashImage("hash-error", "unreadable image"),
         toolbar: defaultToolbar(),
       });
@@ -623,12 +680,20 @@ describe("useLandingComposerActions", () => {
         "hash-restored",
         "restored draft",
       );
-      result.current.submit({ editor, toolbar: defaultToolbar() });
-      result.current.submit({ editor, toolbar: defaultToolbar() });
+      result.current.submit({
+        draftId: null,
+        editor,
+        toolbar: defaultToolbar(),
+      });
+      result.current.submit({
+        draftId: null,
+        editor,
+        toolbar: defaultToolbar(),
+      });
     });
 
     await waitFor(() => {
-      expect(landingMocks.navigate).toHaveBeenCalled();
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
     // Let any second (unguarded) dispatch flush before asserting.
     await act(async () => {
@@ -638,7 +703,7 @@ describe("useLandingComposerActions", () => {
     expect(
       landingMocks.request.mock.calls.filter((c) => c[0] === "epic.create"),
     ).toHaveLength(1);
-    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
 
     queryClient.clear();
   });
@@ -663,6 +728,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: defaultToolbar(),
       });
@@ -746,6 +812,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: defaultToolbar(),
       });
@@ -843,6 +910,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: defaultToolbar(),
       });
@@ -931,6 +999,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: defaultToolbar(),
       });
@@ -1006,6 +1075,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId: null,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: defaultToolbar(),
       });
@@ -1016,15 +1086,9 @@ describe("useLandingComposerActions", () => {
         landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
       ).toBe(true);
     });
-    await waitFor(() => {
-      const tabId = useEpicCanvasStore.getState().openTabOrder.at(0);
-      if (tabId === undefined) throw new Error("expected optimistic tab");
-      const epicId = useEpicCanvasStore.getState().tabsById[tabId]?.epicId;
-      if (epicId === undefined) throw new Error("expected optimistic epic");
-      expect(
-        useComposerRunSettingsStore.getState().getEpicRunSettings(epicId),
-      ).toBeNull();
-    });
+    // T6 does not materialize a tab before the one-shot create succeeds, so a
+    // rejected request leaves no optimistic result to clean up.
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     expect(
       useComposerRunSettingsStore.getState().globalLastRunSettings,
     ).toEqual({
@@ -1040,6 +1104,109 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("places a success after close once in the background without navigating", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-closing", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    expect(tabCommandCoordinator.closeRef(draftRef)).toBe(true);
+    createGate.resolve({ roomInfo: null });
+
+    await waitFor(() => {
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
+    });
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith("Epic created in the background.");
+    queryClient.clear();
+  });
+
+  it("re-preflights a moved draft ref and replaces its current location", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-moving", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    // Another layout mutation moves the same ref; success must not revive the
+    // captured original item id.
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: "moved-draft-item", ref: draftRef }],
+      activeItemId: "moved-draft-item",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    createGate.resolve({ roomInfo: null });
+
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "tab",
+        ref: { kind: "epic" },
+      });
+    });
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    queryClient.clear();
+  });
+
   it("creates an epic from the active draft workspace instead of the global workspace", async () => {
     useWorkspaceFoldersStore.setState({
       folders: [DRAFT_WORKSPACE_PATH],
@@ -1051,7 +1218,7 @@ describe("useLandingComposerActions", () => {
         },
       },
     });
-    useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
     useWorkspaceFoldersStore.setState({
       folders: [GLOBAL_WORKSPACE_PATH],
       folderInfoByPath: {
@@ -1071,6 +1238,7 @@ describe("useLandingComposerActions", () => {
 
     act(() => {
       result.current.submit({
+        draftId,
         editor: editorHandleForPrompt(SUBMITTED_PROMPT),
         toolbar: defaultToolbar(),
       });
@@ -1093,6 +1261,464 @@ describe("useLandingComposerActions", () => {
       GLOBAL_WORKSPACE_PATH,
     );
 
+    queryClient.clear();
+  });
+
+  it("retires a started create at identity teardown without opening, navigating, or updating its handoff", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-retired", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    const handoffBefore = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    )[0];
+    expect(handoffBefore.status).toBe("pending");
+
+    draftRuntimeRegistry.teardown();
+    createGate.resolve({ initialTurnStarted: true });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useTabsStore.getState().items).toEqual([
+      { kind: "tab", id: tabItemId(draftRef), ref: draftRef },
+    ]);
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    expect(toast.info).not.toHaveBeenCalled();
+    const handoffAfter = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    )[0];
+    expect(handoffAfter.status).toBe("pending");
+    queryClient.clear();
+  });
+
+  it("preserves a newer exact-draft snapshot and backgrounds the earlier create", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-post-intent-edit", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt("first request"),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
+    if (runtime === null) throw new Error("expected draft runtime");
+    const newerContent = jsonContentForPrompt("newer unsent draft");
+    runtime.setSnapshot(newerContent, null);
+    runtime.flush();
+
+    createGate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === draftId)?.content,
+    ).toEqual(newerContent);
+    expect(useTabsStore.getState().stripOrder).toEqual([draftRef]);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    expect(toast.info).toHaveBeenCalledWith("Epic created in the background.");
+    queryClient.clear();
+  });
+
+  it("keeps foreground suppressed when focus was acquired after submit intent", async () => {
+    const draftA = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-a", null);
+    const draftB = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-b", null);
+    const refA = { kind: "draft" as const, id: draftA };
+    const refB = { kind: "draft" as const, id: draftB };
+    useTabsStore.setState({
+      items: [splitItem("focus-split", refA, refB, "right")],
+      activeItemId: "focus-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId: draftA,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    useTabsStore.setState({
+      items: [splitItem("focus-split", refA, refB, "left")],
+      activeItemId: "focus-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    // Focus away and back after intent cannot retroactively grant ownership.
+    useTabsStore.setState({
+      items: [splitItem("focus-split", refA, refB, "right")],
+      activeItemId: "focus-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    useTabsStore.setState({
+      items: [splitItem("focus-split", refA, refB, "left")],
+      activeItemId: "focus-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+
+    createGate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "split",
+        left: { kind: "tab", ref: { kind: "epic" } },
+        right: { kind: "tab", ref: refB },
+        focusedSide: "left",
+      });
+    });
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("replaces a moved draft in its current split side without disturbing its partner or focus", async () => {
+    const draftA = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-move-a", null);
+    const draftB = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-move-b", null);
+    const refA = { kind: "draft" as const, id: draftA };
+    const refB = { kind: "draft" as const, id: draftB };
+    useTabsStore.setState({
+      items: [splitItem("move-split", refA, refB, "left")],
+      activeItemId: "move-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId: draftA,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    useTabsStore.setState({
+      items: [splitItem("move-split", refB, refA, "right")],
+      activeItemId: "move-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refB, refA],
+    });
+
+    createGate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "split",
+        id: "move-split",
+        left: { kind: "tab", ref: refB },
+        right: { kind: "tab", ref: { kind: "epic" } },
+        focusedSide: "right",
+        routeBackingSide: "right",
+      });
+    });
+    expect(useTabsStore.getState().stripOrder).toEqual([
+      refB,
+      expect.objectContaining({ kind: "epic" }),
+    ]);
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    queryClient.clear();
+  });
+
+  it("settles simultaneous exact-draft submissions in their own split members and preserves newer focus", async () => {
+    const draftA = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-dual-a", null);
+    const draftB = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-dual-b", null);
+    const refA = { kind: "draft" as const, id: draftA };
+    const refB = { kind: "draft" as const, id: draftB };
+    useTabsStore.setState({
+      items: [splitItem("dual-split", refA, refB, "left")],
+      activeItemId: "dual-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    const firstCreate = deferred<unknown>();
+    const secondCreate = deferred<unknown>();
+    let createCount = 0;
+    landingMocks.request.mockImplementation((method) => {
+      if (method !== "epic.create") return Promise.resolve({});
+      createCount += 1;
+      return createCount === 1 ? firstCreate.promise : secondCreate.promise;
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId: draftA,
+        editor: editorHandleForPrompt("submit A"),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => expect(createCount).toBe(1));
+    useTabsStore.setState({
+      items: [splitItem("dual-split", refA, refB, "right")],
+      activeItemId: "dual-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    act(() => {
+      result.current.submit({
+        draftId: draftB,
+        editor: editorHandleForPrompt("submit B"),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => expect(createCount).toBe(2));
+
+    firstCreate.resolve({ roomInfo: null });
+    secondCreate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "split",
+        left: { kind: "tab", ref: { kind: "epic" } },
+        right: { kind: "tab", ref: { kind: "epic" } },
+        focusedSide: "right",
+      });
+    });
+    expect(useTabsStore.getState().activeItemId).toBe("dual-split");
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    queryClient.clear();
+  });
+
+  it("uses the caller's terminal-agent draft in an A/B split, not the active sibling", async () => {
+    setWorkspace("/tmp/terminal-a", "terminal-a");
+    const draftA = useLandingDraftStore
+      .getState()
+      .createDraftWithId("terminal-a", null);
+    setWorkspace("/tmp/terminal-b", "terminal-b");
+    const draftB = useLandingDraftStore
+      .getState()
+      .createDraftWithId("terminal-b", null);
+    const refA = { kind: "draft" as const, id: draftA };
+    const refB = { kind: "draft" as const, id: draftB };
+    useTabsStore.setState({
+      items: [splitItem("terminal-split", refA, refB, "right")],
+      activeItemId: "terminal-split",
+      systemTabs: { history: null, settings: null },
+      stripOrder: [refA, refB],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.selectTerminalAgent(
+        {
+          harnessId: "claude",
+          agentMode: "regular",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: null,
+        },
+        draftA,
+      );
+    });
+    await waitFor(() => {
+      expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+    });
+    const createCall = landingMocks.request.mock.calls.find(
+      (call) => call[0] === "epic.create",
+    );
+    expect(createCall?.[1]).toMatchObject({
+      workspaces: [{ workspacePath: "/tmp/terminal-a" }],
+    });
+    expect(JSON.stringify(createCall?.[1])).not.toContain("/tmp/terminal-b");
+    expect(useTabsStore.getState().items[0]).toMatchObject({
+      kind: "split",
+      left: { kind: "tab", ref: { kind: "epic" } },
+      right: { kind: "tab", ref: refB },
+    });
+    queryClient.clear();
+  });
+
+  it("retains a staged intent when image preparation aborts before create", async () => {
+    setSingleWorkspace();
+    const stagingKey = { surface: "landing" as const, draftId: null };
+    const stagedIntent = worktreeIntentFor(WORKSPACE_PATH, "retry-precreate");
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(stagingKey, stagedIntent);
+    imageStoreMocks.sessionImageBytes.mockReturnValue(null);
+    const imageGate = deferred<Uint8Array | undefined>();
+    imageStoreMocks.getImageBytes.mockReturnValue(imageGate.promise);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForHashImage("retry-image", "retry"),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    if (draftId === null) throw new Error("expected generated draft");
+    draftRuntimeRegistry.close(draftId);
+    imageGate.resolve(HELLO_BYTES);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(landingMocks.request).not.toHaveBeenCalled();
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey["landing:"],
+    ).toEqual(stagedIntent);
+    queryClient.clear();
+  });
+
+  it("retains a staged intent when the one-shot create rejects", async () => {
+    setSingleWorkspace();
+    const stagingKey = { surface: "landing" as const, draftId: null };
+    const stagedIntent = worktreeIntentFor(WORKSPACE_PATH, "retry-reject");
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(stagingKey, stagedIntent);
+    landingMocks.request.mockRejectedValue(new Error("create rejected"));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt("retry create"),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey["landing:"],
+    ).toEqual(stagedIntent);
     queryClient.clear();
   });
 });
@@ -1218,14 +1844,55 @@ const HELLO_BYTES = new Uint8Array([104, 101, 108, 108, 111]);
 const HELLO_BASE64 = "aGVsbG8=";
 
 function setSingleWorkspace(): void {
+  setWorkspace(WORKSPACE_PATH, "traycer");
+}
+
+function setWorkspace(path: string, name: string): void {
   useWorkspaceFoldersStore.setState({
-    folders: [WORKSPACE_PATH],
+    folders: [path],
     folderInfoByPath: {
-      [WORKSPACE_PATH]: {
-        path: WORKSPACE_PATH,
-        name: "traycer",
-        repoIdentifier: { owner: "traycerai", repo: "traycer" },
+      [path]: {
+        path,
+        name,
+        repoIdentifier: { owner: "traycerai", repo: name },
       },
     },
   });
+}
+
+function splitItem(
+  id: string,
+  left: { readonly kind: "draft"; readonly id: string },
+  right: { readonly kind: "draft"; readonly id: string },
+  focusedSide: "left" | "right",
+) {
+  return {
+    kind: "split" as const,
+    id,
+    left: { kind: "tab" as const, ref: left },
+    right: { kind: "tab" as const, ref: right },
+    focusedSide,
+    routeBackingSide: focusedSide,
+    leftRatio: 0.5,
+  };
+}
+
+function worktreeIntentFor(workspacePath: string, branchName: string) {
+  return {
+    entries: [
+      {
+        kind: "worktree" as const,
+        scripts: null,
+        workspacePath,
+        repoIdentifier: { owner: "traycerai", repo: "traycer" },
+        isPrimary: true,
+        branch: {
+          type: "new" as const,
+          name: branchName,
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+      },
+    ],
+  };
 }
