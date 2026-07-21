@@ -27,6 +27,10 @@ import { useTabsStore } from "@/stores/tabs/store";
 // production. Test mounts skip the provider, so install once here.
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 
+const pinTestState = vi.hoisted(() => ({
+  mutate: vi.fn(),
+}));
+
 vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({
   DesktopDialogHost: () => null,
 }));
@@ -66,7 +70,7 @@ vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
-  useEpicSetPinned: () => ({ mutate: vi.fn() }),
+  useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
   usePendingSetPinnedEpicIds: () => new Set(),
 }));
 
@@ -191,6 +195,7 @@ async function flushNav(): Promise<void> {
 describe("app route tab-strip navigation", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    pinTestState.mutate.mockClear();
     resetStores();
   });
 
