@@ -6,6 +6,10 @@ import type {
   WorktreeBindingEntry,
 } from "@traycer/protocol/host/worktree-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  useWorktreeIntentStagingStore,
+  worktreeStagingKeyString,
+} from "@/stores/worktree/worktree-intent-staging-store";
 
 // ── Hook mocks: the real InEpicSurface pulls host/query/mutation hooks; every
 // one is stubbed inert so the surface renders its REAL row-item mapping (the
@@ -17,6 +21,7 @@ const FAKE_CLIENT = {
   getRequestContextUserId: () => "user-test",
   onChange: () => () => undefined,
 };
+const mutationMocks = vi.hoisted(() => ({ createWorktree: vi.fn() }));
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
@@ -59,7 +64,10 @@ vi.mock("@/hooks/worktree/use-worktree-import-mutation", () => ({
   useWorktreeImportForClient: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock("@/hooks/worktree/use-worktree-create-mutation", () => ({
-  useWorktreeCreateForClient: () => ({ mutate: vi.fn(), isPending: false }),
+  useWorktreeCreateForClient: () => ({
+    mutate: mutationMocks.createWorktree,
+    isPending: false,
+  }),
 }));
 vi.mock(
   "@/hooks/workspace/use-workspace-binding-remove-entry-mutation",
@@ -166,7 +174,11 @@ function renderBoundSurface(kind: "chat" | "terminal-agent"): void {
   );
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mutationMocks.createWorktree.mockReset();
+  useWorktreeIntentStagingStore.getState().resetForTests();
+});
 
 describe.each(["chat", "terminal-agent"] as const)(
   "InEpicSurface (%s owner)",
@@ -194,3 +206,41 @@ describe.each(["chat", "terminal-agent"] as const)(
     });
   },
 );
+
+it("refuses terminal Update when metadata regresses to unresolved", async () => {
+  const key = {
+    surface: "owner" as const,
+    epicId: "epic-1",
+    ownerKind: "terminal-agent" as const,
+    ownerId: "owner-1",
+  };
+  useWorktreeIntentStagingStore.getState().stageIntent(key, {
+    entries: [
+      {
+        kind: "worktree",
+        scripts: null,
+        workspacePath: "/repo/alpha",
+        repoIdentifier: null,
+        isPrimary: false,
+        branch: {
+          type: "new",
+          name: "feat-unresolved",
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+      },
+    ],
+  });
+
+  renderBoundSurface("terminal-agent");
+  fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
+  const update = await screen.findByRole("button", { name: "Update" });
+  fireEvent.click(update);
+
+  expect(mutationMocks.createWorktree).not.toHaveBeenCalled();
+  expect(
+    useWorktreeIntentStagingStore.getState().intentByKey[
+      worktreeStagingKeyString(key)
+    ],
+  ).toBeDefined();
+});

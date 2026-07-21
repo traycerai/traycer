@@ -48,12 +48,12 @@ export type GitStage = z.infer<typeof gitStageSchema>;
  * `previousPath` is set only for renamed/copied files (ADR-0002).
  * `stagedOid` + `worktreeOid` are nullable in degraded mode (ADR-0007).
  *
- * This is the ONLY file schema on the `git.subscribeStatus@1.0` stream and the
- * `git.listChangedFiles@1.0` response. It must NOT be mutated: the broadcaster
- * streams `listChangedFiles` results directly through it, and stream methods
- * carry no version bridge, so any added field would silently break old peers on
- * the live path. Submodule-aware (v1.1) additions live on the DISTINCT
- * `gitChangedFileV11Schema` below, never here.
+ * This is the ONLY file schema on `git.subscribeStatus` minor-0 frames and the
+ * `git.listChangedFiles@1.0` response. It must NOT be mutated: stream methods
+ * carry no version bridge, so a connection negotiated at minor 0 receives
+ * frames RESOLVER-PROJECTED onto this exact shape - any added field would
+ * silently break old peers on the live path. Submodule-aware (v1.1) additions
+ * live on the DISTINCT `gitChangedFileV11Schema` below, never here.
  */
 export const gitChangedFileV10Schema = z.object({
   path: z.string(),
@@ -72,7 +72,8 @@ export type GitChangedFileV10 = z.infer<typeof gitChangedFileV10Schema>;
 /**
  * Back-compat alias for the frozen v1.0 file schema. Existing consumers import
  * `gitChangedFileSchema`; new code should reference `gitChangedFileV10Schema`
- * (the stream's only file schema) or `gitChangedFileV11Schema` (unary v1.1).
+ * (unary v1.0 + stream minor-0 frames) or `gitChangedFileV11Schema` (unary
+ * v1.1 + stream v1.1 frames).
  */
 export const gitChangedFileSchema = gitChangedFileV10Schema;
 export type GitChangedFile = GitChangedFileV10;
@@ -277,13 +278,18 @@ export type GitGetCapabilitiesResponse = z.infer<
 >;
 
 /**
- * `git.subscribeStatus` event - status subscription frame.
+ * `git.subscribeStatus` event - the FROZEN minor-0 status subscription frame.
  * Discriminated union: snapshot (initial full state), updated (incremental
  * change with affected paths), or error (fatal/non-fatal).
  *
  * Both snapshot and updated carry `pollStartedAtMs` per ADR-0004 for debugging.
  * `changedPaths` is an array of repo-relative Git paths that changed since the
  * last event.
+ *
+ * Frozen at minor 0: connections negotiated at 1.0 receive frames the host
+ * resolver projects onto exactly this shape (v1.0 file rows, parent-only
+ * `fingerprint`, no submodule fields). The nested-snapshot frame lives on the
+ * DISTINCT `gitSubscribeStatusEventSchemaV11` below.
  */
 export const gitSubscribeStatusEventSchema = z.discriminatedUnion("type", [
   z.object({
@@ -320,8 +326,12 @@ export type GitSubscribeStatusEvent = z.infer<
 >;
 
 /**
- * `git.subscribeStatus` request.
- * No `pollIntervalMs` per ADR-0003 - host polls every 5s, period.
+ * `git.subscribeStatus` request - shared verbatim by minors 0 and 1 (v1.1
+ * deliberately adds NO `includeSubmodules` knob; the host always computes the
+ * nested snapshot and the resolver projects per negotiated minor).
+ * No `pollIntervalMs` per ADR-0003 - the host owns the refresh cadence
+ * (watcher-driven with a fallback tick on v1.1 hosts; fixed-interval polling
+ * before that), and it is never a client knob.
  * `ignoreWhitespace` is accepted for compatibility but status events are
  * whitespace-independent.
  */
@@ -334,11 +344,13 @@ export type GitSubscribeStatusRequest = z.infer<
   typeof gitSubscribeStatusRequestSchema
 >;
 
-// ---- Submodule-aware v1.1 (unary-only) ---------------------------------- //
+// ---- Submodule-aware v1.1 ------------------------------------------------ //
 //
-// Everything below is exclusive to the unary `git.listChangedFiles@1.1` surface.
-// None of it may reach `git.subscribeStatus@1.0` (frozen, parent-only). The host
-// composes one nested snapshot: `git.listChangedFiles@1.1` returns the parent
+// Everything below is exclusive to the v1.1 surfaces: the unary
+// `git.listChangedFiles@1.1` response and the `git.subscribeStatus@1.1` stream
+// frames (defined further below). None of it may reach a peer negotiated at
+// minor 0 - `git.subscribeStatus@1.0` stays frozen and parent-only via
+// resolver-side projection. The host composes one nested snapshot: the parent
 // changeset plus a `submodules[]` array of working-tree changesets.
 // `git.getFileDiff`/`git.getFileDiffs` stay v1.0-only - a submodule's
 // working-tree files are diffed by pointing `runningDir` at the submodule repo
@@ -399,11 +411,12 @@ export const submodulePointerSchema = z.discriminatedUnion("kind", [
 export type SubmodulePointer = z.infer<typeof submodulePointerSchema>;
 
 /**
- * The unary v1.1 file shape: the frozen v1.0 file EXTENDED with a nullable
+ * The v1.1 file shape: the frozen v1.0 file EXTENDED with a nullable
  * `gitlink` descriptor. Additive by construction (`.default(null)`), so a v1.0
  * response upgrades cleanly. Only a parent gitlink row carries a non-null
- * `gitlink`; every ordinary file row keeps it `null`. This schema NEVER touches
- * the stream - the stream stays on `gitChangedFileV10Schema`.
+ * `gitlink`; every ordinary file row keeps it `null`. Carried by the unary
+ * v1.1 response AND `git.subscribeStatus@1.1` frames; minor-0 stream
+ * connections receive resolver-projected frames on `gitChangedFileV10Schema`.
  */
 export const gitChangedFileV11Schema = gitChangedFileV10Schema.extend({
   gitlink: submodulePointerSchema.nullable().default(null),
@@ -507,3 +520,89 @@ export type GitListChangedFilesResponseV11 = z.infer<
 // v1.0-only. A submodule's working-tree files are diffed stage-based by pointing
 // `runningDir` at the submodule repo root, so the v1.0 request/response shapes
 // are unchanged.
+
+// ---- Stream v1.1: git.subscribeStatus nested-snapshot frames ------------- //
+//
+// `git.subscribeStatus@1.1` folds the SAME host-composed nested snapshot the
+// unary v1.1 response carries into the stream frames, so a v1.1 subscriber
+// stops needing the separate 5s unary refetch loop for submodule state. The
+// v1.0 frame schema above stays byte-frozen: minor-0 connections receive
+// resolver-projected frames, so nothing here mutates any v1.0 export.
+//
+// Fingerprint semantics (stream <-> unary parity invariant):
+// - `fingerprint` keeps PARENT-ONLY semantics on both minors - identical to
+//   the v1.0 stream field and to what a projected minor-0 frame carries.
+// - `nestedFingerprint` (parent + submodules, `fingerprintNested` semantics)
+//   is the rich-slot identity, coherent with the unary v1.1 response
+//   `fingerprint`. It must NEVER appear in (or fold into) a minor-0 frame.
+
+/**
+ * One submodule section on an `updated` v1.1 frame: the working-tree changeset
+ * plus `changedPaths` - the submodule-root-relative Git paths that changed
+ * since the last event (same `diffPaths` semantics as the parent-level
+ * `changedPaths`). Snapshot frames carry plain `submoduleChangesetSchema`
+ * sections (full state, no delta).
+ */
+export const submoduleChangesetUpdatedSchemaV11 = submoduleChangesetSchema.extend(
+  {
+    changedPaths: z.array(z.string()),
+  },
+);
+export type SubmoduleChangesetUpdatedV11 = z.infer<
+  typeof submoduleChangesetUpdatedSchemaV11
+>;
+
+/**
+ * `git.subscribeStatus@1.1` event - the nested-snapshot frame. Relative to the
+ * frozen v1.0 frame, `snapshot`/`updated` additionally carry:
+ * - `files[]` in the v1.1 shape (`gitlink` descriptor on parent gitlink rows);
+ * - `submodules[]` - the host-composed nested snapshot (mirrors the unary
+ *   v1.1 `submodules`), with per-submodule `changedPaths` on `updated`;
+ * - `nestedFingerprint` - the rich-slot identity (see section note above).
+ * The `error` variant is unchanged.
+ *
+ * COMPAT POSTURE: `gitlink` inside `files[]` rows is a WITHIN-FIELD change the
+ * minor-additivity checker does not inspect (it only detects dropped fields).
+ * It is wire-safe via two independent guards: the host resolver projects
+ * frames for minor-0 connections onto the frozen v1.0 schema (v1.0 file rows,
+ * no `submodules`/`nestedFingerprint`), and released clients parse frames with
+ * non-strict zod, which strips unknown fields. See the matching comment on the
+ * `gitSubscribeStatusV11` contract.
+ */
+export const gitSubscribeStatusEventSchemaV11 = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("snapshot"),
+    runningDir: z.string(),
+    headSha: z.string(),
+    branch: z.string().nullable(),
+    files: z.array(gitChangedFileV11Schema),
+    fingerprint: z.string(),
+    nestedFingerprint: z.string(),
+    repoMode: repoModeSchema,
+    repoState: repoStateSchema,
+    submodules: z.array(submoduleChangesetSchema),
+    pollStartedAtMs: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("updated"),
+    runningDir: z.string(),
+    headSha: z.string(),
+    branch: z.string().nullable(),
+    files: z.array(gitChangedFileV11Schema),
+    fingerprint: z.string(),
+    nestedFingerprint: z.string(),
+    repoMode: repoModeSchema,
+    repoState: repoStateSchema,
+    changedPaths: z.array(z.string()),
+    submodules: z.array(submoduleChangesetUpdatedSchemaV11),
+    pollStartedAtMs: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("error"),
+    message: z.string(),
+    isFatal: z.boolean(),
+  }),
+]);
+export type GitSubscribeStatusEventV11 = z.infer<
+  typeof gitSubscribeStatusEventSchemaV11
+>;

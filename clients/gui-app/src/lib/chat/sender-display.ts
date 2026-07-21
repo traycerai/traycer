@@ -153,6 +153,6 @@ const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
   pi: "Pi",
 };
 
-function agentProviderLabel(provider: GuiHarnessId): string {
+export function agentProviderLabel(provider: GuiHarnessId): string {
   return AGENT_PROVIDER_LABEL[provider];
 }

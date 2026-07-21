@@ -44,6 +44,7 @@ export interface ChatMessageEditing {
   readonly canSubmit: boolean;
   readonly slashProviderId: GuiHarnessId;
   readonly mentionRoots: ReadonlyArray<string>;
+  readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
   readonly onSnapshot: (
     content: JsonContent,
@@ -160,6 +161,7 @@ function ChatMessageImpl(props: ChatMessageProps) {
           pausedDurationMs={message.pausedDurationMs ?? 0}
           pausedSinceMs={message.pausedSinceMs ?? null}
           completedAt={message.completedAt}
+          stopped={message.stopped}
           meta={message.assistantMeta}
           nextStepActions={nextStepActions}
           forkAction={assistantActions?.fork ?? null}

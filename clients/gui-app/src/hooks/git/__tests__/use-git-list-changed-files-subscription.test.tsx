@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import type { GitSubscribeStatusEvent } from "@traycer/protocol/host/git-schemas";
+import type {
+  GitListChangedFilesResponse,
+  GitListChangedFilesResponseV11,
+  GitSubscribeStatusEvent,
+  GitSubscribeStatusEventV11,
+} from "@traycer/protocol/host/git-schemas";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -21,9 +27,11 @@ import {
 import { DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET } from "@traycer/protocol/host";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
+import { __resetRichSlotOrderingForTesting } from "@/lib/git/git-rich-slot-ordering";
 import {
   useGitListChangedFilesSubscription,
   __resetSubscriptionsForTesting,
+  type GitListChangedFilesSubscriptionResult,
 } from "../use-git-list-changed-files-subscription";
 
 // Mock stream session for testing.
@@ -78,6 +86,8 @@ class MockStreamSession implements IStreamSession {
 class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   sessions: Map<string, MockStreamSession> = new Map();
   subscribeCallCount: number = 0;
+  methodSchemaVersion: SchemaVersion | null = null;
+  private readonly supportListeners = new Set<() => void>();
 
   constructor() {
     super({
@@ -121,6 +131,89 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     const key = JSON.stringify({ method, params });
     return this.sessions.get(key);
   }
+
+  override getMethodSchemaVersion<
+    Method extends keyof HostStreamRpcRegistry & string,
+  >(_method: Method): SchemaVersion | null {
+    return this.methodSchemaVersion;
+  }
+
+  override subscribeMethodSupport(listener: () => void): () => void {
+    this.supportListeners.add(listener);
+    return () => {
+      this.supportListeners.delete(listener);
+    };
+  }
+
+  notifySupportChanged(): void {
+    this.supportListeners.forEach((listener) => listener());
+  }
+}
+
+function makeSwappableStreamWrapper(
+  queryClient: QueryClient,
+  initialStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+) {
+  const holder: { current: WsStreamClient<HostStreamRpcRegistry> } = {
+    current: initialStreamClient,
+  };
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <StreamRuntimeContext.Provider value={{ wsStreamClient: holder.current }}>
+        {children}
+      </StreamRuntimeContext.Provider>
+    </QueryClientProvider>
+  );
+  return { wrapper, holder };
+}
+
+// Shared "swap the context to a fresh replacement client, then prove it takes
+// over the subscription and delivers a snapshot without surfacing an error"
+// flow used by the replacement-recovery tests below.
+async function swapToReplacementClientAndAssertHeadSha(
+  holder: { current: WsStreamClient<HostStreamRpcRegistry> },
+  rerender: () => void,
+  result: { readonly current: GitListChangedFilesSubscriptionResult },
+  headSha: string,
+) {
+  const replacementClient = new MockWsStreamClient();
+  holder.current = replacementClient;
+  rerender();
+
+  await waitFor(() => {
+    expect(replacementClient.subscribeCallCount).toBe(1);
+  });
+  const replacementSession = replacementClient.getSession(
+    "git.subscribeStatus",
+    {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    },
+  );
+  if (replacementSession === undefined) {
+    throw new Error("Replacement session should exist");
+  }
+  replacementSession.emitFrame(
+    {
+      type: "snapshot",
+      runningDir: "/repo",
+      headSha,
+      branch: "main",
+      files: [],
+      fingerprint: `${headSha}-fingerprint`,
+      repoMode: "normal",
+      repoState: { kind: "clean" },
+      pollStartedAtMs: 1_000,
+    },
+    null,
+  );
+
+  await waitFor(() => {
+    expect(result.current.data?.headSha).toBe(headSha);
+  });
+  expect(result.current.error).toBeNull();
+  expect(result.current.isPending).toBe(false);
 }
 
 describe("useGitListChangedFilesSubscription", () => {
@@ -143,6 +236,7 @@ describe("useGitListChangedFilesSubscription", () => {
 
   beforeEach(() => {
     __resetSubscriptionsForTesting();
+    __resetRichSlotOrderingForTesting();
     queryClient = new QueryClient({
       defaultOptions: {
         queries: { retry: false },
@@ -153,6 +247,7 @@ describe("useGitListChangedFilesSubscription", () => {
 
   afterEach(() => {
     __resetSubscriptionsForTesting();
+    __resetRichSlotOrderingForTesting();
     queryClient.clear();
   });
 
@@ -563,6 +658,216 @@ describe("useGitListChangedFilesSubscription", () => {
     });
   });
 
+  it("transport-terminal close surfaces a fatal error instead of pending forever", async () => {
+    const { result } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+
+    const session = mockWsStreamClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (!session) throw new Error("Session should exist");
+
+    // A transport-terminal close (fatal error frame, closed client, the
+    // UNAUTHORIZED give-up) produces NO domain error frame - only a status
+    // transition. It must surface as a fatal error, not an eternal skeleton.
+    act(() => {
+      session.emitStatus("closed", {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "gave up after no-progress reconnects",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.error).not.toBeNull();
+    });
+    const error = result.current.error;
+    if (error === null || error.type !== "error") {
+      throw new Error("Expected an error event");
+    }
+    expect(error.isFatal).toBe(true);
+    expect(error.message).toContain("UNAUTHORIZED");
+    expect(result.current.isPending).toBe(false);
+    expect(session.closed).toBe(true);
+  });
+
+  it("waits for a replacement client and recovers without surfacing CLIENT_CLOSED", async () => {
+    const closedClient = new WsStreamClient<HostStreamRpcRegistry>({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => null,
+      bearer: () => null,
+      auth: null,
+      webSocketFactory: {
+        create: () => {
+          throw new Error("a closed client must not dial");
+        },
+      },
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    closedClient.close("test-close");
+
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    const { wrapper, holder } = makeSwappableStreamWrapper(
+      queryClient,
+      closedClient,
+    );
+
+    const { result, rerender } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper },
+    );
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.isPending).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    await swapToReplacementClientAndAssertHeadSha(
+      holder,
+      rerender,
+      result,
+      "replacement-head",
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("detaches when the live client closes underneath and rebinds to a replacement", async () => {
+    const liveClient = new MockWsStreamClient();
+    const { wrapper, holder } = makeSwappableStreamWrapper(
+      queryClient,
+      liveClient,
+    );
+
+    const { result, rerender } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(liveClient.subscribeCallCount).toBe(1);
+    });
+    const liveSession = liveClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (liveSession === undefined) {
+      throw new Error("Live session should exist");
+    }
+
+    liveSession.emitFrame(
+      {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "initial-head",
+        branch: "main",
+        files: [],
+        fingerprint: "initial-fingerprint",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        pollStartedAtMs: 1_000,
+      },
+      null,
+    );
+    await waitFor(() => {
+      expect(result.current.data?.headSha).toBe("initial-head");
+    });
+
+    // Close the LIVE client underneath the consumer with NO parent rerender.
+    // The `onClosed` subscription in `useWsStreamClient` must notify on its own,
+    // flip the served snapshot to null, and drive the consumer to detach - its
+    // effect cleanup closes the session - WITHOUT surfacing CLIENT_CLOSED. If
+    // the subscribe branch were dropped, nothing would re-read the snapshot on
+    // this close and the consumer would cling to the dead client's session.
+    act(() => {
+      liveClient.close("closed-underneath");
+    });
+
+    expect(liveSession.closed).toBe(true);
+    expect(result.current.error).toBeNull();
+
+    // A replacement client reaches context (the provider's liveness rebuild).
+    await swapToReplacementClientAndAssertHeadSha(
+      holder,
+      rerender,
+      result,
+      "replacement-head",
+    );
+  });
+
+  it("a rebuilt stream client gets a fresh subscription (per-client keying)", async () => {
+    const { rerender } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const firstClient = mockWsStreamClient;
+    const firstSession = firstClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (!firstSession) throw new Error("Session should exist");
+
+    // Swap the context to a NEW client - a provider rebuild after host swap or
+    // the liveness guard. The shared map is keyed per client instance, so the
+    // consumer must drain the old entry (closing its session) and open a fresh
+    // subscription on the new client instead of clinging to the dead session.
+    mockWsStreamClient = new MockWsStreamClient();
+    rerender();
+
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    expect(firstSession.closed).toBe(true);
+    expect(firstClient.instanceId).not.toBe(mockWsStreamClient.instanceId);
+  });
+
   it("last unmount tears down immediately (no grace period, ADR-0003)", async () => {
     const { unmount } = renderHook(
       () =>
@@ -590,5 +895,359 @@ describe("useGitListChangedFilesSubscription", () => {
     unmount();
 
     expect(session?.closed).toBe(true);
+  });
+
+  it("does not write the rich slot for a v1.0 stream frame", async () => {
+    mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 0 };
+    const richKey = gitQueryKeys.listChangedFilesWithSubmodules(
+      "host1",
+      "/repo",
+      false,
+    );
+    const sentinel = {
+      runningDir: "/repo",
+      headSha: "sentinel",
+      branch: "main",
+      files: [],
+      fingerprint: "rich-sentinel",
+      repoMode: "normal" as const,
+      repoState: { kind: "clean" as const },
+      submodules: [],
+    };
+    queryClient.setQueryData(richKey, sentinel);
+
+    renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => expect(mockWsStreamClient.subscribeCallCount).toBe(1));
+    const session = mockWsStreamClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (session === undefined) throw new Error("Session not found");
+
+    session.emitFrame(
+      {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "v10-head",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-fingerprint",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        pollStartedAtMs: 1_000,
+      },
+      null,
+    );
+
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryData(
+          gitQueryKeys.listChangedFiles("host1", "/repo", false),
+        ),
+      ).not.toBeUndefined(),
+    );
+    expect(queryClient.getQueryData(richKey)).toEqual(sentinel);
+  });
+
+  it("writes both cache slots and submodule diff invalidation for a v1.1 frame", async () => {
+    mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
+    const parentFile = {
+      path: "/repo/parent.ts",
+      previousPath: null,
+      status: "modified" as const,
+      stage: "unstaged" as const,
+      isBinary: false,
+      insertions: 1,
+      deletions: 0,
+      sizeBytes: 1,
+      stagedOid: null,
+      worktreeOid: "parent-oid",
+      gitlink: {
+        kind: "normal" as const,
+        recordedPinSha: "pin",
+        submoduleHeadSha: "head",
+        diverged: true,
+        commitChanged: true,
+        modifiedContent: false,
+        untrackedContent: false,
+      },
+    };
+    const submoduleFile = {
+      path: "src/nested.ts",
+      previousPath: null,
+      status: "modified" as const,
+      stage: "unstaged" as const,
+      isBinary: false,
+      insertions: 2,
+      deletions: 1,
+      sizeBytes: 2,
+      stagedOid: null,
+      worktreeOid: "nested-oid",
+      gitlink: null,
+    };
+    const submodule = {
+      repoRoot: "/repo/submodule",
+      parentPath: "submodule",
+      branch: "main",
+      repoState: { kind: "clean" as const },
+      files: [submoduleFile],
+      pointer: parentFile.gitlink,
+      availability: { state: "ok" as const },
+      changedPaths: ["src/nested.ts"],
+    };
+    renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => expect(mockWsStreamClient.subscribeCallCount).toBe(1));
+    const session = mockWsStreamClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (session === undefined) throw new Error("Session not found");
+
+    const parentDiffKey = gitQueryKeys.fileDiff(
+      "host1",
+      "/repo",
+      "/repo/parent.ts",
+      null,
+      "unstaged",
+      "head",
+      null,
+      "parent-oid",
+      false,
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
+    const submoduleDiffKey = gitQueryKeys.fileDiff(
+      "host1",
+      "/repo/submodule",
+      "src/nested.ts",
+      null,
+      "unstaged",
+      "head",
+      null,
+      "nested-oid",
+      false,
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
+    queryClient.setQueryData(parentDiffKey, { patch: "old" });
+    queryClient.setQueryData(submoduleDiffKey, { patch: "old" });
+
+    const event: GitSubscribeStatusEventV11 = {
+      type: "updated",
+      runningDir: "/repo",
+      headSha: "new-head",
+      branch: "main",
+      files: [parentFile],
+      fingerprint: "parent-fingerprint",
+      nestedFingerprint: "nested-fingerprint",
+      repoMode: "normal",
+      repoState: { kind: "clean" },
+      changedPaths: ["/repo/parent.ts"],
+      submodules: [submodule],
+      pollStartedAtMs: 1_001,
+    };
+    session.emitFrame(event, null);
+
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryData<GitListChangedFilesResponse>(
+          gitQueryKeys.listChangedFiles("host1", "/repo", false),
+        ),
+      ).not.toBeUndefined(),
+    );
+    const v10 = queryClient.getQueryData<GitListChangedFilesResponse>(
+      gitQueryKeys.listChangedFiles("host1", "/repo", false),
+    );
+    expect(v10).toMatchObject({ fingerprint: "parent-fingerprint" });
+    expect(v10).toMatchObject({ files: [{ path: "/repo/parent.ts" }] });
+    expect(v10?.files[0]).not.toHaveProperty("gitlink");
+
+    const rich = queryClient.getQueryData<GitListChangedFilesResponseV11>(
+      gitQueryKeys.listChangedFilesWithSubmodules("host1", "/repo", false),
+    );
+    expect(rich).toMatchObject({ fingerprint: "nested-fingerprint" });
+    expect(rich?.files[0]).toHaveProperty("gitlink");
+    await waitFor(() => {
+      expect(queryClient.getQueryState(parentDiffKey)?.isInvalidated).toBe(
+        true,
+      );
+      expect(queryClient.getQueryState(submoduleDiffKey)?.isInvalidated).toBe(
+        true,
+      );
+    });
+  });
+
+  it("replays a cached rich event for a joining consumer without re-invalidating diffs", async () => {
+    mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
+    const { unmount: unmountFirst } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => expect(mockWsStreamClient.subscribeCallCount).toBe(1));
+    const session = mockWsStreamClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (session === undefined) throw new Error("Session not found");
+
+    const richKey = gitQueryKeys.listChangedFilesWithSubmodules(
+      "host1",
+      "/repo",
+      false,
+    );
+    const diffKey = gitQueryKeys.fileDiff(
+      "host1",
+      "/repo",
+      "/repo/file.ts",
+      null,
+      "unstaged",
+      "head-1",
+      null,
+      "oid-1",
+      false,
+      DEFAULT_GIT_FILE_DIFF_BYTE_BUDGET,
+    );
+    queryClient.setQueryData(diffKey, { patch: "old" });
+    const event: GitSubscribeStatusEventV11 = {
+      type: "updated",
+      runningDir: "/repo",
+      headSha: "head-1",
+      branch: "main",
+      files: [],
+      fingerprint: "parent-1",
+      nestedFingerprint: "nested-1",
+      repoMode: "normal",
+      repoState: { kind: "clean" },
+      changedPaths: ["/repo/file.ts"],
+      submodules: [],
+      pollStartedAtMs: 1_001,
+    };
+    session.emitFrame(event, null);
+    await waitFor(() =>
+      expect(queryClient.getQueryData(richKey)).not.toBeUndefined(),
+    );
+
+    queryClient.removeQueries({ queryKey: richKey });
+    queryClient.removeQueries({ queryKey: diffKey });
+    queryClient.setQueryData(diffKey, { patch: "stable" });
+
+    renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() =>
+      expect(queryClient.getQueryData(richKey)).not.toBeUndefined(),
+    );
+    expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    expect(queryClient.getQueryState(diffKey)?.isInvalidated).toBe(false);
+    unmountFirst();
+  });
+
+  it("replays only the v1.0 slot when a joining consumer negotiates minor zero", async () => {
+    mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 1 };
+    const { unmount: unmountFirst } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => expect(mockWsStreamClient.subscribeCallCount).toBe(1));
+    const session = mockWsStreamClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (session === undefined) throw new Error("Session not found");
+    const event: GitSubscribeStatusEventV11 = {
+      type: "snapshot",
+      runningDir: "/repo",
+      headSha: "head-2",
+      branch: "main",
+      files: [],
+      fingerprint: "parent-2",
+      nestedFingerprint: "nested-2",
+      repoMode: "normal",
+      repoState: { kind: "clean" },
+      submodules: [],
+      pollStartedAtMs: 2_000,
+    };
+    session.emitFrame(event, null);
+    const richKey = gitQueryKeys.listChangedFilesWithSubmodules(
+      "host1",
+      "/repo",
+      false,
+    );
+    await waitFor(() =>
+      expect(queryClient.getQueryData(richKey)).not.toBeUndefined(),
+    );
+
+    queryClient.removeQueries({ queryKey: richKey });
+    queryClient.removeQueries({
+      queryKey: gitQueryKeys.listChangedFiles("host1", "/repo", false),
+    });
+    mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 0 };
+
+    renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryData(
+          gitQueryKeys.listChangedFiles("host1", "/repo", false),
+        ),
+      ).not.toBeUndefined(),
+    );
+    expect(queryClient.getQueryData(richKey)).toBeUndefined();
+    expect(
+      queryClient.getQueryData<GitListChangedFilesResponse>(
+        gitQueryKeys.listChangedFiles("host1", "/repo", false),
+      ),
+    ).toMatchObject({ fingerprint: "parent-2" });
+    expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    unmountFirst();
   });
 });

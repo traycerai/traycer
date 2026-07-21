@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type {
   EpicResourceSnapshotWire,
-  OwnerResourceSnapshotWire,
+  OwnerResourceSnapshotWireV13,
   ResourceProcessSnapshotWire,
   ResourceOwnerKindWire,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -14,7 +14,6 @@ import {
   EpicResourceChip,
   OwnerResourceChip,
   ResourceUsageChip,
-  TaskResourceSummaryChip,
 } from "@/components/resources/resource-usage-chip";
 import { ResourcesStreamMount } from "@/providers/resources-stream-mount";
 import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
@@ -38,12 +37,13 @@ function process(
 function owner(
   kind: ResourceOwnerKindWire,
   ownerId: string,
-  over: Partial<OwnerResourceSnapshotWire>,
-): OwnerResourceSnapshotWire {
+  over: Partial<OwnerResourceSnapshotWireV13>,
+): OwnerResourceSnapshotWireV13 {
   return {
     owner: { kind, hostId: "host-1", epicId: "epic-1", ownerId },
     sampledAt: 1_000,
     rootPids: [1],
+    harnessId: null,
     activeProcessName: "bash",
     processCount: 3,
     cpuPercent: 12,
@@ -195,58 +195,5 @@ describe("EpicResourceChip", () => {
     expect(
       screen.getByLabelText(/Epic resource usage: 40% CPU/),
     ).not.toBeNull();
-  });
-});
-
-describe("TaskResourceSummaryChip", () => {
-  it("renders task-level aggregate metrics and live owner-kind counts", () => {
-    const stub = installStubFactory();
-    render(
-      <>
-        <ResourcesStreamMount epicId="epic-1" />
-        <TaskResourceSummaryChip epicId="epic-1" className={undefined} />
-      </>,
-    );
-    expect(screen.queryByLabelText(/Task resource usage/)).toBeNull();
-
-    act(() => {
-      stub.emit().onSnapshot(
-        projection({
-          owners: [
-            owner("terminal", "term-1", {
-              rootPids: [101],
-              processCount: 3,
-              cpuPercent: 12,
-              rssBytes: 20 * 1024 * 1024,
-            }),
-            owner("terminal", "term-2", {
-              rootPids: [201],
-              processCount: 1,
-              cpuPercent: 8,
-              rssBytes: 30 * 1024 * 1024,
-            }),
-            owner("terminal-agent", "tui-1", {
-              rootPids: [301],
-              processCount: 2,
-              cpuPercent: 3,
-              rssBytes: 40 * 1024 * 1024,
-            }),
-            owner("chat", "chat-1", {
-              rootPids: [401],
-              processCount: 4,
-              cpuPercent: 2,
-              rssBytes: 10 * 1024 * 1024,
-            }),
-          ],
-        }),
-      );
-    });
-
-    const chip = screen.getByLabelText(
-      "Task resource usage: 25% CPU, 100 MB memory, 10 tracked processes, 2 open terminals, 1 TUI agent, 1 GUI agent",
-    );
-    expect(chip.textContent).toContain("2 term");
-    expect(chip.textContent).toContain("1 TUI");
-    expect(chip.textContent).toContain("1 GUI");
   });
 });

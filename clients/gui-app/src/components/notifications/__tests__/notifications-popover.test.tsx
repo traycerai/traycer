@@ -275,6 +275,46 @@ function notificationIds(rows: ReadonlyArray<HTMLElement>) {
   return rows.map((row) => row.dataset.notificationId);
 }
 
+const ELEMENT_DIMENSIONS = [
+  "scrollHeight",
+  "clientHeight",
+  "scrollWidth",
+  "clientWidth",
+] as const;
+
+type ElementDimension = (typeof ELEMENT_DIMENSIONS)[number];
+
+function mockElementDimensions(
+  getValue: (element: HTMLElement, dimension: ElementDimension) => number,
+) {
+  const descriptors = new Map(
+    ELEMENT_DIMENSIONS.map((dimension) => [
+      dimension,
+      Object.getOwnPropertyDescriptor(HTMLElement.prototype, dimension),
+    ]),
+  );
+
+  ELEMENT_DIMENSIONS.forEach((dimension) => {
+    Object.defineProperty(HTMLElement.prototype, dimension, {
+      configurable: true,
+      get(this: HTMLElement) {
+        return getValue(this, dimension);
+      },
+    });
+  });
+
+  return (): void => {
+    ELEMENT_DIMENSIONS.forEach((dimension) => {
+      const descriptor = descriptors.get(dimension);
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(HTMLElement.prototype, dimension);
+      } else {
+        Object.defineProperty(HTMLElement.prototype, dimension, descriptor);
+      }
+    });
+  };
+}
+
 async function selectTab(testId: string) {
   const trigger = screen.getByTestId(testId);
   await act(async () => {
@@ -461,15 +501,204 @@ describe("NotificationsPopover click routing", () => {
     expect(completed?.textContent).toContain("Agent • Done");
     expect(stalled?.dataset.notificationSeverity).toBe("failure");
     expect(stalled?.textContent).toContain(TASK_TITLE);
-    expect(stalled?.textContent).toContain("Agent • Stalled");
+    expect(stalled?.textContent).toContain(
+      "Agent • Provider is taking longer than expected",
+    );
 
     if (completed === undefined) throw new Error("missing completed row");
     const notificationTitle =
       within(completed).getByTestId("notification-title");
-    expect(notificationTitle.className).toContain("truncate");
+    const notificationBody = within(completed).getByTestId("notification-body");
+    expect(notificationTitle.className).toContain("line-clamp-2");
     expect(notificationTitle.className).toContain("font-semibold");
-    fireEvent.pointerMove(notificationTitle, { pointerType: "mouse" });
-    expect((await screen.findByRole("tooltip")).textContent).toBe(TASK_TITLE);
+    expect(notificationBody.className).toContain("line-clamp-2");
+  });
+
+  it("expands overflowing notification text inline", async () => {
+    const restoreDimensions = mockElementDimensions((_element, dimension) =>
+      dimension === "scrollHeight" ? 48 : 24,
+    );
+
+    try {
+      useHostNotificationsStore.getState().replaceFromSnapshot(
+        [
+          hostAgentEntry({
+            id: "completed",
+            kind: "agent.stopped",
+            severity: "done",
+            outcome: "completed",
+          }),
+        ],
+        50,
+      );
+
+      const captured: TargetCapture = {
+        epicId: null,
+        tabId: null,
+        focusArtifactId: null,
+        focusThreadId: null,
+      };
+      const onNavigate = vi.fn();
+      const { router } = buildRouterWithCapture(captured, onNavigate);
+      renderRouter(router);
+
+      const completed = await screen.findByTestId("notification-entry");
+      const notificationTitle =
+        within(completed).getByTestId("notification-title");
+      const notificationBody =
+        within(completed).getByTestId("notification-body");
+      expect(notificationTitle.className).toContain("line-clamp-2");
+      expect(notificationTitle.className).toContain("font-semibold");
+      expect(notificationBody.className).toContain("line-clamp-2");
+      expect(notificationBody.className).toContain("break-words");
+      expect(notificationBody.className).not.toContain("truncate");
+
+      const expand = within(completed).getByRole("button", {
+        name: "Show more",
+      });
+      expect(expand.getAttribute("aria-expanded")).toBe("false");
+      fireEvent.click(expand);
+      expect(onNavigate).not.toHaveBeenCalled();
+
+      expect(notificationTitle.className).not.toContain("line-clamp-2");
+      expect(notificationBody.className).not.toContain("line-clamp-2");
+      const collapse = within(completed).getByRole("button", {
+        name: "Show less",
+      });
+      expect(collapse.getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.click(collapse);
+      expect(notificationTitle.className).toContain("line-clamp-2");
+      expect(notificationBody.className).toContain("line-clamp-2");
+    } finally {
+      restoreDimensions();
+    }
+  });
+
+  it("omits the expansion control when notification text fits", async () => {
+    useHostNotificationsStore.getState().replaceFromSnapshot(
+      [
+        hostAgentEntry({
+          id: "completed",
+          kind: "agent.stopped",
+          severity: "done",
+          outcome: "completed",
+        }),
+      ],
+      50,
+    );
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    await screen.findByTestId("notification-entry");
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+  });
+
+  it("omits disclosure when the title and body fit within two lines", async () => {
+    const restoreDimensions = mockElementDimensions((element, dimension) => {
+      const isTitle = element.dataset.testid === "notification-title";
+      const isWidth =
+        dimension === "scrollWidth" || dimension === "clientWidth";
+      if (isWidth) {
+        return isTitle &&
+          dimension === "scrollWidth" &&
+          element.className.includes("truncate")
+          ? 240
+          : 200;
+      }
+      return isTitle ? 40 : 20;
+    });
+
+    try {
+      useHostNotificationsStore.getState().replaceFromSnapshot(
+        [
+          hostAgentEntry({
+            id: "completed",
+            kind: "agent.stopped",
+            severity: "done",
+            outcome: "completed",
+          }),
+        ],
+        50,
+      );
+
+      const captured: TargetCapture = {
+        epicId: null,
+        tabId: null,
+        focusArtifactId: null,
+        focusThreadId: null,
+      };
+      const { router } = buildRouterWithCapture(captured, () => undefined);
+      renderRouter(router);
+
+      await screen.findByTestId("notification-entry");
+      expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+    } finally {
+      restoreDimensions();
+    }
+  });
+
+  it("shows disclosure consistently for overflowing read and unread rows", async () => {
+    const restoreDimensions = mockElementDimensions((element, dimension) => {
+      if (dimension === "scrollWidth" || dimension === "clientWidth")
+        return 200;
+      const isBody = element.dataset.testid === "notification-body";
+      if (isBody && dimension === "scrollHeight") return 60;
+      return isBody ? 40 : 20;
+    });
+
+    try {
+      const readEntry = {
+        ...hostAgentEntry({
+          id: "read",
+          kind: "agent.stopped",
+          severity: "done",
+          outcome: "completed",
+        }),
+        readAt: 10,
+      };
+      useHostNotificationsStore.getState().replaceFromSnapshot(
+        [
+          hostAgentEntry({
+            id: "unread",
+            kind: "agent.stopped",
+            severity: "done",
+            outcome: "completed",
+          }),
+          readEntry,
+        ],
+        50,
+      );
+
+      const captured: TargetCapture = {
+        epicId: null,
+        tabId: null,
+        focusArtifactId: null,
+        focusThreadId: null,
+      };
+      const { router } = buildRouterWithCapture(captured, () => undefined);
+      renderRouter(router);
+      await screen.findByTestId("notifications-tab-all");
+      await selectTab("notifications-tab-all");
+
+      const allContent = await screen.findByTestId(
+        "notifications-tab-content-all",
+      );
+      await waitFor(() => {
+        expect(
+          within(allContent).getAllByRole("button", { name: "Show more" }),
+        ).toHaveLength(2);
+      });
+    } finally {
+      restoreDimensions();
+    }
   });
 
   it("keeps the Unread tab visible when every notification is read", async () => {

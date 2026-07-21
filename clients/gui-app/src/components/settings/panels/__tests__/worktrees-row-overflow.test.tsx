@@ -7,16 +7,16 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import { WorktreesList } from "@/components/settings/panels/worktrees-settings-panel";
 import { installWorktreeVirtualizerOffsetHeight } from "./worktrees-virtualizer-test-utils";
 
 function entry(
-  over: Partial<WorktreeHostEntryV12> & {
+  over: Partial<WorktreeHostEntryV14> & {
     worktreePath: string;
     branch: string;
   },
-): WorktreeHostEntryV12 {
+): WorktreeHostEntryV14 {
   return {
     repoLabel: "acme/app",
     repoIdentifier: { owner: "acme", repo: "app" },
@@ -34,6 +34,7 @@ function entry(
     mergedHeadShaMatches: false,
     submodules: [],
     atBaseCommit: false,
+    resolvedAt: 1,
     ...over,
   };
 }
@@ -53,7 +54,7 @@ afterEach(() => {
 });
 
 function renderSingleRow(
-  overrides: Partial<WorktreeHostEntryV12> & {
+  overrides: Partial<WorktreeHostEntryV14> & {
     worktreePath: string;
     branch: string;
   },
@@ -85,6 +86,7 @@ function renderSingleRow(
           onRefresh: () => Promise.resolve(),
           refreshing: false,
           canRefresh: true,
+          lastUpdatedAt: null,
         }}
       />
     </Wrapper>,
@@ -156,7 +158,7 @@ describe("WorktreesList row overflow (real DropdownMenu)", () => {
     screen.getByRole("menuitem", { name: "Copy path" });
     screen.getByRole("menuitem", { name: "Manage script" });
     const deleteItem = screen.getByRole("menuitem", {
-      name: "Delete worktree (in use by an active chat or agent)",
+      name: "Delete worktree (in use by an active agent)",
     });
     expect(deleteItem.getAttribute("aria-disabled")).toBe("true");
   });

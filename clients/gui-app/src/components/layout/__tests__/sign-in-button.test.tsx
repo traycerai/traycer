@@ -476,7 +476,11 @@ describe("<SignInButton />", () => {
     });
     await screen.findByRole("heading", { name: "Approve in your browser" });
     expect(screen.queryByRole("button", { name: "Signing in" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Use code instead" }));
+    expect(
+      screen
+        .getByRole("button", { name: "Use code instead" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
     const code = await screen.findByText("ABCDE-FGHIJ");
     expect(code.textContent).toBe("ABCDE-FGHIJ");
     expect(screen.getByText("https://app.traycer.ai/device").textContent).toBe(

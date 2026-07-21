@@ -20,7 +20,9 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
-import { tuiAgentDisplayTitle } from "@/lib/display-title";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { displayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import {
@@ -256,10 +258,7 @@ export function useCreateTuiAgentForClient(
           id: tuiAgentId,
           instanceId: uuidv4(),
           type: "terminal-agent" as const,
-          name: tuiAgentDisplayTitle({
-            title: input.title,
-            harnessId: input.harnessId,
-          }),
+          name: displayTitle(input.title, "agent"),
           hostId: placeholderHostId,
           pendingTuiHarnessId: input.harnessId,
         };
@@ -427,10 +426,38 @@ async function dispatchWorktreeIntent(
   // routing and binding composition owned by `resolveIntent` instead of
   // re-deriving them client-side across separate create / import / setEntryMode
   // RPCs.
-  await args.worktreeCreate({
+  const result = await args.worktreeCreate({
     epicId,
     ownerId: tuiAgentId,
     ownerKind: "terminal-agent",
     entries: [...intent.entries],
   });
+  // The RPC resolves per-entry: an entry the host failed - or reported
+  // nothing about - has no `ok` row. Launching anyway would run the agent
+  // against a silently-partial binding, so surface the failure and abort
+  // before any harness work happens (the placeholder cleanup in the caller's
+  // finally handles the tab).
+  const okPaths = new Set(
+    result.perEntry
+      .filter((entryResult) => entryResult.ok)
+      .map((entryResult) => entryResult.workspacePath),
+  );
+  const failedPaths = intent.entries
+    .map((entry) => entry.workspacePath)
+    .filter((workspacePath) => !okPaths.has(workspacePath));
+  if (failedPaths.length > 0) {
+    const folder = workspaceFolderName(failedPaths[0]);
+    const scope =
+      failedPaths.length === 1
+        ? `"${folder}"`
+        : `${failedPaths.length} folders, starting with "${folder}"`;
+    const message = `Couldn't prepare the workspace for ${scope}. The terminal agent was not launched.`;
+    reportableErrorToast(message, undefined, {
+      title: "Terminal agent launch aborted",
+      message: null,
+      code: null,
+      source: "Worktree create",
+    });
+    throw new Error(message);
+  }
 }

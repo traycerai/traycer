@@ -11,16 +11,27 @@ import {
   queryOptions,
   useQueryClient,
   type QueryClient,
-  type QueryKey,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/index";
-import type { WorktreeListAllForHostResponseV12 } from "@traycer/protocol/host/worktree-schemas";
+import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
+import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  isPerPathEnrichmentQueryKey,
+  perPathEnrichmentQueryPath,
+} from "@/lib/query-keys/worktree-enrichment-keys";
 import { logPerfEvent } from "@/lib/perf/perf-telemetry";
-import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import {
+  createWorktreeEnrichmentBatcher,
+  keepResolvedEnrichmentRows,
+  perPathEnrichmentQueryKey,
+  useBatchedEnrichmentQueries,
+  WORKTREE_ENRICHMENT_GC_MS,
+  type WorktreeEnrichmentBatcher,
+} from "@/components/settings/panels/worktrees-enrichment-batcher";
 import { useWorktreeEnrichSettlePerf } from "@/components/settings/panels/worktrees-settings-perf";
 import {
   persistWorktreeActivitySnapshot,
@@ -29,7 +40,7 @@ import {
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
 
 const EMPTY_PATHS: readonly string[] = [];
-const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV12> = new Map();
+const EMPTY_ENRICHED: ReadonlyMap<string, WorktreeHostEntryV14> = new Map();
 const EMPTY_SEEDED: ReadonlySet<string> = new Set();
 const EMPTY_ERRORED: ReadonlySet<string> = new Set();
 // The boundary between snapshot-seeded and live cache data: the warm-open
@@ -75,13 +86,6 @@ function coldRetryDelayMs(attempts: number): number {
 // viewport batch, so the host never sees more concurrent per-path probes than
 // a normal scroll would produce.
 const WORKTREE_SWEEP_CHUNK_SIZE = 8;
-// Both enrichment legs pin the same generous gcTime, well past TanStack's
-// 5-minute default: swept entries have no observers, so under the default they
-// would be garbage-collected while the panel sits open - each GC visibly
-// regresses its row to "Checking…" and the sweep would re-probe it, a slow,
-// pointless churn loop. Refresh (method-scope invalidation) remains the way
-// entries are re-probed deliberately.
-const WORKTREE_ENRICHMENT_GC_MS = 30 * 60_000;
 // Debounce for the warm-open snapshot writes: the cache fold's identity
 // changes on every relevant cache event (each settled probe), so writes wait
 // for a quiet window instead of serializing the fleet once per chunk while
@@ -103,18 +107,6 @@ interface SweepRetryState {
   readonly sawInvalidated: boolean;
 }
 
-// The per-path enrichment params, shared by the viewport observers and the
-// background sweep so both produce identical query keys - the cache fold and
-// TanStack's request dedupe both hinge on that identity.
-function perPathEnrichmentParams(path: string) {
-  return {
-    includeActivity: true,
-    activityPaths: [path],
-    cursor: null,
-    limit: null,
-  };
-}
-
 // `prState === null` = "not yet probed" (distinct from `"none"` = probed, no
 // PR): the host served a stale/cold row and scheduled a background `gh` probe
 // whose result never re-emits; only a refetch picks the warmed fact up. A
@@ -122,7 +114,7 @@ function perPathEnrichmentParams(path: string) {
 // owned submodule's PR fact is still warming (the detached-submodule shape),
 // and one unproven submodule holds the whole row in Review.
 function responseHasColdPrState(
-  response: WorktreeListAllForHostResponseV12,
+  response: WorktreeListAllForHostResponseV14,
 ): boolean {
   return response.worktrees.some(
     (entry) =>
@@ -131,33 +123,28 @@ function responseHasColdPrState(
   );
 }
 
-function perPathEnrichmentQueryKey(hostId: string, path: string): QueryKey {
-  return hostQueryKeys.method<HostRpcRegistry, "worktree.listAllForHost">(
-    hostId,
-    "worktree.listAllForHost",
-    perPathEnrichmentParams(path),
-  );
-}
-
 // The sweep's imperative fetch, mirroring the observer leg exactly (same key,
-// same request) so the two legs dedupe onto one in-flight query. As in
-// `useHostQueriesWithResponseMap`, the client stays OUT of the query key -
-// `hostId` already carries the cache identity; the client is transport.
+// same batched transport) so the two legs dedupe onto one in-flight query.
+// The client stays OUT of the query key - `hostId` already carries the cache
+// identity; the batcher is transport.
 function sweepEnrichmentFetchOptions(
   hostId: string,
-  client: HostClient<HostRpcRegistry>,
+  batcher: WorktreeEnrichmentBatcher,
   path: string,
 ) {
-  const fetcher = () =>
-    client.request("worktree.listAllForHost", perPathEnrichmentParams(path));
+  // Rejections carry the `HostRpcError` shape the observer leg declares: the
+  // batcher wraps its wire call in the host-rpc error boundary. The batcher
+  // stays out of the query key (it is transport, like the client before it).
+  const fetcher = () => batcher.fetchPath(path);
   return queryOptions({
     queryKey: perPathEnrichmentQueryKey(hostId, path),
     queryFn: fetcher,
     // Sweep candidates are exactly the missing / invalidated / still-cold
-    // entries, so this must always hit the network - never be handed back the
-    // same cold row the app's 60s default staleTime considers fresh.
+    // entries, so this must always hit the network - never be handed back
+    // the same cold row a nonzero staleTime would consider fresh.
     staleTime: 0,
     gcTime: WORKTREE_ENRICHMENT_GC_MS,
+    structuralSharing: keepResolvedEnrichmentRows,
   });
 }
 
@@ -236,7 +223,7 @@ function selectSweepChunk(args: {
     // Paths in the reported window are viewport-owned: their observers fetch
     // them and their cold retries run on the viewport's own ledger.
     if (viewportPaths.has(path)) continue;
-    const state = queryClient.getQueryState<WorktreeListAllForHostResponseV12>(
+    const state = queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
       perPathEnrichmentQueryKey(hostId, path),
     );
     if (state?.fetchStatus === "fetching") continue;
@@ -264,33 +251,6 @@ function selectSweepChunk(args: {
 }
 
 // A `worktree.listAllForHost` query key is `["host", hostId, method, params]`
-// (see `hostQueryKeys.method`). The panel's per-path enrichment queries are the
-// only ones whose `activityPaths` is an array (`[path]`); the base list and the
-// task-delete whole-list query both pass `activityPaths: null`. Folding ONLY the
-// per-path queries keeps the overlay to fully-enriched, on-screen-driven data -
-// crucially it EXCLUDES the base list's `includeActivity: false` entries, so an
-// un-probed row stays "pending" (absent from the overlay) instead of being
-// classified from base-only fields.
-function isPerPathEnrichmentQueryKey(key: QueryKey): boolean {
-  const params = key[3];
-  if (typeof params !== "object" || params === null) return false;
-  if (!("activityPaths" in params)) return false;
-  return Array.isArray(params.activityPaths);
-}
-
-// The worktree path a per-path enrichment key targets (`activityPaths[0]`),
-// or null for any other key under the method scope. Used by the warm-open
-// restore to invalidate exactly the seeded queries in ONE cache scan.
-function perPathEnrichmentQueryPath(key: QueryKey): string | null {
-  const params = key[3];
-  if (typeof params !== "object" || params === null) return null;
-  if (!("activityPaths" in params)) return null;
-  const { activityPaths } = params;
-  return Array.isArray(activityPaths) && typeof activityPaths[0] === "string"
-    ? activityPaths[0]
-    : null;
-}
-
 function queryKeyHasPrefix(key: unknown, prefix: readonly unknown[]): boolean {
   if (!Array.isArray(key)) return false;
   return (
@@ -301,14 +261,14 @@ function queryKeyHasPrefix(key: unknown, prefix: readonly unknown[]): boolean {
 function foldEnrichedWorktrees(
   queryClient: QueryClient,
   methodScope: readonly unknown[],
-): ReadonlyMap<string, WorktreeHostEntryV12> {
-  const entries = queryClient.getQueriesData<WorktreeListAllForHostResponseV12>(
+): ReadonlyMap<string, WorktreeHostEntryV14> {
+  const entries = queryClient.getQueriesData<WorktreeListAllForHostResponseV14>(
     {
       queryKey: methodScope,
       predicate: (query) => isPerPathEnrichmentQueryKey(query.queryKey),
     },
   );
-  const map = new Map<string, WorktreeHostEntryV12>();
+  const map = new Map<string, WorktreeHostEntryV14>();
   for (const [, data] of entries) {
     if (data === undefined) continue;
     for (const entry of data.worktrees) map.set(entry.worktreePath, entry);
@@ -337,7 +297,7 @@ function foldEnrichedWorktrees(
 export function useCachedWorktreeEnrichment(
   queryClient: QueryClient,
   hostId: string | null,
-): ReadonlyMap<string, WorktreeHostEntryV12> {
+): ReadonlyMap<string, WorktreeHostEntryV14> {
   const methodScope = useMemo(
     () => hostQueryKeys.methodScope(hostId, "worktree.listAllForHost"),
     [hostId],
@@ -345,7 +305,7 @@ export function useCachedWorktreeEnrichment(
   // Cached fold + the scope it was folded for, so the snapshot is recomputed on a
   // relevant cache event OR a host change, and is otherwise referentially stable.
   const snapshotRef =
-    useRef<ReadonlyMap<string, WorktreeHostEntryV12>>(EMPTY_ENRICHED);
+    useRef<ReadonlyMap<string, WorktreeHostEntryV14>>(EMPTY_ENRICHED);
   const snapshotScopeRef = useRef<readonly unknown[] | null>(null);
   const dirtyRef = useRef(true);
 
@@ -390,7 +350,7 @@ export function useCachedWorktreeEnrichment(
   );
   const getSnapshot = useCallback((): ReadonlyMap<
     string,
-    WorktreeHostEntryV12
+    WorktreeHostEntryV14
   > => {
     if (!dirtyRef.current && snapshotScopeRef.current === methodScope) {
       return snapshotRef.current;
@@ -423,10 +383,12 @@ export function useCachedWorktreeEnrichment(
  * Per-viewport lazy enrichment. The base list paints instantly with cheap fields;
  * the expensive activity probes (git ahead/behind/merged, gh PR state, submodule
  * merge facts) are fetched ONLY for the worktree paths currently on screen. Each
- * on-screen path gets its OWN selection-mode `worktree.listAllForHost`
- * (`includeActivity: true`, `activityPaths: [path]`, `cursor: null`,
- * `limit: null`) query, so TanStack Query caches enrichment PER PATH: a path is
- * probed once, and scrolling back to it is a cache hit, never a refetch.
+ * on-screen path gets its OWN selection-mode `worktree.listAllForHost` query
+ * (keyed on `activityPaths: [path]`), so TanStack Query caches enrichment PER
+ * PATH: a path is probed once, and scrolling back to it is a cache hit, never a
+ * refetch. The WIRE is batched underneath: per-path fetches coalesce through
+ * {@link createWorktreeEnrichmentBatcher} into chunked `activityPaths` RPCs, so
+ * cache granularity stays per-path while dial count is ~paths/8.
  *
  * The reported on-screen set is debounced into `requestedPaths` (trailing edge),
  * so a fast scroll spins up one batch of per-path queries per settle window, not
@@ -464,7 +426,7 @@ export function useWorktreeActivityEnrichment(
   // denominator. The viewport machinery works purely off reported paths.
   worktreePaths: readonly string[],
 ): {
-  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV12>;
+  readonly enrichedByPath: ReadonlyMap<string, WorktreeHostEntryV14>;
   // Paths whose per-path enrichment query SETTLED to an error (retries exhausted).
   // A path here is distinct from one still in flight: the row must stop reading as
   // progress and fall back to a non-animated "Unknown" pill instead of spinning
@@ -517,22 +479,36 @@ export function useWorktreeActivityEnrichment(
     [],
   );
 
-  // One enrichment query per on-screen path - the cache identity is the path
-  // itself, so each worktree is probed exactly once and cached independently. This
-  // only DRIVES fetching; the overlay is read from the cache below.
-  const requests = useMemo(
+  // The shared wire transport for BOTH enrichment legs: per-path fetches
+  // coalesce into chunked `activityPaths` RPCs (see the batcher's doc), so an
+  // N-row open or refresh costs ~N/8 dials instead of N. Keyed on the bound
+  // client alone - host identity lives in the query keys.
+  const readiness = useReactiveHostReadiness(client);
+  const batcher = useMemo(
     () =>
-      requestedPaths.map((path) => ({
-        method: "worktree.listAllForHost" as const,
-        params: perPathEnrichmentParams(path),
-      })),
-    [requestedPaths],
+      client === null
+        ? null
+        : createWorktreeEnrichmentBatcher((paths) =>
+            withHostRpcErrorBoundary("worktree.listAllForHost", () =>
+              client.request("worktree.listAllForHost", {
+                includeActivity: true,
+                activityPaths: [...paths],
+                cursor: null,
+                limit: null,
+                forceRefresh: false,
+              }),
+            ),
+          ),
+    [client],
   );
-  const results = useHostQueries({
-    client,
-    cacheKeyIdentity: undefined,
-    requests,
-    options: { enabled: reachable, gcTime: WORKTREE_ENRICHMENT_GC_MS },
+  // One enrichment query per on-screen path - the cache identity is the path
+  // itself, so each worktree is probed exactly once and cached independently.
+  // This only DRIVES fetching; the overlay is read from the cache below.
+  const results = useBatchedEnrichmentQueries({
+    hostId: readiness.hostId,
+    paths: requestedPaths,
+    batcher,
+    enabled: reachable && client !== null && readiness.isReady,
   });
   const coldPrRefetchStateRef = useRef<Map<string, ColdPrRefetchState>>(
     new Map(),
@@ -638,9 +614,9 @@ export function useWorktreeActivityEnrichment(
     for (const entry of snapshot.entries) {
       const key = perPathEnrichmentQueryKey(hostId, entry.worktreePath);
       const state =
-        queryClient.getQueryState<WorktreeListAllForHostResponseV12>(key);
+        queryClient.getQueryState<WorktreeListAllForHostResponseV14>(key);
       if (state?.data !== undefined) continue;
-      queryClient.setQueryData<WorktreeListAllForHostResponseV12>(
+      queryClient.setQueryData<WorktreeListAllForHostResponseV14>(
         key,
         { worktrees: [entry], nextCursor: null },
         // The snapshot's own age: restored entries are stale from birth, so
@@ -698,12 +674,10 @@ export function useWorktreeActivityEnrichment(
   // The viewport drives the rows on screen; the sweep drives everything else.
   // Each pass fetches ONE chunk of paths that still need a probe (no cached
   // data, invalidated by a refresh, or landed cold) through
-  // `queryClient.fetchQuery` under the exact per-path keys the observers use,
-  // then bumps `sweepTick` on settle to schedule the next chunk. Keys are
-  // built from the client's OWN readiness (`readiness.hostId`), mirroring
-  // `useHostQueries`, so swept entries land in precisely the scope the fold
-  // and the observers read.
-  const readiness = useReactiveHostReadiness(client);
+  // `queryClient.fetchQuery` under the exact per-path keys the observers use
+  // - and through the same batcher, so a whole chunk is one wire call. Keys
+  // are built from the client's OWN readiness (`readiness.hostId`), so swept
+  // entries land in precisely the scope the fold and the observers read.
   const [sweepTick, bumpSweepTick] = useReducer((tick: number) => tick + 1, 0);
   const [seedTick, bumpSeedTick] = useReducer((tick: number) => tick + 1, 0);
   const seedsOutstandingRef = useRef(false);
@@ -763,7 +737,8 @@ export function useWorktreeActivityEnrichment(
     // gives the fold a fresh identity.
     void sweepTick;
     void enrichedByPath;
-    if (!reachable || client === null || !readiness.isReady) return;
+    if (!reachable || client === null || batcher === null) return;
+    if (!readiness.isReady) return;
     const sweepHostId = readiness.hostId;
     if (sweepHostId === null) return;
     // One chunk in flight at a time; its settle handler bumps `sweepTick`.
@@ -771,7 +746,7 @@ export function useWorktreeActivityEnrichment(
     // Visible rows first: while the viewport batch is fetching, hold the sweep
     // so the on-screen rows always win the host's attention.
     if (results.some((result) => result.isFetching)) return;
-    const boundClient = client;
+    const boundBatcher = batcher;
     const ledger = sweepLedgerRef.current;
     const now = Date.now();
     const { candidates, nextWakeAt } = selectSweepChunk({
@@ -814,7 +789,7 @@ export function useWorktreeActivityEnrichment(
     void Promise.allSettled(
       candidates.map((path) =>
         queryClient.fetchQuery(
-          sweepEnrichmentFetchOptions(sweepHostId, boundClient, path),
+          sweepEnrichmentFetchOptions(sweepHostId, boundBatcher, path),
         ),
       ),
     ).then((outcomes) => {
@@ -839,7 +814,7 @@ export function useWorktreeActivityEnrichment(
           // stays consumed), while a successful-but-cold refetch clears it
           // (→ false: the NEXT refresh may grant a fresh budget again).
           const stateNow =
-            queryClient.getQueryState<WorktreeListAllForHostResponseV12>(
+            queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
               perPathEnrichmentQueryKey(sweepHostId, path),
             );
           ledger.set(path, {
@@ -861,6 +836,7 @@ export function useWorktreeActivityEnrichment(
     results,
     enrichedByPath,
     client,
+    batcher,
     reachable,
     readiness.isReady,
     readiness.hostId,
@@ -908,7 +884,7 @@ export function useWorktreeActivityEnrichment(
     const seeded = new Set<string>();
     for (const path of enrichedByPath.keys()) {
       const state =
-        queryClient.getQueryState<WorktreeListAllForHostResponseV12>(
+        queryClient.getQueryState<WorktreeListAllForHostResponseV14>(
           perPathEnrichmentQueryKey(hostId, path),
         );
       if (state !== undefined && state.dataUpdatedAt < APP_SESSION_START_MS) {

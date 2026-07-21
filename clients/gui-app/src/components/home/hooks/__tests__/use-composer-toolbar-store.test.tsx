@@ -232,27 +232,6 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     );
   });
 
-  it("reroutes a schema-TUI harness that advertises only gui (cursor)", async () => {
-    // Cursor is in `tuiHarnessIdSchema`, but its adapter currently advertises
-    // only `gui`. Capability is the runtime `modes`, not the schema id, so the
-    // terminal surface reroutes off it like any other non-TUI harness.
-    seedDefault("cursor");
-    harnessesData.value = {
-      harnesses: [
-        { id: "cursor", available: true, modes: ["gui"] },
-        { id: "codex", available: true, modes: ["gui", "tui"] },
-      ],
-    };
-
-    const { result } = renderHook(() =>
-      useComposerToolbarStore(null, { kind: "none" }, null, true),
-    );
-
-    await waitFor(() =>
-      expect(result.current.getState().selection.harnessId).toBe("codex"),
-    );
-  });
-
   it("keeps a TUI-capable selection on the terminal surface", async () => {
     seedDefault("claude");
     harnessesData.value = {
@@ -1218,8 +1197,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     const memory = useComposerHarnessMemoryStore.getState();
     expect(memory.lastModelByHarness.codex).toBe("saved-model");
     expect(
-      memory.resolveModelSelection("codex", null, "saved-model")
-        .reasoningEffort,
+      memory.resolveModelSelection("codex", "saved-model").reasoningEffort,
     ).toBe("high");
   });
 

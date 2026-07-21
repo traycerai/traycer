@@ -6,6 +6,7 @@ import {
 import {
   createAgentRequestSchema,
   createAgentRequestSchemaV20,
+  createAgentRequestSchemaV30,
   createAgentResponseSchema,
   agentSelectionGuideRequestSchema,
   agentSelectionGuideResponseSchema,
@@ -62,6 +63,13 @@ export const agentCreateV20 = defineRpcContract({
   responseSchema: createAgentResponseSchema,
 });
 
+export const agentCreateV30 = defineRpcContract({
+  method: "agent.create",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: createAgentRequestSchemaV30,
+  responseSchema: createAgentResponseSchema,
+});
+
 /**
  * A v1.0 caller's nullable `profileId` maps onto the new selection model at
  * the boundary the multi-profile decision log calls compatibility-only:
@@ -89,12 +97,12 @@ export const agentCreateUpgradeV10ToV20 = defineUpgradePath<
 });
 
 /**
- * Projects a v2.0 request back onto the frozen v1.0 wire for an old host.
- * Explicit managed and compatibility-only inherited selections have a
- * v1.0-representable shape (a profile-id string, or `profileId: null`
- * meaning sender inheritance); `ambient` and `last_used` do not, so both fail
- * the downgrade with actionable upgrade guidance instead of silently
- * projecting onto `profileId: null`.
+ * Projects the frozen v2.0 request back onto the frozen v1.0 wire for an old
+ * host.
+ * Explicit managed and compatibility-only inherited profile selections have a
+ * v1.0-representable shape (a profile-id string, or `profileId: null` meaning
+ * sender inheritance). `ambient` and `last_used` fail because v1.0 cannot
+ * represent their profile semantics.
  *
  * Batch-1 review correction: the original plan treated explicit `ambient` as
  * downgrade-compatible (also projecting to `profileId: null`), but frozen
@@ -146,6 +154,55 @@ export const agentCreateDowngradeV20ToV10 = defineDowngradePath<
       }),
     };
   },
+  downgradeResponse: (response) => ({ ok: true, value: response }),
+});
+
+/**
+ * Released v2 callers did not carry a permission choice. Upgrade them with the
+ * compatibility-only `null` sentinel so the host preserves a GUI sender's mode
+ * (and applies the intentional full-access default for TUI->GUI creation).
+ */
+export const agentCreateUpgradeV20ToV30 = defineUpgradePath<
+  typeof agentCreateV20,
+  typeof agentCreateV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
+  upgradeRequest: (request) => ({ ...request, permissionMode: null }),
+  upgradeResponse: (response) => response,
+});
+
+export const agentCreateDowngradeV30ToV20 = defineDowngradePath<
+  typeof agentCreateV30,
+  typeof agentCreateV20
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: () => ({
+    ok: false,
+    error: {
+      code: "DOWNGRADE_UNSUPPORTED",
+      message:
+        "Selecting an agent permission mode requires a newer Traycer host. Upgrade the host before creating this agent.",
+    },
+  }),
+  downgradeResponse: (response) => ({ ok: true, value: response }),
+});
+
+export const agentCreateDowngradeV30ToV10 = defineDowngradePath<
+  typeof agentCreateV30,
+  typeof agentCreateV10
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: () => ({
+    ok: false,
+    error: {
+      code: "DOWNGRADE_UNSUPPORTED",
+      message:
+        "Selecting an agent permission mode requires a newer Traycer host. Upgrade the host before creating this agent.",
+    },
+  }),
   downgradeResponse: (response) => ({ ok: true, value: response }),
 });
 

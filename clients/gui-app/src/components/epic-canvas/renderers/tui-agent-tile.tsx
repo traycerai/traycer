@@ -33,7 +33,6 @@ import {
 } from "@/hooks/terminal/use-terminal-crash-notification";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { beginTerminalLoad } from "@/lib/perf/terminal-load-perf";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-launch-mutation";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -47,6 +46,7 @@ import {
   peekPreparedTerminalAgentLaunch,
 } from "@/stores/terminals/prepared-terminal-agent-launch-store";
 import { TerminalLoadingSkeleton } from "./terminal-loading-skeleton";
+import { TerminalGridMeasureProbe } from "./terminal-grid-measure-probe";
 import { TerminalDeadTileBanner } from "./dead-tile-banner";
 import { TerminalConnectionOverlay } from "./terminal-connection-overlay";
 import { resolveTerminalOverlayState } from "./terminal-connection-overlay-state";
@@ -148,22 +148,46 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
-      epicId,
-      chatId: props.node.id,
+      target: {
+        kind: "terminal",
+        epicId,
+        terminalId: props.node.id,
+        tabId: props.viewTabId,
+        paneId: props.tileId,
+        tileInstanceId: props.node.instanceId,
+      },
       cause: "exit",
     });
-  }, [epicId, props.node.id, props.node.instanceId]);
+  }, [
+    epicId,
+    props.node.id,
+    props.node.instanceId,
+    props.tileId,
+    props.viewTabId,
+  ]);
   const reportRecoveryExhausted = useCallback(() => {
     // Whichever path observes this terminal death first owns its notification.
     if (crashReportedRef.current) return;
     crashReportedRef.current = true;
     emitTerminalCrashedNotification({
       instanceId: props.node.instanceId,
-      epicId,
-      chatId: props.node.id,
+      target: {
+        kind: "terminal",
+        epicId,
+        terminalId: props.node.id,
+        tabId: props.viewTabId,
+        paneId: props.tileId,
+        tileInstanceId: props.node.instanceId,
+      },
       cause: "recovery-exhausted",
     });
-  }, [epicId, props.node.id, props.node.instanceId]);
+  }, [
+    epicId,
+    props.node.id,
+    props.node.instanceId,
+    props.tileId,
+    props.viewTabId,
+  ]);
   const closeCanvasTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.tileId,
@@ -184,17 +208,20 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   const sessionId = props.node.id;
   useEffect(() => {
     beginTerminalLoad(sessionId, "terminal-agent");
-    Analytics.getInstance().track(AnalyticsEvent.TerminalOpened, {
-      kind: "agent",
-    });
   }, [sessionId]);
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
     emitTerminalClosedNotification({
       instanceId: props.node.instanceId,
       hostLabel: reachability.hostLabel,
-      epicId,
-      chatId: props.node.id,
+      target: {
+        kind: "terminal",
+        epicId,
+        terminalId: props.node.id,
+        tabId: props.viewTabId,
+        paneId: props.tileId,
+        tileInstanceId: props.node.instanceId,
+      },
     });
   }, [
     reachability.status,
@@ -202,17 +229,25 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     epicId,
     props.node.id,
     props.node.instanceId,
+    props.tileId,
+    props.viewTabId,
   ]);
   if (reachability.status === "unreachable") {
     return (
       <TerminalDeadTileBanner
         hostLabel={reachability.hostLabel}
+        ownerKind="agent"
         onClose={closeCanvasTile}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
     );
   }
-  if (reachability.status === "checking") {
+  // "host-starting": local host not published yet (boot/ensure/wake) - show
+  // the loading shell, never the permanently-closed banner.
+  if (
+    reachability.status === "checking" ||
+    reachability.status === "host-starting"
+  ) {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>
         <TerminalAgentWorktreeNotice
@@ -263,6 +298,7 @@ function TuiAgentTileLive(
   const killTerminal = useTerminalKillFor(
     hostClient,
     "Couldn't restart terminal after updating folders.",
+    false,
   );
 
   // Every harness - Claude included - goes through `agent.startTerminalSession`
@@ -557,6 +593,15 @@ function TuiAgentTileLive(
           isActive={props.isActive}
           recovery={props.recovery}
           onCrashExit={props.onCrashExit}
+          measureProbe={
+            <TerminalGridMeasureProbe
+              sessionId={sessionId}
+              instanceId={instanceId}
+              tileKind="terminal-agent"
+              chrome="padded"
+              onMeasured={bootstrap.reportMeasuredGrid}
+            />
+          }
         />
       </div>
     </TerminalAgentTileShell>
@@ -585,6 +630,8 @@ interface TerminalAgentBodyProps {
   readonly isRestartKillSuppressed: () => boolean;
   readonly recovery: TerminalSessionRecovery;
   readonly onCrashExit: () => void;
+  /** Pre-subscribe grid measurement probe, rendered in the loading state. */
+  readonly measureProbe: React.ReactNode;
 }
 
 function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
@@ -661,8 +708,21 @@ function TerminalAgentBody(props: TerminalAgentBodyProps): React.ReactNode {
   if (props.handle === null) {
     // One stable skeleton for the whole pre-ready window (preparing → starting
     // → xterm suspense all render `TerminalLoadingSkeleton`), so the transition
-    // into the live terminal never flickers between placeholder strings.
-    return <TerminalLoadingSkeleton />;
+    // into the live terminal never flickers between placeholder strings. The
+    // measurement probe mounts the persistent xterm engine beneath it (both
+    // fill the same relative box) so the container's grid is measured before
+    // the subscribe is dispatched - see `TerminalGridMeasureProbe`. Probe
+    // first, skeleton in an overlay after: the probe's container is
+    // `absolute inset-0`, so in-flow content preceding it would be painted
+    // over.
+    return (
+      <>
+        {props.measureProbe}
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <TerminalLoadingSkeleton />
+        </div>
+      </>
+    );
   }
 
   return (

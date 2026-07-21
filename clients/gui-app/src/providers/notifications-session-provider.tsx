@@ -7,6 +7,8 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { NotificationsStreamClient } from "@traycer-clients/shared/host-transport/notifications-stream-client";
+import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import {
   openNotificationsStream,
@@ -23,7 +25,6 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
-import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import {
@@ -47,6 +48,7 @@ import {
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -67,12 +69,21 @@ export function NotificationsSessionProvider(
   const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
   const showNotification = useNotificationShow();
-  const { activate } = useNotificationActivation();
+  const recordInAppClick = useNotificationEventsStore(
+    (state) => state.recordInAppClick,
+  );
   const windowsBridge = useWindowsBridge();
   const status = useAuthStore((state) => state.status);
   const email = useAuthStore((state) => state.profile?.email ?? null);
   const disposerRef = useRef<(() => void) | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
+  // The stream client BOTH notification streams were opened against. Stream
+  // ownership follows the client instance: when the provider context serves a
+  // different client (the app-wide liveness rebuild, or any same-identity
+  // replacement), the old client's sessions are already dead, so the streams
+  // must be torn down and reopened against the new client.
+  const openedStreamClientRef =
+    useRef<WsStreamClient<HostStreamRpcRegistry> | null>(null);
   const previousHostIdRef = useRef<string | null>(activeHostId);
   const [fallbackWindowId] = useState(createFallbackNotificationsWindowId);
   const windowId = windowsBridge?.windowId ?? fallbackWindowId;
@@ -80,15 +91,11 @@ export function NotificationsSessionProvider(
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<HostNotificationsEntityRef | null>(null);
   const onToastClick = useCallback(
-    (row: MergedNotificationRow): void => {
+    (row: MergedNotificationRow, activatedAt: number): void => {
       if (row.payload === null) return;
-      activate({
-        payload: row.payload,
-        receivedAt: row.createdAt,
-        onActivated: null,
-      });
+      recordInAppClick(row.payload, activatedAt);
     },
-    [activate],
+    [recordInAppClick],
   );
   const onToastClickRef = useRef(onToastClick);
   useEffect(() => {
@@ -158,6 +165,7 @@ export function NotificationsSessionProvider(
   }, []);
 
   const tearDown = useCallback((): void => {
+    openedStreamClientRef.current = null;
     if (disposerRef.current !== null) {
       const disposer = disposerRef.current;
       disposerRef.current = null;
@@ -212,6 +220,7 @@ export function NotificationsSessionProvider(
     };
     if (activeHostId === null) return;
     const streamHostId = activeHostId;
+    openedStreamClientRef.current = wsStreamClient;
     disposerRef.current = openNotificationsStream((callbacks) => {
       const override = getNotificationsStreamFactoryOverride();
       if (override !== null) {
@@ -242,7 +251,8 @@ export function NotificationsSessionProvider(
             displayHostChannelEmission(entries, {
               showNotification,
               playChime: playNotificationChime,
-              onToastClick: (row) => onToastClickRef.current(row),
+              onToastClick: (row, activatedAt) =>
+                onToastClickRef.current(row, activatedAt),
             });
           },
           onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),
@@ -302,6 +312,17 @@ export function NotificationsSessionProvider(
     if (priorHostId !== null && priorHostId !== activeHostId) {
       tearDown();
       resetReplica();
+    }
+    // A replaced stream client under the SAME host + user (the app-wide
+    // liveness rebuild after the client was closed underneath the provider)
+    // closes the old client's sessions, so both notification streams must
+    // rebind to the new client. The identity did not change, so the replica
+    // is kept - the re-landed snapshot merges into the same doc.
+    if (
+      disposerRef.current !== null &&
+      openedStreamClientRef.current !== wsStreamClient
+    ) {
+      tearDown();
     }
     if (disposerRef.current === null) {
       openForCurrentUser();

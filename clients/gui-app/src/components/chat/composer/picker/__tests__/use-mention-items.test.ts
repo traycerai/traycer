@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildCurrentEpicArtifactMentionEntries,
-  epicChatMentionEntriesFromChats,
+  epicAgentMentionEntriesFromEpic,
   mergeCurrentEpicArtifactMentions,
   mergeTaskAndArtifactMentionEntries,
 } from "../use-mention-items";
@@ -11,7 +11,10 @@ import type {
   ArtifactsSlice,
   ChatProjection,
   ChatsSlice,
+  TerminalAgentsSlice,
+  TuiAgentProjection,
 } from "@/stores/epics/open-epic/types";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { EpicMentionEntry } from "@/lib/composer/types";
 import type { EpicMentionArtifactSuggestion } from "@traycer/protocol/host/epic/unary-schemas";
 
@@ -41,13 +44,56 @@ function chatsSlice(chats: ReadonlyArray<ChatProjection>): ChatsSlice {
   };
 }
 
-describe("epicChatMentionEntriesFromChats", () => {
-  it("projects each chat into a mention entry with the epic-scoped token", () => {
-    const entries = epicChatMentionEntriesFromChats(
+function terminalAgent(fields: {
+  id: string;
+  harnessId: TuiHarnessId;
+  title: string;
+  parentId: string | null;
+  updatedAt: number;
+}): TuiAgentProjection {
+  const { id, harnessId, title, parentId, updatedAt } = fields;
+  return {
+    id,
+    harnessId,
+    title,
+    parentId,
+    createdAt: 0,
+    updatedAt,
+    userId: null,
+    hostId: "host-1",
+    workspaceFolders: [],
+    workspaceMode: undefined,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    profileId: null,
+    harnessSessionId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+  };
+}
+
+function terminalAgentsSlice(
+  agents: ReadonlyArray<TuiAgentProjection>,
+): TerminalAgentsSlice {
+  return {
+    byId: Object.fromEntries(agents.map((a) => [a.id, a])),
+    allIds: agents.map((a) => a.id),
+  };
+}
+
+const NO_TERMINAL_AGENTS = terminalAgentsSlice([]);
+const NO_CHATS = chatsSlice([]);
+
+describe("epicAgentMentionEntriesFromEpic", () => {
+  it("projects each chat-interface Agent into an entry with the epic-scoped token", () => {
+    const entries = epicAgentMentionEntriesFromEpic(
       chatsSlice([
         chat("c1", "Planning", null, 200),
         chat("c2", "Bugfix", "c1", 100),
       ]),
+      NO_TERMINAL_AGENTS,
       "epic-1",
       "My Epic",
     );
@@ -64,6 +110,8 @@ describe("epicChatMentionEntriesFromChats", () => {
         description: "My Epic",
         parentId: null,
         updatedAt: 200,
+        agentInterface: "chat",
+        runtimeSupportsMessageDelivery: true,
       },
       {
         kind: "epic-chat",
@@ -76,24 +124,158 @@ describe("epicChatMentionEntriesFromChats", () => {
         description: "My Epic",
         parentId: "c1",
         updatedAt: 100,
+        agentInterface: "chat",
+        runtimeSupportsMessageDelivery: true,
       },
     ]);
   });
 
-  it("falls back to placeholder labels for empty chat / epic titles", () => {
-    const [entry] = epicChatMentionEntriesFromChats(
+  it("projects terminal-interface Agents alongside chat-interface Agents", () => {
+    const entries = epicAgentMentionEntriesFromEpic(
+      chatsSlice([chat("c1", "Planning", null, 200)]),
+      terminalAgentsSlice([
+        terminalAgent({
+          id: "t1",
+          harnessId: "claude",
+          title: "Refactor",
+          parentId: "c1",
+          updatedAt: 150,
+        }),
+      ]),
+      "epic-1",
+      "My Epic",
+    );
+
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "epic-chat",
+      "epic-terminal-agent",
+    ]);
+    expect(entries[1]).toEqual({
+      kind: "epic-terminal-agent",
+      id: "terminal-agent:epic-1:t1",
+      token: "terminal-agent:epic-1/t1",
+      epicId: "epic-1",
+      epicTitle: "My Epic",
+      terminalAgentId: "t1",
+      harnessId: "claude",
+      label: "Refactor",
+      description: "My Epic",
+      parentId: "c1",
+      updatedAt: 150,
+      agentInterface: "terminal",
+      runtimeSupportsMessageDelivery: true,
+    });
+  });
+
+  it("keeps Codex and OpenCode Terminal Agents referenceable but not messageable", () => {
+    const entries = epicAgentMentionEntriesFromEpic(
+      NO_CHATS,
+      terminalAgentsSlice([
+        terminalAgent({
+          id: "t1",
+          harnessId: "codex",
+          title: "Codex run",
+          parentId: null,
+          updatedAt: 10,
+        }),
+        terminalAgent({
+          id: "t2",
+          harnessId: "opencode",
+          title: "OpenCode run",
+          parentId: null,
+          updatedAt: 20,
+        }),
+      ]),
+      "epic-1",
+      "My Epic",
+    );
+
+    expect(entries).toHaveLength(2);
+    expect(
+      entries.every((entry) => !entry.runtimeSupportsMessageDelivery),
+    ).toBe(true);
+    expect(entries.map((entry) => entry.token)).toEqual([
+      "terminal-agent:epic-1/t1",
+      "terminal-agent:epic-1/t2",
+    ]);
+  });
+
+  it("excludes Cursor Terminal Agents, which the product does not expose yet", () => {
+    const entries = epicAgentMentionEntriesFromEpic(
+      NO_CHATS,
+      terminalAgentsSlice([
+        terminalAgent({
+          id: "t1",
+          harnessId: "cursor",
+          title: "Cursor run",
+          parentId: null,
+          updatedAt: 10,
+        }),
+        terminalAgent({
+          id: "t2",
+          harnessId: "claude",
+          title: "Claude run",
+          parentId: null,
+          updatedAt: 20,
+        }),
+      ]),
+      "epic-1",
+      "My Epic",
+    );
+
+    expect(entries.map((entry) => entry.label)).toEqual(["Claude run"]);
+  });
+
+  it("falls back to 'Untitled agent' for untitled Agents on BOTH interfaces", () => {
+    const [chatEntry, terminalEntry] = epicAgentMentionEntriesFromEpic(
       chatsSlice([chat("c1", "", null, 0)]),
+      terminalAgentsSlice([
+        terminalAgent({
+          id: "t1",
+          harnessId: "codex",
+          title: "",
+          parentId: null,
+          updatedAt: 0,
+        }),
+      ]),
       "epic-1",
       "",
     );
-    expect(entry.label).toBe("Untitled chat");
-    expect(entry.epicTitle).toBe("Untitled task");
-    expect(entry.description).toBe("Untitled task");
+
+    // The picker addresses the durable Agent, so the fallback is
+    // interface-agnostic - not "Untitled chat" / the harness label.
+    expect(chatEntry.label).toBe("Untitled agent");
+    expect(terminalEntry.label).toBe("Untitled agent");
+    expect(chatEntry.epicTitle).toBe("Untitled task");
+    expect(chatEntry.description).toBe("Untitled task");
   });
 
-  it("keeps a literal Untitled epic title unchanged for chat descriptions", () => {
-    const [entry] = epicChatMentionEntriesFromChats(
+  it("preserves a historical literal 'Untitled chat' title instead of rewriting it", () => {
+    const [chatEntry, terminalEntry] = epicAgentMentionEntriesFromEpic(
+      chatsSlice([chat("c1", "Untitled chat", null, 0)]),
+      terminalAgentsSlice([
+        terminalAgent({
+          id: "t1",
+          harnessId: "claude",
+          title: "Untitled terminal agent",
+          parentId: null,
+          updatedAt: 0,
+        }),
+      ]),
+      "epic-1",
+      "My Epic",
+    );
+
+    // Stored text is data, not a fallback - the system cannot tell a baked-in
+    // synthetic title apart from one the user chose, so it is left alone.
+    expect(chatEntry.label).toBe("Untitled chat");
+    expect(terminalEntry.label).toBe("Untitled terminal agent");
+  });
+
+  it("keeps a literal Untitled epic title unchanged for Agent descriptions", () => {
+    const [entry] = epicAgentMentionEntriesFromEpic(
       chatsSlice([chat("c1", "Planning", null, 0)]),
+      NO_TERMINAL_AGENTS,
       "epic-1",
       "Untitled epic",
     );
@@ -102,40 +284,74 @@ describe("epicChatMentionEntriesFromChats", () => {
     expect(entry.description).toBe("Untitled epic");
   });
 
-  it("skips chat ids missing from the byId projection", () => {
-    const presentChat = chat("c1", "Planning", null, 200);
-    const entries = epicChatMentionEntriesFromChats(
+  it("skips Agent ids missing from the byId projections", () => {
+    const entries = epicAgentMentionEntriesFromEpic(
       {
-        byId: { c1: presentChat },
+        byId: { c1: chat("c1", "Planning", null, 200) },
         allIds: ["missing", "c1"],
+      },
+      {
+        byId: {
+          t1: terminalAgent({
+            id: "t1",
+            harnessId: "claude",
+            title: "Refactor",
+            parentId: null,
+            updatedAt: 100,
+          }),
+        },
+        allIds: ["missing", "t1"],
       },
       "epic-1",
       "My Epic",
     );
 
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.chatId).toBe("c1");
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.label)).toEqual([
+      "Planning",
+      "Refactor",
+    ]);
   });
 
-  it("returns the stable empty array when every chat id is missing", () => {
-    const missingOnly: ChatsSlice = {
+  it("returns the stable empty array when every Agent id is missing", () => {
+    const missingChats: ChatsSlice = { byId: {}, allIds: ["missing"] };
+    const missingAgents: TerminalAgentsSlice = {
       byId: {},
       allIds: ["missing"],
     };
-    const a = epicChatMentionEntriesFromChats(missingOnly, "epic-1", "My Epic");
-    const b = epicChatMentionEntriesFromChats(missingOnly, "epic-1", "My Epic");
+    const a = epicAgentMentionEntriesFromEpic(
+      missingChats,
+      missingAgents,
+      "epic-1",
+      "My Epic",
+    );
+    const b = epicAgentMentionEntriesFromEpic(
+      missingChats,
+      missingAgents,
+      "epic-1",
+      "My Epic",
+    );
 
     expect(a).toHaveLength(0);
     expect(a).toBe(b);
   });
 
-  it("returns a stable empty array reference when there are no chats", () => {
-    const empty = chatsSlice([]);
-    const a = epicChatMentionEntriesFromChats(empty, "epic-1", "My Epic");
-    const b = epicChatMentionEntriesFromChats(empty, "epic-1", "My Epic");
+  it("returns a stable empty array reference when there are no Agents", () => {
+    const a = epicAgentMentionEntriesFromEpic(
+      NO_CHATS,
+      NO_TERMINAL_AGENTS,
+      "epic-1",
+      "My Epic",
+    );
+    const b = epicAgentMentionEntriesFromEpic(
+      NO_CHATS,
+      NO_TERMINAL_AGENTS,
+      "epic-1",
+      "My Epic",
+    );
     expect(a).toHaveLength(0);
     // Same reference -> the gated `useMemo` in useMentionItems stays stable, so
-    // the composer never re-renders for an epic with no chats.
+    // the composer never re-renders for an epic with no Agents.
     expect(a).toBe(b);
   });
 });
@@ -149,6 +365,7 @@ function artifact(
     id,
     kind,
     title: fields.title,
+    folderName: "",
     parentId: null,
     artifactRoomId: null,
     createdAt: 0,

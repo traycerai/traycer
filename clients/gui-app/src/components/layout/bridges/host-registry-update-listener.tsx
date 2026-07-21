@@ -14,8 +14,18 @@ export function HostRegistryUpdateListener(): null {
     const bridge = resolveDesktopHostRegistryUpdatesBridge(runnerHost);
     if (bridge === null) return;
     const subscription = bridge.onChange((state) => {
+      // File the push under the channel main resolved it against, never
+      // against whatever channel this window currently believes is active. A
+      // channel change emits the app-update snapshot and this state as two
+      // separate IPC events, so this callback can run before React has
+      // re-rendered with the new channel - keying off a captured renderer
+      // value would then write fresh state under the retired key and leave
+      // the live one stale.
       queryClient.setQueryData(
-        runnerQueryKeys.hostRegistryUpdate(management),
+        runnerQueryKeys.hostRegistryUpdate(
+          management,
+          state.includePreReleases,
+        ),
         state,
       );
       void queryClient.invalidateQueries({

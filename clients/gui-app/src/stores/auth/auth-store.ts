@@ -89,6 +89,20 @@ export interface AuthState {
   setSignedOut(): void;
 }
 
+/**
+ * Coalesce a profile's display name to a guaranteed string. `userName` and
+ * `email` are typed `string` on `AuthProfile`, but a persisted or
+ * cross-window-projected snapshot can violate that at runtime; declaring the
+ * params nullable makes the fallback a genuine guard (and preserves an
+ * explicitly empty `userName` rather than overwriting it with the email).
+ */
+function coalesceUserName(
+  userName: string | undefined,
+  email: string | undefined,
+): string {
+  return userName ?? email ?? "";
+}
+
 export const useAuthStore = create<AuthState>()((set) => ({
   status: "signed-out",
   profile: null,
@@ -103,11 +117,29 @@ export const useAuthStore = create<AuthState>()((set) => ({
     contextMetadata: AuthContextMetadata,
     shareableTeams: ReadonlyArray<EpicShareableTeam>,
   ) => {
-    set({ status: "signed-in", profile, contextMetadata, shareableTeams });
-    Analytics.getInstance().identify(contextMetadata.userId, {
-      name: profile.userName,
-      email: profile.email,
+    // Store chokepoint: every signed-in profile lands here, including the
+    // projected/persisted-snapshot override paths (AuthService.ingestProjected
+    // SessionSnapshot / applyExternalSession) that bypass `profileFromUser`.
+    // `AuthProfile.userName` is typed `string`, but a stale or partial snapshot
+    // can deliver it absent at runtime - the type is a serialization-boundary
+    // guarantee the wire can violate. Coerce here so it is never absent
+    // downstream; otherwise startup consumers throw on it:
+    // `readFirstName(userName).replace(...)` in HomeHero and
+    // `computeInitials(userName).trim()` in the header avatar.
+    const safeProfile = {
+      ...profile,
+      userName: coalesceUserName(profile.userName, profile.email),
+    };
+    set({
+      status: "signed-in",
+      profile: safeProfile,
+      contextMetadata,
+      shareableTeams,
     });
+    // Email is the one person property sent (deliberate product decision so
+    // PostHog dashboards can look users up); the final sanitizer drops
+    // everything else the SDK stages on $identify.
+    Analytics.getInstance().identify(contextMetadata.userId, safeProfile.email);
   },
   setSubscriptionStatus: (status: SubscriptionStatus | null) => {
     set({ subscriptionStatus: status });

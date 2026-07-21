@@ -6,6 +6,7 @@ import {
   type AgentMode,
 } from "@traycer/protocol/common/schemas";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
@@ -31,12 +32,15 @@ export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 // `TuiHarnessId extends HarnessId` are both true at the type level, so a
 // surface-narrow value passes everywhere a `HarnessId` is expected.
 //
-// Cursor supports BOTH surfaces at the schema level: the GUI chat tab drives
-// the `@cursor/sdk` agent runtime in local mode, and the TUI tab can launch the
-// `cursor-agent` CLI in a PTY. It is therefore listed in `harnessIdSchema` and
-// in BOTH `guiHarnessIdSchema` and `tuiHarnessIdSchema`. The TUI surface is
-// hidden in the renderer for now (the adapter advertises only the GUI mode via
-// `listGuiHarnesses`'s `modes` field) until the CLI reaches feature parity.
+// Cursor is GUI-only in the product today: the GUI chat tab drives the
+// `@cursor/sdk` agent runtime in local mode. It is listed in `harnessIdSchema`
+// and `guiHarnessIdSchema`, and it stays in `tuiHarnessIdSchema` as a RESERVED
+// compatibility value only - a stable reserved id so existing persisted Cursor
+// Terminal-interface records keep parsing - NOT because a Cursor Terminal
+// launch path exists. There is none today: the host
+// adapter does not implement the TUI surface, the runtime TUI catalog omits
+// Cursor, and `epic.createTuiAgent` / `agent.create` reject `harnessId: "cursor"`
+// on the Terminal interface.
 export const harnessIdSchema = getRecordSchema(
   commonRecordRegistry,
   "harness-id",
@@ -308,7 +312,8 @@ export type ConcreteProfileSelection = z.infer<
  * `model`, `agentMode`, `reasoningEffort`, and `fastMode` are explicit
  * nullable overrides. `null` means "not requested"; the resolver fills
  * defaults and returns warnings for currently unsupported combinations instead
- * of rejecting the whole create.
+ * of rejecting the whole create. `permissionMode` arrives in v3 below; v1 and
+ * v2 remain frozen to their released request shapes.
  *
  * The new agent's `parentId` is set to `senderAgentId` so the epic projection
  * can render the spawn lineage without a separate join.
@@ -345,7 +350,7 @@ export const createAgentResponseSchema = z.object({
 export type CreateAgentResponse = z.infer<typeof createAgentResponseSchema>;
 
 /**
- * `agent.create@2.0` request - identical to v1.0 except the nullable
+ * Frozen `agent.create@2.0` request - identical to v1.0 except the nullable
  * `profileId` override is replaced by an explicit `profileSelection` (see
  * `ProfileSelection` above). Removing `profileId` is why this ships as a new
  * major rather than an additive minor: v1.0 stays frozen and reachable
@@ -367,6 +372,18 @@ export const createAgentRequestSchemaV20 = z.object({
   profileSelection: profileSelectionSchema,
 });
 export type CreateAgentRequestV20 = z.infer<typeof createAgentRequestSchemaV20>;
+
+/**
+ * `agent.create@3.0` adds the required permission-mode choice. `null` is a
+ * compatibility-only sentinel emitted by the v2->v3 upgrade path so released
+ * callers retain their legacy sender-inheritance behavior; current tool/CLI
+ * callers always send a concrete mode. Making the field required keeps the
+ * released v2.0 wire immutable.
+ */
+export const createAgentRequestSchemaV30 = createAgentRequestSchemaV20.extend({
+  permissionMode: permissionModeSchema.nullable(),
+});
+export type CreateAgentRequestV30 = z.infer<typeof createAgentRequestSchemaV30>;
 
 export const agentSelectionGuideRequestSchema = z.object({
   epicId: z.string(),
@@ -520,8 +537,8 @@ export type ListHarnessModelsResponse = z.infer<
  * uuid-keyed map) so the wire shape lines up with `listEpicCollaborators`
  * and the rest of the `list*` family in this registry.
  *
- * `surface` lets a caller route to the right per-agent UI (e.g. fetch a
- * GUI chat transcript vs a TUI scrollback) without a second round-trip.
+ * `surface` lets a caller route to the right per-agent UI (e.g. a GUI chat
+ * interface vs a TUI terminal interface) without a second round-trip.
  * `isLocal` is the host's authoritative answer to "did I mint this
  * session?" - `hostId` equals the responding host's id. Cross-host
  * entries are returned for read-only enumeration; mutating RPCs
@@ -689,10 +706,11 @@ export type SendAgentMessageResponse = z.infer<
  * XML-tagged string so a sibling agent can read it without re-implementing
  * the discriminated `messageSchema` shape. For GUI agents the host
  * serializes the persisted `messageSchema` array (`<user>` / `<assistant>`
- * blocks); for TUI agents the host best-effort returns whatever
- * scrollback its PTY buffer holds. TUI scrollback is not persisted, so the
- * resolver errors when the target TUI session is not local and currently
- * present in this host's PTY manager.
+ * blocks); for supported TUI agents the host reads structured conversation
+ * history through the harness provider SDK. Provider history survives the PTY
+ * closing; there is deliberately no raw scrollback fallback. TUI transcript
+ * reads remain local to the agent's bound host because its provider session
+ * store and credentials are host-local.
  */
 export const getAgentTranscriptRequestSchema = z.object({
   epicId: z.string(),

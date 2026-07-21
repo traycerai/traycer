@@ -51,7 +51,7 @@ import type {
   TuiAgentProjection,
 } from "./types";
 import { EMPTY_ARRAY, EMPTY_PROJECTED_SLICES } from "./types";
-import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { DEFAULT_SORT_MODE, makeNodeComparator } from "@/lib/epic-sort";
 
 // ─── Type-narrow Y.Doc readers ────────────────────────────────────────────
@@ -155,12 +155,7 @@ export function readArtifactKind(map: Y.Map<unknown>): EpicArtifactKind | null {
 
 function readHarnessType(map: Y.Map<unknown>): TuiHarnessId | null {
   const value = map.get("harnessId");
-  if (
-    value === "claude" ||
-    value === "codex" ||
-    value === "opencode" ||
-    value === "cursor"
-  ) {
+  if (value === "claude" || value === "codex" || value === "opencode") {
     return value;
   }
   return null;
@@ -221,6 +216,7 @@ export function projectArtifact(
     id,
     kind,
     title: readMaybeString(entry, "title"),
+    folderName: readMaybeString(entry, "folderName"),
     parentId: readMaybeNullableString(entry, "parentId"),
     artifactRoomId:
       artifactRoomId !== null && artifactRoomId.length > 0
@@ -294,14 +290,8 @@ export function projectTerminalAgent(
   if (typeof hostId !== "string") return null;
   const harnessSessionId = entry.get("harnessSessionId");
   // Claude/OpenCode require a non-null harness session id (allocated
-  // synchronously). Codex tolerates null until `thread/started` back-fills;
-  // Cursor tolerates null when `create-chat` minting failed (re-mints on the
-  // next launch) rather than persisting a bogus id.
-  if (
-    typeof harnessSessionId !== "string" &&
-    harnessId !== "codex" &&
-    harnessId !== "cursor"
-  ) {
+  // synchronously). Codex tolerates null until `thread/started` back-fills.
+  if (typeof harnessSessionId !== "string" && harnessId !== "codex") {
     return null;
   }
   const model = entry.get("model");
@@ -364,6 +354,7 @@ export function artifactProjectionsEq(
     a.id === b.id &&
     a.kind === b.kind &&
     a.title === b.title &&
+    a.folderName === b.folderName &&
     a.parentId === b.parentId &&
     a.artifactRoomId === b.artifactRoomId &&
     a.createdAt === b.createdAt &&
@@ -639,7 +630,10 @@ function collectRawTreeRecords(
     out.push({
       id,
       parentIdRaw: chat.parentId,
-      title: displayTitle(chat.title, "chat"),
+      // Durable Agent tree row: an untitled Chat-interface Agent falls back to
+      // "Untitled agent", not "Untitled chat". `type` stays the structural
+      // "chat" interface discriminator.
+      title: displayTitle(chat.title, "agent"),
       type: "chat",
       status: null,
       createdAt: chat.createdAt,
@@ -651,10 +645,11 @@ function collectRawTreeRecords(
     out.push({
       id,
       parentIdRaw: agent.parentId,
-      title: tuiAgentDisplayTitle({
-        title: agent.title,
-        harnessId: agent.harnessId,
-      }),
+      // Durable Agent tree row: an untitled Terminal-interface Agent falls back
+      // to "Untitled agent" too (harness identity is separate interface
+      // metadata, not the title fallback). `type` stays the interface
+      // discriminator.
+      title: displayTitle(agent.title, "agent"),
       type: "terminal-agent",
       status: null,
       createdAt: agent.createdAt,

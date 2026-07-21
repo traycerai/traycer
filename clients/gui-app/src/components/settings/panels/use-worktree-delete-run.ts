@@ -12,6 +12,11 @@ import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-s
 import { WorktreeDeleteStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsBlockerFromError,
+} from "@/lib/analytics";
 
 export interface LogSegment {
   /** Monotonic per-run id (append-only), so React keys are stable. */
@@ -116,7 +121,15 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
         record.key === key ? { ...record, run: updater(record.run) } : record,
       ),
     })),
-  completeRun: (key, deleted) =>
+  completeRun: (key, deleted) => {
+    // Emission rides the natural non-terminal -> terminal transition (state
+    // read before the synchronous update); a replayed/duplicate settle can't
+    // double-count and no reporting ledger is needed.
+    const existing = useWorktreeDeleteRunStore
+      .getState()
+      .runs.find((candidate) => candidate.key === key);
+    const wasTerminal =
+      existing === undefined || worktreeRunIsTerminal(existing.run);
     set((state) => {
       const record = state.runs.find((candidate) => candidate.key === key);
       if (record === undefined) return state;
@@ -142,8 +155,20 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
             ? key
             : state.foregroundKey,
       };
-    }),
-  failRun: (key, error) =>
+    });
+    if (!wasTerminal) {
+      reportTerminalDeleteOutcome(
+        key,
+        useWorktreeDeleteRunStore.getState().runs,
+      );
+    }
+  },
+  failRun: (key, error) => {
+    const existing = useWorktreeDeleteRunStore
+      .getState()
+      .runs.find((candidate) => candidate.key === key);
+    const wasTerminal =
+      existing === undefined || worktreeRunIsTerminal(existing.run);
     set((state) => {
       const record = state.runs.find((candidate) => candidate.key === key);
       if (record === undefined) return state;
@@ -171,7 +196,14 @@ const useWorktreeDeleteRunStore = create<WorktreeDeleteRunStore>((set) => ({
             ? key
             : state.foregroundKey,
       };
-    }),
+    });
+    if (!wasTerminal) {
+      reportTerminalDeleteOutcome(
+        key,
+        useWorktreeDeleteRunStore.getState().runs,
+      );
+    }
+  },
   setBackgrounded: (key, backgrounded) =>
     set((state) => ({
       runs: state.runs.map((record) =>
@@ -467,6 +499,45 @@ export function __resetWorktreeDeleteRunForTests(): void {
   pendingSettledCallbacks.clear();
   batchSequence = 0;
   useWorktreeDeleteRunStore.getState().clearAll();
+}
+
+/**
+ * Called exactly once per run's non-terminal -> terminal transition (the
+ * store actions observe the transition inside their state update). A batch
+ * emits when the member that just settled was its last non-terminal one.
+ */
+function reportTerminalDeleteOutcome(
+  key: string,
+  runs: readonly WorktreeDeleteRunRecord[],
+): void {
+  const record = runs.find((candidate) => candidate.key === key);
+  if (record === undefined || !worktreeRunIsTerminal(record.run)) return;
+  if (record.batchKey === null) {
+    Analytics.getInstance().track(
+      AnalyticsEvent.WorktreeDeleted,
+      record.run.deleted
+        ? { outcome: "succeeded", blocker: null }
+        : {
+            outcome: "failed",
+            blocker: analyticsBlockerFromError(record.run.error),
+          },
+    );
+    return;
+  }
+  const batch = runs.filter(
+    (candidate) => candidate.batchKey === record.batchKey,
+  );
+  if (batch.some((candidate) => !worktreeRunIsTerminal(candidate.run))) {
+    return;
+  }
+  const succeededCount = batch.filter(
+    (candidate) => candidate.run.deleted,
+  ).length;
+  Analytics.getInstance().track(AnalyticsEvent.WorktreesBulkDeleted, {
+    requested_count: batch.length,
+    succeeded_count: succeededCount,
+    failed_count: batch.length - succeededCount,
+  });
 }
 
 export function useWorktreeDeleteProgressSummary(): WorktreeDeleteProgressSummary {

@@ -159,6 +159,31 @@ describe("HostStreamProvider", () => {
     expect(closeSpy.mock.contexts[0]).toBe(first);
   });
 
+  it("rebuilds the client when it is closed underneath the provider", () => {
+    const hostClient = buildClient();
+    bindingRef.value = { hostClient };
+    act(() => {
+      hostClient.bind(mockLocalHostEntry);
+    });
+
+    const { result } = renderHook(() => useWsStreamClient(), { wrapper });
+    const first = result.current;
+    expect(first).toBeInstanceOf(WsStreamClient);
+
+    // Nothing legitimate closes the served client without also replacing it;
+    // if it happens anyway (the closed-client-in-context wedge), the liveness
+    // guard must mint a fresh client instead of serving the dead one until a
+    // window reload.
+    act(() => {
+      first?.close("test-external-close");
+    });
+
+    expect(first?.isClosed()).toBe(true);
+    expect(result.current).toBeInstanceOf(WsStreamClient);
+    expect(result.current).not.toBe(first);
+    expect(result.current?.isClosed()).toBe(false);
+  });
+
   it("nudges a re-dial exactly once under a StrictMode double-invoke", () => {
     const reconnectSpy = vi.spyOn(WsStreamClient.prototype, "reconnectAll");
     const hostClient = buildClient();

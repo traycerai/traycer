@@ -14,6 +14,7 @@ export {
   notificationEntitiesMatch,
   notificationEntityFromHostEntry,
   notificationEntityFromPayload,
+  notificationEntityMatchesPresence,
   notificationPayloadBelongsToEpic,
   notificationPayloadBelongsToEntity,
 } from "./notification-entity";

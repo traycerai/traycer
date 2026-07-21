@@ -186,6 +186,7 @@ function createBaseRunnerHost(): IRunnerHost {
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),
       copyDroppedFilePaths: (paths) => Promise.resolve(paths),
+      readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
     tokenStore: {
       get: () => Promise.resolve(null),

@@ -17,7 +17,7 @@ const HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS = 15 * 60 * 1000;
 /**
  * The small, closed set of TanStack options every `host.getRateLimitUsage`
  * provider-pull consumer needs. Deliberately NOT expressed as (a slice of)
- * `UseQueryOptions<TData, ...>` - none of these six fields' types actually
+ * `UseQueryOptions<TData, ...>` - none of these fields' types actually
  * depend on the cached data shape, and keeping this type TData-independent is
  * what lets the same `providerRateLimitQueryOptions` result compose with
  * every consumer regardless of which `TData` it reads (the raw wire response
@@ -26,6 +26,7 @@ const HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS = 15 * 60 * 1000;
  */
 export interface ProviderRateLimitTanstackOptions {
   readonly enabled: boolean;
+  readonly gcTime: number;
   readonly retry: false;
   readonly staleTime: number;
   readonly refetchInterval: number | false;
@@ -75,6 +76,13 @@ export function providerRateLimitQueryOptions(
     params: { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId, profileId },
     options: {
       enabled: isHttpFetch,
+      // Rate-limit readings are last-known state, not disposable request
+      // results. Invalidation marks them stale and refreshes when a lane is
+      // able to run; it must not also start a timer that blanks the last known
+      // reading merely because its observer is temporarily inactive. A fresh
+      // authoritative unavailable response still replaces retained data in
+      // `buildProviderRateLimitEnvelope`.
+      gcTime: Infinity,
       retry: false,
       staleTime: PROVIDER_RATE_LIMITS_STALE_TIME_MS,
       refetchInterval: isHttpFetch

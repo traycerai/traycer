@@ -8,10 +8,9 @@ import {
   useEpicPermissionRole,
 } from "@/lib/epic-selectors";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
-import {
-  isChatRunInProgress,
-  type ChatSessionStoreHandle,
-} from "@/stores/chats/chat-session-store";
+import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
+import type { IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
@@ -46,7 +45,11 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
     return (
       <ChatProgressPresentation
         indicatorState={indicatorState}
-        isRunning={isActive}
+        // Without a session subscription the epic-activity signal is binary
+        // (it bridges the host's whole non-idle range, background included),
+        // so an unopened chat can't tell the two tiers apart. Presenting the
+        // turn spinner is the conservative read; opening the chat refines it.
+        running={isActive ? "turn" : false}
         isReadOnly={fallbackReadOnly}
         subjectId={props.chatId}
         className={props.className}
@@ -83,12 +86,23 @@ function ChatProgressIconWithHandle(props: {
   // `useStore(api, selector)` instead of `props.handle.store(...)`: the
   // bound-store call form isn't recognizable as a hook to the React Compiler,
   // which memoizes it away and corrupts the hook order.
-  const runStatus = useStore(props.handle.store, (state) => state.runStatus);
+  //
+  // The selector collapses the session state to the tri-state activity kind
+  // (a primitive), so array-identity churn on queue/backgroundItems can't
+  // re-render this icon.
+  const activity = useStore(props.handle.store, (state) =>
+    chatActivityIndicator(state),
+  );
   const access = useStore(props.handle.store, (state) => state.access);
   return (
     <ChatProgressPresentation
       indicatorState={props.indicatorState}
-      isRunning={props.isActive || isChatRunInProgress(runStatus)}
+      // The session's own tri-state is authoritative when it reads any
+      // activity: the epic-activity bit also covers background-only phases,
+      // so letting it force the turn spinner would re-conflate the tiers.
+      // It only backfills the brief subscription-gap window where the store
+      // still reads idle.
+      running={activity ?? (props.isActive ? "turn" : false)}
       // A session's access snapshot is authoritative. Keep the icon neutral
       // while it is unknown so an owner never sees the unopened-chat fallback
       // lock flash before the snapshot arrives.
@@ -104,7 +118,7 @@ function ChatProgressIconWithHandle(props: {
 
 function ChatProgressPresentation(props: {
   readonly indicatorState: NotificationIndicatorState;
-  readonly isRunning: boolean;
+  readonly running: IndicatorRunningKind;
   readonly isReadOnly: boolean;
   readonly subjectId: string;
   readonly className: string | undefined;
@@ -118,10 +132,10 @@ function ChatProgressPresentation(props: {
     idleIcon = (
       <span
         role="status"
-        aria-label="Read-only chat"
+        aria-label="Read-only agent"
         className={icon.className}
         style={icon.style}
-        title="Read-only chat"
+        title="Read-only agent"
       >
         <MessageSquareLock aria-hidden className="size-3.5" />
       </span>
@@ -136,12 +150,12 @@ function ChatProgressPresentation(props: {
   return (
     <NotificationIndicatorIcon
       state={props.indicatorState}
-      running={props.isRunning}
+      running={props.running}
       subjectId={props.subjectId}
       testIdPrefix={props.testId}
       className={icon.className}
       style={icon.style}
-      runningTitle="Chat in progress"
+      runningTitle="Agent in progress"
       defaultIcon={idleIcon}
       statusPresentation="message"
     />

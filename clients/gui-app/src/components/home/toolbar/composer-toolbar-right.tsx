@@ -15,6 +15,7 @@ import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-st
 interface ComposerToolbarRightProps {
   store: ComposerToolbarStore;
   canSubmit: boolean;
+  attachmentPending: boolean;
   onSubmit: () => void;
   activeTurnStatus: ChatActiveTurn["status"] | null;
   stopDisabled: boolean;
@@ -28,12 +29,14 @@ interface ComposerToolbarRightProps {
   /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   createProfileHostId: string | null;
+  readonly runTargetHostId: string | null;
 }
 
 function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
   const {
     store,
     canSubmit,
+    attachmentPending,
     onSubmit,
     activeTurnStatus,
     stopDisabled,
@@ -43,6 +46,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
     dictation,
     dictationPreparing,
     createProfileHostId,
+    runTargetHostId,
   } = props;
   // Block sending until the model slug resolves to a concrete value - an
   // empty slug is the transient "catalog still loading" marker and must never
@@ -65,6 +69,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
         disabled={settingsLocked}
         registerActivation
         createProfileHostId={createProfileHostId}
+        runTargetHostId={runTargetHostId}
       />
       {dictation !== null ? <ComposerMicButton control={dictation} /> : null}
       {dictation === null && dictationPreparing !== null ? (
@@ -72,6 +77,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
       ) : null}
       <ComposerSendButton
         canSubmit={canSubmitResolved}
+        attachmentPending={attachmentPending}
         onSubmit={onSubmit}
         activeTurnStatus={activeTurnStatus}
         stopDisabled={stopDisabled}

@@ -24,6 +24,7 @@ export type HostNotificationFilter = z.infer<
 export const hostNotificationKindSchema = z.enum([
   "agent.stopped",
   "agent.stalled",
+  "workspace.operation.failed",
   "approval.requested",
   "interview.requested",
 ]);
@@ -48,11 +49,7 @@ export type HostNotificationSeverity = z.infer<
   typeof hostNotificationSeveritySchema
 >;
 
-export const hostNotificationChannelIdSchema = z.enum([
-  "renderer",
-  "webhook",
-  "email",
-]);
+export const hostNotificationChannelIdSchema = z.enum(["renderer", "email"]);
 export type HostNotificationChannelId = z.infer<
   typeof hostNotificationChannelIdSchema
 >;
@@ -100,6 +97,12 @@ export const hostNotificationEntrySchema = z.discriminatedUnion("kind", [
   z.object({
     ...hostNotificationEntryBaseFields,
     kind: z.literal("agent.stalled"),
+    outcome: z.literal("errored"),
+    payload: hostNotificationPayloadSchema,
+  }),
+  z.object({
+    ...hostNotificationEntryBaseFields,
+    kind: z.literal("workspace.operation.failed"),
     outcome: z.literal("errored"),
     payload: hostNotificationPayloadSchema,
   }),
@@ -346,14 +349,6 @@ export type HostNotificationsSecretWrite = z.infer<
   typeof hostNotificationsSecretWriteSchema
 >;
 
-export const hostNotificationsWebhookSetConfigSchema = z.object({
-  url: z.string().url().nullable(),
-  signingSecret: hostNotificationsSecretWriteSchema,
-});
-export type HostNotificationsWebhookSetConfig = z.infer<
-  typeof hostNotificationsWebhookSetConfigSchema
->;
-
 export const hostNotificationsEmailSetConfigSchema = z.object({
   host: z.string().nullable(),
   port: z.number().int().min(1).max(65_535).nullable(),
@@ -374,21 +369,11 @@ export const hostNotificationsSetConfigRequestSchema = z.object({
   matrix: hostNotificationsChannelMatrixSchema,
   channels: z.object({
     renderer: z.object({}),
-    webhook: hostNotificationsWebhookSetConfigSchema,
     email: hostNotificationsEmailSetConfigSchema,
   }),
 });
 export type HostNotificationsSetConfigRequest = z.infer<
   typeof hostNotificationsSetConfigRequestSchema
->;
-
-export const hostNotificationsWebhookConfigStateSchema = z.object({
-  url: z.string().url().nullable(),
-  credentialConfigured: z.boolean(),
-  lastError: z.string().nullable(),
-});
-export type HostNotificationsWebhookConfigState = z.infer<
-  typeof hostNotificationsWebhookConfigStateSchema
 >;
 
 export const hostNotificationsEmailConfigStateSchema = z.object({
@@ -409,7 +394,6 @@ export const hostNotificationsConfigResponseSchema = z.object({
     renderer: z.object({
       lastError: z.string().nullable(),
     }),
-    webhook: hostNotificationsWebhookConfigStateSchema,
     email: hostNotificationsEmailConfigStateSchema,
   }),
 });
@@ -472,4 +456,149 @@ export const hostNotificationsIndicatorState = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsIndicatorStateRequestSchema,
   responseSchema: hostNotificationsIndicatorStateResponseSchema,
+});
+
+/**
+ * `host.notificationHooks.*@1.0` - status, test, and whole-file save surface
+ * for the host's notification hooks. The host's `notification-hooks.json`
+ * stays the single source of truth and remains hand-editable; `save` rewrites
+ * that file from the client's full hook list (last write wins - the form and
+ * hand-edits are two equal editors over one file).
+ *
+ * `configPath` is the one deliberate filesystem-path disclosure on this
+ * surface: it is the user's own hand-editable config file location, not a
+ * diagnostic leak. Header VALUES never appear here - only hook identity,
+ * filters, and a redacted last-result summary.
+ */
+export const notificationHookLastResultSchema = z
+  .object({
+    at: z.number(),
+    ok: z.boolean(),
+    detail: z.string(),
+  })
+  .strict();
+export type NotificationHookLastResult = z.infer<
+  typeof notificationHookLastResultSchema
+>;
+
+/**
+ * One hook exactly as the config file holds it. The same shape is read back
+ * on `status` and written on `save`, so the settings form is a plain editor
+ * over the file rather than a second source of truth.
+ *
+ * Hooks filter on SEVERITY only - the same vocabulary the in-app
+ * interruptions matrix uses. Severity already groups the event kinds
+ * (`needs_action` = approvals/interviews, `failure` = stalls and errored
+ * agents, `done` = completed or stopped agents), so a second event-kind
+ * filter would be a parallel way to say the same thing. The delivered
+ * payload still names the exact `event`, so a receiver that wants finer
+ * granularity can branch on it.
+ *
+ * `headers` carries the file's own header TEMPLATES (`Bearer $TOKEN`) - the
+ * variable names, never the resolved values. Env values are read only on the
+ * host at delivery time and never cross this wire.
+ */
+export const notificationHookConfigSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1).nullable(),
+    enabled: z.boolean(),
+    /** `null` = every severity. */
+    severities: z.array(hostNotificationSeveritySchema).min(1).nullable(),
+    action: z.discriminatedUnion("type", [
+      z
+        .object({
+          type: z.literal("http"),
+          url: z.string().min(1),
+          headers: z.record(z.string().min(1), z.string()),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("command"),
+          command: z.string().min(1),
+          args: z.array(z.string()),
+        })
+        .strict(),
+    ]),
+  })
+  .strict();
+export type NotificationHookConfig = z.infer<
+  typeof notificationHookConfigSchema
+>;
+
+export const notificationHookStatusEntrySchema = notificationHookConfigSchema
+  .extend({
+    lastResult: notificationHookLastResultSchema.nullable(),
+  })
+  .strict();
+export type NotificationHookStatusEntry = z.infer<
+  typeof notificationHookStatusEntrySchema
+>;
+
+export const notificationHooksSaveRequestSchema = z
+  .object({ hooks: z.array(notificationHookConfigSchema) })
+  .strict();
+export type NotificationHooksSaveRequest = z.infer<
+  typeof notificationHooksSaveRequestSchema
+>;
+
+export const notificationHooksStatusRequestSchema = z.object({}).strict();
+export type NotificationHooksStatusRequest = z.infer<
+  typeof notificationHooksStatusRequestSchema
+>;
+
+export const notificationHooksStatusResponseSchema = z
+  .object({
+    configPath: z.string().min(1),
+    configError: z.string().nullable(),
+    hooks: z.array(notificationHookStatusEntrySchema),
+  })
+  .strict();
+export type NotificationHooksStatusResponse = z.infer<
+  typeof notificationHooksStatusResponseSchema
+>;
+
+export const notificationHooksTestRequestSchema = z
+  .object({ hookId: z.string().min(1) })
+  .strict();
+export type NotificationHooksTestRequest = z.infer<
+  typeof notificationHooksTestRequestSchema
+>;
+
+export const notificationHooksTestResponseSchema = z
+  .object({
+    outcome: z.enum(["ok", "failed", "not-found", "disabled"]),
+    detail: z.string(),
+  })
+  .strict();
+export type NotificationHooksTestResponse = z.infer<
+  typeof notificationHooksTestResponseSchema
+>;
+
+export const hostNotificationHooksStatus = defineRpcContract({
+  method: "host.notificationHooks.status",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: notificationHooksStatusRequestSchema,
+  responseSchema: notificationHooksStatusResponseSchema,
+});
+
+export const hostNotificationHooksTest = defineRpcContract({
+  method: "host.notificationHooks.test",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: notificationHooksTestRequestSchema,
+  responseSchema: notificationHooksTestResponseSchema,
+});
+
+/**
+ * Rewrites the whole hooks file from the given list and returns the fresh
+ * status. Last write wins: the file is the single source of truth and the
+ * form is one of two equal editors over it, so a save made against a stale
+ * read replaces whatever is on disk.
+ */
+export const hostNotificationHooksSave = defineRpcContract({
+  method: "host.notificationHooks.save",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: notificationHooksSaveRequestSchema,
+  responseSchema: notificationHooksStatusResponseSchema,
 });

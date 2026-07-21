@@ -35,6 +35,7 @@ vi.mock("sonner", () => ({
 }));
 
 import {
+  chatActivityIndicator,
   chatMessageEditingForInlineEdit,
   resolvedTurnStatus,
   showRestoreResultToast,
@@ -92,6 +93,7 @@ const MESSAGE: ChatMessage = {
   settings: null,
   createdAt: 0,
   completedAt: null,
+  stopped: null,
   persistentMessageId: "persisted-message-1",
   senderLabel: null,
   assistantMeta: null,
@@ -121,6 +123,7 @@ function renderInlineEdit(dirty: boolean) {
     canModifyMessages: true,
     editSettings: SETTINGS,
     mentionRoots: [],
+    fallbackToGlobalMentionRoots: true,
     currentEpicId: "epic-1",
     onSnapshot: vi.fn(),
     onSubmit: vi.fn(),
@@ -137,6 +140,10 @@ describe("chatMessageEditingForInlineEdit", () => {
   it("requires a dirty edit before enabling submit", () => {
     expect(renderInlineEdit(false).canSubmit).toBe(false);
     expect(renderInlineEdit(true).canSubmit).toBe(true);
+  });
+
+  it("carries the workspace fallback policy into the inline editor", () => {
+    expect(renderInlineEdit(false).fallbackToGlobalMentionRoots).toBe(true);
   });
 });
 
@@ -481,5 +488,155 @@ describe("resolvedTurnStatus - turnInProgress present (host-sent, exact)", () =>
         null,
       ),
     ).toBeNull();
+  });
+});
+
+describe("chatActivityIndicator", () => {
+  const MONITOR_ITEM = {
+    taskId: "t1",
+    kind: "monitor" as const,
+    title: "Monitor",
+    blockId: "t1",
+    parentTaskId: null,
+    scheduledFor: null,
+  };
+
+  it("reads null for an idle chat", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "idle",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [],
+        turnInProgress: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("reads turn while the host reports a genuine turn in progress", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: ACTIVE_TURN,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [],
+        turnInProgress: true,
+      }),
+    ).toBe("turn");
+  });
+
+  it("reads background when only a Monitor/background task keeps the chat non-idle", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [MONITOR_ITEM],
+        turnInProgress: false,
+      }),
+    ).toBe("background");
+  });
+
+  it("reads turn (not background) while a detached subagent is still running", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [
+          {
+            taskId: "t2",
+            kind: "subagent" as const,
+            title: "Explore the codebase",
+            blockId: "t2",
+            parentTaskId: null,
+            scheduledFor: null,
+          },
+        ],
+        turnInProgress: false,
+      }),
+    ).toBe("turn");
+  });
+
+  it("reads turn (not background) while a detached workflow fleet is still running", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [
+          MONITOR_ITEM,
+          {
+            taskId: "t3",
+            kind: "workflow" as const,
+            title: "review-changes",
+            blockId: "t3",
+            parentTaskId: null,
+            phase: null,
+            activeLabel: null,
+            agentsStarted: null,
+            agentsFinished: null,
+          },
+        ],
+        turnInProgress: false,
+      }),
+    ).toBe("turn");
+  });
+
+  it("prioritizes the turn when a turn and background work run simultaneously", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: ACTIVE_TURN,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [MONITOR_ITEM],
+        turnInProgress: true,
+      }),
+    ).toBe("turn");
+  });
+
+  it("reads turn (not background) while a runnable queue drains between turns", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: runnableQueue(1),
+        backgroundItems: [],
+        turnInProgress: false,
+      }),
+    ).toBe("turn");
+  });
+
+  it("keeps the stopping phase on the turn tier", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "stopping",
+        activeTurn: ACTIVE_TURN,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [],
+        turnInProgress: true,
+      }),
+    ).toBe("turn");
+  });
+
+  it("falls back to the older-host heuristic when turnInProgress is absent", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [MONITOR_ITEM],
+        turnInProgress: undefined,
+      }),
+    ).toBe("background");
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: undefined,
+        turnInProgress: undefined,
+      }),
+    ).toBe("turn");
   });
 });

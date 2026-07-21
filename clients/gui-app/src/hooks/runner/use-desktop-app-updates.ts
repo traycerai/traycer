@@ -11,6 +11,7 @@ const DESKTOP_APP_UPDATE_IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   sequence: 0,
   status: "idle",
   currentVersion: "",
+  allowPrerelease: false,
   latestVersion: null,
   downloadProgress: null,
   installBlockedReason: null,
@@ -49,6 +50,18 @@ export function useDesktopAppUpdates(): DesktopAppUpdatesState {
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   return { bridge, snapshot };
+}
+
+/**
+ * The active release channel, as pushed from the Electron main process to
+ * every window. This is the single per-window source of truth for the channel:
+ * host-registry query identity, the Settings → Host available-versions filter,
+ * and the RC toggle all read it, so they can never disagree within a window.
+ *
+ * `false` (stable only) in shells without the desktop update bridge.
+ */
+export function useAllowPrereleaseUpdates(): boolean {
+  return useDesktopAppUpdates().snapshot.allowPrerelease;
 }
 
 function getDesktopAppUpdateStore(
@@ -139,6 +152,7 @@ function sameSnapshot(
     left.sequence === right.sequence &&
     left.status === right.status &&
     left.currentVersion === right.currentVersion &&
+    left.allowPrerelease === right.allowPrerelease &&
     left.latestVersion === right.latestVersion &&
     left.downloadProgress === right.downloadProgress &&
     left.installBlockedReason === right.installBlockedReason &&

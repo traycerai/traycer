@@ -3,14 +3,25 @@ import { homedir } from "node:os";
 import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative } from "node:path";
 import { log } from "../app/logger";
-import { compareHostVersions } from "../cli/cli-discovery";
 import rawDevWrapperPaths from "../cli/dev-wrapper-paths.json";
 import {
+  exactHostUpdateArgs,
+  isConsentedHostChannelVersion,
+  resolveExactHostUpdateCli,
+} from "../cli/host-update-cli";
+import {
+  compareHostVersions,
+  isReleaseCandidateHostVersion,
+} from "@traycer-clients/shared/platform/runner-host";
+import {
   runTraycerCliJson,
+  resolveTraycerCliInvocation,
   streamTraycerCliJson,
   TraycerCliError,
   type NdjsonEvent,
+  type TraycerCliInvocation,
 } from "../cli/traycer-cli";
+import { HOST_RESTART_SUBPROCESS_TIMEOUT_MS } from "@traycer/protocol/host/lifecycle-constants";
 import {
   RunnerHostEvent,
   RunnerHostInvoke,
@@ -52,6 +63,11 @@ import {
   writeHostNameSettings,
 } from "../host/host-display-name";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import {
+  getUpdateChannelSnapshot,
+  prereleaseUpdatesEnabled,
+  type UpdateChannelSnapshot,
+} from "../app/update-preferences";
 
 export const LONG_OP_TIMEOUT_MS = 10 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -280,6 +296,18 @@ function nullableString(raw: unknown, key: string): string | null {
  */
 let currentOperationStatus: HostOperationStatus | null = null;
 
+export type HostOperationEventListener = (event: NdjsonEvent) => void;
+
+export interface HostUpdateAdmission {
+  readonly targetVersion: string;
+  readonly allowPrerelease: boolean;
+  readonly generation: number;
+}
+
+export function captureHostUpdateChannel(): UpdateChannelSnapshot {
+  return getUpdateChannelSnapshot();
+}
+
 export function getHostOperationStatus(): HostOperationStatus | null {
   return currentOperationStatus;
 }
@@ -303,7 +331,7 @@ async function trackHostOperation<T>(
   bridge: RunnerIpcBridge,
   kind: HostOperationKind,
   operationId: string,
-  run: (onEvent: (event: NdjsonEvent) => void) => Promise<T>,
+  run: (onEvent: HostOperationEventListener) => Promise<T>,
 ): Promise<T> {
   if (currentOperationStatus !== null) {
     throw new Error(
@@ -352,24 +380,138 @@ async function trackHostOperation<T>(
   }
 }
 
+export function runHostOperation<T>(
+  bridge: RunnerIpcBridge,
+  kind: HostOperationKind,
+  operationId: string,
+  run: (onEvent: HostOperationEventListener) => Promise<T>,
+): Promise<T> {
+  return trackHostOperation(bridge, kind, operationId, run);
+}
+
+/**
+ * Runs a host lifecycle action through the same process-wide single-flight
+ * guard and status publisher used by streaming CLI operations. Callers whose
+ * underlying operation owns its own progress/readiness flow (for example the
+ * native-menu respawn path) do not need to manufacture NDJSON progress events.
+ */
+export function runTrackedHostOperation<T>(
+  bridge: RunnerIpcBridge,
+  kind: HostOperationKind,
+  operationId: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  return trackHostOperation(bridge, kind, operationId, () => run());
+}
+
+function streamCliWithinOperation(
+  args: readonly string[],
+  timeoutMs: number,
+  invocation: TraycerCliInvocation | null,
+  onEvent: HostOperationEventListener,
+): Promise<unknown> {
+  return streamTraycerCliJson<unknown>({
+    args,
+    onEvent,
+    env: null,
+    timeoutMs,
+    invocation,
+  }).then((result: { readonly data: unknown }) => result.data);
+}
 export function streamCliWithProgress(
   args: readonly string[],
   operationId: string,
   kind: HostOperationKind,
   timeoutMs: number,
   bridge: RunnerIpcBridge,
+  invocation: TraycerCliInvocation | null,
 ): Promise<unknown> {
   // The wrapper guarantees `--json`; non-progress envelopes are absorbed
   // by streamTraycerCliJson which only resolves on a terminal `result`
   // event (ok → data, error → TraycerCliError reject).
-  return trackHostOperation(bridge, kind, operationId, (onEvent) =>
-    streamTraycerCliJson<unknown>({
-      args,
-      onEvent,
-      env: null,
-      timeoutMs,
-    }).then((result: { readonly data: unknown }) => result.data),
+  return runHostOperation(bridge, kind, operationId, (onEvent) =>
+    streamCliWithinOperation(args, timeoutMs, invocation, onEvent),
   );
+}
+
+function isAppHostVersionAllowed(
+  version: string,
+  includePreReleases: boolean,
+): boolean {
+  return (
+    isConsentedHostChannelVersion(version) &&
+    (includePreReleases || !isReleaseCandidateHostVersion(version))
+  );
+}
+
+function assertHostOperationReservation(operationId: string): void {
+  if (currentOperationStatus?.operationId !== operationId) {
+    throw new Error("Host update operation admission was lost before spawn");
+  }
+}
+
+/**
+ * Captures an exact target under the current durable update-channel epoch.
+ * Callers revalidate this record in the synchronous turn that begins the CLI
+ * stream, after every readiness, busy, and capability await has completed.
+ */
+export function captureHostUpdateAdmission(
+  targetVersion: string,
+  includePreReleases: boolean,
+  channel: UpdateChannelSnapshot,
+): HostUpdateAdmission {
+  const currentChannel = getUpdateChannelSnapshot();
+  if (
+    currentChannel.generation !== channel.generation ||
+    currentChannel.allowPrerelease !== channel.allowPrerelease ||
+    channel.allowPrerelease !== includePreReleases
+  ) {
+    throw new Error(
+      "The host update channel changed while preparing the update. Try again.",
+    );
+  }
+  if (!isAppHostVersionAllowed(targetVersion, includePreReleases)) {
+    throw new Error(
+      "Host update target is outside the selected release channel.",
+    );
+  }
+  return {
+    targetVersion,
+    allowPrerelease: includePreReleases,
+    generation: channel.generation,
+  };
+}
+
+function assertHostUpdateAdmission(admission: HostUpdateAdmission): void {
+  const channel = getUpdateChannelSnapshot();
+  if (
+    channel.generation !== admission.generation ||
+    channel.allowPrerelease !== admission.allowPrerelease ||
+    !isAppHostVersionAllowed(admission.targetVersion, admission.allowPrerelease)
+  ) {
+    throw new Error(
+      "The host update channel changed while preparing the update. Review the current target and try again.",
+    );
+  }
+}
+
+/**
+ * The final update admission point. Both the generation revalidation and the
+ * already-established operation reservation run synchronously immediately
+ * before the CLI stream invokes its child process, leaving no await for a
+ * channel flip or second click to pass unnoticed.
+ */
+export function streamExactHostUpdateWithinOperation(
+  args: readonly string[],
+  timeoutMs: number,
+  invocation: TraycerCliInvocation,
+  onEvent: HostOperationEventListener,
+  operationId: string,
+  admission: HostUpdateAdmission,
+): Promise<unknown> {
+  assertHostUpdateAdmission(admission);
+  assertHostOperationReservation(operationId);
+  return streamCliWithinOperation(args, timeoutMs, invocation, onEvent);
 }
 
 /**
@@ -557,6 +699,7 @@ async function readInstalledHostRecord(): Promise<HostInstalledRecord | null> {
 
 interface RegistryUpdateCacheFile {
   readonly checkedAt: string;
+  readonly includePreReleases: boolean;
   readonly latestVersion: string | null;
   readonly installedVersion: string | null;
   readonly reachable: boolean;
@@ -628,6 +771,7 @@ async function readRegistryCache(): Promise<RegistryUpdateCacheFile | null> {
     }
     return {
       checkedAt: parsed.checkedAt,
+      includePreReleases: parsed.includePreReleases === true,
       latestVersion:
         typeof parsed.latestVersion === "string" ? parsed.latestVersion : null,
       installedVersion:
@@ -683,6 +827,7 @@ function buildUpdateState(
     updateAvailable,
     reachable: cache.reachable,
     errorMessage: cache.errorMessage,
+    includePreReleases: cache.includePreReleases,
   };
 }
 
@@ -712,15 +857,22 @@ function isVerifyDisabledForBuild(err: unknown): boolean {
 
 async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
   const checkedAt = new Date().toISOString();
+  const includePreReleases = prereleaseUpdatesEnabled();
   try {
     const snapshot = projectAvailableSnapshot(
-      await runTraycerCliJson<unknown>(["host", "available", "--json"]),
+      await runTraycerCliJson<unknown>([
+        "host",
+        "available",
+        "--json",
+        ...(includePreReleases ? ["--include-pre-releases"] : []),
+      ]),
     );
     const installed = await readInstalledHostRecord();
     const installedVersion = installed?.version ?? null;
     return {
       checkedAt,
-      latestVersion: availableLatestVersion(snapshot),
+      includePreReleases,
+      latestVersion: availableLatestVersion(snapshot, includePreReleases),
       installedVersion,
       reachable: true,
       errorMessage: null,
@@ -734,6 +886,7 @@ async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
       // "Up to date" instead of a generic error chip.
       return {
         checkedAt,
+        includePreReleases,
         latestVersion: installedVersion,
         installedVersion,
         reachable: true,
@@ -749,6 +902,7 @@ async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
     log.debug("[host-management] registry probe failed (silent)", { message });
     return {
       checkedAt,
+      includePreReleases,
       latestVersion: null,
       installedVersion,
       reachable: false,
@@ -759,7 +913,26 @@ async function probeRegistry(): Promise<RegistryUpdateCacheFile> {
 
 function availableLatestVersion(
   snapshot: HostAvailableSnapshot,
+  includePreReleases: boolean,
 ): string | null {
+  // RC opt-in is not "every SemVer prerelease": only stable X.Y.Z and the
+  // project's X.Y.Z-rc.N form are consented targets. Yanked / unavailable
+  // entries stay excluded on both channels.
+  const candidates = snapshot.versions.filter(
+    (entry) =>
+      isAppHostVersionAllowed(entry.version, includePreReleases) &&
+      !entry.yanked &&
+      entry.platformAsset !== null &&
+      entry.platformAsset.available,
+  );
+  if (includePreReleases) {
+    if (candidates.length === 0) return null;
+    return candidates.reduce((newest, candidate) =>
+      compareHostVersions(candidate.version, newest.version) > 0
+        ? candidate
+        : newest,
+    ).version;
+  }
   if (snapshot.latest.length === 0) {
     return null;
   }
@@ -769,10 +942,27 @@ function availableLatestVersion(
   if (latest === undefined) {
     return null;
   }
-  if (latest.platformAsset === null || !latest.platformAsset.available) {
+  if (
+    !isAppHostVersionAllowed(latest.version, false) ||
+    latest.yanked ||
+    latest.platformAsset === null ||
+    !latest.platformAsset.available
+  ) {
     return null;
   }
   return latest.version;
+}
+
+function projectAppAvailableSnapshot(
+  snapshot: HostAvailableSnapshot,
+  includePreReleases: boolean,
+): HostAvailableSnapshot {
+  return {
+    ...snapshot,
+    versions: snapshot.versions.filter((entry) =>
+      isAppHostVersionAllowed(entry.version, includePreReleases),
+    ),
+  };
 }
 
 // Empty `HostAvailableSnapshot` used by handlers that need to render a
@@ -823,7 +1013,12 @@ async function refreshRegistryUpdateStateSerial(opts: {
   readonly maxAgeMs: number | null;
 }): Promise<HostRegistryUpdateState> {
   const cache = await readRegistryCache();
-  if (!opts.force && cache !== null && cache.reachable) {
+  if (
+    !opts.force &&
+    cache !== null &&
+    cache.reachable &&
+    cache.includePreReleases === prereleaseUpdatesEnabled()
+  ) {
     const ageMs = Date.now() - Date.parse(cache.checkedAt);
     const threshold = opts.maxAgeMs ?? REGISTRY_CACHE_TTL_MS;
     if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < threshold) {
@@ -932,7 +1127,8 @@ function projectInstallResult(raw: unknown): HostInstallResult {
             priorServiceState:
               lifecycleRaw.priorServiceState === "running" ||
               lifecycleRaw.priorServiceState === "stopped" ||
-              lifecycleRaw.priorServiceState === "not-installed"
+              lifecycleRaw.priorServiceState === "not-installed" ||
+              lifecycleRaw.priorServiceState === "externally-managed"
                 ? lifecycleRaw.priorServiceState
                 : "not-installed",
             stoppedBeforeSwap: lifecycleRaw.stoppedBeforeSwap === true,
@@ -960,6 +1156,10 @@ export function narrowPostSwapAction(raw: unknown): PostSwapAction {
   if (raw === "install") return "install";
   if (raw === "restart") return "restart";
   if (raw === "start") return "start";
+  // An explicit "none" is routine (e.g. an externally-managed/SMAppService
+  // label where the CLI deliberately leaves the service alone) - it must not
+  // trip the version-skew warning below.
+  if (raw === "none") return "none";
   if (raw === undefined) return "none";
   log.warn(
     "[host-management] unknown postSwapAction value from CLI - collapsing to 'none'",
@@ -978,45 +1178,134 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostInstall,
     async (_event, raw: unknown) => {
-      await clearHostRemovalIfSet();
-      const version = optionalString(raw, "version");
+      const requestedVersion = optionalString(raw, "version");
+      const channel = captureHostUpdateChannel();
+      if (
+        requestedVersion !== null &&
+        requestedVersion !== "latest" &&
+        !isAppHostVersionAllowed(requestedVersion, channel.allowPrerelease)
+      ) {
+        throw new Error(
+          "The requested host version is outside the currently selected release channel.",
+        );
+      }
       const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      const args = [
-        "host",
-        "install",
-        ...(version !== null && version !== "latest" ? [version] : ["latest"]),
-      ];
-      const data = await streamCliWithProgress(
-        args,
-        operationId,
-        "install",
-        LONG_OP_TIMEOUT_MS,
+      return runHostOperation(
         bridge,
+        "install",
+        operationId,
+        async (onEvent) => {
+          // Reserve before touching removal state or asking the registry. A
+          // second click then fails synchronously instead of racing a second
+          // install through the CLI lock.
+          await clearHostRemovalIfSet();
+          const updateState =
+            requestedVersion === null || requestedVersion === "latest"
+              ? await refreshRegistryUpdateState({
+                  force: true,
+                  maxAgeMs: null,
+                })
+              : null;
+          const targetVersion =
+            requestedVersion !== null && requestedVersion !== "latest"
+              ? requestedVersion
+              : (updateState?.latestVersion ?? null);
+          if (targetVersion === null || updateState?.reachable === false) {
+            throw new Error(
+              "Host install requires an available exact target version from the registry. Check the selected release channel and try again.",
+            );
+          }
+          // CLI discovery can read the manifest and PATH. Complete it before
+          // the final channel/operation assertion so the stream call below
+          // reaches spawn without another await boundary.
+          const invocation = await resolveTraycerCliInvocation();
+          const admission = captureHostUpdateAdmission(
+            targetVersion,
+            updateState?.includePreReleases ?? channel.allowPrerelease,
+            channel,
+          );
+          const data = await streamExactHostUpdateWithinOperation(
+            ["host", "install", "--release", admission.targetVersion],
+            LONG_OP_TIMEOUT_MS,
+            invocation,
+            onEvent,
+            operationId,
+            admission,
+          );
+          // The install record on disk now points at the freshly installed
+          // version. Re-probe the registry so the cached `installedVersion`
+          // (and `updateAvailable`) reflect it - otherwise the 24h TTL cache
+          // keeps the launch-time snapshot and the Updates row / banner stay
+          // stuck advertising the version we just installed.
+          await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
+          return projectInstallResult(data);
+        },
       );
-      // The install record on disk now points at the freshly installed
-      // version. Re-probe the registry so the cached `installedVersion`
-      // (and `updateAvailable`) reflect it - otherwise the 24h TTL cache
-      // keeps the launch-time snapshot and the Updates row / banner stay
-      // stuck advertising the version we just installed.
-      await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
-      return projectInstallResult(data);
     },
   );
 
   bridge.handleInvoke(
     RunnerHostInvoke.traycerHostUpdate,
     async (_event, raw: unknown) => {
-      await clearHostRemovalIfSet();
       const operationId = optionalString(raw, "operationId") ?? randomUUID();
-      const data = await streamCliWithProgress(
-        ["host", "update"],
-        operationId,
-        "update",
-        LONG_OP_TIMEOUT_MS,
+      return runHostOperation(
         bridge,
+        "update",
+        operationId,
+        async (onEvent) => {
+          const channel = captureHostUpdateChannel();
+          const expectedVersion = optionalString(raw, "expectedVersion");
+          if (
+            expectedVersion !== null &&
+            !isConsentedHostChannelVersion(expectedVersion)
+          ) {
+            throw new Error(
+              "The requested host update is outside the app's stable and release-candidate channels.",
+            );
+          }
+          await clearHostRemovalIfSet();
+          // Always pin an exact registry target. Bare `host update` follows
+          // the moving stable pointer and can silently downgrade an RC host.
+          const updateState = await refreshRegistryUpdateState({
+            force: true,
+            maxAgeMs: null,
+          });
+          if (!updateState.reachable || updateState.latestVersion === null) {
+            throw new Error(
+              "Host update requires a reachable exact target version from the registry. Try again once the registry is reachable, or check for updates first.",
+            );
+          }
+          if (!updateState.updateAvailable) {
+            throw new Error(
+              "No newer host update is available for the currently installed version.",
+            );
+          }
+          if (
+            expectedVersion !== null &&
+            expectedVersion !== updateState.latestVersion
+          ) {
+            throw new Error(
+              `The available host update changed from ${expectedVersion} to ${updateState.latestVersion}. Review the new version and try again.`,
+            );
+          }
+          const admission = captureHostUpdateAdmission(
+            updateState.latestVersion,
+            updateState.includePreReleases,
+            channel,
+          );
+          const invocation = await resolveExactHostUpdateCli();
+          const data = await streamExactHostUpdateWithinOperation(
+            exactHostUpdateArgs(admission.targetVersion),
+            LONG_OP_TIMEOUT_MS,
+            invocation,
+            onEvent,
+            operationId,
+            admission,
+          );
+          await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
+          return projectInstallResult(data);
+        },
       );
-      await refreshRegistryUpdateState({ force: true, maxAgeMs: null });
-      return projectInstallResult(data);
     },
   );
 
@@ -1097,7 +1386,24 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   });
 
   bridge.handleInvoke(RunnerHostInvoke.traycerHostRestart, async () => {
-    await runTraycerCliJson<unknown>(["host", "restart", "--json"]);
+    // `runTraycerCliJson`'s 10s default is shorter than the CLI's stop-grace
+    // (32s) - a slow-draining host would get SIGKILLed between `stop` and
+    // `start`, leaving it down. Route through `trackHostOperation` (like
+    // install/update/register-service) instead of calling
+    // `streamTraycerCliJson` directly with a no-op event sink: a bare
+    // no-op sink left `HostOperationStatus` null during a restart, so a
+    // second Settings window showed no banner and could launch a competing
+    // restart that lost on `cli-lock` with a spurious error. Routing through
+    // the canonical seam gets the shared restart budget, the cross-window
+    // single-flight guard, and the progress banner for free.
+    await streamCliWithProgress(
+      ["host", "restart"],
+      randomUUID(),
+      "restart",
+      HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+      bridge,
+      null,
+    );
   });
 
   bridge.handleInvoke(
@@ -1135,7 +1441,10 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       ];
       try {
         const result = await runTraycerCliJson<unknown>(args);
-        return projectAvailableSnapshot(result);
+        return projectAppAvailableSnapshot(
+          projectAvailableSnapshot(result),
+          includePreReleases,
+        );
       } catch (err) {
         // Dev builds reject this command with `E_HOST_VERIFY_FAILED`
         // because no trusted signing keys are bundled. Surface that as an
@@ -1172,6 +1481,7 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
         "register-service",
         LONG_OP_TIMEOUT_MS,
         bridge,
+        null,
       );
     },
   );
@@ -1215,7 +1525,29 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
       const args = ["host", "free-port-and-restart"];
       if (pid !== null) args.push("--pid", String(pid));
       if (port !== null) args.push("--port", String(port));
-      const data = await runTraycerCliJson<unknown>(args);
+      // Same class of bug as `traycerHostRestart` (review finding 3): this
+      // command SIGTERMs the confirmed foreign process and then awaits a
+      // platform service restart with the same 10-100s deadlines - the 10s
+      // `runTraycerCliJson` default can kill the CLI after the foreign
+      // process is gone but before the host restart finishes, leaving a
+      // dead process, a failed Doctor action, and possibly no host.
+      //
+      // Routed through `trackHostOperation` too (review follow-up finding):
+      // neither `host restart` nor the hidden `host free-port-and-restart`
+      // CLI command takes the CLI's own file lock (`withCliLock`), so
+      // `trackHostOperation`'s single-flight guard is the ONLY same-process
+      // protection against two restart-class subprocesses interleaving
+      // their stop/kill/start sequences - a tracked restart racing an
+      // untracked free-port-and-restart could kill the other's freshly
+      // started host, worst on Windows.
+      const data = await streamCliWithProgress(
+        args,
+        randomUUID(),
+        "free-port-and-restart",
+        HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+        bridge,
+        null,
+      );
       return projectFreePortAndRestartResult(data, {
         port: port ?? 0,
         pid,

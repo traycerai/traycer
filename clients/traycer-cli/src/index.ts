@@ -522,9 +522,17 @@ function registerHostCommands(program: Command): void {
       .option(
         "--force",
         "Update the host even if it has work in progress (skips the busy check).",
+      )
+      .option(
+        "--release <version>",
+        "Update to an exact registry version instead of the stable latest pointer.",
       ),
     (opts) =>
       buildHostUpdateCommand({
+        versionRequest:
+          typeof opts.release === "string" && opts.release.length > 0
+            ? opts.release
+            : "latest",
         force: opts.force === true,
       }),
   );
@@ -1124,6 +1132,10 @@ function registerAgentCommands(program: Command): void {
         "--fast",
         "Request fast mode for supported models. Only available for gui surface.",
       )
+      .option(
+        "--permission-mode <mode>",
+        "GUI permission mode: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
+      )
       .option("--profile <ambient|id>", profileHelp)
       .option(
         "--cwd <path>",
@@ -1156,6 +1168,8 @@ function registerAgentCommands(program: Command): void {
             ? opts.reasoningEffort
             : null,
         fast: opts.fast === true,
+        permissionMode:
+          typeof opts.permissionMode === "string" ? opts.permissionMode : null,
         profile: typeof opts.profile === "string" ? opts.profile : null,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
         workspacePaths: Array.isArray(opts.workspacePath)
@@ -1267,7 +1281,7 @@ function registerAgentCommands(program: Command): void {
     agent
       .command("configure", readonlyHidden)
       .description(
-        "Switch the harness, model, and provider profile an existing GUI agent uses for future turns.",
+        "Switch the harness, model, provider profile, and permission mode an existing GUI agent uses for future turns.",
       )
       .requiredOption("--agent-id <id>", "GUI agent to configure")
       .requiredOption("--harness <id>", harnessHelp)
@@ -1285,6 +1299,10 @@ function registerAgentCommands(program: Command): void {
       .option(
         "--fast",
         "Enable fast mode for supported models. Omitting it disables fast mode.",
+      )
+      .option(
+        "--permission-mode <mode>",
+        "Permission mode for future turns: supervised, auto_accept_edits, or full_access. Defaults to full_access.",
       ),
     (opts) =>
       buildAgentConfigureCommand({
@@ -1300,6 +1318,8 @@ function registerAgentCommands(program: Command): void {
             ? opts.reasoningEffort
             : null,
         fast: opts.fast === true,
+        permissionMode:
+          typeof opts.permissionMode === "string" ? opts.permissionMode : null,
       }),
   );
 
@@ -1320,7 +1340,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--response-id <id>",
-        "Close an open thread - this send is the final reply",
+        "Close an open thread - one reply answers every message received on it",
       ),
     (opts) =>
       buildAgentSendCommand({

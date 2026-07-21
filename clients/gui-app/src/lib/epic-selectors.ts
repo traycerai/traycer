@@ -27,18 +27,26 @@ import { createSelector, lruMemoize } from "reselect";
 import { v4 as uuidv4 } from "uuid";
 import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
+import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
-import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  GuiHarnessId,
+  TuiHarnessId,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
-import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
+import {
+  AGENT_WORKING_AWARENESS_FIELD,
+  AGENT_WORKING_TURN_AWARENESS_FIELD,
+} from "@traycer/protocol/host/epic/subscribe";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
-import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
-import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { displayTitle } from "@/lib/display-title";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import { getTerminalSessionRegistry } from "@/lib/registries/terminal-session-registry";
+import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-title";
 import {
   useMaybeOpenEpicHandle,
   useOpenEpicHandle,
@@ -50,10 +58,8 @@ import {
 } from "@/stores/epics/canvas/store";
 import {
   isOpenableEpicNodeKind,
-  type TerminalTitleSource,
   type EpicNodeRef,
 } from "@/stores/epics/canvas/types";
-import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-session-store";
 import type {
   EpicMigrationSlice,
   OpenEpicState,
@@ -113,7 +119,6 @@ const EMPTY_NODES_AS_ARTIFACTS: ReadonlyArray<ArtifactProjection> =
   Object.freeze([]);
 const EMPTY_TREE_ID_ARRAY: readonly string[] = EMPTY_ARRAY;
 const EMPTY_TREE_ID_SET: ReadonlySet<string> = new Set<string>();
-const TERMINAL_SESSION_REGISTRY = getTerminalSessionRegistry();
 
 export { EMPTY_TREE_ID_ARRAY, EMPTY_TREE_ID_SET };
 
@@ -331,7 +336,9 @@ function recordForChat(c: ChatProjection, hostId: string): EpicTreeRecord {
   const record: EpicTreeRecord = {
     id: c.id,
     parentId: c.parentId,
-    name: displayTitle(c.title, "chat"),
+    // Durable Agent tree row: an untitled Chat-interface Agent falls back to
+    // "Untitled agent"; `type` stays the interface discriminator.
+    name: displayTitle(c.title, "agent"),
     type: "chat",
     status: null,
     hostId,
@@ -346,7 +353,10 @@ function recordForTerminalAgent(a: TuiAgentProjection): EpicTreeRecord {
   const record: EpicTreeRecord = {
     id: a.id,
     parentId: a.parentId,
-    name: tuiAgentDisplayTitle({ title: a.title, harnessId: a.harnessId }),
+    // Durable Agent tree row: an untitled Terminal-interface Agent falls back
+    // to "Untitled agent" too (harness identity is separate interface metadata,
+    // not the title fallback); `type` stays the interface discriminator.
+    name: displayTitle(a.title, "agent"),
     type: "terminal-agent",
     status: null,
     hostId: a.hostId,
@@ -554,71 +564,40 @@ function liveArtifactTitleFromHandle(
 }
 
 /**
- * Canonical display title for a canvas tile / node. The Y.Doc live title is
- * the single source of truth; the tile's persisted `name` snapshot is only a
- * fallback for tiles that have no live title (workspace files, git diff,
- * pre-hydration). Every render site (visible tab strip, drag overlay, ...)
- * MUST read through this hook - never the raw `node.name` - so the resolve
- * cannot be forgotten in one place.
+ * Canonical display title for a canvas tile / node. Live state is the single
+ * source of truth - the Y.Doc title for record-backed nodes, the HOST's
+ * `terminal.list` rows for terminal tabs (via `useTerminalDisplayTitle`,
+ * keyed by the tab's bound host + session id). The tile's persisted `name`
+ * snapshot is only a fallback for tiles that have no live title (workspace
+ * files, git diff, pre-hydration, a terminal session the host no longer
+ * knows). Every render site (visible tab strip, drag overlay, ...) MUST read
+ * through this hook - never the raw `node.name` - so the resolve cannot be
+ * forgotten in one place.
+ *
+ * `terminalHostClient` is the tab's bound-host client for terminal nodes
+ * (`null` for every other node kind). The caller resolves it so one
+ * `useHostClientForHostId` per tab serves both title resolution and the
+ * rename mutation.
  */
 type EpicTabDisplayTitleNode = {
   readonly id: string;
   readonly name: string;
   readonly type: string | undefined;
-  readonly instanceId: string | undefined;
-  readonly titleSource: TerminalTitleSource | undefined;
 };
 
-type TerminalTabTitleNode = Pick<
-  EpicTabDisplayTitleNode,
-  "instanceId" | "name" | "titleSource" | "type"
->;
-
-type TerminalTabTitleHandleNode = Pick<
-  EpicTabDisplayTitleNode,
-  "name" | "titleSource"
->;
-
-export function useEpicTabDisplayTitle(node: EpicTabDisplayTitleNode): string {
+export function useEpicTabDisplayTitle(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+  terminalHostClient: HostClient<HostRpcRegistry> | null,
+): string {
   const liveArtifactTitle = useEpicLiveArtifactTitle(node.id);
-  const liveTerminalTitle = useLiveTerminalTabTitle(node);
-  return liveArtifactTitle ?? liveTerminalTitle ?? node.name;
-}
-
-function useLiveTerminalTabTitle(node: TerminalTabTitleNode): string | null {
-  const terminalInstanceId =
-    node.type === "terminal" && node.instanceId !== undefined
-      ? node.instanceId
-      : null;
-  const handle = useSyncExternalStore(
-    (listener) =>
-      terminalInstanceId === null
-        ? noopSubscribe()
-        : TERMINAL_SESSION_REGISTRY.subscribe(listener),
-    () =>
-      terminalInstanceId === null
-        ? null
-        : TERMINAL_SESSION_REGISTRY.get(terminalInstanceId),
-    () => null,
-  );
-  return useSyncExternalStore(
-    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe(),
-    () => terminalTabTitleFromHandle(handle, node),
-    () => null,
-  );
-}
-
-function terminalTabTitleFromHandle(
-  handle: TerminalSessionStoreHandle | null,
-  node: TerminalTabTitleHandleNode,
-): string | null {
-  if (node.titleSource === "manual") return node.name;
-  if (handle === null) return null;
-  const state = handle.store.getState();
-  return terminalSessionTitle({
-    title: state.title,
-    activeProcessName: state.activeProcessName,
+  const isTerminal = node.type === "terminal";
+  const liveTerminalTitle = useTerminalDisplayTitle({
+    client: isTerminal ? terminalHostClient : null,
+    epicId: isTerminal ? epicId : null,
+    sessionId: isTerminal ? node.id : null,
   });
+  return liveArtifactTitle ?? liveTerminalTitle ?? node.name;
 }
 
 export function useEpicLiveArtifactTitleGenerating(
@@ -733,6 +712,24 @@ const activeAgentIdsCache = new WeakMap<
   Awareness,
   { readonly ids: ReadonlySet<string>; readonly key: string }
 >();
+
+/**
+ * Live-activity tier of a working agent, as published by its host. See
+ * {@link AGENT_WORKING_TURN_AWARENESS_FIELD}: hosts that do not publish the
+ * turn field leave their agents' tier unknown, which reads as `"turn"`.
+ */
+export type AgentActivityTier = "turn" | "background";
+
+const EMPTY_AGENT_ACTIVITY_TIERS: ReadonlyMap<string, AgentActivityTier> =
+  new Map<string, AgentActivityTier>();
+
+const agentActivityTiersCache = new WeakMap<
+  Awareness,
+  {
+    readonly tiers: ReadonlyMap<string, AgentActivityTier>;
+    readonly key: string;
+  }
+>();
 const registeredLiveAgentIdsCache = new WeakMap<
   OpenEpicStoreHandle,
   { readonly ids: ReadonlySet<string>; readonly key: string }
@@ -758,6 +755,54 @@ function activeAgentIdsSnapshot(awareness: Awareness): ReadonlySet<string> {
   const entry = { ids, key };
   activeAgentIdsCache.set(awareness, entry);
   return entry.ids;
+}
+
+/**
+ * Same union as {@link activeAgentIdsSnapshot}, but resolving each working
+ * agent to its {@link AgentActivityTier}.
+ *
+ * The turn field is read PER AWARENESS ENTRY (one entry per host) because its
+ * presence is per-host, and mixed shapes are the steady state rather than a
+ * rollout window - see `AGENT_WORKING_TURN_AWARENESS_FIELD`. A host that omits
+ * it has not classified its agents, so they stay `"turn"` (the conservative
+ * pre-existing reading); a host that publishes it is authoritative, so its
+ * working ids absent from that list are genuinely background-only.
+ *
+ * `"turn"` wins when the same agent appears under two hosts. Returns the prior
+ * Map ref while membership AND tiers are unchanged so `useSyncExternalStore`
+ * sees a referentially-stable snapshot.
+ */
+function agentActivityTiersSnapshot(
+  awareness: Awareness,
+): ReadonlyMap<string, AgentActivityTier> {
+  const tiers = new Map<string, AgentActivityTier>();
+  for (const state of awareness.getStates().values()) {
+    const working: unknown = state[AGENT_WORKING_AWARENESS_FIELD];
+    if (!Array.isArray(working)) continue;
+    const turnField: unknown = state[AGENT_WORKING_TURN_AWARENESS_FIELD];
+    const turnIds = Array.isArray(turnField)
+      ? new Set(
+          (turnField as readonly unknown[]).filter(
+            (id): id is string => typeof id === "string",
+          ),
+        )
+      : null;
+    for (const id of working as readonly unknown[]) {
+      if (typeof id !== "string") continue;
+      const tier: AgentActivityTier =
+        turnIds === null || turnIds.has(id) ? "turn" : "background";
+      if (tier === "turn" || !tiers.has(id)) tiers.set(id, tier);
+    }
+  }
+  const key = [...tiers.entries()]
+    .map(([id, tier]) => `${id}:${tier}`)
+    .sort()
+    .join(" ");
+  const cached = agentActivityTiersCache.get(awareness);
+  if (cached !== undefined && cached.key === key) return cached.tiers;
+  const entry = { tiers, key };
+  agentActivityTiersCache.set(awareness, entry);
+  return entry.tiers;
 }
 
 /**
@@ -787,6 +832,38 @@ export function useEpicActiveAgentIds(): ReadonlySet<string> {
     subscribe,
     getSnapshot,
     () => EMPTY_ACTIVE_AGENT_IDS,
+  );
+}
+
+/**
+ * {@link useEpicActiveAgentIds} with each working agent resolved to its
+ * {@link AgentActivityTier}. Prefer this when the caller distinguishes an
+ * active turn from background-only work; the id set alone cannot.
+ */
+export function useEpicAgentActivityTiers(): ReadonlyMap<
+  string,
+  AgentActivityTier
+> {
+  const handle = useOpenEpicHandle();
+  useStore(handle.store, (s) => s.bindingVersion); // re-resolve on replica swap
+  const awareness = handle.awareness;
+  const subscribe = useMemo(
+    () => (onChange: () => void) => {
+      awareness.on("change", onChange);
+      return () => {
+        awareness.off("change", onChange);
+      };
+    },
+    [awareness],
+  );
+  const getSnapshot = useMemo(
+    () => () => agentActivityTiersSnapshot(awareness),
+    [awareness],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => EMPTY_AGENT_ACTIVITY_TIERS,
   );
 }
 
@@ -830,6 +907,54 @@ export function useRegisteredEpicActiveAgentIds(
     subscribe,
     getSnapshot,
     () => EMPTY_ACTIVE_AGENT_IDS,
+  );
+}
+
+/**
+ * {@link useRegisteredEpicActiveAgentIds} with each working agent resolved to
+ * its {@link AgentActivityTier}, for surfaces that run outside the open-epic
+ * provider (epic tabs, the epic list).
+ */
+export function useRegisteredEpicAgentActivityTiers(
+  epicId: string | null,
+): ReadonlyMap<string, AgentActivityTier> {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  useSyncExternalStore(
+    (listener) =>
+      handle?.store.subscribe((state, prev) => {
+        if (state.bindingVersion === prev.bindingVersion) return;
+        listener();
+      }) ?? noopSubscribe,
+    () => handle?.store.getState().bindingVersion ?? 0,
+    () => 0,
+  );
+  const awareness = handle?.awareness ?? null;
+  const subscribe = useMemo(
+    () => (onChange: () => void) => {
+      if (awareness === null) return noopUnsubscribe;
+      awareness.on("change", onChange);
+      return () => {
+        awareness.off("change", onChange);
+      };
+    },
+    [awareness],
+  );
+  const getSnapshot = useMemo(
+    () => () =>
+      awareness === null
+        ? EMPTY_AGENT_ACTIVITY_TIERS
+        : agentActivityTiersSnapshot(awareness),
+    [awareness],
+  );
+  return useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    () => EMPTY_AGENT_ACTIVITY_TIERS,
   );
 }
 
@@ -949,6 +1074,28 @@ export function useDescendantIds(nodeId: string): readonly string[] {
     }
     return out.length === 0 ? EMPTY_TREE_ID_ARRAY : out;
   }, [index, nodeId]);
+}
+
+/**
+ * This artifact's own root-to-leaf on-disk folder-name chain (ending with
+ * its own `folderName`), or `null` when it can't be reconstructed (unknown
+ * id, a tree cycle, a non-artifact ancestor, or an empty folder name
+ * somewhere in the chain). Feeds `resolveArtifactRelativeLinkPath` so a
+ * relative markdown link authored inside this artifact can be rewritten into
+ * the same artifact-shaped path the absolute-link flow already resolves.
+ *
+ * Selected via `useShallow` (a plain array of primitive strings) rather than
+ * subscribing to the raw `tree`/`artifacts` slices directly: those slices get
+ * a fresh top-level identity on ANY artifact edit anywhere in the epic, which
+ * would otherwise re-render every link consumer even when THIS artifact's own
+ * chain is unchanged.
+ */
+export function useArtifactFolderChain(
+  artifactId: string,
+): readonly string[] | null {
+  return useEpicStore(
+    useShallow((s) => artifactFolderChain(s.tree, s.artifacts, artifactId)),
+  );
 }
 
 // ─── Reselect derived views (cross-slice / sorted / filtered) ─────────────
@@ -1083,6 +1230,19 @@ export function useEpicNodeHostId(nodeId: string): string | null {
       return s.tuiAgents.byId[nodeId].hostId;
     }
     return null;
+  });
+}
+
+/**
+ * A GUI chat row's persisted harness id, selected as a primitive so unrelated
+ * chat projection churn cannot re-render the sidebar icon. New chats normally
+ * persist settings at creation; legacy or optimistic records can still have
+ * no settings, in which case the caller keeps the generic chat glyph.
+ */
+export function useEpicChatHarnessId(nodeId: string): GuiHarnessId | null {
+  return useEpicStore((s) => {
+    if (!Object.hasOwn(s.chats.byId, nodeId)) return null;
+    return s.chats.byId[nodeId].settings?.harnessId ?? null;
   });
 }
 

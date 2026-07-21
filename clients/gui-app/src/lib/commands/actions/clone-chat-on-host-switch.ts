@@ -12,6 +12,7 @@ import {
 } from "@/lib/commands/actions/new-chat";
 import { resolveClonedChatSettings } from "@/lib/commands/actions/resolve-cloned-chat-settings";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Clone-not-migrate flow for switching a chat tab's bound host: chat tabs
@@ -58,14 +59,20 @@ export function cloneChatOnHostSwitch(
       hostId: args.targetHostId,
       worktreeIntent: null,
       settings,
+      source: "direct_ui",
       createChat: args.createChat,
-      openWhenProjected: (intent) =>
-        args.navigateNestedFocus === null
+      openWhenProjected: (intent) => {
+        Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
+          source: "direct_ui",
+          include_history: true,
+        });
+        return args.navigateNestedFocus === null
           ? openCreatedChatWhenProjected(intent)
           : openCreatedChatWhenProjectedWithNavigation({
               intent,
               navigateNestedFocus: args.navigateNestedFocus,
-            }),
+            });
+      },
     });
   });
 

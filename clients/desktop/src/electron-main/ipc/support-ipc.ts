@@ -82,6 +82,7 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
       body: unknown,
       payload: unknown,
       replaceKey: unknown,
+      deliveryKey: unknown,
     ) => {
       assertString(title, "notifications.show");
       assertString(body, "notifications.show");
@@ -90,10 +91,14 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
           "notifications.show requires a replacement key or null",
         );
       }
+      if (deliveryKey !== null && typeof deliveryKey !== "string") {
+        throw new Error("notifications.show requires a delivery key or null");
+      }
       showNativeNotification({
         title,
         body,
         replaceKey,
+        deliveryKey,
         onClick: () => bridge.deliverNotificationClick(payload),
       });
     },

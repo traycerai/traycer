@@ -67,6 +67,7 @@ function showOptions(replaceKey: string) {
     title: "Traycer",
     body: "Agent finished",
     replaceKey,
+    deliveryKey: null,
     onClick: null,
   };
 }
@@ -146,5 +147,19 @@ describe("showNativeNotification", () => {
 
     expect(first.close).toHaveBeenCalledOnce();
     expect(FakeNotification.instances).toHaveLength(2);
+  });
+
+  it("shows an exact delivery key only once across renderer windows", async () => {
+    const { showNativeNotification } = await loadNotifications();
+    const options = {
+      ...showOptions("host:chat:chat-1"),
+      deliveryKey: "user-1:notification-1:10",
+    };
+
+    showNativeNotification(options);
+    showNativeNotification(options);
+
+    expect(FakeNotification.instances).toHaveLength(1);
+    expect(FakeNotification.instances[0]?.show).toHaveBeenCalledOnce();
   });
 });

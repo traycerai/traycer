@@ -118,6 +118,14 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
+      "path": "**.triggers.items.properties.mcp",
+      "reason": "Parsed-stream MCP identity on autonomous-resume triggers, nullable/.default(null): null renders the plain command trigger card - exactly what a pre-mcp host produces, and old clients strip the key on parse. Deliberately an additive field instead of a new `kind` enum value so an older host's whole-chat safeParse of persisted triggers survives (the wakeTriggers constraint); scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
       "path": "**.event.anyOf[*]",
       "reason": "Runtime event union grows with gated harness/event features; old clients only subscribe to chats whose harnesses they can open."
     },

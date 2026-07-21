@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import {
   PROVIDER_DISPLAY_NAMES,
-  TUI_HARNESS_ID_TO_PROVIDER_ID,
   type ProviderCliState,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
@@ -10,30 +9,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 import type { ComposerSeedSourceKind } from "@/lib/composer/composer-seed-source";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-
-// The harness id set is a superset of the provider-CLI id set (it also carries
-// `traycer`, which has no provider-CLI login). Only CLI harnesses gate. Grok,
-// Qwen, Kiro, Kimi, Droid, Copilot, and Kilo Code are GUI-only (not in the TUI map)
-// but DO gate through their CLI login providers, mirroring the host's
-// `harnessIdToProviderId`. Exported so other harness->provider derivations
-// (e.g. the chat provider rate-limit selector) share this single mapping.
-export function providerIdForHarness(
-  harnessId: GuiHarnessId,
-): ProviderId | null {
-  if (harnessId === "traycer") return null;
-  if (harnessId === "openrouter") return "openrouter";
-  if (harnessId === "grok") return "grok";
-  if (harnessId === "qwen") return "qwen";
-  if (harnessId === "kiro") return "kiro";
-  if (harnessId === "droid") return "droid";
-  if (harnessId === "kimi") return "kimi";
-  if (harnessId === "copilot") return "copilot";
-  if (harnessId === "kilocode") return "kilocode";
-  if (harnessId === "amp") return "amp";
-  if (harnessId === "devin") return "devin";
-  if (harnessId === "pi") return "pi";
-  return TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
-}
+import { providerCliIdForHarness } from "@/lib/provider-ordering";
 
 /**
  * - `provider_unauthenticated`: the ambient/host login itself is signed out
@@ -56,6 +32,7 @@ export type ProviderReauthReason =
 
 export interface ProviderReauthGate {
   readonly providerId: ProviderId | null;
+  readonly profileId: string | null;
   readonly state: ProviderCliState | null;
   readonly signedOut: boolean;
   readonly reason: ProviderReauthReason | null;
@@ -165,7 +142,7 @@ export function useProviderReauthGate(
   seedKind: ComposerSeedSourceKind,
 ): ProviderReauthGate {
   const authoritative = seedKind === "authoritative";
-  const providerId = providerIdForHarness(harnessId);
+  const providerId = providerCliIdForHarness(harnessId);
   const enabled = active && providerId !== null;
   const query = useTabProvidersList({ enabled, subscribed: enabled });
   // `providers.list` always returns every configured provider in one atomic
@@ -240,5 +217,5 @@ export function useProviderReauthGate(
     }
   }, [providerUnauthenticated, authStatus, providerId]);
 
-  return { providerId, state, signedOut, reason, profileLabel };
+  return { providerId, profileId, state, signedOut, reason, profileLabel };
 }

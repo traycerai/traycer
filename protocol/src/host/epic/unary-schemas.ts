@@ -29,6 +29,7 @@ import {
 } from "@traycer/protocol/host/worktree-schemas";
 import {
   chatRunSettingsSchema,
+  chatRunSettingsStrictSchema,
   userMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { z } from "zod";
@@ -552,6 +553,33 @@ export const setEpicPinnedResponseSchema = z.object({
 });
 export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
 
+// ─── Batch task context (epic.getTaskContexts@1.0) ───────────────────────────
+// Optional (non-floor) capability: resolve a small set of task ids to list-row
+// shapes for title/context (e.g. worktree owner titles). Old hosts fail only
+// this call with E_HOST_UNSUPPORTED; callers degrade to cache-only resolution.
+//
+// `null` in the response map means deleted OR not permitted to the requester —
+// indistinguishable by design. Clients render both the same way (e.g. muted
+// "Owner unresolved").
+
+export const GET_TASK_CONTEXTS_MAX_IDS = 50;
+
+export const getTaskContextsRequestSchema = z.object({
+  taskIds: z.array(z.string()).max(GET_TASK_CONTEXTS_MAX_IDS),
+});
+export type GetTaskContextsRequest = z.infer<
+  typeof getTaskContextsRequestSchema
+>;
+
+export const getTaskContextsResponseSchema = z.object({
+  // Per-id: ListTaskLight when readable, null when deleted or not permitted
+  // (indistinguishable by design).
+  tasks: z.record(z.string(), listTaskLightSchema.nullable()),
+});
+export type GetTaskContextsResponse = z.infer<
+  typeof getTaskContextsResponseSchema
+>;
+
 // ─── Epic/entity mentions ────────────────────────────────────────────────────
 
 export const epicMentionEpicsRequestSchema = z.object({
@@ -952,6 +980,49 @@ export const updateChatRunSettingsResponseSchema = z.object({
 });
 export type UpdateChatRunSettingsResponse = z.infer<
   typeof updateChatRunSettingsResponseSchema
+>;
+
+// v1.1 tightens `settings` to the wire-strict tuple (every field required, no
+// zod defaults): this method is a whole-tuple WYSIWYG replace, and the strict
+// schema makes a subset-field "patch" a validation error instead of a silent
+// null-clobber of omitted fields. See `chatRunSettingsStrictSchema`.
+// Profile-only changes belong on `epic.updateChatProfile` below.
+export const updateChatRunSettingsRequestSchemaV11 = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+  settings: chatRunSettingsStrictSchema,
+});
+export type UpdateChatRunSettingsRequestV11 = z.infer<
+  typeof updateChatRunSettingsRequestSchemaV11
+>;
+
+// Narrow, safe-by-construction field update: move a chat onto another
+// logged-in profile (subscription) of its CURRENT harness without touching
+// the rest of the tuple. The host patches its own authoritative persisted
+// record, so callers never rebuild (and possibly stale-patch) the full
+// tuple client-side. `null` = the ambient/host login. There is deliberately
+// no sibling `epic.updateChatModel`: a model change invalidates the
+// reasoning/thinking/tier selection and is only expressible as a full
+// reconfigure (`agent.configure` / `epic.updateChatRunSettings`).
+// Optional (non-floor) capability: old hosts fail only this call with
+// E_HOST_UNSUPPORTED and the renderer degrades to persist-on-next-send.
+export const updateChatProfileRequestSchema = z.object({
+  epicId: z.string(),
+  chatId: z.string(),
+  profileId: z.string().nullable(),
+});
+export type UpdateChatProfileRequest = z.infer<
+  typeof updateChatProfileRequestSchema
+>;
+
+// `updated` is false when the chat has no persisted run settings yet (a
+// never-configured chat has no tuple to patch; its first send will stamp
+// the composer's full tuple, profile included).
+export const updateChatProfileResponseSchema = z.object({
+  updated: z.boolean(),
+});
+export type UpdateChatProfileResponse = z.infer<
+  typeof updateChatProfileResponseSchema
 >;
 
 export const deleteChatRequestSchema = z.object({

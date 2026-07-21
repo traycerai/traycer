@@ -528,6 +528,14 @@ export interface StreamTraycerCliOptions {
   readonly onEvent: (event: NdjsonEvent) => void;
   readonly env: Readonly<Record<string, string>> | null;
   readonly timeoutMs: number;
+  /**
+   * Explicit CLI binary + leading args. Pass `null` to resolve via the
+   * standard discovery chain ({@link resolveTraycerCliInvocation}). Host
+   * exact updates pass a capability-negotiated invocation so an older
+   * authoritative external CLI can be replaced by a capable bundled CLI
+   * for `host update --release` only.
+   */
+  readonly invocation: TraycerCliInvocation | null;
 }
 
 export interface StreamTraycerCliResult<T> {
@@ -547,7 +555,10 @@ export interface StreamTraycerCliResult<T> {
 export async function streamTraycerCliJson<T>(
   opts: StreamTraycerCliOptions,
 ): Promise<StreamTraycerCliResult<T>> {
-  const inv = await resolveTraycerCliInvocation();
+  const inv =
+    opts.invocation !== null
+      ? opts.invocation
+      : await resolveTraycerCliInvocation();
   const augmentedArgs = ensureJsonFlag(opts.args);
   const allArgs = [...inv.args, ...augmentedArgs];
   return new Promise<StreamTraycerCliResult<T>>((resolve, reject) => {

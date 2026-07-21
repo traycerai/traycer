@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -62,24 +63,59 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     readiness.hostId === null || readiness.requestContextUserId === null
       ? null
       : `${readiness.hostId}\x1f${readiness.requestContextUserId}`;
+  // Liveness escape hatch: bumped when the served client turns out to be
+  // closed (see the guard effect below), forcing the memo to mint a fresh
+  // client even though the identity never changed.
+  const [rebuildNonce, setRebuildNonce] = useState(0);
+  const clientKey =
+    identityKey === null ? null : `${identityKey}\x1f${rebuildNonce}`;
   const value = useMemo<StreamRuntimeBinding | null>(() => {
     if (binding === null) return null;
-    if (identityKey === null) return null;
+    if (clientKey === null) return null;
     const wsStreamClient = buildHostStreamClient({
       endpoint: () => binding.hostClient.getActiveHost(),
       bearer: () => binding.hostClient.getRequestContext()?.credentials ?? null,
       auth,
     });
     return { wsStreamClient };
-  }, [binding, auth, identityKey]);
+  }, [binding, auth, clientKey]);
   useEffect(() => {
     if (value === null) return;
     appLogger.debug("[stream] app stream client created", {
       hostId: readiness.hostId,
+      client: value.wsStreamClient.instanceId,
       hasTransport:
         binding !== null && binding.hostClient.getActiveHost() !== null,
     });
   }, [binding, readiness.hostId, value]);
+  // Liveness guard: a CLOSED client must be replaced, not left unavailable
+  // until the window reloads. Legitimate closes (replace / unmount) are always
+  // paired with a value change or teardown, so this effect's subscription is
+  // gone before they fire; anything else closing the served client - e.g. the
+  // deferred unmount-close in `useCloseWsStreamClientOnReplace` firing across
+  // an effects-disconnect where React preserves the memoized value - lands
+  // here and forces a rebuild. `useWsStreamClient` hides the dead instance
+  // during that handoff, and the `isClosed()` re-check covers closes that
+  // happened while this effect itself was disconnected.
+  useEffect(() => {
+    if (value === null) return;
+    const client = value.wsStreamClient;
+    const rebuild = (): void => {
+      appLogger.warn(
+        "[stream] app stream client closed underneath the provider - rebuilding",
+        {
+          client: client.instanceId,
+          closedReason: client.getClosedReason(),
+        },
+      );
+      setRebuildNonce((nonce) => nonce + 1);
+    };
+    if (client.isClosed()) {
+      rebuild();
+      return;
+    }
+    return client.onClosed(rebuild);
+  }, [value]);
   useCloseWsStreamClientOnReplace(value?.wsStreamClient ?? null);
   useStreamWakeReconnect(value?.wsStreamClient ?? null);
   useReconnectStreamOnEndpointChange(

@@ -69,11 +69,12 @@ function appLocalEntry(
     id,
     updatedAt,
     readAt,
-    kind: "worktree.setup.failed",
+    kind: "stream.transport.error",
     sourceRef: id,
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
-    message: "Worktree setup failed",
+    message: "Agent stream closed unexpectedly",
     detail: null,
+    displayedUpdatedAt: null,
   };
 }
 
@@ -176,6 +177,23 @@ describe("merged notifications feed", () => {
         outcome: "errored",
       },
     };
+    const workspaceFailure: HostNotificationEntry = {
+      ...base,
+      kind: "workspace.operation.failed",
+      severity: "failure",
+      outcome: "errored",
+      payload: {
+        kind: "workspace_operation_failed",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        chatTitle: "Deploy checkout fix",
+        taskTitle: "Checkout notifications",
+        operation: "provision",
+        title: "Worktree creation failed",
+        message: "Couldn't create worktree.",
+        outcome: "errored",
+      },
+    };
     const interview: HostNotificationEntry = {
       ...base,
       kind: "interview.requested",
@@ -202,11 +220,80 @@ describe("merged notifications feed", () => {
     });
     expect(rowFromHostEntry(stalled)).toMatchObject({
       title: "Checkout notifications",
-      body: "Deploy checkout fix • Stalled",
+      body: "Deploy checkout fix • Provider is taking longer than expected",
+    });
+    expect(rowFromHostEntry(workspaceFailure)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Worktree creation failed",
+      payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     });
     expect(rowFromHostEntry(interview)).toMatchObject({
       title: "Checkout notifications",
       body: "Deploy checkout fix • Question waiting",
+    });
+  });
+
+  it("renders safe semantic failure copy without exposing raw messages", () => {
+    const base = {
+      id: "notification-semantic",
+      updatedAt: 10,
+      readAt: null,
+      sourceRef: "agent-1",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      kind: "agent.stopped",
+      severity: "failure",
+      outcome: "errored",
+    } as const;
+    const entry = (
+      reason: string | undefined,
+      code: string,
+      providerId: string | undefined,
+    ): HostNotificationEntry => ({
+      ...base,
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        agentName: "Debug notifications",
+        taskTitle: "Notification errors",
+        outcome: "errored",
+        code,
+        message: "raw /Users/alice/private-path and provider output",
+        reason,
+        providerId,
+      },
+    });
+
+    expect(
+      rowFromHostEntry(entry("auth", "auth", "claude-code")),
+    ).toMatchObject({
+      body: "Debug notifications • Claude Code is signed out. Reconnect to continue.",
+    });
+    expect(
+      rowFromHostEntry(entry("rate_limit", "future-code", "claude-code")),
+    ).toMatchObject({
+      body: "Debug notifications • Claude Code rate limit reached",
+    });
+    expect(
+      rowFromHostEntry(entry("future-reason", "future-code", undefined)),
+    ).toMatchObject({
+      body: "Debug notifications • Failed",
+    });
+    expect(rowFromHostEntry(entry(undefined, "auth", undefined))).toMatchObject(
+      {
+        body: "Debug notifications • Provider is signed out. Reconnect to continue.",
+      },
+    );
+    expect(
+      rowFromHostEntry(entry("auth", "auth", "future-provider")),
+    ).toMatchObject({
+      body: "Debug notifications • Provider is signed out. Reconnect to continue.",
+    });
+    expect(
+      rowFromHostEntry(entry(undefined, "MISSING_API_KEY", "claude-code")),
+    ).toMatchObject({
+      body: "Debug notifications • Failed",
     });
   });
 
@@ -260,7 +347,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(futureShape)).toMatchObject({
       title: "Task",
-      body: "Chat • Done",
+      body: "Agent • Done",
       payload: null,
     });
 
@@ -284,7 +371,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(crossKind)).toMatchObject({
       title: "Task",
-      body: "Chat • Approval requested",
+      body: "Agent • Approval requested",
       payload: null,
     });
 
@@ -307,7 +394,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(malformed)).toMatchObject({
       title: "Task",
-      body: "Chat • Done",
+      body: "Agent • Done",
       payload: null,
     });
   });
@@ -319,11 +406,11 @@ describe("merged notifications feed", () => {
       sourceId: "setup",
       createdAt: 10,
       readAt: null,
-      title: "Worktree setup failed",
+      title: "Agent stream closed unexpectedly",
       body: "Traycer notification",
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       hostKind: null,
-      appLocalKind: "worktree.setup.failed",
+      appLocalKind: "stream.transport.error",
       globalEntry: null,
       severity: "failure",
       outcome: null,

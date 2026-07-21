@@ -49,9 +49,9 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
 
 ## Sections
 
-- `General` App-level preferences: chat turn-completion notifications, prevent
+- `General` App-level preferences: agent turn-completion notifications, prevent
   sleep while running, pin context usage breakdown (global toggle for the
-  always-visible chat context-window breakdown, default off), voice input,
+  always-visible agent context-window breakdown, default off), voice input,
   local snapshot storage management, and data migration.
 - `Appearance` Theme, global artifact icon color mode, type-color customization,
   and typography controls.
@@ -156,7 +156,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   `useHostClientFor`, the Worktrees pattern); the default is the active
   host. Selection + custom paths + enabled flag + per-provider env persist
   host-side in `~/.traycer/host/config/provider-overrides.json` (per-device
-  == per-host). Disabling a provider marks it unavailable in the new-chat
+  == per-host). Disabling a provider marks it unavailable in the new-agent
   picker. `providers.list` is cached for 15 min
   (no auto-refetch on remount/focus) to avoid re-running `--version` probes; a
   header refresh icon (`RefreshIconButton` → `useRefreshProviders`)
@@ -173,14 +173,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     carried in `providers.list`'s `envOverrides`), persisted host-side in
     `provider-overrides.json` so it follows the host picker. Rendered with the
     shared `EnvOverrideEditor` component (also used by Settings → Shell).
-  - **Terminal agent arguments.** A `TerminalAgentArgsSection` text input (saved
+  - **Terminal interface CLI arguments.** A `TerminalAgentArgsSection` text input (saved
     on blur/Enter) captures extra CLI args spliced into the spawned argv when the
     provider is launched as a terminal agent. The field re-syncs to the saved
     value if it changes underneath (refetch / another window) and stays editable
     while a save is in flight (writes are serialized host-side). Shown only for
     terminal-agent-capable providers - it checks `useGuiHarnessesQuery` for the
-    mapped harness (`HARNESS_ICON_ID`) advertising the `tui` `mode`, so it's
-    hidden for Cursor. Persisted as `terminalAgentArgs` in
+    mapped harness (`HARNESS_ICON_ID`) advertising the `tui` `mode`, so GUI-only
+    providers do not show it. Persisted as `terminalAgentArgs` in
     `provider-overrides.json` via `providers.setTerminalAgentArgs`
     (`useProvidersSetTerminalAgentArgs`, invalidates only `providers.list`). In
     `agent.tui.prepareLaunch` the host tokenizes the string and each harness
@@ -202,11 +202,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `cursor-agent about` for provider auth because GUI chats use `@cursor/sdk`,
     not the CLI login session. Backed by `providers.setApiKey` /
     `providers.clearApiKey` (`useProvidersSetApiKey` /
-    `useProvidersClearApiKey`). Cursor is GUI-only in the UI for now - its
-    `cursor-agent` TUI surface is hidden until the CLI reaches feature parity
-    (the adapter advertises only the `gui` mode via `listGuiHarnesses`'s
-    `modes`) - so the Cursor row hides the CLI candidates table and shows only
-    the API-key section; the key drives the `@cursor/sdk` GUI chat surface.
+    `useProvidersClearApiKey`). Cursor is GUI-only, so its row hides the CLI
+    candidates table and shows only the API-key section; the key drives the
+    `@cursor/sdk` GUI chat surface.
   - **Traycer subscription + credits.** The Traycer provider detail leads with a
     `TraycerSubscriptionSection` card (always visible, not gated by the
     enable/disable toggle since it is account- not binary-level) showing the
@@ -240,22 +238,26 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `providers.setSelection` / `providers.addCustomPath` /
     `providers.removeCustomPath` still target `providerId: "traycer"`.
     Traycer has no API key field. The enable toggle remains a real gate:
-    disabling it hides the Traycer harness from the new-chat picker and blocks
+    disabling it hides the Traycer harness from the new-agent picker and blocks
     runs like any other provider.
-- `Notifications` Host-side notification interruption controls. The severity ×
-  channel grid gates only interruptive delivery (`In-app`, `Webhook`); the bell
-  feed remains complete, and informational collaboration activity is feed-only.
+- `Notifications` Host-side notification generation controls. The `In-app`
+  column gates durable host-row creation before anything enters the bell feed,
+  unread count, tab indicators, delivery channels, or notification hooks.
+  Collaboration and app-local notifications are independent. Notification
+  hooks are configured separately below the grid and further filter generated
+  rows by severity.
   Backed by `host.notifications.getConfig` /
   `host.notifications.setConfig` through host-scoped TanStack Query hooks.
-  Webhook signing secrets are write-only: the host returns only
-  configured/error state, and saves send `set`, `clear`, or `leaveUnchanged`
-  secret writes. The protocol still carries forward-compatible email config,
-  but this panel round-trips it untouched instead of exposing an inactive email
-  delivery surface.
-- `Agents` Editor for the **global** agent selection guide
+  The protocol still carries forward-compatible email config, but this panel
+  round-trips it untouched instead of exposing an inactive email delivery
+  surface.
+- `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
+  compatibility identifiers) Editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
-  to decide which child agents to spawn (harness / model / reasoning effort) for
-  a task. A full-height CodeMirror Markdown source editor provides syntax
+  to decide which child agents to spawn (coding agent / model / reasoning
+  effort) for a task. The section is named for _selection_ because it configures
+  how an agent is chosen, not the Agents that live inside a Task; the panel
+  description says so. A full-height CodeMirror Markdown source editor provides syntax
   highlighting and line numbers, including for Mermaid and wireframe fences.
   It debounce-auto-saves (and flushes on blur) via
   `agent.selectionGuide.setGlobal`; a quiet "Saving… / Saved" status sits in the
@@ -376,7 +378,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   a delete console. A host selector (default = active host, gated on
   `useHostReachability`, demoted to quiet toolbar chrome rather than a
   dominant control) drives a disk-truth list - so orphaned worktrees whose
-  owning chat/agent was deleted still appear - grouped by repo under quiet,
+  owning agent was deleted still appear - grouped by repo under quiet,
   collapsible headers (`WorktreeRepoHeader`) that stay visually secondary to
   row status. The selected host is reached through a **transient per-host
   client** (`useHostClientFor`) so picking a host never swaps the app-wide
@@ -391,15 +393,17 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `classify-worktree.ts`) naming a PROVEN fact, never a generic "Safe"
     label. **Merged**, **At base commit**, and **Unreferenced** are the three
     green tiers - each requires positive, host-validated proof (a merged PR at
-    the live HEAD or local ancestry into the default branch; never advanced
-    from the worktree's birth commit; or clean, fully pushed, and unreferenced
-    by any Task) - and are deliberately kept distinct rather than collapsed
-    into one badge. **Review** is the amber catch-all for anything unproven or
+    the live HEAD, local ancestry into the default branch, or authored owned-
+    submodule work proven landed from an otherwise at-base superproject; never
+    advanced from the worktree's birth commit with no landed authored submodule
+    work; or clean, fully pushed, and unreferenced by any Task) - and are
+    deliberately kept distinct rather than collapsed into one badge. **Review**
+    is the amber catch-all for anything unproven or
     with would-be-lost state (dirty, unpushed/local-only commits, a detached
     HEAD, an unmerged owned-submodule branch, or unverified branch status).
     **Orphaned** means git can't remove the worktree normally (missing/broken
     metadata) and its delete routes through a forced host-side `fs.rm`
-    cleanup. **In use** means an active chat or agent references it - both
+    cleanup. **In use** means an active agent or terminal references it - both
     selection and delete are disabled, not just delete. Hovering any pill
     shows the concrete proof or reason (`WORKTREE_TIER_TOOLTIP`), and the
     risk-bearing facts behind a tier (uncommitted count, ahead/behind,

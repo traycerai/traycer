@@ -8,96 +8,129 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import {
+  notificationEntityFromHostEntry,
+  notificationEntityMatchesPresence,
+} from "@/lib/notifications/notification-entity";
+import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/notification-presence";
 
 export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
   readonly playChime: () => void;
-  readonly onToastClick: (row: MergedNotificationRow) => void;
+  readonly onToastClick: (
+    row: MergedNotificationRow,
+    activatedAt: number,
+  ) => void;
 }
 
 export function displayNotificationRows(
   rows: ReadonlyArray<MergedNotificationRow>,
   target: NotificationDisplayTarget,
 ): void {
+  void displayNotificationRowsAwaitNative(rows, target, null).catch(() => {
+    // The feed remains authoritative; a failed native toast is non-critical.
+  });
+}
+
+async function displayNotificationRowsAwaitNative(
+  rows: ReadonlyArray<MergedNotificationRow>,
+  target: NotificationDisplayTarget,
+  deliveryKey: string | null,
+): Promise<void> {
   if (rows.length === 0) return;
   const content = buildNotificationToastContent(rows);
+  let nativeDisplay: Promise<void>;
   try {
-    void target
-      .showNotification(
-        content.title,
-        content.body,
-        content.payload,
-        content.replaceKey,
-      )
-      .catch(() => {
-        // The feed remains authoritative; a failed native toast is non-critical.
-      });
-  } catch {
-    // The feed remains authoritative; a failed native toast is non-critical.
-  }
-  if (content.row.payload === null) {
-    toast(content.title, {
-      description: content.body,
-      id: content.replaceKey,
+    nativeDisplay = target.showNotification({
+      title: content.title,
+      body: content.body,
+      payload: content.payload,
+      replaceKey: content.replaceKey,
+      deliveryKey,
     });
-  } else {
-    toast.custom(
-      (id) =>
+  } catch (error) {
+    renderNotificationToast(content, target);
+    throw error;
+  }
+  renderNotificationToast(content, target);
+  await nativeDisplay;
+}
+
+function renderNotificationToast(
+  content: NotificationToastContent,
+  target: NotificationDisplayTarget,
+): void {
+  const isActionable = content.row.payload !== null;
+  const toastTitle = isActionable
+    ? createElement(
+        "button",
+        {
+          type: "button",
+          "aria-label": `${content.title} ${content.body}`,
+          "data-notification-toast-action": "",
+          className: "min-w-0 text-left",
+          onClick: () => {
+            target.onToastClick(content.row, Date.now());
+          },
+        },
         createElement(
-          "div",
+          "span",
+          { className: "block font-medium leading-normal" },
+          content.title,
+        ),
+        createElement(
+          "span",
           {
             className:
-              "flex w-[var(--width)] items-start gap-2 rounded-[var(--radius)] border border-border bg-popover p-4 text-popover-foreground shadow-md",
+              "mt-0.5 block text-sm leading-snug text-muted-foreground",
           },
-          createElement(
-            "button",
-            {
-              type: "button",
-              className: "min-w-0 flex-1 text-left",
-              onClick: () => target.onToastClick(content.row),
-            },
-            createElement(
-              "div",
-              { className: "font-medium leading-normal" },
-              content.title,
-            ),
-            createElement(
-              "div",
-              {
-                className: "mt-0.5 text-sm leading-snug text-muted-foreground",
-              },
-              content.body,
-            ),
-          ),
-          createElement(
-            "button",
-            {
-              type: "button",
-              "aria-label": "Close toast",
-              className: "text-muted-foreground hover:text-foreground",
-              onClick: () => toast.dismiss(id),
-            },
-            "×",
-          ),
+          content.body,
         ),
-      { id: content.replaceKey },
-    );
-  }
+      )
+    : content.title;
+  toast(toastTitle, {
+    description: isActionable ? undefined : content.body,
+    id: content.replaceKey,
+  });
   target.playChime();
 }
 
+/**
+ * Host-side presence suppression is authoritative (fresh presence marks the
+ * row read at birth and skips the renderer channel entirely), but it runs on
+ * TTL'd presence snapshots — an emission can already be in flight when focus
+ * lands on the entity, or presence can go stale mid-hold. This gate re-checks
+ * live focus at display time so the tab you are looking at never toasts about
+ * its own activity; rows for other entities still display.
+ */
 export function displayHostChannelEmission(
   entries: ReadonlyArray<HostNotificationEntry>,
   target: NotificationDisplayTarget,
 ): void {
-  displayNotificationRows(entries.map(rowFromHostEntry), target);
+  const focusedEntity = readFocusedHostNotificationPresenceEntity();
+  const visibleEntries =
+    focusedEntity === null
+      ? entries
+      : entries.filter((entry) => {
+          const entity = notificationEntityFromHostEntry(entry);
+          return (
+            entity === null ||
+            !notificationEntityMatchesPresence(entity, focusedEntity)
+          );
+        });
+  displayNotificationRows(visibleEntries.map(rowFromHostEntry), target);
 }
 
 export function displayAppLocalNotification(
   entry: AppLocalNotificationEntry,
   target: NotificationDisplayTarget,
-): void {
-  displayNotificationRows([rowFromAppLocalEntry(entry)], target);
+  deliveryKey: string,
+): Promise<void> {
+  return displayNotificationRowsAwaitNative(
+    [rowFromAppLocalEntry(entry)],
+    target,
+    deliveryKey,
+  );
 }
 
 export function playNotificationChime(): void {
@@ -124,15 +157,17 @@ export function playNotificationChime(): void {
   }
 }
 
-function buildNotificationToastContent(
-  rows: ReadonlyArray<MergedNotificationRow>,
-): {
+interface NotificationToastContent {
   readonly title: string;
   readonly body: string;
   readonly row: MergedNotificationRow;
   readonly payload: unknown;
   readonly replaceKey: string;
-} {
+}
+
+function buildNotificationToastContent(
+  rows: ReadonlyArray<MergedNotificationRow>,
+): NotificationToastContent {
   const first = rows[0];
   if (rows.length === 1) {
     return {
@@ -170,6 +205,7 @@ function hostEntityReplaceKey(
       return `host:chat:${payload.chatId}`;
     case "artifact":
     case "epic":
+    case "terminal":
       return epicReplaceKey(payload.epicId);
     case "session":
       return null;

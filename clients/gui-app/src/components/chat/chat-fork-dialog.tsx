@@ -44,6 +44,7 @@ import type { SeedIntentOverride } from "@/lib/worktree/worktree-intent-seeding"
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 const activeChatForkWorkspaceOwnerByKey = new Map<string, symbol>();
 
@@ -265,6 +266,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       },
       {
         onSuccess: (result) => {
+          Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
+            source: "direct_ui",
+            include_history: true,
+          });
           clearChatForkWorkspace(stagingKey);
           const cancel = openCreatedChatWhenProjectedWithNavigation({
             intent: {
@@ -273,6 +278,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               tabId,
               chatId: result.chatId,
               hostId,
+              source: "direct_ui",
             },
             navigateNestedFocus,
           });
@@ -304,7 +310,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="w-[min(94vw,32rem)] gap-2 sm:max-w-[min(94vw,34rem)]">
         <DialogHeader>
-          <DialogTitle>Fork chat</DialogTitle>
+          <DialogTitle>Fork agent</DialogTitle>
         </DialogHeader>
         <div className="flex min-w-0 flex-col gap-2">
           <label htmlFor={titleInputId} className="flex min-w-0 flex-col gap-2">
@@ -319,7 +325,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 if (event.key === "Enter") submit();
               }}
               disabled={createChat.isPending}
-              aria-label="Fork chat title"
+              aria-label="Fork agent title"
             />
           </label>
           <section className="flex min-w-0 flex-col gap-2">
@@ -336,6 +342,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 disabled={createChat.isPending}
                 registerActivation={false}
                 createProfileHostId={tabHostId}
+                runTargetHostId={tabHostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle
@@ -388,7 +395,7 @@ function clearChatForkWorkspace(stagingKey: WorktreeStagingKey): void {
 
 function displayChatTitle(title: string): string {
   const trimmed = title.trim();
-  return trimmed.length === 0 ? "Untitled chat" : trimmed;
+  return trimmed.length === 0 ? "Untitled agent" : trimmed;
 }
 
 // Whether the Fork dialog can submit. Extracted from the component to keep its

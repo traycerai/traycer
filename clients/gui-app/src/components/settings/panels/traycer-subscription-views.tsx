@@ -47,9 +47,10 @@ import {
   type TraycerSubscription,
 } from "@/lib/auth/traycer-subscription-content";
 import {
+  creditUsageSeverity,
   rateLimitWindowFillPercent,
-  rateLimitWindowSeverity,
   rateLimitWindowSeverityBarClassName,
+  type RateLimitWindowSeverity,
 } from "@/lib/rate-limits/window-severity";
 import { cn } from "@/lib/utils";
 
@@ -224,7 +225,9 @@ function CreditBreakdownView({
  * through: a header line (`label` left, a `detail` slot right - a reset line
  * plus percent for windows, a plain amount line for credit/uncapped-usage
  * buckets), then a bar spanning the row's *full* width on its own line below,
- * colored by the shared severity scale (`window-severity.ts`).
+ * colored by the caller-provided semantic tone (`window-severity.ts`). Provider
+ * windows use the canonical duration-aware classifier; credit/balance meters
+ * keep their separate, non-provider semantics.
  *
  * The bar is deliberately on its own line rather than beside the text (as it
  * used to be): sitting the label and bar on the same line made the bar's
@@ -238,8 +241,7 @@ function CreditBreakdownView({
  * in `provider-rate-limit-views.tsx`), Traycer's own bars (`CreditMeterRow`
  * below), and the uncapped OpenRouter/Claude-extra-usage bars from drifting
  * apart visually - each computes its own `usedPercent` and composes its own
- * `detail`, but all of them render through this one layout and one severity
- * scale.
+ * `detail` and semantic tone, but all of them render through this one layout.
  *
  * The track fills with `bg-foreground/15` rather than `bg-muted`, and carries
  * no border: several dark theme presets set `--muted` equal to `--popover`,
@@ -254,12 +256,13 @@ export function MeterRow({
   label,
   usedPercent,
   detail,
+  severity,
 }: {
   readonly label: string;
   readonly usedPercent: number;
   readonly detail: ReactNode;
+  readonly severity: RateLimitWindowSeverity;
 }): ReactNode {
-  const severity = rateLimitWindowSeverity(usedPercent);
   const fillPercent = rateLimitWindowFillPercent(usedPercent);
   return (
     <div className="flex flex-col gap-1.5">
@@ -302,6 +305,7 @@ function CreditMeterRow({
       label={label}
       usedPercent={usedPercent}
       detail={`${formatValue(consumed)} / ${formatValue(total)}`}
+      severity={creditUsageSeverity(usedPercent)}
     />
   );
 }

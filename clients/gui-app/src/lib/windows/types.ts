@@ -106,6 +106,11 @@ export type DesktopMenuCommandId =
 export interface DesktopMenuCommandPayload {
   readonly command: DesktopMenuCommandId;
   readonly windowId: string;
+  // Only meaningful for `host.installUpdate`: the exact host version the
+  // native menu/tray row displayed. Echoed back as the update's
+  // `expectedVersion` so the shell refuses to install a target the user never
+  // confirmed (e.g. after a release-channel switch). `null` otherwise.
+  readonly hostUpdateVersion: string | null;
 }
 
 export interface DesktopZoomBridge {
@@ -209,6 +214,7 @@ export interface DesktopAppUpdateSnapshot {
   readonly sequence: number;
   readonly status: DesktopAppUpdateStatus;
   readonly currentVersion: string;
+  readonly allowPrerelease: boolean;
   readonly latestVersion: string | null;
   // Whole-percent download progress (0-100) while `status` is "downloading";
   // null in every other state (including before a user-initiated download).
@@ -232,6 +238,9 @@ export interface DesktopAppUpdatesBridge {
   getSnapshot(): Promise<DesktopAppUpdateSnapshot>;
   checkForUpdates(
     intent: DesktopAppUpdateCheckIntent,
+  ): Promise<DesktopAppUpdateSnapshot>;
+  setAllowPrerelease(
+    allowPrerelease: boolean,
   ): Promise<DesktopAppUpdateSnapshot>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;

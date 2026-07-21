@@ -68,6 +68,18 @@ export interface ChatLowerAccessState {
   readonly canAct: boolean;
 }
 
+/**
+ * Why the composer's send is blocked, for the send button's tooltip. `canAct`
+ * folds role and connection: a viewer can never act; a non-viewer with
+ * `canAct === false` means the chat stream is not open (host reconnecting
+ * after a drop / renderer resume).
+ */
+function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
+  if (access.canAct) return null;
+  if (access.isViewer) return "You have view-only access to this chat";
+  return "Reconnecting to the host — sending is paused";
+}
+
 export interface ChatLowerTurnState {
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly stopDisabled: boolean;
@@ -76,6 +88,10 @@ export interface ChatLowerTurnState {
 
 export interface ChatLowerInterviewState {
   readonly pending: PendingInterviewView | null;
+  // True while an answer/skip for the pending block is in flight or accepted
+  // but unresolved (derived from the chat session's pending/accepted actions).
+  // Gates the card so the same action cannot be double-sent.
+  readonly isBusy: boolean;
   readonly onAnswer: (
     blockId: string,
     answers: ReadonlyArray<InterviewAnswer>,
@@ -404,13 +420,15 @@ function ComposerSurface(props: {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
         <PendingInterviewCard
-          key={model.interview.pending.blockId}
+          key={`${model.composer.nodeId}:${model.interview.pending.blockId}`}
+          chatId={model.composer.nodeId}
           blockId={model.interview.pending.blockId}
           toolName={model.interview.pending.toolName}
           title={model.interview.pending.title}
           description={model.interview.pending.description}
           questions={model.interview.pending.questions}
           isActive={model.composer.isActive}
+          isBusy={model.interview.isBusy}
           onSubmit={model.access.canAct ? model.interview.onAnswer : null}
           onSkip={model.access.canAct ? model.interview.onError : null}
           onFork={model.access.canAct ? model.interview.onFork : null}
@@ -439,6 +457,7 @@ function LiveChatComposer(props: {
       taskId={model.composer.nodeId}
       isActive={model.composer.isActive}
       sendDisabled={!model.access.canAct}
+      sendDisabledHint={chatSendDisabledHint(model.access)}
       mentionRoots={model.composer.mentionRoots}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
@@ -506,7 +525,7 @@ function ComposerSlotShell(props: {
 function ReadOnlyComposerNotice() {
   return (
     <div className="rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
-      Read-only viewer. The chat owner can send prompts and manage this queue.
+      Read-only viewer. The agent owner can send prompts and manage this queue.
     </div>
   );
 }

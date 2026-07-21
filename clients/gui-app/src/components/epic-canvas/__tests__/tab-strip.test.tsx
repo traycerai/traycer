@@ -70,6 +70,16 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicLiveArtifactTitleGenerating: () => false,
 }));
 
+// TabItem resolves the tab's bound-host client for terminal renames; these
+// tests render outside a <HostRuntimeProvider>, so stub the host seam.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
+  useTerminalRenameFor: () => ({ mutate: () => undefined }),
+}));
+
 const VIEW_TAB_ID = "view-tab-1";
 
 const TAB: EpicNodeRef = {
@@ -80,6 +90,14 @@ const TAB: EpicNodeRef = {
   hostId: "host-A",
   workspacePath: "/repo",
   filePath: "a.md",
+};
+
+const ARTIFACT_TAB: EpicNodeRef = {
+  id: "spec-1",
+  instanceId: "inst-spec-1",
+  type: "spec",
+  name: "Architecture",
+  hostId: "host-A",
 };
 
 function createQueryClient(): QueryClient {
@@ -175,6 +193,7 @@ function renderTabStripForTab(
 describe("<TabStrip />", () => {
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
     testState.draggableInputs = [];
     testState.droppableInputs = [];
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
@@ -214,6 +233,42 @@ describe("<TabStrip />", () => {
     fireEvent.doubleClick(screen.getByRole("tab", { name: /a\.md/ }));
 
     expect(onPromotePreview).toHaveBeenCalledWith("group-1");
+  });
+
+  it("copies the absolute file path from a workspace-file tab context menu", () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: { writeText },
+    });
+    renderTabStrip({
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    fireEvent.contextMenu(screen.getByTestId(`tab-item-${TAB.instanceId}`));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy File Path" }));
+
+    expect(writeText).toHaveBeenCalledWith("/repo/a.md");
+  });
+
+  it("does not offer the file-path action for non-file tabs", () => {
+    renderTabStripForTab(ARTIFACT_TAB, {
+      onClose: () => undefined,
+      onPromotePreview: () => undefined,
+      onOpenBlankTab: () => undefined,
+      onSplit: undefined,
+    });
+
+    fireEvent.contextMenu(
+      screen.getByTestId(`tab-item-${ARTIFACT_TAB.instanceId}`),
+    );
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Copy File Path" }),
+    ).toBeNull();
   });
 
   it("opens a blank tab when the empty strip area is double-clicked", () => {

@@ -12,6 +12,7 @@ import {
   type ListCloudTasksRequest,
 } from "@/lib/cloud-epic-tasks-query";
 import { useEpicCreate } from "@/hooks/epic/use-epic-create-mutation";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface TaskWorkspaceInput {
   readonly hostId: string;
@@ -33,10 +34,16 @@ interface CreateEpicMutationContext {
 }
 
 interface CapturedCreateOptions {
-  readonly onMutate: () => CreateEpicMutationContext;
+  readonly onMutate: (variables: {
+    readonly chat: null;
+    readonly workspaces: readonly unknown[];
+  }) => CreateEpicMutationContext;
   readonly onSuccess: (
     response: { readonly task: TaskLight | null | undefined },
-    variables: Record<string, never>,
+    variables: {
+      readonly chat: null;
+      readonly workspaces: readonly unknown[];
+    },
     ctx: CreateEpicMutationContext,
   ) => void;
 }
@@ -190,7 +197,26 @@ describe("useEpicCreate", () => {
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
-    options.onSuccess({ task: createdTask }, {}, options.onMutate());
+    const track = vi.spyOn(Analytics.getInstance(), "track");
+    track.mockClear();
+    const stagedVariables = { chat: null, workspaces: [] };
+    options.onSuccess(
+      { task: createdTask },
+      stagedVariables,
+      options.onMutate(stagedVariables),
+    );
+
+    // The started/created pair must agree on the mode derived from the SAME
+    // variables - a mismatch would corrupt the task-creation funnel.
+    expect(track).toHaveBeenCalledWith(AnalyticsEvent.TaskCreationStarted, {
+      source: "direct_ui",
+      mode: "terminal_agent",
+      workspace_count: 0,
+    });
+    expect(track).toHaveBeenCalledWith(AnalyticsEvent.TaskCreated, {
+      mode: "terminal_agent",
+    });
+    track.mockRestore();
 
     expect(
       taskIds(
@@ -256,7 +282,12 @@ describe("useEpicCreate", () => {
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
-    options.onSuccess({ task: createdTask }, {}, options.onMutate());
+    const stagedVariables = { chat: null, workspaces: [] };
+    options.onSuccess(
+      { task: createdTask },
+      stagedVariables,
+      options.onMutate(stagedVariables),
+    );
 
     expect(taskIds(queryClient.getQueryData(queryKey))).toEqual([
       "pinned",
@@ -322,7 +353,12 @@ describe("useEpicCreate", () => {
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
-    options.onSuccess({ task: createdTask }, {}, options.onMutate());
+    const stagedVariables = { chat: null, workspaces: [] };
+    options.onSuccess(
+      { task: createdTask },
+      stagedVariables,
+      options.onMutate(stagedVariables),
+    );
 
     const defaultResponse = queryClient.getQueryData<ListTasksResponse>(
       cloudEpicTasksQueryKey("host-1", "user-1", defaultRequest),
@@ -395,10 +431,11 @@ describe("useEpicCreate", () => {
     const options = testState.capturedOptions;
     if (options === null) throw new Error("expected mutation options");
 
+    const stagedVariables = { chat: null, workspaces: [] };
     options.onSuccess(
       { task: staleCreateResponseTask },
-      {},
-      options.onMutate(),
+      stagedVariables,
+      options.onMutate(stagedVariables),
     );
 
     expect(

@@ -15,9 +15,13 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -60,8 +64,10 @@ import {
   type AmbientDriftSendNotice,
 } from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
-import { commitSelection } from "@/stores/composer/commit-selection";
+import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
 
 interface ChatComposerProps {
   readonly taskId: string;
@@ -75,6 +81,13 @@ interface ChatComposerProps {
    */
   readonly isActive: boolean;
   readonly sendDisabled: boolean | undefined;
+  /**
+   * Why `sendDisabled` is true, shown as the send button's hover/focus
+   * tooltip (e.g. "Reconnecting to the host…"). Without it a blocked send
+   * button is silently grey and reads as broken. `null`/absent when
+   * `sendDisabled` is false or the caller has no reason to give.
+   */
+  readonly sendDisabledHint: string | null | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
@@ -120,6 +133,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     taskId,
     isActive,
     sendDisabled,
+    sendDisabledHint,
     mentionRoots,
     fallbackToGlobalMentionRoots,
     currentEpicId,
@@ -142,11 +156,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
     mentionRoots,
     fallbackToGlobalMentionRoots,
   );
+  const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
 
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const hasPastedImageBytes = useEpicAttachmentBytesPresence();
   // Counts editor-ready transitions (a counter, not a boolean, so a torn-down
   // and re-created editor re-fires). The draft-reset bridge keys its
   // handle-ready catch-up on this - a ref flip alone never re-renders us.
@@ -215,7 +231,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
-  const modelSlug = useStore(toolbarStore, (s) => s.selection.modelSlug);
   // Connection-level auth gate for the selected provider, scoped to the tab's
   // host. When the provider CLI is signed out it blocks send and mounts the
   // re-auth banner above the composer; a doomed turn can't start.
@@ -226,13 +241,23 @@ function ChatComposerImpl(props: ChatComposerProps) {
     seedSource.kind,
   );
   const sendBlocked = sendDisabled === true || reauthGate.signedOut;
+  const sendBlockedHint = resolveSendBlockedHint({
+    workspaceDisabledHint: workspaceAvailability.disabledHint,
+    signedOut: reauthGate.signedOut,
+    sendDisabled,
+    sendDisabledHint,
+  });
+  const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   // Rate-limit switch prompt: purely informational + user-confirmed, so it
-  // never blocks send the way the reauth gate does.
-  const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
+  // never blocks send the way the reauth gate does. Scoped to the selected
+  // model - a limit gating only another model family stays silent here.
+  const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
     harnessId,
     profileId,
-    isActive,
-  );
+    selectedModel,
+    active: isActive,
+    client: hostClient,
+  });
   // Keeps the switch prompt's own `providers.list` read converging with a
   // turn's passive rate-limit capture: without this, a turn that just pushed
   // this harness's profile into near/hard limit wouldn't surface the banner
@@ -240,20 +265,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
   useRefreshProvidersListOnTurn(harnessId, tabHostId);
   const onSwitchProfile = useCallback(
     (nextProfileId: string | null) => {
-      commitSelection(toolbarStore, harnessId, modelSlug, nextProfileId);
+      commitProfileSelection(toolbarStore, nextProfileId);
     },
-    [toolbarStore, harnessId, modelSlug],
+    [toolbarStore],
   );
   // Task-wide extension of the rate-limit switch: sibling chats of this task
   // pinned to the same limited profile, and the action moving them together.
   const taskProfileSwitch = useTaskProfileRateLimitSwitch({
-    enabled: rateLimitPrompt.limited,
+    enabled:
+      rateLimitPrompt.kind === "visible" &&
+      rateLimitPrompt.primaryTarget !== null,
     harnessId,
     profileId,
+    selectedModel,
     epicId: currentEpicId,
     chatId: taskId,
   });
-  const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   const imagesUnsupported = imageAttachmentsUnsupported(
     draftHasImages,
     selectedModel,
@@ -269,6 +296,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isActive,
   });
 
+  const {
+    onPaste,
+    onDrop,
+    onDragOver,
+    onDragEnter,
+    onDragLeave,
+    attachImageFiles,
+    dragOverlayVariant,
+    isIngestingImages,
+    isResolvingFilePaths,
+  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+  const attachmentPending = isAttachmentIngestPending({
+    isIngestingImages,
+    isResolvingFilePaths,
+  });
+
   const submitDraft = useChatComposerSubmit({
     taskId,
     editorRef,
@@ -279,6 +322,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabled: sendBlocked,
     workspaceBlocked,
     imagesUnsupported,
+    attachmentPreparationPending: attachmentPending,
     onSubmitMessage,
   });
   const ambientDrift = useAmbientDriftGate(
@@ -293,26 +337,21 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const topBannerKind = resolveComposerTopBannerKind({
     reauthVisible: reauthBanner !== null,
     ambientDriftVisible: ambientDrift.pendingNotice !== null,
-    rateLimitVisible: !reauthGate.signedOut && rateLimitPrompt.limited,
+    rateLimitVisible:
+      !reauthGate.signedOut && rateLimitPrompt.kind === "visible",
   });
   const continueAfterAmbientDrift = (): void => {
     ambientDrift.acknowledge(() => {
-      if (rateLimitPrompt.limited) return;
+      if (rateLimitPrompt.kind === "visible") return;
       submitDraft();
     });
   };
 
-  const {
-    onPaste,
-    onDrop,
-    onDragOver,
-    onDragEnter,
-    onDragLeave,
-    attachImageFiles,
-    isDraggingFiles,
-  } = useComposerPaste(editorRef);
-
   const removeImage = useCallback((id: string) => {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
+      kind: "image",
+      surface: "chat",
+    });
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
@@ -326,6 +365,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     sendDisabled: sendBlocked,
     workspaceBlocked,
     imagesUnsupported,
+    attachmentPreparationPending: attachmentPending,
     draftHasText,
     draftHasImages,
   });
@@ -336,16 +376,27 @@ function ChatComposerImpl(props: ChatComposerProps) {
         <ChatComposerBannerPortal>
           <div className="bg-canvas px-4 pt-4">
             <div className="mx-auto w-full max-w-3xl">
-              <ProfileRateLimitSwitchBanner
-                harnessId={harnessId}
-                hardLimited={rateLimitPrompt.hardLimited}
-                current={rateLimitPrompt.current}
-                alternatives={rateLimitPrompt.alternatives}
-                onSwitchProfile={onSwitchProfile}
-                affectedChatCount={taskProfileSwitch.affectedChatCount}
-                onSwitchProfileForTask={taskProfileSwitch.switchOtherTaskChats}
-                onDismiss={rateLimitPrompt.dismiss}
-              />
+              {rateLimitPrompt.kind === "visible" ? (
+                <ProfileRateLimitSwitchBanner
+                  key={rateLimitPrompt.warningKey}
+                  harnessId={harnessId}
+                  providerId={rateLimitPrompt.providerId}
+                  severity={rateLimitPrompt.severity}
+                  limitedFamilies={rateLimitPrompt.limitedFamilies}
+                  current={rateLimitPrompt.current}
+                  profiles={rateLimitPrompt.profiles}
+                  destinations={rateLimitPrompt.destinations}
+                  primaryTarget={rateLimitPrompt.primaryTarget}
+                  probeTarget={rateLimitPrompt.probeTarget}
+                  runTargetHostId={tabHostId}
+                  onSwitchProfile={onSwitchProfile}
+                  affectedChatCount={taskProfileSwitch.affectedChatCount}
+                  onSwitchProfileForTask={
+                    taskProfileSwitch.switchOtherTaskChats
+                  }
+                  onDismiss={rateLimitPrompt.dismiss}
+                />
+              ) : null}
             </div>
           </div>
         </ChatComposerBannerPortal>
@@ -362,6 +413,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
               providerId={reauthBanner.providerId}
               state={reauthGate.state}
               reason={reauthBanner.reason}
+              profileId={reauthGate.profileId}
               profileLabel={reauthGate.profileLabel}
               onContinueOnAmbient={
                 reauthBanner.reason === "provider_unauthenticated"
@@ -386,7 +438,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
               onDrop={onDrop}
               onDragEnter={onDragEnter}
               onDragLeave={onDragLeave}
-              isDraggingFiles={isDraggingFiles}
+              dragOverlayVariant={dragOverlayVariant}
               attachmentsStrip={
                 <ChatComposerAttachmentsStrip
                   content={draftContent}
@@ -402,6 +454,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   initialContent={initialContent}
                   initialSelection={initialSelection}
                   slashProviderId={harnessId}
+                  hasPastedImageBytes={hasPastedImageBytes}
                   isActive={isActive}
                   onSnapshot={handleSnapshot}
                   onSubmit={handleSubmitDraft}
@@ -416,16 +469,18 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   store={toolbarStore}
                   onAttachImages={attachImageFiles}
                   canSubmit={canSubmit}
+                  attachmentPending={attachmentPending}
                   onSubmit={handleSubmitDraft}
                   activeTurnStatus={activeTurnStatus}
                   hasPendingApprovals={hasPendingApprovals}
                   stopDisabled={stopDisabled}
                   onStopTurn={onStopTurn}
-                  composerDisabledHint={workspaceAvailability.disabledHint}
+                  composerDisabledHint={sendBlockedHint}
                   dictation={dictationControl}
                   dictationPreparing={dictationPreparing}
                   settingsLocked={false}
                   createProfileHostId={tabHostId}
+                  runTargetHostId={tabHostId}
                 />
               }
             />
@@ -527,8 +582,30 @@ interface CanSubmitDraftArgs {
   readonly sendDisabled: boolean | undefined;
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
+  readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+}
+
+/**
+ * Every blocked-send reason gets a hover/focus hint on the send button — a
+ * silently grey button reads as broken. Priority mirrors severity: the
+ * workspace gate (can't run anywhere), then the signed-out gate (the reauth
+ * banner has the full story), then the caller's reason (connection loss /
+ * view-only access).
+ */
+function resolveSendBlockedHint(args: {
+  readonly workspaceDisabledHint: string | null;
+  readonly signedOut: boolean;
+  readonly sendDisabled: boolean | undefined;
+  readonly sendDisabledHint: string | null | undefined;
+}): string | null {
+  if (args.workspaceDisabledHint !== null) return args.workspaceDisabledHint;
+  if (args.signedOut) {
+    return "Signed out of the provider — sign in to send messages";
+  }
+  if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
+  return null;
 }
 
 function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
@@ -538,6 +615,7 @@ function canSubmitDraft(args: CanSubmitDraftArgs): boolean {
     !args.sendDisabled &&
     !args.workspaceBlocked &&
     !args.imagesUnsupported &&
+    !args.attachmentPreparationPending &&
     (args.draftHasText || args.draftHasImages)
   );
 }

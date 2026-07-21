@@ -14,6 +14,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  LEGACY_HOST_RESOLVED_AT,
   worktreeBindingEntrySchema,
   worktreeBranchStatusSchema,
   worktreeHostEntrySchema,
@@ -24,7 +25,17 @@ import {
   worktreeListAllForHostResponseSchemaV11,
   worktreeListAllForHostRequestSchemaV12,
   worktreeListAllForHostResponseSchemaV12,
+  worktreeListAllForHostRequestSchemaV13,
+  worktreeListAllForHostResponseSchemaV13,
+  worktreeListAllForHostRequestSchemaV14,
+  worktreeListAllForHostResponseSchemaV14,
   worktreeListBindingsForEpicResponseSchemaV11,
+  worktreeListBindingsForEpicResponseSchemaV12,
+  worktreeListByWorkspacePathsRequestSchemaV11,
+  worktreeListByWorkspacePathsRequestSchemaV12,
+  worktreeListByWorkspacePathsResponseSchemaV12,
+  worktreeListByWorkspacePathsRequestSchemaV13,
+  worktreeListByWorkspacePathsResponseSchemaV13,
   worktreeSubmoduleMergeFactSchema,
   worktreeSubmoduleMergeFactSchemaV12,
 } from "@traycer/protocol/host/worktree-schemas";
@@ -32,8 +43,32 @@ import {
 const V10 = { major: 1, minor: 0 } as const;
 const V11 = { major: 1, minor: 1 } as const;
 const V12 = { major: 1, minor: 2 } as const;
+const V13 = { major: 1, minor: 3 } as const;
+const V14 = { major: 1, minor: 4 } as const;
 
 const listAllForHostRegistry = hostRpcRegistry["worktree.listAllForHost"];
+const listByWorkspacePathsRegistry =
+  hostRpcRegistry["worktree.listByWorkspacePaths"];
+const listBindingsForEpicRegistry =
+  hostRpcRegistry["worktree.listBindingsForEpic"];
+
+// A v1.1 selector row - every field the shipped binding listing carries,
+// without the v1.2 `isGitResolvePending` marker.
+const v11SelectorRow = {
+  hostId: "host-1",
+  runningDir: "/Users/dev/acme/web",
+  workspacePath: "/Users/dev/acme/web",
+  worktreePath: null,
+  mode: "local" as const,
+  isGitRepo: false,
+  repoIdentifier: null,
+  branch: null,
+  isPrimary: true,
+  isImported: false,
+  setupState: "not_required" as const,
+  disabledReason: null,
+  sources: [],
+};
 
 // A v1.0 entry - every field the shipped listing already carries, none of the
 // v1.1 staleness signals.
@@ -648,13 +683,211 @@ describe("worktree.listAllForHost v1.0 <-> v1.2 negotiation", () => {
     );
   });
 
-  it("exposes v1.2 as the latest installed minor of major 1", () => {
-    expect(listAllForHostRegistry[1].latestMinor).toBe(2);
+  it("upgrades a v1.2 request to v1.3 by defaulting forceRefresh to false", () => {
+    const request = {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+    };
+    const upgraded = upgradeRequestToVersion(
+      listAllForHostRegistry,
+      V12,
+      V13,
+      request,
+    );
+    expect(upgraded).toEqual({ ...request, forceRefresh: false });
+    expect(worktreeListAllForHostRequestSchemaV13.parse(upgraded)).toEqual(
+      upgraded,
+    );
+  });
+
+  it("upgrades a v1.2 response to v1.3 unchanged", () => {
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [],
+        },
+      ],
+      nextCursor: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listAllForHostRegistry,
+      V12,
+      V13,
+      response,
+    );
+    expect(upgraded).toEqual(response);
+    expect(worktreeListAllForHostResponseSchemaV13.parse(upgraded)).toEqual(
+      upgraded,
+    );
+  });
+
+  it("upgrades v1.3 to v1.4 stamping the legacy-host resolved sentinel (not null)", () => {
+    const request = {
+      includeActivity: false,
+      activityPaths: null,
+      cursor: null,
+      limit: null,
+      forceRefresh: false,
+    };
+    expect(
+      upgradeRequestToVersion(listAllForHostRegistry, V13, V14, request),
+    ).toEqual(request);
+    expect(worktreeListAllForHostRequestSchemaV14.parse(request)).toEqual(
+      request,
+    );
+
+    const response = {
+      worktrees: [
+        {
+          ...v10Entry,
+          lastActivityAt: null,
+          owners: [],
+          branchStatus: null,
+          createdAt: null,
+          ...mergeProvenanceAbsent,
+          submodules: [],
+        },
+      ],
+      nextCursor: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listAllForHostRegistry,
+      V13,
+      V14,
+      response,
+    );
+    // NEW CLIENT + OLD HOST: a v1.3 host has no `resolvedAt` and never sends
+    // one, so bridging to `null` would strand its rows perpetually "checking".
+    // The resolved sentinel keeps them authoritative.
+    expect(upgraded.worktrees[0].resolvedAt).toBe(LEGACY_HOST_RESOLVED_AT);
+    expect(worktreeListAllForHostResponseSchemaV14.parse(upgraded)).toEqual(
+      upgraded,
+    );
+    // OLD CLIENT + NEW HOST: a v1.3 caller strips the field it never knew.
+    expect(
+      worktreeListAllForHostResponseSchemaV13.parse(upgraded).worktrees[0],
+    ).not.toHaveProperty("resolvedAt");
+  });
+
+  it("exposes v1.4 as the latest installed minor of major 1", () => {
+    expect(listAllForHostRegistry[1].latestMinor).toBe(4);
     expect(Object.keys(listAllForHostRegistry[1].versions).sort()).toEqual([
       "0",
       "1",
       "2",
+      "3",
+      "4",
     ]);
+  });
+});
+
+describe("worktree.listByWorkspacePaths v1.1 <-> v1.2 negotiation", () => {
+  it("upgrades a v1.1 request to v1.2 by defaulting forceRefresh to false", () => {
+    const request = {
+      workspacePaths: ["/Users/dev/acme/web"],
+      scriptRefs: [],
+    };
+    const upgraded = upgradeRequestToVersion(
+      listByWorkspacePathsRegistry,
+      V11,
+      V12,
+      request,
+    );
+    expect(upgraded).toEqual({ ...request, forceRefresh: false });
+    expect(
+      worktreeListByWorkspacePathsRequestSchemaV12.parse(upgraded),
+    ).toEqual(upgraded);
+  });
+
+  it("upgrades a v1.1 response to v1.2 unchanged", () => {
+    const response = {
+      workspaces: [],
+      scriptsAtRefs: [],
+    };
+    const upgraded = upgradeResponseToVersion(
+      listByWorkspacePathsRegistry,
+      V11,
+      V12,
+      response,
+    );
+    expect(upgraded).toEqual(response);
+    expect(
+      worktreeListByWorkspacePathsResponseSchemaV12.parse(upgraded),
+    ).toEqual(upgraded);
+  });
+
+  it("rejects a v1.1 request against the v1.2 schema (forceRefresh is required)", () => {
+    const request = {
+      workspacePaths: ["/Users/dev/acme/web"],
+      scriptRefs: [],
+    };
+    expect(worktreeListByWorkspacePathsRequestSchemaV11.parse(request)).toEqual(
+      request,
+    );
+    expect(() =>
+      worktreeListByWorkspacePathsRequestSchemaV12.parse(request),
+    ).toThrow();
+  });
+
+  it("upgrades v1.2 to v1.3 stamping the legacy-host resolved sentinel and strips it for v1.2", () => {
+    const request = {
+      workspacePaths: ["/Users/dev/acme/web"],
+      scriptRefs: [],
+      forceRefresh: false,
+    };
+    expect(
+      upgradeRequestToVersion(listByWorkspacePathsRegistry, V12, V13, request),
+    ).toEqual(request);
+    expect(worktreeListByWorkspacePathsRequestSchemaV13.parse(request)).toEqual(
+      request,
+    );
+
+    const response = {
+      workspaces: [
+        {
+          workspacePath: "/Users/dev/acme/web",
+          isGitRepo: true,
+          repoIdentifier: { owner: "acme", repo: "web" },
+          mainBranch: "main",
+          worktrees: [],
+          scripts: null,
+        },
+      ],
+      scriptsAtRefs: [],
+    };
+    const upgraded = upgradeResponseToVersion(
+      listByWorkspacePathsRegistry,
+      V12,
+      V13,
+      response,
+    );
+    // NEW CLIENT + OLD HOST: a v1.2 host never sends `resolvedAt`; the resolved
+    // sentinel (not `null`) keeps its summaries authoritative so the home
+    // workspace selector does not strand every folder as perpetually pending.
+    expect(upgraded.workspaces[0].resolvedAt).toBe(LEGACY_HOST_RESOLVED_AT);
+    expect(
+      worktreeListByWorkspacePathsResponseSchemaV13.parse(upgraded),
+    ).toEqual(upgraded);
+    // OLD CLIENT + NEW HOST: a v1.2 caller strips the field it never knew.
+    expect(
+      worktreeListByWorkspacePathsResponseSchemaV12.parse(upgraded)
+        .workspaces[0],
+    ).not.toHaveProperty("resolvedAt");
+  });
+
+  it("exposes v1.3 as the latest installed minor of major 1", () => {
+    expect(listByWorkspacePathsRegistry[1].latestMinor).toBe(3);
+    expect(
+      Object.keys(listByWorkspacePathsRegistry[1].versions).sort(),
+    ).toEqual(["0", "1", "2", "3"]);
   });
 });
 
@@ -761,6 +994,67 @@ describe("worktreeListBindingsForEpicResponseSchemaV11 (folderlessCwd)", () => {
         folderlessCwd: undefined,
       }),
     ).toThrow();
+  });
+});
+
+describe("worktree.listBindingsForEpic v1.1 <-> v1.2 negotiation", () => {
+  // NEW CLIENT + OLD HOST: a v1.2 client bridges an inbound v1.1 response up to
+  // canonical. Every bridged row must be stamped isGitResolvePending:false - a
+  // pre-v1.2 host has no pending concept and never sends a signal to clear it,
+  // so its answer is authoritative and must NOT read as perpetually "checking".
+  it("upgrades a v1.1 response to v1.2 by stamping isGitResolvePending:false on every row", () => {
+    const response = {
+      rows: [
+        v11SelectorRow,
+        { ...v11SelectorRow, runningDir: "/other", workspacePath: "/other" },
+      ],
+      folderlessCwd: null,
+    };
+    const upgraded = upgradeResponseToVersion(
+      listBindingsForEpicRegistry,
+      V11,
+      V12,
+      response,
+    );
+    expect(upgraded.rows.map((row) => row.isGitResolvePending)).toEqual([
+      false,
+      false,
+    ]);
+    expect(
+      worktreeListBindingsForEpicResponseSchemaV12.parse(upgraded),
+    ).toEqual(upgraded);
+  });
+
+  // OLD CLIENT + NEW HOST: a v1.2 host serves a v1.1 caller by downgrading its
+  // canonical response - the within-major Zod strip drops isGitResolvePending,
+  // so a pre-v1.2 client (which never knew the field) sees the v1.1 shape.
+  it("strips isGitResolvePending when a v1.2 response is served to a v1.1 caller", () => {
+    const v12Response = {
+      rows: [{ ...v11SelectorRow, isGitResolvePending: true }],
+      folderlessCwd: null,
+    };
+    expect(
+      worktreeListBindingsForEpicResponseSchemaV12.parse(v12Response),
+    ).toEqual(v12Response);
+    const downgraded =
+      worktreeListBindingsForEpicResponseSchemaV11.parse(v12Response);
+    expect(downgraded.rows[0]).not.toHaveProperty("isGitResolvePending");
+  });
+
+  it("rejects a v1.1 row against the v1.2 schema (isGitResolvePending is required)", () => {
+    expect(() =>
+      worktreeListBindingsForEpicResponseSchemaV12.parse({
+        rows: [v11SelectorRow],
+        folderlessCwd: null,
+      }),
+    ).toThrow();
+  });
+
+  it("exposes v1.2 as the latest installed minor of major 1", () => {
+    expect(listBindingsForEpicRegistry[1].latestMinor).toBe(2);
+    expect(Object.keys(listBindingsForEpicRegistry[1].versions).sort()).toEqual(
+      ["0", "1", "2"],
+    );
   });
 });
 

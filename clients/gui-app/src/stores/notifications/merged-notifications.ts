@@ -30,6 +30,7 @@ import {
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
 import {
+  formatHostNotificationPresentation,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationKnownPayload,
   type HostNotificationOutcome,
@@ -394,7 +395,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 export function rowFromHostEntry(
   entry: HostNotificationFeedEntry,
 ): MergedNotificationRow {
-  const presentation = hostNotificationPresentation(entry);
+  const presentation = formatHostNotificationPresentation(entry);
   return {
     feedId: hostFeedId(entry.id),
     source: "host",
@@ -514,6 +515,8 @@ function navigationPayloadFromKnown(
       };
     case "agent_stalled":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
+    case "workspace_operation_failed":
+      return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "epic":
       return { kind: "epic", epicId: known.epicId };
     case "approval":
@@ -533,113 +536,6 @@ function navigationPayloadFromKnown(
         interviewBlockId: known.interviewBlockId,
       };
   }
-}
-
-interface NotificationPresentation {
-  readonly title: string;
-  readonly body: string;
-}
-
-function hostNotificationPresentation(
-  entry: HostNotificationFeedEntry,
-): NotificationPresentation {
-  // Known payloads present from typed, schema-linked fields; anything else
-  // (a payload from a newer host, a malformed row, or a payload contradicting
-  // its row kind) degrades to generic copy - never a crash, never a dropped
-  // row.
-  const known = parseKnownHostNotificationPayloadForKind(
-    entry.kind,
-    entry.payload,
-  );
-  const agentName =
-    known === null ? null : nonEmptyTitle(knownAgentName(known));
-  const chatTitle =
-    known === null ? null : nonEmptyTitle(knownChatTitle(known));
-  const taskTitle = known === null ? null : nonEmptyTitle(known.taskTitle);
-  const title = taskTitle ?? chatTitle ?? agentName ?? "Task";
-  const chatContext =
-    chatTitle !== null && chatTitle !== title ? chatTitle : "Chat";
-  const isTerminalAgent = known !== null && known.kind === "epic";
-  switch (entry.kind) {
-    case "agent.stopped": {
-      const context = notificationContext(agentName, title, isTerminalAgent);
-      const code = known === null ? null : knownStoppedCode(known);
-      return {
-        title,
-        body: `${context} • ${agentStoppedStatus(entry.outcome, code)}`,
-      };
-    }
-    case "agent.stalled":
-      return {
-        title,
-        body: `${notificationContext(agentName, title, isTerminalAgent)} • Stalled`,
-      };
-    case "approval.requested":
-      return { title, body: `${chatContext} • Approval requested` };
-    case "interview.requested":
-      return { title, body: `${chatContext} • Question waiting` };
-  }
-}
-
-function knownAgentName(payload: HostNotificationKnownPayload): string | null {
-  switch (payload.kind) {
-    case "chat":
-    case "epic":
-    case "agent_stalled":
-      return payload.agentName;
-    case "approval":
-    case "interview":
-      return null;
-  }
-}
-
-function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
-  switch (payload.kind) {
-    case "approval":
-    case "interview":
-      return payload.chatTitle;
-    case "chat":
-    case "epic":
-    case "agent_stalled":
-      return null;
-  }
-}
-
-function knownStoppedCode(
-  payload: HostNotificationKnownPayload,
-): string | null {
-  switch (payload.kind) {
-    case "chat":
-    case "epic":
-      return payload.code ?? null;
-    case "agent_stalled":
-    case "approval":
-    case "interview":
-      return null;
-  }
-}
-
-function agentStoppedStatus(
-  outcome: HostNotificationOutcome,
-  code: string | null,
-): string {
-  if (code === "RATE_LIMIT") return "Rate limit reached";
-  if (outcome === "errored") return "Failed";
-  if (outcome === "stopped") return "Stopped";
-  return "Done";
-}
-
-function notificationContext(
-  agentName: string | null,
-  title: string,
-  isTerminalAgent: boolean,
-): string {
-  if (agentName !== null && agentName !== title) return agentName;
-  return isTerminalAgent ? "Terminal agent" : "Chat";
-}
-
-function nonEmptyTitle(value: string | null): string | null {
-  return value !== null && value.length > 0 ? value : null;
 }
 
 const HOST_PAGE_LIMIT = 50;

@@ -64,6 +64,35 @@ function capitalizeEnvironment(environment: Environment): string {
   return environment.charAt(0).toUpperCase() + environment.slice(1);
 }
 
+// The label the desktop registers via SMAppService, derived from the CLI
+// label above (`<cli-label>.agent`) - deliberately NOT the CLI label itself.
+// macOS BTM matches an SMAppService registration to an existing record BY
+// LABEL, and a legacy record created by a raw `~/Library/LaunchAgents`
+// plist (any machine that ever ran a CLI-registered host, i.e. every
+// release install upgraded from <= 1.1.6) survives file deletion, bootout,
+// and BTM sweeps - registering the same label there lands `not-registered`
+// forever. The `.agent` suffix is collision-free by construction: raw CLI
+// installs never append it, so no legacy record can ever match this label.
+//
+// DO NOT change this derivation without updating the three sites that must
+// stay in lockstep and cannot import this module:
+//   - `clients/traycer-cli/src/service/label.ts` (`smAppServiceAgentLabelId`)
+//   - `clients/desktop/scripts/prepack/inject-host-launch-agent.cjs`
+//   - the internal repo's `scripts/desktop-install-cloud.js` (`hostAgentLabel`)
+export function smAppServiceAgentLabelId(cliLabelId: string): string {
+  return `${cliLabelId}.agent`;
+}
+
+// The raw user-domain LaunchAgent manifest path the CLI writes for a label
+// (mirrors the CLI's `serviceManifestPath` on darwin; separate bundle, so it
+// can't be imported here). The desktop only ever REMOVES this file: the
+// register cycle's legacy-plist cleanup deletes the pre-1.1.7 CLI manifest
+// so the old label's `RunAtLoad` agent can't start a competing host at
+// login. macOS-only by contract - callers gate on darwin.
+export function userLaunchAgentPlistPath(labelId: string): string {
+  return join(homedir(), "Library", "LaunchAgents", `${labelId}.plist`);
+}
+
 /**
  * Filesystem layout the desktop shell uses to locate the host's published
  * metadata and diagnostics.
@@ -89,6 +118,20 @@ function capitalizeEnvironment(environment: Environment): string {
  * DO NOT change the filename without updating the matching helper
  * `getDefaultHostPidMetadataPath()` on the host side - drift here
  * silently breaks local host discovery for every packaged build.
+ *
+ * `pendingLoginItemRevisionFile` is a second cross-repo coordination point,
+ * this time with the *internal* `traycer-internal` repository's
+ * `scripts/desktop-install-cloud.js` (a separate repo from this one - see
+ * that repo's CLAUDE.md for the submodule boundary). That installer writes
+ * this marker when it deliberately preserves a busy/indeterminate running
+ * host across a bundle swap instead of `launchctl bootout`-ing it: the
+ * on-disk LaunchAgent plist changed (e.g. a new descriptor limit) but the
+ * loaded launchd job/SMAppService registration did not. `ensureHost`'s
+ * already-ready fast path checks for this file and, once it observes the
+ * host idle, runs the existing `registerHostLoginItem()` bootout->
+ * unregister->register cycle to apply the refreshed plist, then deletes the
+ * marker. DO NOT change this filename without updating the matching write
+ * site in `desktop-install-cloud.js`.
  */
 
 export interface HostFsLayout {
@@ -97,6 +140,7 @@ export interface HostFsLayout {
   readonly logFile: string;
   readonly installDir: string;
   readonly installRecordFile: string;
+  readonly pendingLoginItemRevisionFile: string;
   readonly environment: Environment;
 }
 
@@ -127,6 +171,10 @@ export function getHostFsLayout(environment: Environment): HostFsLayout {
     logFile: join(rootDir, "host.log"),
     installDir,
     installRecordFile: join(installDir, "install.json"),
+    pendingLoginItemRevisionFile: join(
+      rootDir,
+      "pending-login-item-revision.json",
+    ),
     environment,
   };
 }

@@ -72,6 +72,7 @@ type MockState = {
   traycerUsageUpdatedAt: Readonly<Record<string, number>>;
   openSettings: Mock<(...args: unknown[]) => void>;
   enqueue: Mock<(...args: unknown[]) => Promise<void>>;
+  enqueueBatch: Mock<(...args: unknown[]) => Promise<void>>;
   consumeReset: Mock<
     (
       request: ProvidersConsumeRateLimitResetCreditRequest,
@@ -112,6 +113,7 @@ const mocks = vi.hoisted<MockState>(() => ({
   traycerUsageUpdatedAt: {},
   openSettings: vi.fn(),
   enqueue: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  enqueueBatch: vi.fn((..._args: unknown[]) => Promise.resolve()),
   consumeReset: vi.fn(),
   lastUseHostQueriesOptions: null,
   lastUseHostQueriesProviderIds: null,
@@ -227,6 +229,8 @@ vi.mock("@/lib/rate-limits/ephemeral-fetch-queue", () => ({
   // Wrapper (not `mocks.enqueue` directly) so `beforeEach` can swap the spy -
   // an object-literal binding would freeze the original fn at module load.
   enqueueRateLimitFetch: (...args: unknown[]) => mocks.enqueue(...args),
+  enqueueRateLimitFetchBatch: (...args: unknown[]) =>
+    mocks.enqueueBatch(...args),
   enqueueRateLimitFetchForScope: (...args: unknown[]) =>
     mocks.enqueue(...args.slice(1)),
 }));
@@ -377,6 +381,7 @@ function providerProfile(input: {
     },
     usageUpdatedAt: input.usageUpdatedAt,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -510,6 +515,188 @@ function renderPopover() {
   return { ...rendered, client };
 }
 
+function pointerEvent(
+  type:
+    | "pointerdown"
+    | "pointermove"
+    | "pointerup"
+    | "pointercancel"
+    | "lostpointercapture",
+  options: {
+    readonly pointerId: number;
+    readonly clientX: number;
+    readonly clientY: number;
+    readonly button: number;
+  },
+): MouseEvent {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX: options.clientX,
+    clientY: options.clientY,
+    button: options.button,
+  });
+  Object.defineProperty(event, "pointerId", { value: options.pointerId });
+  return event;
+}
+
+function parseTranslate(transform: string): {
+  readonly xPx: number;
+  readonly yPx: number;
+} {
+  const matches = Array.from(
+    transform.matchAll(/translate\(\s*(-?[\d.]+)px\s*,\s*(-?[\d.]+)px\s*\)/g),
+  );
+  return {
+    xPx: matches.reduce(
+      (total, match) => total + Number.parseFloat(match[1]),
+      0,
+    ),
+    yPx: matches.reduce(
+      (total, match) => total + Number.parseFloat(match[2]),
+      0,
+    ),
+  };
+}
+
+function mockRadixResizeGeometry(
+  surface: HTMLElement,
+  initialWidth: number,
+  initialHeight: number,
+) {
+  const positionWrapper = surface.closest<HTMLElement>(
+    "[data-radix-popper-content-wrapper]",
+  );
+  if (positionWrapper === null) {
+    throw new Error("Expected the Radix popover positioning elements");
+  }
+  const startLeftPx = 100;
+  const startTopPx = 100;
+  const initialTransform = `translate(${startLeftPx}px, ${startTopPx}px)`;
+  positionWrapper.style.transform = initialTransform;
+  const rectSpy = vi
+    .spyOn(surface, "getBoundingClientRect")
+    .mockImplementation(() => {
+      const width = Number.parseFloat(surface.style.width) || initialWidth;
+      const height = Number.parseFloat(surface.style.height) || initialHeight;
+      const translate = parseTranslate(positionWrapper.style.transform);
+      return new DOMRect(translate.xPx, translate.yPx, width, height);
+    });
+  return {
+    initialTransform,
+    positionWrapper,
+    rectSpy,
+    overwriteRadixPosition: (xPx: number, yPx: number) => {
+      positionWrapper.style.transform = `translate(${xPx}px, ${yPx}px)`;
+    },
+  };
+}
+
+const RESIZE_GEOMETRY_CASES = [
+  {
+    direction: "n",
+    deltaX: 0,
+    deltaY: -40,
+    expected: { left: 100, top: 60, right: 580, bottom: 460 },
+  },
+  {
+    direction: "ne",
+    deltaX: 40,
+    deltaY: -40,
+    expected: { left: 100, top: 60, right: 620, bottom: 460 },
+  },
+  {
+    direction: "e",
+    deltaX: 40,
+    deltaY: 0,
+    expected: { left: 100, top: 100, right: 620, bottom: 460 },
+  },
+  {
+    direction: "se",
+    deltaX: 40,
+    deltaY: 40,
+    expected: { left: 100, top: 100, right: 620, bottom: 500 },
+  },
+  {
+    direction: "s",
+    deltaX: 0,
+    deltaY: 40,
+    expected: { left: 100, top: 100, right: 580, bottom: 500 },
+  },
+  {
+    direction: "sw",
+    deltaX: -40,
+    deltaY: 40,
+    expected: { left: 60, top: 100, right: 580, bottom: 500 },
+  },
+  {
+    direction: "w",
+    deltaX: -40,
+    deltaY: 0,
+    expected: { left: 60, top: 100, right: 580, bottom: 460 },
+  },
+  {
+    direction: "nw",
+    deltaX: -40,
+    deltaY: -40,
+    expected: { left: 60, top: 60, right: 580, bottom: 460 },
+  },
+] as const;
+
+function dragResize(
+  surface: HTMLElement,
+  direction: (typeof RESIZE_GEOMETRY_CASES)[number]["direction"],
+  pointerId: number,
+  delta: { readonly x: number; readonly y: number },
+): void {
+  const startClientX = 580;
+  const startClientY = 460;
+  fireEvent(
+    screen.getByTestId(`rate-limit-popover-resize-${direction}`),
+    pointerEvent("pointerdown", {
+      pointerId,
+      clientX: startClientX,
+      clientY: startClientY,
+      button: 0,
+    }),
+  );
+  fireEvent(
+    surface,
+    pointerEvent("pointermove", {
+      pointerId,
+      clientX: startClientX + delta.x,
+      clientY: startClientY + delta.y,
+      button: 0,
+    }),
+  );
+}
+
+function endResize(
+  surface: HTMLElement,
+  type: "pointerup" | "pointercancel" | "lostpointercapture",
+  pointerId: number,
+  delta: { readonly x: number; readonly y: number },
+): void {
+  fireEvent(
+    surface,
+    pointerEvent(type, {
+      pointerId,
+      clientX: 580 + delta.x,
+      clientY: 460 + delta.y,
+      button: 0,
+    }),
+  );
+}
+
+function renderCodexPopover(): HTMLElement {
+  mocks.configured = [
+    { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+  ];
+  mocks.results = { codex: readyResult(codexReady()) };
+  renderPopover();
+  return screen.getByTestId("rate-limit-popover-resize-surface");
+}
+
 beforeEach(() => {
   mocks.configured = [];
   mocks.results = {};
@@ -518,6 +705,7 @@ beforeEach(() => {
   mocks.traycerUsageUpdatedAt = {};
   mocks.openSettings = vi.fn();
   mocks.enqueue = vi.fn((..._args: unknown[]) => Promise.resolve());
+  mocks.enqueueBatch = vi.fn((..._args: unknown[]) => Promise.resolve());
   mocks.consumeReset = vi.fn();
   mocks.lastUseHostQueriesOptions = null;
   mocks.lastUseHostQueriesProviderIds = null;
@@ -527,7 +715,7 @@ beforeEach(() => {
   };
   mocks.authUser = coldAuthUser();
   useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
-  useRateLimitPopoverStore.setState({ activeTab: "overview" });
+  useRateLimitPopoverStore.setState({ activeTab: "overview", size: null });
   useRateLimitPopoverStore.persist.clearStorage();
   onClose = vi.fn();
 });
@@ -551,6 +739,32 @@ describe("<RateLimitPopover /> zero-provider state", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
   });
 
+  it("keeps the empty surface resizable within the available viewport", () => {
+    renderPopover();
+
+    const surface = screen.getByTestId("rate-limit-popover-resize-surface");
+    expect(surface.className).toContain(
+      "max-w-[var(--radix-popover-content-available-width)]",
+    );
+    expect(surface.className).toContain(
+      "max-h-[var(--radix-popover-content-available-height)]",
+    );
+    expect(surface.className).toContain(
+      "min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))]",
+    );
+    expect(surface.className).toContain(
+      "min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))]",
+    );
+    expect(
+      Array.from(surface.querySelectorAll("[data-resize-direction]")).map(
+        (handle) => handle.getAttribute("data-resize-direction"),
+      ),
+    ).toEqual(["n", "ne", "e", "se", "s", "sw", "w", "nw"]);
+    expect(
+      screen.getByTestId("rate-limit-popover-resize-sw").className,
+    ).toContain("cursor-sw-resize");
+  });
+
   it("opens provider settings and closes the popover from the CTA", () => {
     mocks.configured = [];
     renderPopover();
@@ -566,6 +780,252 @@ describe("<RateLimitPopover /> zero-provider state", () => {
 });
 
 describe("<RateLimitPopover /> rail", () => {
+  it.each(RESIZE_GEOMETRY_CASES)(
+    "keeps the opposite edges fixed while resizing $direction",
+    ({ direction, deltaX, deltaY, expected }) => {
+      const surface = renderCodexPopover();
+      mockRadixResizeGeometry(surface, 480, 360);
+
+      dragResize(surface, direction, 7, { x: deltaX, y: deltaY });
+
+      const rect = surface.getBoundingClientRect();
+      expect(rect.left).toBe(expected.left);
+      expect(rect.top).toBe(expected.top);
+      expect(rect.right).toBe(expected.right);
+      expect(rect.bottom).toBe(expected.bottom);
+      expect(useRateLimitPopoverStore.getState().size).toBeNull();
+
+      endResize(surface, "pointerup", 7, { x: deltaX, y: deltaY });
+      expect(useRateLimitPopoverStore.getState().size).toEqual({
+        widthPx: expected.right - expected.left,
+        heightPx: expected.bottom - expected.top,
+      });
+    },
+  );
+
+  it("keeps the wrapper locked when Radix rewrites its transform mid-drag", async () => {
+    const surface = renderCodexPopover();
+    const geometry = mockRadixResizeGeometry(surface, 480, 360);
+    dragResize(surface, "e", 8, { x: 40, y: 0 });
+
+    await act(async () => {
+      geometry.overwriteRadixPosition(-80, 120);
+      await Promise.resolve();
+    });
+
+    const rect = surface.getBoundingClientRect();
+    expect(rect.left).toBe(100);
+    expect(rect.top).toBe(100);
+    expect(rect.right).toBe(620);
+    expect(rect.bottom).toBe(460);
+    endResize(surface, "pointerup", 8, { x: 40, y: 0 });
+  });
+
+  it("does not accumulate position across repeated horizontal Radix rewrites", async () => {
+    const surface = renderCodexPopover();
+    const geometry = mockRadixResizeGeometry(surface, 480, 360);
+    fireEvent(
+      screen.getByTestId("rate-limit-popover-resize-e"),
+      pointerEvent("pointerdown", {
+        pointerId: 14,
+        clientX: 580,
+        clientY: 460,
+        button: 0,
+      }),
+    );
+    const assertHorizontalDragStep = async (deltaX: number): Promise<void> => {
+      fireEvent(
+        surface,
+        pointerEvent("pointermove", {
+          pointerId: 14,
+          clientX: 580 + deltaX,
+          clientY: 460,
+          button: 0,
+        }),
+      );
+      await act(async () => {
+        // Simulate bottom-end Radix re-anchoring after each content-size update.
+        geometry.overwriteRadixPosition(100 - deltaX, 100);
+        await Promise.resolve();
+      });
+      const rect = surface.getBoundingClientRect();
+      expect(rect.left).toBe(100);
+      expect(rect.right).toBe(580 + deltaX);
+    };
+
+    await assertHorizontalDragStep(20);
+    await assertHorizontalDragStep(40);
+    await assertHorizontalDragStep(80);
+    await assertHorizontalDragStep(120);
+    endResize(surface, "pointerup", 14, { x: 120, y: 0 });
+  });
+
+  it("caps outward resizing at the popover collision boundary", () => {
+    const widthSpy = vi
+      .spyOn(document.documentElement, "clientWidth", "get")
+      .mockReturnValue(700);
+    const heightSpy = vi
+      .spyOn(document.documentElement, "clientHeight", "get")
+      .mockReturnValue(600);
+    try {
+      const surface = renderCodexPopover();
+      mockRadixResizeGeometry(surface, 480, 360);
+      dragResize(surface, "ne", 9, { x: 1_000, y: -1_000 });
+
+      const rect = surface.getBoundingClientRect();
+      expect(rect.left).toBe(100);
+      expect(rect.top).toBe(12);
+      expect(rect.right).toBe(688);
+      expect(rect.bottom).toBe(460);
+      endResize(surface, "pointerup", 9, { x: 1_000, y: -1_000 });
+      expect(useRateLimitPopoverStore.getState().size).toEqual({
+        widthPx: 588,
+        heightPx: 448,
+      });
+    } finally {
+      widthSpy.mockRestore();
+      heightSpy.mockRestore();
+    }
+  });
+
+  it("does not commit a drag clamped to the starting dimensions", () => {
+    const widthSpy = vi
+      .spyOn(document.documentElement, "clientWidth", "get")
+      .mockReturnValue(592);
+    const heightSpy = vi
+      .spyOn(document.documentElement, "clientHeight", "get")
+      .mockReturnValue(600);
+    try {
+      const surface = renderCodexPopover();
+      const geometry = mockRadixResizeGeometry(surface, 480, 360);
+
+      dragResize(surface, "e", 15, { x: 100, y: 0 });
+      expect(surface.getBoundingClientRect().width).toBe(480);
+
+      endResize(surface, "pointerup", 15, { x: 100, y: 0 });
+
+      expect(surface.style.width).toBe("");
+      expect(surface.style.height).toBe("");
+      expect(geometry.positionWrapper.style.transform).toBe(
+        geometry.initialTransform,
+      );
+      expect(useRateLimitPopoverStore.getState().size).toBeNull();
+    } finally {
+      widthSpy.mockRestore();
+      heightSpy.mockRestore();
+    }
+  });
+
+  it.each(["pointercancel", "lostpointercapture"] as const)(
+    "rolls back an interrupted drag on %s",
+    (eventType) => {
+      const surface = renderCodexPopover();
+      const geometry = mockRadixResizeGeometry(surface, 480, 360);
+      dragResize(surface, "ne", 10, { x: 40, y: -40 });
+      expect(geometry.positionWrapper.style.transform).not.toBe(
+        geometry.initialTransform,
+      );
+
+      endResize(surface, eventType, 10, { x: 40, y: -40 });
+
+      expect(surface.style.width).toBe("");
+      expect(surface.style.height).toBe("");
+      expect(geometry.positionWrapper.style.transform).toBe(
+        geometry.initialTransform,
+      );
+      expect(useRateLimitPopoverStore.getState().size).toBeNull();
+    },
+  );
+
+  it("ignores events from a different pointer id", () => {
+    const surface = renderCodexPopover();
+    mockRadixResizeGeometry(surface, 480, 360);
+    fireEvent(
+      screen.getByTestId("rate-limit-popover-resize-e"),
+      pointerEvent("pointerdown", {
+        pointerId: 11,
+        clientX: 580,
+        clientY: 460,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      surface,
+      pointerEvent("pointermove", {
+        pointerId: 99,
+        clientX: 620,
+        clientY: 460,
+        button: 0,
+      }),
+    );
+    expect(surface.style.width).toBe("480px");
+    fireEvent(
+      surface,
+      pointerEvent("pointermove", {
+        pointerId: 11,
+        clientX: 620,
+        clientY: 460,
+        button: 0,
+      }),
+    );
+
+    endResize(surface, "pointerup", 99, { x: 40, y: 0 });
+    expect(surface.style.width).toBe("520px");
+    expect(useRateLimitPopoverStore.getState().size).toBeNull();
+
+    endResize(surface, "pointercancel", 11, { x: 40, y: 0 });
+    expect(surface.style.width).toBe("");
+  });
+
+  it("does not roll back a committed resize when capture is lost after pointer-up", () => {
+    const surface = renderCodexPopover();
+    mockRadixResizeGeometry(surface, 480, 360);
+    dragResize(surface, "ne", 12, { x: 40, y: -40 });
+    endResize(surface, "pointerup", 12, { x: 40, y: -40 });
+    const committedSize = useRateLimitPopoverStore.getState().size;
+
+    endResize(surface, "lostpointercapture", 12, { x: 40, y: -40 });
+
+    expect(useRateLimitPopoverStore.getState().size).toEqual(committedSize);
+    expect(surface.style.width).toBe("520px");
+    expect(surface.style.height).toBe("400px");
+  });
+
+  it("remembers the last drag size across popover reopens", () => {
+    mocks.configured = [
+      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = { codex: readyResult(codexReady()) };
+    const first = renderPopover();
+
+    const surface = screen.getByTestId("rate-limit-popover-resize-surface");
+    const geometry = mockRadixResizeGeometry(surface, 480, 360);
+    dragResize(surface, "se", 13, { x: 60, y: 100 });
+    endResize(surface, "pointerup", 13, { x: 60, y: 100 });
+
+    expect(useRateLimitPopoverStore.getState().size).toEqual({
+      widthPx: 540,
+      heightPx: 460,
+    });
+    expect(surface.style.width).toBe("540px");
+    expect(surface.style.height).toBe("460px");
+    expect(surface.className).toContain("grid-rows-[minmax(0,1fr)]");
+    expect(surface.className).toContain(
+      "min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))]",
+    );
+    expect(surface.className).toContain("overflow-hidden");
+
+    geometry.rectSpy.mockRestore();
+    first.unmount();
+    renderPopover();
+
+    const reopenedSurface = screen.getByTestId(
+      "rate-limit-popover-resize-surface",
+    );
+    expect(reopenedSurface.style.width).toBe("540px");
+    expect(reopenedSurface.style.height).toBe("460px");
+  });
+
   it("pins Overview first, then one tab per provider in app order", () => {
     // Passed out of order; the rail must sort to codex, claude-code, ...
     mocks.configured = [
@@ -1377,9 +1837,28 @@ describe("<RateLimitPopover /> Refresh all", () => {
     expect((refreshCodex as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("enqueues each ephemeralProcess provider with force:true", () => {
+  it("enqueues every ephemeralProcess profile in one parallel refresh batch", () => {
     mocks.configured = [
-      { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Terminal",
+            tier: "Pro",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
       {
         providerId: "claude-code",
         lane: "ephemeralProcess",
@@ -1391,17 +1870,67 @@ describe("<RateLimitPopover /> Refresh all", () => {
       "claude-code": readyResult(claudeReady()),
     };
     renderPopover();
+    mocks.enqueue.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "codex",
-      { type: "PERSONAL" },
-      { force: true, profileId: null },
+    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
+      [
+        {
+          providerId: "codex",
+          accountContext: { type: "PERSONAL" },
+          profileId: null,
+        },
+        {
+          providerId: "codex",
+          accountContext: { type: "PERSONAL" },
+          profileId: "work-profile",
+        },
+        {
+          providerId: "claude-code",
+          accountContext: { type: "PERSONAL" },
+          profileId: null,
+        },
+      ],
+      { force: true },
     );
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "claude-code",
-      { type: "PERSONAL" },
-      { force: true, profileId: null },
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("targets the managed profile id, not null, when refreshing a provider with exactly one managed profile", () => {
+    // Regression: refreshTargetsForProvider used to short-circuit to [null]
+    // whenever profiles.length <= 1, so a lone managed profile's card
+    // (keyed by work-profile) never received the Refresh-all invalidation.
+    mocks.configured = [
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [
+          providerProfile({
+            profileId: "work-profile",
+            kind: "managed",
+            label: "Work",
+            tier: "Pro 5x",
+            usageUpdatedAt: NOW - 10_000,
+          }),
+        ],
+      },
+    ];
+    mocks.results = {
+      [resultKey("codex", "work-profile")]: readyResult(codexReady()),
+    };
+    renderPopover();
+    mocks.enqueue.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh all" }));
+    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
+      [
+        {
+          providerId: "codex",
+          accountContext: { type: "PERSONAL" },
+          profileId: "work-profile",
+        },
+      ],
+      { force: true },
     );
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   it("refetches Traycer when the synthetic Traycer entry is eligible", () => {
@@ -1559,7 +2088,7 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
-  it("refreshes every profile from one provider-heading control", () => {
+  it("refreshes every profile in parallel from one provider-heading control", () => {
     mocks.configured = [
       {
         providerId: "codex",
@@ -1595,16 +2124,22 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
     expect(screen.queryByRole("button", { name: "Refresh Work" })).toBeNull();
     fireEvent.click(refreshProvider);
 
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "codex",
-      { type: "PERSONAL" },
-      { force: true, profileId: null },
+    expect(mocks.enqueueBatch).toHaveBeenCalledWith(
+      [
+        {
+          providerId: "codex",
+          accountContext: { type: "PERSONAL" },
+          profileId: null,
+        },
+        {
+          providerId: "codex",
+          accountContext: { type: "PERSONAL" },
+          profileId: "work-profile",
+        },
+      ],
+      { force: true },
     );
-    expect(mocks.enqueue).toHaveBeenCalledWith(
-      "codex",
-      { type: "PERSONAL" },
-      { force: true, profileId: "work-profile" },
-    );
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 
   it("keeps profile cards out of a shared loading state while the provider refresh queue drains", () => {
@@ -1648,11 +2183,12 @@ describe("<RateLimitPopover /> per-provider refresh", () => {
 
   // The queue's `draining` flag is lane-global, not per-provider, so a refresh
   // on ANY ephemeralProcess provider disables every provider's control in that
-  // lane - not just the one whose fetch is in flight. Deliberate: the lane runs
-  // providers one at a time, so this matches a "refresh round is in progress"
-  // mental model rather than "my own fetch is in flight". See the spinner-state
-  // note in `use-provider-rate-limit-refresh.ts`. Pinned here so the shared
-  // disable isn't mistaken for cross-provider leakage and "fixed" away.
+  // lane - not just the one whose fetch is in flight. Deliberate: queue items run
+  // one at a time (each provider click is one parallel profile batch), so this
+  // matches a "refresh round is in progress" mental model rather than "my own
+  // fetch is in flight". See the spinner-state note in
+  // `use-provider-rate-limit-refresh.ts`. Pinned here so the shared disable isn't
+  // mistaken for cross-provider leakage and "fixed" away.
   it("disables both ephemeralProcess providers' refresh controls while the shared queue drains", () => {
     mocks.configured = [
       {

@@ -16,6 +16,7 @@ import {
 } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
   EPIC_NODE_ICONS,
+  EPIC_NODE_SENTENCE_NOUNS,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import {
@@ -28,7 +29,27 @@ import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import {
+  NotificationIndicatorsContext,
+  useSurfaceNotificationIndicatorState,
+} from "@/components/notifications/notification-indicator-context";
+import {
+  APPROVAL_TONE,
+  attentionTone,
+  DONE_TONE,
+  FAILURE_TONE,
+  INTERVIEW_TONE,
+  type IndicatorTone,
+} from "@/components/notifications/notification-indicator-tones";
+import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
+import {
+  selectNotificationIndicatorState,
+  type NotificationIndicatorState,
+} from "@/stores/notifications/notification-indicator-state";
+import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import type { TreeSlice } from "@/stores/epics/open-epic/types";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import type { ProviderId } from "@/components/home/data/landing-options";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -75,7 +96,10 @@ import {
 import {
   useAncestorIds,
   useEpicActiveAgentIds,
+  useEpicAgentActivityTiers,
+  type AgentActivityTier,
   useEpicArtifactRecords,
+  useEpicChatHarnessId,
   useEpicConnectionStatus,
   useEpicNodeHostId,
   useEpicNodeOwnerKind,
@@ -97,6 +121,7 @@ import {
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -104,6 +129,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   BASE_PAD_LEFT,
   EMPTY_PENDING_LIST,
@@ -122,6 +148,7 @@ import {
   SidebarFilterVisibilityContext,
   SidebarSortContext,
   useFilteredPanelChildIds,
+  useSidebarVisibleIds,
 } from "./epic-sidebar-filter";
 import {
   collectVisibleSidebarTreeIds,
@@ -156,6 +183,202 @@ const CHATS_TREE_FILTER: TreeFilterFn = (type) =>
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set<string>();
 const noopToggleSelection = (_id: string): void => undefined;
 const noopRowAction = (): void => undefined;
+
+type ChatDescendantStatusKind =
+  "failure" | "interview" | "approval" | "running" | "background" | "done";
+
+/**
+ * One shared urgency ladder for a collapsed parent's icon slot: the parent's
+ * own status tier and the hidden descendants' highest tier are ranked on it,
+ * and the higher one owns the slot (ties go to the parent, so solid always
+ * beats muted). Mirrors the order `NotificationIndicatorIcon` resolves a
+ * single chat's simultaneous states.
+ *
+ * `running` (an agent turn) outranks `background` (a `run_in_background` task
+ * / subagent / Monitor / scheduled wakeup keeping a session non-idle while the
+ * agent itself is idle), matching the turn-over-background precedence the
+ * per-chat indicator already uses. Both still outrank `done`, so any live work
+ * beats a finished-but-unread one.
+ */
+const CHAT_STATUS_RANKS: Record<ChatDescendantStatusKind, number> = {
+  failure: 6,
+  interview: 5,
+  approval: 4,
+  running: 3,
+  background: 2,
+  done: 1,
+};
+
+/** {@link CHAT_STATUS_RANKS} most-urgent first, for picking a rollup's kind. */
+const CHAT_STATUS_ORDER: ReadonlyArray<ChatDescendantStatusKind> = [
+  "failure",
+  "interview",
+  "approval",
+  "running",
+  "background",
+  "done",
+];
+
+/** The ladder kind an activity tier occupies. */
+function activityTierKind(tier: AgentActivityTier): ChatDescendantStatusKind {
+  return tier === "turn" ? "running" : "background";
+}
+
+/**
+ * The single tier a descendant chat is counted under - its own highest. The
+ * attention precedence goes through the shared `attentionTone`, so
+ * failure > interview > approval lives in exactly one place.
+ */
+function chatDescendantKind(
+  indicatorState: NotificationIndicatorState,
+  tier: AgentActivityTier | undefined,
+): ChatDescendantStatusKind | null {
+  const tone = attentionTone(indicatorState);
+  if (tone === FAILURE_TONE) return "failure";
+  if (tone === INTERVIEW_TONE) return "interview";
+  if (tone === APPROVAL_TONE) return "approval";
+  if (tier !== undefined) return activityTierKind(tier);
+  if (indicatorState.unreadDone) return "done";
+  return null;
+}
+
+/**
+ * Rollup over a collapsed parent's hidden chat descendants: the
+ * highest-priority kind plus per-tier counts (each descendant is counted once,
+ * under its own highest tier) so the icon's tooltip can break the aggregate
+ * down instead of hiding it behind one glyph.
+ */
+interface ChatDescendantStatusRollup {
+  readonly kind: ChatDescendantStatusKind;
+  readonly failureCount: number;
+  readonly interviewCount: number;
+  readonly approvalCount: number;
+  readonly runningCount: number;
+  readonly backgroundCount: number;
+  readonly doneCount: number;
+}
+
+interface ChatDescendantIds {
+  readonly chatIds: ReadonlyArray<string>;
+  readonly agentIds: ReadonlyArray<string>;
+}
+
+const EMPTY_CHAT_DESCENDANT_IDS: ChatDescendantIds = {
+  chatIds: [],
+  agentIds: [],
+};
+
+/**
+ * Collects the chat / terminal-agent descendants of `nodeId` so a collapsed
+ * parent can roll their statuses up without mounting the child rows. Mirrors
+ * the artifact tree's `collectDescendantArtifactEntries`: filter-hidden
+ * subtrees are skipped along with their children (the rollup must never point
+ * at a row the user cannot reach by expanding) and the walk is cycle-guarded
+ * via `visited`.
+ */
+function collectDescendantChatIds(
+  nodeId: string,
+  tree: TreeSlice,
+  visibleIds: ReadonlySet<string> | null,
+): ChatDescendantIds {
+  const rootChildren = Object.hasOwn(tree.childrenByParent, nodeId)
+    ? tree.childrenByParent[nodeId]
+    : null;
+  if (rootChildren === null || rootChildren.length === 0) {
+    return EMPTY_CHAT_DESCENDANT_IDS;
+  }
+  const chatIds: string[] = [];
+  const agentIds: string[] = [];
+  const visited = new Set<string>([nodeId]);
+  const stack = [...rootChildren];
+  while (stack.length > 0) {
+    const id = stack.pop();
+    if (id === undefined || visited.has(id)) continue;
+    visited.add(id);
+    if (visibleIds !== null && !visibleIds.has(id)) continue;
+    if (!Object.hasOwn(tree.nodeById, id)) continue;
+    const node = tree.nodeById[id];
+    if (node.type === "chat") chatIds.push(id);
+    if (node.type === "terminal-agent") agentIds.push(id);
+    if (Object.hasOwn(tree.childrenByParent, id)) {
+      for (const childId of tree.childrenByParent[id]) stack.push(childId);
+    }
+  }
+  if (chatIds.length === 0 && agentIds.length === 0) {
+    return EMPTY_CHAT_DESCENDANT_IDS;
+  }
+  return { chatIds, agentIds };
+}
+
+/**
+ * Rollup over a collapsed parent's hidden chat descendants, or `null` when
+ * there are none or none has a notable status. Each descendant chat is
+ * classified once, under its own highest tier - the per-chat attention
+ * precedence goes through the shared `attentionTone`, so failure > interview >
+ * approval lives in exactly one place. Terminal-agent descendants contribute
+ * only running-ness - epic-wide activity is their sole status authority. Only
+ * mounted inside `ChatSidebarNodeIconWithNestedStatus` (rendered solely for
+ * collapsed parents), so leaves and expanded rows carry none of these
+ * subscriptions; the shallow-compared flat result lets Zustand bail re-renders
+ * whose rollup did not change.
+ */
+function useChatDescendantStatus(args: {
+  readonly epicId: string;
+  readonly nodeId: string;
+}): ChatDescendantStatusRollup | null {
+  const { epicId, nodeId } = args;
+  const tree = useEpicTreeIndex();
+  const visibleIds = useSidebarVisibleIds();
+  const descendants = useMemo(
+    () => collectDescendantChatIds(nodeId, tree, visibleIds),
+    [nodeId, tree, visibleIds],
+  );
+  const activityTiers = useEpicAgentActivityTiers();
+  const indicators = useContext(NotificationIndicatorsContext);
+  return useAppLocalNotificationsStore(
+    useShallow((state): ChatDescendantStatusRollup | null => {
+      if (descendants === EMPTY_CHAT_DESCENDANT_IDS) return null;
+      const counts: Record<ChatDescendantStatusKind, number> = {
+        failure: 0,
+        interview: 0,
+        approval: 0,
+        running: 0,
+        background: 0,
+        done: 0,
+      };
+      for (const chatId of descendants.chatIds) {
+        const indicatorState = selectNotificationIndicatorState(
+          state,
+          { epicId, chatId },
+          indicators,
+        );
+        const kind = chatDescendantKind(
+          indicatorState,
+          activityTiers.get(chatId),
+        );
+        if (kind !== null) counts[kind] += 1;
+      }
+      for (const agentId of descendants.agentIds) {
+        // Terminal-agent descendants contribute only activity - epic-wide
+        // awareness is their sole status authority.
+        const tier = activityTiers.get(agentId);
+        if (tier !== undefined) counts[activityTierKind(tier)] += 1;
+      }
+      const kind =
+        CHAT_STATUS_ORDER.find((candidate) => counts[candidate] > 0) ?? null;
+      if (kind === null) return null;
+      return {
+        kind,
+        failureCount: counts.failure,
+        interviewCount: counts.interview,
+        approvalCount: counts.approval,
+        runningCount: counts.running,
+        backgroundCount: counts.background,
+        doneCount: counts.done,
+      };
+    }),
+  );
+}
 
 interface ExpansionController {
   expandedIds: ReadonlySet<string>;
@@ -296,9 +519,21 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [rootIds, expandedIds, tree, visibleIds, comparator],
   );
+  // Indicator state must cover every chat in the (filter-visible) tree, not
+  // just rows currently revealed by expansion: a collapsed parent rolls its
+  // hidden descendants' statuses up into a badge, so their indicators have to
+  // be observed even while their rows are unmounted. Sorted for a stable
+  // query identity across expand/collapse churn.
   const indicatorChatIds = useMemo(
-    () => selectableIds.filter((id) => tree.nodeById[id].type === "chat"),
-    [selectableIds, tree],
+    () =>
+      Object.keys(tree.nodeById)
+        .filter(
+          (id) =>
+            tree.nodeById[id].type === "chat" &&
+            (visibleIds === null || visibleIds.has(id)),
+        )
+        .sort(),
+    [tree, visibleIds],
   );
   const notificationIndicators = useHostNotificationIndicators({
     epicIds: [],
@@ -340,8 +575,8 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No chats yet."
-        description={null}
+        title="No agents yet."
+        description="Add an agent and choose a Chat or Terminal interface."
         testId="epic-chat-sidebar-empty"
       />
     );
@@ -349,14 +584,17 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     panelContent = (
       <SidebarPanelEmptyState
         icon={MessagesSquare}
-        title="No chats match the filter."
+        // Names the INTERFACE as the thing with no matches. "No agents match"
+        // would imply the Task has none at all, when the filter is only hiding
+        // the other interface.
+        title="No agents use this interface."
         description={null}
         testId="epic-chat-sidebar-filter-empty"
       />
     );
   } else {
     panelContent = (
-      <ul role="tree" aria-label="Epic chats tree" className="space-y-0.5">
+      <ul role="tree" aria-label="Epic agents tree" className="space-y-0.5">
         {rootIds.map((nodeId) => (
           <ChatNode
             key={nodeId}
@@ -940,7 +1178,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
             disabledTooltip={
               isDisconnected ? "Reconnect to make changes." : null
             }
-            triggerLabel="Add child chat or agent"
+            triggerLabel="Add child agent"
             triggerTestId={`epic-sidebar-add-${nodeId}`}
             actionRevealClassName={cn(
               "absolute right-7 top-1/2 -translate-y-1/2",
@@ -975,7 +1213,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
       <ConfirmDestructiveDialog
         open={confirmDeleteOpen}
         onOpenChange={onConfirmDeleteOpenChange}
-        title={`Delete ${artifactType} "${nodeName}"?`}
+        title={`Delete ${EPIC_NODE_SENTENCE_NOUNS[artifactType]} "${nodeName}"?`}
         description="This action cannot be undone."
         cascadeSummary={cascadeSummary}
         actionLabel="Delete"
@@ -1118,14 +1356,16 @@ function ChatRenameRow(props: ChatRenameRowProps) {
       }}
     >
       <TreeChevronSpacer />
-      <ChatSidebarNodeIcon
-        epicId={epicId}
-        nodeId={nodeId}
-        artifactType={artifactType}
-        Icon={Icon}
-        artifactIconColorMode={artifactIconColorMode}
-        iconStyle={iconStyle}
-      />
+      <ChatSidebarNodeIconSlot>
+        <ChatSidebarNodeIcon
+          epicId={epicId}
+          nodeId={nodeId}
+          artifactType={artifactType}
+          Icon={Icon}
+          artifactIconColorMode={artifactIconColorMode}
+          iconStyle={iconStyle}
+        />
+      </ChatSidebarNodeIconSlot>
       <input
         ref={renameInputRef}
         value={renameValue}
@@ -1255,6 +1495,28 @@ function ChatRowButton(props: ChatRowButtonProps) {
       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
   );
   const selectionInputId = `epic-sidebar-select-input-${nodeId}`;
+  // Collapsed parents merge their hidden descendants' status into the icon
+  // slot; every other row renders its own status only.
+  const nodeIcon =
+    hasChildren && !expanded ? (
+      <ChatSidebarNodeIconWithNestedStatus
+        epicId={epicId}
+        nodeId={nodeId}
+        artifactType={artifactType}
+        Icon={Icon}
+        artifactIconColorMode={artifactIconColorMode}
+        iconStyle={iconStyle}
+      />
+    ) : (
+      <ChatSidebarNodeIcon
+        epicId={epicId}
+        nodeId={nodeId}
+        artifactType={artifactType}
+        Icon={Icon}
+        artifactIconColorMode={artifactIconColorMode}
+        iconStyle={iconStyle}
+      />
+    );
 
   if (selectionMode) {
     return (
@@ -1281,14 +1543,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
           onToggleSelection={onToggleSelection}
         />
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <ChatSidebarNodeIcon
-            epicId={epicId}
-            nodeId={nodeId}
-            artifactType={artifactType}
-            Icon={Icon}
-            artifactIconColorMode={artifactIconColorMode}
-            iconStyle={iconStyle}
-          />
+          <ChatSidebarNodeIconSlot>{nodeIcon}</ChatSidebarNodeIconSlot>
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
         </span>
       </label>
@@ -1316,14 +1571,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         onToggle={onToggle}
       />
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        <ChatSidebarNodeIcon
-          epicId={epicId}
-          nodeId={nodeId}
-          artifactType={artifactType}
-          Icon={Icon}
-          artifactIconColorMode={artifactIconColorMode}
-          iconStyle={iconStyle}
-        />
+        <ChatSidebarNodeIconSlot>{nodeIcon}</ChatSidebarNodeIconSlot>
         <span className="min-w-0 flex-1 truncate">{nodeName}</span>
         {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
           <OwnerResourceChip
@@ -1348,6 +1596,148 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
 }
 
+// Glyph and color come from the shared notification tones so the nested
+// variant cannot drift from the per-row icon; "running" stays local because
+// it is an activity tier, not a notification state.
+const CHAT_DESCENDANT_STATUS_TONES: Record<
+  Exclude<ChatDescendantStatusKind, "running" | "background">,
+  IndicatorTone
+> = {
+  failure: FAILURE_TONE,
+  interview: INTERVIEW_TONE,
+  approval: APPROVAL_TONE,
+  done: DONE_TONE,
+};
+
+/**
+ * The parent's own tier on the shared ladder. `selfTier` is the host-published
+ * activity tier from epic awareness - the same authority the per-row icon
+ * falls back to for an unopened chat, now carrying the turn/background split
+ * so a parent doing only background work cannot outrank a descendant that is
+ * genuinely mid-turn.
+ */
+function chatSelfStatusRank(
+  state: NotificationIndicatorState,
+  selfTier: AgentActivityTier | undefined,
+): number {
+  const tone = attentionTone(state);
+  if (tone === FAILURE_TONE) return CHAT_STATUS_RANKS.failure;
+  if (tone === INTERVIEW_TONE) return CHAT_STATUS_RANKS.interview;
+  if (tone === APPROVAL_TONE) return CHAT_STATUS_RANKS.approval;
+  if (selfTier === "turn") return CHAT_STATUS_RANKS.running;
+  if (selfTier === "background") return CHAT_STATUS_RANKS.background;
+  if (state.unreadDone) return CHAT_STATUS_RANKS.done;
+  return 0;
+}
+
+/** "Nested: 1 needs attention · 2 running" - non-zero tiers, priority order. */
+function nestedChatStatusSummary(rollup: ChatDescendantStatusRollup): string {
+  const parts: string[] = [];
+  if (rollup.failureCount > 0) {
+    parts.push(
+      `${rollup.failureCount} ${rollup.failureCount === 1 ? "needs" : "need"} attention`,
+    );
+  }
+  if (rollup.interviewCount > 0) {
+    parts.push(`${rollup.interviewCount} waiting for interview`);
+  }
+  if (rollup.approvalCount > 0) {
+    parts.push(`${rollup.approvalCount} waiting for approval`);
+  }
+  if (rollup.runningCount > 0) parts.push(`${rollup.runningCount} running`);
+  if (rollup.backgroundCount > 0) {
+    parts.push(`${rollup.backgroundCount} in background`);
+  }
+  if (rollup.doneCount > 0) parts.push(`${rollup.doneCount} completed`);
+  return `Nested: ${parts.join(" · ")}`;
+}
+
+/**
+ * Icon slot for a collapsed parent. Merges the parent's own status tier with
+ * the hidden descendants' rollup on the shared ladder: the more urgent one
+ * owns the slot, ties go to the parent - so a nested state renders exactly
+ * where users already read status, as a muted variant of the same icon, and a
+ * hidden failure can never sit invisible behind a parent that is merely
+ * running. Mounted only for collapsed parents, so rows without a rollup carry
+ * none of these subscriptions.
+ */
+const ChatSidebarNodeIconWithNestedStatus = memo(
+  function ChatSidebarNodeIconWithNestedStatus(
+    props: ChatSidebarNodeIconProps,
+  ) {
+    const rollup = useChatDescendantStatus({
+      epicId: props.epicId,
+      nodeId: props.nodeId,
+    });
+    const activityTiers = useEpicAgentActivityTiers();
+    const selfIndicator = useSurfaceNotificationIndicatorState({
+      epicId: props.epicId,
+      chatId: props.nodeId,
+    });
+    if (rollup !== null) {
+      const selfTier = activityTiers.get(props.nodeId);
+      // Terminal-agent parents have no notification states of their own -
+      // activity is their only tier (their indicator entry is always empty).
+      const agentSelfRank =
+        selfTier === undefined
+          ? 0
+          : CHAT_STATUS_RANKS[activityTierKind(selfTier)];
+      const selfRank =
+        props.artifactType === "chat"
+          ? chatSelfStatusRank(selfIndicator, selfTier)
+          : agentSelfRank;
+      if (CHAT_STATUS_RANKS[rollup.kind] > selfRank) {
+        return <NestedChatStatusIcon nodeId={props.nodeId} rollup={rollup} />;
+      }
+    }
+    return <ChatSidebarNodeIcon {...props} />;
+  },
+);
+
+/**
+ * The muted variant of the status icon: same glyph, same slot, reduced
+ * opacity - the artifact tree's solid-vs-translucent "self vs descendant"
+ * convention applied to chat status. The tooltip carries the full nested
+ * breakdown, since one glyph can stand for several children.
+ */
+function NestedChatStatusIcon(props: {
+  readonly nodeId: string;
+  readonly rollup: ChatDescendantStatusRollup;
+}): ReactNode {
+  const title = nestedChatStatusSummary(props.rollup);
+  return (
+    <span
+      role="status"
+      aria-label={title}
+      title={title}
+      data-testid={`chat-descendant-status-${props.rollup.kind}-${props.nodeId}`}
+      className="inline-flex size-3.5 shrink-0 items-center justify-center opacity-60"
+    >
+      <NestedChatStatusGlyph kind={props.rollup.kind} />
+    </span>
+  );
+}
+
+function NestedChatStatusGlyph(props: {
+  readonly kind: ChatDescendantStatusKind;
+}): ReactNode {
+  if (props.kind === "background") {
+    return <BackgroundActivityGlyph testId={undefined} />;
+  }
+  if (props.kind === "running") {
+    return (
+      <AgentSpinningDots
+        className="text-current"
+        testId={undefined}
+        variant={undefined}
+      />
+    );
+  }
+  const tone = CHAT_DESCENDANT_STATUS_TONES[props.kind];
+  const Icon = tone.Icon;
+  return <Icon aria-hidden className={cn("size-3.5", tone.className)} />;
+}
+
 interface ChatSidebarNodeIconProps {
   readonly epicId: string;
   readonly nodeId: string;
@@ -1360,14 +1750,7 @@ interface ChatSidebarNodeIconProps {
 function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
   if (props.artifactType === "chat") {
     return (
-      <ChatProgressIcon
-        epicId={props.epicId}
-        chatId={props.nodeId}
-        className={undefined}
-        mutedClassName="text-muted-foreground/70"
-        testId="chat-sidebar-spinner"
-        defaultIcon={undefined}
-      />
+      <GuiChatSidebarNodeIcon epicId={props.epicId} nodeId={props.nodeId} />
     );
   }
   if (props.artifactType === "terminal-agent") {
@@ -1385,6 +1768,36 @@ function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
       Icon={props.Icon}
       artifactIconColorMode={props.artifactIconColorMode}
       iconStyle={props.iconStyle}
+    />
+  );
+}
+
+/**
+ * GUI chat sidebar icon. The persisted harness brand occupies the idle slot;
+ * `ChatProgressIcon` remains authoritative for read-only, activity, approval,
+ * failure, and completion states.
+ */
+function GuiChatSidebarNodeIcon(props: {
+  readonly epicId: string;
+  readonly nodeId: string;
+}) {
+  const harnessId = useEpicChatHarnessId(props.nodeId);
+  return (
+    <ChatProgressIcon
+      epicId={props.epicId}
+      chatId={props.nodeId}
+      className={undefined}
+      mutedClassName="text-muted-foreground/70"
+      testId="chat-sidebar-spinner"
+      defaultIcon={
+        harnessId === null ? undefined : (
+          <SidebarAgentHarnessIcon
+            nodeId={props.nodeId}
+            harnessId={harnessId}
+            surface="gui"
+          />
+        )
+      }
     />
   );
 }
@@ -1411,7 +1824,11 @@ function TerminalAgentProgressIcon(props: {
     // generic bot glyph is the fallback for unresolved/legacy records.
     if (harnessId !== null) {
       return (
-        <HarnessIcon harnessId={harnessId} className="size-3.5 shrink-0" />
+        <SidebarAgentHarnessIcon
+          nodeId={props.nodeId}
+          harnessId={harnessId}
+          surface="tui"
+        />
       );
     }
     return (
@@ -1436,6 +1853,48 @@ function TerminalAgentProgressIcon(props: {
         testId="terminal-agent-sidebar-spinner"
         variant={undefined}
       />
+    </span>
+  );
+}
+
+/**
+ * Harness identity with a terminal-only surface mark. GUI chats use the brand
+ * unchanged; TUI agents add a bare terminal glyph without a background so the
+ * harness mark stays visible beneath it.
+ */
+function SidebarAgentHarnessIcon(props: {
+  readonly nodeId: string;
+  readonly harnessId: ProviderId;
+  readonly surface: "gui" | "tui";
+}) {
+  const TerminalIcon = EPIC_NODE_ICONS.terminal;
+  const surfaceTitle =
+    props.surface === "gui" ? "GUI chat" : "TUI terminal agent";
+  return (
+    <span
+      data-testid={`sidebar-agent-harness-${props.nodeId}`}
+      data-agent-surface={props.surface}
+      className="relative inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
+      title={surfaceTitle}
+    >
+      <HarnessIcon harnessId={props.harnessId} className="size-3.5" />
+      {props.surface === "tui" ? (
+        <TerminalIcon
+          aria-hidden="true"
+          data-testid={`sidebar-agent-surface-${props.nodeId}`}
+          data-agent-surface="tui"
+          className="pointer-events-none absolute -right-1 -bottom-1.5 size-2 text-muted-foreground"
+          strokeWidth={3}
+        />
+      ) : null}
+    </span>
+  );
+}
+
+function ChatSidebarNodeIconSlot(props: { readonly children: ReactNode }) {
+  return (
+    <span className="inline-flex h-3.5 w-[1.125rem] shrink-0 items-center">
+      {props.children}
     </span>
   );
 }
@@ -1511,7 +1970,7 @@ function ChatMoreMenu(props: {
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label={`Chat actions for ${nodeName}`}
+          aria-label={`Agent actions for ${nodeName}`}
           data-testid={`epic-sidebar-more-${nodeId}`}
           className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100"
           onClick={(event) => {

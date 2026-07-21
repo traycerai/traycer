@@ -1,9 +1,10 @@
 {
   "name": "@traycer-clients/shared",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "scripts": {
+    "compile": "tsc --noEmit",
     "lint": "eslint . --cache --fix --max-warnings 0",
     "format": "bun x prettier --write .",
     "test": "vitest run"

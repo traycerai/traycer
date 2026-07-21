@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  candidateWorkspaceFileRefsForRelativeLinkPath,
   workspaceFileRefFromAbsoluteFilePath,
   workspaceFileRefFromLinkPath,
 } from "@/components/epic-canvas/workspace-file/workspace-file-link-ref";
@@ -118,5 +119,143 @@ describe("workspaceFileRefFromAbsoluteFilePath", () => {
 
   it("returns null for a blank path", () => {
     expect(workspaceFileRefFromAbsoluteFilePath(HOST_ID, "   ")).toBeNull();
+  });
+});
+
+describe("candidateWorkspaceFileRefsForRelativeLinkPath", () => {
+  it("builds the direct-file candidate then its index.md fallback per bound root, root-major order", () => {
+    const refs = candidateWorkspaceFileRefsForRelativeLinkPath(
+      HOST_ID,
+      ["/repo-a", "/repo-b"],
+      "src/app.ts",
+    );
+
+    expect(refs).toHaveLength(4);
+    expect(refs?.[0]).toMatchObject({
+      workspacePath: "/repo-a",
+      filePath: "src/app.ts",
+    });
+    expect(refs?.[1]).toMatchObject({
+      workspacePath: "/repo-a",
+      filePath: "src/app.ts/index.md",
+    });
+    expect(refs?.[2]).toMatchObject({
+      workspacePath: "/repo-b",
+      filePath: "src/app.ts",
+    });
+    expect(refs?.[3]).toMatchObject({
+      workspacePath: "/repo-b",
+      filePath: "src/app.ts/index.md",
+    });
+  });
+
+  it("resolves a directory-shaped relative path (trailing separator) to its own index.md candidate, not the bare directory", () => {
+    const refs = candidateWorkspaceFileRefsForRelativeLinkPath(
+      HOST_ID,
+      ROOTS,
+      "sub-dir/",
+    );
+
+    expect(refs).toHaveLength(1);
+    expect(refs?.[0]).toMatchObject({
+      workspacePath: "/repo",
+      filePath: "sub-dir/index.md",
+    });
+  });
+
+  it("resolves a bare '.' -less trailing directory root href to index.md at the root itself", () => {
+    // A bare trailing-slash "current directory" href names the root's own
+    // index.md, mirroring how a bare file href resolves against root[0].
+    const refs = candidateWorkspaceFileRefsForRelativeLinkPath(
+      HOST_ID,
+      ROOTS,
+      "./",
+    );
+
+    expect(refs).toHaveLength(1);
+    expect(refs?.[0]).toMatchObject({
+      workspacePath: "/repo",
+      filePath: "index.md",
+    });
+  });
+
+  it("resolves a parent-escaping relative path to an absolute, single-file synthesized candidate per root (the host enforces containment per workspacePath)", () => {
+    const refs = candidateWorkspaceFileRefsForRelativeLinkPath(
+      HOST_ID,
+      ROOTS,
+      "../sibling/app.ts",
+    );
+
+    // The direct file, then its own index.md fallback, both resolved
+    // client-side into an absolute path whose OWN directory becomes the
+    // synthesized workspacePath - never `{ workspacePath: "/repo", filePath:
+    // "../sibling/app.ts" }`, which `workspace.readFile`'s containment guard
+    // would always reject.
+    expect(refs).toHaveLength(2);
+    expect(refs?.[0]).toMatchObject({
+      workspacePath: "/sibling",
+      filePath: "app.ts",
+    });
+    expect(refs?.[1]).toMatchObject({
+      workspacePath: "/sibling/app.ts",
+      filePath: "index.md",
+    });
+  });
+
+  it("resolves a directory-shaped parent-escaping href to a single absolute index.md candidate", () => {
+    const refs = candidateWorkspaceFileRefsForRelativeLinkPath(
+      HOST_ID,
+      ["/repo/sub"],
+      "../sibling/",
+    );
+
+    expect(refs).toHaveLength(1);
+    expect(refs?.[0]).toMatchObject({
+      workspacePath: "/repo/sibling",
+      filePath: "index.md",
+    });
+  });
+
+  it("preserves root order for an escaping href resolved against multiple roots", () => {
+    const refs = candidateWorkspaceFileRefsForRelativeLinkPath(
+      HOST_ID,
+      ["/repo-a", "/repo-a/nested"],
+      "../app.ts/",
+    );
+
+    // Each root resolves the SAME escaping href to a different absolute
+    // target, in ROOT order - root 0's candidate always precedes root 1's,
+    // regardless of where either one lands.
+    expect(refs).toHaveLength(2);
+    expect(refs?.[0]?.workspacePath).toBe("/app.ts");
+    expect(refs?.[1]?.workspacePath).toBe("/repo-a/app.ts");
+  });
+
+  it("returns null for an absolute path", () => {
+    expect(
+      candidateWorkspaceFileRefsForRelativeLinkPath(
+        HOST_ID,
+        ROOTS,
+        "/repo/src/app.ts",
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when no roots are bound", () => {
+    expect(
+      candidateWorkspaceFileRefsForRelativeLinkPath(HOST_ID, [], "src/app.ts"),
+    ).toBeNull();
+  });
+
+  it("returns null for a blank path", () => {
+    expect(
+      candidateWorkspaceFileRefsForRelativeLinkPath(HOST_ID, ROOTS, "   "),
+    ).toBeNull();
+  });
+
+  it("returns null for a bare '.'", () => {
+    expect(
+      candidateWorkspaceFileRefsForRelativeLinkPath(HOST_ID, ROOTS, "."),
+    ).toBeNull();
   });
 });

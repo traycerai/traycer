@@ -2,9 +2,19 @@ import { randomUUID } from "node:crypto";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
 import { log } from "../app/logger";
 import {
+  exactHostUpdateArgs,
+  resolveExactHostUpdateCli,
+} from "../cli/host-update-cli";
+import {
+  captureHostUpdateAdmission,
+  captureHostUpdateChannel,
   refreshRegistryUpdateState,
-  streamCliWithProgress,
+  runHostOperation,
+  streamExactHostUpdateWithinOperation,
+  type HostOperationEventListener,
+  type HostUpdateAdmission,
 } from "../ipc/host-management-ipc";
+import type { UpdateChannelSnapshot } from "../app/update-preferences";
 import type { RunnerIpcBridge } from "../ipc/runner-ipc-bridge";
 import type { HostRegistryUpdateState } from "../../ipc-contracts/host-management-types";
 import type { HostLifecycle } from "./host-lifecycle";
@@ -56,11 +66,33 @@ export interface HostAutoUpdateDeps {
   // `true` when the host reports work in progress or its state can't be
   // determined (fail-safe busy).
   readonly probeBusy: (websocketUrl: string) => Promise<boolean>;
-  // Runs the actual `traycer host update`.
-  readonly runHostUpdate: () => Promise<void>;
+  // Reserves the process-wide Host operation before registry/capability
+  // prework begins, so every window disables consistently while an automatic
+  // update is being admitted.
+  readonly runUpdateOperation: <T>(
+    run: (operation: HostAutoUpdateOperation) => Promise<T>,
+  ) => Promise<T>;
+  readonly captureUpdateChannel: () => UpdateChannelSnapshot;
+  // Binds the selected target to the current durable channel generation.
+  readonly captureUpdateAdmission: (
+    version: string,
+    includePreReleases: boolean,
+    channel: UpdateChannelSnapshot,
+  ) => HostUpdateAdmission;
+  // Resolves capability, performs the final generation/reservation admission,
+  // and starts the exact CLI update.
+  readonly runHostUpdate: (
+    admission: HostUpdateAdmission,
+    operation: HostAutoUpdateOperation,
+  ) => Promise<void>;
   // Re-probes the registry with force after a successful update so the cached
   // installedVersion (and the Updates row / banner / menu) reflect the swap.
   readonly refreshAfter: () => Promise<void>;
+}
+
+export interface HostAutoUpdateOperation {
+  readonly operationId: string;
+  readonly onEvent: HostOperationEventListener;
 }
 
 /**
@@ -72,51 +104,75 @@ export async function reconcileHostAutoUpdate(
   reason: string,
   deps: HostAutoUpdateDeps,
 ): Promise<HostAutoUpdateOutcome> {
-  const state = await deps.checkUpdateState();
-  if (
-    !state.reachable ||
-    !state.updateAvailable ||
-    state.latestVersion === null
-  ) {
-    return "up-to-date";
-  }
-
-  // Let host discovery settle before trusting the snapshot - otherwise a null
-  // url at boot (snapshot not loaded yet) would fail the idle gate open and
-  // stop a host that is actually running work.
-  await deps.awaitHostReady();
-  const websocketUrl = deps.getHostWebsocketUrl();
-  if (websocketUrl !== null) {
-    const busy = await deps.probeBusy(websocketUrl);
-    if (busy) {
-      log.info("[host-auto-update] host busy - deferring update", {
-        reason,
-        latestVersion: state.latestVersion,
-      });
-      return "skipped-busy";
-    }
-  }
-
-  log.info("[host-auto-update] updating idle host", {
-    reason,
-    installedVersion: state.installedVersion,
-    latestVersion: state.latestVersion,
-  });
   try {
-    await deps.runHostUpdate();
-  } catch (err) {
-    log.warn("[host-auto-update] host update failed - will retry next launch", {
-      reason,
-      err,
+    return await deps.runUpdateOperation(async (operation) => {
+      const channel = deps.captureUpdateChannel();
+      const state = await deps.checkUpdateState();
+      if (
+        !state.reachable ||
+        !state.updateAvailable ||
+        state.latestVersion === null
+      ) {
+        return "up-to-date";
+      }
+
+      // Capture before readiness/busy work. `runHostUpdate` repeats the check
+      // after its capability await in the same synchronous turn that spawns.
+      const admission = deps.captureUpdateAdmission(
+        state.latestVersion,
+        state.includePreReleases,
+        channel,
+      );
+
+      // Let host discovery settle before trusting the snapshot - otherwise a
+      // null URL at boot would fail the idle gate open and stop active work.
+      await deps.awaitHostReady();
+      const websocketUrl = deps.getHostWebsocketUrl();
+      if (websocketUrl !== null) {
+        const busy = await deps.probeBusy(websocketUrl);
+        if (busy) {
+          log.info("[host-auto-update] host busy - deferring update", {
+            reason,
+            latestVersion: admission.targetVersion,
+          });
+          return "skipped-busy";
+        }
+      }
+
+      log.info("[host-auto-update] updating idle host", {
+        reason,
+        installedVersion: state.installedVersion,
+        latestVersion: admission.targetVersion,
+      });
+      try {
+        await deps.runHostUpdate(admission, operation);
+      } catch (err) {
+        log.warn(
+          "[host-auto-update] host update failed - will retry next launch",
+          {
+            reason,
+            err,
+          },
+        );
+        return "failed";
+      }
+      await deps.refreshAfter();
+      log.info("[host-auto-update] host updated", {
+        reason,
+        latestVersion: admission.targetVersion,
+      });
+      return "updated";
     });
+  } catch (err) {
+    log.warn(
+      "[host-auto-update] host update admission failed - will retry next launch",
+      {
+        reason,
+        err,
+      },
+    );
     return "failed";
   }
-  await deps.refreshAfter();
-  log.info("[host-auto-update] host updated", {
-    reason,
-    latestVersion: state.latestVersion,
-  });
-  return "updated";
 }
 
 /**
@@ -146,13 +202,26 @@ export function defaultHostAutoUpdateDeps(
     awaitHostReady,
     getHostWebsocketUrl: () => host.getSnapshot()?.websocketUrl ?? null,
     probeBusy: probeHostActivityBusy,
-    runHostUpdate: async () => {
-      await streamCliWithProgress(
-        ["host", "update"],
-        randomUUID(),
-        "update",
+    runUpdateOperation: (run) => {
+      const operationId = randomUUID();
+      return runHostOperation(bridge, "update", operationId, (onEvent) =>
+        run({ operationId, onEvent }),
+      );
+    },
+    captureUpdateChannel: captureHostUpdateChannel,
+    captureUpdateAdmission: captureHostUpdateAdmission,
+    runHostUpdate: async (admission, operation) => {
+      // Capability-negotiate a CLI that understands `--release` (may be the
+      // bundled binary when an older external CLI is authoritative), then
+      // always pin the exact selected target — never bare `host update`.
+      const invocation = await resolveExactHostUpdateCli();
+      await streamExactHostUpdateWithinOperation(
+        exactHostUpdateArgs(admission.targetVersion),
         timeoutMs,
-        bridge,
+        invocation,
+        operation.onEvent,
+        operation.operationId,
+        admission,
       );
     },
     refreshAfter: async () => {

@@ -1,10 +1,12 @@
-import { useCallback, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import {
   Bell,
   BellOff,
   Check,
   CheckCheck,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   CircleAlert,
   MessageCircle,
   MessageSquarePlus,
@@ -36,6 +38,7 @@ import {
   type NotificationEvent,
   NOTIFICATION_EVENT_TYPES,
 } from "@traycer/protocol/notifications/notification-entry";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface NotificationsPopoverProps {
   readonly onNavigate: () => void;
@@ -47,8 +50,8 @@ type NotificationsTab = "unread" | "all";
  * Notifications list surface. Rendered inside the bell's popover.
  *
  * Layout: header with unread count, unread/all tabs, and bulk actions. Every
- * row is a single button (navigation), with a sibling hover-revealed
- * "mark as read" affordance - no nested buttons.
+ * row has a primary navigation button, with sibling disclosure and
+ * hover-revealed "mark as read" affordances - no nested buttons.
  *
  * Click-to-navigate: clicking a notification activates it through the same
  * preflight path that `NotificationFocusBridge` uses for OS-toast clicks.
@@ -65,6 +68,13 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
   const handleClick = useCallback(
     (row: MergedNotificationRow) => {
       if (row.payload === null) {
+        // Payload-less rows have no preflight: the click IS the activation.
+        Analytics.getInstance().track(AnalyticsEvent.NotificationActivated, {
+          category: row.source,
+        });
+        Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
+          category: row.source,
+        });
         actions.markAsRead(row.feedId);
         return;
       }
@@ -72,7 +82,16 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
       activate({
         payload: row.payload,
         receivedAt: Date.now(),
+        // Fires only after activation preflight succeeds, so a failed
+        // preflight is not counted as an activation - and the auto-read that
+        // accompanies it is recorded too.
         onActivated: () => {
+          Analytics.getInstance().track(AnalyticsEvent.NotificationActivated, {
+            category: row.source,
+          });
+          Analytics.getInstance().track(AnalyticsEvent.NotificationMarkedRead, {
+            category: row.source,
+          });
           actions.markAsRead(row.feedId);
         },
       });
@@ -148,7 +167,13 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  onClick={() => actions.markAllAsRead()}
+                  onClick={() => {
+                    Analytics.getInstance().track(
+                      AnalyticsEvent.NotificationsMarkedAllRead,
+                      null,
+                    );
+                    actions.markAllAsRead();
+                  }}
                   disabled={unreadCount === 0}
                   data-testid="notifications-mark-all-read"
                   aria-label="Mark all notifications as read"
@@ -167,7 +192,13 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
                   type="button"
                   variant="ghost"
                   size="icon-sm"
-                  onClick={() => actions.clearAll()}
+                  onClick={() => {
+                    Analytics.getInstance().track(
+                      AnalyticsEvent.NotificationsCleared,
+                      { scope: "all" },
+                    );
+                    actions.clearAll();
+                  }}
                   disabled={isEmpty}
                   data-testid="notifications-clear-all"
                   aria-label="Clear all notifications"
@@ -311,9 +342,82 @@ interface NotificationRowProps {
   readonly onMarkRead: (id: string) => void;
 }
 
+function useNotificationTextOverflow(
+  row: MergedNotificationRow | null,
+  isExpanded: boolean,
+) {
+  const titleRef = useRef<HTMLSpanElement | null>(null);
+  const bodyRef = useRef<HTMLSpanElement | null>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const title = row === null ? null : row.title;
+  const body = row === null ? null : row.body;
+  const readAt = row === null ? null : row.readAt;
+
+  useLayoutEffect(() => {
+    if (isExpanded) return;
+    const titleElement = titleRef.current;
+    const bodyElement = bodyRef.current;
+    if (titleElement === null || bodyElement === null) return;
+
+    const check = (): void => {
+      const titleIsOverflowing =
+        titleElement.scrollHeight - titleElement.clientHeight > 1;
+      const bodyIsOverflowing =
+        bodyElement.scrollHeight - bodyElement.clientHeight > 1;
+      const next = titleIsOverflowing || bodyIsOverflowing;
+      setIsOverflowing((current) => (current === next ? current : next));
+    };
+    const observer = new ResizeObserver(check);
+    observer.observe(titleElement);
+    observer.observe(bodyElement);
+    check();
+    return () => observer.disconnect();
+  }, [body, isExpanded, readAt, title]);
+
+  return { bodyRef, isOverflowing, titleRef };
+}
+
+interface NotificationExpansionControlProps {
+  readonly isExpanded: boolean;
+  readonly onToggle: () => void;
+}
+
+function NotificationExpansionControl(
+  props: NotificationExpansionControlProps,
+) {
+  return (
+    <div className="flex justify-end px-3 pb-2">
+      <Button
+        type="button"
+        variant="ghost"
+        size="xs"
+        aria-expanded={props.isExpanded}
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onToggle();
+        }}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        {props.isExpanded ? (
+          <ChevronUp className="size-3" aria-hidden />
+        ) : (
+          <ChevronDown className="size-3" aria-hidden />
+        )}
+        {props.isExpanded ? "Show less" : "Show more"}
+      </Button>
+    </div>
+  );
+}
+
 function NotificationRow(props: NotificationRowProps) {
   const { feedId, filter, onActivate, onMarkRead } = props;
   const row = useMergedNotificationRow(feedId);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const { bodyRef, isOverflowing, titleRef } = useNotificationTextOverflow(
+    row,
+    isExpanded,
+  );
+
   if (row === null) return null;
   const isRead = row.readAt !== null;
   if (filter === "unread" && isRead) return null;
@@ -347,6 +451,7 @@ function NotificationRow(props: NotificationRowProps) {
         className={cn(
           "flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition-colors",
           "hover:bg-accent/70 focus-visible:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+          isOverflowing && "pb-1",
         )}
       >
         <span
@@ -360,28 +465,27 @@ function NotificationRow(props: NotificationRowProps) {
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex min-w-0 items-baseline gap-2">
-            <TooltipWrapper
-              label={row.title}
-              side="bottom"
-              sideOffset={6}
-              align="start"
+            <span
+              ref={titleRef}
+              data-testid="notification-title"
+              className={cn(
+                "min-w-0 flex-1 text-ui-sm font-semibold leading-snug",
+                isExpanded
+                  ? "whitespace-pre-wrap break-words"
+                  : "line-clamp-2 break-words",
+                isRead ? "text-muted-foreground" : "text-foreground",
+              )}
             >
-              <span
-                data-testid="notification-title"
-                className={cn(
-                  "min-w-0 flex-1 truncate text-ui-sm font-semibold leading-snug",
-                  isRead ? "text-muted-foreground" : "text-foreground",
-                )}
-              >
-                {row.title}
-              </span>
-            </TooltipWrapper>
+              {row.title}
+            </span>
             <NotificationTimestamp createdAt={row.createdAt} />
           </div>
           <span
+            ref={bodyRef}
             data-testid="notification-body"
             className={cn(
-              "truncate text-ui-sm leading-snug",
+              "break-words text-ui-sm leading-snug",
+              isExpanded ? "whitespace-pre-wrap" : "line-clamp-2",
               isRead ? "text-muted-foreground/80" : "text-foreground/80",
             )}
           >
@@ -389,6 +493,12 @@ function NotificationRow(props: NotificationRowProps) {
           </span>
         </div>
       </button>
+      {isOverflowing ? (
+        <NotificationExpansionControl
+          isExpanded={isExpanded}
+          onToggle={() => setIsExpanded((current) => !current)}
+        />
+      ) : null}
       {!isRead && (
         <TooltipWrapper
           label="Mark as read"
@@ -400,6 +510,10 @@ function NotificationRow(props: NotificationRowProps) {
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              Analytics.getInstance().track(
+                AnalyticsEvent.NotificationMarkedRead,
+                { category: row.source },
+              );
               onMarkRead(row.feedId);
             }}
             aria-label="Mark as read"
@@ -490,6 +604,7 @@ function getRowMeta(row: MergedNotificationRow): EventMeta {
         tone: DONE_TONE,
       };
     case "agent.stalled":
+    case "workspace.operation.failed":
       return {
         icon: CircleAlert,
         tone: DANGER_TONE,

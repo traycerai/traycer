@@ -14,7 +14,7 @@ import type {
   EpicResourceSnapshotWire,
   HostTreeResourceSnapshotWire,
   OtherResourceSnapshotWire,
-  OwnerResourceSnapshotWire,
+  OwnerResourceSnapshotWireV13,
   ResourceProcessSnapshotWire,
   ResourceOwnerKindWire,
 } from "@traycer/protocol/host/resources/subscribe";
@@ -38,7 +38,7 @@ export type ResourcesStreamClientFactory = (
   callbacks: ResourcesStreamCallbacks,
 ) => ResourcesStreamClientHandle;
 
-export type OwnerResourceUsage = OwnerResourceSnapshotWire;
+export type OwnerResourceUsage = OwnerResourceSnapshotWireV13;
 export type EpicResourceUsage = EpicResourceSnapshotWire;
 export type AppResourceUsage = AppResourceSnapshotWire;
 export type HostTreeResourceUsage = HostTreeResourceSnapshotWire;
@@ -48,9 +48,6 @@ export interface TaskResourceSummary {
   readonly cpuPercent: number;
   readonly rssBytes: number;
   readonly trackedProcessCount: number;
-  readonly openTerminalCount: number;
-  readonly tuiAgentCount: number;
-  readonly guiAgentCount: number;
 }
 
 /** Stable map key for one owner within an epic's projection. */
@@ -79,7 +76,7 @@ export interface ResourcesState {
    * map is "not currently tracked" - callers must treat that as unknown, never
    * as zero use.
    */
-  readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWire>;
+  readonly owners: ReadonlyMap<string, OwnerResourceSnapshotWireV13>;
   /** Host-app usage sampled alongside the owner projection. */
   readonly app: AppResourceSnapshotWire | null;
   /** Whole host-process-tree aggregate, available from resources.subscribe@1.2. */
@@ -89,11 +86,6 @@ export interface ResourcesState {
   /** `null` when the epic has no tracked owner roots (a valid quiet state). */
   readonly epic: EpicResourceSnapshotWire | null;
   readonly epics: ReadonlyMap<string, EpicResourceSnapshotWire>;
-  /**
-   * Renderer-derived task-level summary for the live owner projection. `null`
-   * means no tracked owner snapshots are present, not zero usage.
-   */
-  readonly taskSummary: TaskResourceSummary | null;
   readonly dispose: () => void;
 }
 
@@ -109,7 +101,8 @@ export interface ResourcesStoreHandle {
   readonly dispose: () => void;
 }
 
-const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWire> = new Map();
+const EMPTY_OWNERS: ReadonlyMap<string, OwnerResourceSnapshotWireV13> =
+  new Map();
 const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWire> = new Map();
 
 // Compare only the fields a chip renders. `sampledAt`/`rootPids` move on every
@@ -118,8 +111,8 @@ const EMPTY_EPICS: ReadonlyMap<string, EpicResourceSnapshotWire> = new Map();
 // projection is resent each update, but only owners whose metrics actually moved
 // get a new reference (and re-render their chip).
 function ownerUsageEqual(
-  a: OwnerResourceSnapshotWire,
-  b: OwnerResourceSnapshotWire,
+  a: OwnerResourceSnapshotWireV13,
+  b: OwnerResourceSnapshotWireV13,
 ): boolean {
   return (
     a.cpuPercent === b.cpuPercent &&
@@ -165,20 +158,6 @@ function epicUsageEqual(
   );
 }
 
-function taskSummaryEqual(
-  a: TaskResourceSummary,
-  b: TaskResourceSummary,
-): boolean {
-  return (
-    a.cpuPercent === b.cpuPercent &&
-    a.rssBytes === b.rssBytes &&
-    a.trackedProcessCount === b.trackedProcessCount &&
-    a.openTerminalCount === b.openTerminalCount &&
-    a.tuiAgentCount === b.tuiAgentCount &&
-    a.guiAgentCount === b.guiAgentCount
-  );
-}
-
 function appUsageEqual(
   a: AppResourceSnapshotWire,
   b: AppResourceSnapshotWire,
@@ -219,12 +198,12 @@ function otherUsageEqual(
 }
 
 function mergeOwners(
-  previous: ReadonlyMap<string, OwnerResourceSnapshotWire>,
+  previous: ReadonlyMap<string, OwnerResourceSnapshotWireV13>,
   payload: ResourcesProjectionPayload,
   scope: ResourcesStreamScope,
-): ReadonlyMap<string, OwnerResourceSnapshotWire> {
+): ReadonlyMap<string, OwnerResourceSnapshotWireV13> {
   if (payload.owners.length === 0) return EMPTY_OWNERS;
-  const next = new Map<string, OwnerResourceSnapshotWire>();
+  const next = new Map<string, OwnerResourceSnapshotWireV13>();
   for (const owner of payload.owners) {
     const key =
       scope.kind === "global"
@@ -243,47 +222,6 @@ function mergeOwners(
     );
   }
   return next;
-}
-
-export function deriveTaskResourceSummary(
-  app: AppResourceSnapshotWire | null,
-  owners: readonly OwnerResourceSnapshotWire[],
-): TaskResourceSummary | null {
-  if (app === null && owners.length === 0) return null;
-
-  let cpuPercent = app?.cpuPercent ?? 0;
-  let rssBytes = app?.rssBytes ?? 0;
-  let trackedProcessCount = app?.processCount ?? 0;
-  let openTerminalCount = 0;
-  let tuiAgentCount = 0;
-  let guiAgentCount = 0;
-
-  for (const snapshot of owners) {
-    cpuPercent += snapshot.cpuPercent;
-    rssBytes += snapshot.rssBytes;
-    trackedProcessCount += snapshot.processCount;
-
-    switch (snapshot.owner.kind) {
-      case "terminal":
-        openTerminalCount += 1;
-        break;
-      case "terminal-agent":
-        tuiAgentCount += 1;
-        break;
-      case "chat":
-        guiAgentCount += 1;
-        break;
-    }
-  }
-
-  return {
-    cpuPercent,
-    rssBytes,
-    trackedProcessCount,
-    openTerminalCount,
-    tuiAgentCount,
-    guiAgentCount,
-  };
 }
 
 function mergeEpic(
@@ -343,16 +281,6 @@ function mergeOther(
   return next;
 }
 
-function mergeTaskSummary(
-  previous: TaskResourceSummary | null,
-  payload: ResourcesProjectionPayload,
-): TaskResourceSummary | null {
-  const next = deriveTaskResourceSummary(payload.app, payload.owners);
-  if (next === null) return null;
-  if (previous !== null && taskSummaryEqual(previous, next)) return previous;
-  return next;
-}
-
 export function createResourcesStore(
   options: ResourcesStoreOptions,
 ): ResourcesStoreHandle {
@@ -372,7 +300,6 @@ export function createResourcesStore(
         other: mergeOther(state.other, payload.other),
         epic: mergeEpic(state.epic, payload.epic),
         epics: mergeEpics(state.epics, payload),
-        taskSummary: mergeTaskSummary(state.taskSummary, payload),
       }));
     };
 
@@ -400,7 +327,6 @@ export function createResourcesStore(
       other: null,
       epic: null,
       epics: EMPTY_EPICS,
-      taskSummary: null,
       dispose: () => {
         if (disposed) return;
         disposed = true;

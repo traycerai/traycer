@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { userMessageSenderSchema } from "@traycer/protocol/persistence/epic/senders";
+import {
+  userMessageSenderSchema,
+  userMessageSenderSchemaPreInReplyTo,
+} from "@traycer/protocol/persistence/epic/senders";
 
 /**
  * Durable chat event log - append-only record of state transitions a
@@ -68,3 +71,23 @@ export const chatEventSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).nullable(),
 });
 export type ChatEvent = z.infer<typeof chatEventSchema>;
+
+// Wire-freeze copy with `actor` swapped for the pre-`inReplyTo` sender freeze,
+// bound to `chat.subscribe@1.0–1.3` serverFrames (`eventAppended` + snapshot
+// `chat.events`). Hand-frozen, not derived from the live shape. See
+// `agentSenderSchemaPreInReplyTo`.
+export const chatEventSchemaPreInReplyTo = z.object({
+  eventId: z.string(),
+  type: chatEventTypeSchema,
+  timestamp: z.number(),
+  clientActionId: z.string().nullable(),
+  actor: userMessageSenderSchemaPreInReplyTo.nullable(),
+  message: z.string().nullable(),
+  turnId: z.string().nullable(),
+  messageId: z.string().nullable(),
+  queueItemId: z.string().nullable(),
+  approvalId: z.string().nullable(),
+  blockId: z.string().nullable(),
+  severity: chatEventSeveritySchema,
+  metadata: z.record(z.string(), z.unknown()).nullable(),
+});

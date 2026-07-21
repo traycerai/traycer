@@ -36,13 +36,23 @@ export interface ComposerBodyProps {
   } | null;
   readonly canSubmit: boolean;
   readonly isSubmitting: boolean;
+  readonly attachmentPending: boolean;
   readonly workspaceDisabledHint: string | null;
   readonly header: ReactNode;
+  /**
+   * Rendered between `header` and the composer card (`ComposerShell`) - the
+   * decision-log-mandated slot for a banner that must sit flush above the
+   * card itself, below any mode-switch header. `null` for callers with
+   * nothing to show there (the chat composer routes its own rate-limit
+   * banner through a separate portal and never uses this slot).
+   */
+  readonly topBanner: ReactNode | null;
   readonly attachmentsStrip: ReactNode;
   readonly workspaceControls: ReactNode;
   readonly dictationControl: ComposerDictationControl | null;
   readonly dictationPreparing: DictationPreparingStatus | null;
   readonly paste: UseComposerPasteResult;
+  readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
   readonly onSubmit: () => void;
   readonly onStartTerminal: (launch: TerminalAgentLaunch) => void;
   readonly onSnapshot: (
@@ -62,18 +72,22 @@ export function ComposerBody({
   initialSelection,
   canSubmit,
   isSubmitting,
+  attachmentPending,
   workspaceDisabledHint,
   header,
+  topBanner,
   attachmentsStrip,
   workspaceControls,
   dictationControl,
   dictationPreparing,
   paste,
+  hasPastedImageBytes,
   onSubmit,
   onStartTerminal,
   onSnapshot,
 }: ComposerBodyProps) {
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const chatPasteActive = composerMode === "chat";
   const hiddenInTerminal = cn(composerMode !== "chat" && "hidden");
   const hiddenInChat = cn(composerMode !== "terminal" && "hidden");
   const showLandingAgentModeTooltip = true;
@@ -81,13 +95,14 @@ export function ComposerBody({
   return (
     <div className="flex flex-col gap-3">
       {header}
+      {topBanner}
       <ComposerShell
         pickerStore={pickerStore}
-        onDragOver={paste.onDragOver}
-        onDrop={paste.onDrop}
-        onDragEnter={paste.onDragEnter}
-        onDragLeave={paste.onDragLeave}
-        isDraggingFiles={paste.isDraggingFiles}
+        onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
+        onDrop={chatPasteActive ? paste.onDrop : NOOP}
+        onDragEnter={chatPasteActive ? paste.onDragEnter : NOOP}
+        onDragLeave={chatPasteActive ? paste.onDragLeave : NOOP}
+        dragOverlayVariant={chatPasteActive ? paste.dragOverlayVariant : null}
         attachmentsStrip={composerMode === "chat" ? attachmentsStrip : null}
         editor={
           <>
@@ -98,6 +113,7 @@ export function ComposerBody({
                 initialContent={initialContent}
                 initialSelection={initialSelection}
                 slashProviderId={harnessId}
+                hasPastedImageBytes={hasPastedImageBytes}
                 isActive={chatEditorIsActive}
                 disabled={false}
                 placeholder={COMPOSER_PLACEHOLDER}
@@ -105,9 +121,9 @@ export function ComposerBody({
                 stabilizeImageAttachmentCaret={false}
                 onSnapshot={onSnapshot}
                 onSubmit={onSubmit}
-                onPaste={paste.onPaste}
-                onDragOver={paste.onDragOver}
-                onDrop={paste.onDrop}
+                onPaste={chatPasteActive ? paste.onPaste : NOOP}
+                onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
+                onDrop={chatPasteActive ? paste.onDrop : NOOP}
                 onKeyDown={undefined}
                 onFocus={NOOP}
                 onBlur={NOOP}
@@ -135,6 +151,7 @@ export function ComposerBody({
                 showNextTurnPermissionNote={false}
                 showAgentModeTooltip={showLandingAgentModeTooltip}
                 canSubmit={canSubmit}
+                attachmentPending={attachmentPending}
                 onSubmit={onSubmit}
                 activeTurnStatus={null}
                 stopDisabled
@@ -146,6 +163,7 @@ export function ComposerBody({
                 // The landing composer has no tab yet - the app-wide default
                 // host applies.
                 createProfileHostId={null}
+                runTargetHostId={null}
               />
             </SurfaceActivityProvider>
           </div>

@@ -15,6 +15,7 @@ import {
 } from "./host-display-name";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 import { streamTraycerCliJson } from "../cli/traycer-cli";
+import { HOST_RESTART_SUBPROCESS_TIMEOUT_MS } from "@traycer/protocol/host/lifecycle-constants";
 
 /**
  * Snapshot of the OS-supervised host's runtime state, as projected by
@@ -50,8 +51,21 @@ const WS_RPC_HOST = "127.0.0.1";
 const HOST_READY_TIMEOUT_MS = 60_000;
 const HOST_POLL_INTERVAL_MS = 250;
 const HOST_ENDPOINT_CHECK_TIMEOUT_MS = 750;
-const CLI_RESTART_TIMEOUT_MS = 2 * 60_000;
 const CLI_START_STOP_TIMEOUT_MS = 60_000;
+/**
+ * Backoff ladder for re-probing a pid.json that is present but whose
+ * endpoint didn't answer. The pid-file watcher is edge-triggered on file
+ * WRITES while reachability is time-varying, so a single probe failure at
+ * the only watcher edge used to wedge `currentSnapshot` at null for the
+ * rest of the session (2026-07-14 incident: host reachable 7s after the
+ * ensure timeout, renderer stuck on "Bound host is offline" until an app
+ * restart). While metadata exists but the endpoint is unreachable, keep
+ * re-probing - the host is either still binding (converges in the next
+ * shot or two) or genuinely dead (the health monitor / ensure flows own
+ * that; a capped 5s loopback probe is negligible to keep running).
+ */
+const REACHABILITY_RETRY_INITIAL_MS = 250;
+const REACHABILITY_RETRY_MAX_MS = 5_000;
 
 export interface HostLifecycleEvents {
   change: (snapshot: DesktopLocalHostSnapshot | null) => void;
@@ -171,6 +185,8 @@ export class HostLifecycle extends EventEmitter {
   private currentSnapshot: DesktopLocalHostSnapshot | null = null;
   private reloadGeneration = 0;
   private disposed = false;
+  private reachabilityRetryTimer: NodeJS.Timeout | null = null;
+  private reachabilityRetryDelayMs = REACHABILITY_RETRY_INITIAL_MS;
 
   constructor(options: HostLifecycleOptions) {
     super();
@@ -229,6 +245,11 @@ export class HostLifecycle extends EventEmitter {
    * build) instead of poking the platform service-manager APIs directly. The
    * PID-file watcher fires `change` once the new host publishes fresh
    * metadata.
+   *
+   * Rethrows after logging/emitting so the renderer-driven caller (IPC
+   * `requestHostRespawn` via `respawnHost`) sees a rejected promise instead of
+   * a false success - a swallowed failure here used to resolve while the host
+   * stayed dead.
    */
   async respawn(): Promise<void> {
     if (this.disposed) {
@@ -253,6 +274,7 @@ export class HostLifecycle extends EventEmitter {
       const startupError = await this.buildStartupError(cause);
       log.error("[host] respawn failed", startupError);
       this.emit("error", startupError);
+      throw cause;
     }
   }
 
@@ -334,6 +356,10 @@ export class HostLifecycle extends EventEmitter {
       return;
     }
     this.disposed = true;
+    if (this.reachabilityRetryTimer !== null) {
+      clearTimeout(this.reachabilityRetryTimer);
+      this.reachabilityRetryTimer = null;
+    }
     if (this.watcher !== null) {
       this.watcher.close();
       this.watcher = null;
@@ -392,7 +418,10 @@ export class HostLifecycle extends EventEmitter {
     }
     const generation = this.reloadGeneration + 1;
     this.reloadGeneration = generation;
-    const raw = await readPidMetadata(this.options.layout.pidMetadataFile);
+    const readState = await readPidMetadataState(
+      this.options.layout.pidMetadataFile,
+    );
+    const raw = readState.kind === "parsed" ? readState.snapshot : null;
     // Filter an unreachable / wrong-shaped host out of what the renderer sees,
     // so the host gate treats it as not-ready and fires `ensureHost`. A
     // reachable host is surfaced regardless of its version stamp - the renderer
@@ -423,7 +452,52 @@ export class HostLifecycle extends EventEmitter {
       this.currentSnapshot = next;
       this.emit("change", next);
     }
+    // Retry-until-reachable: the file is PRESENT (a named-but-unreachable host,
+    // or an indeterminate read we can't yet trust) but did not resolve to a
+    // reachable snapshot. The watcher won't fire again until the FILE changes,
+    // so without a timer this state is terminal for the session. Clear the
+    // ladder only on a CONFIRMED-absent file (a deliberate stop) - never on a
+    // partial/transient read, which was the hole that let the wedge persist.
+    if (readState.kind !== "absent" && next === null) {
+      this.scheduleReachabilityRetry();
+    } else {
+      this.clearReachabilityRetry();
+    }
     return next;
+  }
+
+  private scheduleReachabilityRetry(): void {
+    if (this.disposed || this.reachabilityRetryTimer !== null) {
+      return;
+    }
+    const delayMs = this.reachabilityRetryDelayMs;
+    if (delayMs === REACHABILITY_RETRY_INITIAL_MS) {
+      log.info(
+        "[host] pid metadata present but endpoint unreachable - retrying until it answers",
+        { delayMs },
+      );
+    }
+    this.reachabilityRetryDelayMs = Math.min(
+      delayMs * 2,
+      REACHABILITY_RETRY_MAX_MS,
+    );
+    const timer = setTimeout(() => {
+      this.reachabilityRetryTimer = null;
+      void this.reloadSnapshot().catch((error: unknown) => {
+        log.warn("[host] reachability retry reload failed", error);
+      });
+    }, delayMs);
+    // The retry ladder must never be what keeps the main process alive.
+    timer.unref();
+    this.reachabilityRetryTimer = timer;
+  }
+
+  private clearReachabilityRetry(): void {
+    this.reachabilityRetryDelayMs = REACHABILITY_RETRY_INITIAL_MS;
+    if (this.reachabilityRetryTimer !== null) {
+      clearTimeout(this.reachabilityRetryTimer);
+      this.reachabilityRetryTimer = null;
+    }
   }
 
   private async toReachableSnapshot(
@@ -506,7 +580,8 @@ export class HostLifecycle extends EventEmitter {
     await streamTraycerCliJson<unknown>({
       args: ["host", "restart"],
       env: null,
-      timeoutMs: CLI_RESTART_TIMEOUT_MS,
+      timeoutMs: HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
+      invocation: null,
       onEvent: () => {
         // No progress sink - restart payload is small and any partial
         // progress lines are advisory. The PID-metadata watcher fires
@@ -585,25 +660,43 @@ export function canReachHostWebsocketUrl(url: string): Promise<boolean> {
   });
 }
 
-export async function readPidMetadata(
+/**
+ * The outcome of reading pid.json, kept DISTINCT so the reachability ladder can
+ * tell "the host deliberately stopped" (file gone) from "I couldn't read it
+ * yet" (a partial write, or a transient EACCES/EIO). Collapsing both to `null`
+ * made a coalesced watcher edge that landed mid-write CLEAR the retry ladder,
+ * so the original session-long wedge could persist (review finding 4). The host
+ * writer documents partial reads as expected-and-retryable, so this is a real
+ * interleaving, not a theoretical one.
+ */
+type PidMetadataRead =
+  | { readonly kind: "parsed"; readonly snapshot: DesktopLocalHostSnapshot }
+  | { readonly kind: "absent" }
+  | { readonly kind: "indeterminate" };
+
+export async function readPidMetadataState(
   path: string,
-): Promise<DesktopLocalHostSnapshot | null> {
+): Promise<PidMetadataRead> {
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
-  } catch {
-    return null;
+  } catch (error: unknown) {
+    // ENOENT is the only signal that the host is genuinely gone; every other
+    // read error (EACCES/EIO/EMFILE) leaves the file's fate unknown.
+    if (isErrorCode(error, "ENOENT")) return { kind: "absent" };
+    return { kind: "indeterminate" };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return null;
+    // A partially-written file parses as invalid JSON - present, not absent.
+    return { kind: "indeterminate" };
   }
 
   if (parsed === null || typeof parsed !== "object") {
-    return null;
+    return { kind: "indeterminate" };
   }
 
   const obj = parsed as Record<string, unknown>;
@@ -618,10 +711,29 @@ export async function readPidMetadata(
     typeof version !== "string" ||
     typeof pid !== "number"
   ) {
-    return null;
+    return { kind: "indeterminate" };
   }
 
-  return withDefaultHostName({ hostId, websocketUrl, version, pid });
+  return {
+    kind: "parsed",
+    snapshot: withDefaultHostName({ hostId, websocketUrl, version, pid }),
+  };
+}
+
+export async function readPidMetadata(
+  path: string,
+): Promise<DesktopLocalHostSnapshot | null> {
+  const state = await readPidMetadataState(path);
+  return state.kind === "parsed" ? state.snapshot : null;
+}
+
+function isErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === code
+  );
 }
 
 async function safeReadLogTail(

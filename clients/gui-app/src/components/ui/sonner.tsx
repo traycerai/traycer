@@ -25,13 +25,19 @@ const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
   "border border-border bg-background text-foreground",
   "hover:bg-muted",
 );
+const INTERACTIVE_ELEMENT_SELECTOR =
+  "button, a, input, textarea, select, [role='button']";
+const NOTIFICATION_TOAST_ACTION_SELECTOR = "[data-notification-toast-action]";
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
   const toasterTheme = normalizeToasterTheme(theme);
 
   return (
-    <DismissableLayer.Branch data-slot="toaster-branch">
+    <DismissableLayer.Branch
+      data-slot="toaster-branch"
+      onClick={activateNotificationToastSurface}
+    >
       <Sonner
         theme={toasterTheme}
         className="toaster group"
@@ -63,6 +69,23 @@ const Toaster = ({ ...props }: ToasterProps) => {
     </DismissableLayer.Branch>
   );
 };
+
+function activateNotificationToastSurface(
+  event: React.MouseEvent<HTMLDivElement>,
+): void {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+
+  const interactiveTarget = target.closest(INTERACTIVE_ELEMENT_SELECTOR);
+  const toastSurface = target.closest("[data-sonner-toast]");
+  const action = toastSurface?.querySelector<HTMLButtonElement>(
+    NOTIFICATION_TOAST_ACTION_SELECTOR,
+  );
+  if (interactiveTarget !== null) return;
+
+  if (action === undefined || action === null) return;
+  action.click();
+}
 
 function normalizeToasterTheme(
   theme: string | undefined,

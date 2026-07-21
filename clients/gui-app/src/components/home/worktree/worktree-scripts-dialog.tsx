@@ -107,6 +107,9 @@ function WorktreeScriptsDialogBody(props: {
       activityPaths: null,
       cursor: null,
       limit: null,
+      // A background read: serve the host's TTL-cached view. Only the
+      // Settings toolbar's explicit Refresh forces a disk recompute.
+      forceRefresh: false,
     },
     options: { enabled: resolved.kind === "existing-worktree" },
   });
@@ -141,6 +144,10 @@ function WorktreeScriptsDialogBody(props: {
     params: {
       workspacePaths: [],
       scriptRefs: sourceRef !== null ? [{ workspacePath, ref: sourceRef }] : [],
+      // A pure `git show` point-read at a ref; the TTL-cached workspace
+      // summaries this flag governs are not even consulted, so a forced
+      // recompute would buy nothing.
+      forceRefresh: false,
     },
     options: { enabled: sourceRef !== null },
   });
@@ -387,7 +394,7 @@ function describeTarget(input: {
       pathLabel: "New worktree branch",
       pathValue: input.resolved.branchName,
       description:
-        "These scripts ride the worktree request - the host writes them into the new worktree when the chat starts.",
+        "These scripts ride the worktree request - the host writes them into the new worktree when the agent starts.",
     };
   }
   if (input.resolved.kind === "checkout-branch-worktree") {

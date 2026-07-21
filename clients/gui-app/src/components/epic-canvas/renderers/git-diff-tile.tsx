@@ -141,11 +141,17 @@ function GitDiffTileLive(props: GitDiffTileLiveProps): ReactNode {
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
   );
+  // Gate on tile visibility: a diff tile in a background canvas tab must not
+  // hold the host's status poller (and its watcher set) alive. On
+  // re-activation, a still-running poller (another consumer kept it alive)
+  // replays its cached snapshot immediately; if this tile was the sole
+  // consumer, a fresh poller computes its first snapshot while the TanStack
+  // cache keeps the previous data rendered - no blank frame either way.
   const subscription = useGitListChangedFilesSubscription({
     hostId: props.node.hostId,
     runningDir: props.node.diff.runningDir,
     ignoreWhitespace,
-    enabled: true,
+    enabled: props.isActive,
   });
 
   const bundleFileCount = bundleChangedFileCount(
@@ -210,7 +216,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
   const patchDiffViewerPreferences = useSettingsStore(
     (s) => s.patchDiffViewerPreferences,
   );
-  const editorOpen = useEditorOpen();
+  const editorOpen = useEditorOpen("file");
   const { mutateAsync: refreshWorktreeStatus } = useGitRefreshWorktreeStatus();
   const updateView = useEpicCanvasStore((s) => s.updateGitDiffTileViewInTab);
   const { active: openFileFeedbackActive, trigger: triggerOpenFileFeedback } =
@@ -408,7 +414,7 @@ interface GitFileDiffPanelProps {
 
 function GitFileDiffPanel(props: GitFileDiffPanelProps): ReactNode {
   const defaultEditor = useSettingsStore((s) => s.defaultEditor);
-  const editorOpen = useEditorOpen();
+  const editorOpen = useEditorOpen("file");
   const {
     active: openExternallyFeedbackActive,
     trigger: triggerOpenExternallyFeedback,

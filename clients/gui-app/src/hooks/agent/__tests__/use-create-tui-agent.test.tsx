@@ -111,6 +111,24 @@ const startSessionResponse = {
   harnessId: "claude" as const,
 };
 
+// worktree.create resolves per-entry; echo an `ok` row for every requested
+// entry so the dispatch's partial-failure gate sees a full success.
+function worktreeCreateOkResponse(payload: unknown): unknown {
+  const entries =
+    (payload as { entries?: ReadonlyArray<{ workspacePath: string }> })
+      .entries ?? [];
+  return {
+    binding: { entries: [] },
+    perEntry: entries.map((entry) => ({
+      workspacePath: entry.workspacePath,
+      ok: true,
+      worktreePath: null,
+      branch: null,
+      errorMessage: null,
+    })),
+  };
+}
+
 function setupSequencedMock(): {
   readonly calls: ReadonlyArray<CapturedCall>;
 } {
@@ -126,7 +144,7 @@ function setupSequencedMock(): {
           (payload as { tuiAgentId?: string | null }).tuiAgentId ?? "server-id",
       });
     }
-    return Promise.resolve({ binding: { entries: [] } });
+    return Promise.resolve(worktreeCreateOkResponse(payload));
   });
   return { calls };
 }
@@ -143,6 +161,82 @@ describe("useCreateTuiAgent", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("aborts the launch when worktree.create reports a per-entry failure", async () => {
+    const calls: CapturedCall[] = [];
+    hookMocks.request.mockImplementation((method, payload) => {
+      calls.push({ method, payload });
+      if (method === "worktree.create") {
+        // RPC resolves, but the host failed the folder's worktree.
+        return Promise.resolve({
+          binding: { entries: [] },
+          perEntry: [
+            {
+              workspacePath: WORKSPACE_PATH,
+              ok: false,
+              worktreePath: null,
+              branch: null,
+              errorMessage: "branch already exists",
+            },
+          ],
+        });
+      }
+      if (method === "epic.createTuiAgent") {
+        return Promise.resolve({ tuiAgentId: "server-id" });
+      }
+      return Promise.resolve(worktreeCreateOkResponse(payload));
+    });
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    const intent: WorktreeIntent = {
+      entries: [
+        {
+          kind: "worktree",
+          scripts: null,
+          workspacePath: WORKSPACE_PATH,
+          repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          isPrimary: true,
+          branch: {
+            type: "new",
+            name: "traycer/fix-x",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+        },
+      ],
+    };
+
+    await act(async () => {
+      await expect(
+        result.current.create({
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          parentId: null,
+          title: "",
+          placement: { kind: "active-tile" },
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          agentMode: "regular",
+          forkSourceHarnessSessionId: null,
+          onStatusChange: null,
+          workspaceMode: "inherit",
+          worktreeIntent: intent,
+          terminalAgentArgs: null,
+          profileId: null,
+        }),
+      ).rejects.toThrow("Couldn't prepare the workspace");
+    });
+
+    // Launching against the partial binding never proceeds to harness work.
+    const methodOrder = calls.map((call) => call.method);
+    expect(methodOrder).toContain("worktree.create");
+    expect(methodOrder).not.toContain("agent.tui.prepareLaunch");
+    expect(methodOrder).not.toContain("epic.createTuiAgent");
   });
 
   it("Worktree-mode (create) dispatches worktree.create BEFORE agent.tui.prepareLaunch", async () => {
@@ -308,7 +402,7 @@ describe("useCreateTuiAgent", () => {
             "server-id",
         });
       }
-      return Promise.resolve({ binding: { entries: [] } });
+      return Promise.resolve(worktreeCreateOkResponse(payload));
     });
     const queryClient = makeQueryClient();
     const { result } = renderHook(() => useCreateTuiAgent(), {
@@ -447,7 +541,7 @@ describe("useCreateTuiAgent", () => {
             "server-id",
         });
       }
-      return Promise.resolve({ binding: { entries: [] } });
+      return Promise.resolve(worktreeCreateOkResponse(payload));
     });
 
     const queryClient = makeQueryClient();
@@ -607,7 +701,7 @@ describe("useCreateTuiAgent", () => {
       if (method === "epic.createTuiAgent") {
         return Promise.resolve({ tuiAgentId: "server-id" });
       }
-      return Promise.resolve({ binding: { entries: [] } });
+      return Promise.resolve(worktreeCreateOkResponse(payload));
     });
 
     const queryClient = makeQueryClient();
@@ -974,7 +1068,7 @@ describe("useCreateTuiAgent", () => {
             "server-id",
         });
       }
-      return Promise.resolve({ binding: { entries: [] } });
+      return Promise.resolve(worktreeCreateOkResponse(payload));
     });
 
     const queryClient = makeQueryClient();

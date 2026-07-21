@@ -4,7 +4,7 @@ import { cleanup, renderHook } from "@testing-library/react";
 import { PaletteQueryProvider } from "@/lib/commands/palette-query-context";
 import type {
   GitChangedFile,
-  WorktreeBindingSelectorRow,
+  WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
 import type { CommandContext, CommandItem } from "@/lib/commands/types";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
@@ -28,7 +28,7 @@ interface GitListChangedFilesArgs {
 const state = vi.hoisted(() => ({
   openTileIntoTargetGroup: vi.fn<(args: OpenTileIntoTargetGroupArgs) => void>(),
   query: "",
-  rows: [] as ReadonlyArray<WorktreeBindingSelectorRow>,
+  rows: [] as ReadonlyArray<WorktreeBindingSelectorRowV12>,
   files: [] as ReadonlyArray<FileNode>,
   truncated: false,
   changedFiles: [] as ReadonlyArray<GitChangedFile>,
@@ -125,7 +125,7 @@ function changedFile(path: string): GitChangedFile {
 function bindingRow(
   runningDir: string,
   isGitRepo: boolean,
-): WorktreeBindingSelectorRow {
+): WorktreeBindingSelectorRowV12 {
   return {
     hostId: "default-host",
     runningDir,
@@ -142,13 +142,14 @@ function bindingRow(
     setupState: "not_required",
     disabledReason: null,
     sources: [],
+    isGitResolvePending: false,
   };
 }
 
 function worktreeBindingRow(
   workspacePath: string,
   runningDir: string,
-): WorktreeBindingSelectorRow {
+): WorktreeBindingSelectorRowV12 {
   return {
     ...bindingRow(runningDir, true),
     workspacePath,

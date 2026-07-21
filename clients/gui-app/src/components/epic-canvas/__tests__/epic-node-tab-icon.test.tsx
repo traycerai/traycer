@@ -30,8 +30,14 @@ describe("<EpicNodeTabIcon /> terminal indicator", () => {
     useAppLocalNotificationsStore.getState().activateIdentity("user-1");
     emitTerminalCrashedNotification({
       instanceId: TERMINAL_NODE.instanceId,
-      epicId: "epic-1",
-      chatId: TERMINAL_NODE.id,
+      target: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: TERMINAL_NODE.id,
+        tabId: "view-tab-1",
+        paneId: "pane-1",
+        tileInstanceId: TERMINAL_NODE.instanceId,
+      },
       cause: "exit",
     });
 

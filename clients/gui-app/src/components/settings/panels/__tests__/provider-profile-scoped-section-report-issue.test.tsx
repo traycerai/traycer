@@ -62,6 +62,7 @@ function ambientProfile(): ProviderCliState["profiles"][number] {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -115,6 +116,7 @@ function renderSection(
           hostId="host-1"
           isSelectedHostLocal
           canAddProfile
+          startInReauth={false}
           failedAttempt={null}
           onAddProfile={() => undefined}
           onDismissFailedAttempt={() => undefined}

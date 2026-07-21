@@ -1,6 +1,12 @@
 import "../../../../__tests__/test-browser-apis";
-import type { ReactNode } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { KeyboardEvent, ReactNode } from "react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileDropdownShortcutHint } from "../profile-dropdown";
@@ -21,7 +27,19 @@ vi.mock("@/components/ui/dropdown-menu", () => {
       </div>
     ),
     DropdownMenuTrigger: passthrough,
-    DropdownMenuContent: passthrough,
+    DropdownMenuContent: (props: {
+      readonly children: ReactNode;
+      readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+    }): ReactNode => (
+      <div
+        role="menu"
+        tabIndex={-1}
+        data-testid="profile-dropdown-content"
+        onKeyDown={props.onKeyDown}
+      >
+        {props.children}
+      </div>
+    ),
     DropdownMenuItem: (props: {
       readonly children: ReactNode;
       readonly onSelect: (() => void) | undefined;
@@ -76,6 +94,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -138,6 +157,7 @@ function renderDropdown(input: RenderDropdownInput) {
       shortcutHintForIndex={input.shortcutHintForIndex}
       contentContainer={null}
       onCloseAutoFocus={input.onCloseAutoFocus}
+      usagePresentation={null}
     />,
   );
 }
@@ -161,6 +181,33 @@ describe("<ProfileDropdown />", () => {
       name: "Codex profile: Work",
     });
     expect(trigger.textContent).toContain("Work");
+    expect(
+      within(trigger).queryByText("Terminal", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeNull();
+  });
+
+  it("shows the Terminal badge on the closed trigger for the ambient profile", () => {
+    renderDropdown({
+      profiles: [AMBIENT, WORK],
+      activeProfileId: null,
+      onSelectProfile: vi.fn(),
+      onCreateProfile: vi.fn(),
+      createProfileDisabled: false,
+      createProfileDisabledReason: undefined,
+      shortcutHintForIndex: stubShortcutHintForIndex,
+      onCloseAutoFocus: null,
+    });
+
+    const trigger = screen.getByRole("button", {
+      name: "Codex profile: Terminal account, Terminal",
+    });
+    expect(
+      within(trigger).getByText("Terminal", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeDefined();
   });
 
   it("renders non-modal so nested picker clicks can dismiss only the profile menu", () => {
@@ -180,6 +227,31 @@ describe("<ProfileDropdown />", () => {
     );
   });
 
+  it("stops only menu-owned keys from bubbling beyond the dropdown", () => {
+    const onDocumentKeyDown = vi.fn();
+    document.addEventListener("keydown", onDocumentKeyDown);
+    renderDropdown({
+      profiles: [AMBIENT, WORK],
+      activeProfileId: "work-profile",
+      onSelectProfile: vi.fn(),
+      onCreateProfile: vi.fn(),
+      createProfileDisabled: false,
+      createProfileDisabledReason: undefined,
+      shortcutHintForIndex: stubShortcutHintForIndex,
+      onCloseAutoFocus: null,
+    });
+    const content = screen.getByTestId("profile-dropdown-content");
+
+    ["ArrowDown", "ArrowUp", "Home", "End", "Enter", "Escape"].forEach((key) =>
+      fireEvent.keyDown(content, { key }),
+    );
+    expect(onDocumentKeyDown).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(content, { key: "1", metaKey: true, shiftKey: true });
+    expect(onDocumentKeyDown).toHaveBeenCalledTimes(1);
+    document.removeEventListener("keydown", onDocumentKeyDown);
+  });
+
   it("lists every profile as a row, dimming a signed-out row with a status suffix", () => {
     renderDropdown({
       profiles: [AMBIENT, WORK, PERSONAL_SIGNED_OUT],
@@ -193,7 +265,7 @@ describe("<ProfileDropdown />", () => {
     });
 
     expect(
-      screen.getByRole("menuitem", { name: "Terminal account" }),
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     ).toBeDefined();
     expect(screen.getByRole("menuitem", { name: "Work" })).toBeDefined();
     const signedOutRow = screen.getByRole("menuitem", {
@@ -215,7 +287,9 @@ describe("<ProfileDropdown />", () => {
       onCloseAutoFocus: null,
     });
 
-    fireEvent.click(screen.getByRole("menuitem", { name: "Terminal account" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
+    );
     expect(onSelectProfile).toHaveBeenLastCalledWith(null);
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
@@ -347,7 +421,7 @@ describe("<ProfileDropdown />", () => {
     ).toBe("true");
     expect(
       screen
-        .getByRole("menuitem", { name: "Terminal account" })
+        .getByRole("menuitem", { name: "Terminal account, Terminal" })
         .getAttribute("aria-current"),
     ).toBeNull();
   });

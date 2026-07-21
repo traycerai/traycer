@@ -17,13 +17,19 @@ import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import { useProfileRateLimitSwitchPrompt } from "@/components/chat/composer/use-profile-rate-limit-switch-prompt";
+import { ProfileRateLimitSwitchBanner } from "@/components/chat/composer/profile-rate-limit-switch-banner";
+import { useRefreshProvidersListOnTurnDefaultHost } from "@/hooks/providers/use-refresh-providers-list-on-turn-default-host";
+import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { ComposerBody } from "@/components/home/composer/composer-body";
 import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
+import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreate } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
@@ -48,6 +54,7 @@ import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { nextComposerMode } from "@/components/home/data/landing-options";
 import { ArrowLeftRight } from "lucide-react";
 import { useHostBinding, useHostClient } from "@/lib/host";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface LandingComposerProps {
   readonly draftId: string | null;
@@ -141,6 +148,8 @@ export function LandingComposer(props: LandingComposerProps) {
     composerMode === "terminal",
   );
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
+  const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   const mentionRoots = useLandingComposerMentionRoots(draftId);
   useComposerPickerItems({
     pickerStore,
@@ -168,6 +177,29 @@ export function LandingComposer(props: LandingComposerProps) {
     );
   });
   const defaultHostClient = useHostClient();
+  // Rate-limit switch prompt for the landing composer's own toolbar
+  // selection, scoped to the app-wide default host (landing has no tab of
+  // its own) - the same shared hook the chat composer uses, mirroring its
+  // wiring in `chat-composer.tsx`. Purely informational: it never blocks
+  // epic creation.
+  const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
+    harnessId,
+    profileId,
+    selectedModel,
+    active: activityEnabled,
+    client: defaultHostClient,
+  });
+  // Keeps the banner's `providers.list` read converging with a turn's
+  // passive rate-limit capture from ANY running epic on this host -
+  // mirrors `useRefreshProvidersListOnTurn` in `chat-composer.tsx`, scoped
+  // to the default host instead of a tab.
+  useRefreshProvidersListOnTurnDefaultHost(harnessId);
+  const onSwitchRateLimitedProfile = useCallback(
+    (nextProfileId: string | null) => {
+      commitProfileSelection(toolbarStore, nextProfileId);
+    },
+    [toolbarStore],
+  );
   const resolvedWorkspace = useResolvedWorkspaceFolders(
     draftWorkspace,
     defaultHostClient,
@@ -177,14 +209,29 @@ export function LandingComposer(props: LandingComposerProps) {
       deriveFolderlessAllowedWorkspaceAvailability(
         resolvedWorkspace.folders,
         resolvedWorkspace.isLoading,
+        resolvedWorkspace.isError,
       ),
-    [resolvedWorkspace.folders, resolvedWorkspace.isLoading],
+    [
+      resolvedWorkspace.folders,
+      resolvedWorkspace.isLoading,
+      resolvedWorkspace.isError,
+    ],
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
-  const canSubmit = !isSubmitting && workspaceCanStart && hasSubmittableContent;
+  const runnerHost = useRunnerHost();
+  const paste = useLandingComposerPaste(
+    editorRef,
+    runnerHost.fileDrops,
+    mentionRoots,
+  );
+  const attachmentPending = isAttachmentIngestPending(paste);
+  const canSubmit =
+    !isSubmitting &&
+    !attachmentPending &&
+    workspaceCanStart &&
+    hasSubmittableContent;
 
   const actions = useLandingComposerActions();
-  const paste = useLandingComposerPaste(editorRef);
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
     isActive: chatComposerActive,
@@ -222,6 +269,10 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 
   const handleRemoveImage = useCallback((id: string) => {
+    Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
+      kind: "image",
+      surface: "draft",
+    });
     editorRef.current?.removeImageAttachmentById(id);
   }, []);
 
@@ -230,8 +281,8 @@ export function LandingComposer(props: LandingComposerProps) {
       type="button"
       aria-label={
         composerMode === "chat"
-          ? "Switch to terminal mode"
-          : "Switch to chat mode"
+          ? "Switch to the Terminal interface"
+          : "Switch to the Chat interface"
       }
       className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       onClick={() => {
@@ -259,8 +310,34 @@ export function LandingComposer(props: LandingComposerProps) {
       initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
+      attachmentPending={attachmentPending}
       workspaceDisabledHint={workspaceAvailability.disabledHint}
       header={<div className="flex justify-end">{switcher}</div>}
+      topBanner={
+        rateLimitPrompt.kind === "visible" ? (
+          <ProfileRateLimitSwitchBanner
+            key={rateLimitPrompt.warningKey}
+            harnessId={harnessId}
+            providerId={rateLimitPrompt.providerId}
+            severity={rateLimitPrompt.severity}
+            limitedFamilies={rateLimitPrompt.limitedFamilies}
+            current={rateLimitPrompt.current}
+            profiles={rateLimitPrompt.profiles}
+            destinations={rateLimitPrompt.destinations}
+            primaryTarget={rateLimitPrompt.primaryTarget}
+            probeTarget={rateLimitPrompt.probeTarget}
+            // Landing has no tab of its own; `null` resolves the usage
+            // sidecar/R-key refresh to the app-wide default host, matching
+            // `ComposerToolbar`'s own `runTargetHostId={null}` for this
+            // surface (composer-body.tsx).
+            runTargetHostId={null}
+            onSwitchProfile={onSwitchRateLimitedProfile}
+            affectedChatCount={0}
+            onSwitchProfileForTask={noopSwitchProfileForTask}
+            onDismiss={rateLimitPrompt.dismiss}
+          />
+        ) : null
+      }
       attachmentsStrip={
         <LandingComposerAttachmentStrip onRemoveImage={handleRemoveImage} />
       }
@@ -268,12 +345,15 @@ export function LandingComposer(props: LandingComposerProps) {
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
+      hasPastedImageBytes={null}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onSnapshot={handleSnapshot}
     />
   );
 }
+
+function noopSwitchProfileForTask(): void {}
 
 function LandingComposerAttachmentStrip(props: {
   readonly onRemoveImage: (id: string) => void;

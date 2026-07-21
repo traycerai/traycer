@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   PERSIST_STORES,
+  appLocalNotificationDisplayReceiptKey,
+  appLocalNotificationDisplayReceiptNotificationPrefix,
+  appLocalNotificationDisplayReceiptPrefix,
   appLocalNotificationsKey,
   composerHarnessMemoryKey,
   composerRunSettingsKey,
   epicCanvasKey,
+  interviewDraftKey,
+  interviewDraftKeyPrefix,
   landingTerminalsKey,
   openEpicKey,
   persistKey,
@@ -22,7 +27,7 @@ import {
 // would make the test circular and unable to catch a divergence.
 
 describe("persist key builders — output-preserving against current source", () => {
-  it("emits the current localStorage key for each of the 18 static stores", () => {
+  it("emits the current localStorage key for each static store", () => {
     // Source: src/stores/onboarding/onboarding-store.ts
     expect(persistKey("onboarding")).toBe("traycer-gui-app:onboarding");
     // Source: src/stores/command-palette/command-palette-store.ts
@@ -32,6 +37,15 @@ describe("persist key builders — output-preserving against current source", ()
     // Source: src/stores/composer/composer-draft-store.ts (plural divergence)
     expect(persistKey("composer-drafts")).toBe(
       "traycer-gui-app:composer-drafts",
+    );
+    // Source: src/stores/composer/interview-draft-store.ts — leaf prefix only;
+    // drafts persist as one key per (chatId, blockId) via interviewDraftKey.
+    expect(persistKey("interview-drafts")).toBe(
+      "traycer-gui-app:interview-drafts",
+    );
+    expect(interviewDraftKeyPrefix()).toBe("traycer-gui-app:interview-drafts:");
+    expect(interviewDraftKey("chat/1", "block:2")).toBe(
+      "traycer-gui-app:interview-drafts:chat%2F1:block%3A2",
     );
     // Source: src/stores/epics/artifact-read-state-store.ts
     expect(persistKey("artifact-read-state")).toBe(
@@ -145,6 +159,40 @@ describe("persist key builders — output-preserving against current source", ()
     );
     expect(worktreeListingCacheKey("host-1")).toBe(
       "traycer-gui-app:worktree-listing-cache:host-1",
+    );
+  });
+
+  it("scopes app-local display receipts by user and exact row version", () => {
+    expect(appLocalNotificationDisplayReceiptPrefix("user-1")).toBe(
+      "traycer-gui-app:app-local-notification-display-receipt:user-1",
+    );
+    expect(
+      appLocalNotificationDisplayReceiptNotificationPrefix({
+        userId: "user-1",
+        notificationId: "host.error:transport",
+      }),
+    ).toBe(
+      "traycer-gui-app:app-local-notification-display-receipt:user-1:host.error%3Atransport",
+    );
+    expect(
+      appLocalNotificationDisplayReceiptKey({
+        userId: "user-1",
+        notificationId: "host.error:transport",
+        updatedAt: 42,
+      }),
+    ).toBe(
+      "traycer-gui-app:app-local-notification-display-receipt:user-1:host.error%3Atransport:42",
+    );
+  });
+
+  it("keys interview drafts per (chatId, blockId), percent-encoding segments", () => {
+    expect(interviewDraftKeyPrefix()).toBe("traycer-gui-app:interview-drafts:");
+    expect(interviewDraftKey("chat-1", "block-1")).toBe(
+      "traycer-gui-app:interview-drafts:chat-1:block-1",
+    );
+    // A `:` or `/` inside an id must be encoded so it can never split the key.
+    expect(interviewDraftKey("a:b", "c/d")).toBe(
+      "traycer-gui-app:interview-drafts:a%3Ab:c%2Fd",
     );
   });
 

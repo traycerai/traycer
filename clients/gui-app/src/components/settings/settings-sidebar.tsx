@@ -12,6 +12,7 @@ import {
 } from "@/providers/keybinding-context";
 import { LeaderDigitBadge } from "@/components/ui/leader-digit-badge";
 import { leaderHint } from "@/components/ui/leader-digit-shortcuts";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -77,7 +78,13 @@ function SettingsSidebarItem(props: SettingsSidebarItemProps) {
       <button
         type="button"
         data-testid={`settings-sidebar-item-${section.id}`}
-        onClick={() => mode.onSelect(section.id)}
+        onClick={() => {
+          Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
+            source: "direct_ui",
+            section: section.id,
+          });
+          mode.onSelect(section.id);
+        }}
         className={cn(
           baseClass,
           "text-left",
@@ -107,6 +114,12 @@ function SettingsSidebarRouteItem(props: {
     <Link
       to={`/settings/${section.id}`}
       replace
+      onClick={() => {
+        Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
+          source: "direct_ui",
+          section: section.id,
+        });
+      }}
       className={cn(
         "inline-flex items-center gap-3 rounded-md px-3 py-2 text-ui-sm transition-colors",
         active

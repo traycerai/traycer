@@ -30,6 +30,15 @@ export interface ArtifactProjection {
   readonly id: string;
   readonly kind: EpicArtifactKind;
   readonly title: string;
+  /**
+   * On-disk folder name for this artifact's `index.md` (its own directory
+   * under `epics/<epicId>/artifacts/...`, distinct from `title`, which the
+   * user can rename freely afterward). Empty string for a legacy/malformed
+   * entry that predates the field. Root-to-leaf folder names walked via
+   * `parentId` reconstruct an artifact-shaped path for a relative markdown
+   * link authored inside this artifact - see `artifact-folder-chain.ts`.
+   */
+  readonly folderName: string;
   readonly parentId: string | null;
   readonly artifactRoomId: string | null;
   readonly createdAt: number;

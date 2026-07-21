@@ -2,7 +2,9 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -58,7 +60,7 @@ import {
   resolveRateLimitProfileId,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import { enqueueRateLimitFetch } from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { enqueueRateLimitFetchBatch } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -72,6 +74,7 @@ import {
   sortProviderStatesByProviderOrder,
 } from "@/lib/provider-ordering";
 import { queryKeys } from "@/lib/query-keys";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
   rateLimitFetchLane,
@@ -112,6 +115,166 @@ type RailTabDescriptor =
   | { readonly kind: "traycer" };
 
 const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
+
+const POPOVER_SURFACE_CLASS_NAME =
+  "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
+
+type RateLimitPopoverResizeDirection =
+  "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+
+interface RateLimitPopoverPositionLock {
+  readonly wrapperElement: HTMLElement;
+  offsetXPx: number;
+  offsetYPx: number;
+  readonly setOffset: (xPx: number, yPx: number) => void;
+  readonly restore: () => void;
+}
+
+interface RateLimitPopoverViewportBounds {
+  readonly rightPx: number;
+  readonly bottomPx: number;
+}
+
+interface RateLimitPopoverResizeDrag {
+  readonly pointerId: number;
+  readonly direction: RateLimitPopoverResizeDirection;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly startLeftPx: number;
+  readonly startTopPx: number;
+  readonly startRightPx: number;
+  readonly startBottomPx: number;
+  readonly startWidthPx: number;
+  readonly startHeightPx: number;
+  readonly viewportRightPx: number;
+  readonly viewportBottomPx: number;
+  readonly positionLock: RateLimitPopoverPositionLock;
+  readonly restorePositionOnCancel: boolean;
+  readonly startPositionOffsetXPx: number;
+  readonly startPositionOffsetYPx: number;
+  readonly previousInlineWidth: string;
+  readonly previousInlineHeight: string;
+  latestWidthPx: number;
+  latestHeightPx: number;
+  moved: boolean;
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS = [
+  "n",
+  "ne",
+  "e",
+  "se",
+  "s",
+  "sw",
+  "w",
+  "nw",
+] as const;
+
+function isRateLimitPopoverResizeDirection(
+  value: string | undefined,
+): value is RateLimitPopoverResizeDirection {
+  return RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.some(
+    (direction) => direction === value,
+  );
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES = {
+  n: "absolute inset-x-3 top-0 z-20 h-2 cursor-n-resize touch-none",
+  ne: "absolute top-0 right-0 z-30 size-3 cursor-ne-resize touch-none",
+  e: "absolute inset-y-3 right-0 z-20 w-2 cursor-e-resize touch-none",
+  se: "absolute right-0 bottom-0 z-30 size-3 cursor-se-resize touch-none",
+  s: "absolute inset-x-3 bottom-0 z-20 h-2 cursor-s-resize touch-none",
+  sw: "absolute bottom-0 left-0 z-30 size-3 cursor-sw-resize touch-none",
+  w: "absolute inset-y-3 left-0 z-20 w-2 cursor-w-resize touch-none",
+  nw: "absolute top-0 left-0 z-30 size-3 cursor-nw-resize touch-none",
+} satisfies Record<RateLimitPopoverResizeDirection, string>;
+
+const RATE_LIMIT_POPOVER_COLLISION_PADDING_PX = 12;
+
+// Radix owns the floating wrapper's transform and rewrites it whenever content
+// size changes. Lock that transform for the rest of this popover opening so a
+// resize can move the exact active edge without Radix re-anchoring underneath
+// the pointer. The observer only restores one expected transform; it never
+// derives another offset from the moved element, avoiding a feedback loop.
+function createRateLimitPopoverPositionLock(
+  wrapperElement: HTMLElement,
+): RateLimitPopoverPositionLock {
+  const originalTransform = wrapperElement.style.transform;
+  const originalTransformPriority =
+    wrapperElement.style.getPropertyPriority("transform");
+  let expectedTransform = originalTransform;
+  let restored = false;
+  const applyExpectedTransform = (): void => {
+    if (restored) return;
+    if (
+      wrapperElement.style.transform === expectedTransform &&
+      wrapperElement.style.getPropertyPriority("transform") === "important"
+    ) {
+      return;
+    }
+    wrapperElement.style.setProperty(
+      "transform",
+      expectedTransform,
+      "important",
+    );
+  };
+  const observer = new MutationObserver(applyExpectedTransform);
+  const positionLock: RateLimitPopoverPositionLock = {
+    wrapperElement,
+    offsetXPx: 0,
+    offsetYPx: 0,
+    setOffset: (xPx, yPx) => {
+      positionLock.offsetXPx = xPx;
+      positionLock.offsetYPx = yPx;
+      const offsetTransform = `translate(${xPx}px, ${yPx}px)`;
+      expectedTransform =
+        originalTransform === "" || originalTransform === "none"
+          ? offsetTransform
+          : `${originalTransform} ${offsetTransform}`;
+      applyExpectedTransform();
+    },
+    restore: () => {
+      if (restored) return;
+      restored = true;
+      observer.disconnect();
+      if (originalTransform === "") {
+        wrapperElement.style.removeProperty("transform");
+        return;
+      }
+      wrapperElement.style.setProperty(
+        "transform",
+        originalTransform,
+        originalTransformPriority,
+      );
+    },
+  };
+  observer.observe(wrapperElement, {
+    attributes: true,
+    attributeFilter: ["style"],
+  });
+  applyExpectedTransform();
+  return positionLock;
+}
+
+function rateLimitPopoverViewportBounds(
+  surface: HTMLDivElement,
+  rect: DOMRect,
+): RateLimitPopoverViewportBounds {
+  const ownerDocument = surface.ownerDocument;
+  const win = ownerDocument.defaultView;
+  const viewportWidth =
+    ownerDocument.documentElement.clientWidth || win?.innerWidth || rect.right;
+  const viewportHeight =
+    ownerDocument.documentElement.clientHeight ||
+    win?.innerHeight ||
+    rect.bottom;
+  return {
+    rightPx: viewportWidth - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+    bottomPx: viewportHeight - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+  };
+}
+
+type RateLimitPopoverSurfaceVariant = "content" | "empty";
 
 function railTabProviderId(tab: RailTabDescriptor): ProviderId {
   return tab.kind === "traycer" ? "traycer" : tab.providerId;
@@ -191,7 +354,7 @@ function configuredProviderProfiles(
 function refreshTargetsForProvider(
   provider: ConfiguredRateLimitProvider,
 ): ReadonlyArray<string | null> {
-  if (provider.profiles.length <= 1) return [null];
+  if (provider.profiles.length === 0) return [null];
   return provider.profiles
     .filter(profileLoggedInForUsage)
     .map(rateLimitProfileId);
@@ -228,10 +391,10 @@ export function RateLimitPopover({
       side="bottom"
       align="end"
       sideOffset={8}
-      collisionPadding={12}
+      collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
       aria-label="Usage limits"
-      className="w-[min(92vw,30rem)] gap-0 overflow-hidden rounded-xl p-0"
+      className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
       // Radix auto-focuses the first focusable child on open. Here that's the
       // Overview rail tab, whose `TooltipWrapper` opens the tooltip on focus
       // (keyboard a11y) - so it would pop open the instant the popover mounts
@@ -257,6 +420,218 @@ export function RateLimitPopover({
         profileSelection={profileSelection}
       />
     </PopoverContent>
+  );
+}
+
+/**
+ * Viewport-bounded resize surface with OS-style hit areas on every edge and
+ * corner. Drag frames mutate inline dimensions directly, while pointer release
+ * commits the final measured size once so subsequent opens restore it.
+ */
+function RateLimitPopoverResizeSurface({
+  variant,
+  children,
+}: {
+  readonly variant: RateLimitPopoverSurfaceVariant;
+  readonly children: ReactNode;
+}): ReactNode {
+  const size = useRateLimitPopoverStore((state) => state.size);
+  const setSize = useRateLimitPopoverStore((state) => state.setSize);
+  const dragRef = useRef<RateLimitPopoverResizeDrag | null>(null);
+  const positionLockRef = useRef<RateLimitPopoverPositionLock | null>(null);
+  useEffect(
+    () => () => {
+      positionLockRef.current?.restore();
+    },
+    [],
+  );
+
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 || dragRef.current !== null) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const direction = target.dataset.resizeDirection;
+    if (!isRateLimitPopoverResizeDirection(direction)) return;
+
+    const surface = event.currentTarget;
+    const positionWrapper = surface.closest<HTMLElement>(
+      "[data-radix-popper-content-wrapper]",
+    );
+    if (positionWrapper === null) return;
+    const rect = surface.getBoundingClientRect();
+    const { width, height } = rect;
+    if (width <= 0 || height <= 0) return;
+    const viewportBounds = rateLimitPopoverViewportBounds(surface, rect);
+    event.preventDefault();
+    event.stopPropagation();
+    surface.setPointerCapture(event.pointerId);
+    const existingPositionLock = positionLockRef.current;
+    const restorePositionOnCancel =
+      existingPositionLock === null ||
+      existingPositionLock.wrapperElement !== positionWrapper;
+    if (
+      existingPositionLock !== null &&
+      existingPositionLock.wrapperElement !== positionWrapper
+    ) {
+      existingPositionLock.restore();
+    }
+    const positionLock = restorePositionOnCancel
+      ? createRateLimitPopoverPositionLock(positionWrapper)
+      : existingPositionLock;
+    positionLockRef.current = positionLock;
+    const drag: RateLimitPopoverResizeDrag = {
+      pointerId: event.pointerId,
+      direction,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startLeftPx: rect.left,
+      startTopPx: rect.top,
+      startRightPx: rect.right,
+      startBottomPx: rect.bottom,
+      startWidthPx: width,
+      startHeightPx: height,
+      viewportRightPx: viewportBounds.rightPx,
+      viewportBottomPx: viewportBounds.bottomPx,
+      positionLock,
+      restorePositionOnCancel,
+      startPositionOffsetXPx: positionLock.offsetXPx,
+      startPositionOffsetYPx: positionLock.offsetYPx,
+      previousInlineWidth: surface.style.width,
+      previousInlineHeight: surface.style.height,
+      latestWidthPx: width,
+      latestHeightPx: height,
+      moved: false,
+    };
+    dragRef.current = drag;
+    // Freeze both axes at their computed dimensions before the first drag frame;
+    // otherwise a content reflow can change the untouched axis mid-drag.
+    surface.style.width = `${width}px`;
+    surface.style.height = `${height}px`;
+  };
+
+  const resizeDuringDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const deltaX = event.clientX - drag.startClientX;
+    const deltaY = event.clientY - drag.startClientY;
+    const resizeFromLeft = drag.direction.includes("w");
+    const resizeFromRight = drag.direction.includes("e");
+    const resizeFromTop = drag.direction.includes("n");
+    const resizeFromBottom = drag.direction.includes("s");
+    let widthDelta = 0;
+    if (resizeFromLeft) widthDelta = -deltaX;
+    else if (resizeFromRight) widthDelta = deltaX;
+    let heightDelta = 0;
+    if (resizeFromTop) heightDelta = -deltaY;
+    else if (resizeFromBottom) heightDelta = deltaY;
+    let maxWidthPx = drag.startWidthPx;
+    if (resizeFromLeft) {
+      maxWidthPx = drag.startRightPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromRight) {
+      maxWidthPx = drag.viewportRightPx - drag.startLeftPx;
+    }
+    let maxHeightPx = drag.startHeightPx;
+    if (resizeFromTop) {
+      maxHeightPx =
+        drag.startBottomPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromBottom) {
+      maxHeightPx = drag.viewportBottomPx - drag.startTopPx;
+    }
+    drag.latestWidthPx = Math.min(
+      Math.max(1, maxWidthPx),
+      Math.max(1, drag.startWidthPx + widthDelta),
+    );
+    drag.latestHeightPx = Math.min(
+      Math.max(1, maxHeightPx),
+      Math.max(1, drag.startHeightPx + heightDelta),
+    );
+    event.currentTarget.style.width = `${drag.latestWidthPx}px`;
+    event.currentTarget.style.height = `${drag.latestHeightPx}px`;
+    const measured = event.currentTarget.getBoundingClientRect();
+    drag.moved =
+      measured.width !== drag.startWidthPx ||
+      measured.height !== drag.startHeightPx;
+    const offsetDeltaXPx = resizeFromLeft
+      ? drag.startWidthPx - measured.width
+      : 0;
+    const offsetDeltaYPx = resizeFromTop
+      ? drag.startHeightPx - measured.height
+      : 0;
+    drag.positionLock.setOffset(
+      drag.startPositionOffsetXPx + offsetDeltaXPx,
+      drag.startPositionOffsetYPx + offsetDeltaYPx,
+    );
+  };
+
+  const finishResize = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    commit: boolean,
+  ): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    const surface = event.currentTarget;
+    if (surface.hasPointerCapture(event.pointerId)) {
+      surface.releasePointerCapture(event.pointerId);
+    }
+    if (!commit || !drag.moved) {
+      surface.style.width = drag.previousInlineWidth;
+      surface.style.height = drag.previousInlineHeight;
+      if (drag.restorePositionOnCancel) {
+        drag.positionLock.restore();
+        if (positionLockRef.current === drag.positionLock) {
+          positionLockRef.current = null;
+        }
+      } else {
+        drag.positionLock.setOffset(
+          drag.startPositionOffsetXPx,
+          drag.startPositionOffsetYPx,
+        );
+      }
+      return;
+    }
+
+    const measured = surface.getBoundingClientRect();
+    const widthPx = measured.width > 0 ? measured.width : drag.latestWidthPx;
+    const heightPx =
+      measured.height > 0 ? measured.height : drag.latestHeightPx;
+    surface.style.width = `${widthPx}px`;
+    surface.style.height = `${heightPx}px`;
+    setSize({ widthPx, heightPx });
+  };
+
+  return (
+    <div
+      data-testid="rate-limit-popover-resize-surface"
+      className={cn(
+        POPOVER_SURFACE_CLASS_NAME,
+        variant === "content"
+          ? "grid h-[max(50vh,22rem)] min-h-[min(35vh,16rem,var(--radix-popover-content-available-height))] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"
+          : "flex min-h-[min(20vh,8rem,var(--radix-popover-content-available-height))] flex-col items-start gap-3 p-4",
+      )}
+      style={
+        size === null
+          ? undefined
+          : { width: size.widthPx, height: size.heightPx }
+      }
+      onPointerDown={startResize}
+      onPointerMove={resizeDuringDrag}
+      onPointerUp={(event) => finishResize(event, true)}
+      onPointerCancel={(event) => finishResize(event, false)}
+      onLostPointerCapture={(event) => finishResize(event, false)}
+    >
+      {children}
+      {RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.map((direction) => (
+        <div
+          key={direction}
+          aria-hidden="true"
+          data-resize-direction={direction}
+          data-testid={`rate-limit-popover-resize-${direction}`}
+          className={RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES[direction]}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -290,7 +665,11 @@ function RateLimitPopoverBody({
   // Zero-state only when there is genuinely nothing to show: no host-RPC
   // providers AND no eligible Traycer tab.
   if (providers.length === 0 && !traycerSubscription.eligible) {
-    return <RateLimitZeroState onClose={onClose} />;
+    return (
+      <RateLimitPopoverResizeSurface variant="empty">
+        <RateLimitZeroState onClose={onClose} />
+      </RateLimitPopoverResizeSurface>
+    );
   }
 
   // A credential removed (or Traycer becoming ineligible) mid-session can drop
@@ -306,15 +685,12 @@ function RateLimitPopoverBody({
     ? activeTab
     : "overview";
 
-  // A *fixed target* height (not content-sized), plus an explicit
-  // `minmax(0,1fr)` grid row, is what makes the popover a stable box across
-  // tabs and lets its panes scroll. The target is at least half the viewport in
-  // normal header placement, while Radix's available-height guard keeps it
-  // inside short windows. `minmax(0,1fr)` pins the row to the used container
-  // height regardless of content, and both columns stretch into it with their
-  // own `min-h-0` + `overflow-y-auto`, so each scrolls internally.
+  // The default target height keeps the popover stable across tabs. The resize
+  // surface applies the remembered user size within fluid viewport bounds.
+  // `minmax(0,1fr)` pins the row to that height, and both columns keep their
+  // own `min-h-0` + `overflow-y-auto` scrolling.
   return (
-    <div className="grid h-[max(50vh,22rem)] max-h-[var(--radix-popover-content-available-height)] grid-cols-[3rem_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden">
+    <RateLimitPopoverResizeSurface variant="content">
       <RateLimitRail
         railTabs={railTabs}
         providers={providers}
@@ -344,7 +720,7 @@ function RateLimitPopoverBody({
           />
         )}
       </div>
-    </div>
+    </RateLimitPopoverResizeSurface>
   );
 }
 
@@ -630,16 +1006,17 @@ function useTraycerRateLimitUsageState(
 
 /**
  * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
- * refresh one at a time through the shared serial queue (`force: true`), while
- * httpFetch providers refresh concurrently alongside via a direct query
- * invalidation - a plain GET has no subprocess cost to serialize. The synthetic
- * Traycer entry refreshes here too: it refetches the AuthService subscription
- * query, and rate-limit based plans additionally invalidate the unscoped
- * aperture `host.getRateLimitUsage` query that backs the live artifact bar.
+ * refresh as one queued batch whose profile pulls run concurrently
+ * (`force: true`), while httpFetch providers refresh concurrently alongside via
+ * a direct query invalidation - a plain GET has no subprocess cost to serialize.
+ * The synthetic Traycer entry refreshes here too: it refetches the AuthService
+ * subscription query, and rate-limit based plans additionally invalidate the
+ * unscoped aperture `host.getRateLimitUsage` query that backs the live artifact
+ * bar.
  * `refreshing` combines all lanes' real query state - the queue's draining flag
- * for ephemeralProcess (which stays true a beat longer than any single
- * provider's `isFetching`, covering the "still waiting behind an earlier
- * provider in the queue" gap), each configured httpFetch provider's own
+ * for ephemeralProcess (which stays true until every profile in the batch has
+ * settled, even after one provider's own `isFetching` clears), each configured
+ * httpFetch provider's own
  * `isFetching` (read via `useHostQueries` against the exact same query keys the
  * invalidation below targets), plus Traycer's auth/aperture fetch state - so
  * the icon spins for the whole round regardless of which lane(s) are actually
@@ -669,6 +1046,15 @@ function RateLimitRefreshAllButton({
       profileId,
     })),
   );
+  const ephemeralProcessRequests = providers
+    .filter((provider) => provider.lane === "ephemeralProcess")
+    .flatMap((provider) =>
+      refreshTargetsForProvider(provider).map((profileId) => ({
+        providerId: provider.providerId,
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        profileId,
+      })),
+    );
   // Every httpFetch provider resolves to the exact same lane options (the
   // `isHttpFetch` branch in `providerRateLimitQueryOptions` doesn't vary by
   // provider id) - reusing the first one's is safe without the "verify every
@@ -710,8 +1096,8 @@ function RateLimitRefreshAllButton({
     traycerRefreshing;
 
   // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
-  // direct invalidation, ephemeralProcess providers queue through the shared
-  // serial lane, and Traycer refetches its subscription/usage queries. Returns
+  // direct invalidation, ephemeralProcess profiles fan out inside one queued
+  // batch, and Traycer refetches its subscription/usage queries. Returns
   // an already-resolved promise so `RefreshIconButton` gets its
   // `() => Promise<void>` contract without gating the spinner on the fetches
   // themselves - `refreshing` (above) owns that.
@@ -728,17 +1114,7 @@ function RateLimitRefreshAllButton({
         }),
       });
     });
-    providers
-      .filter((provider) => provider.lane === "ephemeralProcess")
-      .forEach((provider) => {
-        refreshTargetsForProvider(provider).forEach((profileId) => {
-          void enqueueRateLimitFetch(
-            provider.providerId,
-            DEFAULT_ACCOUNT_CONTEXT,
-            { force: true, profileId },
-          );
-        });
-      });
+    void enqueueRateLimitFetchBatch(ephemeralProcessRequests, { force: true });
     if (traycerRefreshTarget.enabled) {
       void traycerRefreshTarget.refetch();
       traycerRefreshTarget.rateLimitAccountContexts.forEach(
@@ -907,7 +1283,7 @@ function SingleProfileRateLimitProviderBlock({
               // `isRefreshing` (from useProviderRateLimitRefresh) already folds
               // in the ephemeralProcess `draining` flag, so this button stays
               // disabled for a "Refresh all" round's full duration, not just
-              // this provider's own slice of it.
+              // this provider's own fetch.
               refreshing={isRefreshing}
             />
           ) : null}
@@ -971,12 +1347,14 @@ function ProfileRateLimitProviderBlock({
 
   const refresh = (): Promise<void> => {
     if (lane === "ephemeralProcess") {
-      targets.forEach((target) => {
-        void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-          force: true,
+      void enqueueRateLimitFetchBatch(
+        targets.map((target) => ({
+          providerId,
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
           profileId: target.profileId,
-        });
-      });
+        })),
+        { force: true },
+      );
       return Promise.resolve();
     }
     targets.forEach((target) => {
@@ -1368,13 +1746,20 @@ function TraycerRateLimitBlock({
   // invalidation targets only aperture `{ accountContext }` keys, never provider
   // `{ accountContext, providerId }` pulls.
   const refresh = async (): Promise<void> => {
-    await traycerSubscription.query.refetch();
+    const result = await traycerSubscription.query.refetch();
     traycerSubscription.rateLimitAccountContexts.forEach((accountContext) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostTraycerRateLimitUsage(hostId, accountContext),
         exact: true,
       });
     });
+    // Observational only: the UI awaits exactly what it always did (the
+    // primary refetch; invalidations stay fire-and-forget background work).
+    if (result.status === "success") {
+      Analytics.getInstance().track(AnalyticsEvent.SubscriptionRefreshed, {
+        source: "direct_ui",
+      });
+    }
   };
 
   return (
@@ -1628,7 +2013,7 @@ function RateLimitZeroState({
     openSettings({ section: "providers", resetToGeneral: false });
   };
   return (
-    <div className="flex flex-col items-start gap-3 p-4">
+    <div className="flex h-full flex-col items-start gap-3">
       <p className="text-ui-sm text-muted-foreground">
         Connect Claude Code or Codex to see usage here.
       </p>

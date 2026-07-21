@@ -153,6 +153,7 @@ export interface DesktopPreloadBridge {
       body: string,
       payload: unknown,
       replaceKey: string | null,
+      deliveryKey: string | null,
     ): Promise<void>;
     onClick(handler: (payload: unknown) => void): { dispose: () => void };
   };
@@ -199,6 +200,7 @@ export interface DesktopFileDropsBridge {
     readonly bytes: ArrayBuffer;
   }): Promise<string>;
   copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
+  readNativeClipboardFilePaths(): Promise<readonly string[]>;
   saveFile(input: FileSaveInput): Promise<string | null>;
 }
 
@@ -214,6 +216,7 @@ export interface DesktopHostManagementBridge {
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
   }): Promise<HostInstallResult>;
   updateHost(input: {
+    readonly expectedVersion: string | null;
     readonly onProgress: ((event: HostProgressEvent) => void) | null;
   }): Promise<HostInstallResult>;
   uninstallHost(input: { readonly all: boolean }): Promise<HostUninstallResult>;
@@ -432,6 +435,9 @@ export interface DesktopAppUpdatesBridge {
   checkForUpdates(
     intent: DesktopAppUpdateCheckIntent,
   ): Promise<DesktopAppUpdateSnapshot>;
+  setAllowPrerelease(
+    allowPrerelease: boolean,
+  ): Promise<DesktopAppUpdateSnapshot>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
@@ -619,8 +625,14 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
 
     this.notifications = {
-      show: (title, body, payload, replaceKey) =>
-        this.bridge.notifications.show(title, body, payload, replaceKey),
+      show: (title, body, payload, replaceKey, deliveryKey) =>
+        this.bridge.notifications.show(
+          title,
+          body,
+          payload,
+          replaceKey,
+          deliveryKey,
+        ),
       onClick: (handler) =>
         toDisposable(this.bridge.notifications.onClick(handler)),
     };
@@ -880,9 +892,15 @@ function buildDesktopFileDrops(bridge: DesktopFileDropsBridge): IFileDropHost {
     copyDroppedFilePaths: async (
       paths: readonly string[],
     ): Promise<readonly string[]> => {
-      if (paths.length === 0) return [];
-      const copied = await bridge.copyTemporaryFiles(paths);
-      return copied.filter((path) => path.length > 0);
+      const resolved = await Promise.all(
+        paths.map(async (sourcePath) => {
+          if (!isEphemeralDropPath(sourcePath)) return sourcePath;
+          const copied = await bridge.copyTemporaryFiles([sourcePath]);
+          return copied.at(0) ?? sourcePath;
+        }),
+      );
+      return resolved.filter((path) => path.length > 0);
     },
+    readNativeClipboardFilePaths: () => bridge.readNativeClipboardFilePaths(),
   };
 }

@@ -37,6 +37,7 @@ import {
   reportableErrorToast,
   reportableWarningToast,
 } from "@/lib/reportable-error-toast";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface BatchDeleteEpicMutationContext {
   readonly hostId: string | null;
@@ -113,6 +114,13 @@ export function useEpicBatchDelete(): UseMutationResult<
           result.success ? [result.taskId] : [],
         );
         const successes = data.results.length - failures.length;
+        if (variables.ids.length === 1 && successes === 1) {
+          Analytics.getInstance().track(AnalyticsEvent.TaskDeleted, {
+            source: "direct_ui",
+            cleanup_worktrees:
+              (variables.worktreeCleanup?.candidates.length ?? 0) > 0,
+          });
+        }
         const navigationTarget = pickNeighborAfterDeletingEpics(
           getHeaderTabs(),
           activePathname,

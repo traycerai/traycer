@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TerminalLoadingSkeleton } from "@/components/epic-canvas/renderers/terminal-loading-skeleton";
+import { TerminalGridMeasureProbe } from "@/components/epic-canvas/renderers/terminal-grid-measure-probe";
 import {
   TerminalXtermHost,
   useTerminalTileBootstrap,
@@ -110,9 +111,23 @@ function LandingTerminalTileBootstrap(
     );
   }
   if (bootstrap.handle === null) {
+    // Same layout box as the live tile below (relative flex-1 column) so the
+    // measurement probe underneath measures the real grid before the
+    // create/subscribe are dispatched - see `TerminalGridMeasureProbe`.
     return (
-      <div className="flex h-full min-h-0 w-full items-center justify-center bg-canvas text-ui-sm text-muted-foreground">
-        <TerminalLoadingSkeleton />
+      <div className="relative flex h-full min-h-0 w-full flex-col bg-canvas">
+        <div className="relative min-h-0 flex-1">
+          <TerminalGridMeasureProbe
+            sessionId={props.tab.sessionId}
+            instanceId={props.tab.instanceId}
+            tileKind="terminal"
+            chrome="flush"
+            onMeasured={bootstrap.reportMeasuredGrid}
+          />
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <TerminalLoadingSkeleton />
+          </div>
+        </div>
       </div>
     );
   }
@@ -120,7 +135,6 @@ function LandingTerminalTileBootstrap(
     <LandingTerminalTileLive
       handle={bootstrap.handle}
       tab={props.tab}
-      active={props.active}
       onExited={removeExitedTab}
     />
   );
@@ -129,10 +143,9 @@ function LandingTerminalTileBootstrap(
 function LandingTerminalTileLive(props: {
   readonly handle: TerminalSessionStoreHandle;
   readonly tab: LandingTerminalTabRef;
-  readonly active: boolean;
   readonly onExited: (instanceId: string) => void;
 }): ReactNode {
-  const { handle, tab, active, onExited } = props;
+  const { handle, tab, onExited } = props;
   const status = useStore(handle.store, (state) => state.status);
   const effectiveCols = useStore(handle.store, (state) => state.effectiveCols);
   const effectiveRows = useStore(handle.store, (state) => state.effectiveRows);
@@ -175,9 +188,21 @@ function LandingTerminalTileLive(props: {
             onUserInput={handleInput}
             onContainerResize={handleResize}
             onWriterReady={handleWriter}
-            shouldFocusOnActivePane={active}
+            // Landing tiles stay mounted while the panel is collapsed, so a
+            // visibility-driven focus grab would fire on every landing-page
+            // mount (new tab, tab switch back) and steal the composer's focus.
+            // Focus moves here only through explicit gestures, routed via the
+            // terminal-focus registry by the panel.
+            shouldFocusOnActivePane={false}
             findTargetId={null}
-            keepAlive={false}
+            // Mirrors the registry's linger rule: while the session is live its
+            // handle outlives this unmount (tab switch away from the landing
+            // page), and the store's writer keeps pointing at this engine - so
+            // the engine must survive too, or a return within the linger
+            // window would reattach a blank terminal (the host snapshot was
+            // already consumed). The registry follower disposes the engine
+            // when the lingering handle is finally evicted.
+            keepAlive={status !== "exited"}
           />
         </Suspense>
       </div>

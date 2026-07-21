@@ -25,7 +25,7 @@ import {
   type CreateTuiAgentStatus,
   useCreateTuiAgentForClient,
 } from "@/hooks/agent/use-create-tui-agent";
-import { tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
@@ -36,6 +36,7 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 // `pendingForkTerminalAgentStagingKey` is per-EPIC, so every terminal-agent
 // tile in an epic shares one staging slot. Two dialog bodies can therefore be
@@ -247,6 +248,10 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       })
       .then((createdAgentId) => {
         if (createdAgentId !== null) {
+          Analytics.getInstance().track(AnalyticsEvent.TerminalAgentForked, {
+            source: "direct_ui",
+            harness: target.sourceAgent.harnessId,
+          });
           clearTerminalForkWorkspace(stagingKey);
           onOpenChange(false);
         }
@@ -304,6 +309,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 disabled={busy}
                 registerActivation={false}
                 createProfileHostId={hostId}
+                runTargetHostId={hostId}
               />
               <div className="shrink-0">
                 <AgentModeToggle
@@ -333,7 +339,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 if (event.key === "Enter") submit();
               }}
               disabled={busy}
-              aria-label="Terminal agent additional arguments"
+              aria-label="Terminal interface CLI arguments"
               className="font-mono text-ui-xs"
             />
           </label>
@@ -431,10 +437,7 @@ function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
 }
 
 function terminalForkDefaultTitle(agent: TuiAgentProjection): string {
-  return `Fork - ${tuiAgentDisplayTitle({
-    title: agent.title,
-    harnessId: agent.harnessId,
-  })}`;
+  return `Fork - ${displayTitle(agent.title, "agent")}`;
 }
 
 function terminalForkModelPickerKey(
