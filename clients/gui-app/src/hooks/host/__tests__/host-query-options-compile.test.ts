@@ -30,11 +30,13 @@ const neverPolledRefetchInterval: HostQueryTanstackOptions<
   refetchInterval: 1_000,
 };
 
-const conditionRetry: HostQueryTanstackOptions<"speech.getModelStatus", unknown> =
-  {
-    // @ts-expect-error retry is rejected for condition methods
-    retry: false,
-  };
+const conditionRetry: HostQueryTanstackOptions<
+  "speech.getModelStatus",
+  unknown
+> = {
+  // @ts-expect-error retry is rejected for condition methods
+  retry: false,
+};
 
 // Non-condition methods still accept deliberate caller retry policy.
 const nonconditionRetry: HostQueryTanstackOptions<"host.status", unknown> = {
@@ -48,10 +50,12 @@ const fixedRetry: HostQueryTanstackOptions<"host.getRateLimitUsage", unknown> =
     poll: true,
   };
 
-const conditionPoll: HostQueryTanstackOptions<"speech.getModelStatus", unknown> =
-  {
-    poll: false,
-  };
+const conditionPoll: HostQueryTanstackOptions<
+  "speech.getModelStatus",
+  unknown
+> = {
+  poll: false,
+};
 
 describe("HostQueryTanstackOptions closed surface", () => {
   it("keeps the compile fixtures reachable so the file is not elided", () => {

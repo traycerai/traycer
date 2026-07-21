@@ -273,6 +273,8 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Killing a process tree from the resource monitor is a destructive command.
+  "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "agent.gui.listHarnesses": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("agent.gui.listHarnesses", {
@@ -442,6 +444,12 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.renameChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Updating chat run settings changes persisted execution configuration.
   "epic.updateChatRunSettings": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Updating a chat's profile persists its selected agent/model (optional host capability).
+  "epic.updateChatProfile": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

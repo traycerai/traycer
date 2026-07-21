@@ -463,10 +463,7 @@ describe("useHostQuery fixed cadence wiring", () => {
       expect(fixture.requestCount.value).toBe(1);
     });
 
-    const query = queryForMethod(
-      fixture.queryClient,
-      "epic.listCollaborators",
-    );
+    const query = queryForMethod(fixture.queryClient, "epic.listCollaborators");
     expect(query.options.meta).toMatchObject({
       hostRpcMethod: "epic.listCollaborators",
     });
@@ -496,10 +493,7 @@ describe("useHostQuery fixed cadence wiring", () => {
       expect(fixture.requestCount.value).toBe(1);
     });
 
-    const query = queryForMethod(
-      fixture.queryClient,
-      "host.getRateLimitUsage",
-    );
+    const query = queryForMethod(fixture.queryClient, "host.getRateLimitUsage");
     expect(query.options.meta).toMatchObject({
       hostRpcMethod: "host.getRateLimitUsage",
     });
@@ -529,10 +523,7 @@ describe("useHostQuery fixed cadence wiring", () => {
       expect(fixture.requestCount.value).toBe(1);
     });
 
-    const query = queryForMethod(
-      fixture.queryClient,
-      "host.getRateLimitUsage",
-    );
+    const query = queryForMethod(fixture.queryClient, "host.getRateLimitUsage");
     expect(refetchIntervalFor(query)).toBe(15 * 60 * 1000);
     expect(refetchIntervalInBackgroundFor(query)).toBe(false);
   });

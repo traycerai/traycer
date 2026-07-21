@@ -243,9 +243,7 @@ export function useHeaderRateLimitBars(
     glyphOptions.length > 0 ? glyphOptions[0] : null;
   const sharedGlyphOptions =
     firstGlyphOptions !== null &&
-    glyphOptions.every(
-      (options) => options.poll === firstGlyphOptions.poll,
-    )
+    glyphOptions.every((options) => options.poll === firstGlyphOptions.poll)
       ? firstGlyphOptions
       : null;
 

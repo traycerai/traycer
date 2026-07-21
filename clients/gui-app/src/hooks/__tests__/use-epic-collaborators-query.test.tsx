@@ -220,17 +220,13 @@ describe("epic.listCollaborators fixed-path poll inventory", () => {
       ),
       "utf8",
     );
-    expect(sharing).toMatch(
-      /useEpicCollaboratorsQuery\([\s\S]*?poll:\s*true/,
-    );
+    expect(sharing).toMatch(/useEpicCollaboratorsQuery\([\s\S]*?poll:\s*true/);
 
     const mention = readFileSync(
       path.join(guiAppSrc, "hooks/comments/use-mention-collaborators.ts"),
       "utf8",
     );
-    expect(mention).toMatch(
-      /useEpicCollaboratorsQuery\([\s\S]*?poll:\s*false/,
-    );
+    expect(mention).toMatch(/useEpicCollaboratorsQuery\([\s\S]*?poll:\s*false/);
 
     const chatTile = readFileSync(
       path.join(guiAppSrc, "components/epic-canvas/renderers/chat-tile.tsx"),
