@@ -158,22 +158,6 @@ export class HostRequestCoordinator<Registry extends VersionedRpcRegistry> {
     return waiter.promise;
   }
 
-  /** Rejects queued latest tails in a replaced authority domain. */
-  supersedeLatestTails(hostId: string): void {
-    for (const [key, queue] of this.queues) {
-      if (!key.startsWith(`[${JSON.stringify(hostId)},`)) {
-        continue;
-      }
-      const latestTail = queue.queued.find((job) => job.mode === "latest");
-      if (latestTail === undefined) {
-        continue;
-      }
-      this.settleJobControlFlow(latestTail, "authority-superseded");
-      removeFromArray(queue.queued, latestTail);
-      this.removeQueueWhenDrained(key, queue);
-    }
-  }
-
   /**
    * Captures the read jobs that existed when a host/context transition began.
    * The caller must later apply this snapshot after cancelling that host's

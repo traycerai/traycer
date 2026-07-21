@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { queryOptions, useQueryClient } from "@tanstack/react-query";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -100,7 +100,7 @@ export function useGitSubmoduleSnapshotRefresh(args: {
     const request = (context: {
       readonly signal: AbortSignal;
     }): Promise<GitListChangedFilesResponseV11> =>
-      withHostRpcErrorBoundary("git.listChangedFiles", () =>
+      withHostQueryErrorBoundary("git.listChangedFiles", () =>
         richSlotRequest(context),
       );
     // Cancel any fetch already in flight for this key first: `fetchQuery`

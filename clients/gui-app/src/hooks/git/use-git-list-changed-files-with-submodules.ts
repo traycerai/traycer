@@ -6,7 +6,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
 import { hostClientUnavailableError } from "@/hooks/host/use-host-query";
@@ -334,7 +334,7 @@ export function useGitListChangedFilesWithSubmodules(args: {
   const request = (context: {
     readonly signal: AbortSignal;
   }): Promise<GitListChangedFilesResponseV11> =>
-    withHostRpcErrorBoundary("git.listChangedFiles", () =>
+    withHostQueryErrorBoundary("git.listChangedFiles", () =>
       richSlotRequest(context),
     );
 

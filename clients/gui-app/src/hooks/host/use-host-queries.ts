@@ -2,22 +2,20 @@ import {
   queryOptions,
   useQueries,
   useQueryClient,
-  CancelledError,
   type QueryClient,
   type QueryFunctionContext,
   type QueryKey,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
-import { isHostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import type {
   HostRpcError,
   RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import {
   hostClientUnavailableError,
   type HostQueryTanstackOptions,
@@ -182,15 +180,13 @@ export function useHostQueriesWithResponseMap<
       ),
       ...(args.cacheKeyIdentity === undefined ? [] : [args.cacheKeyIdentity]),
     ];
-    // Boundary-wrapped like `useHostQueryWithResponseMap`'s request: the
-    // declared `HostRpcError` generic must hold even when the caller's
-    // `mapResponse` throws.
-    const fetcher = async ({
-      signal,
-    }: QueryFunctionContext): Promise<TData> => {
-      try {
+    // Boundary-wrapped like `useHostQueryWithResponseMap`'s request:
+    // non-control-flow throws from caller-supplied `mapResponse` are
+    // `HostRpcError`, while coordinator control flow is cancellation.
+    const fetcher = ({ signal }: QueryFunctionContext): Promise<TData> =>
+      withHostQueryErrorBoundary(request.method, async () => {
         if (client === null) {
-          return await Promise.reject<TData>(
+          return Promise.reject<TData>(
             hostClientUnavailableError(request.method),
           );
         }
@@ -200,13 +196,7 @@ export function useHostQueriesWithResponseMap<
           signal,
         );
         return mapResponse({ response, queryClient, queryKey });
-      } catch (error) {
-        if (isHostRequestControlFlowError(error)) {
-          throw new CancelledError({ revert: true, silent: true });
-        }
-        throw toHostRpcError(error, request.method);
-      }
-    };
+      });
     const pollPolicy = HOST_METHOD_POLL_TABLE[request.method].poll;
     let tablePollingOptions:
       | {

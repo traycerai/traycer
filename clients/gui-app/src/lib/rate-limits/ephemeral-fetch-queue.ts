@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
@@ -319,25 +319,28 @@ function enqueueRateLimitFetchBatchForScope(
       // writes the same cache slot the `HostRpcError`-typed provider observers
       // read, so mapper/cool-down throws must not leak a foreign error shape.
       function queryFn(): Promise<ProviderRateLimitEnvelope> {
-        return withHostRpcErrorBoundary("host.getRateLimitUsage", async () => {
-          const response = await request(
-            hostId,
-            "host.getRateLimitUsage",
-            params,
-          );
-          const envelope = mapResponseToProviderRateLimitEnvelope({
-            response,
-            queryClient,
-            queryKey,
-          });
-          applyCooldownPolicy(
-            hostId,
-            target.providerId,
-            target.profileId,
-            envelope,
-          );
-          return envelope;
-        });
+        return withHostQueryErrorBoundary(
+          "host.getRateLimitUsage",
+          async () => {
+            const response = await request(
+              hostId,
+              "host.getRateLimitUsage",
+              params,
+            );
+            const envelope = mapResponseToProviderRateLimitEnvelope({
+              response,
+              queryClient,
+              queryKey,
+            });
+            applyCooldownPolicy(
+              hostId,
+              target.providerId,
+              target.profileId,
+              envelope,
+            );
+            return envelope;
+          },
+        );
       }
 
       function runFetch(): Promise<ProviderRateLimitEnvelope | undefined> {

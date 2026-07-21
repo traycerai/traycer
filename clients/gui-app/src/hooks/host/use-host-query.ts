@@ -3,7 +3,6 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
-  CancelledError,
   type QueryClient,
   type QueryFunctionContext,
   type QueryKey,
@@ -13,17 +12,16 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
-import { isHostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
 import {
   HostRpcError,
   toHostRpcError,
-  withHostRpcErrorBoundary,
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type { HostRpcRegistry } from "@/lib/host";
 import { queryKeys } from "@/lib/query-keys";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import {
   HOST_METHOD_POLL_TABLE,
@@ -195,23 +193,17 @@ export function useHostQueryWithResponseMap<
     ...(args.cacheKeyIdentity ?? []),
   ];
 
-  // The boundary makes the declared `HostRpcError` generic true by
-  // construction: it also normalizes throws from the caller-supplied
-  // `mapResponse`, which the transport's own error discipline can't cover.
-  const request = async ({ signal }: QueryFunctionContext): Promise<TData> => {
-    try {
+  // The boundary normalizes every non-control-flow failure into the declared
+  // `HostRpcError`, including throws from caller-supplied `mapResponse`.
+  // Coordinator control flow deliberately remains TanStack cancellation.
+  const request = ({ signal }: QueryFunctionContext): Promise<TData> =>
+    withHostQueryErrorBoundary(method, async () => {
       if (client === null) {
-        return await Promise.reject<TData>(hostClientUnavailableError(method));
+        return Promise.reject<TData>(hostClientUnavailableError(method));
       }
       const response = await client.requestWithSignal(method, params, signal);
       return mapResponse({ response, queryClient, queryKey });
-    } catch (error) {
-      if (isHostRequestControlFlowError(error)) {
-        throw new CancelledError({ revert: true, silent: true });
-      }
-      throw toHostRpcError(error, method);
-    }
-  };
+    });
 
   return useQuery<TData, HostRpcError, TData>(
     queryOptions<TData, HostRpcError, TData>({
@@ -299,7 +291,7 @@ export function useHostMutation<
     // Boundary-wrapped so a throw inside the caller-supplied `mapVariables`
     // (pre-flight validation) surfaces as the declared `HostRpcError`.
     mutationFn: (variables) =>
-      withHostRpcErrorBoundary(args.method, () => {
+      withHostQueryErrorBoundary(args.method, () => {
         if (args.client === null) {
           return Promise.reject<ResponseOfMethod<Registry, Method>>(
             hostClientUnavailableError(args.method),
@@ -342,7 +334,7 @@ export function useHostMutationWithResponseTimeout<
   >({
     ...withHostMutationLifecycleBoundary(args.method, baseOptions),
     mutationFn: (variables) =>
-      withHostRpcErrorBoundary(args.method, () => {
+      withHostQueryErrorBoundary(args.method, () => {
         if (args.client === null) {
           return Promise.reject<ResponseOfMethod<Registry, Method>>(
             hostClientUnavailableError(args.method),

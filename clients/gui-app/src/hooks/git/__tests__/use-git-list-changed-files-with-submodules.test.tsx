@@ -28,6 +28,8 @@ import {
   type HostStreamRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { HostRequestControlFlowError } from "@traycer-clients/shared/host-client/host-request-coordinator";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   hasDirtySubmodulesForRefresh,
   useGitListChangedFilesWithSubmodules,
@@ -593,6 +595,47 @@ describe("useGitListChangedFilesWithSubmodules", () => {
     );
     expect(result.current.error).toBeNull();
     expect(result.current.isPending).toBe(false);
+  });
+
+  it("treats coordinator control flow in the fallback request as cancellation, not an RPC error", async () => {
+    const request = clientForHost("h").request;
+    let rejectRequest: (reason: unknown) => void = () => undefined;
+    request.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectRequest = reject;
+        }),
+    );
+    const richKey = gitQueryKeys.listChangedFilesWithSubmodules(
+      "h",
+      "/repo",
+      false,
+    );
+
+    const { result } = renderHook(
+      () =>
+        useGitListChangedFilesWithSubmodules({
+          hostId: "h",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+          changeToken: null,
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      rejectRequest(new HostRequestControlFlowError("authority-superseded"));
+      await Promise.resolve();
+    });
+    // A silent TanStack cancellation reverts the query instead of storing an
+    // error. Before the query-layer boundary, this was a HostRpcError here.
+    expect(queryClient.getQueryState(richKey)?.error).toBeNull();
+    expect(queryClient.getQueryState(richKey)?.error).not.toBeInstanceOf(
+      HostRpcError,
+    );
+    expect(result.current.error).toBeNull();
   });
 
   it("forces a unary refetch when fallback mounts over a stream-owned rich cache", async () => {
