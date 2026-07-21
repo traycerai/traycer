@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import type {
   CreateEpicChatSeed,
@@ -12,6 +12,7 @@ import type {
   WorktreeBindingSelectorRowV12,
   WorktreeBindingWorkspaceMode,
   WorktreeIntent,
+  WorktreeWorkspaceSummaryV13,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
@@ -64,7 +65,10 @@ import {
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
-import { orderFoldersPrimaryFirst } from "@/lib/worktree/resolve-primary-path";
+import {
+  orderFoldersPrimaryFirst,
+  resolvePrimaryPath,
+} from "@/lib/worktree/resolve-primary-path";
 import {
   clearEpicCreateSeedPending,
   markEpicCreateSeedPending,
@@ -80,6 +84,8 @@ import type {
 } from "@/components/home/data/landing-options";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { buildDefaultBranchByPath } from "@/lib/worktree/default-branch-name";
+import { defaultFolderIntent } from "@/lib/worktree/worktree-intent-seeding";
 
 export interface LandingComposerSubmitArgs {
   readonly editor: ComposerPromptEditorHandle | null;
@@ -598,22 +604,28 @@ export function useLandingComposerActions(): LandingComposerActions {
 
   const submit = useCallback(
     (args: LandingComposerSubmitArgs) => {
-      const workspaceContext = readLandingWorkspaceContext();
+      const workspaceContext = readLandingWorkspaceContext(
+        queryClient,
+        client.getActiveHostId(),
+      );
       if (workspaceContext.worktreeIntentSuspended) return;
       dispatchSubmission(args, workspaceContext);
       clearConsumedLandingWorktreeIntent(workspaceContext);
     },
-    [dispatchSubmission],
+    [client, dispatchSubmission, queryClient],
   );
 
   const selectTerminalAgent = useCallback(
     (launch: TerminalAgentLaunch) => {
-      const workspaceContext = readLandingWorkspaceContext();
+      const workspaceContext = readLandingWorkspaceContext(
+        queryClient,
+        client.getActiveHostId(),
+      );
       if (workspaceContext.worktreeIntentSuspended) return;
       dispatchTerminalAgent(launch, workspaceContext);
       clearConsumedLandingWorktreeIntent(workspaceContext);
     },
-    [dispatchTerminalAgent],
+    [client, dispatchTerminalAgent, queryClient],
   );
 
   return useMemo(
@@ -636,7 +648,10 @@ interface LandingWorkspaceContext {
   readonly activeDraftId: string | null;
 }
 
-function readLandingWorkspaceContext(): LandingWorkspaceContext {
+function readLandingWorkspaceContext(
+  queryClient: QueryClient,
+  hostId: string | null,
+): LandingWorkspaceContext {
   const draftState = useLandingDraftStore.getState();
   const activeDraft =
     draftState.activeDraftId === null
@@ -655,21 +670,31 @@ function readLandingWorkspaceContext(): LandingWorkspaceContext {
   });
   if (activeDraft !== null) {
     return {
-      ...canonicalLaunchWorkspace(activeDraft.workspace, stagedWorktreeIntent),
+      ...canonicalLaunchWorkspace(
+        activeDraft.workspace,
+        stagedWorktreeIntent,
+        readCachedDefaultWorktreeIntent(
+          queryClient,
+          hostId,
+          activeDraft.workspace,
+        ),
+      ),
       workspaceFolderInfoByPath: activeDraft.workspace.folderInfoByPath,
       worktreeIntentSuspended,
       activeDraftId,
     };
   }
   const globalState = useWorkspaceFoldersStore.getState();
+  const globalWorkspace = {
+    folders: globalState.folders,
+    folderInfoByPath: globalState.folderInfoByPath,
+    primaryPath: globalState.primaryPath,
+  };
   return {
     ...canonicalLaunchWorkspace(
-      {
-        folders: globalState.folders,
-        folderInfoByPath: globalState.folderInfoByPath,
-        primaryPath: globalState.primaryPath,
-      },
+      globalWorkspace,
       stagedWorktreeIntent,
+      readCachedDefaultWorktreeIntent(queryClient, hostId, globalWorkspace),
     ),
     workspaceFolderInfoByPath: globalState.folderInfoByPath,
     worktreeIntentSuspended,
@@ -689,24 +714,26 @@ function readLandingWorkspaceContext(): LandingWorkspaceContext {
 // only staged (git) entry to `isPrimary: false` with nothing taking its
 // place, sending a zero-primary intent.
 //
-// A nothing-staged launch stays `null`: the primary-first folder list already
-// carries the binding, and synthesizing an all-`local` intent here would be
-// remembered as the epic's intent and suppress the per-folder worktree
-// defaults the next time the epic opens.
+// A nothing-staged launch only stays `null` when the cached workspace summaries
+// do not identify a resolved git folder. When the picker is visibly showing its
+// derived "New worktree" default but branch-dependent memory is still being
+// validated, `cachedDefaultWorktreeIntent` closes that transient gap at the
+// submit boundary without trusting the unvalidated remembered branch.
 function canonicalLaunchWorkspace(
   workspace: LandingDraftWorkspaceSnapshot,
   stagedWorktreeIntent: WorktreeIntent | null,
+  cachedDefaultWorktreeIntent: WorktreeIntent | null,
 ): {
   readonly workspaceFolders: ReadonlyArray<string>;
   readonly worktreeIntent: WorktreeIntent | null;
   readonly workspaceMode: WorktreeBindingWorkspaceMode;
 } {
   const worktreeIntent =
-    stagedWorktreeIntent === null
+    stagedWorktreeIntent === null && cachedDefaultWorktreeIntent === null
       ? null
       : effectiveWorktreeIntent({
           workspace,
-          seedIntent: null,
+          seedIntent: cachedDefaultWorktreeIntent,
           stagedIntent: stagedWorktreeIntent,
         });
   return {
@@ -720,6 +747,71 @@ function canonicalLaunchWorkspace(
       worktreeIntent,
     ),
   };
+}
+
+function readCachedDefaultWorktreeIntent(
+  queryClient: QueryClient,
+  hostId: string | null,
+  workspace: LandingDraftWorkspaceSnapshot,
+): WorktreeIntent | null {
+  const response = queryClient.getQueryData<{
+    readonly workspaces: ReadonlyArray<WorktreeWorkspaceSummaryV13>;
+  }>(
+    hostQueryKeys.method<HostRpcRegistry, "worktree.listByWorkspacePaths">(
+      hostId,
+      "worktree.listByWorkspacePaths",
+      {
+        workspacePaths: [...workspace.folders],
+        scriptRefs: [],
+        forceRefresh: false,
+      },
+    ),
+  );
+  const summariesByPath = new Map(
+    response?.workspaces.map((summary) => [summary.workspacePath, summary]) ??
+      [],
+  );
+  const worktreeDefaults = workspace.folders.flatMap((workspacePath) => {
+    const summary = summariesByPath.get(workspacePath);
+    if (
+      summary === undefined ||
+      summary.resolvedAt === null ||
+      !summary.isGitRepo
+    ) {
+      return [];
+    }
+    const currentBranch = branchForCachedSummary(summary);
+    return currentBranch === null ? [] : [{ summary, currentBranch }];
+  });
+  if (worktreeDefaults.length === 0) return null;
+
+  const defaultBranchByPath = buildDefaultBranchByPath(
+    worktreeDefaults.map((entry) => entry.summary),
+    worktreeDefaults.length > 1,
+  );
+  const primaryPath = resolvePrimaryPath(
+    workspace.folders,
+    workspace.primaryPath,
+  );
+  return {
+    entries: worktreeDefaults.map(({ summary, currentBranch }) =>
+      defaultFolderIntent({
+        workspacePath: summary.workspacePath,
+        repoIdentifier: summary.repoIdentifier,
+        isPrimary: summary.workspacePath === primaryPath,
+        isGitRepo: true,
+        currentBranch,
+        defaultNewBranchName: defaultBranchByPath[summary.workspacePath] ?? "",
+      }),
+    ),
+  };
+}
+
+function branchForCachedSummary(
+  summary: WorktreeWorkspaceSummaryV13,
+): string | null {
+  const mainEntry = summary.worktrees.find((worktree) => worktree.isMain);
+  return mainEntry?.branch ?? summary.mainBranch ?? null;
 }
 
 function rememberLandingWorktreeIntent(
