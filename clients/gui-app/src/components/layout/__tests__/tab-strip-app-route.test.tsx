@@ -61,6 +61,15 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
+  useEpicTaskPinnedStates: () => new Map(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
+  useEpicSetPinned: () => ({ mutate: vi.fn() }),
+  usePendingSetPinnedEpicIds: () => new Set(),
+}));
+
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));
