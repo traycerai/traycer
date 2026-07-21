@@ -866,7 +866,9 @@ describe("<ChatTile />", () => {
     await waitFor(() => {
       expect(chatHarness.streamCreations()).toBe(1);
     });
-    expect(screen.getByRole("status", { name: "Loading chat" })).not.toBeNull();
+    expect(
+      screen.getByRole("status", { name: "Loading agent" }),
+    ).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
@@ -896,7 +898,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
     expect(chatHarness.streamCreations()).toBe(1);
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
-    expect(screen.queryByRole("status", { name: "Loading chat" })).toBeNull();
+    expect(screen.queryByRole("status", { name: "Loading agent" })).toBeNull();
     expect(
       screen
         .getByTestId("host-workspace-selector")
@@ -1208,7 +1210,7 @@ describe("<ChatTile />", () => {
     await screen.findByText("Implementation is complete.");
     fireEvent.click(screen.getByTestId("assistant-fork-chat"));
 
-    const titleInput = await screen.findByLabelText("Fork chat title");
+    const titleInput = await screen.findByLabelText("Fork agent title");
     if (!(titleInput instanceof HTMLInputElement)) {
       throw new Error("expected fork title input");
     }
@@ -1438,7 +1440,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cross Question" }));
 
-    const titleInput = await screen.findByLabelText("Fork chat title");
+    const titleInput = await screen.findByLabelText("Fork agent title");
     if (!(titleInput instanceof HTMLInputElement)) {
       throw new Error("expected fork title input");
     }
@@ -2050,7 +2052,7 @@ describe("<ChatTile />", () => {
         clientActionId: frame.clientActionId,
         action: "send",
         status: "rejected",
-        reason: "Only the chat owner can perform this action.",
+        reason: "Only the agent owner can perform this action.",
         code: "NOT_OWNER",
         backgroundStopTaskIds: [],
       });
@@ -2071,7 +2073,7 @@ describe("<ChatTile />", () => {
       Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
     ).toMatchObject({
       status: "failed",
-      failureReason: "Only the chat owner can perform this action.",
+      failureReason: "Only the agent owner can perform this action.",
     });
   });
 
@@ -2095,7 +2097,7 @@ describe("<ChatTile />", () => {
     });
     expect(
       await screen.findByText(
-        "Read-only viewer. The chat owner can send prompts and manage this queue.",
+        "Read-only viewer. The agent owner can send prompts and manage this queue.",
       ),
     ).not.toBeNull();
   });
@@ -2113,7 +2115,7 @@ describe("<ChatTile />", () => {
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(
       screen.getByText(
-        "Read-only viewer. The chat owner can send prompts and manage this queue.",
+        "Read-only viewer. The agent owner can send prompts and manage this queue.",
       ),
     ).not.toBeNull();
   });

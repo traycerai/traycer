@@ -128,6 +128,7 @@ export function mentionAttrsFromAttachment(
       artifactId: mention.artifactId,
       artifactType: mention.artifactType,
       chatId: mention.chatId,
+      terminalAgentId: mention.terminalAgentId,
       status: mention.status,
     };
   }
@@ -150,7 +151,11 @@ export function mentionAttachmentFromAttrs(
   if (contextType === "git") {
     return gitMentionAttachmentFromAttrs(attrs);
   }
-  if (contextType === "epic" || contextType === "chat") {
+  if (
+    contextType === "epic" ||
+    contextType === "chat" ||
+    contextType === "terminal-agent"
+  ) {
     return entityMentionAttachmentFromAttrs(attrs, contextType);
   }
   if (isArtifactContextType(contextType)) {
@@ -340,6 +345,9 @@ function entityMentionId(
 ): string {
   if (mention.contextType === "epic") return mention.epicId;
   if (mention.contextType === "chat") return mention.chatId ?? mention.path;
+  if (mention.contextType === "terminal-agent") {
+    return mention.terminalAgentId ?? mention.path;
+  }
   return mention.artifactId ?? mention.path;
 }
 
@@ -546,11 +554,17 @@ function entityMentionAttachmentFromAttrs(
     description: stringValue(attrs.description) ?? path,
     epicId,
     artifactId:
-      contextType === "epic" || contextType === "chat"
+      contextType === "epic" ||
+      contextType === "chat" ||
+      contextType === "terminal-agent"
         ? null
         : (stringValue(attrs.artifactId) ?? id),
     artifactType,
     chatId: contextType === "chat" ? (stringValue(attrs.chatId) ?? id) : null,
+    terminalAgentId:
+      contextType === "terminal-agent"
+        ? (stringValue(attrs.terminalAgentId) ?? id)
+        : null,
     status: statusValue(attrs.status),
   };
 }

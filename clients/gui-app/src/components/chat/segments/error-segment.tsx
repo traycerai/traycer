@@ -39,7 +39,7 @@ export function ErrorSegment({ code, findUnitId, message }: ErrorSegmentProps) {
         </div>
         <ReportIssueAction
           context={createReportIssueContext({
-            title: "Chat error",
+            title: "Agent error",
             message: null,
             code: null,
             source: "Chat",

@@ -35,7 +35,12 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "providers", label: "Providers", icon: Boxes },
   { id: "notifications", label: "Notifications", icon: Bell },
-  { id: "agents", label: "Agents", icon: Bot },
+  // "Agent selection", not "Agents": this section configures HOW a coding agent
+  // and model get chosen when spawning child agents. It does not manage the
+  // Agents that live in a Task, and the old label collided with that surface.
+  // The section `id` (and its `/settings/agents` route) is an internal
+  // identifier on the compatibility boundary and stays put.
+  { id: "agents", label: "Agent selection", icon: Bot },
   { id: "keybindings", label: "Keybindings", icon: Keyboard },
   { id: "shell", label: "Shell", icon: TerminalSquare },
   { id: "worktrees", label: "Worktrees", icon: GitBranch },

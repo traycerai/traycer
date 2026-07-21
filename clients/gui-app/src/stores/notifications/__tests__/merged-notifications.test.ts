@@ -72,7 +72,7 @@ function appLocalEntry(
     kind: "stream.transport.error",
     sourceRef: id,
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
-    message: "Chat stream closed unexpectedly",
+    message: "Agent stream closed unexpectedly",
     detail: null,
     displayedUpdatedAt: null,
   };
@@ -347,7 +347,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(futureShape)).toMatchObject({
       title: "Task",
-      body: "Chat • Done",
+      body: "Agent • Done",
       payload: null,
     });
 
@@ -371,7 +371,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(crossKind)).toMatchObject({
       title: "Task",
-      body: "Chat • Approval requested",
+      body: "Agent • Approval requested",
       payload: null,
     });
 
@@ -394,7 +394,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(malformed)).toMatchObject({
       title: "Task",
-      body: "Chat • Done",
+      body: "Agent • Done",
       payload: null,
     });
   });
@@ -406,7 +406,7 @@ describe("merged notifications feed", () => {
       sourceId: "setup",
       createdAt: 10,
       readAt: null,
-      title: "Chat stream closed unexpectedly",
+      title: "Agent stream closed unexpectedly",
       body: "Traycer notification",
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       hostKind: null,

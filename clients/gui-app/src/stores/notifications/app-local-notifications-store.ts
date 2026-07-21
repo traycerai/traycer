@@ -499,7 +499,7 @@ export function emitChatStreamErrorNotification(input: {
       epicId: input.epicId,
       chatId: input.chatId,
     },
-    message: "Chat stream closed unexpectedly.",
+    message: "Agent stream closed unexpectedly.",
     detail: input.details.reason,
   });
 }

@@ -1319,7 +1319,7 @@ function buildForkedChatLinkMessages(
       return [];
     }
     const sourceChatTitle =
-      metadataString(metadata, "sourceChatTitle") ?? "Untitled chat";
+      metadataString(metadata, "sourceChatTitle") ?? "Untitled agent";
     const id = `forked-chat-link:${event.eventId}`;
     return [
       {

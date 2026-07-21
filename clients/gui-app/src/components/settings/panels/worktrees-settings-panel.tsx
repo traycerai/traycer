@@ -245,7 +245,7 @@ export function WorktreesSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Worktrees"
-      description="Git worktrees Traycer created under ~/.traycer/worktrees on the selected host. Remove ones you no longer need - including orphans whose chat or agent was deleted."
+      description="Git worktrees Traycer created under ~/.traycer/worktrees on the selected host. Remove ones you no longer need - including orphans whose agent was deleted."
       fillHeight
       bodyClassName="relative max-h-[min(85vh,52rem)]"
     >
@@ -2842,7 +2842,7 @@ function WorktreeSelectionControl(props: {
   if (props.canSelect || props.deleting) return checkbox;
   return (
     <TooltipWrapper
-      label="In use by an active chat or agent"
+      label="In use by an active agent"
       side="top"
       sideOffset={undefined}
       align="start"
@@ -2857,7 +2857,7 @@ const WORKTREE_DELETE_DISABLED_COPY: Record<
   { readonly ariaLabel: string }
 > = {
   "in-use": {
-    ariaLabel: "Delete worktree (in use by an active chat or agent)",
+    ariaLabel: "Delete worktree (in use by an active agent)",
   },
   checking: {
     ariaLabel: "Delete worktree (status is still being checked)",
@@ -2964,9 +2964,7 @@ function WorktreeScriptReviewDialog(props: {
       seedPending={false}
       errorNote={null}
       inUseNote={
-        target.inUse
-          ? "This worktree is in use by an active chat or agent."
-          : null
+        target.inUse ? "This worktree is in use by an active agent." : null
       }
       // Settings stashes the reviewed scripts synchronously for its delete flow;
       // wrap in a resolved promise so the shared dialog's success path runs.

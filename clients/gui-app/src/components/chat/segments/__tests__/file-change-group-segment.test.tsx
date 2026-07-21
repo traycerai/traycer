@@ -236,7 +236,7 @@ describe("<FileChangeGroupSegment /> checkpoint undo", () => {
     });
 
     expectUndoUnavailable();
-    expect(await tooltipText()).toBe("Only the chat owner can restore files.");
+    expect(await tooltipText()).toBe("Only the agent owner can restore files.");
   });
 
   it("disables Undo on the wrong host", async () => {
