@@ -909,12 +909,18 @@ function ChatMessagesInner(props: ChatMessagesProps) {
               aria-hidden="true"
               className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-linear-to-t from-background to-transparent"
             />
+            {/* The 2px hover-rail minimap is untappable on touch and its
+                hover-expand never fires; hide it below md and reclaim the right
+                edge. `contents` keeps the absolutely-positioned rail's layout
+                identical on desktop (>=768px). */}
             {hasContent ? (
-              <ChatUserMessageMinimap
-                items={minimapItems}
-                activeMessageId={activeUserMessageId}
-                onItemClick={onMinimapItemClick}
-              />
+              <div className="contents max-md:hidden">
+                <ChatUserMessageMinimap
+                  items={minimapItems}
+                  activeMessageId={activeUserMessageId}
+                  onItemClick={onMinimapItemClick}
+                />
+              </div>
             ) : null}
             {hasContent ? (
               <ScrollToBottomChip
