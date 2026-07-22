@@ -530,6 +530,7 @@ describe("<TabStrip />", () => {
       openEpicFixture(EPIC_A);
       openEpicFixture(EPIC_B);
       openEpicFixture(EPIC_C);
+      useTabsStore.setState({ activeItemId: "tab:epic:e-a" });
       const router = buildRouter("/epics/e-a/e-a");
       render(<RouterProvider router={router} />);
       await screen.findByTestId("tab-epic-e-a");
@@ -549,6 +550,7 @@ describe("<TabStrip />", () => {
           focusTileInstanceId: undefined,
         },
       });
+      useTabsStore.setState({ activeItemId: "tab:epic:e-c" });
       await flushNav();
 
       const activeTab = screen.getByTestId("tab-epic-e-c");
@@ -1003,6 +1005,9 @@ describe("<TabStrip />", () => {
     if (secondTabId === null || thirdTabId === null) {
       throw new Error("Expected duplicate tabs");
     }
+    useTabsStore.setState({
+      activeItemId: `tab:epic:${secondTabId}`,
+    });
     const router = buildRouter(`/epics/epic-shared/${secondTabId}`);
     render(<RouterProvider router={router} />);
 

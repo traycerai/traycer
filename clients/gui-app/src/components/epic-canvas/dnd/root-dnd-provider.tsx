@@ -61,12 +61,36 @@ import {
   type HeaderTabDragData,
 } from "@/components/layout/tabs/header-tab-dnd";
 import {
+  EdgeSplitDwellMachine,
+  edgeSplitBrowserTimer,
+  type EdgeSplitDwellState,
+} from "@/components/layout/tabs/edge-split-dwell";
+import {
+  readTopLevelTabDropTarget,
+  resolveValidatedTopLevelTabDrop,
+  type TopLevelEdgeSplitTarget,
+  type TopLevelFillableTarget,
+} from "@/components/layout/tabs/top-level-tab-dnd";
+import {
+  activatePreparedPairTabIntent,
   existingEpicTabIntent,
   navigateToTabIntent,
 } from "@/lib/tab-navigation";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import {
+  getTabCommandLedger,
+  subscribeToTabCommandLedger,
+} from "@/stores/tabs/tab-command-coordinator";
+import { subscribeTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
+import { subscribeTabStructuralLocks } from "@/stores/tabs/tab-structural-lock";
+import { type SplitStripItem } from "@/stores/tabs/layout";
+import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import { tabResolveIntent } from "@/stores/tabs/registry";
+import type { TabRef } from "@/stores/tabs/types";
+import { v4 as uuidv4 } from "uuid";
 import {
   DndContext,
   DragOverlay,
@@ -79,8 +103,8 @@ import {
   type Modifier,
 } from "@dnd-kit/core";
 import { snapCenterToCursor } from "@dnd-kit/modifiers";
-import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 
 /**
  * The artifact-reference drag source can come from wide in-content rows/cards,
@@ -200,9 +224,29 @@ function updateHeaderTabSourcePreview(
   headerTab: HeaderTabDragData,
   event: DragUpdateEvent,
   point: PointLike | null,
+  edgeDwell: EdgeSplitDwellMachine,
 ): void {
   const dndStore = useEpicDndStore.getState();
   const over = event.over;
+  const topLevelTarget =
+    over === null ? null : readTopLevelTabDropTarget(over.data.current);
+  const validDrop =
+    topLevelTarget === null
+      ? null
+      : resolveLiveTopLevelDrop(headerTab, topLevelTarget);
+  if (validDrop !== null) {
+    dndStore.headerStripDropIndexChanged(null);
+    if (validDrop.target.kind === "top-level-fillable-slot") {
+      edgeDwell.reset();
+      return;
+    }
+    edgeDwell.setTargetValidator(
+      (candidate) => resolveLiveTopLevelDrop(headerTab, candidate) !== null,
+    );
+    edgeDwell.observe(validDrop.target);
+    return;
+  }
+  edgeDwell.reset();
   const headerSlot =
     over === null ? null : readHeaderTabSlotDropData(over.data.current);
   if (headerSlot === null || point === null) {
@@ -219,6 +263,129 @@ function updateHeaderTabSourcePreview(
   );
 }
 
+function layoutFromTabsStore() {
+  const state = useTabsStore.getState();
+  return {
+    version: 2,
+    items: state.items,
+    activeItemId: state.activeItemId,
+    systemTabs: state.systemTabs,
+  } as const;
+}
+
+function resolveLiveTopLevelDrop(
+  headerTab: HeaderTabDragData,
+  target: TopLevelEdgeSplitTarget | TopLevelFillableTarget,
+) {
+  return resolveValidatedTopLevelTabDrop(
+    headerTab,
+    target,
+    layoutFromTabsStore(),
+  );
+}
+
+function fillTopLevelSlot(
+  source: TabRef,
+  target: TopLevelFillableTarget,
+  activate: (ref: TabRef) => void,
+): void {
+  const layout = layoutFromTabsStore();
+  const split =
+    layout.items.find(
+      (item): item is SplitStripItem =>
+        item.kind === "split" && item.id === target.splitId,
+    ) ?? null;
+  if (split === null) return;
+  const targetSide = target.side === "left" ? split.left : split.right;
+  if (targetSide.kind === "tab") return;
+  const focused = split.focusedSide === target.side;
+  if (!tabCommandCoordinator.fillSplitSide({ ...target, ref: source })) return;
+  if (!focused) return;
+  activate(source);
+}
+
+function activateHeaderRef(ref: TabRef, activate: (tab: TabRef) => void): void {
+  activate(ref);
+}
+
+function commitHeaderTabDrop(input: {
+  readonly event: DragEndEvent;
+  readonly headerStripIndex: number | null;
+  readonly navigate: UseNavigateResult<string>;
+  readonly edgeDwell: EdgeSplitDwellMachine;
+}): void {
+  const headerTab = readHeaderTabDragData(input.event.active.data.current);
+  const target =
+    input.event.over === null
+      ? null
+      : readTopLevelTabDropTarget(input.event.over.data.current);
+  const validDrop =
+    headerTab === null || target === null
+      ? null
+      : resolveLiveTopLevelDrop(headerTab, target);
+  const activate = (ref: TabRef): void => {
+    const tab = getHeaderTabs().find(
+      (candidate) => candidate.kind === ref.kind && candidate.id === ref.id,
+    );
+    if (tab !== undefined) {
+      navigateToTabIntent(input.navigate, tabResolveIntent(tab), undefined);
+    }
+  };
+  if (validDrop?.target.kind === "top-level-fillable-slot") {
+    fillTopLevelSlot(validDrop.source, validDrop.target, (ref) =>
+      activateHeaderRef(ref, activate),
+    );
+    return;
+  }
+  if (validDrop?.target.kind === "top-level-edge-split") {
+    commitHeaderEdgeSplit(
+      validDrop.source,
+      validDrop.target,
+      input.edgeDwell,
+      input.navigate,
+    );
+    return;
+  }
+  if (headerTab !== null && input.headerStripIndex !== null) {
+    tabCommandCoordinator.reorderStripItem({
+      itemId: headerTab.stripItemId,
+      targetIndex: input.headerStripIndex,
+    });
+  }
+}
+
+function commitHeaderEdgeSplit(
+  sourceRef: TabRef,
+  target: TopLevelEdgeSplitTarget,
+  edgeDwell: EdgeSplitDwellMachine,
+  navigate: UseNavigateResult<string>,
+): void {
+  const committedTarget = edgeDwell.commit(target);
+  if (committedTarget === null) {
+    return;
+  }
+  const sourceTab = getHeaderTabs().find(
+    (tab) => tab.kind === sourceRef.kind && tab.id === sourceRef.id,
+  );
+  if (sourceTab === undefined) return;
+  activatePreparedPairTabIntent(
+    navigate,
+    {
+      left:
+        committedTarget.side === "left" ? sourceRef : committedTarget.targetRef,
+      right:
+        committedTarget.side === "right"
+          ? sourceRef
+          : committedTarget.targetRef,
+      focusedRef: sourceRef,
+      splitId: `split:${uuidv4()}`,
+      leftRatio: 0.5,
+    },
+    tabResolveIntent(sourceTab),
+    undefined,
+  );
+}
+
 interface RootDndProviderProps {
   readonly children: ReactNode;
 }
@@ -229,6 +396,17 @@ export function RootDndProvider(props: RootDndProviderProps) {
   const lastResolvedDropRef = useRef<ResolvedEpicCanvasDrop | null>(null);
   const lastReparentDropRef = useRef<LastReparentDrop | null>(null);
   const springLoadRef = useRef<SpringLoadEntry | null>(null);
+  const edgeDwell = useMemo(
+    () =>
+      new EdgeSplitDwellMachine((state: EdgeSplitDwellState) => {
+        useEpicDndStore
+          .getState()
+          .topLevelEdgeSplitPreviewChanged(
+            state.kind === "preview" ? state.target : null,
+          );
+      }, edgeSplitBrowserTimer),
+    [],
+  );
   // Stable bundle (the inner refs never change identity) so the preview helpers
   // take one object instead of three positional ref params.
   const reparentRefsRef = useRef<ReparentRefs>({
@@ -240,7 +418,35 @@ export function RootDndProvider(props: RootDndProviderProps) {
   // A spring-load timer armed mid-drag must not survive the provider: if it
   // unmounts (route change / epic close) before drag end/cancel clears it, the
   // pending `setTimeout` would fire and `expand()` a stale tab/panel.
-  useEffect(() => () => clearSpringLoad(springLoadRef), []);
+  useEffect(
+    () => () => {
+      clearSpringLoad(springLoadRef);
+      edgeDwell.reset();
+    },
+    [edgeDwell],
+  );
+  useEffect(() => {
+    // A coordinator transaction fires a mid-transaction notify while
+    // suppressionDepth is still 1 (before the layout write lands), for which
+    // resolveValidatedTopLevelTabDrop always returns null. Revalidating
+    // against that transient state would reset a valid, stationary dwell on
+    // every unrelated transaction. Only settled notifies (suppressionDepth
+    // back at 0) reflect a state a dwell target should be judged against.
+    const revalidate = (): void => {
+      if (getTabCommandLedger().suppressionDepth > 0) return;
+      edgeDwell.revalidate();
+    };
+    const unsubscribeTabs = useTabsStore.subscribe(revalidate);
+    const unsubscribeLocks = subscribeTabStructuralLocks(revalidate);
+    const unsubscribeLedger = subscribeToTabCommandLedger(revalidate);
+    const unsubscribeCompatibility = subscribeTabSplitCompatibility(revalidate);
+    return () => {
+      unsubscribeTabs();
+      unsubscribeLocks();
+      unsubscribeLedger();
+      unsubscribeCompatibility();
+    };
+  }, [edgeDwell]);
   const sensors = useSensors(
     useSensor(EpicCanvasPointerSensor, {
       activationConstraint: {
@@ -249,26 +455,30 @@ export function RootDndProvider(props: RootDndProviderProps) {
     }),
   );
 
-  const handleDragStart = useCallback((event: DragStartEvent) => {
-    lastResolvedDropRef.current = null;
-    lastReparentDropRef.current = null;
-    clearSpringLoad(springLoadRef);
-    const dndStore = useEpicDndStore.getState();
-    const source = readActiveDragSource(event.active);
-    if (source !== null) {
-      dndStore.canvasDragStarted(source, resolveOverlayTileForSource(source));
-      if (source.kind === ARTIFACT_TAB_DND_TYPE && source.isPreview) {
-        useEpicCanvasStore
-          .getState()
-          .promotePreviewInTab(source.viewTabId, source.sourceGroupId);
+  const handleDragStart = useCallback(
+    (event: DragStartEvent) => {
+      lastResolvedDropRef.current = null;
+      lastReparentDropRef.current = null;
+      clearSpringLoad(springLoadRef);
+      edgeDwell.reset();
+      const dndStore = useEpicDndStore.getState();
+      const source = readActiveDragSource(event.active);
+      if (source !== null) {
+        dndStore.canvasDragStarted(source, resolveOverlayTileForSource(source));
+        if (source.kind === ARTIFACT_TAB_DND_TYPE && source.isPreview) {
+          useEpicCanvasStore
+            .getState()
+            .promotePreviewInTab(source.viewTabId, source.sourceGroupId);
+        }
+        return;
       }
-      return;
-    }
-    const headerTab = readHeaderTabDragData(event.active.data.current);
-    if (headerTab !== null) {
-      dndStore.headerTabDragStarted(headerTab);
-    }
-  }, []);
+      const headerTab = readHeaderTabDragData(event.active.data.current);
+      if (headerTab !== null) {
+        dndStore.headerTabDragStarted(headerTab);
+      }
+    },
+    [edgeDwell],
+  );
 
   const updateDropPreview = useCallback(
     (event: DragUpdateEvent) => {
@@ -284,10 +494,10 @@ export function RootDndProvider(props: RootDndProviderProps) {
       }
       const headerTab = readHeaderTabDragData(event.active.data.current);
       if (headerTab !== null) {
-        updateHeaderTabSourcePreview(headerTab, event, point);
+        updateHeaderTabSourcePreview(headerTab, event, point, edgeDwell);
       }
     },
-    [reparentRefs],
+    [edgeDwell, reparentRefs],
   );
 
   const handleDragMove = useCallback(
@@ -351,31 +561,30 @@ export function RootDndProvider(props: RootDndProviderProps) {
           }
         }
       } else {
-        const headerTab = readHeaderTabDragData(event.active.data.current);
-        if (headerTab !== null && headerStripIndex !== null) {
-          useTabsStore
-            .getState()
-            .moveRef(
-              { kind: headerTab.tabKind, id: headerTab.tabId },
-              headerStripIndex,
-            );
-        }
+        commitHeaderTabDrop({
+          event,
+          headerStripIndex,
+          navigate,
+          edgeDwell,
+        });
       }
+      edgeDwell.reset();
       lastResolvedDropRef.current = null;
       lastReparentDropRef.current = null;
       clearLastCollisionPointerPoint();
       useEpicDndStore.getState().dragEnded();
     },
-    [navigate, navigateNested, updateDropPreview],
+    [edgeDwell, navigate, navigateNested, updateDropPreview],
   );
 
   const handleDragCancel = useCallback(() => {
     lastResolvedDropRef.current = null;
     lastReparentDropRef.current = null;
     clearSpringLoad(springLoadRef);
+    edgeDwell.reset();
     clearLastCollisionPointerPoint();
     useEpicDndStore.getState().dragEnded();
-  }, []);
+  }, [edgeDwell]);
 
   return (
     <DndContext

@@ -4,6 +4,10 @@ import { toast } from "sonner";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  findStripItemForRef,
+  flattenStripItemRefs,
+} from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import {
   tabMatchesPath,
@@ -53,8 +57,23 @@ export function useCloseTabFlow(): CloseTabFlow {
   const closeOtherTabs = useCallback(
     (target: HeaderTab) => {
       const skipped: string[] = [];
+      const state = useTabsStore.getState();
+      const layout = {
+        version: 2 as const,
+        items: state.items,
+        activeItemId: state.activeItemId,
+        systemTabs: state.systemTabs,
+      };
+      const targetItem = findStripItemForRef(layout, {
+        kind: target.kind,
+        id: target.id,
+      });
+      if (targetItem === null) return;
+      const preserved = new Set(
+        flattenStripItemRefs(targetItem).map((ref) => `${ref.kind}:${ref.id}`),
+      );
       for (const other of getHeaderTabs()) {
-        if (other.kind === target.kind && other.id === target.id) continue;
+        if (preserved.has(`${other.kind}:${other.id}`)) continue;
         if (tabRequiresCloseConfirm(other)) {
           skipped.push(other.name);
           continue;

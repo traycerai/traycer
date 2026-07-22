@@ -10,9 +10,11 @@ const UNSUPPORTED: TabSplitCompatibility = {
 };
 
 let compatibility = SUPPORTED;
+const listeners = new Set<() => void>();
 
 export function setTabSplitCompatibility(supported: boolean): void {
   compatibility = supported ? SUPPORTED : UNSUPPORTED;
+  listeners.forEach((listener) => listener());
 }
 
 export function getTabSplitCompatibility(): TabSplitCompatibility {
@@ -21,4 +23,11 @@ export function getTabSplitCompatibility(): TabSplitCompatibility {
 
 export function canMutateTabSplits(): boolean {
   return compatibility.supported;
+}
+
+export function subscribeTabSplitCompatibility(
+  listener: () => void,
+): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
 }

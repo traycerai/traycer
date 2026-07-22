@@ -55,6 +55,7 @@ import {
 } from "@/components/ui/leader-digit-shortcuts";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
+import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
 import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
@@ -81,6 +82,9 @@ const LONG_PRESS_CONTEXT_MENU_MS = 500;
 interface TabItemProps {
   readonly tab: HeaderTab;
   readonly index: number;
+  /** `null` makes this a member control inside a group-level reorder frame. */
+  readonly dnd: HeaderTabDndConfig | null;
+  readonly includeMotionFrame: boolean;
   readonly isActive: boolean;
   readonly showSeparatorAfter: boolean;
   readonly showDropIndicatorBefore: boolean;
@@ -91,12 +95,21 @@ interface TabItemProps {
   readonly canCloseOtherTabs: boolean;
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
+  readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
+}
+
+export interface HeaderTabDndConfig {
+  readonly stripItemId: string;
+  readonly index: number;
+  readonly isDropSlot: boolean;
 }
 
 export const TabItem = memo(function TabItem(props: TabItemProps) {
   const {
     tab,
     index,
+    dnd,
+    includeMotionFrame,
     isActive,
     showSeparatorAfter,
     showDropIndicatorBefore,
@@ -107,12 +120,13 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     canCloseOtherTabs,
     onOpenInNewWindow,
     canOpenInNewWindow,
+    onSplitCommand,
   } = props;
   const {
     ref: dndRef,
     listeners,
     isDragging,
-  } = useHeaderTabDnd(tab.kind, tab.id, index);
+  } = useHeaderTabDnd(tab.kind, tab.id, dnd);
   const tabRef = useRef<HTMLDivElement | null>(null);
   const scrollActiveTabIntoView = useCallback(
     (element: HTMLDivElement | null) => {
@@ -278,86 +292,84 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           index,
           hint: leaderHint(leaderDigitFor(index), "to switch to", displayName),
         };
-  return (
+  const control = (
     <ContextMenu>
-      <HeaderTabMotionFrame isDragging={isDragging}>
-        <ContextMenuTrigger asChild>
-          <div
-            ref={combinedRef}
-            {...listeners}
-            role="tab"
-            tabIndex={0}
-            aria-selected={isActive}
-            data-testid={`tab-${tab.kind}-${tab.id}`}
-            data-tab-kind={tab.kind}
-            data-tab-index={index}
-            onClick={activateTab}
-            onKeyDown={handleKeyDown}
-            onTouchCancel={cancelLongPress}
-            onTouchEnd={cancelLongPress}
-            onTouchMove={cancelLongPress}
-            onTouchStart={handleTouchStart}
-            className={cn(
-              TAB_CLASS_BASE,
-              tabStateClass(isActive),
-              NO_DRAG_CLASS,
-              "cursor-pointer",
-            )}
-          >
-            <HeaderTabDropIndicator
-              visible={showDropIndicatorBefore}
-              side="left"
+      <ContextMenuTrigger asChild>
+        <div
+          ref={combinedRef}
+          {...listeners}
+          role="tab"
+          tabIndex={0}
+          aria-selected={isActive}
+          data-testid={`tab-${tab.kind}-${tab.id}`}
+          data-tab-kind={tab.kind}
+          data-tab-index={index}
+          onClick={activateTab}
+          onKeyDown={handleKeyDown}
+          onTouchCancel={cancelLongPress}
+          onTouchEnd={cancelLongPress}
+          onTouchMove={cancelLongPress}
+          onTouchStart={handleTouchStart}
+          className={cn(
+            TAB_CLASS_BASE,
+            tabStateClass(isActive),
+            NO_DRAG_CLASS,
+            "cursor-pointer",
+          )}
+        >
+          <HeaderTabDropIndicator
+            visible={showDropIndicatorBefore}
+            side="left"
+          />
+          <TabChrome isActive={isActive} />
+          <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
+            <TabLeadingIcon
+              icon={tab.icon}
+              titleGenerationPending={titleGenerationPending}
+              activityStatus={activityStatus}
+              tabId={tab.id}
+              epicId={tab.kind === "epic" ? tab.epicId : null}
             />
-            <TabChrome isActive={isActive} />
-            <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
-              <TabLeadingIcon
-                icon={tab.icon}
-                titleGenerationPending={titleGenerationPending}
-                activityStatus={activityStatus}
-                tabId={tab.id}
-                epicId={tab.kind === "epic" ? tab.epicId : null}
+            {rename.isEditing ? (
+              <input
+                {...rename.inputProps}
+                aria-label="Edit epic title"
+                data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
+                className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-center text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
               />
-              {rename.isEditing ? (
-                <input
-                  {...rename.inputProps}
-                  aria-label="Edit epic title"
-                  data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
-                  className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-center text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
+            ) : (
+              <>
+                <span className="min-w-0 flex-1 text-center">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        data-testid={`tab-title-${tab.kind}-${tab.id}`}
+                        className="inline-block max-w-full truncate align-bottom"
+                      >
+                        {displayName}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{displayName}</TooltipContent>
+                  </Tooltip>
+                </span>
+                <TabTrailingSlot
+                  label={`Close ${displayName}`}
+                  testId={`tab-close-${tab.kind}-${tab.id}`}
+                  onClose={() => onClose(displayTab)}
+                  leaderBadge={leaderBadge}
+                  active={isActive}
+                  disabled={!canClose}
                 />
-              ) : (
-                <>
-                  <span className="min-w-0 flex-1 text-center">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span
-                          data-testid={`tab-title-${tab.kind}-${tab.id}`}
-                          className="inline-block max-w-full truncate align-bottom"
-                        >
-                          {displayName}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>{displayName}</TooltipContent>
-                    </Tooltip>
-                  </span>
-                  <TabTrailingSlot
-                    label={`Close ${displayName}`}
-                    testId={`tab-close-${tab.kind}-${tab.id}`}
-                    onClose={() => onClose(displayTab)}
-                    leaderBadge={leaderBadge}
-                    active={isActive}
-                    disabled={!canClose}
-                  />
-                </>
-              )}
-            </span>
-            <HeaderTabSeparator visible={showSeparatorAfter} />
-            <HeaderTabDropIndicator
-              visible={showDropIndicatorAfter}
-              side="right"
-            />
-          </div>
-        </ContextMenuTrigger>
-      </HeaderTabMotionFrame>
+              </>
+            )}
+          </span>
+          <HeaderTabSeparator visible={showSeparatorAfter} />
+          <HeaderTabDropIndicator
+            visible={showDropIndicatorAfter}
+            side="right"
+          />
+        </div>
+      </ContextMenuTrigger>
       <TabContextMenuContent
         tab={displayTab}
         canCloseOtherTabs={canCloseOtherTabs}
@@ -366,9 +378,17 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         onCloseOtherTabs={onCloseOtherTabs}
         onDuplicateTab={onDuplicateTab}
         onOpenInNewWindow={onOpenInNewWindow}
+        onSplitCommand={onSplitCommand}
         onEditTitle={rename.startEditing}
       />
     </ContextMenu>
+  );
+  return includeMotionFrame ? (
+    <HeaderTabMotionFrame isDragging={isDragging}>
+      {control}
+    </HeaderTabMotionFrame>
+  ) : (
+    control
   );
 });
 
@@ -384,27 +404,47 @@ interface UseHeaderTabDndReturn {
 function useHeaderTabDnd(
   tabKind: HeaderTabKind,
   tabId: string,
-  index: number,
+  config: HeaderTabDndConfig | null,
 ): UseHeaderTabDndReturn {
   const dragData = useMemo<HeaderTabDragData>(
-    () => ({ kind: HEADER_TAB_DND_TYPE, tabKind, tabId, index }),
-    [index, tabId, tabKind],
+    () => ({
+      kind: HEADER_TAB_DND_TYPE,
+      stripItemId: config?.stripItemId ?? `member:${tabKind}:${tabId}`,
+      tabKind,
+      tabId,
+      index: config?.index ?? 0,
+    }),
+    [config, tabId, tabKind],
   );
   const {
     listeners,
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getHeaderTabDragId(tabKind, tabId),
+    id: getHeaderTabDragId(
+      tabKind,
+      config?.stripItemId.startsWith("tab:") === true
+        ? tabId
+        : `${config?.stripItemId ?? "member"}:${tabId}`,
+    ),
     data: dragData,
+    disabled: config === null,
   });
   const dropData = useMemo<HeaderTabSlotDropData>(
-    () => ({ kind: HEADER_TAB_SLOT_DND_TYPE, index, isTrailing: false }),
-    [index],
+    () => ({
+      kind: HEADER_TAB_SLOT_DND_TYPE,
+      index: config?.index ?? 0,
+      isTrailing: false,
+    }),
+    [config],
   );
   const { setNodeRef: dropRef } = useDroppable({
-    id: getHeaderTabSlotDropId(tabKind, tabId),
+    id: getHeaderTabSlotDropId(
+      tabKind,
+      `${config?.stripItemId ?? "member"}:${tabId}`,
+    ),
     data: dropData,
+    disabled: config === null || !config.isDropSlot,
   });
   const ref = useMemo(
     () => mergeRefs<HTMLElement>(dragRef, dropRef),

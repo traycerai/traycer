@@ -17,6 +17,7 @@ import {
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
+import type { TopLevelEdgeSplitTarget } from "@/components/layout/tabs/top-level-tab-dnd";
 import type {
   DropPosition,
   EpicCanvasTileRef,
@@ -112,6 +113,8 @@ interface EpicDndState {
    * and canvas-source tear-off hovers. Null when not hovering the strip.
    */
   readonly headerStripDropIndex: number | null;
+  /** Preview owned by the independent top-level edge-dwell machine. */
+  readonly topLevelEdgeSplitPreview: TopLevelEdgeSplitTarget | null;
   /**
    * Sidebar reparent preview (gesture-scoped, mutually exclusive with the
    * canvas `dropPreview`). `reparentTargetNodeId` is the hovered VALID row
@@ -130,6 +133,9 @@ interface EpicDndState {
   readonly headerTabDragStarted: (tab: HeaderTabDragData) => void;
   readonly dropPreviewChanged: (preview: EpicCanvasDropPreview) => void;
   readonly headerStripDropIndexChanged: (index: number | null) => void;
+  readonly topLevelEdgeSplitPreviewChanged: (
+    preview: TopLevelEdgeSplitTarget | null,
+  ) => void;
   readonly sidebarReparentPreviewChanged: (preview: {
     readonly targetNodeId: string | null;
     readonly targetViewTabId?: string | null;
@@ -145,6 +151,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   activeHeaderTab: null,
   dropPreview: null,
   headerStripDropIndex: null,
+  topLevelEdgeSplitPreview: null,
   reparentTargetNodeId: null,
   reparentTargetViewTabId: null,
   reparentRootPanelId: null,
@@ -156,6 +163,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeHeaderTab: null,
       dropPreview: null,
       headerStripDropIndex: null,
+      topLevelEdgeSplitPreview: null,
       reparentTargetNodeId: null,
       reparentTargetViewTabId: null,
       reparentRootPanelId: null,
@@ -169,6 +177,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeHeaderTab: tab,
       dropPreview: null,
       headerStripDropIndex: null,
+      topLevelEdgeSplitPreview: null,
       reparentTargetNodeId: null,
       reparentTargetViewTabId: null,
       reparentRootPanelId: null,
@@ -182,6 +191,20 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   headerStripDropIndexChanged: (index) => {
     if (get().headerStripDropIndex === index) return;
     set({ headerStripDropIndex: index });
+  },
+  topLevelEdgeSplitPreviewChanged: (preview) => {
+    const current = get().topLevelEdgeSplitPreview;
+    if (
+      current === preview ||
+      (current !== null &&
+        preview !== null &&
+        current.side === preview.side &&
+        current.targetRef.kind === preview.targetRef.kind &&
+        current.targetRef.id === preview.targetRef.id)
+    ) {
+      return;
+    }
+    set({ topLevelEdgeSplitPreview: preview });
   },
   sidebarReparentPreviewChanged: (preview) => {
     const state = get();
@@ -208,6 +231,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       state.activeHeaderTab === null &&
       state.dropPreview === null &&
       state.headerStripDropIndex === null &&
+      state.topLevelEdgeSplitPreview === null &&
       state.reparentTargetNodeId === null &&
       state.reparentTargetViewTabId === null &&
       state.reparentRootPanelId === null &&
@@ -221,6 +245,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeHeaderTab: null,
       dropPreview: null,
       headerStripDropIndex: null,
+      topLevelEdgeSplitPreview: null,
       reparentTargetNodeId: null,
       reparentTargetViewTabId: null,
       reparentRootPanelId: null,
@@ -286,6 +311,20 @@ export function useEmptyShellDropActive(viewTabId: string): boolean {
 /** Header strip insertion indicator (reorder + canvas tear-off hovers). */
 export function useHeaderStripDropIndex(): number | null {
   return useEpicDndStore((s) => s.headerStripDropIndex);
+}
+
+export function useTopLevelEdgeSplitPreview(
+  refKind: string,
+  refId: string,
+): "left" | "right" | null {
+  return useEpicDndStore((state) => {
+    const preview = state.topLevelEdgeSplitPreview;
+    return preview !== null &&
+      preview.targetRef.kind === refKind &&
+      preview.targetRef.id === refId
+      ? preview.side
+      : null;
+  });
 }
 
 type LeftPanelRailDropPreview = Extract<

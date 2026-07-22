@@ -5,6 +5,11 @@ import {
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
 import type { HeaderTab } from "@/stores/tabs/types";
+import {
+  TAB_SPLIT_COMMANDS,
+  resolveTabSplitCommandAvailability,
+  type TabSplitCommandId,
+} from "@/stores/tabs/tab-split-commands";
 
 interface TabContextMenuContentProps {
   readonly tab: HeaderTab;
@@ -14,6 +19,7 @@ interface TabContextMenuContentProps {
   readonly onCloseOtherTabs: (tab: HeaderTab) => void;
   readonly onDuplicateTab: (tab: HeaderTab) => void;
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
+  readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   /** Switches the epic tab title into the inline editable input. */
   readonly onEditTitle: () => void;
 }
@@ -29,11 +35,21 @@ export function TabContextMenuContent(
     onCloseOtherTabs,
     onDuplicateTab,
     onOpenInNewWindow,
+    onSplitCommand,
     onEditTitle,
   } = props;
 
   const showDuplicate = tab.canDuplicate;
   const showOpenInNewWindow = tab.canOpenInNewWindow;
+  const splitAvailability = resolveTabSplitCommandAvailability({
+    kind: tab.kind,
+    id: tab.id,
+  });
+  const showsGroupCommands =
+    splitAvailability.swap ||
+    splitAvailability.separate ||
+    splitAvailability.closeLeft !== null ||
+    splitAvailability.closeRight !== null;
 
   return (
     <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
@@ -71,6 +87,58 @@ export function TabContextMenuContent(
         </ContextMenuItem>
       ) : null}
       {showOpenInNewWindow ? <ContextMenuSeparator /> : null}
+      <ContextMenuItem
+        disabled={!splitAvailability.add}
+        onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.add.id, tab)}
+        data-testid={`tab-add-split-${tab.kind}-${tab.id}`}
+      >
+        {TAB_SPLIT_COMMANDS.add.label}
+      </ContextMenuItem>
+      <ContextMenuItem
+        disabled={!splitAvailability.pair}
+        onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.pair.id, tab)}
+        data-testid={`tab-pair-current-${tab.kind}-${tab.id}`}
+      >
+        {TAB_SPLIT_COMMANDS.pair.label}
+      </ContextMenuItem>
+      {showsGroupCommands ? <ContextMenuSeparator /> : null}
+      {showsGroupCommands ? (
+        <ContextMenuItem
+          disabled={!splitAvailability.swap}
+          onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.swap.id, tab)}
+          data-testid={`tab-swap-split-${tab.kind}-${tab.id}`}
+        >
+          {TAB_SPLIT_COMMANDS.swap.label}
+        </ContextMenuItem>
+      ) : null}
+      {showsGroupCommands ? (
+        <ContextMenuItem
+          disabled={!splitAvailability.separate}
+          onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.separate.id, tab)}
+          data-testid={`tab-separate-split-${tab.kind}-${tab.id}`}
+        >
+          {TAB_SPLIT_COMMANDS.separate.label}
+        </ContextMenuItem>
+      ) : null}
+      {showsGroupCommands ? (
+        <ContextMenuItem
+          disabled={splitAvailability.closeLeft === null}
+          onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.closeLeft.id, tab)}
+          data-testid={`tab-close-left-${tab.kind}-${tab.id}`}
+        >
+          {TAB_SPLIT_COMMANDS.closeLeft.label}
+        </ContextMenuItem>
+      ) : null}
+      {showsGroupCommands ? (
+        <ContextMenuItem
+          disabled={splitAvailability.closeRight === null}
+          onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.closeRight.id, tab)}
+          data-testid={`tab-close-right-${tab.kind}-${tab.id}`}
+        >
+          {TAB_SPLIT_COMMANDS.closeRight.label}
+        </ContextMenuItem>
+      ) : null}
+      <ContextMenuSeparator />
       <ContextMenuItem
         disabled={!canCloseOtherTabs}
         onSelect={() => onCloseOtherTabs(tab)}

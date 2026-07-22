@@ -29,6 +29,10 @@ import {
   HEADER_TAB_DND_TYPE,
   HEADER_TAB_SLOT_DND_TYPE,
 } from "@/components/layout/tabs/header-tab-dnd";
+import {
+  TOP_LEVEL_EDGE_SPLIT_TARGET,
+  TOP_LEVEL_FILLABLE_TARGET,
+} from "@/components/layout/tabs/top-level-tab-dnd";
 
 /**
  * Resolves the typed canvas source from the active draggable: Pierre hosts
@@ -59,7 +63,10 @@ function readActiveDragKind(active: Active): string | null {
 
 /** Every drop-target kind the root context can resolve a collision against. */
 type EpicRootDropTargetKind =
-  EpicCanvasDropTargetData["kind"] | typeof HEADER_TAB_SLOT_DND_TYPE;
+  | EpicCanvasDropTargetData["kind"]
+  | typeof HEADER_TAB_SLOT_DND_TYPE
+  | typeof TOP_LEVEL_EDGE_SPLIT_TARGET
+  | typeof TOP_LEVEL_FILLABLE_TARGET;
 
 const LEFT_PANEL_TARGET_KINDS: ReadonlyArray<EpicRootDropTargetKind> = [
   "left-panel-rail-item",
@@ -88,7 +95,13 @@ function targetKindsForSourceKind(
   sourceKind: string | null,
 ): ReadonlyArray<EpicRootDropTargetKind> {
   if (sourceKind === null) return [];
-  if (sourceKind === HEADER_TAB_DND_TYPE) return [HEADER_TAB_SLOT_DND_TYPE];
+  if (sourceKind === HEADER_TAB_DND_TYPE) {
+    return [
+      HEADER_TAB_SLOT_DND_TYPE,
+      TOP_LEVEL_EDGE_SPLIT_TARGET,
+      TOP_LEVEL_FILLABLE_TARGET,
+    ];
+  }
   if (sourceKind === LEFT_PANEL_RAIL_ITEM_DND_TYPE) {
     return LEFT_PANEL_TARGET_KINDS;
   }
@@ -111,6 +124,8 @@ function targetKindsForSourceKind(
  */
 const TARGET_KIND_PRIORITY = {
   [HEADER_TAB_SLOT_DND_TYPE]: 0,
+  [TOP_LEVEL_FILLABLE_TARGET]: 0,
+  [TOP_LEVEL_EDGE_SPLIT_TARGET]: 0,
   "artifact-tab": 1,
   "artifact-tab-strip-end": 2,
   "left-panel-rail-item": 3,

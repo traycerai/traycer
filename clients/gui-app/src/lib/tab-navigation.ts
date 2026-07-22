@@ -37,6 +37,7 @@ import {
   tabCommandCoordinator,
   type CoordinatedTabActivation,
   type CoordinatedTabActivationTarget,
+  type PairTabsCommand,
 } from "@/stores/tabs/tab-command-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
@@ -125,6 +126,14 @@ interface PreparedDraftSwap {
   readonly epicName: string | undefined;
 }
 
+interface PreparedPairRestore {
+  readonly splitId: string;
+  readonly left: TabRef;
+  readonly right: TabRef;
+  readonly priorRef: TabRef;
+  readonly focusedRef: TabRef;
+}
+
 interface PendingNavigation {
   readonly envelope: TabNavigationEnvelope;
   readonly destination: TabNavigationDestination;
@@ -133,6 +142,7 @@ interface PendingNavigation {
   readonly routeOptions: NavigateOptions;
   readonly activation: CoordinatedTabActivation | null;
   readonly preparedSwap: PreparedDraftSwap | null;
+  readonly preparedPair: PreparedPairRestore | null;
   readonly correctionKind: CorrectionKind | null;
   readonly correctionAttempt: 0 | 1;
   readonly correctionKey: string | null;
@@ -529,6 +539,65 @@ export class TabNavigationController {
     return this.executeActivation(navigate, intent, options);
   }
 
+  /**
+   * Commits a structural pair while the navigation controller still has the
+   * pre-pair selection. The ordinary activation path deliberately samples the
+   * layout itself; doing that after `pairTabs` would turn a cross-item visit
+   * into a focus-replace and make Back skip the original item.
+   */
+  activatePreparedPair(
+    navigate: NavigateFn,
+    command: PairTabsCommand,
+    intent: TabActivationIntent,
+    options: TabNavigationOptions | undefined,
+  ): boolean {
+    this.navigator = navigate;
+    if (!this.hydrationReady) return false;
+    const layoutBefore = currentLayout();
+    const focusedRef = command.focusedRef;
+    const canonical = this.canonicalIntent(intent, focusedRef);
+    if (canonical === null) return false;
+    const priorRef = backingRefOfLayout(layoutBefore);
+    if (priorRef === null || !tabCommandCoordinator.pairTabs(command)) {
+      return false;
+    }
+    const replace =
+      options?.replace === true ||
+      activeItemContainsRef(layoutBefore, focusedRef);
+    this.supersedeAll();
+    const envelope = this.createAuthorityEnvelope(
+      destinationForRef(focusedRef),
+      replace ? "focus-replace" : "activate-push",
+    );
+    const routeOptions = {
+      ...tabRouteOptions(canonical),
+      ...(options?.search === undefined ? {} : { search: options.search }),
+      replace,
+    } satisfies NavigateOptions;
+    const pending: PendingNavigation = {
+      envelope,
+      destination: envelope.destination,
+      expectedRef: focusedRef,
+      intent: canonical,
+      routeOptions,
+      activation: null,
+      preparedSwap: null,
+      preparedPair: {
+        splitId: command.splitId,
+        left: command.left,
+        right: command.right,
+        priorRef,
+        focusedRef,
+      },
+      correctionKind: null,
+      correctionAttempt: 0,
+      correctionKey: null,
+      placementCommitted: true,
+    };
+    this.issueUserNavigation(navigate, pending);
+    return true;
+  }
+
   observeLocation(
     location: TabNavigationLocation,
     action: HistoryAction,
@@ -756,6 +825,7 @@ export class TabNavigationController {
       routeOptions,
       activation,
       preparedSwap: null,
+      preparedPair: null,
       correctionKind: null,
       correctionAttempt: 0,
       correctionKey: null,
@@ -919,6 +989,7 @@ export class TabNavigationController {
       routeOptions,
       activation: null,
       preparedSwap: swap,
+      preparedPair: null,
       correctionKind: null,
       correctionAttempt: 0,
       correctionKey: null,
@@ -1067,6 +1138,9 @@ export class TabNavigationController {
     if (pending.activation !== null) {
       tabCommandCoordinator.restoreTabActivation(pending.activation);
     }
+    if (pending.preparedPair !== null) {
+      this.restorePreparedPair(pending.preparedPair);
+    }
     this.nextAuthoritySerial();
     const current = this.readCurrentLocation();
     const backing = this.backingNavigation();
@@ -1087,6 +1161,32 @@ export class TabNavigationController {
       }
       this.pending.delete(token);
     });
+  }
+
+  private restorePreparedPair(pair: PreparedPairRestore): void {
+    const layout = currentLayout();
+    const item = layout.items.find(
+      (candidate) => candidate.id === pair.splitId,
+    );
+    if (
+      layout.activeItemId !== pair.splitId ||
+      item?.kind !== "split" ||
+      !refsEqual(item.left.kind === "tab" ? item.left.ref : null, pair.left) ||
+      !refsEqual(item.right.kind === "tab" ? item.right.ref : null, pair.right)
+    ) {
+      return;
+    }
+    const focused = item.focusedSide === "left" ? item.left : item.right;
+    const backing = item.routeBackingSide === "left" ? item.left : item.right;
+    if (
+      focused.kind !== "tab" ||
+      backing.kind !== "tab" ||
+      !refsEqual(focused.ref, pair.focusedRef) ||
+      !refsEqual(backing.ref, pair.focusedRef)
+    ) {
+      return;
+    }
+    tabCommandCoordinator.activateTab({ kind: "ref", ref: pair.priorRef });
   }
 
   private repairStaleLocation(
@@ -1170,6 +1270,7 @@ export class TabNavigationController {
       routeOptions,
       activation: null,
       preparedSwap: null,
+      preparedPair: null,
       correctionKind: kind,
       correctionAttempt: attempt,
       correctionKey,
@@ -1487,6 +1588,21 @@ export function navigateToTabIntent(
   options: Pick<NavigateOptions, "replace"> | undefined,
 ): void {
   activateTabIntent(navigate, intent, options);
+}
+
+/** Additive structural-activation seam for header pairing gestures. */
+export function activatePreparedPairTabIntent(
+  navigate: NavigateFn,
+  command: PairTabsCommand,
+  intent: TabActivationIntent,
+  options: TabNavigationOptions | undefined,
+): boolean {
+  return tabNavigationController.activatePreparedPair(
+    navigate,
+    command,
+    intent,
+    options,
+  );
 }
 
 export function __resetTabNavigationControllerForTesting(): void {

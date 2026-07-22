@@ -22,6 +22,7 @@ import {
 } from "vitest";
 import {
   __resetTabNavigationControllerForTesting,
+  activatePreparedPairTabIntent,
   activateTabIntent,
   getTabNavigationDiagnostics,
   tabNavigationController,
@@ -1732,6 +1733,94 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
     activateTabIntent(nav.asNavigate, epicIntent("epic-b", b.tabId), undefined);
     expect(nav.calls[0]?.replace).not.toBe(true);
     expect(nav.envelopeAt(0).intentKind).toBe("activate-push");
+  });
+
+  it("prepared pairing captures the pre-pair item and pushes the focused member", () => {
+    const a = openEpic("epic-a", "A");
+    const b = openEpic("epic-b", "B");
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        { kind: "tab", id: tabItemId(a.ref), ref: a.ref },
+        { kind: "tab", id: tabItemId(b.ref), ref: b.ref },
+      ],
+      activeItemId: tabItemId(a.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const nav = makeDeferredNavigate();
+
+    expect(
+      activatePreparedPairTabIntent(
+        nav.asNavigate,
+        {
+          left: a.ref,
+          right: b.ref,
+          focusedRef: b.ref,
+          splitId: "split-ab",
+          leftRatio: 0.5,
+        },
+        epicIntent("epic-b", b.tabId),
+        undefined,
+      ),
+    ).toBe(true);
+
+    expect(nav.calls[0]?.replace).not.toBe(true);
+    expect(nav.envelopeAt(0).intentKind).toBe("activate-push");
+    expect(focusedRefKey()).toBe(tabRefKey(b.ref));
+    expect(useTabsStore.getState().activeItemId).toBe("split-ab");
+
+    commitInternal({
+      navigate: nav.asNavigate,
+      pathname: b.pathname,
+      envelope: nav.envelopeAt(0),
+      action: "PUSH",
+      key: "pair-b",
+      index: 1,
+    });
+    commitExternal({
+      navigate: nav.asNavigate,
+      pathname: a.pathname,
+      action: "BACK",
+      key: "pair-a",
+      index: 0,
+    });
+    expect(focusedRefKey()).toBe(tabRefKey(a.ref));
+  });
+
+  it("rejected prepared pairing retains members but restores the prior owner", async () => {
+    const a = openEpic("epic-a", "A");
+    const b = openEpic("epic-b", "B");
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        { kind: "tab", id: tabItemId(a.ref), ref: a.ref },
+        { kind: "tab", id: tabItemId(b.ref), ref: b.ref },
+      ],
+      activeItemId: tabItemId(a.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const nav = makeDeferredNavigate();
+
+    activatePreparedPairTabIntent(
+      nav.asNavigate,
+      {
+        left: a.ref,
+        right: b.ref,
+        focusedRef: b.ref,
+        splitId: "split-ab",
+        leftRatio: 0.5,
+      },
+      epicIntent("epic-b", b.tabId),
+      undefined,
+    );
+    expect(focusedRefKey()).toBe(tabRefKey(b.ref));
+
+    await nav.reject(0);
+
+    expect(useTabsStore.getState().items).toEqual([
+      expect.objectContaining({ id: "split-ab", kind: "split" }),
+    ]);
+    expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
   // Cold review #7: re-activating the already-active ordinary tab must replace

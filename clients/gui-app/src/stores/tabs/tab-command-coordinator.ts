@@ -22,14 +22,21 @@ import {
   flattenLayoutRefs,
   focusLayoutRef,
   focusSplitSide,
+  pairLayoutRefs,
+  reorderStripItem,
   removeLayoutRef,
   repairLayout,
   replaceFillableSide,
   replaceLayoutRef,
+  resizeSplit,
   separateSplit,
+  swapSplitSides,
   tabRefKey,
   type PersistedTabStripLayout,
   type CreateEmptySplitArgs,
+  type PairLayoutArgs,
+  type ReorderItemArgs,
+  type ResizeSplitArgs,
   type SplitSide,
   type SplitSideName,
   type StripItem,
@@ -67,6 +74,30 @@ export interface FillSplitSideCommand {
 export interface CreateDraftForSplitCommand {
   readonly splitId: string;
   readonly side: SplitSideName;
+}
+
+export interface CreateEpicForSplitCommand extends CreateDraftForSplitCommand {
+  readonly epicId: string;
+  readonly name: string | undefined;
+}
+
+export interface CreatePhaseMigrationForSplitCommand extends CreateDraftForSplitCommand {
+  readonly phaseId: string;
+  readonly name: string | undefined;
+}
+
+export interface CreateSystemForSplitCommand extends CreateDraftForSplitCommand {
+  readonly systemKind: "history" | "settings";
+  readonly name: string;
+  readonly lastPath: string;
+}
+
+/**
+ * Pairing keeps its requested visual order while the caller explicitly names
+ * the member that should own focus after the one layout transaction commits.
+ */
+export interface PairTabsCommand extends PairLayoutArgs {
+  readonly focusedRef: TabRef;
 }
 
 export interface ReplaceDraftWithEpicCommand {
@@ -479,11 +510,21 @@ export class TabCommandCoordinator {
   fillSplitSide(command: FillSplitSideCommand): boolean {
     const layout = currentLayout();
     if (!sourceHasRef(command.ref)) return false;
-    const next = replaceFillableSide(layout, command, canSplitRef);
-    if (next === layout) return false;
+    const existing = findStripItemForRef(layout, command.ref);
+    // A chooser may reuse an already-open, unpaired source. Remove its one
+    // ordinary frame first, then fill the requested side inside the SAME
+    // transaction so source ownership never changes and the view stays keyed.
+    const withoutUngroupedSource =
+      existing?.kind === "tab" ? removeLayoutRef(layout, command.ref) : layout;
+    const next = replaceFillableSide(
+      withoutUngroupedSource,
+      command,
+      canSplitRef,
+    );
+    if (next === withoutUngroupedSource) return false;
     this.execute({
       layout: next,
-      reservedAdditions: [command.ref],
+      reservedAdditions: existing === null ? [command.ref] : [],
       pendingRemovals: [],
       projectSourceCompatibility: true,
       applySources: () => undefined,
@@ -496,6 +537,138 @@ export class TabCommandCoordinator {
     const layout = currentLayout();
     if (!sourceHasRef(args.ref)) return false;
     const next = createEmptySplit(layout, args, canSplitRef);
+    if (next === layout) return false;
+    this.execute({
+      layout: next,
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
+  pairTabs(command: PairTabsCommand): boolean {
+    const layout = currentLayout();
+    if (!sourceHasRef(command.left) || !sourceHasRef(command.right)) {
+      return false;
+    }
+    const paired = pairLayoutRefs(layout, command, canSplitRef);
+    const next = focusLayoutRef(paired, command.focusedRef);
+    if (next === layout) return false;
+    this.execute({
+      layout: next,
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
+  reorderStripItem(command: ReorderItemArgs): boolean {
+    const layout = currentLayout();
+    const item = layout.items.find(
+      (candidate) => candidate.id === command.itemId,
+    );
+    if (item === undefined) return false;
+    if (
+      flattenLayoutRefs({ ...layout, items: [item] }).some(
+        isTabStructurallyLocked,
+      )
+    ) {
+      return false;
+    }
+    const next = reorderStripItem(layout, command);
+    if (next === layout) return false;
+    this.execute({
+      layout: next,
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
+  resizeSplit(command: ResizeSplitArgs): boolean {
+    const layout = currentLayout();
+    const next = resizeSplit(layout, command);
+    if (next === layout) return false;
+    this.execute({
+      layout: next,
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
+  focusSplitSide(command: {
+    readonly splitId: string;
+    readonly side: SplitSideName;
+  }): boolean {
+    const layout = currentLayout();
+    const next = focusSplitSide(layout, command);
+    if (next === layout) return false;
+    this.execute({
+      layout: next,
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
+  swapSplitSides(splitId: string): boolean {
+    const layout = currentLayout();
+    const item = layout.items.find(
+      (candidate): candidate is Extract<StripItem, { kind: "split" }> =>
+        candidate.kind === "split" && candidate.id === splitId,
+    );
+    if (item === undefined) return false;
+    if (
+      flattenLayoutRefs({ ...layout, items: [item] }).some(
+        isTabStructurallyLocked,
+      )
+    ) {
+      return false;
+    }
+    const next = swapSplitSides(layout, splitId);
+    if (next === layout) return false;
+    this.execute({
+      layout: next,
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
+  separateSplit(splitId: string): boolean {
+    const layout = currentLayout();
+    const item = layout.items.find(
+      (candidate): candidate is Extract<StripItem, { kind: "split" }> =>
+        candidate.kind === "split" && candidate.id === splitId,
+    );
+    if (item === undefined) return false;
+    if (
+      flattenLayoutRefs({ ...layout, items: [item] }).some(
+        isTabStructurallyLocked,
+      )
+    ) {
+      return false;
+    }
+    const next = separateSplit(layout, splitId);
     if (next === layout) return false;
     this.execute({
       layout: next,
@@ -523,6 +696,85 @@ export class TabCommandCoordinator {
           useLandingDraftStore.getState().createDraftWithId(ref.id, null);
         });
       },
+      applyRemovals: () => undefined,
+    });
+    return ref;
+  }
+
+  createEpicForSplit(command: CreateEpicForSplitCommand): TabRef | null {
+    const ref: TabRef = { kind: "epic", id: uuidv4() };
+    const layout = currentLayout();
+    const next = replaceFillableSide(layout, { ...command, ref }, canSplitRef);
+    if (next === layout) return null;
+    this.execute({
+      layout: next,
+      reservedAdditions: [ref],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        this.applyExpectedSourceMutation(() => {
+          useEpicCanvasStore
+            .getState()
+            .openEpicTabWithId(ref.id, command.epicId, command.name);
+        });
+      },
+      applyRemovals: () => undefined,
+    });
+    return ref;
+  }
+
+  createPhaseMigrationForSplit(
+    command: CreatePhaseMigrationForSplitCommand,
+  ): TabRef | null {
+    const ref: TabRef = { kind: "epic", id: uuidv4() };
+    const layout = currentLayout();
+    const next = replaceFillableSide(layout, { ...command, ref }, canSplitRef);
+    if (next === layout) return null;
+    this.execute({
+      layout: next,
+      reservedAdditions: [ref],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        this.applyExpectedSourceMutation(() => {
+          useEpicCanvasStore
+            .getState()
+            .openPhaseMigrationTabWithId(ref.id, command.phaseId, command.name);
+        });
+      },
+      applyRemovals: () => undefined,
+    });
+    return ref;
+  }
+
+  createSystemForSplit(command: CreateSystemForSplitCommand): TabRef | null {
+    const ref: TabRef = { kind: command.systemKind, id: command.systemKind };
+    const layout = currentLayout();
+    if (layout.systemTabs[command.systemKind] !== null) return null;
+    const withSystem = {
+      ...layout,
+      systemTabs: {
+        ...layout.systemTabs,
+        [command.systemKind]: {
+          id: command.systemKind,
+          kind: command.systemKind,
+          name: command.name,
+          lastPath: command.lastPath,
+        },
+      },
+    };
+    const next = replaceFillableSide(
+      withSystem,
+      { ...command, ref },
+      canSplitRef,
+    );
+    if (next === withSystem) return null;
+    this.execute({
+      layout: next,
+      reservedAdditions: [ref],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
       applyRemovals: () => undefined,
     });
     return ref;

@@ -1,11 +1,13 @@
 import {
   Suspense,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
 } from "react";
 import type { FocusEvent, PointerEvent } from "react";
+import { useDroppable } from "@dnd-kit/core";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import {
@@ -18,8 +20,20 @@ import {
 import { tabSurfaceDescriptor } from "@/stores/tabs/registry";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
+import { SplitDivider } from "@/components/layout/tabs/split-divider";
+import { SplitSlotChooser } from "@/components/layout/tabs/split-slot-chooser";
+import {
+  TOP_LEVEL_EDGE_SPLIT_TARGET,
+  TOP_LEVEL_FILLABLE_TARGET,
+  edgeSplitDropId,
+  fillableSlotDropId,
+  type TopLevelEdgeSplitTarget,
+  type TopLevelFillableTarget,
+} from "@/components/layout/tabs/top-level-tab-dnd";
+import { useTopLevelEdgeSplitPreview } from "@/components/epic-canvas/dnd/dnd-store";
 import { PhaseMigrationControllerHost } from "@/components/epic-tabs/phase-migration-controller-host";
 import { PhaseMigrationSurface } from "@/components/epic-tabs/phase-migration-surface";
 import { TabSurfaceActivityProvider } from "./tab-surface-activity";
@@ -51,7 +65,16 @@ export function TopLevelTabHost() {
     })),
   );
   const headerTabs = useHeaderTabs();
+  const hostBoundsRef = useRef<HTMLDivElement | null>(null);
+  const [previewRatio, setPreviewRatio] = useState<number | null>(null);
   const activeItem = items.find((item) => item.id === activeItemId) ?? null;
+  const renderedActiveItem = useMemo(
+    () =>
+      activeItem?.kind === "split" && previewRatio !== null
+        ? { ...activeItem, leftRatio: previewRatio }
+        : activeItem,
+    [activeItem, previewRatio],
+  );
   const tabsByRefKey = useMemo(
     () => new Map(headerTabs.map((tab) => [tabRefKey(tab), tab])),
     [headerTabs],
@@ -67,17 +90,20 @@ export function TopLevelTabHost() {
   );
   const activeRefKeys = useMemo(
     () =>
-      (activeItem === null ? [] : flattenStripItemRefs(activeItem))
+      (renderedActiveItem === null
+        ? []
+        : flattenStripItemRefs(renderedActiveItem)
+      )
         .map(tabRefKey)
         .filter((key) => tabsByRefKey.has(key)),
-    [activeItem, tabsByRefKey],
+    [renderedActiveItem, tabsByRefKey],
   );
   const mountedRefKeys = useMountedSurfaceKeys(availableRefKeys, activeRefKeys);
   const activateSurface = useTopLevelSurfaceActivator();
   const mounts = mountedRefKeys.flatMap((key) => {
     const tab = tabsByRefKey.get(key);
     if (tab === undefined) return [];
-    const placement = placementForRef(activeItem, tab);
+    const placement = placementForRef(renderedActiveItem, tab);
     return [
       {
         tab,
@@ -92,6 +118,7 @@ export function TopLevelTabHost() {
 
   return (
     <div
+      ref={hostBoundsRef}
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
       data-testid="top-level-tab-host"
     >
@@ -143,7 +170,20 @@ export function TopLevelTabHost() {
           </TabSurfaceActivityProvider>
         </div>
       ))}
-      {activeItem?.kind === "split" ? renderFillableSlots(activeItem) : null}
+      {renderedActiveItem?.kind === "tab" ? (
+        <TopLevelEdgeSplitTargets targetRef={renderedActiveItem.ref} />
+      ) : null}
+      {renderedActiveItem?.kind === "split" ? (
+        <>
+          <FillableSplitSlots item={renderedActiveItem} />
+          <SplitDivider
+            splitId={renderedActiveItem.id}
+            leftRatio={renderedActiveItem.leftRatio}
+            hostBoundsRef={hostBoundsRef}
+            onPreviewRatioChange={setPreviewRatio}
+          />
+        </>
+      ) : null}
     </div>
   );
 }
@@ -178,23 +218,154 @@ function useMountedSurfaceKeys(
   }, [activeRefKeys, availableRefKeys, recency]);
 }
 
-function renderFillableSlots(item: SplitStripItem): ReactNode {
+function FillableSplitSlots(props: {
+  readonly item: SplitStripItem;
+}): ReactNode {
   return (["left", "right"] as const).flatMap((side) => {
-    const slot = side === "left" ? item.left : item.right;
+    const slot = side === "left" ? props.item.left : props.item.right;
     if (slot.kind === "tab") return [];
-    const placement = splitSidePlacement(item, side);
+    const placement = splitSidePlacement(props.item, side);
     return (
-      <div
-        key={`${item.id}:${side}`}
-        aria-label="Empty split slot"
-        className={surfaceClassName(placement)}
-        data-slot-kind={slot.kind}
-        data-slot-side={side}
-        data-testid={`top-level-fillable-slot-${side}`}
-        style={surfaceStyle(placement)}
+      <FillableSplitSlot
+        key={`${props.item.id}:${side}`}
+        splitId={props.item.id}
+        side={side}
+        slot={slot}
+        placement={placement}
+        focused={props.item.focusedSide === side}
       />
     );
   });
+}
+
+function FillableSplitSlot(props: {
+  readonly splitId: string;
+  readonly side: SplitSideName;
+  readonly slot: Exclude<SplitSide, { readonly kind: "tab" }>;
+  readonly placement: SurfacePlacement;
+  readonly focused: boolean;
+}): ReactNode {
+  const dropData: TopLevelFillableTarget = {
+    kind: TOP_LEVEL_FILLABLE_TARGET,
+    splitId: props.splitId,
+    side: props.side,
+  };
+  const { setNodeRef } = useDroppable({
+    id: fillableSlotDropId(props.splitId, props.side),
+    data: dropData,
+  });
+  return (
+    <div
+      ref={setNodeRef}
+      aria-label="Fillable split slot"
+      className={surfaceClassName(props.placement)}
+      data-slot-kind={props.slot.kind}
+      data-slot-side={props.side}
+      data-testid={`top-level-fillable-slot-${props.side}`}
+      style={surfaceStyle(props.placement)}
+      onFocusCapture={() => {
+        tabCommandCoordinator.focusSplitSide({
+          splitId: props.splitId,
+          side: props.side,
+        });
+      }}
+      onPointerDownCapture={() => {
+        tabCommandCoordinator.focusSplitSide({
+          splitId: props.splitId,
+          side: props.side,
+        });
+      }}
+    >
+      <TabSurfaceActivityProvider
+        activity={{ visible: true, focused: props.focused }}
+      >
+        <SurfacePresentationBoundary visible focused={props.focused}>
+          <SplitSlotChooser
+            splitId={props.splitId}
+            side={props.side}
+            slot={props.slot}
+            focused={props.focused}
+          />
+        </SurfacePresentationBoundary>
+      </TabSurfaceActivityProvider>
+    </div>
+  );
+}
+
+function TopLevelEdgeSplitTargets(props: {
+  readonly targetRef: TabRef;
+}): ReactNode {
+  const left: TopLevelEdgeSplitTarget = {
+    kind: TOP_LEVEL_EDGE_SPLIT_TARGET,
+    targetRef: props.targetRef,
+    side: "left",
+  };
+  const right: TopLevelEdgeSplitTarget = {
+    kind: TOP_LEVEL_EDGE_SPLIT_TARGET,
+    targetRef: props.targetRef,
+    side: "right",
+  };
+  const { setNodeRef: setLeftRef } = useDroppable({
+    id: edgeSplitDropId(props.targetRef, "left"),
+    data: left,
+  });
+  const { setNodeRef: setRightRef } = useDroppable({
+    id: edgeSplitDropId(props.targetRef, "right"),
+    data: right,
+  });
+  const preview = useTopLevelEdgeSplitPreview(
+    props.targetRef.kind,
+    props.targetRef.id,
+  );
+  return (
+    <>
+      {preview !== null ? (
+        <div
+          aria-hidden
+          data-preview-side={preview}
+          data-testid="top-level-edge-split-preview"
+          className="pointer-events-none absolute inset-0 z-10 grid grid-cols-2 gap-px bg-border/70 p-px"
+        >
+          <div
+            data-testid="top-level-edge-split-preview-left"
+            data-destination={preview === "left" ? "true" : "false"}
+            className={cn(
+              "bg-background/85",
+              preview === "left" &&
+                "bg-primary/15 ring-2 ring-inset ring-primary",
+            )}
+          />
+          <div
+            data-testid="top-level-edge-split-preview-right"
+            data-destination={preview === "right" ? "true" : "false"}
+            className={cn(
+              "bg-background/85",
+              preview === "right" &&
+                "bg-primary/15 ring-2 ring-inset ring-primary",
+            )}
+          />
+        </div>
+      ) : null}
+      <div
+        ref={setLeftRef}
+        aria-hidden
+        data-testid="top-level-edge-target-left"
+        className={cn(
+          "pointer-events-none absolute inset-y-0 left-0 z-20 w-1/5 border-2 border-transparent transition-colors",
+          preview === "left" && "border-primary bg-primary/10",
+        )}
+      />
+      <div
+        ref={setRightRef}
+        aria-hidden
+        data-testid="top-level-edge-target-right"
+        className={cn(
+          "pointer-events-none absolute inset-y-0 right-0 z-20 w-1/5 border-2 border-transparent transition-colors",
+          preview === "right" && "border-primary bg-primary/10",
+        )}
+      />
+    </>
+  );
 }
 
 function TabSurface(props: { readonly tab: HeaderTab }): ReactNode {
