@@ -686,7 +686,9 @@ function useNewWorktreeFormState(
   return {
     selectedSource,
     branchName: nameState.value,
-    hasUserEdited: nameState.edited || sourceId !== null,
+    hasUserEdited:
+      nameState.edited ||
+      (sourceId !== null && sourceId !== model.newBranchSourceId),
     hasUnresolvedExplicitSource,
     setBranchName,
     selectSource,

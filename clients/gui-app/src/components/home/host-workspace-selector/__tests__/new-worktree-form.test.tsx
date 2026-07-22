@@ -1390,6 +1390,36 @@ describe("NewWorktreeForm — autosave lifecycle", () => {
     expect(onEmit).not.toHaveBeenCalled();
   });
 
+  it("preserves an existing-branch checkout when its default source is re-selected", async () => {
+    branchesData = {
+      branches: [
+        { name: "development", isCurrent: true, isRemoteOnly: false },
+        { name: "feat/remembered", isCurrent: false, isRemoteOnly: false },
+      ],
+      uncommittedFileCount: 0,
+    };
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    renderForm(onEmit, {
+      kind: "worktree",
+      scripts: null,
+      workspacePath: "/repo",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      isPrimary: true,
+      branch: { type: "existing", name: "feat/remembered" },
+    });
+
+    await selectSource("development");
+    expect(screen.getByTestId("new-worktree-save-status").textContent).toBe(
+      "Saved",
+    );
+    flushAutosave();
+    expect(onEmit).not.toHaveBeenCalled();
+
+    cleanup();
+    await act(() => Promise.resolve());
+    expect(onEmit).not.toHaveBeenCalled();
+  });
+
   it("autosaves a remembered existing-branch checkout after the user edits it", () => {
     branchesData = {
       branches: [
