@@ -3,7 +3,10 @@ import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
 import { downgradeResponseAcrossMajors } from "@traycer/protocol/framework/index";
 import {
   hostGetRateLimitUsageDowngradeV2ToV1,
+  hostGetRateLimitUsageDowngradeV3ToV1,
+  hostGetRateLimitUsageDowngradeV3ToV2,
   hostGetRateLimitUsageUpgradeV20ToV21,
+  hostGetRateLimitUsageUpgradeV21ToV30,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
@@ -16,6 +19,7 @@ import {
   rateLimitUsageResponseSchemaV12,
   rateLimitUsageResponseSchemaV20,
   rateLimitUsageResponseSchemaV21,
+  rateLimitUsageResponseSchemaV30,
 } from "@traycer/protocol/host/rate-limit/schemas";
 
 describe("providers.consumeRateLimitResetCredit schemas", () => {
@@ -572,5 +576,319 @@ describe("host.getRateLimitUsage v2.0 -> v1.2 downgrade bridge", () => {
       hostRpcRegistry["host.getRateLimitUsage"][1].versions[2].contract
         .schemaVersion,
     ).toEqual({ major: 1, minor: 2 });
+  });
+});
+
+// `host.getRateLimitUsage` major 3.0 - adds the grok available arm. Frozen
+// v2.1 / v1.2 unions have no grok arm, so the 3 -> 2 and 3 -> 1 downgrade
+// bridges degrade a grok-available snapshot to
+// `{ provider: "grok", available: false, reason: "unsupported_provider" }`
+// (the exact row a pre-grok host returns for grok) and reparse through the
+// frozen response schema. 3 -> 1 also composes the existing
+// `usage_fetch_failed` -> `rate_limits_not_available` mapping.
+describe("host.getRateLimitUsage v3.0 -> v2.1 / v1.2 grok downgrade bridges", () => {
+  const grokAvailableWithPeriod = {
+    provider: "grok" as const,
+    available: true as const,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart: 1753142400000,
+    periodEnd: 1753747200000,
+    period: {
+      usedPercent: 12,
+      resetsAt: 1753747200000,
+      durationMinutes: 10080,
+    },
+    monthlyLimit: null,
+    onDemandCap: 0,
+    onDemandUsed: 0,
+    prepaidBalance: 0,
+  };
+
+  const grokAvailablePeriodLess = {
+    provider: "grok" as const,
+    available: true as const,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart: 1753142400000,
+    periodEnd: 1753747200000,
+    period: null,
+    monthlyLimit: null,
+    onDemandCap: null,
+    onDemandUsed: null,
+    prepaidBalance: null,
+  };
+
+  const grokUnavailable = {
+    provider: "grok" as const,
+    available: false as const,
+    reason: "unsupported_provider" as const,
+  };
+
+  const codexAvailable = {
+    provider: "codex" as const,
+    available: true as const,
+    planType: "plus",
+    limitId: "plus-primary",
+    limitName: "Plus",
+    primary: {
+      usedPercent: 42,
+      resetsAt: 1735689600000,
+      durationMinutes: 300,
+    },
+    secondary: null,
+    extraWindows: [],
+    credits: null,
+    individualLimit: null,
+    resetCredits: null,
+    rateLimitReachedType: null,
+  };
+
+  it("parses a grok-available snapshot on the live union and rejects it on the frozen v2.1 schema", () => {
+    expect(providerRateLimitsSchema.parse(grokAvailableWithPeriod)).toEqual(
+      grokAvailableWithPeriod,
+    );
+    expect(providerRateLimitsSchema.parse(grokAvailablePeriodLess)).toEqual(
+      grokAvailablePeriodLess,
+    );
+    expect(
+      rateLimitUsageResponseSchemaV30.parse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokAvailableWithPeriod,
+      }),
+    ).toMatchObject({
+      providerRateLimits: { provider: "grok", available: true },
+    });
+    // The frozen v2.1 response has no grok arm - without the bridge map a
+    // reparse would fail, which is exactly why the bridge exists.
+    expect(
+      rateLimitUsageResponseSchemaV21.safeParse({
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokAvailableWithPeriod,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("degrades a grok-available (with period) snapshot through the 3.0 -> 2.1 bridge", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailableWithPeriod,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("degrades a period-less grok-available snapshot through the 3.0 -> 2.1 bridge", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailablePeriodLess,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("passes non-grok available arms and null through the 3.0 -> 2.1 bridge unchanged", () => {
+    const withCodex = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: codexAvailable,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(withCodex),
+    ).toEqual({ ok: true, value: withCodex });
+
+    const withNull = {
+      totalTokens: 100,
+      remainingTokens: 50,
+      providerRateLimits: null,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(withNull),
+    ).toEqual({ ok: true, value: withNull });
+  });
+
+  it("passes an already-unavailable grok snapshot through the 3.0 -> 2.1 bridge unchanged", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokUnavailable,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeResponse(response),
+    ).toEqual({ ok: true, value: response });
+  });
+
+  it("downgrades the 3.0 -> 2.1 request as the identity", () => {
+    const request = rateLimitUsageRequestSchemaV12.parse({
+      accountContext: DEFAULT_ACCOUNT_CONTEXT,
+      providerId: "grok",
+    });
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV2.downgradeRequest(request),
+    ).toEqual({ ok: true, value: request });
+  });
+
+  it("degrades grok-available through the host registry major 3 -> 2 path", () => {
+    const response = rateLimitUsageResponseSchemaV30.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailableWithPeriod,
+    });
+    expect(
+      downgradeResponseAcrossMajors(
+        hostRpcRegistry["host.getRateLimitUsage"],
+        3,
+        2,
+        response,
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("degrades a grok-available snapshot through the 3.0 -> 1.2 bridge", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailableWithPeriod,
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV1.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("maps usage_fetch_failed to rate_limits_not_available on the 3.0 -> 1.2 bridge", () => {
+    const response = {
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: {
+        provider: "codex" as const,
+        available: false as const,
+        reason: "usage_fetch_failed" as const,
+      },
+    };
+    expect(
+      hostGetRateLimitUsageDowngradeV3ToV1.downgradeResponse(response),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: {
+          provider: "codex",
+          available: false,
+          reason: "rate_limits_not_available",
+        },
+      },
+    });
+  });
+
+  it("degrades grok-available through the host registry major 3 -> 1 path", () => {
+    const response = rateLimitUsageResponseSchemaV30.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: grokAvailablePeriodLess,
+    });
+    expect(
+      downgradeResponseAcrossMajors(
+        hostRpcRegistry["host.getRateLimitUsage"],
+        3,
+        1,
+        response,
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: grokUnavailable,
+      },
+    });
+  });
+
+  it("maps usage_fetch_failed through the host registry major 3 -> 1 path", () => {
+    const response = rateLimitUsageResponseSchemaV30.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: {
+        provider: "claude-code",
+        available: false,
+        reason: "usage_fetch_failed",
+      },
+    });
+    expect(
+      downgradeResponseAcrossMajors(
+        hostRpcRegistry["host.getRateLimitUsage"],
+        3,
+        1,
+        response,
+      ),
+    ).toEqual({
+      ok: true,
+      value: {
+        totalTokens: 0,
+        remainingTokens: 0,
+        providerRateLimits: {
+          provider: "claude-code",
+          available: false,
+          reason: "rate_limits_not_available",
+        },
+      },
+    });
+  });
+
+  it("upgrades a v2.1 response to v3.0 as the identity", () => {
+    const response = rateLimitUsageResponseSchemaV21.parse({
+      totalTokens: 0,
+      remainingTokens: 0,
+      providerRateLimits: codexAvailable,
+    });
+    const upgraded =
+      hostGetRateLimitUsageUpgradeV21ToV30.upgradeResponse(response);
+    expect(upgraded).toEqual(response);
+    expect(rateLimitUsageResponseSchemaV30.parse(upgraded)).toEqual(response);
+  });
+
+  it("registers host.getRateLimitUsage major 3.0 in the host registry", () => {
+    expect(
+      hostRpcRegistry["host.getRateLimitUsage"][3].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 3, minor: 0 });
+    expect(
+      hostRpcRegistry["host.getRateLimitUsage"][2].versions[1].contract
+        .schemaVersion,
+    ).toEqual({ major: 2, minor: 1 });
   });
 });
