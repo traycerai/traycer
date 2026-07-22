@@ -66,12 +66,13 @@ describe("<EpicMobileHeaderMenu />", () => {
     expect(screen.getAllByRole("menuitem")).toHaveLength(2);
   });
 
-  it("hides Rename for a non-editor (viewer keeps only New chat)", () => {
+  it("renders no trigger at all for a viewer (no editable actions)", () => {
     role = "viewer";
     renderMenu();
-    openMenu();
-    expect(screen.getByRole("menuitem", { name: "New chat" })).toBeTruthy();
-    expect(screen.queryByRole("menuitem", { name: "Rename" })).toBeNull();
+    // A viewer can neither create nor rename, so the whole ⋮ is hidden - no
+    // dead-end New chat, no empty menu.
+    expect(screen.queryByTestId("mobile-epic-actions-trigger")).toBeNull();
+    expect(screen.queryByRole("menuitem")).toBeNull();
   });
 
   it("New chat opens the shared New Conversation modal request for this epic", () => {

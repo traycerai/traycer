@@ -44,11 +44,24 @@ interface EpicHeaderIdentity {
  * closes over the stable route ids; everything volatile (title, permission,
  * mutation) is read from hooks here, so there is no stale closure. See
  * {@link MobileEpicHeaderActionsBinder} for why this stays a `ReactNode` slot.
+ *
+ * Both actions require edit rights: New chat mirrors the desktop sidebar's
+ * `canMutate` editable gate (`epic-sidebar-chat-tree.tsx` - a viewer's create is
+ * server-rejected, so an ungated item would open a dead-end modal), and Rename
+ * is likewise editor-only. A viewer therefore has no actions, so the whole
+ * trigger is hidden (no empty menu). The role reads through
+ * `useRegisteredEpicPermissionRole` + `isEditableRole` - the same predicate on
+ * the same permission the sidebar uses, via the header-safe registry accessor
+ * (not a parallel check). The transient `!isDisconnected` half of desktop's
+ * `canMutate` is intentionally not mirrored - there is no app-global connection
+ * accessor to read without inventing a parallel check, and a disconnected
+ * editor only hits the modal's own submit gate (self-heals on reconnect), not a
+ * permanent dead-end.
  */
 export function EpicMobileHeaderMenu(props: EpicHeaderIdentity) {
   const { epicId, tabId } = props;
   const role = useRegisteredEpicPermissionRole(epicId);
-  const canRename = isEditableRole(role);
+  const canEdit = isEditableRole(role);
   const [renameOpen, setRenameOpen] = useState(false);
 
   const handleNewChat = () => {
@@ -63,6 +76,10 @@ export function EpicMobileHeaderMenu(props: EpicHeaderIdentity) {
       parentId: null,
     });
   };
+
+  // No editable action for a viewer -> no trigger at all (avoids an empty menu
+  // and the viewer new-chat dead-end).
+  if (!canEdit) return null;
 
   return (
     <>
@@ -81,11 +98,9 @@ export function EpicMobileHeaderMenu(props: EpicHeaderIdentity) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onSelect={handleNewChat}>New chat</DropdownMenuItem>
-          {canRename ? (
-            <DropdownMenuItem onSelect={() => setRenameOpen(true)}>
-              Rename
-            </DropdownMenuItem>
-          ) : null}
+          <DropdownMenuItem onSelect={() => setRenameOpen(true)}>
+            Rename
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <EpicRenameDialog
