@@ -94,6 +94,7 @@ describe("useCloseTabFlow", () => {
         name: "Beta",
         route: `/epics/epic-b/${b}`,
         icon: null,
+        canClose: true,
         canDuplicate: true,
         canOpenInNewWindow: true,
       });

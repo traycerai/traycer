@@ -52,6 +52,7 @@ function epicHeaderTab(tabId: string, epicId: string, name: string): HeaderTab {
     name,
     route: `/epics/${epicId}/${tabId}`,
     icon: null,
+    canClose: true,
     canDuplicate: true,
     canOpenInNewWindow: true,
   };

@@ -466,11 +466,16 @@ function getActiveEpicTabId(router: KeybindingRouter): string | null {
   if (
     tab === undefined ||
     tab.epicId !== epicId ||
-    tab.tabId !== focusedRef.id
+    tab.tabId !== focusedRef.id ||
+    isPhaseMigrationSurface(tab)
   ) {
     return null;
   }
   return tab.tabId;
+}
+
+function isPhaseMigrationSurface(tab: EpicViewTab): boolean {
+  return tab.surfaceMode?.kind === "phase-migration";
 }
 
 function getActiveTab(router: KeybindingRouter): EpicViewTab | null {

@@ -6,6 +6,7 @@ import {
   matchDigitAction,
   registerBaseLeaderScope,
   registerDynamicActionHandler,
+  resolveLeaderOwner,
   type KeybindingRouter,
 } from "@/lib/keybindings/dispatch";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
@@ -103,6 +104,9 @@ function buildRouter(initialPath: string): MockRouter {
       } else if (intent.kind === "open-epic") {
         calls.push({ kind: "epic", epicId: intent.epicId, sectionId: null });
         pathname = `/epics/${intent.epicId}`;
+      } else if (intent.kind === "open-phase-migration") {
+        calls.push({ kind: "epic", epicId: intent.phaseId, sectionId: null });
+        pathname = `/epics/${intent.phaseId}`;
       } else if (intent.kind === "complete-epic-migration") {
         calls.push({ kind: "epic", epicId: intent.epicId, sectionId: null });
         pathname = `/epics/${intent.epicId}/${intent.tabId}`;
@@ -367,6 +371,35 @@ describe("dispatchAction", () => {
 
     expect(fired).toBe(true);
     expect(canvasTabIds(tabId)).toEqual(["spec-a"]);
+  });
+
+  it("excludes a focused Phase-migration surface from Epic canvas commands and leader scope", () => {
+    const tabId = useEpicCanvasStore.getState().openTabOrder[0];
+    useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
+    useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-b"));
+    useEpicCanvasStore.setState((state) => {
+      const tab = state.tabsById[tabId];
+      if (tab === undefined) return state;
+      return {
+        tabsById: {
+          ...state.tabsById,
+          [tabId]: {
+            ...tab,
+            surfaceMode: { kind: "phase-migration", phaseId: tab.epicId },
+          },
+        },
+      };
+    });
+    const { router } = buildRouter(`/epics/e1/${tabId}`);
+    const unregister = registerBaseLeaderScope(router);
+
+    try {
+      expect(resolveLeaderOwner("mod")).toBeNull();
+      expect(dispatchAction("tab.close", router)).toBe(false);
+      expect(canvasTabIds(tabId)).toEqual(["spec-a", "spec-b"]);
+    } finally {
+      unregister();
+    }
   });
 });
 

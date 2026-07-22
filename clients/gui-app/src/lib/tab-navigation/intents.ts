@@ -84,6 +84,12 @@ export type TabActivationIntent =
       readonly preparation: EpicPostResolvePreparation | null;
       readonly includeNestedFocus: boolean;
     }
+  | {
+      readonly kind: "open-phase-migration";
+      readonly phaseId: string;
+      readonly name: string | undefined;
+      readonly focus: EpicRouteFocus | undefined;
+    }
   | { readonly kind: "new-draft"; readonly settings: ChatRunSettings | null };
 
 const DEFAULT_EPIC_FOCUS: EpicRouteFocus = {
@@ -218,6 +224,19 @@ export function openExactEpicTabIntent(input: {
     replaceEmptyDraftId: null,
     preparation: null,
     includeNestedFocus: false,
+  };
+}
+
+export function openPhaseMigrationIntent(input: {
+  readonly phaseId: string;
+  readonly name: string | undefined;
+  readonly focus: EpicRouteFocus | undefined;
+}): Extract<TabActivationIntent, { kind: "open-phase-migration" }> {
+  return {
+    kind: "open-phase-migration",
+    phaseId: input.phaseId,
+    name: input.name,
+    focus: input.focus,
   };
 }
 

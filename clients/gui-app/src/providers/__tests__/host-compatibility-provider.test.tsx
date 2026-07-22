@@ -37,6 +37,8 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 const STARTUP_EPIC_ID = "epic-startup-compat";
 const STALE_EPIC_ID = "epic-stale-persisted";
 const FRESH_EPIC_ID = "epic-fresh-created";
+const RESTORED_PHASE_ID = "phase-restored-persisted";
+const RESTORED_PHASE_TAB_ID = "phase-restored-tab";
 
 const HANDOFF_SETTINGS = {
   harnessId: "codex",
@@ -336,7 +338,12 @@ describe("HostCompatibilityProvider startup consumers", () => {
     useAuthStore.getState().setSignedOut();
     useEpicCanvasStore
       .getState()
-      .closeTabsForEpics([STARTUP_EPIC_ID, STALE_EPIC_ID, FRESH_EPIC_ID]);
+      .closeTabsForEpics([
+        STARTUP_EPIC_ID,
+        STALE_EPIC_ID,
+        FRESH_EPIC_ID,
+        RESTORED_PHASE_ID,
+      ]);
     useInitialChatHandoffStore.getState().resetForTests();
     clearSessionCreatedEpics();
     vi.restoreAllMocks();
@@ -558,6 +565,33 @@ describe("HostCompatibilityProvider startup consumers", () => {
       expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
     });
     expect(collectOpenEpicIds()).toContain(FRESH_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("keeps a restored Phase-mode ref while pruning an ordinary stale Epic", async () => {
+    const { queryClient } = mountReconcilerHarness();
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .openPhaseMigrationTabWithId(
+          RESTORED_PHASE_TAB_ID,
+          RESTORED_PHASE_ID,
+          "Restored Phase",
+        );
+      useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale");
+    });
+
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
+    });
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(
+      RESTORED_PHASE_TAB_ID,
+    );
+    expect(
+      useEpicCanvasStore.getState().tabsById[RESTORED_PHASE_TAB_ID]
+        ?.surfaceMode,
+    ).toEqual({ kind: "phase-migration", phaseId: RESTORED_PHASE_ID });
     queryClient.clear();
   });
 

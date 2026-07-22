@@ -43,6 +43,7 @@ import {
 } from "@/stores/tabs/layout";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
+import { isTabStructurallyLocked } from "@/stores/tabs/tab-structural-lock";
 
 export type PersistedTabsStoreState = PersistedTabStripLayout;
 
@@ -142,8 +143,18 @@ export function discardLegacyTabsSourceActiveSelection(): void {
 function canSplitRef(ref: TabRef): boolean {
   return (
     canMutateTabSplits() &&
+    !isTabStructurallyLocked(ref) &&
     tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible"
   );
+}
+
+function itemContainsStructurallyLockedRef(item: StripItem): boolean {
+  return flattenLayoutRefs({
+    version: 2,
+    items: [item],
+    activeItemId: item.id,
+    systemTabs: emptySystemTabs(),
+  }).some(isTabStructurallyLocked);
 }
 
 function committedLayout(layout: PersistedTabStripLayout): CommittedTabsLayout {
@@ -422,6 +433,7 @@ export const useTabsStore = create<TabsStoreState>()(
       },
 
       dropRef: (ref) => {
+        if (isTabStructurallyLocked(ref)) return;
         set((state) =>
           committedLayout(removeLayoutRef(layoutFromState(state), ref)),
         );
@@ -437,6 +449,7 @@ export const useTabsStore = create<TabsStoreState>()(
         set((state) => {
           const item = findStripItemForRef(layoutFromState(state), ref);
           if (item === null) return state;
+          if (itemContainsStructurallyLockedRef(item)) return state;
           return committedLayout(
             reorderStripItem(layoutFromState(state), {
               itemId: item.id,
@@ -528,15 +541,31 @@ export const useTabsStore = create<TabsStoreState>()(
       },
 
       swapSplitSides: (splitId) => {
-        set((state) =>
-          committedLayout(swapSplitSides(layoutFromState(state), splitId)),
-        );
+        set((state) => {
+          const layout = layoutFromState(state);
+          const item = layout.items.find(
+            (candidate) =>
+              candidate.kind === "split" && candidate.id === splitId,
+          );
+          if (item !== undefined && itemContainsStructurallyLockedRef(item)) {
+            return state;
+          }
+          return committedLayout(swapSplitSides(layout, splitId));
+        });
       },
 
       separateSplit: (splitId) => {
-        set((state) =>
-          committedLayout(separateSplit(layoutFromState(state), splitId)),
-        );
+        set((state) => {
+          const layout = layoutFromState(state);
+          const item = layout.items.find(
+            (candidate) =>
+              candidate.kind === "split" && candidate.id === splitId,
+          );
+          if (item !== undefined && itemContainsStructurallyLockedRef(item)) {
+            return state;
+          }
+          return committedLayout(separateSplit(layout, splitId));
+        });
       },
 
       replaceRef: (args) => {
@@ -546,9 +575,16 @@ export const useTabsStore = create<TabsStoreState>()(
       },
 
       reorderItem: (args) => {
-        set((state) =>
-          committedLayout(reorderStripItem(layoutFromState(state), args)),
-        );
+        set((state) => {
+          const layout = layoutFromState(state);
+          const item = layout.items.find(
+            (candidate) => candidate.id === args.itemId,
+          );
+          if (item !== undefined && itemContainsStructurallyLockedRef(item)) {
+            return state;
+          }
+          return committedLayout(reorderStripItem(layout, args));
+        });
       },
 
       repair: () => {

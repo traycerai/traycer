@@ -16,7 +16,7 @@ const tabNavigationMocks = vi.hoisted(() => ({
 
 // Only `activateTabIntent` is replaced with a spy so we can observe HOW the
 // Phase row opens without changing the controller's real behavior; every
-// other export (notably `tabNavigationController` and `openOrFocusEpicIntent`,
+// other export (notably `tabNavigationController` and `openPhaseMigrationIntent`,
 // used both by production and to build the expected call args below) stays
 // the real implementation via `importActual`.
 vi.mock("@/lib/tab-navigation", async () => {
@@ -58,7 +58,7 @@ import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import {
   __resetTabNavigationControllerForTesting,
-  openOrFocusEpicIntent,
+  openPhaseMigrationIntent,
   tabNavigationController,
 } from "@/lib/tab-navigation";
 import { flattenLayoutRefs, tabItemId } from "@/stores/tabs/layout";
@@ -68,7 +68,7 @@ import type { TabRef } from "@/stores/tabs/types";
 /**
  * F-phase: opening a legacy Phase row from the epics list must route through
  * the canonical activation boundary (`activateTabIntent` carrying an
- * `open-epic` intent with `focus.migrationSource: "phase"`) instead of a raw
+ * `open-phase-migration` intent with `focus.migrationSource: "phase"`) instead of a raw
  * mutating navigate over a route builder - so a rejected phase navigation can
  * roll back to the tab the user actually started on, the same guarantee every
  * other opener in this boundary gets (see
@@ -221,7 +221,7 @@ describe("<EpicsListPanel /> Phase row activation", () => {
     __resetTabNavigationControllerForTesting();
   });
 
-  it('routes a Phase row click through activateTabIntent with an open-epic intent carrying migrationSource: "phase"', async () => {
+  it('routes a Phase row click through activateTabIntent with an open-phase-migration intent carrying migrationSource: "phase"', async () => {
     renderPanel();
 
     fireEvent.click(
@@ -233,8 +233,9 @@ describe("<EpicsListPanel /> Phase row activation", () => {
     });
     expect(tabNavigationMocks.activateTabIntent).toHaveBeenCalledWith(
       expect.any(Function),
-      openOrFocusEpicIntent({
-        epicId: PHASE_EPIC_ID,
+      openPhaseMigrationIntent({
+        phaseId: PHASE_EPIC_ID,
+        name: "Legacy phase row",
         focus: {
           focusedAt: undefined,
           focusArtifactId: undefined,
@@ -246,7 +247,7 @@ describe("<EpicsListPanel /> Phase row activation", () => {
     );
   });
 
-  it("restores the prior tab when a rejected Phase-row open-epic navigation is rolled back", async () => {
+  it("restores the prior tab when a rejected Phase-row migration navigation is rolled back", async () => {
     // A real prior tab, open before the phase-open attempt - drives the REAL
     // controller directly (bypassing the mocked `activateTabIntent` free
     // function above) via `tabNavigationController.activate`, exactly the
@@ -273,8 +274,9 @@ describe("<EpicsListPanel /> Phase row activation", () => {
 
     tabNavigationController.activate(
       asNavigate,
-      openOrFocusEpicIntent({
-        epicId: PHASE_EPIC_ID,
+      openPhaseMigrationIntent({
+        phaseId: PHASE_EPIC_ID,
+        name: "Legacy phase row",
         focus: {
           focusedAt: undefined,
           focusArtifactId: undefined,

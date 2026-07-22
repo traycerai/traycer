@@ -90,7 +90,10 @@ import {
   type HistorySearchController,
 } from "@/hooks/home/use-history-search-state";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { activateTabIntent, openOrFocusEpicIntent } from "@/lib/tab-navigation";
+import {
+  activateTabIntent,
+  openPhaseMigrationIntent,
+} from "@/lib/tab-navigation";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { openEpicFromList as openEpicFromCommand } from "@/lib/commands/actions/open-epic-from-list";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -1052,8 +1055,9 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       // selection. `migrationSource: "phase"` threads through the epic search.
       activateTabIntent(
         navigate,
-        openOrFocusEpicIntent({
-          epicId: item.epicId,
+        openPhaseMigrationIntent({
+          phaseId: item.epicId,
+          name: item.title,
           focus: {
             focusedAt: undefined,
             focusArtifactId: undefined,

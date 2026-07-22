@@ -1,12 +1,14 @@
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
+import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
+import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import {
   ensureHistoryTab,
@@ -21,6 +23,7 @@ import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import { phaseMigrationController } from "@/components/epic-tabs/phase-migration-controller";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -35,6 +38,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../../../__tests__/test-browser-apis";
@@ -72,6 +76,9 @@ const SPEC_B: EpicNodeRef = {
   hostId: "host-a",
 };
 const EPIC_C: EpicTab = { id: "e-c", name: "Gamma", draft: false };
+const PHASE_TAB_ID = "phase-tab";
+const PHASE_ID = "phase-1";
+const PARTNER_TAB_ID = "partner-tab";
 let queryClient: QueryClient;
 
 function epicFixture(index: number): EpicTab {
@@ -230,6 +237,7 @@ function resetStores(): void {
   // This unit router omits the permanent root bridge. Production releases the
   // controller's hydration gate through that bridge before strip commands run.
   __resetTabNavigationControllerForTesting();
+  phaseMigrationController.resetForTesting();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -239,6 +247,55 @@ function resetStores(): void {
   });
   __getOpenEpicRegistryForTests().disposeAll();
   __getChatSessionRegistryForTests().disposeAll();
+}
+
+function seedPhaseMigrationHeaderTabs(): void {
+  useEpicCanvasStore.setState({
+    tabsById: {
+      [PHASE_TAB_ID]: {
+        tabId: PHASE_TAB_ID,
+        epicId: PHASE_ID,
+        name: "Legacy Phase",
+        surfaceMode: { kind: "phase-migration", phaseId: PHASE_ID },
+      },
+      [PARTNER_TAB_ID]: {
+        tabId: PARTNER_TAB_ID,
+        epicId: "epic-partner",
+        name: "Partner",
+      },
+    },
+    canvasByTabId: {
+      [PHASE_TAB_ID]: createEmptyCanvas(),
+      [PARTNER_TAB_ID]: createEmptyCanvas(),
+    },
+    openTabOrder: [PHASE_TAB_ID, PARTNER_TAB_ID],
+    activeTabId: PHASE_TAB_ID,
+    mostRecentTabIdByEpicId: {
+      [PHASE_ID]: PHASE_TAB_ID,
+      "epic-partner": PARTNER_TAB_ID,
+    },
+  });
+  useTabsStore.setState({
+    version: 2,
+    items: [
+      {
+        kind: "tab",
+        id: `tab:epic:${PHASE_TAB_ID}`,
+        ref: { kind: "epic", id: PHASE_TAB_ID },
+      },
+      {
+        kind: "tab",
+        id: `tab:epic:${PARTNER_TAB_ID}`,
+        ref: { kind: "epic", id: PARTNER_TAB_ID },
+      },
+    ],
+    activeItemId: `tab:epic:${PHASE_TAB_ID}`,
+    stripOrder: [
+      { kind: "epic", id: PHASE_TAB_ID },
+      { kind: "epic", id: PARTNER_TAB_ID },
+    ],
+    systemTabs: { history: null, settings: null },
+  });
 }
 
 function buildRouter(initialPath: string) {
@@ -345,6 +402,39 @@ describe("<TabStrip />", () => {
     expect(await screen.findByTestId("tab-epic-e-a")).toBeDefined();
     expect(screen.getByTestId("tab-epic-e-b")).toBeDefined();
     expect(screen.getByTestId("tab-new")).toBeDefined();
+  });
+
+  it("updates a Phase migration close button without rebuilding its unlocked partner", async () => {
+    seedPhaseMigrationHeaderTabs();
+    phaseMigrationController.attach(PHASE_TAB_ID, PHASE_ID, () => undefined);
+    const pendingPartner = getHeaderTabs().find(
+      (tab) => tab.id === PARTNER_TAB_ID,
+    );
+    const router = buildRouter(`/epics/${PHASE_ID}/${PHASE_TAB_ID}`);
+    render(<RouterProvider router={router} />);
+
+    const closeButton = await screen.findByTestId(
+      `tab-close-epic-${PHASE_TAB_ID}`,
+    );
+    expect(closeButton.hasAttribute("disabled")).toBe(true);
+
+    act(() =>
+      phaseMigrationController.fail(PHASE_TAB_ID, PHASE_ID, 1, "failed"),
+    );
+    await waitFor(() =>
+      expect(closeButton.hasAttribute("disabled")).toBe(false),
+    );
+    expect(getHeaderTabs().find((tab) => tab.id === PARTNER_TAB_ID)).toBe(
+      pendingPartner,
+    );
+
+    act(() => phaseMigrationController.retry(PHASE_TAB_ID));
+    await waitFor(() =>
+      expect(closeButton.hasAttribute("disabled")).toBe(true),
+    );
+    expect(getHeaderTabs().find((tab) => tab.id === PARTNER_TAB_ID)).toBe(
+      pendingPartner,
+    );
   });
 
   it("caps header tab frames while preserving the shrink floor", async () => {

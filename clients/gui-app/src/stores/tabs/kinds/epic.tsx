@@ -11,6 +11,10 @@ import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
 import { duplicateEpicTab } from "@/lib/commands/actions/duplicate-tab";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import type { TabKindModule } from "@/stores/tabs/types";
+import {
+  isTabCloseLocked,
+  isTabStructurallyLocked,
+} from "@/stores/tabs/tab-structural-lock";
 
 const epicSurface = lazy(() =>
   import("@/components/epic-tabs/epic-surface").then((module) => ({
@@ -26,16 +30,27 @@ const epicSurface = lazy(() =>
  */
 export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
   kind: "epic",
-  build: (source) => ({
-    kind: "epic",
-    id: source.tabId,
-    epicId: source.epicId,
-    route: epicPathname({ tabId: source.tabId, epicId: source.epicId }),
-    name: source.name,
-    icon: null,
-    canDuplicate: true,
-    canOpenInNewWindow: true,
-  }),
+  build: (source) => {
+    const closeLocked = isTabCloseLocked({
+      kind: "epic",
+      id: source.tabId,
+    });
+    const structurallyLocked = isTabStructurallyLocked({
+      kind: "epic",
+      id: source.tabId,
+    });
+    return {
+      kind: "epic",
+      id: source.tabId,
+      epicId: source.epicId,
+      route: epicPathname({ tabId: source.tabId, epicId: source.epicId }),
+      name: source.name,
+      icon: null,
+      canClose: !closeLocked,
+      canDuplicate: !structurallyLocked,
+      canOpenInNewWindow: !structurallyLocked,
+    };
+  },
   descriptor: {
     kind: "epic",
     surface: {
@@ -50,6 +65,7 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       durableState: { owner: "epic-canvas", eviction: "reconstruct" },
     },
     duplicate: (tab) => {
+      if (isTabStructurallyLocked({ kind: "epic", id: tab.id })) return null;
       const duplicated = duplicateEpicTab(tab.id);
       if (duplicated === null) return null;
       return existingEpicTabIntent({
@@ -82,11 +98,13 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       useEpicCanvasStore.getState().setActiveTab(intent.tabId);
     },
     requestClose: (tab) => {
+      if (isTabCloseLocked({ kind: "epic", id: tab.id })) return;
       useEpicCanvasStore.getState().closeTab(tab.id);
       releaseOpenEpicSessionIfUnused(tab.epicId);
     },
     requiresCloseConfirm: (tab) => epicHasUnsyncedEdits(tab.epicId),
     openInNewWindow: (tab, deps) => {
+      if (isTabStructurallyLocked({ kind: "epic", id: tab.id })) return;
       deps.epicFlow.requestOpenInNewWindow({
         epicId: tab.epicId,
         tabId: tab.id,

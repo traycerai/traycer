@@ -142,6 +142,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     tab.kind === "epic" ? tab.epicId : null,
   );
   const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
+  const canClose = tab.kind !== "epic" || tab.canClose;
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
   // back to "Untitled epic". Other kinds render their name verbatim.
   const resolvedTabName = liveEpicTitle ?? tab.name;
@@ -344,6 +345,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
                     onClose={() => onClose(displayTab)}
                     leaderBadge={leaderBadge}
                     active={isActive}
+                    disabled={!canClose}
                   />
                 </>
               )}
@@ -520,6 +522,7 @@ interface TabTrailingSlotProps {
   onClose: () => void;
   leaderBadge: LeaderBadge | null;
   active: boolean;
+  disabled: boolean;
 }
 
 /**
@@ -535,7 +538,7 @@ interface TabTrailingSlotProps {
  * across the hover transition.
  */
 function TabTrailingSlot(props: TabTrailingSlotProps) {
-  const { label, testId, onClose, leaderBadge, active } = props;
+  const { label, testId, onClose, leaderBadge, active, disabled } = props;
   const showLeader = leaderBadge !== null;
   return (
     <span
@@ -563,6 +566,7 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
           variant="ghost"
           aria-label={label}
           data-testid={testId}
+          disabled={disabled}
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();

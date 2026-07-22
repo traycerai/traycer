@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import {
   useNavigate,
   useParams,
@@ -12,21 +6,14 @@ import {
   useSearch,
 } from "@tanstack/react-router";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
-import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-session-body";
-import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { Button } from "@/components/ui/button";
 import { RootLandingPage } from "@/components/layout/root-landing-page";
-import { usePhaseMigrateToEpic } from "@/hooks/migration/use-phase-migrate-to-epic-mutation";
-import { EpicSessionProvider } from "@/providers/epic-session-provider";
-import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   activateTabIntent,
-  completeEpicMigrationIntent,
+  existingEpicTabIntent,
+  openPhaseMigrationIntent,
   subscribeTabNavigationResolutionFailure,
   tabNavigationResolutionFailed,
 } from "@/lib/tab-navigation";
-import { parseNestedFocusTargetFromSearch } from "@/lib/epic-nested-focus-route";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicFocusSearch } from "./epic-route-search";
 
@@ -75,167 +62,45 @@ function EpicRouteTabSync(props: {
   return null;
 }
 
+/** Deep links only ensure the persisted migration ref; the slot owns its UI. */
 export function PhaseToEpicMigrationGate(props: {
   readonly phaseId: string;
   readonly tabId: string;
   readonly search: EpicFocusSearch;
 }) {
-  return (
-    <PhaseToEpicMigrationGateInner
-      key={`${props.phaseId}:${props.tabId}`}
-      {...props}
-    />
-  );
-}
-
-function PhaseToEpicMigrationGateInner(props: {
-  readonly phaseId: string;
-  readonly tabId: string;
-  readonly search: EpicFocusSearch;
-}) {
   const navigate = useNavigate();
-  const migration = usePhaseMigrateToEpic(props.phaseId);
-  const [migratedEpicId, setMigratedEpicId] = useState<string | null>(null);
-  const [migrationRoutingFailed, setMigrationRoutingFailed] = useState(false);
-  const [isTakingLonger, setIsTakingLonger] = useState(false);
-  const startedRef = useRef(false);
-  const openMigratedEpic = useCallback(
-    (epicId: string) => {
-      const accepted = activateTabIntent(
+  const routeTab = useEpicCanvasStore(
+    (state) => state.tabsById[props.tabId] ?? null,
+  );
+  useEffect(() => {
+    if (
+      routeTab?.surfaceMode?.kind === "phase-migration" &&
+      routeTab.surfaceMode.phaseId === props.phaseId
+    ) {
+      return;
+    }
+    if (routeTab !== null && routeTab.surfaceMode?.kind !== "phase-migration") {
+      activateTabIntent(
         navigate,
-        completeEpicMigrationIntent({
-          sourceEpicId: props.phaseId,
-          epicId,
-          tabId: props.tabId,
-          focus: {
-            focusedAt: props.search.focusedAt,
-            focusArtifactId: props.search.focusArtifactId,
-            focusThreadId: props.search.focusThreadId,
-            migrationSource: undefined,
-          },
-          nestedFocus: parseNestedFocusTargetFromSearch({ ...props.search }),
+        existingEpicTabIntent({
+          epicId: routeTab.epicId,
+          tabId: routeTab.tabId,
+          focus: { ...props.search, migrationSource: undefined },
         }),
         { replace: true },
       );
-      // The coordinator updates this exact source synchronously before the
-      // route navigation; render it immediately while the owned replace ACKs.
-      if (accepted) {
-        setMigratedEpicId(epicId);
-        setMigrationRoutingFailed(false);
-      } else {
-        setMigrationRoutingFailed(true);
-      }
-    },
-    [navigate, props.phaseId, props.search, props.tabId],
-  );
-
-  useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-    migration.mutate(
-      { phaseId: props.phaseId },
-      { onSuccess: (data) => openMigratedEpic(data.epicId) },
+      return;
+    }
+    activateTabIntent(
+      navigate,
+      openPhaseMigrationIntent({
+        phaseId: props.phaseId,
+        name: undefined,
+        focus: props.search,
+      }),
+      { replace: true },
     );
-  }, [migration, openMigratedEpic, props.phaseId]);
+  }, [navigate, props.phaseId, props.search, routeTab]);
 
-  useEffect(() => {
-    if (!migration.isPending) return;
-    const timer = window.setTimeout(() => setIsTakingLonger(true), 15_000);
-    return () => window.clearTimeout(timer);
-  }, [migration.isPending]);
-
-  const completedEpicId = migratedEpicId;
-  if (completedEpicId !== null) {
-    return (
-      <EpicSessionProvider epicId={completedEpicId} tabId={props.tabId}>
-        <EpicRouteSessionBody
-          epicId={completedEpicId}
-          tabId={props.tabId}
-          active
-          focusedAt={props.search.focusedAt}
-          focusArtifactId={props.search.focusArtifactId}
-          focusThreadId={props.search.focusThreadId}
-          focusPaneId={props.search.focusPaneId}
-          focusTileInstanceId={props.search.focusTileInstanceId}
-        />
-      </EpicSessionProvider>
-    );
-  }
-
-  return (
-    <div
-      data-testid="phase-to-epic-migration-screen"
-      className="flex min-h-0 flex-1 items-center justify-center bg-background px-4 py-6"
-    >
-      <section className="w-full max-w-md rounded-lg border border-border bg-card p-5 shadow-lg">
-        <div className="flex items-start gap-3">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted text-foreground">
-            {migration.isError || migrationRoutingFailed ? (
-              <span className="text-ui-sm font-semibold">!</span>
-            ) : (
-              <AgentSpinningDots
-                className="text-foreground"
-                testId="phase-to-epic-migration-spinner"
-                variant="dots"
-              />
-            )}
-          </div>
-          <div className="min-w-0 space-y-2">
-            <h2 className="text-ui-sm font-semibold text-foreground">
-              Migrating Phase to Epic
-            </h2>
-            <p className="text-ui-sm leading-6 text-muted-foreground">
-              Converting this legacy Phase into an Epic. Phase tasks are being
-              turned into tickets, and saved plans or verification notes are
-              being attached as spec and review artifacts.
-            </p>
-            {isTakingLonger ? (
-              <p className="text-ui-sm leading-6 text-muted-foreground">
-                Still migrating. Larger Phases can take a little longer while
-                the desktop host copies the room and uploads the Epic.
-              </p>
-            ) : null}
-            {migration.isError || migrationRoutingFailed ? (
-              <p
-                className="text-ui-sm leading-6 text-destructive"
-                data-testid="phase-to-epic-migration-error"
-              >
-                {migration.isError
-                  ? migration.error.message
-                  : "The migrated Epic could not be attached to this tab."}
-              </p>
-            ) : null}
-            {migration.isError || migrationRoutingFailed ? (
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  onClick={() => {
-                    setMigrationRoutingFailed(false);
-                    migration.mutate(
-                      { phaseId: props.phaseId },
-                      { onSuccess: (data) => openMigratedEpic(data.epicId) },
-                    );
-                  }}
-                  size="sm"
-                  type="button"
-                  variant="outline"
-                >
-                  Re-attempt migration
-                </Button>
-                <ReportIssueAction
-                  context={createReportIssueContext({
-                    title: "Phase migration did not finish",
-                    message: "The legacy Phase migration did not complete.",
-                    code: null,
-                    source: "Phase migration",
-                  })}
-                  presentation="text"
-                  className={undefined}
-                />
-              </div>
-            ) : null}
-          </div>
-        </div>
-      </section>
-    </div>
-  );
+  return <EpicShell epicId={props.phaseId} tabId={props.tabId} active />;
 }

@@ -271,7 +271,13 @@ function useVisibleEpicIds(): ReadonlyArray<string> {
       return state.openTabOrder
         .map((tabId) => state.tabsById[tabId])
         .flatMap((tab) => {
-          if (tab === undefined || seen.has(tab.epicId)) return [];
+          if (
+            tab === undefined ||
+            tab.surfaceMode?.kind === "phase-migration" ||
+            seen.has(tab.epicId)
+          ) {
+            return [];
+          }
           seen.add(tab.epicId);
           return [tab.epicId];
         });

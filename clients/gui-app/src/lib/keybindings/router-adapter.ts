@@ -97,6 +97,7 @@ export function routerAdapterFor(
       if (
         api !== null &&
         intent.kind !== "open-epic" &&
+        intent.kind !== "open-phase-migration" &&
         intent.kind !== "new-draft" &&
         intent.kind !== "complete-epic-migration" &&
         routeIntentViaModalBridge(intent, api)

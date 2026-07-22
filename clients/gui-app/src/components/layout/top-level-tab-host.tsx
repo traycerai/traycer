@@ -17,7 +17,10 @@ import {
 import { tabSurfaceDescriptor } from "@/stores/tabs/registry";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
+import { PhaseMigrationControllerHost } from "@/components/epic-tabs/phase-migration-controller-host";
+import { PhaseMigrationSurface } from "@/components/epic-tabs/phase-migration-surface";
 import { TabSurfaceActivityProvider } from "./tab-surface-activity";
 
 export const MAX_RETAINED_TOP_LEVEL_SURFACES = 5;
@@ -83,6 +86,7 @@ export function TopLevelTabHost() {
       className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden"
       data-testid="top-level-tab-host"
     >
+      <PhaseMigrationControllerHost />
       {mounts.map((mount) => (
         <div
           key={tabRefKey(mount.tab)}
@@ -159,7 +163,7 @@ function renderFillableSlots(item: SplitStripItem): ReactNode {
 function TabSurface(props: { readonly tab: HeaderTab }): ReactNode {
   switch (props.tab.kind) {
     case "epic":
-      return tabSurfaceDescriptor("epic").render(props.tab);
+      return <EpicTabSurface tab={props.tab} />;
     case "draft":
       return tabSurfaceDescriptor("draft").render(props.tab);
     case "history":
@@ -167,6 +171,23 @@ function TabSurface(props: { readonly tab: HeaderTab }): ReactNode {
     case "settings":
       return tabSurfaceDescriptor("settings").render(props.tab);
   }
+}
+
+function EpicTabSurface(props: {
+  readonly tab: Extract<HeaderTab, { kind: "epic" }>;
+}): ReactNode {
+  const surfaceMode = useEpicCanvasStore(
+    (state) => state.tabsById[props.tab.id]?.surfaceMode,
+  );
+  if (surfaceMode?.kind === "phase-migration") {
+    return (
+      <PhaseMigrationSurface
+        phaseId={surfaceMode.phaseId}
+        tabId={props.tab.id}
+      />
+    );
+  }
+  return tabSurfaceDescriptor("epic").render(props.tab);
 }
 
 function placementForRef(

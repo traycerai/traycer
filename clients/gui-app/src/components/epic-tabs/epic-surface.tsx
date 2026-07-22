@@ -32,10 +32,6 @@ export function EpicSurface(props: EpicSurfaceProps) {
       ? route.search
       : null;
   const routeMatches = activeSearch !== null;
-  const migrating = activeSearch?.migrationSource === "phase";
-
-  if (migrating) return null;
-
   return (
     <PaneVisibilityContext.Provider value={activity.visible}>
       <EpicSessionProvider epicId={props.epicId} tabId={props.tabId}>

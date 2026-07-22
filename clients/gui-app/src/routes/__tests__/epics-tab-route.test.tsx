@@ -191,9 +191,6 @@ describe("/epics/$epicId/$tabId route", () => {
       focusedAt: 123,
       focusArtifactId: "artifact-1",
       focusThreadId: "thread-1",
-      migrationSource: "phase",
-      focusPaneId: undefined,
-      focusTileInstanceId: undefined,
     });
   });
 

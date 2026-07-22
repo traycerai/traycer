@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   RouterProvider,
@@ -9,6 +9,10 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { PhaseToEpicMigrationGate } from "@/routes/epic-tab-route-components";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { useTabsStore } from "@/stores/tabs/store";
 
 const testState = vi.hoisted(() => ({
   mutate: vi.fn(
@@ -57,9 +61,27 @@ vi.mock("@/hooks/migration/use-phase-migrate-to-epic-mutation", () => ({
   }),
 }));
 
+function resetStores(): void {
+  vi.clearAllMocks();
+  __resetTabNavigationControllerForTesting();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useTabsStore.setState({
+    version: 2,
+    items: [],
+    activeItemId: null,
+    stripOrder: [],
+    systemTabs: { history: null, settings: null },
+  });
+  tabCommandCoordinator.resetReconciliationForTesting();
+}
+
+beforeEach(() => {
+  resetStores();
+});
+
 afterEach(() => {
   cleanup();
-  vi.clearAllMocks();
+  resetStores();
 });
 
 function mountPhaseMigrationGate() {
@@ -93,22 +115,19 @@ function mountPhaseMigrationGate() {
 }
 
 describe("/epics/$epicId phase migration gate", () => {
-  it("renders the Epic session after successful Phase migration with the same id", async () => {
-    const router = mountPhaseMigrationGate();
+  it("creates the persisted migration ref without starting a route-owned mutation", async () => {
+    mountPhaseMigrationGate();
 
     await waitFor(() => {
-      expect(screen.queryByTestId("phase-to-epic-migration-screen")).toBeNull();
-      expect(
-        screen
-          .getByTestId("epic-route-session-body")
-          .getAttribute("data-epic-id"),
-      ).toBe("phase-1");
+      const tab = Object.values(useEpicCanvasStore.getState().tabsById).find(
+        (candidate) =>
+          candidate?.surfaceMode?.kind === "phase-migration" &&
+          candidate.surfaceMode.phaseId === "phase-1",
+      );
+      expect(tab?.epicId).toBe("phase-1");
+      expect(tab?.name).toBe("Untitled epic");
     });
-    expect(testState.mutate).toHaveBeenCalledTimes(1);
-    const [variables, options] = testState.mutate.mock.calls[0];
-    expect(variables).toEqual({ phaseId: "phase-1" });
-    expect(options.onSuccess).toBeTypeOf("function");
-    expect(router.state.location.pathname).toBe("/epics/phase-1");
+    expect(testState.mutate).not.toHaveBeenCalled();
   });
 });
 

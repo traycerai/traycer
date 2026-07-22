@@ -20,6 +20,7 @@ const EPIC_TAB: HeaderTab = {
   name: "Alpha",
   route: "/epics/epic-1/tab-1",
   icon: null,
+  canClose: true,
   canDuplicate: true,
   canOpenInNewWindow: true,
 };

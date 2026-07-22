@@ -36,7 +36,7 @@ export type TabIcon = ComponentType<{ className: string | undefined }>;
 /**
  * Canonical, render-ready tab projected by `useHeaderTabs`. The strip
  * iterates this. Each variant is fully self-contained - all display
- * fields (`name`, `icon`, `canDuplicate`, `canOpenInNewWindow`) are
+ * fields (`name`, `icon`, `canClose`, `canDuplicate`, `canOpenInNewWindow`) are
  * baked in at build time by the kind module's `build()` factory.
  * Behavioral delegation (close, duplicate, navigate) goes through the
  * per-concern dispatch fns (`tabRequestClose`, `tabDuplicate`,
@@ -50,6 +50,7 @@ export type HeaderTab =
       readonly route: string;
       readonly name: string;
       readonly icon: TabIcon | null;
+      readonly canClose: boolean;
       readonly canDuplicate: boolean;
       readonly canOpenInNewWindow: boolean;
     }
@@ -105,7 +106,7 @@ export interface TabKindModule<K extends HeaderTabKind, Source> {
   /**
    * Constructs the fully-populated `HeaderTab` variant for this kind
    * from the source store record. All display fields (`name`, `icon`,
-   * `canDuplicate`, `canOpenInNewWindow`) are baked in here so consumers
+   * `canClose`, `canDuplicate`, `canOpenInNewWindow`) are baked in here so consumers
    * never need to call back into the descriptor for static data.
    */
   readonly build: (source: Source) => Extract<HeaderTab, { kind: K }>;

@@ -3,6 +3,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import { releaseOpenEpicSessionIfUnused } from "@/lib/registries/epic-session-registry";
 import {
   resolveTabIdForEpic,
+  resolveTabIdForPhaseMigration,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -35,6 +36,10 @@ import {
 } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
+import {
+  isTabCloseLocked,
+  isTabStructurallyLocked,
+} from "@/stores/tabs/tab-structural-lock";
 
 /**
  * The observable transaction ledger. A source-owned ref may be absent from
@@ -71,6 +76,12 @@ export interface ReplaceDraftWithEpicCommand {
   readonly epicName: string | undefined;
 }
 
+export interface CompletePhaseMigrationCommand {
+  readonly tabId: string;
+  readonly phaseId: string;
+  readonly epicId: string;
+}
+
 export type CoordinatedTabActivationTarget =
   | { readonly kind: "ref"; readonly ref: TabRef }
   | {
@@ -83,6 +94,11 @@ export type CoordinatedTabActivationTarget =
       readonly kind: "epic";
       readonly epicId: string;
       readonly tabId: string | null;
+      readonly name: string | undefined;
+    }
+  | {
+      readonly kind: "phase-migration";
+      readonly phaseId: string;
       readonly name: string | undefined;
     }
   | {
@@ -252,6 +268,7 @@ function sourceHasRef(ref: TabRef): boolean {
 function canSplitRef(ref: TabRef): boolean {
   return (
     canMutateTabSplits() &&
+    !isTabStructurallyLocked(ref) &&
     tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible"
   );
 }
@@ -579,6 +596,8 @@ export class TabCommandCoordinator {
         return this.resolveDraftActivation(target, layout);
       case "epic":
         return this.resolveEpicActivation(target, layout);
+      case "phase-migration":
+        return this.resolvePhaseMigrationActivation(target, layout);
       case "migrated-epic":
         return this.resolveMigratedEpicActivation(target, layout);
       case "ref":
@@ -712,6 +731,36 @@ export class TabCommandCoordinator {
     });
   }
 
+  private resolvePhaseMigrationActivation(
+    target: Extract<
+      CoordinatedTabActivationTarget,
+      { kind: "phase-migration" }
+    >,
+    layout: PersistedTabStripLayout,
+  ): ResolvedCoordinatedActivation | null {
+    const canvas = useEpicCanvasStore.getState();
+    const resolvedId =
+      resolveTabIdForPhaseMigration(canvas, target.phaseId) ?? uuidv4();
+    const existing = canvas.tabsById[resolvedId];
+    if (
+      existing !== undefined &&
+      (existing.surfaceMode?.kind !== "phase-migration" ||
+        existing.surfaceMode.phaseId !== target.phaseId)
+    ) {
+      return null;
+    }
+    const ref: TabRef = { kind: "epic", id: resolvedId };
+    return this.activationForRef(layout, ref, () => {
+      if (existing === undefined) {
+        useEpicCanvasStore
+          .getState()
+          .openPhaseMigrationTabWithId(resolvedId, target.phaseId, target.name);
+        return;
+      }
+      useEpicCanvasStore.getState().setActiveTab(resolvedId);
+    });
+  }
+
   private resolveRefActivation(
     ref: TabRef,
     layout: PersistedTabStripLayout,
@@ -785,11 +834,72 @@ export class TabCommandCoordinator {
     return nextRef;
   }
 
+  /**
+   * Converts the exact persisted migration ref without touching its layout
+   * item, split side, ratio, or focused partner. Route ownership is decided by
+   * the slot-local migration bridge after this source transaction commits.
+   */
+  completePhaseMigration(command: CompletePhaseMigrationCommand): boolean {
+    const ref: TabRef = { kind: "epic", id: command.tabId };
+    const layout = currentLayout();
+    const existing = useEpicCanvasStore.getState().tabsById[command.tabId];
+    if (
+      findStripItemForRef(layout, ref) === null ||
+      existing?.surfaceMode?.kind !== "phase-migration" ||
+      existing.surfaceMode.phaseId !== command.phaseId
+    ) {
+      return false;
+    }
+    this.execute({
+      layout,
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        this.applyExpectedSourceMutation(() => {
+          useEpicCanvasStore.setState((state) => {
+            const current = state.tabsById[command.tabId];
+            if (
+              current?.surfaceMode?.kind !== "phase-migration" ||
+              current.surfaceMode.phaseId !== command.phaseId
+            ) {
+              return state;
+            }
+            const mostRecentTabIdByEpicId = {
+              ...state.mostRecentTabIdByEpicId,
+              [command.epicId]: command.tabId,
+            };
+            if (
+              command.phaseId !== command.epicId &&
+              mostRecentTabIdByEpicId[command.phaseId] === command.tabId
+            ) {
+              delete mostRecentTabIdByEpicId[command.phaseId];
+            }
+            return {
+              tabsById: {
+                ...state.tabsById,
+                [command.tabId]: {
+                  ...current,
+                  epicId: command.epicId,
+                  surfaceMode: { kind: "epic" },
+                },
+              },
+              mostRecentTabIdByEpicId,
+            };
+          });
+        });
+      },
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
   closeRef(ref: TabRef): boolean {
     return this.closeRefAfterConfirmed(ref);
   }
 
   closeRefAfterConfirmed(ref: TabRef): boolean {
+    if (isTabCloseLocked(ref)) return false;
     const layout = currentLayout();
     if (findStripItemForRef(layout, ref) === null) return false;
     const next = layoutWithRemovedRef(layout, ref);
@@ -839,6 +949,13 @@ export class TabCommandCoordinator {
     if (item === null || item.kind === "tab") {
       return { separated: false, splitId: null };
     }
+    if (
+      flattenLayoutRefs({ ...layout, items: [item] }).some(
+        isTabStructurallyLocked,
+      )
+    ) {
+      return { separated: false, splitId: null };
+    }
     this.execute({
       layout: separateSplit(layout, item.id),
       reservedAdditions: [],
@@ -852,6 +969,7 @@ export class TabCommandCoordinator {
 
   removeMovedRef(ref: TabRef): boolean {
     if (ref.kind !== "epic") return false;
+    if (isTabStructurallyLocked(ref)) return false;
     const layout = currentLayout();
     if (findStripItemForRef(layout, ref) === null) return false;
     this.execute({

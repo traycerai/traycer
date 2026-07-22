@@ -58,6 +58,7 @@ export {
   openEpicFromListIntent,
   openExactEpicTabIntent,
   openEpicTabIntent,
+  openPhaseMigrationIntent,
   resourceEpicTabIntent,
   settingsTabIntent,
   type EpicPostResolvePreparation,
@@ -791,6 +792,13 @@ export class TabNavigationController {
         name: intent.name,
       };
     }
+    if (intent.kind === "open-phase-migration") {
+      return {
+        kind: "phase-migration",
+        phaseId: intent.phaseId,
+        name: intent.name,
+      };
+    }
     if (intent.kind === "history" || intent.kind === "settings") {
       return systemActivationTarget(intent);
     }
@@ -822,6 +830,20 @@ export class TabNavigationController {
         tabId: ref.id,
         focus: requested.focus,
         nestedFocus: requested.includeNestedFocus ? nestedFocus : null,
+      });
+    }
+    if (requested.kind === "open-phase-migration") {
+      if (ref.kind !== "epic") return null;
+      return existingEpicTabIntentWithNestedFocus({
+        epicId: requested.phaseId,
+        tabId: ref.id,
+        focus: requested.focus ?? {
+          focusedAt: undefined,
+          focusArtifactId: undefined,
+          focusThreadId: undefined,
+          migrationSource: "phase",
+        },
+        nestedFocus: null,
       });
     }
     return requested;
