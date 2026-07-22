@@ -419,7 +419,7 @@ export const TabGroupView = memo(function TabGroupView(
   );
 });
 
-interface ActiveTabBodyProps {
+export interface ActiveTabBodyProps {
   readonly activeTab: EpicCanvasTileRef;
   readonly epicId: string;
   readonly groupId: string;
@@ -428,7 +428,14 @@ interface ActiveTabBodyProps {
   readonly globallyActive: boolean;
 }
 
-function ActiveTabBody(props: ActiveTabBodyProps) {
+/**
+ * Renders one tile body with the desktop remote-deleted guard and `isActive`
+ * computation. Exported so the mobile single-tile view
+ * (`epic-canvas/mobile/mobile-epic-tile-view.tsx`) renders the selected tile
+ * through the identical logic instead of duplicating the deleted-guard and the
+ * `role && selected && globallyActive` derivation.
+ */
+export function ActiveTabBody(props: ActiveTabBodyProps) {
   const { activeTab, epicId, groupId, tabId } = props;
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareCloseCanvasTabFocusTarget = useEpicCanvasStore(
