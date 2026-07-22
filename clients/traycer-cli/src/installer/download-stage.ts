@@ -206,7 +206,7 @@ export async function downloadAndStageHost(
 
   const client =
     opts.registryClient ??
-    (await createDefaultRegistryClient(opts.environment));
+    (await createDefaultRegistryClient(opts.environment, opts.onProgress));
   progressStage(opts.onProgress, "resolve", "resolving host manifest");
   const manifest = await client.fetchManifest();
   const requestedLatest = opts.versionRequest === null;
