@@ -115,6 +115,15 @@ export function useSystemTabModalActions(): SystemTabModalActions {
   );
 
   const openHistory = useCallback(() => {
+    // On phones History is only the full-page `/epics` route, never the modal
+    // or a strip tab. Every entry point (header/hamburger, palette, keybindings
+    // via the bridge) funnels through here, so this one gate routes them all to
+    // the routed surface. No `search` reducer: leaving the current route drops
+    // the overlay params on its own, mirroring the mobile `openSettings` gate.
+    if (isMobileViewport()) {
+      void router.navigate({ to: "/epics" });
+      return;
+    }
     const historyTab = useTabsStore.getState().systemTabs.history;
     if (historyTab !== null) {
       navigateToTabClearingOverlay(ensureHistoryTab());
