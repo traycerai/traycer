@@ -8,12 +8,14 @@ import {
   Server,
   Settings,
   SquareArrowOutUpRight,
+  X,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
+  SheetClose,
   SheetContent,
   SheetTitle,
 } from "@/components/ui/sheet";
@@ -110,12 +112,16 @@ export function MobileNavDrawer(): ReactNode {
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetContent
         side="left"
+        showCloseButton={false}
         className="gap-0 p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
         data-testid="mobile-nav-drawer"
         data-mobile-shell-touch-scope=""
       >
         <SheetTitle className="sr-only">Menu</SheetTitle>
-        <div className="flex shrink-0 items-center gap-3 border-b border-border/60 p-4 pr-12">
+        {/* In-flow close (not the primitive's absolute one), so the top
+            safe-area padding pushes it below the notch. Mirrors the pattern in
+            notifications-mobile-sheet.tsx. */}
+        <div className="flex shrink-0 items-center gap-3 border-b border-border/60 p-4">
           {profile === null ? null : (
             <>
               <Avatar size="sm">
@@ -126,7 +132,7 @@ export function MobileNavDrawer(): ReactNode {
                   {computeInitials(profile.userName, profile.email)}
                 </AvatarFallback>
               </Avatar>
-              <div className="flex min-w-0 flex-col">
+              <div className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-ui-sm font-medium text-foreground">
                   {profile.userName}
                 </span>
@@ -136,6 +142,18 @@ export function MobileNavDrawer(): ReactNode {
               </div>
             </>
           )}
+          <SheetClose asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Close menu"
+              data-testid="mobile-nav-close"
+              className="ml-auto"
+            >
+              <X />
+            </Button>
+          </SheetClose>
         </div>
         <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
           <Button
