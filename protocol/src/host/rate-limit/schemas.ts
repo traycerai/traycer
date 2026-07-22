@@ -232,20 +232,18 @@ const grokRateLimitsSchema = z
     // `period.resetsAt` and `periodEnd` denote the same instant by
     // construction - the host synthesizes the window's reset FROM the period
     // end. The redundancy is deliberate: `periodEnd` is kept as its own field
-    // so the billing-period bounds survive a period-less snapshot (a zero-usage
-    // account reports the period dates but no usage percentage, so `period` is
-    // null and only `periodEnd` carries the end). Enforce that invariant at the
-    // wire boundary so a payload can never present two disagreeing reset
-    // instants for the same period.
+    // so the billing-period bounds survive a period-less, unmeasured snapshot
+    // (`period` is null and only `periodEnd` carries the end). Enforce that
+    // invariant at the wire boundary so a measured period can never omit or
+    // disagree with the known reset instant.
     if (
       value.periodEnd !== null &&
       value.period !== null &&
-      value.period.resetsAt !== null &&
       value.period.resetsAt !== value.periodEnd
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "grok period.resetsAt must equal periodEnd when both are set",
+        message: "grok period.resetsAt must equal periodEnd when period is set",
         path: ["period", "resetsAt"],
       });
     }
@@ -371,9 +369,7 @@ export const providerRateLimitsSchemaV21 = z.union([
   kiloCodeRateLimitsSchema,
   unavailableProviderRateLimitsSchemaV2,
 ]);
-export type ProviderRateLimitsV21 = z.infer<
-  typeof providerRateLimitsSchemaV21
->;
+export type ProviderRateLimitsV21 = z.infer<typeof providerRateLimitsSchemaV21>;
 
 // Latest provider union: identical to the frozen v2.1 union above plus the
 // grok available arm. Feeds the v3.0 host response and the unreleased,
