@@ -4826,3 +4826,148 @@ describe("non-message pendings across a missed-ack reconnect", () => {
     expect(harness.handle.store.getState().restore).toBeNull();
   });
 });
+
+describe("createChatSessionStore - persisted auth-error provider nudge", () => {
+  function authErroredAssistantMessage(
+    messageId: string,
+    code: string | null,
+  ): Extract<Message, { role: "assistant" }> {
+    return {
+      role: "assistant",
+      messageId,
+      sender: {
+        type: "agent",
+        harnessId: "codex",
+        agentId: "codex",
+        displayName: "Codex",
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks:
+        code === null
+          ? []
+          : [
+              {
+                type: "error",
+                blockId: `error-${messageId}`,
+                status: "completed",
+                timestamp: 4,
+                parentBlockId: null,
+                message: "Codex is signed out on this machine.",
+                recoverable: true,
+                code,
+              },
+            ],
+      startedAt: 4,
+      timestamp: 4,
+      turnId: `turn-${messageId}`,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+    };
+  }
+
+  interface NudgeHarness {
+    readonly handle: ChatSessionStoreHandle;
+    callbacks(): ChatStreamCallbacks;
+    nudgeCount(): number;
+  }
+
+  function createNudgeHarness(): NudgeHarness {
+    let nudges = 0;
+    let callbacks: ChatStreamCallbacks | null = null;
+    const handle = createChatSessionStore({
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      userId: OWNER_ID,
+      onAuthError: null,
+      onProviderAuthError: () => {
+        nudges += 1;
+      },
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+        callbacks = nextCallbacks;
+        return {
+          sendAction: () => undefined,
+          close: () => undefined,
+        };
+      },
+    });
+    return {
+      handle,
+      callbacks: () => {
+        if (callbacks === null) throw new Error("Expected callbacks");
+        return callbacks;
+      },
+      nudgeCount: () => nudges,
+    };
+  }
+
+  function emitMessagesSnapshot(
+    callbacks: ChatStreamCallbacks,
+    messages: ReadonlyArray<Message>,
+  ): void {
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages,
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+  }
+
+  it("nudges once per persisted auth-error row, even across reconnect re-delivery", () => {
+    const harness = createNudgeHarness();
+    const authRow = authErroredAssistantMessage("assistant-auth-1", "auth");
+    emitMessagesSnapshot(harness.callbacks(), [authRow]);
+    expect(harness.nudgeCount()).toBe(1);
+
+    // Reconnect re-delivers the SAME row: no duplicate nudge.
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    emitMessagesSnapshot(harness.callbacks(), [authRow]);
+    expect(harness.nudgeCount()).toBe(1);
+  });
+
+  it("nudges again for a NEW auth failure after the first one recovered", () => {
+    const harness = createNudgeHarness();
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-auth-1", "auth"),
+    ]);
+    expect(harness.nudgeCount()).toBe(1);
+
+    // Recovered: latest assistant row carries no auth error.
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-auth-1", "auth"),
+      authErroredAssistantMessage("assistant-ok", null),
+    ]);
+    expect(harness.nudgeCount()).toBe(1);
+
+    // A second headless failure lands during a disconnect; the reconnect
+    // snapshot is its only signal, so the store must nudge again - a
+    // store-lifetime latch would leave the provider gate stale here.
+    harness.callbacks().onConnectionStatus("reconnecting", null);
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-auth-1", "auth"),
+      authErroredAssistantMessage("assistant-ok", null),
+      authErroredAssistantMessage("assistant-auth-2", "auth"),
+    ]);
+    expect(harness.nudgeCount()).toBe(2);
+  });
+
+  it("finds the latest assistant row behind a trailing user row", () => {
+    const harness = createNudgeHarness();
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-auth-1", "auth"),
+      persistedUserMessage("user-after-failure"),
+    ]);
+    expect(harness.nudgeCount()).toBe(1);
+  });
+
+  it("does not nudge for a non-auth error on the latest assistant row", () => {
+    const harness = createNudgeHarness();
+    emitMessagesSnapshot(harness.callbacks(), [
+      authErroredAssistantMessage("assistant-runtime-err", "RUNTIME_THROWN"),
+    ]);
+    expect(harness.nudgeCount()).toBe(0);
+  });
+});
