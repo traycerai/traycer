@@ -470,11 +470,17 @@ export function createCredentialsMutationStore(
       async ({ state, file }): Promise<MutationResult> => {
         // Resolved under the same lock that performs the write: a caller that
         // built `credentials` from a pre-lock read (or omits the refresh token
-        // entirely) never races a concurrent rotate for this decision.
+        // entirely) never races a concurrent rotate for this decision. Only
+        // preserve across a SAME-user re-seed - the on-disk pair may belong to
+        // a different account than the one just validated, and pairing a
+        // foreign refresh token with this identity would corrupt later rotation.
         const resolved: StoredCredentials =
-          credentials.refreshToken.length > 0 || !preserveRefreshTokenIfBlank
+          credentials.refreshToken.length > 0 ||
+          !preserveRefreshTokenIfBlank ||
+          file === null ||
+          file.user.id !== credentials.user.id
             ? credentials
-            : { ...credentials, refreshToken: file?.refreshToken ?? "" };
+            : { ...credentials, refreshToken: file.refreshToken };
         const commit = await commitMutation({
           paths: commitPaths,
           op: "signIn",

@@ -297,6 +297,27 @@ describe("credentials mutation store", () => {
       expect(result.outcome).toBe("applied");
       expect(result.credentials?.refreshToken).toBe("");
     });
+
+    it("preserveRefreshTokenIfBlank never pairs a foreign refresh token with a different account", async () => {
+      const store = makeStore(refreshStub(rotateOk).fn);
+      await seedSignedIn(store);
+      const result = await store.signIn(
+        {
+          ...CREDS,
+          token: "tok-2",
+          refreshToken: "",
+          user: { id: "u2", email: "bo@traycer.ai", name: "Bo" },
+        },
+        true,
+        null,
+      );
+      expect(result.outcome).toBe("applied");
+      expect(result.credentials?.refreshToken).toBe("");
+      expect(result.credentials?.user.id).toBe("u2");
+      expect(
+        (await readCredentialsFile(credentialsPath))?.refreshToken,
+      ).toBe("");
+    });
   });
 
   describe("updateProfile", () => {
