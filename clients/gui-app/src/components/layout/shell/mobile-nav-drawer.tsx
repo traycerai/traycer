@@ -17,6 +17,7 @@ import {
   SheetContent,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { computeInitials } from "@/lib/auth/compute-initials";
 import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
 import { useAuthService } from "@/lib/host";
@@ -66,10 +67,19 @@ export function MobileNavDrawer(): ReactNode {
   };
   const handleSettings = () => {
     close();
+    // Mirror the desktop user-menu call site's telemetry (user-menu.tsx). Not
+    // lifted into the shared action, which would double-fire for the desktop
+    // callers that already track here.
+    Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
+      source: "direct_ui",
+      section: "general",
+    });
     openSettings({ section: null, resetToGeneral: true });
   };
   const handleNotifications = () => {
     close();
+    // Mirror the desktop bell's open telemetry (notifications-bell.tsx).
+    Analytics.getInstance().track(AnalyticsEvent.NotificationCenterOpened, null);
     setNotificationsOpen(true);
   };
   const handleSwitchHost = () => {
@@ -78,12 +88,20 @@ export function MobileNavDrawer(): ReactNode {
   };
   const handleManageSubscription = () => {
     close();
-    void runnerHost.openExternalLink(
-      resolveManageSubscriptionUrl(runnerHost.authnBaseUrl),
-    );
+    void runnerHost
+      .openExternalLink(resolveManageSubscriptionUrl(runnerHost.authnBaseUrl))
+      .then(() => {
+        Analytics.getInstance().track(
+          AnalyticsEvent.SubscriptionManagementOpened,
+          { source: "direct_ui" },
+        );
+      });
   };
   const handleSignOut = () => {
     close();
+    Analytics.getInstance().track(AnalyticsEvent.SignOutRequested, {
+      source: "direct_ui",
+    });
     void auth.signOut();
   };
 
