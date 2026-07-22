@@ -68,6 +68,24 @@ const CODEX_WITH_RESET_DETAILS: ProviderRateLimits = {
   rateLimitReachedType: null,
 };
 
+const GROK_GOOD: ProviderRateLimits = {
+  provider: "grok",
+  available: true,
+  subscriptionTier: "SuperGrok",
+  periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+  periodStart: 1_784_678_400_000,
+  periodEnd: 1_785_283_200_000,
+  period: {
+    usedPercent: 12,
+    resetsAt: 1_785_283_200_000,
+    durationMinutes: 10_080,
+  },
+  monthlyLimit: null,
+  onDemandCap: null,
+  onDemandUsed: null,
+  prepaidBalance: null,
+};
+
 function response(
   providerRateLimits: ProviderRateLimits | null,
 ): RateLimitUsageResponse {
@@ -450,6 +468,17 @@ describe("mapResponseToProviderRateLimitEnvelope providers.list convergence", ()
     const invalidateSpy = invalidateSpyFor(queryClient);
     mapResponseToProviderRateLimitEnvelope({
       response: response(CODEX_GOOD),
+      queryClient,
+      queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
+    });
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates providers.list when a grok fetch resolves", () => {
+    const queryClient = new QueryClient();
+    const invalidateSpy = invalidateSpyFor(queryClient);
+    mapResponseToProviderRateLimitEnvelope({
+      response: response(GROK_GOOD),
       queryClient,
       queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
     });
