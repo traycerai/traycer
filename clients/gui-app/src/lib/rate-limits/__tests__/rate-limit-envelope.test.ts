@@ -477,12 +477,32 @@ describe("mapResponseToProviderRateLimitEnvelope providers.list convergence", ()
   it("invalidates providers.list when a grok fetch resolves", () => {
     const queryClient = new QueryClient();
     const invalidateSpy = invalidateSpyFor(queryClient);
+    const providersListKey = ["host", "host-a", "providers.list", {}];
+    const unrelatedKey = ["host", "host-a", "host.getRateLimitUsage", {}];
+    queryClient.setQueryData(providersListKey, { providers: [] });
+    queryClient.setQueryData(unrelatedKey, {});
     mapResponseToProviderRateLimitEnvelope({
       response: response(GROK_GOOD),
       queryClient,
-      queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
+      queryKey: unrelatedKey,
     });
     expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    const predicate = invalidateSpy.mock.calls[0]?.[0]?.predicate;
+    const providersListQuery = queryClient
+      .getQueryCache()
+      .find({ queryKey: providersListKey, exact: true });
+    const unrelatedQuery = queryClient
+      .getQueryCache()
+      .find({ queryKey: unrelatedKey, exact: true });
+    if (
+      predicate === undefined ||
+      providersListQuery === undefined ||
+      unrelatedQuery === undefined
+    ) {
+      throw new Error("expected cached queries and invalidation predicate");
+    }
+    expect(predicate(providersListQuery)).toBe(true);
+    expect(predicate(unrelatedQuery)).toBe(false);
   });
 
   it("does not invalidate providers.list for openrouter/kilocode (never carry managed profiles)", () => {
