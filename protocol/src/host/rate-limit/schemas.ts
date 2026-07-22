@@ -214,22 +214,42 @@ const claudeCodeRateLimitsSchema = z.object({
 // shared window primitive with zero special-casing) plus the raw credit
 // fields. Every payload-derived field is nullable: xAI omits fields freely by
 // account type, and a zero-usage subscription reports only period + tier.
-// `period.resetsAt` duplicates `periodEnd` when both exist; `periodEnd` stays a
-// separate field because the period bounds are known even when no usage
-// percentage is reported.
-const grokRateLimitsSchema = z.object({
-  provider: z.literal(rateLimitCapableProviderIdSchema.enum.grok),
-  available: z.literal(true),
-  subscriptionTier: z.string().nullable(),
-  periodType: z.string().nullable(),
-  periodStart: z.number().nullable(),
-  periodEnd: z.number().nullable(),
-  period: providerRateLimitWindowSchema.nullable(),
-  monthlyLimit: z.number().nullable(),
-  onDemandCap: z.number().nullable(),
-  onDemandUsed: z.number().nullable(),
-  prepaidBalance: z.number().nullable(),
-});
+const grokRateLimitsSchema = z
+  .object({
+    provider: z.literal(rateLimitCapableProviderIdSchema.enum.grok),
+    available: z.literal(true),
+    subscriptionTier: z.string().nullable(),
+    periodType: z.string().nullable(),
+    periodStart: z.number().nullable(),
+    periodEnd: z.number().nullable(),
+    period: providerRateLimitWindowSchema.nullable(),
+    monthlyLimit: z.number().nullable(),
+    onDemandCap: z.number().nullable(),
+    onDemandUsed: z.number().nullable(),
+    prepaidBalance: z.number().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    // `period.resetsAt` and `periodEnd` denote the same instant by
+    // construction - the host synthesizes the window's reset FROM the period
+    // end. The redundancy is deliberate: `periodEnd` is kept as its own field
+    // so the billing-period bounds survive a period-less snapshot (a zero-usage
+    // account reports the period dates but no usage percentage, so `period` is
+    // null and only `periodEnd` carries the end). Enforce that invariant at the
+    // wire boundary so a payload can never present two disagreeing reset
+    // instants for the same period.
+    if (
+      value.periodEnd !== null &&
+      value.period !== null &&
+      value.period.resetsAt !== null &&
+      value.period.resetsAt !== value.periodEnd
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "grok period.resetsAt must equal periodEnd when both are set",
+        path: ["period", "resetsAt"],
+      });
+    }
+  });
 
 // Closed, Traycer-owned set of reasons a provider pull can fail to report
 // rate limits - unlike a provider's own plan/reached-type tokens (owned by
@@ -367,6 +387,33 @@ export const providerRateLimitsSchema = z.union([
   unavailableProviderRateLimitsSchemaV2,
 ]);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
+
+// Single home for the grok available -> unavailable degrade every downgrade
+// bridge below the v3.0 line applies. A grok-available snapshot has no
+// representation in any frozen provider union (grok was not a rate-limit-capable
+// provider then), so it degrades to the unavailable `unsupported_provider` shape
+// - the exact row a pre-grok host returns for grok today. `"grok"` is in every
+// frozen `provider` enum (it predates Hermes), so the result reparses cleanly
+// through the older union. Any other snapshot (or `null`) passes through
+// unchanged. Shared by the `host.getRateLimitUsage` 3 -> 2 / 3 -> 1 bridges
+// (`rate-limit/contracts.ts`) and the a2a `agent.getProviderProfileRateLimits`
+// v2 -> v1 bridge (`agent/profiles.ts`).
+export function mapGrokAvailableToUnavailable(
+  providerRateLimits: ProviderRateLimits | null,
+): ProviderRateLimits | null {
+  if (
+    providerRateLimits !== null &&
+    providerRateLimits.available &&
+    providerRateLimits.provider === "grok"
+  ) {
+    return {
+      provider: "grok",
+      available: false,
+      reason: "unsupported_provider",
+    };
+  }
+  return providerRateLimits;
+}
 
 // Frozen pre-Hermes unavailable arm: same v2 reason enum, but `provider` is
 // pinned to `providerIdSchemaV40` (the harness/provider id set as shipped in

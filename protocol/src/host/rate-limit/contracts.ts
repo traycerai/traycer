@@ -15,31 +15,9 @@ import {
   rateLimitUsageResponseSchemaV20,
   rateLimitUsageResponseSchemaV21,
   rateLimitUsageResponseSchemaV30,
+  mapGrokAvailableToUnavailable,
   type ProviderRateLimits,
 } from "@traycer/protocol/host/rate-limit/schemas";
-
-// A grok-available snapshot has no representation in any frozen provider union
-// below the v3.0 line (grok was not a rate-limit-capable provider then), so a
-// downgrade degrades it to the unavailable `unsupported_provider` shape - the
-// exact row a pre-grok host returns for grok today. `"grok"` is in every frozen
-// `provider` enum (it predates Hermes), so this reparses cleanly through the
-// older union. Any other snapshot (or `null`) passes through unchanged.
-function mapGrokAvailableToUnavailable(
-  providerRateLimits: ProviderRateLimits | null,
-): ProviderRateLimits | null {
-  if (
-    providerRateLimits !== null &&
-    providerRateLimits.available &&
-    providerRateLimits.provider === "grok"
-  ) {
-    return {
-      provider: "grok",
-      available: false,
-      reason: "unsupported_provider",
-    };
-  }
-  return providerRateLimits;
-}
 
 // The v2-only `usage_fetch_failed` reason maps to `rate_limits_not_available`
 // so a v1.2 client's frozen 8-value reason enum keeps parsing. Every other

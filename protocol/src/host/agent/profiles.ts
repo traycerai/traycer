@@ -24,6 +24,7 @@ import {
   providerProfileRateLimitStatusSchema,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  mapGrokAvailableToUnavailable,
   providerRateLimitsSchema,
   providerRateLimitsSchemaV40,
 } from "@traycer/protocol/host/rate-limit/schemas";
@@ -244,18 +245,11 @@ export const agentGetProviderProfileRateLimitsDowngradeV20ToV10 =
     downgradeResponse: (response) => {
       // Grok is representable in the frozen provider enum (it predates Hermes),
       // so a grok-available snapshot degrades to the unavailable
-      // `unsupported_provider` shape - the exact row a v1.0 host returns for
-      // grok today - rather than being dropped. A Hermes rate-limit read stays
-      // unrepresentable on the frozen v1.0 wire and still fails closed below.
-      const rateLimits =
-        response.rateLimits.available &&
-        response.rateLimits.provider === "grok"
-          ? {
-              provider: "grok",
-              available: false,
-              reason: "unsupported_provider",
-            }
-          : response.rateLimits;
+      // `unsupported_provider` shape (via the shared bridge map) - the exact row
+      // a v1.0 host returns for grok today - rather than being dropped. A Hermes
+      // rate-limit read stays unrepresentable on the frozen v1.0 wire and still
+      // fails closed below.
+      const rateLimits = mapGrokAvailableToUnavailable(response.rateLimits);
       // A v1.0 caller only ever reads pre-hermes rate limits, so the common
       // case reparses cleanly through the frozen schema. Fails closed
       // (rather than silently mis-decoding) for any provider unrepresentable
