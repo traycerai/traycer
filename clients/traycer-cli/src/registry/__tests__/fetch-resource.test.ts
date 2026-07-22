@@ -23,6 +23,10 @@ import {
 } from "./fault-server-test-helpers";
 
 const RESOURCE_URL = "https://registry.example.test/host.tar.gz";
+// settleRetryTimers drives ~100 real event-loop turns to advance fake
+// timers past the production backoff; under CI CPU contention that real
+// wall-clock cost alone can exceed vitest's 5s default test timeout.
+const SETTLE_RETRY_TEST_TIMEOUT_MS = 15_000;
 
 let workDir: string;
 let originalFetch: typeof globalThis.fetch;
@@ -119,37 +123,41 @@ describe("downloadToFile resume and integrity policy", () => {
     vi.useFakeTimers();
   });
 
-  it("uses the on-disk stat offset after a buffered write fails", async () => {
-    const destPath = join(workDir, "host.tar.gz");
-    const requests: Request[] = [];
-    let call = 0;
-    globalThis.fetch = vi.fn(async (input, init) => {
-      requests.push(new Request(input, init));
-      call += 1;
-      if (call === 1) {
-        return response(
-          failingBody("abc", "connection reset after buffered write"),
-          200,
-          {
-            etag: '"strong-etag"',
-          },
-        );
-      }
-      return response("def", 206, {
-        "content-range": "bytes 3-5/6",
-      });
-    }) as typeof globalThis.fetch;
+  it(
+    "uses the on-disk stat offset after a buffered write fails",
+    async () => {
+      const destPath = join(workDir, "host.tar.gz");
+      const requests: Request[] = [];
+      let call = 0;
+      globalThis.fetch = vi.fn(async (input, init) => {
+        requests.push(new Request(input, init));
+        call += 1;
+        if (call === 1) {
+          return response(
+            failingBody("abc", "connection reset after buffered write"),
+            200,
+            {
+              etag: '"strong-etag"',
+            },
+          );
+        }
+        return response("def", 206, {
+          "content-range": "bytes 3-5/6",
+        });
+      }) as typeof globalThis.fetch;
 
-    const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
-    const result = await settleRetryTimers(pending);
+      const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
+      const result = await settleRetryTimers(pending);
 
-    expect(result).toEqual({ downloadedBytes: 6, sha256: sha256("abcdef") });
-    expect(requests).toHaveLength(2);
-    expect(requests[1]?.headers.get("range")).toBe("bytes=3-");
-    expect(requests[1]?.headers.get("if-range")).toBe('"strong-etag"');
-    expect(readFileSync(destPath, "utf8")).toBe("abcdef");
-    expect(statSync(destPath).size).toBe(6);
-  });
+      expect(result).toEqual({ downloadedBytes: 6, sha256: sha256("abcdef") });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.headers.get("range")).toBe("bytes=3-");
+      expect(requests[1]?.headers.get("if-range")).toBe('"strong-etag"');
+      expect(readFileSync(destPath, "utf8")).toBe("abcdef");
+      expect(statSync(destPath).size).toBe(6);
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 
   it.each([
     ["strong ETag", { etag: '"etag-1"' }, '"etag-1"'],
@@ -182,153 +190,178 @@ describe("downloadToFile resume and integrity policy", () => {
       expect(requests[1]?.headers.get("range")).toBe("bytes=3-");
       expect(requests[1]?.headers.get("if-range")).toBe(expectedValidator);
     },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
   );
 
-  it("restarts from zero when the failed response had no validator", async () => {
-    const destPath = join(workDir, "no-validator.tar.gz");
-    const requests: Request[] = [];
-    let call = 0;
-    globalThis.fetch = vi.fn(async (input, init) => {
-      requests.push(new Request(input, init));
-      call += 1;
-      return call === 1
-        ? response(failingBody("abc", "transient stream failure"), 200, {})
-        : response("abcdef", 200, {});
-    }) as typeof globalThis.fetch;
+  it(
+    "restarts from zero when the failed response had no validator",
+    async () => {
+      const destPath = join(workDir, "no-validator.tar.gz");
+      const requests: Request[] = [];
+      let call = 0;
+      globalThis.fetch = vi.fn(async (input, init) => {
+        requests.push(new Request(input, init));
+        call += 1;
+        return call === 1
+          ? response(failingBody("abc", "transient stream failure"), 200, {})
+          : response("abcdef", 200, {});
+      }) as typeof globalThis.fetch;
 
-    const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
-    await settleRetryTimers(pending);
+      const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
+      await settleRetryTimers(pending);
 
-    expect(requests).toHaveLength(2);
-    expect(requests[1]?.headers.get("range")).toBeNull();
-    expect(requests[1]?.headers.get("if-range")).toBeNull();
-    expect(readFileSync(destPath, "utf8")).toBe("abcdef");
-  });
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.headers.get("range")).toBeNull();
+      expect(requests[1]?.headers.get("if-range")).toBeNull();
+      expect(readFileSync(destPath, "utf8")).toBe("abcdef");
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 
-  it("discards a mismatched Content-Range and retries from zero", async () => {
-    const destPath = join(workDir, "bad-range.tar.gz");
-    const requests: Request[] = [];
-    let call = 0;
-    globalThis.fetch = vi.fn(async (input, init) => {
-      requests.push(new Request(input, init));
-      call += 1;
-      if (call === 1)
-        return response(failingBody("abc", "stream reset"), 200, {
-          etag: '"etag-1"',
-        });
-      if (call === 2)
-        return response(null, 206, { "content-range": "bytes 2-5/6" });
-      return response("abcdef", 200, {});
-    }) as typeof globalThis.fetch;
+  it(
+    "discards a mismatched Content-Range and retries from zero",
+    async () => {
+      const destPath = join(workDir, "bad-range.tar.gz");
+      const requests: Request[] = [];
+      let call = 0;
+      globalThis.fetch = vi.fn(async (input, init) => {
+        requests.push(new Request(input, init));
+        call += 1;
+        if (call === 1)
+          return response(failingBody("abc", "stream reset"), 200, {
+            etag: '"etag-1"',
+          });
+        if (call === 2)
+          return response(null, 206, { "content-range": "bytes 2-5/6" });
+        return response("abcdef", 200, {});
+      }) as typeof globalThis.fetch;
 
-    const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
-    await settleRetryTimers(pending);
+      const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
+      await settleRetryTimers(pending);
 
-    expect(requests).toHaveLength(3);
-    expect(requests[1]?.headers.get("range")).toBe("bytes=3-");
-    expect(requests[2]?.headers.get("range")).toBeNull();
-    expect(readFileSync(destPath, "utf8")).toBe("abcdef");
-  });
+      expect(requests).toHaveLength(3);
+      expect(requests[1]?.headers.get("range")).toBe("bytes=3-");
+      expect(requests[2]?.headers.get("range")).toBeNull();
+      expect(readFileSync(destPath, "utf8")).toBe("abcdef");
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 
-  it("accepts a 416 response when the on-disk file is already complete", async () => {
-    const destPath = join(workDir, "complete-416.tar.gz");
-    let call = 0;
-    globalThis.fetch = vi.fn(async () => {
-      call += 1;
-      return call === 1
-        ? response(
-            failingBody("abcdef", "connection reset after full write"),
-            200,
-            { etag: '"etag-1"' },
-          )
-        : response(null, 416, {});
-    }) as typeof globalThis.fetch;
+  it(
+    "accepts a 416 response when the on-disk file is already complete",
+    async () => {
+      const destPath = join(workDir, "complete-416.tar.gz");
+      let call = 0;
+      globalThis.fetch = vi.fn(async () => {
+        call += 1;
+        return call === 1
+          ? response(
+              failingBody("abcdef", "connection reset after full write"),
+              200,
+              { etag: '"etag-1"' },
+            )
+          : response(null, 416, {});
+      }) as typeof globalThis.fetch;
 
-    const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
-    const result = await settleRetryTimers(pending);
+      const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
+      const result = await settleRetryTimers(pending);
 
-    expect(result.sha256).toBe(sha256("abcdef"));
-    expect(call).toBe(2);
-  });
+      expect(result.sha256).toBe(sha256("abcdef"));
+      expect(call).toBe(2);
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 
-  it("clears an incomplete 416 and restarts with a full response", async () => {
-    const destPath = join(workDir, "incomplete-416.tar.gz");
-    const requests: Request[] = [];
-    let call = 0;
-    globalThis.fetch = vi.fn(async (input, init) => {
-      requests.push(new Request(input, init));
-      call += 1;
-      if (call === 1)
-        return response(failingBody("abc", "stream reset"), 200, {
-          etag: '"etag-1"',
-        });
-      if (call === 2) return response(null, 416, {});
-      return response("abcdef", 200, {});
-    }) as typeof globalThis.fetch;
+  it(
+    "clears an incomplete 416 and restarts with a full response",
+    async () => {
+      const destPath = join(workDir, "incomplete-416.tar.gz");
+      const requests: Request[] = [];
+      let call = 0;
+      globalThis.fetch = vi.fn(async (input, init) => {
+        requests.push(new Request(input, init));
+        call += 1;
+        if (call === 1)
+          return response(failingBody("abc", "stream reset"), 200, {
+            etag: '"etag-1"',
+          });
+        if (call === 2) return response(null, 416, {});
+        return response("abcdef", 200, {});
+      }) as typeof globalThis.fetch;
 
-    const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
-    await settleRetryTimers(pending);
+      const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
+      await settleRetryTimers(pending);
 
-    expect(requests).toHaveLength(3);
-    expect(requests[1]?.headers.get("range")).toBe("bytes=3-");
-    expect(requests[2]?.headers.get("range")).toBeNull();
-    expect(readFileSync(destPath, "utf8")).toBe("abcdef");
-  });
+      expect(requests).toHaveLength(3);
+      expect(requests[1]?.headers.get("range")).toBe("bytes=3-");
+      expect(requests[2]?.headers.get("range")).toBeNull();
+      expect(readFileSync(destPath, "utf8")).toBe("abcdef");
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 
-  it("does not reuse a validator from before an incomplete 416 restart", async () => {
-    const destPath = join(workDir, "stale-validator-after-416.tar.gz");
-    const requests: Request[] = [];
-    let call = 0;
-    globalThis.fetch = vi.fn(async (input, init) => {
-      requests.push(new Request(input, init));
-      call += 1;
-      if (call === 1) {
-        return response(failingBody("abc", "first entity reset"), 200, {
-          etag: '"etag-a"',
-        });
-      }
-      if (call === 2) return response(null, 416, {});
-      if (call === 3) {
-        return response(failingBody("abc", "replacement entity reset"), 200, {
-          etag: '"etag-b"',
-        });
-      }
-      return response("def", 206, { "content-range": "bytes 3-5/6" });
-    }) as typeof globalThis.fetch;
+  it(
+    "does not reuse a validator from before an incomplete 416 restart",
+    async () => {
+      const destPath = join(workDir, "stale-validator-after-416.tar.gz");
+      const requests: Request[] = [];
+      let call = 0;
+      globalThis.fetch = vi.fn(async (input, init) => {
+        requests.push(new Request(input, init));
+        call += 1;
+        if (call === 1) {
+          return response(failingBody("abc", "first entity reset"), 200, {
+            etag: '"etag-a"',
+          });
+        }
+        if (call === 2) return response(null, 416, {});
+        if (call === 3) {
+          return response(failingBody("abc", "replacement entity reset"), 200, {
+            etag: '"etag-b"',
+          });
+        }
+        return response("def", 206, { "content-range": "bytes 3-5/6" });
+      }) as typeof globalThis.fetch;
 
-    await settleRetryTimers(
-      downloadToFile(downloadOptions(destPath, "abcdef")),
-    );
+      await settleRetryTimers(
+        downloadToFile(downloadOptions(destPath, "abcdef")),
+      );
 
-    expect(requests[1]?.headers.get("if-range")).toBe('"etag-a"');
-    expect(requests[2]?.headers.get("range")).toBeNull();
-    expect(requests[3]?.headers.get("range")).toBe("bytes=3-");
-    expect(requests[3]?.headers.get("if-range")).toBe('"etag-b"');
-  });
+      expect(requests[1]?.headers.get("if-range")).toBe('"etag-a"');
+      expect(requests[2]?.headers.get("range")).toBeNull();
+      expect(requests[3]?.headers.get("range")).toBe("bytes=3-");
+      expect(requests[3]?.headers.get("if-range")).toBe('"etag-b"');
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 
-  it("falls back from a redirecting 200 response to a clean full download", async () => {
-    const destPath = join(workDir, "redirect-200.tar.gz");
-    const requests: Request[] = [];
-    let call = 0;
-    globalThis.fetch = vi.fn(async (input, init) => {
-      requests.push(new Request(input, init));
-      call += 1;
-      if (call === 1)
-        return response(failingBody("abc", "stream reset"), 200, {
-          etag: '"etag-1"',
-        });
-      if (call === 2) return response("abcdef", 200, {});
-      return response("abcdef", 200, {});
-    }) as typeof globalThis.fetch;
+  it(
+    "falls back from a redirecting 200 response to a clean full download",
+    async () => {
+      const destPath = join(workDir, "redirect-200.tar.gz");
+      const requests: Request[] = [];
+      let call = 0;
+      globalThis.fetch = vi.fn(async (input, init) => {
+        requests.push(new Request(input, init));
+        call += 1;
+        if (call === 1)
+          return response(failingBody("abc", "stream reset"), 200, {
+            etag: '"etag-1"',
+          });
+        if (call === 2) return response("abcdef", 200, {});
+        return response("abcdef", 200, {});
+      }) as typeof globalThis.fetch;
 
-    const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
-    await settleRetryTimers(pending);
+      const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
+      await settleRetryTimers(pending);
 
-    expect(requests).toHaveLength(3);
-    expect(requests[1]?.headers.get("range")).toBe("bytes=3-");
-    expect(requests[2]?.headers.get("range")).toBeNull();
-    expect(readFileSync(destPath, "utf8")).toBe("abcdef");
-  });
+      expect(requests).toHaveLength(3);
+      expect(requests[1]?.headers.get("range")).toBe("bytes=3-");
+      expect(requests[2]?.headers.get("range")).toBeNull();
+      expect(readFileSync(destPath, "utf8")).toBe("abcdef");
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 
   it("preserves Range and If-Range across a real redirect before the 200 fallback", async () => {
     vi.useRealTimers();
@@ -429,22 +462,26 @@ describe("downloadToFile resume and integrity policy", () => {
     expect(heartbeats.slice(0, 3)).toEqual(["attempt", "watchdog", "backoff"]);
   });
 
-  it("performs exactly one clean retry for a final sha256 mismatch", async () => {
-    const destPath = join(workDir, "sha256-mismatch.tar.gz");
-    let call = 0;
-    globalThis.fetch = vi.fn(async () => {
-      call += 1;
-      return response("ghijkl", 200, {});
-    }) as typeof globalThis.fetch;
+  it(
+    "performs exactly one clean retry for a final sha256 mismatch",
+    async () => {
+      const destPath = join(workDir, "sha256-mismatch.tar.gz");
+      let call = 0;
+      globalThis.fetch = vi.fn(async () => {
+        call += 1;
+        return response("ghijkl", 200, {});
+      }) as typeof globalThis.fetch;
 
-    const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
-    await expect(settleRetryTimers(pending)).rejects.toMatchObject({
-      name: "CliError",
-      code: "E_HOST_VERIFY_FAILED",
-    });
-    expect(call).toBe(2);
-    expect(() => statSync(destPath)).toThrow();
-  });
+      const pending = downloadToFile(downloadOptions(destPath, "abcdef"));
+      await expect(settleRetryTimers(pending)).rejects.toMatchObject({
+        name: "CliError",
+        code: "E_HOST_VERIFY_FAILED",
+      });
+      expect(call).toBe(2);
+      expect(() => statSync(destPath)).toThrow();
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 
   it.each(["bytes 2-5/6", "bytes 3-5/7"])(
     "discards a Content-Range whose start or total does not match (%s)",
@@ -473,29 +510,34 @@ describe("downloadToFile resume and integrity policy", () => {
       expect(call).toBe(3);
       expect(readFileSync(destPath, "utf8")).toBe("abcdef");
     },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
   );
 
-  it("does not resume a weak ETag without a Last-Modified validator", async () => {
-    const destPath = join(workDir, "weak-etag.tar.gz");
-    const requests: Request[] = [];
-    let call = 0;
-    globalThis.fetch = vi.fn(async (input, init) => {
-      requests.push(new Request(input, init));
-      call += 1;
-      return call === 1
-        ? response(failingBody("abc", "stream reset"), 200, {
-            etag: 'W/"weak-etag"',
-          })
-        : response("abcdef", 200, {});
-    }) as typeof globalThis.fetch;
+  it(
+    "does not resume a weak ETag without a Last-Modified validator",
+    async () => {
+      const destPath = join(workDir, "weak-etag.tar.gz");
+      const requests: Request[] = [];
+      let call = 0;
+      globalThis.fetch = vi.fn(async (input, init) => {
+        requests.push(new Request(input, init));
+        call += 1;
+        return call === 1
+          ? response(failingBody("abc", "stream reset"), 200, {
+              etag: 'W/"weak-etag"',
+            })
+          : response("abcdef", 200, {});
+      }) as typeof globalThis.fetch;
 
-    await settleRetryTimers(
-      downloadToFile(downloadOptions(destPath, "abcdef")),
-    );
+      await settleRetryTimers(
+        downloadToFile(downloadOptions(destPath, "abcdef")),
+      );
 
-    expect(requests[1]?.headers.get("range")).toBeNull();
-    expect(requests[1]?.headers.get("if-range")).toBeNull();
-  });
+      expect(requests[1]?.headers.get("range")).toBeNull();
+      expect(requests[1]?.headers.get("if-range")).toBeNull();
+    },
+    SETTLE_RETRY_TEST_TIMEOUT_MS,
+  );
 });
 
 describe("fetch watchdogs and heartbeat semantics", () => {
