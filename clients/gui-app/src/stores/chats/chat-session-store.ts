@@ -781,13 +781,16 @@ export function createChatSessionStore(
     // frame below; this covers failures that happened headlessly (an
     // A2A-triggered turn with no live subscriber) and only surface on
     // subscribe/rehydrate - reload, host restart, reconnect, or opening the
-    // tab after the fact. Deduped by the failed row's `messageId`, NOT once
-    // per store lifetime: a reconnect can surface a NEW headless failure
-    // after the user already re-authed the first one, and that later snapshot
-    // must still invalidate the (long-staleTime) provider query. Re-delivery
-    // of the SAME row across reconnects stays a single nudge; a stale nudge
-    // is a harmless refetch either way (the gate is a pure predicate).
-    let nudgedAuthErrorMessageId: string | null = null;
+    // tab after the fact. Deduped by the failed turn's `turnId` (shared by the
+    // live and persisted paths - `ChatActiveTurn.turnId` mirrors 1:1 onto the
+    // eventual `AssistantMessage.turnId`), NOT once per store lifetime: a
+    // reconnect can surface a NEW headless failure after the user already
+    // re-authed the first one, and that later snapshot must still invalidate
+    // the (long-staleTime) provider query. Re-delivery of the SAME row across
+    // reconnects, or a snapshot arriving right after the live nudge already
+    // fired for the same turn, stays a single nudge; a stale nudge is a
+    // harmless refetch either way (the gate is a pure predicate).
+    let nudgedAuthErrorTurnId: string | null = null;
 
     const nudgeProviderAuthFromPersistedError = (
       messages: ReadonlyArray<Message>,
@@ -797,12 +800,13 @@ export function createChatSessionStore(
         (message): message is AssistantMessage => message.role === "assistant",
       );
       if (lastAssistant === undefined) return;
-      if (nudgedAuthErrorMessageId === lastAssistant.messageId) return;
+      const turnKey = lastAssistant.turnId ?? lastAssistant.messageId;
+      if (nudgedAuthErrorTurnId === turnKey) return;
       const hasAuthError = lastAssistant.blocks.some(
         (block) => block.type === "error" && block.code === AUTH_ERROR_CODE,
       );
       if (!hasAuthError) return;
-      nudgedAuthErrorMessageId = lastAssistant.messageId;
+      nudgedAuthErrorTurnId = turnKey;
       options.onProviderAuthError();
     };
 
@@ -1235,8 +1239,13 @@ export function createChatSessionStore(
           frame.event.code === AUTH_ERROR_CODE
         ) {
           // Nudge `providers.list` to refetch (and read the host's poisoned
-          // `unauthenticated`) so the banner mounts + send blocks.
+          // `unauthenticated`) so the banner mounts + send blocks. Record the
+          // SAME turnId marker `nudgeProviderAuthFromPersistedError` uses, so
+          // the snapshot that follows this live failure (on this connection
+          // or after a reconnect) doesn't nudge a second time for the
+          // identical turn.
           if (options.onProviderAuthError !== null) {
+            nudgedAuthErrorTurnId = get().activeTurn?.turnId ?? null;
             options.onProviderAuthError();
           }
         }

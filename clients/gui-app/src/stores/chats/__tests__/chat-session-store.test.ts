@@ -4970,4 +4970,84 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     ]);
     expect(harness.nudgeCount()).toBe(0);
   });
+
+  it("does not double-nudge when a live auth event's turn is later re-delivered by a snapshot", () => {
+    const harness = createNudgeHarness();
+    const callbacks = harness.callbacks();
+
+    // The live turn fails on auth mid-session: onBlockDelta fires the nudge
+    // directly (no persisted row exists yet to read from).
+    callbacks.onTurnStateChanged({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      runStatus: "running",
+      activeTurn: {
+        turnId: "turn-live-auth-1",
+        status: "running",
+        harnessId: "codex",
+        model: "gpt-5-codex",
+        agentMode: "regular",
+        profileId: null,
+        userMessageId: "message-live-1",
+        startedAt: 3,
+        updatedAt: 3,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+    });
+    callbacks.onBlockDelta({
+      kind: "blockDelta",
+      hasBinaryPayload: false,
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      event: {
+        type: "error",
+        blockId: "auth-live-1",
+        timestamp: 4,
+        message: "Codex is signed out on this machine.",
+        recoverable: true,
+        code: "auth",
+      },
+    });
+    expect(harness.nudgeCount()).toBe(1);
+
+    // The turn's own persisted row (same turnId) then arrives via snapshot -
+    // a reconnect, or the same connection catching up. It must NOT re-nudge:
+    // it is the SAME failure the live path already reported.
+    emitMessagesSnapshot(callbacks, [
+      {
+        role: "assistant",
+        messageId: "assistant-live-auth-1",
+        sender: {
+          type: "agent",
+          harnessId: "codex",
+          agentId: "codex",
+          displayName: "Codex",
+          reply: { expectsReply: false },
+          inReplyTo: null,
+        },
+        blocks: [
+          {
+            type: "error",
+            blockId: "auth-live-1",
+            status: "completed",
+            timestamp: 4,
+            parentBlockId: null,
+            message: "Codex is signed out on this machine.",
+            recoverable: true,
+            code: "auth",
+          },
+        ],
+        startedAt: 3,
+        timestamp: 4,
+        turnId: "turn-live-auth-1",
+        usage: null,
+        reasoningEffort: null,
+        serviceTier: null,
+      },
+    ]);
+    expect(harness.nudgeCount()).toBe(1);
+  });
 });
