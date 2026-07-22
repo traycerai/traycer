@@ -1,13 +1,15 @@
 import "../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
   TileGroup,
+  TileLayoutNode,
   TilePane,
 } from "@/stores/epics/canvas/types";
 
@@ -37,6 +39,15 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", () => ({
 // it to a marker so the empty-canvas branch is observable in isolation.
 vi.mock("@/components/epic-canvas/canvas/pane-opener", () => ({
   PaneOpener: () => <div data-testid="pane-opener" />,
+}));
+
+// The current-tile bar is covered by its own test; stub it here to a marker
+// carrying the tile it was handed, so the view test can assert WHICH tile the
+// bar reflects without pulling the bar's host/title hooks.
+vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
+  MobileCurrentTileBar: ({ tile }: { readonly tile: EpicCanvasTileRef }) => (
+    <div data-testid="current-tile-bar" data-tile-id={tile.id} />
+  ),
 }));
 
 function spec(n: number): EpicCanvasTileRef {
@@ -103,6 +114,10 @@ function renderView() {
 
 function renderedTileCount(): number {
   return document.querySelectorAll('[data-testid^="tile-"]').length;
+}
+
+function paneIds(root: TileLayoutNode | null): ReadonlyArray<string> {
+  return collectPanes(root).map((pane) => pane.id);
 }
 
 describe("selectMobileTile", () => {
@@ -189,6 +204,35 @@ describe("<MobileEpicTileView />", () => {
     expect(after).toBe(before);
     expect(after?.root).toBe(before?.root);
     expect(after?.sizesByGroupId).toBe(before?.sizesByGroupId);
+  });
+
+  it("hands the current tile to the current-tile bar", () => {
+    seed(twoPaneCanvas("pane-B"));
+    renderView();
+    expect(
+      screen.getByTestId("current-tile-bar").getAttribute("data-tile-id"),
+    ).toBe("spec-3");
+  });
+
+  it("swaps the rendered tile when activation moves to another pane", () => {
+    seed(twoPaneCanvas("pane-A"));
+    renderView();
+    expect(screen.queryByTestId("tile-spec-1")).not.toBeNull();
+    const before = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+
+    // Same store transition `useMobileEpicTiles.selectTile` drives.
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .prepareSetActiveTileTabFocusTarget(VIEW_TAB_ID, "pane-B", "inst-3");
+    });
+
+    expect(screen.queryByTestId("tile-spec-3")).not.toBeNull();
+    expect(renderedTileCount()).toBe(1);
+    const after = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    // The split STRUCTURE + sizes are unchanged - only activation moved.
+    expect(paneIds(after?.root ?? null)).toEqual(["pane-A", "pane-B"]);
+    expect(after?.sizesByGroupId).toEqual(before?.sizesByGroupId);
   });
 
   it("renders the inline opener (not a blank screen) for an empty pane", () => {
