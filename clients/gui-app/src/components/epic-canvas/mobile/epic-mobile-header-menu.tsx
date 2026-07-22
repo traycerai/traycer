@@ -1,0 +1,204 @@
+import { useEffect, useState, type SyntheticEvent } from "react";
+import { EllipsisVertical } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useIsMobile } from "@/hooks/ui/use-mobile";
+import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
+import {
+  useRegisteredEpicPermissionRole,
+  useRegisteredEpicTitle,
+} from "@/lib/epic-selectors";
+import { isEditableRole } from "@/lib/epic-permissions";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
+import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+
+interface EpicHeaderIdentity {
+  readonly epicId: string;
+  readonly tabId: string;
+}
+
+/**
+ * Fills Phase 0's mobile-header right-actions slot on the epic route with a "⋮"
+ * overflow menu: **New chat** and **Rename** (the two settled actions).
+ *
+ * Rendered by `MobileAppHeader` (inside the app provider stack, OUTSIDE the
+ * epic session tree), so it derives epic state from app-global registries keyed
+ * on `epicId` - never epic-session React context. The stored element only
+ * closes over the stable route ids; everything volatile (title, permission,
+ * mutation) is read from hooks here, so there is no stale closure. See
+ * {@link MobileEpicHeaderActionsBinder} for why this stays a `ReactNode` slot.
+ */
+export function EpicMobileHeaderMenu(props: EpicHeaderIdentity) {
+  const { epicId, tabId } = props;
+  const role = useRegisteredEpicPermissionRole(epicId);
+  const canRename = isEditableRole(role);
+  const [renameOpen, setRenameOpen] = useState(false);
+
+  const handleNewChat = () => {
+    // The exact desktop funnel (see NewConversationModalAction): force chat
+    // mode, then open the shared New Conversation modal request for this epic.
+    // NewConversationModalHost (mounted on the active epic route) renders it.
+    useNewConversationModalStore.getState().setComposerMode(epicId, "chat");
+    useNewConversationModalOpenStore.getState().open({
+      epicId,
+      tabId,
+      placement: ACTIVE_TILE_PLACEMENT,
+      parentId: null,
+    });
+  };
+
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Epic actions"
+            data-testid="mobile-epic-actions-trigger"
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <EllipsisVertical className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={handleNewChat}>New chat</DropdownMenuItem>
+          {canRename ? (
+            <DropdownMenuItem onSelect={() => setRenameOpen(true)}>
+              Rename
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <EpicRenameDialog
+        epicId={epicId}
+        open={renameOpen}
+        onOpenChange={setRenameOpen}
+      />
+    </>
+  );
+}
+
+interface EpicRenameDialogProps {
+  readonly epicId: string;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}
+
+function EpicRenameDialog(props: EpicRenameDialogProps) {
+  const { epicId, open, onOpenChange } = props;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[min(92vw,28rem)] max-w-[min(92vw,28rem)]">
+        <DialogHeader>
+          <DialogTitle>Rename epic</DialogTitle>
+          <DialogDescription>Give this epic a new name.</DialogDescription>
+        </DialogHeader>
+        {/* Mounted only while open (Radix unmounts closed content), so the form
+            re-seeds from the current title on every open without an effect. */}
+        {open ? (
+          <EpicRenameForm epicId={epicId} onDone={() => onOpenChange(false)} />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EpicRenameForm(props: {
+  readonly epicId: string;
+  readonly onDone: () => void;
+}) {
+  const { epicId, onDone } = props;
+  const currentTitle = useRegisteredEpicTitle(epicId) ?? "";
+  const [value, setValue] = useState(currentTitle);
+  const updateTitle = useEpicUpdateTitle();
+  const trimmed = value.trim();
+  const canSubmit = trimmed.length > 0 && !updateTitle.isPending;
+
+  const handleSubmit = (event: SyntheticEvent) => {
+    event.preventDefault();
+    if (!canSubmit) return;
+    // Reuse the canonical epic-rename mutation. The active epic route's
+    // title sync (use-epic-route-synchronization) mirrors the resulting epic
+    // title into the header title, so no separate tab-name write is needed.
+    updateTitle.mutate(
+      { epicDelta: { id: epicId, title: trimmed, updatedAt: Date.now() } },
+      { onSuccess: () => onDone() },
+    );
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      {/* Radix Dialog moves focus to the first focusable element (this input)
+          on open, so no autoFocus prop is needed. */}
+      <Input
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        aria-label="Epic title"
+        data-testid="mobile-epic-rename-input"
+      />
+      <DialogFooter>
+        <Button type="button" variant="ghost" onClick={onDone}>
+          Cancel
+        </Button>
+        <Button
+          type="submit"
+          disabled={!canSubmit}
+          data-testid="mobile-epic-rename-save"
+        >
+          Save
+          {updateTitle.isPending ? (
+            <AgentSpinningDots
+              className="size-3.5"
+              testId="mobile-epic-rename-pending"
+              variant="dots2"
+            />
+          ) : null}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+/**
+ * Fills / clears the mobile-header right-actions slot for the ACTIVE epic
+ * route. Mounted once (from the active epic's route effects), self-gated on
+ * `useIsMobile()`. The slot stores a `ReactNode` element (Phase 0 shape kept):
+ * this is safe because the element is a self-contained component keyed only on
+ * the stable `{epicId, tabId}` route ids - it re-reads volatile state from its
+ * own hooks each header render, so nothing goes stale. A render-fn slot would
+ * be isomorphic (a fn returning the same element) but a larger store change; a
+ * baked-in menu that closed over epic-session handlers WOULD go stale, which is
+ * exactly what this shape avoids.
+ */
+export function MobileEpicHeaderActionsBinder(props: EpicHeaderIdentity) {
+  const { epicId, tabId } = props;
+  const isMobile = useIsMobile();
+  const setRightActions = useMobileHeaderStore((s) => s.setRightActions);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    setRightActions(<EpicMobileHeaderMenu epicId={epicId} tabId={tabId} />);
+    return () => setRightActions(null);
+  }, [isMobile, epicId, tabId, setRightActions]);
+
+  return null;
+}

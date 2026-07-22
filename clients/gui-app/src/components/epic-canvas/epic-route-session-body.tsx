@@ -1,5 +1,6 @@
 import { EpicMigrationModal } from "@/components/epic-canvas/dialogs/epic-migration-modal";
 import { EpicShell } from "@/components/epic-canvas/epic-shell";
+import { MobileEpicHeaderActionsBinder } from "@/components/epic-canvas/mobile/epic-mobile-header-menu";
 import { useInitialChatHandoff } from "@/components/epic-canvas/hooks/use-initial-chat-handoff";
 import { useEpicRouteSynchronization } from "@/components/epic-canvas/hooks/use-epic-route-synchronization";
 import { NewConversationModalHost } from "@/components/epic-canvas/sidebar/new-conversation-modal";
@@ -53,6 +54,9 @@ function EpicRouteActiveEffects(props: EpicRouteSessionBodyProps) {
     <>
       <EpicMigrationModal tabId={props.tabId} />
       <NewConversationModalHost epicId={props.epicId} tabId={props.tabId} />
+      {/* Fills the mobile header's right-actions slot (⋮ New chat / Rename) for
+          the active epic; self-gates on mobile, so desktop renders nothing. */}
+      <MobileEpicHeaderActionsBinder epicId={props.epicId} tabId={props.tabId} />
     </>
   );
 }
