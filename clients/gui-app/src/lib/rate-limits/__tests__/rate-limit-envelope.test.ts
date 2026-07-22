@@ -480,7 +480,12 @@ describe("mapResponseToProviderRateLimitEnvelope providers.list convergence", ()
     const providersListKey = ["host", "host-a", "providers.list", {}];
     const unrelatedKey = ["host", "host-a", "host.getRateLimitUsage", {}];
     queryClient.setQueryData(providersListKey, { providers: [] });
-    queryClient.setQueryData(unrelatedKey, {});
+    queryClient.setQueryData(unrelatedKey, {
+      latest: null,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+    });
     mapResponseToProviderRateLimitEnvelope({
       response: response(GROK_GOOD),
       queryClient,
