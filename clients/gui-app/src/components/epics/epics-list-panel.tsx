@@ -435,7 +435,9 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       <section
         className={cn(
           "flex min-h-0 w-full flex-col",
-          variant === "page" ? "mx-auto max-w-3xl flex-1 px-6 pt-6" : "mt-8",
+          variant === "page"
+            ? "mx-auto max-w-3xl flex-1 px-4 pt-4 md:px-6 md:pt-6"
+            : "mt-8",
         )}
       >
         {showChrome ? (
@@ -952,13 +954,18 @@ function HistoryRowTrailingMetadata(props: {
 }): ReactNode {
   const hasPrPills =
     !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
+  // Desktop (md+): label and pills share one grid cell and swap on
+  // hover/focus. Below md there is no hover, so the cell flattens into a
+  // flex line - label and pills sit side by side, pills persistently
+  // visible and tappable - on the row's wrapped second line (`pl-6` aligns
+  // it under the title, past the leading icon).
   return (
-    <span className="grid shrink-0 items-center justify-items-end text-ui-xs">
+    <span className="grid shrink-0 items-center justify-items-end text-ui-xs max-md:flex max-md:min-w-0 max-md:gap-2 max-md:pl-6">
       <span
         className={cn(
           "col-start-1 row-start-1 text-muted-foreground",
           hasPrPills &&
-            "transition-opacity group-hover/list-row:opacity-0 group-focus-within/list-row:opacity-0",
+            "transition-opacity md:group-hover/list-row:opacity-0 md:group-focus-within/list-row:opacity-0",
         )}
       >
         updated {props.updatedLabel}
@@ -968,7 +975,7 @@ function HistoryRowTrailingMetadata(props: {
           worktrees={props.worktrees}
           detailOnHover
           maximumVisible={2}
-          className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] overflow-hidden opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100"
+          className="pointer-events-none col-start-1 row-start-1 max-w-[min(36vw,22rem)] overflow-hidden opacity-0 transition-opacity group-hover/list-row:pointer-events-auto group-hover/list-row:opacity-100 group-focus-within/list-row:pointer-events-auto group-focus-within/list-row:opacity-100 has-data-[state=open]:pointer-events-auto has-data-[state=open]:opacity-100 max-md:pointer-events-auto max-md:max-w-full max-md:opacity-100"
           testId={`task-history-prs-${props.epicId}`}
         />
       ) : null}
@@ -1194,8 +1201,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       })}
     >
       {rowInteractionLayer}
-      <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm">
-        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+      {/* Below md the row wraps to two lines - title spans the full first
+          line (`basis-full` beats flex-1's 0% basis inside the media query)
+          and the metadata drops underneath - otherwise the shrink-0
+          "updated ..." label squeezes the title to nothing at phone width. */}
+      <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm max-md:flex-wrap max-md:gap-y-1">
+        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
           <HistoryRowLeadingIcon item={item} />
           {isRenaming ? (
             <input
