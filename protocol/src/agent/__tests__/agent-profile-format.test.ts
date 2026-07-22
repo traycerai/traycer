@@ -161,6 +161,38 @@ describe("detailed rate-limit formatting", () => {
     expect(human).not.toContain("0% used");
   });
 
+  it("preserves known Grok billing dates for an unmeasured period", () => {
+    const response: AgentGetProviderProfileRateLimitsResponse = {
+      rateLimits: {
+        provider: "grok",
+        available: true,
+        subscriptionTier: "SuperGrok",
+        periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+        periodStart: CAPTURED_AT,
+        periodEnd: Date.UTC(2026, 6, 20, 9, 30, 0),
+        period: null,
+        monthlyLimit: null,
+        onDemandCap: null,
+        onDemandUsed: null,
+        prepaidBalance: null,
+      },
+      usageUpdatedAt: CAPTURED_AT,
+    };
+
+    const human = formatAgentProviderProfileRateLimitsResponse(
+      { kind: "ambient" },
+      response,
+    );
+
+    expect(human).toContain(
+      "period (USAGE_PERIOD_TYPE_WEEKLY): unknown",
+    );
+    expect(human).toContain(
+      "billing period: 2026-07-13T09:30:00.000Z - 2026-07-20T09:30:00.000Z",
+    );
+    expect(human).not.toContain("0% used");
+  });
+
   it("renders the unavailable arm with its reason instead of inventing limits", () => {
     const response: AgentGetProviderProfileRateLimitsResponse = {
       rateLimits: {

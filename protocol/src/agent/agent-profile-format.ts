@@ -149,6 +149,11 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
           : `period (${rateLimits.periodType})`,
         rateLimits.period,
       ),
+      rateLimits.period !== null ||
+      rateLimits.periodStart === null ||
+      rateLimits.periodEnd === null
+        ? null
+        : `billing period: ${formatTimestamp(rateLimits.periodStart)} - ${formatTimestamp(rateLimits.periodEnd)}`,
       rateLimits.onDemandCap === null && rateLimits.onDemandUsed === null
         ? null
         : `on-demand: ${formatNumber(rateLimits.onDemandUsed)}/${formatNumber(rateLimits.onDemandCap)} used`,
