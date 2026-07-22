@@ -4,6 +4,7 @@ import {
   type HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
@@ -18,6 +19,7 @@ export function toastFromHostError(
   error: HostRpcError,
   fallback: string,
 ): void {
+  if (shouldSuppressRecoverableUnauthorized(error)) return;
   const message = hostErrorToastMessage(error, fallback);
   emitHostFatalErrorNotification(error, message);
   const dedupeKey = hostErrorDedupeKey(error);
@@ -56,6 +58,7 @@ export function toastFromHostErrorWithDetail(
   error: HostRpcError,
   fallback: string,
 ): void {
+  if (shouldSuppressRecoverableUnauthorized(error)) return;
   const message = hostErrorToastMessageWithDetail(error, fallback);
   emitHostFatalErrorNotification(error, message);
   const dedupeKey = hostErrorDedupeKey(error);
@@ -69,6 +72,24 @@ export function toastFromHostErrorWithDetail(
       source: "Host",
     }),
   );
+}
+
+/**
+ * A host `UNAUTHORIZED` while the app-level session is still signed in is the
+ * recoverable stale-bearer race (the wake-after-suspension case: an in-flight
+ * call raced the token refresh). The shared single-flight revalidator owns
+ * recovery: on "rotated" the retry succeeds silently, and on "rejected" the
+ * revalidator signs out - flipping auth status to `signed-out`, which emits
+ * the one authoritative "Session expired - sign in again." toast via
+ * `AuthSessionExpiredToastBridge`. Toasting here too produced a "sign in"
+ * toast on every overnight wake even though recovery succeeded seconds later.
+ * The `retryable` (host-side JWKS outage) variant keeps its distinct copy:
+ * it is not a credential statement and never leads to a sign-out.
+ */
+function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
+  if (error.code !== "UNAUTHORIZED") return false;
+  if (error.fatalDetails?.retryable === true) return false;
+  return useAuthStore.getState().status !== "signed-out";
 }
 
 function hostErrorToastMessage(error: HostRpcError, fallback: string) {
@@ -90,7 +111,7 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
     return "Please sign in again.";
   }
   if (error.code === "WORKTREE_BUSY") {
-    return "Worktree is in use by an active chat or terminal. Stop those runs and try again.";
+    return "Worktree is in use by an active agent or terminal. Stop those runs and try again.";
   }
   if (error.code === "WORKTREE_REBIND_BLOCKED") {
     return "Stop the active run before rebinding the worktree.";

@@ -14,6 +14,10 @@ const PANEL_RESIZING_CLASS_NAME = "traycer-panel-resizing";
 
 let stopPanelResizeInteraction: (() => void) | null = null;
 
+export function isPanelResizeInteractionActive(): boolean {
+  return stopPanelResizeInteraction !== null;
+}
+
 export function beginPanelResizeInteraction(
   pointerId: number,
   onStop: () => void,

@@ -58,7 +58,7 @@ export function InterviewSegment(props: InterviewSegmentProps) {
       ? answeredQuestionsSummaryFromCounts(questions, answers)
       : "Question failed";
   const summary = forkedWithoutAnswer
-    ? "Question carried from the original chat — not answered here"
+    ? "Question carried from the original agent — not answered here"
     : resolvedSummary;
 
   return (

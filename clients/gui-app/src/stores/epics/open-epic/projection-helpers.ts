@@ -51,7 +51,7 @@ import type {
   TuiAgentProjection,
 } from "./types";
 import { EMPTY_ARRAY, EMPTY_PROJECTED_SLICES } from "./types";
-import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { DEFAULT_SORT_MODE, makeNodeComparator } from "@/lib/epic-sort";
 
 // ─── Type-narrow Y.Doc readers ────────────────────────────────────────────
@@ -630,7 +630,10 @@ function collectRawTreeRecords(
     out.push({
       id,
       parentIdRaw: chat.parentId,
-      title: displayTitle(chat.title, "chat"),
+      // Durable Agent tree row: an untitled Chat-interface Agent falls back to
+      // "Untitled agent", not "Untitled chat". `type` stays the structural
+      // "chat" interface discriminator.
+      title: displayTitle(chat.title, "agent"),
       type: "chat",
       status: null,
       createdAt: chat.createdAt,
@@ -642,10 +645,11 @@ function collectRawTreeRecords(
     out.push({
       id,
       parentIdRaw: agent.parentId,
-      title: tuiAgentDisplayTitle({
-        title: agent.title,
-        harnessId: agent.harnessId,
-      }),
+      // Durable Agent tree row: an untitled Terminal-interface Agent falls back
+      // to "Untitled agent" too (harness identity is separate interface
+      // metadata, not the title fallback). `type` stays the interface
+      // discriminator.
+      title: displayTitle(agent.title, "agent"),
       type: "terminal-agent",
       status: null,
       createdAt: agent.createdAt,

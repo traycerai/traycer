@@ -6,7 +6,7 @@
  * the `onBeforeOpen` handoff (e.g. one-shot editor focus) stay in lockstep.
  */
 import { v4 as uuidv4 } from "uuid";
-import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import {
   isOpenableEpicNodeKind,
   makeOpenableNodeRef,
@@ -117,7 +117,9 @@ function resolveProjectedSidebarNode(
     return {
       id: chat.id,
       type: "chat",
-      name: displayTitle(chat.title, "chat"),
+      // Durable Agent node: an untitled Chat-interface Agent renders as
+      // "Untitled agent". `type` remains the structural interface discriminator.
+      name: displayTitle(chat.title, "agent"),
       hostId: chat.hostId ?? fallbackHostId,
     };
   }
@@ -126,10 +128,9 @@ function resolveProjectedSidebarNode(
     return {
       id: agent.id,
       type: "terminal-agent",
-      name: tuiAgentDisplayTitle({
-        title: agent.title,
-        harnessId: agent.harnessId,
-      }),
+      // Durable Agent node: an untitled Terminal-interface Agent renders as
+      // "Untitled agent"; `type` stays the interface discriminator.
+      name: displayTitle(agent.title, "agent"),
       hostId: agent.hostId,
     };
   }

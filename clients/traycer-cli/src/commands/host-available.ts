@@ -31,7 +31,10 @@ interface HostAvailableListing {
 export function buildHostAvailableCommand(args: HostAvailableArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
     const urlInfo = resolveManifestUrl();
-    const client = await createDefaultRegistryClient(ctx.runtime.environment);
+    const client = await createDefaultRegistryClient(
+      ctx.runtime.environment,
+      ctx.progress,
+    );
     const manifest = await client.fetchManifest();
     const platformKey = currentHostPlatformKey();
     const listing = buildHostAvailableListing({

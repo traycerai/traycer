@@ -43,6 +43,7 @@ import {
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
 import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
+import { resolveRateLimitFetchEligibility } from "@/lib/rate-limit-providers";
 import {
   AddProviderProfileDialog,
   type FailedProviderProfileAttempt,
@@ -81,7 +82,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   codex: "OpenAI's Codex CLI.",
   opencode: "OpenCode CLI agent.",
   cursor:
-    "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
+    "Cursor coding agent - SDK-driven agents authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   openrouter:
     "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
@@ -98,6 +99,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   devin:
     "Devin agent - Cognition's coding CLI via Windsurf/Devin login or API key.",
   pi: "Pi agent - pi.dev coding agent via your configured model API key (BYOK).",
+  hermes: "Hermes Agent - Nous Research's coding CLI via your Hermes account.",
 };
 
 function hasPendingProviderProbe(
@@ -261,7 +263,7 @@ function ProvidersSettingsPanelInner({
   return (
     <SettingsPanelShell
       title="Providers"
-      description="Choose the CLI binary Traycer runs for each agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it from new chats."
+      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
       fillHeight
       bodyClassName="max-h-[min(85vh,52rem)]"
       headerAction={
@@ -567,6 +569,7 @@ function ProviderDetail({
           providerId={providerId}
           profileId={null}
           usageUpdatedAt={null}
+          fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
         />
       ) : null}
       <ProviderProfileScopedSection

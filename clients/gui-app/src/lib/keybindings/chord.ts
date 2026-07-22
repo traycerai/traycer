@@ -5,6 +5,13 @@ import {
   modLabel,
   shiftLabel,
 } from "@/lib/keybindings/platform";
+import {
+  formatChord,
+  parseChordString,
+  type ChordKey,
+  type ChordParts,
+  type ChordString,
+} from "@traycer-clients/shared/keybindings/chord-core";
 
 /**
  * Canonical chord string: `mod+ctrl+shift+alt+key` where modifiers appear in
@@ -19,18 +26,15 @@ import {
  * platform-primary modifier: Command on macOS, Command/Control elsewhere.
  * `ctrl` chords are matched by consumers that need a Control-specific binding
  * (e.g. the dictation hotkey).
+ *
+ * The parse/format core (`formatChord`/`parseChordString` and their types)
+ * lives in `@traycer-clients/shared/keybindings/chord-core` - it has no
+ * `navigator`/DOM dependency, so it's also importable from the Electron main
+ * process (global-shortcut registration). Everything below that touches
+ * `KeyboardEvent` or platform display labels stays here.
  */
-export type ChordString = string;
-
-export type ChordKey = string;
-
-export interface ChordParts {
-  readonly mod: boolean;
-  readonly ctrl: boolean;
-  readonly shift: boolean;
-  readonly alt: boolean;
-  readonly key: ChordKey;
-}
+export type { ChordKey, ChordParts, ChordString };
+export { formatChord, parseChordString };
 
 /** Physical keys we never want to treat as a primary chord key. */
 const BARE_MODIFIER_CODES = new Set<string>([
@@ -130,41 +134,6 @@ export function parseChordFromEvent(event: KeyboardEvent): ChordParts | null {
   const shift = event.shiftKey;
   const alt = event.altKey;
   return { mod, ctrl: false, shift, alt, key };
-}
-
-export function formatChord(parts: ChordParts): ChordString {
-  const pieces: Array<string> = [];
-  if (parts.mod) pieces.push("mod");
-  if (parts.ctrl) pieces.push("ctrl");
-  if (parts.shift) pieces.push("shift");
-  if (parts.alt) pieces.push("alt");
-  pieces.push(parts.key);
-  return pieces.join("+");
-}
-
-export function parseChordString(chord: ChordString): ChordParts | null {
-  if (chord.length === 0) return null;
-  const tokens = chord.split("+");
-  if (tokens.length === 0) return null;
-  let mod = false;
-  let ctrl = false;
-  let shift = false;
-  let alt = false;
-  let key: ChordKey | null = null;
-  for (let i = 0; i < tokens.length; i += 1) {
-    const t = tokens[i];
-    if (i < tokens.length - 1) {
-      if (t === "mod") mod = true;
-      else if (t === "ctrl") ctrl = true;
-      else if (t === "shift") shift = true;
-      else if (t === "alt") alt = true;
-      else return null;
-    } else {
-      key = t;
-    }
-  }
-  if (key === null || key.length === 0) return null;
-  return { mod, ctrl, shift, alt, key };
 }
 
 /**

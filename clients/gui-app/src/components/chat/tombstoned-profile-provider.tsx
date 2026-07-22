@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { ChatSessionAnchor } from "@traycer/protocol/persistence/epic/schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
-import { providerIdForHarness } from "@/components/chat/composer/use-provider-reauth-gate";
+import { providerCliIdForHarness } from "@/lib/provider-ordering";
 import { TombstonedProfileContext } from "@/components/chat/use-tombstoned-profile-label";
 
 function resolveTombstonedProfileLabel(
@@ -9,7 +9,7 @@ function resolveTombstonedProfileLabel(
   providers: ReadonlyArray<ProviderCliState>,
 ): string | null {
   if (anchor.profileId === null) return null;
-  const providerId = providerIdForHarness(anchor.harnessId);
+  const providerId = providerCliIdForHarness(anchor.harnessId);
   if (providerId === null) return null;
   const state = providers.find((p) => p.providerId === providerId);
   if (state === undefined || state.profiles.length === 0) return null;

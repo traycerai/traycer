@@ -1,8 +1,7 @@
 import { HostPicker } from "@/components/layout/header/host-picker";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
-import { HostOperationStatusListener } from "@/components/layout/bridges/host-operation-status-listener";
-import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
+import { HostControllerStatusListener } from "@/components/layout/bridges/host-controller-status-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
@@ -30,7 +29,6 @@ import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-loc
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
-import { CliCredentialSeeder } from "@/providers/cli-credential-seeder";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
@@ -228,11 +226,9 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
   return (
     <>
       <RunnerHostBridges />
-      <HostRegistryUpdateListener />
-      <HostOperationStatusListener />
+      <HostControllerStatusListener />
       <AppUpdateToastController />
       <WorktreeDeleteProgressToastBridge />
-      <CliCredentialSeeder />
       <HarnessCatalogPrefetcher />
       <RateLimitQueueProvider />
       <HistoryPruneProvider router={props.router} />

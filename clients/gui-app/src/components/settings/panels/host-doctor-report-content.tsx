@@ -16,7 +16,6 @@ interface HostDoctorReportContentProps {
   readonly recurrence: RecurrenceState;
   readonly reportFetching: boolean;
   readonly fixPendingCode: string | null;
-  readonly externalOperationActive: boolean;
   readonly freePortPrompt: FreePortAndRestartInput | null;
   readonly freePortPending: boolean;
   readonly onFix: (issue: HostDoctorIssue) => void;
@@ -33,7 +32,6 @@ export function HostDoctorReportContent(props: HostDoctorReportContentProps) {
     recurrence,
     reportFetching,
     fixPendingCode,
-    externalOperationActive,
     freePortPrompt,
     freePortPending,
     onFix,
@@ -55,7 +53,6 @@ export function HostDoctorReportContent(props: HostDoctorReportContentProps) {
           expanded={expandedCodes.has(issue.code)}
           recurrenceLocked={recurrence.locked}
           fixPendingCode={fixPendingCode}
-          externalOperationActive={externalOperationActive}
           onFix={onFix}
           onToggle={onToggleIssue}
         />

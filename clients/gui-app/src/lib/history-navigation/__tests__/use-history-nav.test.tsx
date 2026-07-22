@@ -18,6 +18,7 @@ import {
 } from "@/lib/persistent-history";
 import { useHistoryNavAvailable } from "@/lib/history-navigation/use-history-nav-available";
 import { useHistoryNavState } from "@/lib/history-navigation/use-history-nav-state";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 const WINDOW_ID = "history-nav-test-window";
 
@@ -59,12 +60,14 @@ function wrapperFor(router: AppRouter) {
 
 beforeEach(() => {
   window.localStorage.clear();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   window.localStorage.clear();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
 describe("useHistoryNavAvailable", () => {
@@ -97,7 +100,10 @@ describe("useHistoryNavState", () => {
   it("derives canGoBack/canGoForward from the seeded stack position", () => {
     // Stack of 3 sitting in the middle: can go both ways.
     const router = makeRouter(
-      seedPersistentHistory(["/epics/e1/t1", "/draft/d1", "/epics/e1/t2"], 1),
+      seedPersistentHistory(
+        ["/settings/general", "/draft/d1", "/settings/appearance"],
+        1,
+      ),
     );
     const { result } = renderHook(() => useHistoryNavState(), {
       wrapper: wrapperFor(router),
@@ -132,5 +138,90 @@ describe("useHistoryNavState", () => {
     expect(result.current).toEqual({ canGoBack: false, canGoForward: false });
     // Prune is load-free: it must never drive router.load().
     expect(loadSpy).not.toHaveBeenCalled();
+  });
+
+  it("disables back when only closed-task entries remain behind", () => {
+    const store = useEpicCanvasStore.getState();
+    const openId = store.openEpicTab("e1", "Open");
+    const closedId = store.openEpicTab("e1", "Closed");
+    store.closeTab(closedId);
+
+    const router = makeRouter(
+      seedPersistentHistory(
+        [`/epics/e1/${closedId}`, `/epics/e1/${openId}`],
+        1,
+      ),
+    );
+    const { result } = renderHook(() => useHistoryNavState(), {
+      wrapper: wrapperFor(router),
+    });
+
+    expect(result.current).toEqual({ canGoBack: false, canGoForward: false });
+  });
+
+  it("disables forward when only closed-task entries remain ahead", () => {
+    const store = useEpicCanvasStore.getState();
+    const openId = store.openEpicTab("e1", "Open");
+    const closedId = store.openEpicTab("e1", "Closed");
+    store.closeTab(closedId);
+
+    const router = makeRouter(
+      seedPersistentHistory(
+        [`/epics/e1/${openId}`, `/epics/e1/${closedId}`],
+        0,
+      ),
+    );
+    const { result } = renderHook(() => useHistoryNavState(), {
+      wrapper: wrapperFor(router),
+    });
+
+    expect(result.current).toEqual({ canGoBack: false, canGoForward: false });
+  });
+
+  it("re-enables after a closed Task is reopened, without a history event", () => {
+    const store = useEpicCanvasStore.getState();
+    const openId = store.openEpicTab("e1", "Open");
+    const closedId = store.openEpicTab("e1", "Closed");
+    store.closeTab(closedId);
+
+    const router = makeRouter(
+      seedPersistentHistory(
+        [`/epics/e1/${closedId}`, `/epics/e1/${openId}`],
+        1,
+      ),
+    );
+    const loadSpy = vi.spyOn(router, "load");
+    const { result } = renderHook(() => useHistoryNavState(), {
+      wrapper: wrapperFor(router),
+    });
+    expect(result.current.canGoBack).toBe(false);
+
+    act(() => {
+      useEpicCanvasStore.getState().setActiveTab(closedId);
+    });
+
+    expect(result.current).toEqual({ canGoBack: true, canGoForward: false });
+    // Canvas subscription must flip the arrow without a route load.
+    expect(loadSpy).not.toHaveBeenCalled();
+  });
+
+  it("disables back after the only eligible prior Task is closed mid-session", () => {
+    const store = useEpicCanvasStore.getState();
+    const openA = store.openEpicTab("e1", "A");
+    const openB = store.openEpicTab("e1", "B");
+
+    const router = makeRouter(
+      seedPersistentHistory([`/epics/e1/${openA}`, `/epics/e1/${openB}`], 1),
+    );
+    const { result } = renderHook(() => useHistoryNavState(), {
+      wrapper: wrapperFor(router),
+    });
+    expect(result.current.canGoBack).toBe(true);
+
+    act(() => {
+      useEpicCanvasStore.getState().closeTab(openA);
+    });
+
+    expect(result.current).toEqual({ canGoBack: false, canGoForward: false });
   });
 });

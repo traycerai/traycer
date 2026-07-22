@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { LayoutGroup } from "motion/react";
 import { useDroppable } from "@dnd-kit/core";
+import { toast } from "sonner";
 import {
   HEADER_TAB_SLOT_DND_TYPE,
   HEADER_TAB_TRAILING_SLOT_DROP_ID,
@@ -29,6 +30,11 @@ import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import {
+  useEpicSetPinned,
+  usePendingSetPinnedEpicIds,
+} from "@/hooks/epic/use-epic-set-pinned-mutation";
+import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -68,6 +74,29 @@ function TabStripBody() {
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
   });
+  const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
+  const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
+  const { mutate: setEpicPinned } = useEpicSetPinned();
+  const handleSetTaskPinned = useCallback(
+    (epicId: string, pinned: boolean, displayName: string) => {
+      setEpicPinned(
+        { epicId, pinned },
+        {
+          onSuccess: () => {
+            toast.success(pinConfirmationMessage(displayName, pinned), {
+              action: {
+                label: "Undo",
+                onClick: () => {
+                  setEpicPinned({ epicId, pinned: !pinned });
+                },
+              },
+            });
+          },
+        },
+      );
+    },
+    [setEpicPinned],
+  );
 
   // Trailing slot: the strip's empty space after the last tab accepts drops
   // at index `allTabs.length` (both reorder and tear-off).
@@ -162,6 +191,16 @@ function TabStripBody() {
                     canCloseOtherTabs={canCloseOtherTabs}
                     onOpenInNewWindow={openInNewWindowFlow.requestOpen}
                     canOpenInNewWindow={openInNewWindowFlow.isAvailable}
+                    taskPinned={
+                      tab.kind === "epic"
+                        ? (taskPinnedStates.get(tab.epicId) ?? null)
+                        : null
+                    }
+                    isTaskPinPending={
+                      tab.kind === "epic" &&
+                      pendingSetPinnedEpicIds.has(tab.epicId)
+                    }
+                    onSetTaskPinned={handleSetTaskPinned}
                   />
                 );
               })}
@@ -182,4 +221,10 @@ function isTabActive(tab: HeaderTab, pathname: string): boolean {
 
 function refKey(kind: HeaderTab["kind"], id: string): string {
   return `${kind}:${id}`;
+}
+
+function pinConfirmationMessage(displayName: string, pinned: boolean): string {
+  return pinned
+    ? `Pinned “${displayName}” to the top of History`
+    : `Unpinned “${displayName}” from History`;
 }

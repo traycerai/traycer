@@ -40,6 +40,17 @@ const composerPickerMocks = vi.hoisted(() => ({
   useComposerPickerItems: vi.fn(),
 }));
 
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: () => Promise.resolve([]),
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve(paths),
+      readNativeClipboardFilePaths: () => Promise.resolve([]),
+    },
+  }),
+}));
+
 function render(ui: ReactNode) {
   return rtlRender(
     <ChatExpansionTestProviders tileInstanceId="user-body-test-tile">

@@ -77,10 +77,21 @@ export interface ProfileUsageComparisonEntry {
   readonly profileId: string | null;
   readonly providerId: ProviderId;
   readonly detail: ProfileUsageDetailState;
+  /** Whether this exact target currently has usable credentials for a refresh. */
+  readonly fetchEligible: boolean;
   readonly refreshStatus: ProfileUsageRefreshStatus;
   /** Addresses exactly this `(host, provider, profile)` - see
    *  `useProfileUsageComparison`'s doc comment for routing/serialization. */
   readonly refresh: () => Promise<void>;
+  /** Non-forced sibling of `refresh` for AUTOMATIC callers (the composer
+   *  banner's single unknown-destination check). On the queue-backed
+   *  `ephemeralProcess` lane (claude-code / codex - the only providers with
+   *  managed profiles, so the only ones this automatic check ever runs on) it
+   *  passes `force: false`, so it no-ops on still-fresh cache and honors the
+   *  post-`usage_fetch_failed` cool-down instead of re-tripping a server-side
+   *  penalty window. The httpFetch lane (openrouter / kilocode) has no such
+   *  queue and always refetches, but its call is a cheap direct HTTP GET. */
+  readonly ensureFresh: () => Promise<void>;
 }
 
 function isSemanticWarning(

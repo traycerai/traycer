@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import {
   PROVIDER_DISPLAY_NAMES,
-  TUI_HARNESS_ID_TO_PROVIDER_ID,
   type ProviderCliState,
   type ProviderId,
 } from "@traycer/protocol/host/provider-schemas";
@@ -10,31 +9,11 @@ import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { useTabProvidersList } from "@/hooks/providers/use-tab-providers-list-query";
 import type { ComposerSeedSourceKind } from "@/lib/composer/composer-seed-source";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
-
-// The harness id set is a superset of the provider-CLI id set (it also carries
-// `traycer`, which has no provider-CLI login). Only CLI harnesses gate. Grok,
-// Cursor, Grok, Qwen, Kiro, Kimi, Droid, Copilot, and Kilo Code are GUI-only
-// (not in the TUI map) but DO gate through their providers, mirroring the host's
-// `harnessIdToProviderId`. Exported so other harness->provider derivations
-// (e.g. the chat provider rate-limit selector) share this single mapping.
-export function providerIdForHarness(
-  harnessId: GuiHarnessId,
-): ProviderId | null {
-  if (harnessId === "traycer") return null;
-  if (harnessId === "cursor") return "cursor";
-  if (harnessId === "openrouter") return "openrouter";
-  if (harnessId === "grok") return "grok";
-  if (harnessId === "qwen") return "qwen";
-  if (harnessId === "kiro") return "kiro";
-  if (harnessId === "droid") return "droid";
-  if (harnessId === "kimi") return "kimi";
-  if (harnessId === "copilot") return "copilot";
-  if (harnessId === "kilocode") return "kilocode";
-  if (harnessId === "amp") return "amp";
-  if (harnessId === "devin") return "devin";
-  if (harnessId === "pi") return "pi";
-  return TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
-}
+import { providerCliIdForHarness } from "@/lib/provider-ordering";
+import {
+  isProviderAmbientAuthenticated,
+  isProviderAmbientSignedOut,
+} from "@/lib/providers/provider-ambient-auth";
 
 /**
  * - `provider_unauthenticated`: the ambient/host login itself is signed out
@@ -138,7 +117,13 @@ function deriveReauthReason(input: {
 }): ProviderReauthReason | null {
   if (!input.enabled) return null;
   if (input.profileId === null) {
-    return input.state?.auth.status === "unauthenticated"
+    // Ambient/terminal account: reconcile the provider-level probe with the
+    // ambient profile row so a definitive logout on either source blocks send,
+    // matching the model picker's degraded state (see
+    // `isProviderAmbientSignedOut`). Reading only `state.auth` here is what let
+    // a doomed turn launch in the convergence window (summary `unavailable`,
+    // ambient row already `unauthenticated`).
+    return input.state !== null && isProviderAmbientSignedOut(input.state)
       ? "provider_unauthenticated"
       : null;
   }
@@ -167,7 +152,7 @@ export function useProviderReauthGate(
   seedKind: ComposerSeedSourceKind,
 ): ProviderReauthGate {
   const authoritative = seedKind === "authoritative";
-  const providerId = providerIdForHarness(harnessId);
+  const providerId = providerCliIdForHarness(harnessId);
   const enabled = active && providerId !== null;
   const query = useTabProvidersList({ enabled, subscribed: enabled });
   // `providers.list` always returns every configured provider in one atomic
@@ -215,7 +200,13 @@ export function useProviderReauthGate(
   // was written for) - the profile-specific reasons block send via the banner
   // without this connection-level toast.
   const providerUnauthenticated = reason === "provider_unauthenticated";
-  const authStatus = state?.auth.status ?? null;
+  // Reconnect edge reads the same two-source ambient verdict the sign-out edge
+  // now does (`isProviderAmbientAuthenticated`), not a bare provider-level
+  // `auth.status`: a reconnect that lands on the ambient profile row first
+  // (summary still lagging) must still clear the latch. A transient `unknown`
+  // keeps this false, so the success toast never phantom-fires mid-reprobe.
+  const providerAuthenticated =
+    state !== null && isProviderAmbientAuthenticated(state);
   const signedOutProviderRef = useRef<ProviderId | null>(null);
   useEffect(() => {
     if (providerUnauthenticated && providerId !== null) {
@@ -233,14 +224,14 @@ export function useProviderReauthGate(
         );
       }
     } else if (
-      authStatus === "authenticated" &&
+      providerAuthenticated &&
       providerId !== null &&
       signedOutProviderRef.current === providerId
     ) {
       signedOutProviderRef.current = null;
       toast.success(`${PROVIDER_DISPLAY_NAMES[providerId]} reconnected`);
     }
-  }, [providerUnauthenticated, authStatus, providerId]);
+  }, [providerUnauthenticated, providerAuthenticated, providerId]);
 
   return { providerId, profileId, state, signedOut, reason, profileLabel };
 }

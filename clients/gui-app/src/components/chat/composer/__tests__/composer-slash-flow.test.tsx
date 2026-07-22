@@ -76,6 +76,8 @@ function openDisabledOnlyPicker(pickerStore: ComposerPickerStore): void {
       },
     ],
     loading: false,
+    loadFailed: false,
+    retryLoad: null,
   });
 }
 

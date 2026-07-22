@@ -77,7 +77,9 @@ import { queryKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
+  isRateLimitProfileFetchEligible,
   rateLimitFetchLane,
+  type RateLimitFetchEligibility,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
 import { useRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
@@ -115,6 +117,10 @@ type RailTabDescriptor =
   | { readonly kind: "traycer" };
 
 const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
+const NO_RATE_LIMIT_FETCH_ELIGIBILITY: RateLimitFetchEligibility = {
+  ambient: false,
+  managedProfiles: false,
+};
 
 const POPOVER_SURFACE_CLASS_NAME =
   "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
@@ -351,20 +357,27 @@ function configuredProviderProfiles(
   return provider === undefined ? [] : provider.profiles;
 }
 
+function providerFetchEligibility(
+  providers: ReadonlyArray<ConfiguredRateLimitProvider>,
+  providerId: RateLimitProviderId,
+): RateLimitFetchEligibility {
+  return (
+    providers.find((candidate) => candidate.providerId === providerId)
+      ?.fetchEligibility ?? NO_RATE_LIMIT_FETCH_ELIGIBILITY
+  );
+}
+
 function refreshTargetsForProvider(
   provider: ConfiguredRateLimitProvider,
 ): ReadonlyArray<string | null> {
-  if (provider.profiles.length === 0) return [null];
+  if (provider.profiles.length === 0) {
+    return provider.fetchEligibility.ambient ? [null] : [];
+  }
   return provider.profiles
-    .filter(profileLoggedInForUsage)
+    .filter((profile) =>
+      isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
+    )
     .map(rateLimitProfileId);
-}
-
-function profileLoggedInForUsage(profile: ProviderProfile): boolean {
-  return (
-    profile.auth.status === "authenticated" ||
-    profile.auth.status === "configured"
-  );
 }
 
 function rateLimitProfileId(profile: ProviderProfile): string | null {
@@ -744,6 +757,7 @@ function RateLimitDetailPane({
     <RateLimitProviderBlock
       providerId={tab}
       profiles={configuredProviderProfiles(providers, tab)}
+      fetchEligibility={providerFetchEligibility(providers, tab)}
       variant="popover-detail"
       onReady={null}
       profileSelection={profileSelection}
@@ -940,6 +954,10 @@ function RateLimitOverview({
               <RateLimitProviderBlock
                 providerId={tab.providerId}
                 profiles={configuredProviderProfiles(providers, tab.providerId)}
+                fetchEligibility={providerFetchEligibility(
+                  providers,
+                  tab.providerId,
+                )}
                 variant="popover-overview"
                 onReady={onReady}
                 profileSelection={profileSelection}
@@ -1068,8 +1086,11 @@ function RateLimitRefreshAllButton({
   const httpFetchOptions =
     httpFetchProviders.length === 0
       ? null
-      : providerRateLimitQueryOptions(httpFetchProviders[0].providerId, null)
-          .options;
+      : providerRateLimitQueryOptions(
+          httpFetchProviders[0].providerId,
+          null,
+          true,
+        ).options;
   const httpFetchQueries = useHostQueriesWithResponseMap<
     HostRpcRegistry,
     "host.getRateLimitUsage",
@@ -1081,6 +1102,7 @@ function RateLimitRefreshAllButton({
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,
         target.profileId,
+        true,
       );
       return { method, params };
     }),
@@ -1094,6 +1116,10 @@ function RateLimitRefreshAllButton({
     draining ||
     httpFetchQueries.some((query) => query.isFetching) ||
     traycerRefreshing;
+  const hasRefreshTarget =
+    httpFetchRequests.length > 0 ||
+    ephemeralProcessRequests.length > 0 ||
+    traycerRefreshTarget.enabled;
 
   // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
   // direct invalidation, ephemeralProcess profiles fan out inside one queued
@@ -1132,6 +1158,8 @@ function RateLimitRefreshAllButton({
     return Promise.resolve();
   };
 
+  if (!hasRefreshTarget) return null;
+
   return (
     <RefreshIconButton
       onRefresh={refreshAll}
@@ -1168,12 +1196,14 @@ type PopoverBlockVariant = "popover-detail" | "popover-overview";
 function RateLimitProviderBlock({
   providerId,
   profiles,
+  fetchEligibility,
   variant,
   onReady,
   profileSelection,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly fetchEligibility: RateLimitFetchEligibility;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
@@ -1183,6 +1213,7 @@ function RateLimitProviderBlock({
       <ProfileRateLimitProviderBlock
         providerId={providerId}
         profiles={profiles}
+        fetchEligibility={fetchEligibility}
         variant={variant}
         onReady={onReady}
         profileSelection={profileSelection}
@@ -1193,6 +1224,7 @@ function RateLimitProviderBlock({
   return (
     <SingleProfileRateLimitProviderBlock
       providerId={providerId}
+      fetchEligible={fetchEligibility.ambient}
       variant={variant}
       onReady={onReady}
     />
@@ -1201,14 +1233,16 @@ function RateLimitProviderBlock({
 
 function SingleProfileRateLimitProviderBlock({
   providerId,
+  fetchEligible,
   variant,
   onReady,
 }: {
   readonly providerId: RateLimitProviderId;
+  readonly fetchEligible: boolean;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
 }): ReactNode {
-  const query = useHostProviderRateLimitsQuery(providerId, null);
+  const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
   // Single source of truth for this provider's refresh action + spinner state
   // (fresh-on-open, queue routing, and the ephemeralProcess `draining` fold-in),
   // shared verbatim with the Settings card so they can't drift apart.
@@ -1216,6 +1250,7 @@ function SingleProfileRateLimitProviderBlock({
     providerId,
     profileId: null,
     usageUpdatedAt: null,
+    fetchEligible,
     isFetching: query.isFetching,
     refetch: query.refetch,
   });
@@ -1231,8 +1266,14 @@ function SingleProfileRateLimitProviderBlock({
       ? (query.data?.lastGoodAt ?? query.dataUpdatedAt)
       : query.dataUpdatedAt;
   useEffect(() => {
-    if (state.kind !== "cold" && onReady !== null) onReady();
-  }, [state.kind, onReady]);
+    // A disabled query with no cache stays pending forever by design: it is a
+    // passive observer for a signed-out provider, not a queue-owned cold
+    // read. Reveal that provider in Overview so its unavailable state cannot
+    // remain hidden behind the global loading indicator.
+    if ((!fetchEligible || state.kind !== "cold") && onReady !== null) {
+      onReady();
+    }
+  }, [fetchEligible, onReady, state.kind]);
 
   // Chip next to the name, single-provider tab only (Overview stays
   // condensed - same scoping the plan/tier line used before it moved into
@@ -1276,7 +1317,7 @@ function SingleProfileRateLimitProviderBlock({
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback:
               a per-provider icon there was redundant); only the single-provider
               detail tab keeps this one. */}
-          {variant === "popover-detail" ? (
+          {variant === "popover-detail" && fetchEligible ? (
             <RefreshIconButton
               onRefresh={refresh}
               label={`Refresh ${providerDisplayName(providerId)}`}
@@ -1297,12 +1338,14 @@ function SingleProfileRateLimitProviderBlock({
 function ProfileRateLimitProviderBlock({
   providerId,
   profiles,
+  fetchEligibility,
   variant,
   onReady,
   profileSelection,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly fetchEligibility: RateLimitFetchEligibility;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
@@ -1316,39 +1359,69 @@ function ProfileRateLimitProviderBlock({
     providerId,
     profiles,
   );
-  const rows = profiles.filter(profileLoggedInForUsage);
-  const targets = rows.map((profile) => ({
+  const targets = profiles.map((profile) => ({
     profile,
     profileId: rateLimitProfileId(profile),
+    fetchEligible: isRateLimitProfileFetchEligible(fetchEligibility, profile),
   }));
-  const queryOptions = providerRateLimitQueryOptions(providerId, null).options;
-  const queries = useHostQueriesWithResponseMap<
+  const refreshEligibleTargets = targets.filter(
+    (target) => target.fetchEligible,
+  );
+  const passiveTargets = targets.filter((target) => !target.fetchEligible);
+  const fetchEligibleQueries = useHostQueriesWithResponseMap<
     HostRpcRegistry,
     "host.getRateLimitUsage",
     ProviderRateLimitEnvelope
   >({
     client,
-    requests: targets.map((target) => {
+    requests: refreshEligibleTargets.map((target) => {
       const { method, params } = providerRateLimitQueryOptions(
         providerId,
         target.profileId,
+        true,
       );
       return { method, params };
     }),
     cacheKeyIdentity: undefined,
-    options: queryOptions,
+    options: providerRateLimitQueryOptions(providerId, null, true).options,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
+  });
+  const passiveQueries = useHostQueriesWithResponseMap<
+    HostRpcRegistry,
+    "host.getRateLimitUsage",
+    ProviderRateLimitEnvelope
+  >({
+    client,
+    requests: passiveTargets.map((target) => {
+      const { method, params } = providerRateLimitQueryOptions(
+        providerId,
+        target.profileId,
+        false,
+      );
+      return { method, params };
+    }),
+    cacheKeyIdentity: undefined,
+    options: providerRateLimitQueryOptions(providerId, null, false).options,
+    mapResponse: mapResponseToProviderRateLimitEnvelope,
+  });
+  const queries = targets.map((target) => {
+    const index = target.fetchEligible
+      ? refreshEligibleTargets.indexOf(target)
+      : passiveTargets.indexOf(target);
+    return target.fetchEligible
+      ? fetchEligibleQueries[index]
+      : passiveQueries[index];
   });
   const lane = rateLimitFetchLane(providerId);
   const isRefreshing =
     lane === "ephemeralProcess"
       ? draining
-      : queries.some((query) => query.isFetching);
+      : fetchEligibleQueries.some((query) => query.isFetching);
 
   const refresh = (): Promise<void> => {
     if (lane === "ephemeralProcess") {
       void enqueueRateLimitFetchBatch(
-        targets.map((target) => ({
+        refreshEligibleTargets.map((target) => ({
           providerId,
           accountContext: DEFAULT_ACCOUNT_CONTEXT,
           profileId: target.profileId,
@@ -1357,7 +1430,7 @@ function ProfileRateLimitProviderBlock({
       );
       return Promise.resolve();
     }
-    targets.forEach((target) => {
+    refreshEligibleTargets.forEach((target) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,
@@ -1377,23 +1450,6 @@ function ProfileRateLimitProviderBlock({
     if (onReady !== null) onReady();
   }, [onReady]);
 
-  if (rows.length === 0) {
-    return (
-      <div className="flex flex-col gap-2">
-        <ProviderGroupHeader
-          providerId={providerId}
-          variant={variant}
-          refresh={refresh}
-          isRefreshing={isRefreshing}
-        />
-        <RateLimitErrorMessage
-          message="No logged-in profiles."
-          reportContext={null}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col gap-2">
       <ProviderGroupHeader
@@ -1401,6 +1457,7 @@ function ProfileRateLimitProviderBlock({
         variant={variant}
         refresh={refresh}
         isRefreshing={isRefreshing}
+        refreshEligible={refreshEligibleTargets.length > 0}
       />
       <div className="flex flex-col gap-2">
         {targets.map((target, index) => {
@@ -1410,6 +1467,7 @@ function ProfileRateLimitProviderBlock({
               providerId={providerId}
               profile={target.profile}
               profileId={target.profileId}
+              fetchEligible={target.fetchEligible}
               active={activeProfileId === target.profileId}
               variant={variant}
               query={queries[index]}
@@ -1426,11 +1484,13 @@ function ProviderGroupHeader({
   variant,
   refresh,
   isRefreshing,
+  refreshEligible,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly variant: PopoverBlockVariant;
   readonly refresh: () => Promise<void>;
   readonly isRefreshing: boolean;
+  readonly refreshEligible: boolean;
 }): ReactNode {
   return (
     <div className="flex min-w-0 items-center justify-between gap-2">
@@ -1442,7 +1502,7 @@ function ProviderGroupHeader({
           {providerDisplayName(providerId)}
         </span>
       </div>
-      {variant === "popover-detail" ? (
+      {variant === "popover-detail" && refreshEligible ? (
         <RefreshIconButton
           onRefresh={refresh}
           label={`Refresh ${providerDisplayName(providerId)}`}
@@ -1457,6 +1517,7 @@ function RateLimitProviderProfileRow({
   providerId,
   profile,
   profileId,
+  fetchEligible,
   active,
   variant,
   query,
@@ -1464,6 +1525,7 @@ function RateLimitProviderProfileRow({
   readonly providerId: RateLimitProviderId;
   readonly profile: ProviderProfile;
   readonly profileId: string | null;
+  readonly fetchEligible: boolean;
   readonly active: boolean;
   readonly variant: PopoverBlockVariant;
   readonly query: {
@@ -1477,6 +1539,7 @@ function RateLimitProviderProfileRow({
     providerId,
     profileId,
     profile.usageUpdatedAt,
+    fetchEligible,
   );
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,

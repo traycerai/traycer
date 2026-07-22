@@ -77,6 +77,7 @@ export type AnalyticsHarness =
   | "devin"
   | "droid"
   | "grok"
+  | "hermes"
   | "kilocode"
   | "kimi"
   | "kiro"
@@ -86,7 +87,51 @@ export type AnalyticsHarness =
   | "qwen"
   | "traycer";
 
-export type AnalyticsNotificationCategory = "app-local" | "global" | "host";
+/** Product vocabulary only - never the internal host/app-local/global source
+ * seam. Callers pass `MergedNotificationRow.category`, already mapped at the
+ * projection boundary by `categoryForNotificationSource`. */
+export type AnalyticsNotificationCategory = "task" | "collaboration" | "system";
+
+/** Bounded count buckets for every notification-analytics count. `unknown`
+ * is legal only when an exact composite count cannot be formed (host
+ * summary unavailable) - never as a generic "didn't bother computing it"
+ * escape hatch. */
+export type AnalyticsCountBucket =
+  "unknown" | "0" | "1" | "2-5" | "6-20" | "21+";
+
+export type AnalyticsNotificationEntryPoint = Extract<
+  AnalyticsSource,
+  "direct_ui" | "notification"
+>;
+
+export type AnalyticsNotificationHostState = "exact" | "unknown";
+
+export type AnalyticsNotificationFilter =
+  "unread_only" | AnalyticsNotificationCategory;
+
+export type AnalyticsNotificationSection = "attention" | "recent";
+
+export type AnalyticsNotificationSurface = "center" | "toast" | "native";
+
+export type AnalyticsNotificationAcknowledgmentSource =
+  "explicit_action" | "activation";
+
+export type AnalyticsNotificationOutcome = "success" | "failure";
+
+/** Maps a count to one of the fixed buckets `0`, `1`, `2-5`, `6-20`, `21+`.
+ * Pass `null` when the exact composite count cannot be formed (e.g. the host
+ * summary is unavailable) to get `"unknown"` - never derive `"unknown"` from
+ * the numeric value itself. */
+export function analyticsCountBucket(
+  count: number | null,
+): AnalyticsCountBucket {
+  if (count === null) return "unknown";
+  if (count <= 0) return "0";
+  if (count === 1) return "1";
+  if (count <= 5) return "2-5";
+  if (count <= 20) return "6-20";
+  return "21+";
+}
 
 export type AnalyticsOnboardingStep =
   | "agent-guide"
@@ -115,6 +160,7 @@ export type AnalyticsProvider =
   | "devin"
   | "droid"
   | "grok"
+  | "hermes"
   | "kilocode"
   | "kimi"
   | "kiro"
@@ -146,6 +192,8 @@ export type AnalyticsSetting =
   | "quoteReplyEnabled"
   | "showGlobalResourceMonitor"
   | "showNavigatorResourceStats"
+  | "summonHotkeyChord"
+  | "summonHotkeyEnabled"
   | "terminalCursorBlink"
   | "terminalCursorStyle"
   | "terminalFontFamily"
@@ -275,10 +323,12 @@ export enum AnalyticsEvent {
   ShareRoleChanged = "share_role_changed",
   ShareAccessRevoked = "share_access_revoked",
   NotificationCenterOpened = "notification_center_opened",
-  NotificationActivated = "notification_activated",
+  NotificationFilterChanged = "notification_filter_changed",
+  NotificationActivationCompleted = "notification_activation_completed",
   NotificationMarkedRead = "notification_marked_read",
   NotificationsMarkedAllRead = "notifications_marked_all_read",
-  NotificationsCleared = "notifications_cleared",
+  NotificationPageLoaded = "notification_page_loaded",
+  NotificationNewRevealed = "notification_new_revealed",
   TerminalOpened = "terminal_opened",
   TerminalRenamed = "terminal_renamed",
   TerminalKilled = "terminal_killed",
@@ -586,16 +636,44 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ShareAccessRevoked]: {
     readonly target: "person" | "team";
   };
-  readonly [AnalyticsEvent.NotificationCenterOpened]: null;
-  readonly [AnalyticsEvent.NotificationActivated]: {
+  readonly [AnalyticsEvent.NotificationCenterOpened]: {
+    readonly entry_point: AnalyticsNotificationEntryPoint;
+    readonly host_state: AnalyticsNotificationHostState;
+    readonly attention_bucket: AnalyticsCountBucket;
+    readonly unread_bucket: AnalyticsCountBucket;
+  };
+  readonly [AnalyticsEvent.NotificationFilterChanged]: {
+    readonly filter: AnalyticsNotificationFilter;
+    readonly enabled: boolean;
+  };
+  readonly [AnalyticsEvent.NotificationActivationCompleted]: {
     readonly category: AnalyticsNotificationCategory;
+    readonly section: AnalyticsNotificationSection;
+    readonly surface: AnalyticsNotificationSurface;
+    readonly outcome: AnalyticsNotificationOutcome;
   };
   readonly [AnalyticsEvent.NotificationMarkedRead]: {
     readonly category: AnalyticsNotificationCategory;
+    readonly acknowledgment_source: AnalyticsNotificationAcknowledgmentSource;
   };
-  readonly [AnalyticsEvent.NotificationsMarkedAllRead]: null;
-  readonly [AnalyticsEvent.NotificationsCleared]: {
-    readonly scope: "all" | "read";
+  readonly [AnalyticsEvent.NotificationsMarkedAllRead]: {
+    readonly affected_count_bucket: AnalyticsCountBucket;
+  };
+  readonly [AnalyticsEvent.NotificationPageLoaded]:
+    | {
+        readonly section: AnalyticsNotificationSection;
+        readonly outcome: "success";
+        readonly result_count_bucket: AnalyticsCountBucket;
+        readonly has_more: boolean;
+      }
+    | {
+        readonly section: AnalyticsNotificationSection;
+        readonly outcome: "failure";
+        readonly result_count_bucket: null;
+        readonly has_more: null;
+      };
+  readonly [AnalyticsEvent.NotificationNewRevealed]: {
+    readonly count_bucket: AnalyticsCountBucket;
   };
   readonly [AnalyticsEvent.TerminalOpened]: SourceProperties & {
     readonly kind: "agent" | "shell";
@@ -757,6 +835,7 @@ const ANALYTICS_HARNESSES = new Set<string>([
   "devin",
   "droid",
   "grok",
+  "hermes",
   "kilocode",
   "kimi",
   "kiro",
@@ -776,6 +855,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "devin",
   "droid",
   "grok",
+  "hermes",
   "kilocode",
   "kimi",
   "kiro",
@@ -871,6 +951,51 @@ const ANALYTICS_TARGETS = new Set<string>([
   "task",
   "terminal",
   "terminal_agent",
+]);
+
+const ANALYTICS_COUNT_BUCKETS = new Set<string>([
+  "unknown",
+  "0",
+  "1",
+  "2-5",
+  "6-20",
+  "21+",
+]);
+
+/** `unknown` is reserved for a composite count that genuinely cannot be
+ * formed (e.g. the host summary is unavailable). A completed page load and a
+ * revealed arrival count are always derived from local, exact data, so
+ * neither may report `unknown`. */
+const ANALYTICS_EXACT_COUNT_BUCKETS = new Set<string>(
+  [...ANALYTICS_COUNT_BUCKETS].filter((bucket) => bucket !== "unknown"),
+);
+
+const ANALYTICS_NOTIFICATION_CATEGORIES = new Set<string>([
+  "task",
+  "collaboration",
+  "system",
+]);
+
+const ANALYTICS_NOTIFICATION_ENTRY_POINTS = new Set<string>([
+  "direct_ui",
+  "notification",
+]);
+
+const ANALYTICS_NOTIFICATION_HOST_STATES = new Set<string>([
+  "exact",
+  "unknown",
+]);
+
+const ANALYTICS_NOTIFICATION_FILTERS = new Set<string>([
+  "unread_only",
+  "task",
+  "collaboration",
+  "system",
+]);
+
+const ANALYTICS_NOTIFICATION_ACKNOWLEDGMENT_SOURCES = new Set<string>([
+  "explicit_action",
+  "activation",
 ]);
 
 const ANALYTICS_EVENTS = new Set<string>(Object.values(AnalyticsEvent));
@@ -1068,13 +1193,33 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["target", "role"],
   ),
   ...eventKeyEntries(
-    [
-      AnalyticsEvent.NotificationActivated,
-      AnalyticsEvent.NotificationMarkedRead,
-    ],
-    ["category"],
+    [AnalyticsEvent.NotificationCenterOpened],
+    ["entry_point", "host_state", "attention_bucket", "unread_bucket"],
   ),
-  ...eventKeyEntries([AnalyticsEvent.NotificationsCleared], ["scope"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationFilterChanged],
+    ["filter", "enabled"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationActivationCompleted],
+    ["category", "section", "surface", "outcome"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationMarkedRead],
+    ["category", "acknowledgment_source"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationsMarkedAllRead],
+    ["affected_count_bucket"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationPageLoaded],
+    ["section", "outcome", "result_count_bucket", "has_more"],
+  ),
+  ...eventKeyEntries(
+    [AnalyticsEvent.NotificationNewRevealed],
+    ["count_bucket"],
+  ),
   ...eventKeyEntries([AnalyticsEvent.TerminalOpened], ["source", "kind"]),
   ...eventKeyEntries(
     [AnalyticsEvent.TerminalRenamed, AnalyticsEvent.TerminalKilled],
@@ -1123,8 +1268,6 @@ const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
   AnalyticsEvent.CommentResolved,
   AnalyticsEvent.CommentReopened,
   AnalyticsEvent.CommentDeleted,
-  AnalyticsEvent.NotificationCenterOpened,
-  AnalyticsEvent.NotificationsMarkedAllRead,
   AnalyticsEvent.VoiceDictationCancelled,
   AnalyticsEvent.UpdateDownloadSucceeded,
 ]);
@@ -1153,9 +1296,16 @@ export function analyticsEventContractIsComplete(): boolean {
 const EXACT_PROPERTY_VALUES: {
   readonly [key: string]: ReadonlySet<string> | undefined;
 } = {
-  category: new Set(["app-local", "global", "host"]),
+  acknowledgment_source: ANALYTICS_NOTIFICATION_ACKNOWLEDGMENT_SOURCES,
+  affected_count_bucket: ANALYTICS_COUNT_BUCKETS,
+  attention_bucket: ANALYTICS_COUNT_BUCKETS,
+  category: ANALYTICS_NOTIFICATION_CATEGORIES,
   command: ANALYTICS_COMMANDS,
   context: new Set(["personal", "team"]),
+  count_bucket: ANALYTICS_COUNT_BUCKETS,
+  entry_point: ANALYTICS_NOTIFICATION_ENTRY_POINTS,
+  filter: ANALYTICS_NOTIFICATION_FILTERS,
+  host_state: ANALYTICS_NOTIFICATION_HOST_STATES,
   operation: new Set([
     "ambient_drift",
     "api_key",
@@ -1184,6 +1334,7 @@ const EXACT_PROPERTY_VALUES: {
   surface: new Set(["chat", "draft"]),
   theme: ANALYTICS_THEMES,
   to: ANALYTICS_HARNESSES,
+  unread_bucket: ANALYTICS_COUNT_BUCKETS,
   workspace_kind: new Set(["local", "unknown", "worktree"]),
 };
 
@@ -1196,6 +1347,11 @@ function eventValueEntries(
 }
 
 const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
+  ...eventValueEntries(
+    [AnalyticsEvent.NotificationNewRevealed],
+    "count_bucket",
+    ANALYTICS_EXACT_COUNT_BUCKETS,
+  ),
   ...eventValueEntries(
     [AnalyticsEvent.OnboardingStarted],
     "mode",
@@ -1266,9 +1422,25 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["all", "file"]),
   ),
   ...eventValueEntries(
-    [AnalyticsEvent.NotificationsCleared],
-    "scope",
-    new Set(["all", "read"]),
+    [
+      AnalyticsEvent.NotificationActivationCompleted,
+      AnalyticsEvent.NotificationPageLoaded,
+    ],
+    "section",
+    new Set(["attention", "recent"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.NotificationActivationCompleted],
+    "surface",
+    new Set(["center", "toast", "native"]),
+  ),
+  ...eventValueEntries(
+    [
+      AnalyticsEvent.NotificationActivationCompleted,
+      AnalyticsEvent.NotificationPageLoaded,
+    ],
+    "outcome",
+    new Set(["success", "failure"]),
   ),
   ...eventValueEntries(
     [
@@ -1328,6 +1500,7 @@ const BOOLEAN_PROPERTY_KEYS = new Set<string>([
   "cascade",
   "cleanup_worktrees",
   "customized",
+  "enabled",
   "has_mention",
   "include_history",
   "restored_tabs",
@@ -1353,6 +1526,8 @@ function analyticsPropertyHasValidator(
   return (
     key === "blocker" ||
     key === "status" ||
+    key === "result_count_bucket" ||
+    key === "has_more" ||
     BOOLEAN_PROPERTY_KEYS.has(key) ||
     COUNT_PROPERTY_KEYS.has(key) ||
     EVENT_EXACT_PROPERTY_VALUES.has(`${event}:${key}`) ||
@@ -1383,6 +1558,14 @@ function isAnalyticsPropertyValue(
       );
     }
     return typeof value === "string" && ANALYTICS_BLOCKERS.has(value);
+  }
+  if (key === "result_count_bucket") {
+    if (value === null) return event === AnalyticsEvent.NotificationPageLoaded;
+    return typeof value === "string" && ANALYTICS_COUNT_BUCKETS.has(value);
+  }
+  if (key === "has_more") {
+    if (value === null) return event === AnalyticsEvent.NotificationPageLoaded;
+    return typeof value === "boolean";
   }
   if (key === "status") return isAnalyticsStatus(value);
   if (BOOLEAN_PROPERTY_KEYS.has(key)) return typeof value === "boolean";
@@ -1416,8 +1599,29 @@ function analyticsPropertiesAreRelationallyValid(
       Number(properties.succeeded_count) + Number(properties.failed_count)
     );
   }
+  if (event === AnalyticsEvent.NotificationPageLoaded) {
+    return (
+      (properties.outcome === "success" &&
+        typeof properties.result_count_bucket === "string" &&
+        ANALYTICS_EXACT_COUNT_BUCKETS.has(properties.result_count_bucket) &&
+        typeof properties.has_more === "boolean") ||
+      (properties.outcome === "failure" &&
+        properties.result_count_bucket === null &&
+        properties.has_more === null)
+    );
+  }
   return true;
 }
+
+const NOTIFICATION_STRICT_EVENTS = new Set<AnalyticsEvent>([
+  AnalyticsEvent.NotificationCenterOpened,
+  AnalyticsEvent.NotificationFilterChanged,
+  AnalyticsEvent.NotificationActivationCompleted,
+  AnalyticsEvent.NotificationMarkedRead,
+  AnalyticsEvent.NotificationsMarkedAllRead,
+  AnalyticsEvent.NotificationPageLoaded,
+  AnalyticsEvent.NotificationNewRevealed,
+]);
 
 export function sanitizeAnalyticsProperties(
   event: AnalyticsEvent,
@@ -1426,6 +1630,18 @@ export function sanitizeAnalyticsProperties(
   const record: Record<string, unknown> = { ...properties };
   const expectedKeys = eventPropertyKeys(event);
   if (expectedKeys === null) return null;
+  // The notification event family rejects rather than silently strips: a
+  // property outside its exact allowlist is a caller bug (e.g. an
+  // accidentally attached feed/host identifier), not extra data to discard
+  // quietly. Other events keep the historical strip-only behavior other call
+  // sites already rely on (see "strips identifiers, paths, content, queries,
+  // and raw errors at runtime").
+  if (
+    NOTIFICATION_STRICT_EVENTS.has(event) &&
+    Object.keys(record).length !== expectedKeys.length
+  ) {
+    return null;
+  }
   if (
     expectedKeys.some(
       (key) =>

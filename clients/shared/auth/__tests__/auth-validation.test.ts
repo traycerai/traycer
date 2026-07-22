@@ -1,29 +1,23 @@
 /**
- * Tests for the boundary auth-validation helpers in `shared/auth/`.
- *
- * The narrow-profile path (`validateAuthTokenViaHttp`) is exercised
- * indirectly through runner-host implementations elsewhere; this suite
- * pins the new full-identity path (`validateAuthTokenIdentityViaHttp`),
- * which returns a complete `AuthenticatedUser` so the client
- * `RequestContextProvider` can mint a context whose identity shape
- * matches host-minted contexts. Spec: aca3ac84 §1.10 / §3.1 / §4
- * "Token validation/refresh preserves full AuthenticatedUser when minting
- * or updating client contexts."
+ * Tests for the abort-aware boundary auth helpers in `shared/auth/`:
+ * `exchangeCodeForTokens` (PKCE code → token pair, single-attempt, no retry) and
+ * `refreshOnceAbortable` (the single-attempt, ~10s, lock-budgeted refresh the
+ * credentials mutation store injects as its `RefreshFn` — the ONLY /auth/refresh
+ * spend primitive; its status mapping + single-attempt budget are pinned below).
+ * The access-only `validateAuthTokenIdentity*` validators are consumed (and
+ * mocked) by the CLI/runner-host store paths; their live `/api/v3/user` behaviour
+ * runs against a faked fetch in the desktop file-token-store and gui-app
+ * auth-service suites.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  AUTH_FETCH_MAX_ATTEMPTS,
   exchangeCodeForTokens,
-  refreshAuthTokenViaHttp,
-  validateAuthTokenIdentityViaHttp,
-  type AuthIdentityValidationResult,
+  refreshOnceAbortable,
 } from "../auth-validation";
-import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 
 const AUTHN_BASE_URL = "https://authn.example.test";
-const USER_ENDPOINT = `${AUTHN_BASE_URL}/api/v3/user`;
-const REFRESH_ENDPOINT = `${AUTHN_BASE_URL}/api/v3/auth/refresh`;
 const EXCHANGE_ENDPOINT = `${AUTHN_BASE_URL}/api/v3/auth/exchange-code`;
+const REFRESH_ENDPOINT = `${AUTHN_BASE_URL}/api/v3/auth/refresh`;
 
 interface MockFetchCall {
   readonly url: string;
@@ -73,11 +67,6 @@ function installMockFetch(specs: ReadonlyArray<MockSpec>): MockFetchCall[] {
   return calls;
 }
 
-function serializeAuthenticatedUserForHttp(): unknown {
-  const user = createAuthenticatedUserFixture({});
-  return JSON.parse(JSON.stringify(user));
-}
-
 // A real `Response` (so it stays `Response`-typed with no casts) whose body read
 // rejects with a `TimeoutError` - mirrors `AbortSignal.timeout` firing during
 // `response.json()`, after the status/headers have already arrived.
@@ -99,306 +88,6 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.useRealTimers();
-});
-
-describe("validateAuthTokenIdentityViaHttp - full AuthenticatedUser", () => {
-  it("returns the parsed full AuthenticatedUser on a successful lookup", async () => {
-    const userBody = serializeAuthenticatedUserForHttp();
-    installMockFetch([{ status: 200, body: userBody }]);
-
-    const result = await validateAuthTokenIdentityViaHttp(
-      AUTHN_BASE_URL,
-      "bearer-token",
-      "bearer-token-refresh",
-    );
-
-    expect(result.kind).toBe("valid");
-    if (result.kind !== "valid") {
-      throw new Error("expected valid result");
-    }
-    expect(result.user.user.id).toBe("user-fixture-1");
-    expect(result.user.user.providerHandle).toBe("testuser");
-    expect(result.user.userSubscription.id).toBe("sub-fixture-1");
-    expect(result.user.payAsYouGoUsage.allowPayAsYouGo).toBe(false);
-    expect(result.user.teamSubscriptions).toEqual([]);
-    expect(
-      (result as AuthIdentityValidationResult & { refreshedToken?: string })
-        .refreshedToken,
-    ).toBeUndefined();
-  });
-
-  it("calls /api/v3/user with the supplied bearer", async () => {
-    installMockFetch([
-      { status: 200, body: serializeAuthenticatedUserForHttp() },
-    ]);
-
-    await validateAuthTokenIdentityViaHttp(
-      AUTHN_BASE_URL,
-      "bearer-1",
-      "bearer-1-refresh",
-    );
-
-    expect(calls[0].url).toBe(USER_ENDPOINT);
-    expect(calls[0].method).toBe("GET");
-    expect(calls[0].authorization).toBe("Bearer bearer-1");
-  });
-
-  it("refreshes once on initial 401 and reports the rotated bearer", async () => {
-    const userBody = serializeAuthenticatedUserForHttp();
-    installMockFetch([
-      { status: 401, body: { error: "Unauthorized" } },
-      {
-        status: 200,
-        body: { token: "rotated-bearer", refreshToken: "rotated-refresh" },
-      },
-      { status: 200, body: userBody },
-    ]);
-
-    const result = await validateAuthTokenIdentityViaHttp(
-      AUTHN_BASE_URL,
-      "stale-bearer",
-      "stale-bearer-refresh",
-    );
-
-    expect(result.kind).toBe("valid");
-    if (result.kind !== "valid") {
-      throw new Error("expected valid result");
-    }
-    expect(result.user.user.id).toBe("user-fixture-1");
-    expect(
-      (result as AuthIdentityValidationResult & { refreshedToken?: string })
-        .refreshedToken,
-    ).toBe("rotated-bearer");
-
-    expect(calls).toHaveLength(3);
-    expect(calls[0].url).toBe(USER_ENDPOINT);
-    expect(calls[0].authorization).toBe("Bearer stale-bearer");
-    expect(calls[1].url).toBe(REFRESH_ENDPOINT);
-    expect(calls[1].method).toBe("POST");
-    expect(calls[1].authorization).toBe("Bearer stale-bearer");
-    expect(calls[2].url).toBe(USER_ENDPOINT);
-    expect(calls[2].authorization).toBe("Bearer rotated-bearer");
-  });
-
-  it("returns rejected when both initial lookup and refresh are unauthorized", async () => {
-    installMockFetch([
-      { status: 401, body: { error: "Unauthorized" } },
-      { status: 401, body: { error: "Unauthorized" } },
-    ]);
-
-    const result = await validateAuthTokenIdentityViaHttp(
-      AUTHN_BASE_URL,
-      "expired",
-      "expired-refresh",
-    );
-
-    expect(result.kind).toBe("rejected");
-  });
-
-  it("returns network-error when transport fails after exhausting retries", async () => {
-    vi.useFakeTimers();
-    let attempts = 0;
-    globalThis.fetch = (async (): Promise<Response> => {
-      attempts += 1;
-      throw new TypeError("network failure");
-    }) as typeof fetch;
-
-    const pending = validateAuthTokenIdentityViaHttp(
-      AUTHN_BASE_URL,
-      "bearer",
-      "bearer-refresh",
-    );
-    await vi.runAllTimersAsync();
-    const result = await pending;
-
-    expect(result.kind).toBe("network-error");
-    // The initial user lookup and the follow-up refresh each exhaust the cap,
-    // and the whole thing settles in bounded time instead of hanging.
-    expect(attempts).toBe(AUTH_FETCH_MAX_ATTEMPTS * 2);
-  });
-
-  it("time-boxes each request with an AbortSignal and maps a timeout to network-error", async () => {
-    vi.useFakeTimers();
-    globalThis.fetch = (async (
-      _input: RequestInfo | URL,
-      init: RequestInit | undefined,
-    ): Promise<Response> => {
-      calls.push({
-        url: USER_ENDPOINT,
-        method: init?.method ?? "GET",
-        authorization: null,
-        hasSignal: init?.signal instanceof AbortSignal,
-      });
-      // Mirror what a fired `AbortSignal.timeout` throws into `fetch`.
-      throw new DOMException("The operation timed out.", "TimeoutError");
-    }) as typeof fetch;
-
-    const pending = validateAuthTokenIdentityViaHttp(
-      AUTHN_BASE_URL,
-      "bearer",
-      "bearer-refresh",
-    );
-    await vi.runAllTimersAsync();
-    const result = await pending;
-
-    expect(result.kind).toBe("network-error");
-    expect(calls.length).toBeGreaterThan(0);
-    expect(calls.every((call) => call.hasSignal)).toBe(true);
-  });
-
-  it("retries a transient user-lookup failure and then succeeds", async () => {
-    vi.useFakeTimers();
-    installMockFetch([
-      { status: 503, body: { error: "unavailable" } },
-      { status: 200, body: serializeAuthenticatedUserForHttp() },
-    ]);
-
-    const pending = validateAuthTokenIdentityViaHttp(
-      AUTHN_BASE_URL,
-      "bearer",
-      "bearer-refresh",
-    );
-    await vi.runAllTimersAsync();
-    const result = await pending;
-
-    expect(result.kind).toBe("valid");
-    // One transient 5xx retried straight into a success - no refresh round trip.
-    expect(calls).toHaveLength(2);
-    expect(calls.every((call) => call.url === USER_ENDPOINT)).toBe(true);
-    expect(calls.every((call) => call.hasSignal)).toBe(true);
-  });
-
-  it("retries a user lookup whose body read times out (mid-read abort maps to network-error)", async () => {
-    vi.useFakeTimers();
-    let attempts = 0;
-    globalThis.fetch = (async (): Promise<Response> => {
-      attempts += 1;
-      if (attempts === 1) {
-        return responseWithAbortingBody(200);
-      }
-      return new Response(JSON.stringify(serializeAuthenticatedUserForHttp()), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
-
-    const pending = validateAuthTokenIdentityViaHttp(
-      AUTHN_BASE_URL,
-      "bearer",
-      "bearer-refresh",
-    );
-    await vi.runAllTimersAsync();
-    const result = await pending;
-
-    // A timeout during response.json() (after headers) is transient, so the
-    // lookup retries and succeeds instead of collapsing to a `rejected` sign-out.
-    expect(result.kind).toBe("valid");
-    expect(attempts).toBe(2);
-    vi.useRealTimers();
-  });
-
-  it("returns rejected when the response body fails AuthenticatedUser parsing", async () => {
-    installMockFetch([
-      { status: 200, body: { user: { id: "u" }, partial: true } },
-    ]);
-
-    const result = await validateAuthTokenIdentityViaHttp(
-      AUTHN_BASE_URL,
-      "bearer",
-      "bearer-refresh",
-    );
-
-    expect(result.kind).toBe("rejected");
-  });
-});
-
-describe("refreshAuthTokenViaHttp - status mapping", () => {
-  it("maps a 409 (refresh grace window in progress) to network-error and retries", async () => {
-    vi.useFakeTimers();
-    installMockFetch([{ status: 409, body: { error: "in progress" } }]);
-
-    const pending = refreshAuthTokenViaHttp(
-      AUTHN_BASE_URL,
-      "stale-bearer",
-      "stale-refresh",
-    );
-    await vi.runAllTimersAsync();
-    const result = await pending;
-
-    // A concurrent refresher is mid-rotation: transient/retriable, NOT a dead
-    // credential. Must NOT downgrade to `rejected` (which signs the GUI out) -
-    // the bounded retry re-drives to land on the winner's replayed pair.
-    expect(result.kind).toBe("network-error");
-    expect(calls).toHaveLength(AUTH_FETCH_MAX_ATTEMPTS);
-    expect(calls[0].url).toBe(REFRESH_ENDPOINT);
-    expect(calls[0].method).toBe("POST");
-  });
-
-  it("maps a 401 to rejected", async () => {
-    installMockFetch([{ status: 401, body: { error: "Unauthorized" } }]);
-
-    const result = await refreshAuthTokenViaHttp(
-      AUTHN_BASE_URL,
-      "stale-bearer",
-      "stale-refresh",
-    );
-
-    expect(result.kind).toBe("rejected");
-  });
-
-  it("returns the rotated pair on success", async () => {
-    installMockFetch([
-      {
-        status: 200,
-        body: { token: "rotated-bearer", refreshToken: "rotated-refresh" },
-      },
-    ]);
-
-    const result = await refreshAuthTokenViaHttp(
-      AUTHN_BASE_URL,
-      "stale-bearer",
-      "stale-refresh",
-    );
-
-    expect(result.kind).toBe("refreshed");
-    if (result.kind !== "refreshed") {
-      throw new Error("expected refreshed result");
-    }
-    expect(result.token).toBe("rotated-bearer");
-    expect(result.refreshToken).toBe("rotated-refresh");
-  });
-
-  it("retries a refresh whose body read times out (mid-read abort maps to network-error)", async () => {
-    vi.useFakeTimers();
-    let attempts = 0;
-    globalThis.fetch = (async (): Promise<Response> => {
-      attempts += 1;
-      if (attempts === 1) {
-        return responseWithAbortingBody(200);
-      }
-      return new Response(
-        JSON.stringify({
-          token: "rotated-bearer",
-          refreshToken: "rotated-refresh",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    }) as typeof fetch;
-
-    const pending = refreshAuthTokenViaHttp(
-      AUTHN_BASE_URL,
-      "stale-bearer",
-      "stale-refresh",
-    );
-    await vi.runAllTimersAsync();
-    const result = await pending;
-
-    // A mid-read timeout on a 200 is transient, not a bad body: it retries into
-    // the rotated pair rather than downgrading to `rejected` (a sign-out).
-    expect(result.kind).toBe("refreshed");
-    expect(attempts).toBe(2);
-    vi.useRealTimers();
-  });
 });
 
 describe("exchangeCodeForTokens - timeout without retry", () => {
@@ -491,5 +180,127 @@ describe("exchangeCodeForTokens - timeout without retry", () => {
     // A SyntaxError from response.json() is NOT an abort/timeout, so it stays a
     // terminal `rejected` - proving the transient/terminal distinction holds.
     expect(result.kind).toBe("rejected");
+  });
+});
+
+describe("refreshOnceAbortable", () => {
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+    calls = [];
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("returns network-error when the caller supplies a pre-aborted AbortSignal", async () => {
+    // Production currently only passes `signal: null` (FileTokenStore + mock),
+    // so the `AbortSignal.any([caller, timeout])` combine branch is otherwise
+    // dormant. A pre-aborted signal exercises that path: fetch throws →
+    // network-error (nothing spent).
+    let fetchCalls = 0;
+    globalThis.fetch = (async (
+      _input: RequestInfo | URL,
+      init: RequestInit | undefined,
+    ): Promise<Response> => {
+      fetchCalls += 1;
+      // Mirror real fetch: a pre-aborted signal rejects immediately.
+      if (init?.signal?.aborted === true) {
+        throw new DOMException("The operation was aborted.", "AbortError");
+      }
+      return new Response(JSON.stringify({ token: "t", refreshToken: "r" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const result = await refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "access",
+      refreshToken: "refresh",
+      signal: AbortSignal.abort(),
+    });
+
+    expect(result).toEqual({ kind: "network-error" });
+    // The aborted signal may short-circuit before fetch is invoked, or fetch
+    // may be called and reject — either way nothing is spent (no refreshed pair).
+    expect(fetchCalls === 0 || fetchCalls === 1).toBe(true);
+  });
+
+  it("returns the rotated pair on a 200 — a single POST, one spend", async () => {
+    installMockFetch([
+      {
+        status: 200,
+        body: { token: "rotated-bearer", refreshToken: "rotated-refresh" },
+      },
+    ]);
+
+    const result = await refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "stale-bearer",
+      refreshToken: "stale-refresh",
+      signal: null,
+    });
+
+    expect(result).toEqual({
+      kind: "refreshed",
+      token: "rotated-bearer",
+      refreshToken: "rotated-refresh",
+    });
+    // Exactly one POST to /auth/refresh — the single-spend budget.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(REFRESH_ENDPOINT);
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].authorization).toBe("Bearer stale-bearer");
+  });
+
+  it("maps a 409 refresh-grace race to network-error WITHOUT retrying", async () => {
+    // A 409 means a concurrent refresher won the grace window: transient
+    // (retriable under a FRESH lock), NOT a dead credential — it must map to
+    // network-error, never `rejected` (which would sign the session out). And
+    // unlike the retired multi-attempt helper, this single-attempt primitive must
+    // NOT re-POST: a retry inside the lock would blow the lock-hold budget.
+    installMockFetch([{ status: 409, body: { error: "in progress" } }]);
+
+    const result = await refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "stale-bearer",
+      refreshToken: "stale-refresh",
+      signal: null,
+    });
+
+    expect(result).toEqual({ kind: "network-error" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("maps a 401 to rejected (dead refresh credential) in a single attempt", async () => {
+    installMockFetch([{ status: 401, body: { error: "Unauthorized" } }]);
+
+    const result = await refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "stale-bearer",
+      refreshToken: "dead-refresh",
+      signal: null,
+    });
+
+    expect(result).toEqual({ kind: "rejected" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("makes exactly one attempt on a transient 5xx (no retry → no double-spend)", async () => {
+    // installMockFetch replays the last spec for every call, so a retry would
+    // surface as calls.length > 1. The single-attempt property is what keeps a
+    // refresh inside the lock-hold budget.
+    installMockFetch([{ status: 503, body: { error: "unavailable" } }]);
+
+    const result = await refreshOnceAbortable({
+      authnBaseUrl: AUTHN_BASE_URL,
+      token: "stale-bearer",
+      refreshToken: "stale-refresh",
+      signal: null,
+    });
+
+    expect(result).toEqual({ kind: "network-error" });
+    expect(calls).toHaveLength(1);
   });
 });

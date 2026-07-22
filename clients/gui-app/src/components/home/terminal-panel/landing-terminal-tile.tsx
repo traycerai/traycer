@@ -194,6 +194,7 @@ function LandingTerminalTileLive(props: {
             // Focus moves here only through explicit gestures, routed via the
             // terminal-focus registry by the panel.
             shouldFocusOnActivePane={false}
+            registerImperativeFocus
             findTargetId={null}
             // Mirrors the registry's linger rule: while the session is live its
             // handle outlives this unmount (tab switch away from the landing
