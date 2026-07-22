@@ -899,7 +899,13 @@ function TabStripEndDropIndicator(props: { readonly visible: boolean }) {
   );
 }
 
-function TabIcon(props: {
+/**
+ * Live tile icon (chat progress spinner / harness brand / static kind glyph,
+ * with diff + blank fallbacks). Exported so the mobile current-tile bar
+ * (`epic-canvas/mobile/mobile-current-tile-bar.tsx`) renders the identical icon
+ * as the desktop tab strip instead of duplicating the dispatch.
+ */
+export function TabIcon(props: {
   readonly epicId: string;
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
