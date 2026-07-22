@@ -2,10 +2,13 @@ import { type ReactNode } from "react";
 import { Menu } from "lucide-react";
 import { useMatch, useRouterState } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
+import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
+import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { isHistoryPath } from "@/stores/tabs/kinds/history";
 import { isSettingsPath } from "@/stores/tabs/kinds/settings";
 
@@ -18,6 +21,9 @@ import { isSettingsPath } from "@/stores/tabs/kinds/settings";
 export function MobileAppHeader(): ReactNode {
   const setNavOpen = useMobileNavStore((state) => state.setOpen);
   const rightActions = useMobileHeaderStore((state) => state.rightActions);
+  const showGlobalResourceMonitor = useSettingsStore(
+    (state) => state.showGlobalResourceMonitor,
+  );
   const title = useMobileHeaderTitle();
   return (
     <header
@@ -43,9 +49,18 @@ export function MobileAppHeader(): ReactNode {
       >
         {title}
       </span>
-      {/* Right slot: the active route (e.g. the epic view) contributes its own
-          actions via the mobile-header store. Empty on surfaces that add none. */}
-      <div className="flex shrink-0 items-center gap-1">{rightActions}</div>
+      {/* Right cluster: global status controls sit parallel to the hamburger,
+          mirroring the desktop header's rate-limit + resource-monitor gating
+          (navDisabled never applies here - MobileAppHeader only renders for the
+          "app" variant). They come before the route-provided actions so a
+          route's own controls (e.g. the epic overflow) land outermost. */}
+      <div className="flex shrink-0 items-center gap-1">
+        <RateLimitIconButton />
+        {showGlobalResourceMonitor ? (
+          <ResourceMonitorPopover className={undefined} />
+        ) : null}
+        {rightActions}
+      </div>
     </header>
   );
 }

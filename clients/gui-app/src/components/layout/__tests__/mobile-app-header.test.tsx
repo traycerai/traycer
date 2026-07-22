@@ -8,11 +8,27 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+
+// The real rate-limit / resource-monitor controls pull host + stream
+// providers; stub them to their accessible trigger so the header renders in
+// this minimal harness while the switch on the resource-monitor toggle stays
+// observable.
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => (
+    <button type="button" aria-label="Usage limits" />
+  ),
+}));
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => (
+    <button type="button" aria-label="Resource monitor" />
+  ),
+}));
 
 function renderAt(path: string) {
   const rootRoute = createRootRoute({
@@ -47,6 +63,7 @@ describe("MobileAppHeader", () => {
     useMobileNavStore.setState({ open: false });
     useMobileHeaderStore.setState({ rightActions: null });
     useEpicCanvasStore.setState({ tabsById: {} });
+    useSettingsStore.setState({ showGlobalResourceMonitor: false });
   });
   afterEach(() => {
     cleanup();
@@ -88,6 +105,29 @@ describe("MobileAppHeader", () => {
     expect(
       (await screen.findByTestId("mobile-header-title")).textContent,
     ).toBe("Wire up billing");
+  });
+
+  it("always renders the rate-limit control", async () => {
+    renderAt("/");
+    expect(
+      await screen.findByRole("button", { name: "Usage limits" }),
+    ).not.toBeNull();
+  });
+
+  it("shows the resource monitor only when the global toggle is on", async () => {
+    useSettingsStore.setState({ showGlobalResourceMonitor: true });
+    renderAt("/");
+    expect(
+      await screen.findByRole("button", { name: "Resource monitor" }),
+    ).not.toBeNull();
+
+    cleanup();
+    useSettingsStore.setState({ showGlobalResourceMonitor: false });
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "Resource monitor" }),
+    ).toBeNull();
   });
 
   it("renders route-contributed right actions from the slot store", async () => {
