@@ -1,11 +1,5 @@
-import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,6 +14,11 @@ import {
 import { createRegistryClient } from "../client";
 import type { RegistryTransport } from "../client";
 import { CliError } from "../../runner/errors";
+import {
+  closeFaultServer,
+  sha256,
+  startFaultServer,
+} from "./fault-server-test-helpers";
 
 const manifestUrlMock = vi.hoisted(() => ({
   url: "https://registry.example.test/versions.json",
@@ -70,49 +69,6 @@ afterAll(async () => {
   );
   rmSync(tmpRoot, { recursive: true, force: true });
 });
-
-async function startFaultServer(
-  handler: (request: IncomingMessage, response: ServerResponse) => void,
-): Promise<string> {
-  const server = createServer(handler);
-  faultServers.push(server);
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error): void => {
-      server.off("listening", onListening);
-      reject(error);
-    };
-    const onListening = (): void => {
-      server.off("error", onError);
-      resolve();
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(0, "127.0.0.1");
-  });
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("fault server did not expose a TCP address");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function closeFaultServer(server: Server): Promise<void> {
-  if (!server.listening) return;
-  await new Promise<void>((resolve, reject) => {
-    server.closeAllConnections();
-    server.close((error) => {
-      if (error === undefined) {
-        resolve();
-        return;
-      }
-      reject(error);
-    });
-  });
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 function faultManifest(baseUrl: string) {
   return JSON.stringify({
@@ -230,7 +186,7 @@ describe("registry client", () => {
     });
     const baseUrl = await startFaultServer(() => {
       if (requestReceived !== null) requestReceived();
-    });
+    }, faultServers);
     manifestUrlMock.url = `${baseUrl}/versions.json`;
     const progress: string[] = [];
     let desktopInactivityExpired = false;
@@ -301,7 +257,7 @@ describe("registry client", () => {
       if (request.url === "/archive.minisig") {
         if (signatureRequested !== null) signatureRequested();
       }
-    });
+    }, faultServers);
     manifestUrlMock.url = `${baseUrl}/versions.json`;
     const progress: string[] = [];
     let desktopInactivityExpired = false;

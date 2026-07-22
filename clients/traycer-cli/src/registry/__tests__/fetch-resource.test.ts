@@ -1,10 +1,4 @@
-import { createHash } from "node:crypto";
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import type { Server } from "node:http";
 import {
   mkdtempSync,
   readFileSync,
@@ -22,6 +16,11 @@ import {
   waitForWriterDrain,
 } from "../fetch-resource";
 import { CliError } from "../../runner/errors";
+import {
+  closeFaultServer,
+  sha256,
+  startFaultServer,
+} from "./fault-server-test-helpers";
 
 const RESOURCE_URL = "https://registry.example.test/host.tar.gz";
 
@@ -42,49 +41,6 @@ afterEach(async () => {
   );
   rmSync(workDir, { recursive: true, force: true });
 });
-
-async function startFaultServer(
-  handler: (request: IncomingMessage, response: ServerResponse) => void,
-): Promise<string> {
-  const server = createServer(handler);
-  faultServers.push(server);
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error): void => {
-      server.off("listening", onListening);
-      reject(error);
-    };
-    const onListening = (): void => {
-      server.off("error", onError);
-      resolve();
-    };
-    server.once("error", onError);
-    server.once("listening", onListening);
-    server.listen(0, "127.0.0.1");
-  });
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("fault server did not expose a TCP address");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function closeFaultServer(server: Server): Promise<void> {
-  if (!server.listening) return;
-  await new Promise<void>((resolve, reject) => {
-    server.closeAllConnections();
-    server.close((error) => {
-      if (error === undefined) {
-        resolve();
-        return;
-      }
-      reject(error);
-    });
-  });
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 function firstRequestHeaderValue(
   value: string | string[] | undefined,
@@ -409,7 +365,7 @@ describe("downloadToFile resume and integrity policy", () => {
       }
       response.writeHead(200, { "content-length": "6" });
       response.end("abcdef");
-    });
+    }, faultServers);
     const destPath = join(workDir, "real-redirect.tar.gz");
 
     const result = await downloadToFile({
@@ -433,7 +389,7 @@ describe("downloadToFile resume and integrity policy", () => {
     let sawRequest = false;
     const baseUrl = await startFaultServer(() => {
       sawRequest = true;
-    });
+    }, faultServers);
     const server = faultServers[faultServers.length - 1];
     if (server === undefined) throw new Error("fault server was not retained");
     const heartbeats: string[] = [];
