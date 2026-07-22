@@ -277,6 +277,21 @@ function projectedLiveWindows(
       const credits = openRouterCreditProjection(rateLimits);
       return credits === null ? [] : [credits];
     }
+    case "grok":
+      // Grok rides the shared window path via its synthesized billing-period
+      // window - not the OpenRouter-style credit projection - so its severity
+      // and compact bar come straight from `classifyProviderRateLimits` with
+      // no special-casing. A period-less snapshot (tier + dates only) carries
+      // no window.
+      return [
+        windowProjection({
+          id: "period",
+          role: "primary",
+          name: null,
+          window: rateLimits.period,
+          now,
+        }),
+      ].filter((window): window is ProfileUsageWindow => window !== null);
     case "kilocode":
       return [];
   }
