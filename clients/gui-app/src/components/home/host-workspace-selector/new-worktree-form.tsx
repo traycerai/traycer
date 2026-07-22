@@ -122,14 +122,19 @@ export function NewWorktreeForm(props: NewWorktreeFormProps) {
       trimmed,
     ],
   );
-  const isSaved =
-    draftIntent?.kind === "worktree" &&
+  const preservesExistingBranchCheckout =
     props.currentIntent?.kind === "worktree" &&
-    matchesStagedBranch(
-      props.currentIntent.branch,
-      draftIntent.branch.name,
-      selectedSource,
-    );
+    props.currentIntent.branch.type === "existing" &&
+    !form.hasUserEdited;
+  const isSaved =
+    preservesExistingBranchCheckout ||
+    (draftIntent?.kind === "worktree" &&
+      props.currentIntent?.kind === "worktree" &&
+      matchesStagedBranch(
+        props.currentIntent.branch,
+        draftIntent.branch.name,
+        selectedSource,
+      ));
   const { flush } = useNewWorktreeAutosave({
     draftIntent,
     isSaved,
@@ -464,7 +469,8 @@ const SourceBranchList = memo(function SourceBranchList(props: {
         id={listboxId}
         role="listbox"
         aria-label="Worktree source branch"
-        className="max-h-[min(40vh,12rem)] overflow-y-auto overscroll-contain"
+        className="overflow-y-auto overscroll-contain"
+        style={{ maxHeight: SOURCE_LIST_HEIGHT_CAP }}
         data-testid="new-worktree-source-list"
       >
         <div className="flex items-center justify-center gap-2 px-2 py-6 text-ui-sm text-muted-foreground">
@@ -483,7 +489,8 @@ const SourceBranchList = memo(function SourceBranchList(props: {
         id={listboxId}
         role="listbox"
         aria-label="Worktree source branch"
-        className="max-h-[min(40vh,12rem)] overflow-y-auto overscroll-contain"
+        className="overflow-y-auto overscroll-contain"
+        style={{ maxHeight: SOURCE_LIST_HEIGHT_CAP }}
         data-testid="new-worktree-source-list"
       >
         <div className="px-2 py-1.5 text-ui-sm text-muted-foreground">
@@ -595,6 +602,7 @@ function sourceBranchRowKey(
 interface NewWorktreeFormState {
   readonly selectedSource: UnifiedPickerSourceOption | null;
   readonly branchName: string;
+  readonly hasUserEdited: boolean;
   readonly hasUnresolvedExplicitSource: boolean;
   readonly setBranchName: (next: string) => void;
   readonly selectSource: (next: string) => void;
@@ -675,6 +683,7 @@ function useNewWorktreeFormState(
   return {
     selectedSource,
     branchName: nameState.value,
+    hasUserEdited: nameState.edited || sourceId !== null,
     hasUnresolvedExplicitSource,
     setBranchName,
     selectSource,

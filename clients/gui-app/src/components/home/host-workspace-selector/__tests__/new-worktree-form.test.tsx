@@ -1361,6 +1361,71 @@ describe("NewWorktreeForm — new-branch name", () => {
 });
 
 describe("NewWorktreeForm — autosave lifecycle", () => {
+  it("preserves an untouched existing-branch checkout through debounce and close", async () => {
+    branchesData = {
+      branches: [
+        { name: "development", isCurrent: true, isRemoteOnly: false },
+        { name: "feat/remembered", isCurrent: false, isRemoteOnly: false },
+      ],
+      uncommittedFileCount: 0,
+    };
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    renderForm(onEmit, {
+      kind: "worktree",
+      scripts: null,
+      workspacePath: "/repo",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      isPrimary: true,
+      branch: { type: "existing", name: "feat/remembered" },
+    });
+
+    expect(screen.getByTestId("new-worktree-save-status").textContent).toBe(
+      "Saved",
+    );
+    flushAutosave();
+    expect(onEmit).not.toHaveBeenCalled();
+
+    cleanup();
+    await act(() => Promise.resolve());
+    expect(onEmit).not.toHaveBeenCalled();
+  });
+
+  it("autosaves a remembered existing-branch checkout after the user edits it", () => {
+    branchesData = {
+      branches: [
+        { name: "development", isCurrent: true, isRemoteOnly: false },
+        { name: "feat/remembered", isCurrent: false, isRemoteOnly: false },
+      ],
+      uncommittedFileCount: 0,
+    };
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    renderForm(onEmit, {
+      kind: "worktree",
+      scripts: null,
+      workspacePath: "/repo",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      isPrimary: true,
+      branch: { type: "existing", name: "feat/remembered" },
+    });
+
+    fireEvent.change(screen.getByTestId("new-worktree-branch-name"), {
+      target: { value: "feat/replacement" },
+    });
+    expect(screen.getByTestId("new-worktree-save-status").textContent).toBe(
+      "Saving…",
+    );
+    flushAutosave();
+
+    expect(onEmit).toHaveBeenCalledTimes(1);
+    expect(onEmit.mock.calls[0][0]).toMatchObject({
+      branch: {
+        type: "new",
+        name: "feat/replacement",
+        source: "development",
+      },
+    });
+  });
+
   it("ignores blur dispatched after the branch-name input becomes disabled", async () => {
     branchesData = {
       branches: [
