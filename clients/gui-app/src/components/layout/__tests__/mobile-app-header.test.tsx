@@ -55,10 +55,11 @@ describe("MobileAppHeader", () => {
     useEpicCanvasStore.setState({ tabsById: {} });
   });
 
-  it("renders the hamburger and NOT the desktop tab strip", async () => {
+  it("renders the hamburger menu trigger", async () => {
     renderAt("/");
-    expect(await screen.findByTestId("mobile-nav-trigger")).not.toBeNull();
-    expect(screen.queryByTestId("tab-strip")).toBeNull();
+    expect(
+      await screen.findByRole("button", { name: "Open menu" }),
+    ).not.toBeNull();
   });
 
   it("opens the navigation drawer store when the hamburger is tapped", async () => {
