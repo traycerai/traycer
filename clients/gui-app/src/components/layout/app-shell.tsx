@@ -24,9 +24,9 @@ export function AppShell(props: AppShellProps) {
 
   return (
     <DiffWorkerPoolProvider>
-      <div className="min-h-screen bg-canvas text-canvas-foreground">
+      <div className="min-h-dvh bg-canvas text-canvas-foreground">
         <RootDndProvider>
-          <div className="relative flex h-screen w-full flex-col">
+          <div className="relative flex h-dvh w-full flex-col">
             <AppHeader variant="app" />
             <main className="relative flex min-h-0 flex-1 flex-col">
               {children}
