@@ -1,8 +1,12 @@
 import { useMemo } from "react";
 import { ActiveTabBody } from "@/components/epic-canvas/canvas/tab-group-view";
 import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
-import { useEpicCanvas, useIsActivePane } from "@/stores/epics/canvas/store";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { useEpicCanvas } from "@/stores/epics/canvas/store";
+import { firstPaneId } from "@/stores/epics/canvas/tile-tree";
+import type { TileLayoutNode } from "@/stores/epics/canvas/types";
 
 interface MobileEpicTileViewProps {
   readonly epicId: string;
@@ -32,12 +36,14 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
   const { epicId, tabId } = props;
   const canvas = useEpicCanvas(tabId);
   const selection = useMemo(() => selectMobileTile(canvas), [canvas]);
-  // Match the desktop `globallyActive` signal for this tile so `isActive`
-  // (focused-composer registration) is computed identically; `""` is a
-  // no-match sentinel that resolves to `false` while there is no selection.
-  const globallyActive = useIsActivePane(tabId, selection?.paneId ?? "");
 
-  if (selection === null) return null;
+  // Non-null root with no resolvable tile = an empty pane (e.g. the user closed
+  // the last tab). Desktop renders the inline `PaneOpener` for this; do the
+  // same on mobile instead of a blank dead-end. `PaneOpener` is fully fluid
+  // (flex column, no fixed widths), so it is usable at phone width as-is.
+  if (selection === null) {
+    return <MobileEmptyEpicPane epicId={epicId} tabId={tabId} root={canvas.root} />;
+  }
 
   return (
     <div
@@ -52,10 +58,43 @@ export function MobileEpicTileView(props: MobileEpicTileViewProps) {
             groupId={selection.paneId}
             tabId={tabId}
             selected
-            globallyActive={globallyActive}
+            // The single visible mobile tile IS the epic's active surface, so
+            // it is always globally active (drives focused-composer
+            // registration). Unlike desktop it is not gated on `activePaneId`,
+            // which can lag the shown tile in the fallback-pane case. This is a
+            // pure render prop - no store write - so flipping back to desktop
+            // re-derives activation from the real `activePaneId`.
+            globallyActive
           />
         </TabBodySelectedContext.Provider>
       </div>
+    </div>
+  );
+}
+
+interface MobileEmptyEpicPaneProps {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly root: TileLayoutNode | null;
+}
+
+function MobileEmptyEpicPane(props: MobileEmptyEpicPaneProps) {
+  const { epicId, tabId, root } = props;
+  const paneVisible = usePaneVisible();
+  // Defensive: this component is only reached with a non-null root (the mobile
+  // branch in TileCanvasLive gates on it), but guard rather than assert.
+  if (root === null) return null;
+  return (
+    <div
+      className="flex h-full min-h-0 w-full flex-col bg-canvas"
+      data-testid="mobile-epic-empty-pane"
+    >
+      <PaneOpener
+        epicId={epicId}
+        tabId={tabId}
+        groupId={firstPaneId(root)}
+        active={paneVisible}
+      />
     </div>
   );
 }

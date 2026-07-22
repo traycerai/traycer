@@ -33,6 +33,12 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", () => ({
   ),
 }));
 
+// The empty-pane opener pulls the command-palette router/provider stack; stub
+// it to a marker so the empty-canvas branch is observable in isolation.
+vi.mock("@/components/epic-canvas/canvas/pane-opener", () => ({
+  PaneOpener: () => <div data-testid="pane-opener" />,
+}));
+
 function spec(n: number): EpicCanvasTileRef {
   return {
     id: `spec-${n}`,
@@ -183,5 +189,20 @@ describe("<MobileEpicTileView />", () => {
     expect(after).toBe(before);
     expect(after?.root).toBe(before?.root);
     expect(after?.sizesByGroupId).toBe(before?.sizesByGroupId);
+  });
+
+  it("renders the inline opener (not a blank screen) for an empty pane", () => {
+    // A non-null root whose only pane holds no tiles - the user closed the last
+    // tab. selectMobileTile returns null; the view must still offer an
+    // affordance, not a dead-end.
+    seed({
+      root: makePane("pane-A", [], null),
+      activePaneId: "pane-A",
+      tilesByInstanceId: {},
+      sizesByGroupId: {},
+    });
+    renderView();
+    expect(screen.queryByTestId("pane-opener")).not.toBeNull();
+    expect(renderedTileCount()).toBe(0);
   });
 });
