@@ -8,6 +8,7 @@ import { PreventSleepController } from "@/components/layout/bridges/prevent-slee
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
+import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
@@ -59,7 +60,14 @@ export function RootComponent() {
           showOnboarding={showOnboarding}
           isStandalone={isStandalone}
         />
-        {isStandalone ? null : <SystemTabModalHost />}
+        {isStandalone ? null : (
+          <>
+            <SystemTabModalHost />
+            {/* Mobile-only full-screen notifications surface (renders null on
+                desktop, where the header bell + popover are used instead). */}
+            <NotificationsMobileSheet />
+          </>
+        )}
       </HostReadyGate>
     </>
   );

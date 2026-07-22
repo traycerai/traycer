@@ -80,7 +80,10 @@ export function NotificationsBell() {
         className="w-auto overflow-hidden p-0"
         onOpenAutoFocus={(event: Event) => event.preventDefault()}
       >
-        <NotificationsPopover onNavigate={handleNavigate} />
+        <NotificationsPopover
+          onNavigate={handleNavigate}
+          frameClassName="h-[min(var(--radix-popover-content-available-height,70vh),32rem)] w-[min(90vw,24rem)]"
+        />
       </PopoverContent>
     </Popover>
   );

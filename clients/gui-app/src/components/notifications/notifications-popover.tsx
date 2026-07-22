@@ -42,6 +42,11 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface NotificationsPopoverProps {
   readonly onNavigate: () => void;
+  /**
+   * Sizing for the surface root. The desktop bell passes its fixed popover
+   * box; the mobile full-screen host passes `h-full w-full` to fill the sheet.
+   */
+  readonly frameClassName: string;
 }
 
 type NotificationsTab = "unread" | "all";
@@ -118,7 +123,10 @@ export function NotificationsPopover(props: NotificationsPopoverProps) {
       <Tabs
         value={activeTab}
         onValueChange={handleTabChange}
-        className="flex h-[min(var(--radix-popover-content-available-height,70vh),32rem)] w-[min(90vw,24rem)] min-w-0 flex-col gap-0 overflow-hidden"
+        className={cn(
+          "flex min-w-0 flex-col gap-0 overflow-hidden",
+          props.frameClassName,
+        )}
         data-testid="notifications-popover"
       >
         <header className="flex shrink-0 flex-col gap-3 border-b border-border/60 bg-popover px-4 pt-3 pb-2">

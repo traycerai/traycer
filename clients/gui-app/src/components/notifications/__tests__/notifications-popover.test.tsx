@@ -92,7 +92,12 @@ function buildRouterWithCapture(target: TargetCapture, onNavigate: () => void) {
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    component: () => <NotificationsPopover onNavigate={onNavigate} />,
+    component: () => (
+      <NotificationsPopover
+        onNavigate={onNavigate}
+        frameClassName="h-[min(70vh,32rem)] w-[min(90vw,24rem)]"
+      />
+    ),
   });
   const epicRoute = createRoute({
     getParentRoute: () => rootRoute,
