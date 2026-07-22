@@ -54,6 +54,10 @@ import {
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
+import {
+  isRateLimitProfileFetchEligible,
+  resolveRateLimitFetchEligibility,
+} from "@/lib/rate-limit-providers";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -84,6 +88,16 @@ function profileDriftKey(
   const notice = profile.ambientDriftNotice;
   if (notice === null) return null;
   return `${providerId}:${profile.profileId}:${notice.changedAt}`;
+}
+
+function profileRateLimitFetchEligible(
+  state: ProviderCliState,
+  profile: ProviderProfile,
+): boolean {
+  return isRateLimitProfileFetchEligible(
+    resolveRateLimitFetchEligibility(state),
+    profile,
+  );
 }
 
 interface ProviderProfileScopedSectionProps {
@@ -197,6 +211,10 @@ export function ProviderProfileScopedSection(
               providerId={state.providerId}
               profileId={profileCommitId(selectedProfile)}
               usageUpdatedAt={selectedProfile.usageUpdatedAt}
+              fetchEligible={profileRateLimitFetchEligible(
+                state,
+                selectedProfile,
+              )}
             />
           </div>
         </div>
@@ -318,6 +336,7 @@ export function ProviderProfileScopedSection(
           providerId={state.providerId}
           profileId={profileCommitId(selectedProfile)}
           usageUpdatedAt={selectedProfile.usageUpdatedAt}
+          fetchEligible={profileRateLimitFetchEligible(state, selectedProfile)}
         />
       </div>
 

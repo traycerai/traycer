@@ -43,6 +43,7 @@ import {
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
 import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
+import { resolveRateLimitFetchEligibility } from "@/lib/rate-limit-providers";
 import {
   AddProviderProfileDialog,
   type FailedProviderProfileAttempt,
@@ -568,6 +569,7 @@ function ProviderDetail({
           providerId={providerId}
           profileId={null}
           usageUpdatedAt={null}
+          fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
         />
       ) : null}
       <ProviderProfileScopedSection

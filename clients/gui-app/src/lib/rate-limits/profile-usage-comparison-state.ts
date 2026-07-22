@@ -77,6 +77,8 @@ export interface ProfileUsageComparisonEntry {
   readonly profileId: string | null;
   readonly providerId: ProviderId;
   readonly detail: ProfileUsageDetailState;
+  /** Whether this exact target currently has usable credentials for a refresh. */
+  readonly fetchEligible: boolean;
   readonly refreshStatus: ProfileUsageRefreshStatus;
   /** Addresses exactly this `(host, provider, profile)` - see
    *  `useProfileUsageComparison`'s doc comment for routing/serialization. */

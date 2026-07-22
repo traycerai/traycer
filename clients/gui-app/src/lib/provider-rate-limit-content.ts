@@ -24,23 +24,69 @@ export type ProviderRateLimitViewState =
   | { readonly kind: "loading" }
   | { readonly kind: "error" }
   | { readonly kind: "empty" }
-  | { readonly kind: "data"; readonly data: ProviderRateLimits };
+  | {
+      readonly kind: "data";
+      readonly data: ProviderRateLimits;
+      /**
+       * True when `data` is a retained last-known-good reading shown after the
+       * latest poll failed - a transient envelope reason
+       * (`usage_fetch_failed`/`timeout`/`connection_failed` retaining a
+       * `lastGood`) or a thrown query-level refetch over good data - rather
+       * than a fresh reading. The Settings card dims it in place and surfaces a
+       * failed-refresh note, the same degraded treatment the header popover
+       * gives this state. Always `false` for a fresh reading, and for an
+       * authoritative `available: false` reason (which replaces the picture).
+       */
+      readonly degraded: boolean;
+      /**
+       * The specific transient reason driving `degraded` when the envelope
+       * itself is the cause, so the caller can show that plain-language copy
+       * instead of the generic "refresh failed". `null` when not degraded, or
+       * degraded only because the query's own last fetch threw (no specific
+       * wire reason to report), mirroring
+       * `PopoverProviderRateLimitState.degradedReason`.
+       */
+      readonly degradedReason: RateLimitUnavailableReason | null;
+      /**
+       * Epoch-ms time of the reading being shown - the ORIGINAL `lastGoodAt`,
+       * never the failed attempt's time, so a dimmed reading's "Updated Xm ago"
+       * can't read as fresh. `null` only for an authoritative unavailable arm
+       * (nothing dated to show).
+       */
+      readonly lastGoodAt: number | null;
+    };
 
 export function resolveProviderRateLimitViewState(
   props: ProviderRateLimitQueryState,
 ): ProviderRateLimitViewState {
   if (props.isPending && props.isFetching) return { kind: "loading" };
-  if (props.isError) return { kind: "error" };
+  const envelope = props.envelope ?? null;
   // Retention through a transient failure (`usage_fetch_failed`, `timeout`,
-  // `connection_failed`) resolves to the envelope's `lastGood` reading here,
-  // same as the popover - this surface just has no dimmed treatment of its
-  // own to layer on top (Settings card has no "degraded" concept today), so a
-  // retained reading renders exactly like a fresh one. An authoritative
-  // reason (`rate_limits_not_available` and friends) replaces the picture
-  // entirely, same as before.
-  const data = resolveRetainedProviderRateLimits(props.envelope ?? null);
-  if (data === null) return { kind: "empty" };
-  return { kind: "data", data };
+  // `connection_failed`) or a thrown query-level refresh failure resolves to
+  // the envelope's last usable reading here, same as the popover. TanStack
+  // keeps successful `data` when a background refetch throws, so `isError`
+  // must only win when there is no cached snapshot to render. An authoritative
+  // reason (`rate_limits_not_available` and friends) still replaces the
+  // picture entirely, same as before.
+  const data = resolveRetainedProviderRateLimits(envelope);
+  if (data !== null) {
+    // Degradation and the retained timestamp only apply to an *available*
+    // reading. An authoritative `available: false` reason replaces the picture
+    // outright (`resolveRetainedProviderRateLimits` already decided nothing is
+    // shown dimmed), so it carries no stale treatment and no timestamp.
+    const degradedReason = data.available
+      ? envelopeDegradedReason(envelope)
+      : null;
+    return {
+      kind: "data",
+      data,
+      degraded: data.available && (props.isError || degradedReason !== null),
+      degradedReason,
+      lastGoodAt: data.available ? (envelope?.lastGoodAt ?? null) : null,
+    };
+  }
+  if (props.isError) return { kind: "error" };
+  return { kind: "empty" };
 }
 
 /**
