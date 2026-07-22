@@ -11,6 +11,33 @@ export interface MobileTileSelection {
   readonly ref: EpicCanvasTileRef;
 }
 
+export interface MobileEpicTile {
+  readonly paneId: string;
+  readonly instanceId: string;
+  readonly ref: EpicCanvasTileRef;
+}
+
+const EMPTY_TILES: ReadonlyArray<MobileEpicTile> = [];
+
+/**
+ * Every open tile across every pane, in tree order, as
+ * `{ paneId, instanceId, ref }`. InstanceIds with no resolved payload are
+ * skipped. Read-only - the Phase-2 "Switch tab" sheet and the current-tile bar
+ * list from this.
+ */
+export function flattenMobileTiles(
+  canvas: EpicCanvasState,
+): ReadonlyArray<MobileEpicTile> {
+  const { root, tilesByInstanceId } = canvas;
+  if (root === null) return EMPTY_TILES;
+  return collectPanes(root).flatMap((pane) =>
+    pane.tabInstanceIds.flatMap((instanceId) => {
+      const ref = tilesByInstanceId[instanceId];
+      return ref === undefined ? [] : [{ paneId: pane.id, instanceId, ref }];
+    }),
+  );
+}
+
 /**
  * Deterministic "the one tile to show on mobile" rule. Read-only: it inspects
  * `activePaneId` / `root` / `tilesByInstanceId` and NEVER writes `root` or
