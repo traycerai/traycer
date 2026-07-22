@@ -909,6 +909,7 @@ describe("<LandingTerminalPanel />", () => {
 
   it("refits a terminal activated by delayed reconciliation after the reveal transition", async () => {
     mocks.activeHostId = "host-a";
+    mocks.clientActiveHostId = "host-a";
     mocks.primaryWorkspacePath = "/workspace/other";
     mocks.probeData = undefined;
     const sessions = [
