@@ -191,10 +191,12 @@ import {
   terminalCreateV20,
   terminalCreateUpgradeV10ToV20,
   terminalKillV10,
-  terminalListDowngradeV20ToV10,
+  terminalListDowngradeV21ToV10,
   terminalListV10,
   terminalListV20,
+  terminalListV21,
   terminalListUpgradeV10ToV20,
+  terminalListUpgradeV20ToV21,
   terminalRenameV10,
   terminalSubscribeV10,
   terminalSubscribeV11,
@@ -3573,14 +3575,18 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: terminalListV20,
           upgradeFromPreviousVersion: terminalListUpgradeV10ToV20,
         },
+        1: {
+          contract: terminalListV21,
+          upgradeFromPreviousVersion: terminalListUpgradeV20ToV21,
+        },
       },
-      downgradePathsFromLatest: { 1: terminalListDowngradeV20ToV10 },
+      downgradePathsFromLatest: { 1: terminalListDowngradeV21ToV10 },
     },
   },
   "terminal.rename": {

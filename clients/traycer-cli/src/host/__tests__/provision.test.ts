@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   serviceLabelForMock: vi.fn(),
   createServiceInstallLifecycleMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
+  isVersionYankedMock: vi.fn(),
   lockHeld: false,
   lockAcquisitions: 0,
 }));
@@ -85,6 +86,16 @@ vi.mock("../busy-check", () => ({
   assertHostNotBusy: mocks.assertHostNotBusyMock,
 }));
 
+// Finding D: `provisionHost` constructs a registry yank-lookup up front. The
+// Finding-1 suite uses exact satisfaction (which never consults the manifest);
+// the Finding-D suite drives this stub directly to exercise the
+// implicit-registry-minimum branch.
+vi.mock("../../registry/client", () => ({
+  createRegistryYankLookup: () => ({
+    isVersionYanked: mocks.isVersionYankedMock,
+  }),
+}));
+
 const {
   stageHostInstallSourceMock,
   commitHostInstallSourceMock,
@@ -94,6 +105,7 @@ const {
   serviceLabelForMock,
   createServiceInstallLifecycleMock,
   assertHostNotBusyMock,
+  isVersionYankedMock,
 } = mocks;
 
 import { provisionHost, type ProvisionHostOptions } from "../provision";
@@ -122,7 +134,7 @@ function makeOpts(
       kind: "registry",
       versionRequest: "2.0.0",
     }),
-    targetVersion: "2.0.0",
+    satisfaction: { kind: "exact", version: "2.0.0" },
     recordVersionOverride: null,
     enableLinger: true,
     allowSelfInvocation: true,
@@ -294,5 +306,90 @@ describe("provisionHost - Finding 1: lost fast-path prediction never stages insi
       "commit",
       "lock-exit",
     ]);
+  });
+});
+
+describe("provisionHost - Finding D: implicit-registry-minimum satisfaction", () => {
+  beforeEach(() => {
+    mocks.callOrder = [];
+    mocks.lockHeld = false;
+    mocks.lockAcquisitions = 0;
+    serviceLabelForMock.mockReturnValue({
+      id: "ai.traycer.host",
+      environment: "production",
+    });
+    assertHostNotBusyMock.mockResolvedValue(undefined);
+    discardStagedHostInstallSourceMock.mockResolvedValue(undefined);
+    createServiceInstallLifecycleMock.mockReturnValue(sampleLifecycleHandle());
+    stageHostInstallSourceMock.mockResolvedValue(sampleStaged("1.7.2"));
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: sampleRecord("1.7.2"),
+      previous: null,
+      installGeneration: "id:install-1.7.2",
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function runningController() {
+    return {
+      status: async () => ({
+        state: "running" as const,
+        version: "host",
+        listenUrl: "ws://127.0.0.1:7100/rpc",
+        pid: 4242,
+      }),
+      install: vi.fn(),
+      start: vi.fn(),
+    };
+  }
+
+  it("treats a newer non-yanked install as satisfied and never downgrades it", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.8.0"));
+    isVersionYankedMock.mockResolvedValue(false);
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "implicit-registry-minimum", version: "1.7.2" },
+      }),
+    );
+
+    expect(result.action).toBe("noop");
+    expect(isVersionYankedMock).toHaveBeenCalledWith("1.8.0");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("reinstalls a newer install the registry marks yanked", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.8.0"));
+    isVersionYankedMock.mockResolvedValue(true);
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "implicit-registry-minimum", version: "1.7.2" },
+      }),
+    );
+
+    expect(result.action).toBe("installed");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reinstalls an older install and never consults the yank list for it", async () => {
+    createServiceControllerMock.mockReturnValue(runningController());
+    readHostInstallRecordMock.mockResolvedValue(sampleRecord("1.6.0"));
+
+    const result = await provisionHost(
+      makeOpts({
+        satisfaction: { kind: "implicit-registry-minimum", version: "1.7.2" },
+      }),
+    );
+
+    expect(result.action).toBe("installed");
+    // The `less` ordering short-circuits before the advisory yank lookup.
+    expect(isVersionYankedMock).not.toHaveBeenCalled();
   });
 });
