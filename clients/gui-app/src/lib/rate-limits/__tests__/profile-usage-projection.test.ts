@@ -203,14 +203,18 @@ describe("projectProfileUsage", () => {
     expect(projection.windows).toHaveLength(1);
   });
 
-  it("yields no window for a period-less Grok snapshot", () => {
+  it("projects a period-less Grok snapshot as unmeasured, not unavailable", () => {
     // Zero-usage SuperGrok returns tier + period bounds only - no synthesized
-    // period window - so projection has nothing to meter.
-    expect(project("ok", NOW, envelope(grok(null), NOW), false)).toMatchObject({
-      kind: "unavailable",
-      reason: "missing_windows",
+    // period window - so there is nothing to meter. That is available-but-
+    // unmeasured (severity `unknown`, consistent with protocol semantics), not
+    // the alarming unavailable/`missing_windows` state that reads as a fetch or
+    // account failure for a perfectly healthy account.
+    expect(project("ok", NOW, envelope(grok(null), NOW), false)).toEqual({
+      kind: "not_checked",
+      severity: "unknown",
       compactWindow: null,
       windows: [],
+      checkedAt: null,
     });
   });
 

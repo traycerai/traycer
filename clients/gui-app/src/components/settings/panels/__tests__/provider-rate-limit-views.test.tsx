@@ -714,6 +714,29 @@ describe("GrokRateLimitView", () => {
     expect(container.querySelectorAll(".bg-foreground\\/15").length).toBe(0);
   });
 
+  it("suppresses the fallback Plan row on popover-detail (the header owns the tier chip), keeping the billing period", () => {
+    // In the single-provider popover tab the header already renders the tier as
+    // a chip (resolveProviderPlanLabel), so the body's Plan row would duplicate
+    // it - same reason Codex/Claude keep the tier out of their card bodies. The
+    // billing-period row, which the chip doesn't carry, still shows.
+    render(
+      <GrokRateLimitView data={grokPeriodLess} variant="popover-detail" />,
+    );
+    expect(screen.queryByText("Plan")).toBeNull();
+    expect(screen.queryByText("SuperGrok")).toBeNull();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+    expect(screen.getByText(expectedBillingPeriod)).toBeTruthy();
+  });
+
+  it("keeps the fallback Plan row on the Overview tab, which renders no tier chip", () => {
+    render(
+      <GrokRateLimitView data={grokPeriodLess} variant="popover-overview" />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+  });
+
   it("renders credit rows only when non-null", () => {
     render(
       <GrokRateLimitView

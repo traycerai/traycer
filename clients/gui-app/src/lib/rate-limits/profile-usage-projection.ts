@@ -323,6 +323,26 @@ function emptyDetailProjection(
   input: ProfileUsageProjectionInput,
 ): ProfileUsageProjection {
   const checkedAt = envelope.lastGoodAt ?? input.usageUpdatedAt;
+  // Grok's zero-usage snapshot is `available` with tier + billing-period bounds
+  // but no usage percentage, so it synthesizes no `period` window. That is
+  // "unmeasured", not "unavailable": the account is reachable and healthy, it
+  // just reports nothing to meter this period (the same snapshot the Settings
+  // card renders as tier + billing period, no severity). Project it as the
+  // percentage-free unmeasured state so its severity stays `unknown` -
+  // consistent with protocol `classifyProviderRateLimits` and the (parallel)
+  // host-gauge fix - instead of the alarming unavailable/`missing_windows`
+  // framing, which reads as a fetch/account failure. A grok snapshot whose
+  // period merely rolled (window present but expired) still falls through to
+  // `expired` below, the correct stale framing.
+  if (rateLimits.provider === "grok" && rateLimits.period === null) {
+    return {
+      kind: "not_checked",
+      severity: "unknown",
+      compactWindow: null,
+      windows: [],
+      checkedAt: null,
+    };
+  }
   const severity = classifyProviderRateLimits(rateLimits, input.now);
   if (severity === "limited") {
     return {

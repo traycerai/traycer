@@ -1054,19 +1054,29 @@ function formatGrokPeriodRange(
  * (no usage percentage, so the host synthesizes no `period` window). Surfacing
  * the plan and the period dates keeps the card meaningful instead of blank.
  * Each row drops out on its own when the field is absent.
+ *
+ * The `Plan` row is suppressed on `popover-detail`, where the popover header
+ * already renders the same tier as a chip (`resolveProviderPlanLabel`) - the
+ * same reason Codex/Claude keep the tier out of their card bodies. The Settings
+ * card and the Overview tab render no such chip, so there the `Plan` row is the
+ * only tier surface and stays. The billing-period row shows on every surface.
  */
 function GrokPeriodFallback({
   subscriptionTier,
   periodStart,
   periodEnd,
+  variant,
 }: {
   readonly subscriptionTier: string | null;
   readonly periodStart: number | null;
   readonly periodEnd: number | null;
+  readonly variant: RateLimitViewVariant;
 }): ReactNode {
   return (
     <>
-      <ProviderTextRow label="Plan" value={subscriptionTier} />
+      {variant !== "popover-detail" ? (
+        <ProviderTextRow label="Plan" value={subscriptionTier} />
+      ) : null}
       <ProviderTextRow
         label="Billing period"
         value={formatGrokPeriodRange(periodStart, periodEnd)}
@@ -1115,6 +1125,7 @@ export function GrokRateLimitView({
           subscriptionTier={data.subscriptionTier}
           periodStart={data.periodStart}
           periodEnd={data.periodEnd}
+          variant={variant}
         />
       )}
       <ProviderNumberRow
