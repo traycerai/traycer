@@ -1177,7 +1177,9 @@ describe("FolderBranchControl — Escape close", () => {
       </TooltipProvider>,
     );
 
-    const chip = screen.getByTestId("folder-branch-trigger");
+    const chip = screen.getByRole("button", {
+      name: "Choose worktree branch",
+    });
     fireEvent.click(chip);
     const popover = await screen.findByTestId("folder-branch-popover");
     const name = screen.getByTestId("new-worktree-branch-name");
@@ -1221,7 +1223,9 @@ describe("FolderBranchControl — Escape close", () => {
       </TooltipProvider>,
     );
 
-    const chip = screen.getByTestId("folder-branch-trigger");
+    const chip = screen.getByRole("button", {
+      name: "Choose worktree branch",
+    });
     fireEvent.click(chip);
     const popover = await screen.findByTestId("folder-branch-popover");
     expect(popover).toBeTruthy();

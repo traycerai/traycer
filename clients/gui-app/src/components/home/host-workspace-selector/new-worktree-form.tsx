@@ -43,10 +43,13 @@ import { promotePickerRow } from "./promote-picker-row";
 type RepoIdentifier = WorktreeFolderIntent["repoIdentifier"];
 
 const WORKTREE_AUTOSAVE_DELAY_MS = 500;
-/** Matches Virtuoso `defaultItemHeight` so the list can size to content. */
-const SOURCE_ROW_HEIGHT_PX = 32;
-/** Viewport-aware cap used by the source list (`min(40vh, 12rem)`). */
-const SOURCE_LIST_HEIGHT_CAP = "min(40vh, 12rem)";
+/** One-line row block size: `leading-5` plus `py-1.5`, scalable with root text. */
+const SOURCE_ROW_BLOCK_SIZE_REM = 2;
+/** Virtuoso startup estimate only; rendered rows are measured after mount. */
+const SOURCE_ROW_HEIGHT_ESTIMATE_PX = 32;
+/** Shared viewport-aware limits for loaded and placeholder source lists. */
+const SOURCE_LIST_HEIGHT_LIMITS = "40vh, 12rem";
+const SOURCE_LIST_HEIGHT_CAP = `min(${SOURCE_LIST_HEIGHT_LIMITS})`;
 
 export interface NewWorktreeFormProps {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
@@ -417,7 +420,7 @@ const SourceBranchList = memo(function SourceBranchList(props: {
     () => filtered.map((row) => row.id).join("\u0000"),
     [filtered],
   );
-  const listHeight = `min(${Math.max(filtered.length, 1) * SOURCE_ROW_HEIGHT_PX}px, ${SOURCE_LIST_HEIGHT_CAP})`;
+  const listHeight = `min(${Math.max(filtered.length, 1) * SOURCE_ROW_BLOCK_SIZE_REM}rem, ${SOURCE_LIST_HEIGHT_LIMITS})`;
   // Pure render: aria-activedescendant tracks the current active row id.
   // During virtualized scroll it may briefly name an off-window option — an
   // accepted ARIA limitation vs mounted-gating state/effects that failed lint.
@@ -510,7 +513,7 @@ const SourceBranchList = memo(function SourceBranchList(props: {
           className="h-full overscroll-contain"
           data={filtered}
           computeItemKey={sourceBranchRowKey}
-          defaultItemHeight={SOURCE_ROW_HEIGHT_PX}
+          defaultItemHeight={SOURCE_ROW_HEIGHT_ESTIMATE_PX}
           increaseViewportBy={64}
           initialItemCount={Math.min(filtered.length, 12)}
           initialTopMostItemIndex={{ index: activeIndex, align: "center" }}
