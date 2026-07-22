@@ -328,6 +328,24 @@ export function peekXtermHostGridForSession(
 }
 
 /**
+ * Reconcile a mounted terminal after an outer layout transition finishes.
+ *
+ * The landing terminal panel expands from zero width while its xterm engine
+ * stays mounted. Its ResizeObserver normally reports the final box, but a
+ * transition can leave the engine's last-sent dedupe at an intermediate grid.
+ * Reconcile against the local effective grid after the panel reaches its
+ * stable width so the natural container size is re-reported even when an
+ * ordinary fit would be deduped.
+ */
+export function reconcileXtermHostAfterLayoutTransition(
+  instanceId: string,
+): void {
+  const entry = entries.get(instanceId);
+  if (entry === undefined) return;
+  entry.controls.reconcileWithHost(entry.term.cols, entry.term.rows);
+}
+
+/**
  * Whether another live engine (a second tab instance - split view) renders the
  * same host session. Under "smaller pane wins" a peer legitimately holds the
  * shared effective grid below this pane's natural size, so the engine's

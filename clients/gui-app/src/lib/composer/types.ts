@@ -5,11 +5,12 @@ import type {
   WorkspaceMentionSuggestion,
 } from "@traycer/protocol/host/index";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import type { MentionPathTree } from "@/lib/path";
 
 export type PathKind = "file" | "folder";
 export type EntityMentionContextType =
-  "epic" | "chat" | EpicArtifactKind | "user";
+  "epic" | "chat" | "terminal-agent" | EpicArtifactKind | "user";
 export type MentionContextType =
   PathKind | "git" | "worktree" | EntityMentionContextType;
 
@@ -17,20 +18,67 @@ export type ComposerPromptSegment =
   { type: "text"; text: string } | { type: "mention"; path: string };
 
 export type WorkspaceEntry = WorkspaceMentionSuggestion;
-export interface EpicChatMentionEntry {
-  readonly kind: "epic-chat";
+
+/**
+ * Which interface a referenceable Agent is interacted with through. Agent is
+ * the durable entity; Chat and Terminal are interfaces on it, not sibling
+ * entity types - so both arms below are Agents and both are referenceable.
+ */
+export type AgentMentionInterface = "chat" | "terminal";
+
+/**
+ * Fields every referenceable Agent carries, regardless of interface. The two
+ * arms differ only in which durable record they name (`chatId` vs
+ * `terminalAgentId`) and in the token prefix that encodes it.
+ */
+interface EpicAgentMentionEntryBase {
   readonly id: string;
   readonly token: string;
   readonly epicId: string;
   readonly epicTitle: string;
-  readonly chatId: string;
   readonly label: string;
   readonly description: string;
   readonly parentId: string | null;
   readonly updatedAt: number;
+  readonly agentInterface: AgentMentionInterface;
+  /**
+   * Whether this Agent's RUNTIME supports agent-to-agent delivery at all - the
+   * surface/harness arm of the host's send gate (`canParticipateInA2A`). It is
+   * deliberately NOT a claim of actual routability: the host additionally
+   * requires the receiver to be same-user and host-local (`agent.list`'s
+   * `capabilities.sendMessage` = `sameUser && isLocal && canParticipateInA2A`),
+   * and the picker does not carry viewer host/user identity.
+   *
+   * So `false` is a definite "this runtime has no inbox" and is surfaced on the
+   * row; `true` means only "not ruled out here" and is surfaced as nothing at
+   * all. The picker inserts a REFERENCE - delivery is attempted elsewhere and
+   * the host returns the authoritative error (e.g. `RECEIVER_NOT_LOCAL`), so an
+   * unmarked row never promises the message will land.
+   *
+   * Referenceability is a SEPARATE capability either way: this field changes
+   * how a row is labelled, never whether it is listed.
+   */
+  readonly runtimeSupportsMessageDelivery: boolean;
 }
 
-export type EpicMentionEntry = EpicMentionSuggestion | EpicChatMentionEntry;
+export interface EpicChatMentionEntry extends EpicAgentMentionEntryBase {
+  readonly kind: "epic-chat";
+  readonly agentInterface: "chat";
+  readonly chatId: string;
+}
+
+export interface EpicTerminalAgentMentionEntry extends EpicAgentMentionEntryBase {
+  readonly kind: "epic-terminal-agent";
+  readonly agentInterface: "terminal";
+  readonly terminalAgentId: string;
+  /** Coding agent backing the Terminal interface; disambiguates same-named rows. */
+  readonly harnessId: TuiHarnessId;
+}
+
+export type EpicAgentMentionEntry =
+  EpicChatMentionEntry | EpicTerminalAgentMentionEntry;
+
+export type EpicMentionEntry = EpicMentionSuggestion | EpicAgentMentionEntry;
 export type MentionSuggestionEntry = WorkspaceEntry | EpicMentionEntry;
 
 export type ImageAttachment = {
@@ -105,6 +153,7 @@ export type EntityMentionAttachment = {
   artifactId: string | null;
   artifactType: EpicArtifactKind | null;
   chatId: string | null;
+  terminalAgentId: string | null;
   status: string | number | null;
 };
 

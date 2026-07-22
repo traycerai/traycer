@@ -73,6 +73,7 @@ describe("F4: hostile profile labels in the rate-limit banner", () => {
             profiles={[current, target]}
             destinations={[destination]}
             primaryTarget={destination}
+            probeTarget={null}
             runTargetHostId={null}
             onSwitchProfile={() => undefined}
             affectedChatCount={1}

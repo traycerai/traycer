@@ -8,6 +8,28 @@ import type {
   VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { OpenFrameBearerSource } from "../auth/bearer-source";
+
+/**
+ * Immutable transport coordinates captured for one host-RPC job. The
+ * transport owns no live endpoint or bearer providers: callers capture an
+ * authority before dispatch, then every retry reuses this exact object.
+ */
+export interface HostTransportEndpoint {
+  readonly hostId: string;
+  readonly websocketUrl: string | null;
+}
+
+/**
+ * The frozen authority a unary transport attempt is allowed to observe.
+ * `bearer` can rotate in place for the same request context, but replacing the
+ * context or host must abort this signal and issue a new authority.
+ */
+export interface HostRequestAuthority {
+  readonly endpoint: HostTransportEndpoint;
+  readonly bearer: OpenFrameBearerSource;
+  readonly abortSignal: AbortSignal;
+}
 
 /**
  * App-facing host messenger abstraction.
@@ -30,6 +52,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 
   /**
@@ -46,6 +69,7 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>>;
 }
 
@@ -220,6 +244,34 @@ export class RetryableTransportError extends HostTransportFailureError {
   }) {
     super(details);
     this.name = "RetryableTransportError";
+  }
+}
+
+/**
+ * A caller-owned request authority was aborted. Unlike a pre-send dial
+ * failure, this is never retryable: the authority belongs to a context or host
+ * binding that has already been replaced or disposed.
+ */
+export class HostRequestAbortedError extends HostTransportFailureError {
+  constructor(details: { message: string; requestId: string; method: string }) {
+    super({
+      code: "RPC_ERROR",
+      message: details.message,
+      requestId: details.requestId,
+      method: details.method,
+      fatalDetails: null,
+    });
+    this.name = "HostRequestAbortedError";
+  }
+}
+
+/** Auth recovery discovered that the captured bearer no longer owns the session. */
+export class HostAuthoritySupersededError extends Error {
+  constructor() {
+    super(
+      "Host request authority was superseded before authentication recovery completed",
+    );
+    this.name = "HostAuthoritySupersededError";
   }
 }
 

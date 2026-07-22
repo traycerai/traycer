@@ -8,19 +8,42 @@ import { noopLogger } from "../../logger";
 // off the current install record + service status.
 
 const mocks = vi.hoisted(() => ({
-  installHostMock: vi.fn(),
+  callOrder: [] as string[],
+  stageHostInstallSourceMock: vi.fn(),
+  commitHostInstallSourceMock: vi.fn(),
+  discardStagedHostInstallSourceMock: vi.fn(),
+  currentInstallPlatformMock: vi.fn(),
   resolveBundledHostArchiveMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
   resolveServiceCliInvocationMock: vi.fn(),
   createServiceControllerMock: vi.fn(),
   serviceLabelForMock: vi.fn(),
   createServiceInstallLifecycleMock: vi.fn(),
+  createBytesOnlyInstallLifecycleMock: vi.fn(),
   withCliLockMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
-  installHost: mocks.installHostMock,
+  stageHostInstallSource: async (
+    ...callArgs: Parameters<typeof mocks.stageHostInstallSourceMock>
+  ) => {
+    mocks.callOrder.push("stage");
+    return mocks.stageHostInstallSourceMock(...callArgs);
+  },
+  commitHostInstallSource: async (
+    ...callArgs: Parameters<typeof mocks.commitHostInstallSourceMock>
+  ) => {
+    mocks.callOrder.push("commit");
+    return mocks.commitHostInstallSourceMock(...callArgs);
+  },
+  discardStagedHostInstallSource: async (
+    ...callArgs: Parameters<typeof mocks.discardStagedHostInstallSourceMock>
+  ) => {
+    mocks.callOrder.push("discard");
+    return mocks.discardStagedHostInstallSourceMock(...callArgs);
+  },
+  currentInstallPlatform: mocks.currentInstallPlatformMock,
 }));
 
 vi.mock("../../installer/bundled-host", () => ({
@@ -42,6 +65,7 @@ vi.mock("../../service/cli-binary", () => ({
 
 vi.mock("../../service/install-lifecycle", () => ({
   createServiceInstallLifecycle: mocks.createServiceInstallLifecycleMock,
+  createBytesOnlyInstallLifecycle: mocks.createBytesOnlyInstallLifecycleMock,
 }));
 
 vi.mock("../../store/cli-lock", () => ({
@@ -53,13 +77,16 @@ vi.mock("../busy-check", () => ({
 }));
 
 const {
-  installHostMock,
+  stageHostInstallSourceMock,
+  commitHostInstallSourceMock,
+  discardStagedHostInstallSourceMock,
   resolveBundledHostArchiveMock,
   readHostInstallRecordMock,
   resolveServiceCliInvocationMock,
   createServiceControllerMock,
   serviceLabelForMock,
   createServiceInstallLifecycleMock,
+  createBytesOnlyInstallLifecycleMock,
   withCliLockMock,
   assertHostNotBusyMock,
 } = mocks;
@@ -126,6 +153,7 @@ function makeController(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.callOrder = [];
   config.supportedHostVersion = null;
   serviceLabelForMock.mockImplementation(
     (environment: "production" | "dev") => ({
@@ -141,7 +169,12 @@ beforeEach(() => {
   });
   resolveBundledHostArchiveMock.mockResolvedValue(null);
   withCliLockMock.mockImplementation(
-    async (_opts: unknown, fn: () => Promise<unknown>) => fn(),
+    async (_opts: unknown, fn: () => Promise<unknown>) => {
+      mocks.callOrder.push("lock-enter");
+      const result = await fn();
+      mocks.callOrder.push("lock-exit");
+      return result;
+    },
   );
   createServiceInstallLifecycleMock.mockImplementation(() => ({
     state: {
@@ -152,8 +185,25 @@ beforeEach(() => {
     },
     lifecycle: { beforeSwap: vi.fn(), afterSwap: vi.fn() },
   }));
-  installHostMock.mockResolvedValue({ record: { version: "1.6.0" } });
+  createBytesOnlyInstallLifecycleMock.mockImplementation(() => ({
+    beforeSwap: vi.fn(),
+    afterSwap: vi.fn(),
+  }));
+  stageHostInstallSourceMock.mockResolvedValue({
+    stagingDir: "/tmp/staged",
+    version: "1.6.0",
+  });
+  commitHostInstallSourceMock.mockResolvedValue({
+    record: {
+      installId: "install-1.6.0",
+      version: "1.6.0",
+      runtimeVersion: null,
+    },
+    previous: null,
+    installGeneration: "id:install-1.6.0",
+  });
   assertHostNotBusyMock.mockResolvedValue(undefined);
+  mocks.currentInstallPlatformMock.mockReturnValue("darwin");
 });
 
 afterEach(() => {
@@ -161,6 +211,19 @@ afterEach(() => {
 });
 
 describe("ensureHost", () => {
+  it("rejects --no-service-register on Windows before inspecting or stopping a live host", async () => {
+    mocks.currentInstallPlatformMock.mockReturnValue("win32");
+
+    await expect(
+      ensureHost(makeOpts({ noServiceRegister: true })),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+
+    expect(readHostInstallRecordMock).not.toHaveBeenCalled();
+    expect(createServiceControllerMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
   it("fast no-op when installed + registered + running (no lock, no install)", async () => {
     readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
     const controller = makeController("running");
@@ -170,14 +233,22 @@ describe("ensureHost", () => {
 
     expect(result.action).toBe("noop");
     expect(result.running).toBe(true);
+    expect(result.installGeneration).toBeNull();
     expect(withCliLockMock).not.toHaveBeenCalled();
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
     expect(controller.install).not.toHaveBeenCalled();
     expect(controller.start).not.toHaveBeenCalled();
   });
 
-  it("starts a registered-but-stopped host without reinstalling", async () => {
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+  it("starts a registered-but-stopped host without reinstalling, and attests the current record's generation", async () => {
+    readHostInstallRecordMock.mockResolvedValue({
+      installId: "install-1.5.0",
+      version: "1.5.0",
+      runtimeVersion: null,
+      installedAt: "2026-01-01T00:00:00.000Z",
+      archiveSha256: "a".repeat(64),
+    });
     const controller = makeController("stopped");
     createServiceControllerMock.mockReturnValue(controller);
 
@@ -185,8 +256,16 @@ describe("ensureHost", () => {
 
     expect(result.action).toBe("started");
     expect(controller.start).toHaveBeenCalledTimes(1);
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
     expect(controller.install).not.toHaveBeenCalled();
+    expect(result.installGeneration).toBe("id:install-1.5.0");
+    expect(result.serviceLifecycle).toEqual({
+      priorServiceState: "stopped",
+      stoppedBeforeSwap: false,
+      postSwapAction: "start",
+      postSwapError: null,
+    });
   });
 
   it("escalate-once: install's own recovery run is accepted without a duplicate IgnoreNew start", async () => {
@@ -234,7 +313,7 @@ describe("ensureHost", () => {
     expect(result.running).toBe(true);
     expect(controller.start).toHaveBeenCalledTimes(1);
     expect(controller.install).toHaveBeenCalledTimes(1);
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
   });
 
   it("escalate-once: failed install launch gets one verified retry, then reports its honest retry error", async () => {
@@ -271,7 +350,7 @@ describe("ensureHost", () => {
     });
     expect(controller.start).toHaveBeenCalledTimes(2);
     expect(controller.install).toHaveBeenCalledTimes(1);
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
   });
 
   it("surfaces a failed task-definition rewrite instead of retrying the stale task", async () => {
@@ -303,11 +382,17 @@ describe("ensureHost", () => {
     // registered, falsely reporting a repair that never rewrote anything.
     expect(controller.start).toHaveBeenCalledTimes(1);
     expect(controller.install).toHaveBeenCalledTimes(1);
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
   });
 
-  it("registers the service when installed but not registered (no download)", async () => {
-    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+  it("registers the service when installed but not registered (no download), and attests the current record's generation", async () => {
+    readHostInstallRecordMock.mockResolvedValue({
+      installId: "install-1.5.0",
+      version: "1.5.0",
+      runtimeVersion: null,
+      installedAt: "2026-01-01T00:00:00.000Z",
+      archiveSha256: "a".repeat(64),
+    });
     const controller = makeController("not-installed");
     createServiceControllerMock.mockReturnValue(controller);
 
@@ -316,10 +401,18 @@ describe("ensureHost", () => {
     expect(result.action).toBe("service-registered");
     expect(controller.install).toHaveBeenCalledTimes(1);
     expect(resolveServiceCliInvocationMock).toHaveBeenCalledTimes(1);
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(result.installGeneration).toBe("id:install-1.5.0");
+    expect(result.serviceLifecycle).toEqual({
+      priorServiceState: "not-installed",
+      stoppedBeforeSwap: false,
+      postSwapAction: "install",
+      postSwapError: null,
+    });
   });
 
-  it("installs from the registry (latest) when no host is installed", async () => {
+  it("installs from the registry (latest) when no host is installed, staging entirely before the lock is ever acquired", async () => {
     readHostInstallRecordMock.mockResolvedValue(null);
     const controller = makeController("not-installed");
     createServiceControllerMock.mockReturnValue(controller);
@@ -328,12 +421,19 @@ describe("ensureHost", () => {
 
     expect(result.action).toBe("installed");
     expect(result.version).toBe("1.6.0");
-    expect(installHostMock).toHaveBeenCalledTimes(1);
-    expect(installHostMock).toHaveBeenCalledWith(
+    expect(result.installGeneration).toBe("id:install-1.6.0");
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source: { kind: "registry", versionRequest: "latest" },
       }),
     );
+    expect(mocks.callOrder).toEqual([
+      "stage",
+      "lock-enter",
+      "commit",
+      "lock-exit",
+    ]);
   });
 
   it("uses the configured supported host version for default registry installs", async () => {
@@ -345,8 +445,8 @@ describe("ensureHost", () => {
     const result = await ensureHost(makeOpts({}));
 
     expect(result.action).toBe("installed");
-    expect(installHostMock).toHaveBeenCalledTimes(1);
-    expect(installHostMock).toHaveBeenCalledWith(
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source: { kind: "registry", versionRequest: "1.7.2" },
       }),
@@ -358,12 +458,20 @@ describe("ensureHost", () => {
     readHostInstallRecordMock.mockResolvedValue({ version: "1.6.0" });
     const controller = makeController("running");
     createServiceControllerMock.mockReturnValue(controller);
-    installHostMock.mockResolvedValue({ record: { version: "1.7.2" } });
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: {
+        installId: "install-1.7.2",
+        version: "1.7.2",
+        runtimeVersion: null,
+      },
+      previous: { installId: "install-1.6.0", version: "1.6.0" },
+      installGeneration: "id:install-1.7.2",
+    });
 
     const result = await ensureHost(makeOpts({}));
 
     expect(result.action).toBe("installed");
-    expect(installHostMock).toHaveBeenCalledWith(
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source: { kind: "registry", versionRequest: "1.7.2" },
       }),
@@ -381,7 +489,7 @@ describe("ensureHost", () => {
     expect(result.action).toBe("installed");
   });
 
-  it("aborts the reinstall when the busy probe throws E_HOST_BUSY", async () => {
+  it("aborts the reinstall when the busy probe throws E_HOST_BUSY, discarding the already-staged temp without ever committing", async () => {
     config.supportedHostVersion = "1.7.2";
     readHostInstallRecordMock.mockResolvedValue({ version: "1.6.0" });
     createServiceControllerMock.mockReturnValue(makeController("running"));
@@ -397,7 +505,11 @@ describe("ensureHost", () => {
     await expect(ensureHost(makeOpts({}))).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_BUSY,
     });
-    expect(installHostMock).not.toHaveBeenCalled();
+    // Staging (outside the lock) already ran by prediction before the busy
+    // probe (inside the lock) ever gets a chance to throw.
+    expect(stageHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(discardStagedHostInstallSourceMock).toHaveBeenCalledTimes(1);
   });
 
   it("--force skips the busy probe and reinstalls a running host", async () => {
@@ -429,14 +541,22 @@ describe("ensureHost", () => {
     config.supportedHostVersion = "1.7.2";
     readHostInstallRecordMock.mockResolvedValue({ version: "1.7.2" });
     createServiceControllerMock.mockReturnValue(makeController("running"));
-    installHostMock.mockResolvedValue({ record: { version: "1.7.2" } });
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: {
+        installId: "install-1.7.2",
+        version: "1.7.2",
+        runtimeVersion: null,
+      },
+      previous: { installId: "install-1.7.2-prev", version: "1.7.2" },
+      installGeneration: "id:install-1.7.2",
+    });
 
     const result = await ensureHost(makeOpts({ force: true }));
 
     // Without force this is a no-op (installed + registered + running + version
     // matches); force must still reinstall + restart (D5).
     expect(result.action).toBe("installed");
-    expect(installHostMock).toHaveBeenCalledTimes(1);
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
     expect(assertHostNotBusyMock).not.toHaveBeenCalled();
   });
 
@@ -448,12 +568,15 @@ describe("ensureHost", () => {
     const result = await ensureHost(makeOpts({ noServiceRegister: true }));
 
     expect(result.action).toBe("installed");
-    expect(installHostMock).toHaveBeenCalledTimes(1);
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
     // Host (desktop SMAppService) owns registration - the CLI must not
     // touch the OS service or build a registering lifecycle.
     expect(controller.install).not.toHaveBeenCalled();
     expect(controller.start).not.toHaveBeenCalled();
     expect(createServiceInstallLifecycleMock).not.toHaveBeenCalled();
+    // The bytes-only builder IS used - Windows still needs its `beforeSwap`
+    // to release stray file handles before the rename.
+    expect(createBytesOnlyInstallLifecycleMock).toHaveBeenCalledTimes(1);
     expect(result.serviceLifecycle).toBeNull();
   });
 
@@ -465,7 +588,8 @@ describe("ensureHost", () => {
     const result = await ensureHost(makeOpts({ noServiceRegister: true }));
 
     expect(result.action).toBe("noop");
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
     expect(controller.install).not.toHaveBeenCalled();
   });
 
@@ -478,7 +602,7 @@ describe("ensureHost", () => {
 
     await ensureHost(makeOpts({}));
 
-    expect(installHostMock).toHaveBeenCalledWith(
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source: { kind: "local-file", path: "/bundle/host.tar.gz" },
       }),
@@ -493,7 +617,7 @@ describe("ensureHost", () => {
 
     await ensureHost(makeOpts({ versionRequest: "latest" }));
 
-    expect(installHostMock).toHaveBeenCalledWith(
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source: { kind: "registry", versionRequest: "latest" },
       }),
@@ -508,10 +632,29 @@ describe("ensureHost", () => {
     const result = await ensureHost(makeOpts({ versionRequest: "1.6.0" }));
 
     expect(result.action).toBe("installed");
-    expect(installHostMock).toHaveBeenCalledWith(
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source: { kind: "registry", versionRequest: "1.6.0" },
       }),
     );
+  });
+
+  it("a lost race (locked recheck finds the host already provisioned by another actor) discards the pre-staged temp and never commits", async () => {
+    // Fast (lock-free) read predicts install is needed (not installed yet);
+    // by the time the lock is acquired, a concurrent actor has already
+    // installed - the locked recheck must win and the speculative stage
+    // must be discarded rather than committed on top.
+    readHostInstallRecordMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ version: "1.6.0" });
+    const controller = makeController("running");
+    createServiceControllerMock.mockReturnValue(controller);
+
+    const result = await ensureHost(makeOpts({}));
+
+    expect(result.action).toBe("noop");
+    expect(stageHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(discardStagedHostInstallSourceMock).toHaveBeenCalledTimes(1);
   });
 });

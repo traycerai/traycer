@@ -1,399 +1,39 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type Mock,
-} from "vitest";
-import type { HostEnsureIpcResult } from "../../ipc/host-ensure-ipc";
-import type { Environment, HostFsLayout } from "../host-paths";
-import type {
-  HostEnsureError,
-  HostEnsureResultPayload,
-  HostReadinessResult,
-  ServiceLifecycleSnapshot,
-} from "../host-readiness";
-import type {
-  HostLoginItemStatus,
-  RegisterHostLoginItemResult,
-} from "../../app/host-login-item";
-
-// Ticket packaging-smappservice-activation / marker-monitor: the pending
-// LaunchAgent revision monitor closes the gap where `ensureHost()`'s
-// already-ready fast path only gets one shot per app launch to apply a
-// deferred SMAppService revision - see
-// `pending-login-item-revision-monitor.ts`'s module doc comment for the
-// full mechanism.
-//
-// Two independent things are pinned here:
-//   - The monitor's own tick logic (guard order, failure budget, dispose
-//     semantics) via its deps-injection seams - no module mocking needed,
-//     every collaborator is overridable per test.
-//   - Mutual exclusion with a concurrent renderer-triggered ensure, which
-//     requires the REAL `runEnsureHost` (its in-flight coalescing slot is
-//     module-scoped state in `host-ensure-ipc.ts`, not something a fake
-//     `deps.runEnsure` could exercise) - that block mocks `ensureHost`'s own
-//     dependencies the same way `host-ensure-ipc.test.ts` does.
-
-vi.mock("electron", () => ({
-  app: { isPackaged: false, getAppPath: (): string => "/fake/app/path" },
-}));
-
-vi.mock("electron-log", () => ({
-  default: {
-    transports: { file: { level: "info" }, console: { level: "info" } },
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  },
-}));
-
-const isHostRemovedByUser: Mock<() => Promise<boolean>> = vi.fn();
-vi.mock("../host-removal-state", () => ({
-  isHostRemovedByUser: () => isHostRemovedByUser(),
-}));
-
-const hostManagesHostLoginItem: Mock<() => Promise<boolean>> = vi.fn();
-const hasPendingLoginItemRevision: Mock<
-  (environment: Environment) => Promise<boolean>
-> = vi.fn();
-const registerHostLoginItem: Mock<() => Promise<RegisterHostLoginItemResult>> =
-  vi.fn();
-const readHostLoginItemStatus: Mock<() => HostLoginItemStatus> = vi.fn();
-vi.mock("../../app/host-login-item", () => ({
-  hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
-  hasPendingLoginItemRevision: (environment: Environment) =>
-    hasPendingLoginItemRevision(environment),
-  registerHostLoginItem: () => registerHostLoginItem(),
-  readHostLoginItemStatus: () => readHostLoginItemStatus(),
-}));
-
-const approvalRequiredMessage: Mock<() => string> = vi.fn();
-vi.mock("../../app/host-respawn", () => ({
-  approvalRequiredMessage: () => approvalRequiredMessage(),
-}));
-
-const probeHostActivityBusy: Mock<(websocketUrl: string) => Promise<boolean>> =
-  vi.fn();
-vi.mock("@traycer-clients/shared/host-client/host-activity-probe", () => ({
-  probeHostActivityBusy: (listenUrl: string) =>
-    probeHostActivityBusy(listenUrl),
-}));
-
-const canReachHostWebsocketUrl: Mock<(url: string) => Promise<boolean>> =
-  vi.fn();
-vi.mock("../host-lifecycle", () => ({
-  canReachHostWebsocketUrl: (url: string) => canReachHostWebsocketUrl(url),
-}));
-
-const waitForHostReady: Mock<
-  (
-    timeoutMs: number,
-    pidPath: string,
-    pollIntervalMs: number,
-    skipPid: number | null,
-    options: {
-      spawnEvidenceBaseline: unknown;
-      extendedTimeoutMs: number;
-    },
-  ) => Promise<HostReadinessResult>
-> = vi.fn();
-const categorizeHostCliError: Mock<(err: unknown) => HostEnsureError> = vi.fn();
-const readServiceLifecycle: Mock<
-  (
-    payload: HostEnsureResultPayload | null | undefined,
-  ) => ServiceLifecycleSnapshot
-> = vi.fn();
-vi.mock("../host-readiness", () => ({
-  HOST_READY_TIMEOUT_MS: 60_000,
-  HOST_READY_POLL_MS: 250,
-  HOST_READY_EXTENDED_TIMEOUT_MS: 5 * 60_000,
-  categorizeHostCliError: (err: unknown) => categorizeHostCliError(err),
-  readServiceLifecycle: (payload: HostEnsureResultPayload | null | undefined) =>
-    readServiceLifecycle(payload),
-  waitForHostReady: (
-    timeoutMs: number,
-    pidPath: string,
-    pollIntervalMs: number,
-    skipPid: number | null,
-    options: {
-      spawnEvidenceBaseline: unknown;
-      extendedTimeoutMs: number;
-    },
-  ) => waitForHostReady(timeoutMs, pidPath, pollIntervalMs, skipPid, options),
-}));
-
-const getHostFsLayout: Mock<(environment: Environment) => HostFsLayout> =
-  vi.fn();
-vi.mock("../host-paths", () => ({
-  getHostFsLayout: (environment: Environment) => getHostFsLayout(environment),
-}));
-
-const getActiveEnvironment: Mock<() => Environment> = vi.fn();
-const streamCliWithinReservedOperation: Mock<
-  (...args: unknown[]) => Promise<unknown>
-> = vi.fn();
-
-type HostOperationKind =
-  | "install"
-  | "update"
-  | "register-service"
-  | "ensure"
-  | "restart"
-  | "free-port-and-restart";
-
-interface HostOperationStatus {
-  readonly operationId: string;
-  readonly kind: HostOperationKind;
-  readonly stage: string | null;
-  readonly percent: number | null;
-  readonly bytes: number | null;
-  readonly totalBytes: number | null;
-  readonly message: string | null;
-  readonly startedAt: string;
-}
-
-type HostEnsureOutcome =
-  | {
-      readonly operationId: string;
-      readonly revision: number;
-      readonly result: HostEnsureIpcResult;
-      readonly busyHostPid: number | null;
-    }
-  | {
-      readonly operationId: string;
-      readonly revision: number;
-      readonly error: {
-        readonly message: string;
-        readonly code: string | null;
-      };
-    }
-  | null;
-
-interface HostOperationStatusEnvelope {
-  revision: number;
-  status: HostOperationStatus | null;
-  lastEnsureOutcome: HostEnsureOutcome;
-}
-
-interface HostOperationReservation {
-  readonly bridge: {
-    fanOut: Mock<(channel: string, payload: unknown) => void>;
-  };
-  readonly operationId: string;
-  readonly kind: HostOperationKind;
-  readonly startedAt: string;
-  readonly cancelEpoch: number;
-}
-
-type PendingEnsureOutcome =
-  | {
-      readonly operationId: string;
-      readonly result: HostEnsureIpcResult;
-      readonly busyHostPid: number | null;
-    }
-  | {
-      readonly operationId: string;
-      readonly error: {
-        readonly message: string;
-        readonly code: string | null;
-      };
-    }
-  | null;
-
-let currentEnvelope: HostOperationStatusEnvelope = {
-  revision: 0,
-  status: null,
-  lastEnsureOutcome: null,
-};
-
-function resetEnvelopeSeam(): void {
-  currentEnvelope = {
-    revision: 0,
-    status: null,
-    lastEnsureOutcome: null,
-  };
-}
-
-function setEnvelope(
-  bridge: HostOperationReservation["bridge"],
-  status: HostOperationStatus | null,
-  pendingEnsureOutcome: PendingEnsureOutcome,
-): HostOperationStatusEnvelope {
-  const revision = currentEnvelope.revision + 1;
-  const lastEnsureOutcome: HostEnsureOutcome =
-    pendingEnsureOutcome === null
-      ? null
-      : "result" in pendingEnsureOutcome
-        ? {
-            operationId: pendingEnsureOutcome.operationId,
-            revision,
-            result: pendingEnsureOutcome.result,
-            busyHostPid: pendingEnsureOutcome.busyHostPid,
-          }
-        : {
-            operationId: pendingEnsureOutcome.operationId,
-            revision,
-            error: pendingEnsureOutcome.error,
-          };
-  currentEnvelope = { revision, status, lastEnsureOutcome };
-  bridge.fanOut("hostOperationStatusChange", currentEnvelope);
-  return currentEnvelope;
-}
-
-vi.mock("../../ipc/host-management-ipc", () => ({
-  getActiveEnvironment: () => getActiveEnvironment(),
-  optionalString: (raw: unknown, key: string) => {
-    if (raw === null || typeof raw !== "object" || !(key in raw)) {
-      return null;
-    }
-    const value = (raw as Record<string, unknown>)[key];
-    return typeof value === "string" ? value : null;
-  },
-  optionalBoolean: (raw: unknown, key: string) => {
-    if (raw === null || typeof raw !== "object" || !(key in raw)) {
-      return false;
-    }
-    return (raw as Record<string, unknown>)[key] === true;
-  },
-  getHostOperationStatus: () => currentEnvelope,
-  reserveHostOperation: (
-    bridge: HostOperationReservation["bridge"],
-    kind: HostOperationKind,
-    operationId: string,
-  ): HostOperationReservation => {
-    if (currentEnvelope.status !== null) {
-      throw new Error(
-        `Another host operation (${currentEnvelope.status.kind}) is already in progress`,
-      );
-    }
-    const reservation: HostOperationReservation = {
-      bridge,
-      operationId,
-      kind,
-      startedAt: "2026-05-15T00:00:00Z",
-      cancelEpoch: 0,
-    };
-    setEnvelope(
-      bridge,
-      {
-        operationId,
-        kind,
-        stage: null,
-        percent: null,
-        bytes: null,
-        totalBytes: null,
-        message: null,
-        startedAt: reservation.startedAt,
-      },
-      null,
-    );
-    return reservation;
-  },
-  publishHostOperationStage: (
-    reservation: HostOperationReservation,
-    stage: string,
-  ): void => {
-    const status = currentEnvelope.status;
-    if (status === null || status.operationId !== reservation.operationId) {
-      throw new Error(
-        "Host operation reservation was lost before it completed",
-      );
-    }
-    setEnvelope(
-      reservation.bridge,
-      {
-        ...status,
-        stage,
-        percent: null,
-        bytes: null,
-        totalBytes: null,
-        message: null,
-      },
-      null,
-    );
-  },
-  releaseHostOperation: (
-    reservation: HostOperationReservation,
-    pendingEnsureOutcome: PendingEnsureOutcome,
-  ): void => {
-    const status = currentEnvelope.status;
-    if (status === null || status.operationId !== reservation.operationId) {
-      throw new Error(
-        "Host operation reservation was lost before it completed",
-      );
-    }
-    setEnvelope(reservation.bridge, null, pendingEnsureOutcome);
-  },
-  streamCliWithinReservedOperation: (...args: unknown[]) =>
-    streamCliWithinReservedOperation(...args),
-  LONG_OP_TIMEOUT_MS: 600_000,
-}));
-
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startPendingLoginItemRevisionMonitor } from "../pending-login-item-revision-monitor";
-import {
-  resetInFlightEnsureForTests,
-  runEnsureHost,
-} from "../../ipc/host-ensure-ipc";
+import type { PendingLoginItemRevisionMonitorHostController } from "../pending-login-item-revision-monitor";
+import type { MutationOutcome } from "../host-controller-types";
+import type { ConvergeReadyOk } from "../host-controller-types";
 
-const INTERVAL_MS = 1_000;
-const LISTEN_URL = "ws://127.0.0.1:9999/rpc";
+// Ticket: HostController two-lane scheduler cutover. This monitor used to
+// own the pending-LaunchAgent-revision fast path's own guards (marker check,
+// reachability, idle probe) and hand off to `host-ensure-ipc.ts`'s
+// `runEnsureHost` in-flight slot. All of that now lives inside
+// `HostController.applyPendingLoginItemRevisionIfIdle()` - a single,
+// self-locking controller method - so this monitor is a thin timer wrapper:
+// it owns only the poll interval, the failure budget, and stopping once the
+// controller reports the refresh quarantined for the session. See
+// `host-controller.test.ts` for the actual refresh-cycle behavior (busy
+// skip, requires-approval quarantine, desktop-lock mutual exclusion with a
+// concurrent `convergeReady`) and `pending-login-item-revision-monitor.ts`'s
+// module doc comment for the full mechanism this closes the gap for.
+
 const SERVICE_VERSION = "1.2.3";
-const SERVICE_PID = 111;
+const INTERVAL_MS = 1_000;
 
-// `FakeBridge` below is fully typed (no member is `any`/unparameterized), but
-// every `runEnsureHost(bridge as never, ...)` call site still needs the cast:
-// `RunnerIpcBridge` is a concrete class with private fields, so no plain
-// object - however precisely typed - can structurally satisfy it. Only
-// `options.host.{getServiceStatus,reloadSnapshotFromDisk}` are ever
-// dereferenced on the fast (already-reachable) path these tests exercise.
-interface FakeServiceStatus {
-  readonly state: "running" | "stopped" | "not-installed";
-  readonly version: string | null;
-  readonly listenUrl: string | null;
-  readonly pid: number | null;
-}
+type Outcome = MutationOutcome<ConvergeReadyOk> | null;
 
-interface FakeBridge {
-  readonly fanOut: Mock<(channel: string, payload: unknown) => void>;
-  readonly options: {
-    readonly host: {
-      readonly getServiceStatus: Mock<() => Promise<FakeServiceStatus>>;
-      readonly reloadSnapshotFromDisk: Mock<() => Promise<null>>;
-    };
-  };
-}
-
-function fakeBridge(
-  getServiceStatus: Mock<() => Promise<FakeServiceStatus>>,
-): FakeBridge {
+function fakeHostController(
+  applyPendingLoginItemRevisionIfIdle: () => Promise<Outcome>,
+  isPendingRevisionRefreshQuarantined: () => boolean,
+): PendingLoginItemRevisionMonitorHostController {
   return {
-    fanOut: vi.fn(),
-    options: {
-      host: {
-        getServiceStatus,
-        reloadSnapshotFromDisk: vi.fn(async () => null),
-      },
-    },
+    applyPendingLoginItemRevisionIfIdle,
+    isPendingRevisionRefreshQuarantined,
   };
-}
-
-function runningServiceStatus(): Mock<() => Promise<FakeServiceStatus>> {
-  return vi.fn(async () => ({
-    state: "running" as const,
-    version: SERVICE_VERSION,
-    listenUrl: LISTEN_URL,
-    pid: SERVICE_PID,
-  }));
 }
 
 describe("startPendingLoginItemRevisionMonitor", () => {
   beforeEach(() => {
-    resetEnvelopeSeam();
-    resetInFlightEnsureForTests();
     vi.useFakeTimers();
   });
   afterEach(() => {
@@ -406,258 +46,92 @@ describe("startPendingLoginItemRevisionMonitor", () => {
     }
   }
 
-  it("runs exactly one register cycle when a marker is present on a reachable host", async () => {
-    const runEnsure = vi.fn(async (): Promise<HostEnsureIpcResult> => ({
-      action: "already-ready",
-      running: true,
-      version: SERVICE_VERSION,
-    }));
-    const bridge = fakeBridge(runningServiceStatus());
-    const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: bridge as never,
-      intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision: vi.fn(async () => true),
-      canReach: vi.fn(async () => true),
-      isRefreshQuarantined: () => false,
-      runEnsure,
-    });
-    await ticks(1);
-    expect(runEnsure).toHaveBeenCalledTimes(1);
-    expect(runEnsure).toHaveBeenCalledWith(bridge, expect.any(String), false);
-    monitor.dispose();
-  });
-
-  it("short-circuits before any other guard when there is no pending marker", async () => {
-    const getServiceStatus = runningServiceStatus();
-    const canReach = vi.fn(async () => true);
-    const runEnsure = vi.fn(async (): Promise<HostEnsureIpcResult> => ({
-      action: "already-ready",
-      running: true,
-      version: SERVICE_VERSION,
+  // Fixup D2: title narrowed - every outcome here is "ok", so there is never
+  // a spent failure budget for this test to reset. The reset-on-success
+  // claim is actually exercised (failure -> success -> failure again all
+  // still running) by the test below, "resets the failure budget after a
+  // successful refresh".
+  it("calls applyPendingLoginItemRevisionIfIdle on every tick", async () => {
+    const refresh = vi.fn(async (): Promise<Outcome> => ({
+      kind: "ok",
+      value: { running: true, version: SERVICE_VERSION },
     }));
     const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: fakeBridge(getServiceStatus) as never,
+      hostController: fakeHostController(refresh, () => false),
       intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision: vi.fn(async () => false),
-      canReach,
-      isRefreshQuarantined: () => false,
-      runEnsure,
     });
     await ticks(3);
-    expect(getServiceStatus).not.toHaveBeenCalled();
-    expect(canReach).not.toHaveBeenCalled();
-    expect(runEnsure).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(3);
     monitor.dispose();
   });
 
-  it("does nothing and never provisions when the service is not running", async () => {
-    const canReach = vi.fn(async () => true);
-    const runEnsure = vi.fn(async (): Promise<HostEnsureIpcResult> => ({
-      action: "already-ready",
-      running: true,
-      version: SERVICE_VERSION,
-    }));
-    const getServiceStatus = vi.fn(async () => ({
-      state: "stopped" as const,
-      version: null,
-      listenUrl: null,
-      pid: null,
-    }));
+  it("treats a null outcome (nothing to do) as a no-op that does not spend the failure budget", async () => {
+    const refresh = vi.fn(async (): Promise<Outcome> => null);
+    const isQuarantined = vi.fn(() => false);
     const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: fakeBridge(getServiceStatus) as never,
+      hostController: fakeHostController(refresh, isQuarantined),
       intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision: vi.fn(async () => true),
-      canReach,
-      isRefreshQuarantined: () => false,
-      runEnsure,
     });
-    await ticks(1);
-    expect(canReach).not.toHaveBeenCalled();
-    expect(runEnsure).not.toHaveBeenCalled();
+    await ticks(10);
+    expect(refresh).toHaveBeenCalledTimes(10);
+    // Never quarantined by the controller and null is never a failure, so
+    // ticking never stops on its own.
     monitor.dispose();
   });
 
-  it("does nothing when the service reports running but listenUrl is null", async () => {
-    const canReach = vi.fn(async () => true);
-    const runEnsure = vi.fn(async (): Promise<HostEnsureIpcResult> => ({
-      action: "already-ready",
-      running: true,
-      version: SERVICE_VERSION,
+  it("exhausts the failure budget after 3 non-ok outcomes and stops every check thereafter, permanently", async () => {
+    const refresh = vi.fn(async (): Promise<Outcome> => ({
+      kind: "failed",
+      message: "refresh cycle failed",
     }));
-    const getServiceStatus = vi.fn(async () => ({
-      state: "running" as const,
-      version: SERVICE_VERSION,
-      listenUrl: null,
-      pid: SERVICE_PID,
-    }));
+    const isQuarantined = vi.fn(() => false);
     const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: fakeBridge(getServiceStatus) as never,
+      hostController: fakeHostController(refresh, isQuarantined),
       intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision: vi.fn(async () => true),
-      canReach,
-      isRefreshQuarantined: () => false,
-      runEnsure,
-    });
-    await ticks(1);
-    expect(canReach).not.toHaveBeenCalled();
-    expect(runEnsure).not.toHaveBeenCalled();
-    monitor.dispose();
-  });
-
-  it("does nothing when the host is unreachable", async () => {
-    const canReach = vi.fn(async () => false);
-    const runEnsure = vi.fn(async (): Promise<HostEnsureIpcResult> => ({
-      action: "already-ready",
-      running: true,
-      version: SERVICE_VERSION,
-    }));
-    const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: fakeBridge(runningServiceStatus()) as never,
-      intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision: vi.fn(async () => true),
-      canReach,
-      isRefreshQuarantined: () => false,
-      runEnsure,
-    });
-    await ticks(1);
-    expect(canReach).toHaveBeenCalledTimes(1);
-    expect(runEnsure).not.toHaveBeenCalled();
-    monitor.dispose();
-  });
-
-  it("exhausts the failure budget after 3 failed attempts and stops every guard check thereafter, permanently", async () => {
-    const hasPendingRevision = vi.fn(async () => true);
-    const canReach = vi.fn(async () => true);
-    const getServiceStatus = runningServiceStatus();
-    const runEnsure = vi.fn(async (): Promise<HostEnsureIpcResult> => {
-      throw new Error("register cycle failed");
-    });
-    const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: fakeBridge(getServiceStatus) as never,
-      intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision,
-      canReach,
-      isRefreshQuarantined: () => false,
-      runEnsure,
     });
 
     await ticks(3);
-    expect(runEnsure).toHaveBeenCalledTimes(3);
+    expect(refresh).toHaveBeenCalledTimes(3);
 
-    hasPendingRevision.mockClear();
-    getServiceStatus.mockClear();
-    canReach.mockClear();
-    runEnsure.mockClear();
+    refresh.mockClear();
+    isQuarantined.mockClear();
 
-    // The 4th tick: budget already exhausted, not even the cheap marker
-    // check should run.
-    await ticks(1);
-    expect(hasPendingRevision).not.toHaveBeenCalled();
-    expect(getServiceStatus).not.toHaveBeenCalled();
-    expect(canReach).not.toHaveBeenCalled();
-    expect(runEnsure).not.toHaveBeenCalled();
-
-    // Never recovers even though every guard would now report favorably.
+    // 4th tick: budget already exhausted - not even the quarantine check
+    // (which itself gates every tick) should keep calling refresh.
     await ticks(3);
-    expect(hasPendingRevision).not.toHaveBeenCalled();
-    expect(runEnsure).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
 
     monitor.dispose();
   });
 
-  it("increments the failure budget on a thrown guard, not only a runEnsure rejection", async () => {
-    const canReach = vi.fn(async () => {
-      throw new Error("reachability check failed");
+  it("increments the failure budget on a thrown refresh, same as a non-ok outcome", async () => {
+    const refresh = vi.fn(async (): Promise<Outcome> => {
+      throw new Error("refresh threw");
     });
-    const runEnsure = vi.fn(async (): Promise<HostEnsureIpcResult> => ({
-      action: "already-ready",
-      running: true,
-      version: SERVICE_VERSION,
-    }));
     const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: fakeBridge(runningServiceStatus()) as never,
+      hostController: fakeHostController(refresh, () => false),
       intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision: vi.fn(async () => true),
-      canReach,
-      isRefreshQuarantined: () => false,
-      runEnsure,
     });
 
     await ticks(3);
-    expect(canReach).toHaveBeenCalledTimes(3);
-    canReach.mockClear();
+    expect(refresh).toHaveBeenCalledTimes(3);
+    refresh.mockClear();
 
     await ticks(1);
-    expect(canReach).not.toHaveBeenCalled();
-    expect(runEnsure).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
 
     monitor.dispose();
   });
 
-  it("stops for the session once the ensure fast path has quarantined the refresh - no more handoffs, marker left for the next launch", async () => {
-    // Without this terminal check, a quarantined fast path makes every
-    // handoff no-op AND resolve `already-ready`: the failure budget resets
-    // on each tick and the monitor churns a pointless ensure every 30s for
-    // the rest of the session.
-    let quarantined = false;
-    const hasPendingRevision = vi.fn(async () => true);
-    const runEnsure = vi.fn(async (): Promise<HostEnsureIpcResult> => {
-      // Mirrors the real fast path's requires-approval pre-flight: it
-      // quarantines and RESOLVES (already-ready) rather than throwing.
-      quarantined = true;
-      return {
-        action: "already-ready",
-        running: true,
-        version: SERVICE_VERSION,
-      };
-    });
-    const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: fakeBridge(runningServiceStatus()) as never,
-      intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision,
-      canReach: vi.fn(async () => true),
-      isRefreshQuarantined: () => quarantined,
-      runEnsure,
-    });
-
-    await ticks(1);
-    expect(runEnsure).toHaveBeenCalledTimes(1);
-
-    // Every subsequent tick is terminal: no marker probe, no handoff.
-    hasPendingRevision.mockClear();
-    await ticks(4);
-    expect(runEnsure).toHaveBeenCalledTimes(1);
-    expect(hasPendingRevision).not.toHaveBeenCalled();
-
-    monitor.dispose();
-  });
-
-  it("resets the failure budget after a successful register cycle", async () => {
+  it("resets the failure budget after a successful refresh", async () => {
     let shouldFail = true;
-    const runEnsure = vi.fn(async (): Promise<HostEnsureIpcResult> => {
-      if (shouldFail) throw new Error("register cycle failed");
-      return {
-        action: "already-ready",
-        running: true,
-        version: SERVICE_VERSION,
-      };
+    const refresh = vi.fn(async (): Promise<Outcome> => {
+      if (shouldFail) throw new Error("refresh failed");
+      return { kind: "ok", value: { running: true, version: SERVICE_VERSION } };
     });
     const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: fakeBridge(runningServiceStatus()) as never,
+      hostController: fakeHostController(refresh, () => false),
       intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision: vi.fn(async () => true),
-      canReach: vi.fn(async () => true),
-      isRefreshQuarantined: () => false,
-      runEnsure,
     });
 
     await ticks(2); // 2 failures - budget not yet exhausted (threshold is 3)
@@ -665,36 +139,66 @@ describe("startPendingLoginItemRevisionMonitor", () => {
     await ticks(1); // success resets failedAttempts to 0
     shouldFail = true;
     await ticks(3); // a fresh run of 3 failures - should still be allowed to run all 3
-    expect(runEnsure).toHaveBeenCalledTimes(6);
+    expect(refresh).toHaveBeenCalledTimes(6);
 
     monitor.dispose();
   });
 
-  it("disposing mid-tick stops further ticks and does not crash once the in-flight call resolves", async () => {
-    let resolveRunEnsure!: (value: HostEnsureIpcResult) => void;
-    const pending = new Promise<HostEnsureIpcResult>((resolve) => {
-      resolveRunEnsure = resolve;
+  it("stops for the session the moment the controller reports the refresh quarantined - no further calls, even without a thrown/failed outcome", async () => {
+    // Without this terminal check, a quarantined controller state would just
+    // make every tick call `applyPendingLoginItemRevisionIfIdle()` forever
+    // for a refresh that can never succeed again this session.
+    let quarantined = false;
+    const refresh = vi.fn(async (): Promise<Outcome> => {
+      quarantined = true;
+      return null;
     });
-    const runEnsure = vi.fn(() => pending);
     const monitor = startPendingLoginItemRevisionMonitor({
-      bridge: fakeBridge(runningServiceStatus()) as never,
+      hostController: fakeHostController(refresh, () => quarantined),
       intervalMs: INTERVAL_MS,
-      environment: "production",
-      hasPendingRevision: vi.fn(async () => true),
-      canReach: vi.fn(async () => true),
-      isRefreshQuarantined: () => false,
-      runEnsure,
     });
 
-    // Fires tick 1, which suspends on the still-pending `runEnsure` call.
-    await vi.advanceTimersByTimeAsync(INTERVAL_MS);
-    expect(runEnsure).toHaveBeenCalledTimes(1);
+    await ticks(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    refresh.mockClear();
+    await ticks(4);
+    expect(refresh).not.toHaveBeenCalled();
 
     monitor.dispose();
-    resolveRunEnsure({
-      action: "already-ready",
-      running: true,
-      version: SERVICE_VERSION,
+  });
+
+  it("checks the quarantine flag before every tick's refresh call, not only once at start", async () => {
+    const refresh = vi.fn(async (): Promise<Outcome> => null);
+    const isQuarantined = vi.fn(() => false);
+    const monitor = startPendingLoginItemRevisionMonitor({
+      hostController: fakeHostController(refresh, isQuarantined),
+      intervalMs: INTERVAL_MS,
+    });
+    await ticks(5);
+    expect(isQuarantined).toHaveBeenCalledTimes(5);
+    monitor.dispose();
+  });
+
+  it("disposing mid-tick stops further ticks and does not crash once the in-flight call resolves", async () => {
+    let resolveRefresh!: (value: Outcome) => void;
+    const pending = new Promise<Outcome>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const refresh = vi.fn(() => pending);
+    const monitor = startPendingLoginItemRevisionMonitor({
+      hostController: fakeHostController(refresh, () => false),
+      intervalMs: INTERVAL_MS,
+    });
+
+    // Fires tick 1, which suspends on the still-pending refresh call.
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    monitor.dispose();
+    resolveRefresh({
+      kind: "ok",
+      value: { running: true, version: SERVICE_VERSION },
     });
     // Flush the suspended tick's continuation after resolution.
     await Promise.resolve();
@@ -702,61 +206,37 @@ describe("startPendingLoginItemRevisionMonitor", () => {
 
     // No further ticks fire - the interval was cleared by dispose().
     await ticks(3);
-    expect(runEnsure).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
 
     // dispose() is idempotent and does not crash when called again.
     expect(() => monitor.dispose()).not.toThrow();
   });
-});
 
-describe("mutual exclusion with a concurrent renderer-triggered ensure", () => {
-  beforeEach(() => {
-    isHostRemovedByUser.mockReset().mockResolvedValue(false);
-    hostManagesHostLoginItem.mockReset().mockResolvedValue(true);
-    hasPendingLoginItemRevision.mockReset().mockResolvedValue(false);
-    registerHostLoginItem.mockReset().mockResolvedValue("enabled");
-    readHostLoginItemStatus.mockReset().mockReturnValue("enabled");
-    probeHostActivityBusy.mockReset().mockResolvedValue(false);
-    canReachHostWebsocketUrl.mockReset().mockResolvedValue(true);
-    waitForHostReady.mockReset();
-    approvalRequiredMessage.mockReset();
-    getHostFsLayout.mockReset();
-    getActiveEnvironment.mockReset().mockReturnValue("production");
-    streamCliWithinReservedOperation.mockReset();
-    categorizeHostCliError.mockReset();
-    readServiceLifecycle.mockReset();
-    resetEnvelopeSeam();
-    resetInFlightEnsureForTests();
-  });
+  it("does not stack a second tick on top of a still-pending one", async () => {
+    let resolveRefresh!: (value: Outcome) => void;
+    let callCount = 0;
+    const refresh = vi.fn(() => {
+      callCount += 1;
+      return new Promise<Outcome>((resolve) => {
+        resolveRefresh = resolve;
+      });
+    });
+    const monitor = startPendingLoginItemRevisionMonitor({
+      hostController: fakeHostController(refresh, () => false),
+      intervalMs: INTERVAL_MS,
+    });
 
-  it("coalesces the monitor's runEnsureHost call onto a concurrent renderer-triggered one - the underlying cycle runs only once", async () => {
-    const getServiceStatus = runningServiceStatus();
-    const bridge = fakeBridge(getServiceStatus);
+    // Two interval fires while the first call is still pending.
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS * 2);
+    expect(callCount).toBe(1);
 
-    // Simulates the renderer's `traycerHostEnsure` IPC handler and the
-    // monitor's own tick both calling the shared coalescing entry point at
-    // the same moment, with matching `force: false`.
-    const rendererCall = runEnsureHost(bridge as never, "renderer-op", false);
-    const monitorCall = runEnsureHost(bridge as never, "monitor-op", false);
+    resolveRefresh({
+      kind: "ok",
+      value: { running: true, version: SERVICE_VERSION },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
 
-    const [rendererResult, monitorResult] = await Promise.all([
-      rendererCall,
-      monitorCall,
-    ]);
-
-    const expected: HostEnsureIpcResult = {
-      action: "already-ready",
-      running: true,
-      version: SERVICE_VERSION,
-    };
-    expect(rendererResult).toEqual(expected);
-    expect(monitorResult).toEqual(expected);
-
-    // The second caller coalesced onto the first's in-flight promise rather
-    // than racing a second, independent register cycle.
-    expect(getServiceStatus).toHaveBeenCalledTimes(1);
-    expect(canReachHostWebsocketUrl).toHaveBeenCalledTimes(1);
-    expect(isHostRemovedByUser).toHaveBeenCalledTimes(1);
-    expect(hostManagesHostLoginItem).toHaveBeenCalledTimes(1);
+    monitor.dispose();
   });
 });

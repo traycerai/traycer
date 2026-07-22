@@ -18,9 +18,11 @@ import {
   useRouterState,
 } from "@tanstack/react-router";
 import type {
-  HostEnsureResult,
+  ConvergeReadyOk,
+  HostControllerStatus,
   IHostManagement,
   LocalHostSnapshot,
+  MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
@@ -118,14 +120,32 @@ function makeHost(snapshot: LocalHostSnapshot | null): MockRunnerHost {
   });
 }
 
+const IDLE_CONTROLLER_STATUS: HostControllerStatus = {
+  download: null,
+  mutation: null,
+  installedVersion: validSnapshot.version,
+  latestVersion: validSnapshot.version,
+  stagedVersion: null,
+  installedRuntimeVersion: null,
+  runningRuntimeVersion: null,
+  updateReady: false,
+  activation: "activated",
+  reachable: true,
+  removedByUser: false,
+  checkedAt: "2026-05-15T00:00:00Z",
+};
+
 function makeHostManagement(
-  ensureHost: IHostManagement["ensureHost"],
+  convergeReady: IHostManagement["convergeReady"],
 ): IHostManagement {
   const notImplemented = (name: string) => () =>
     Promise.reject(new Error(`${name} not implemented in this test`));
   return {
-    installHost: notImplemented("installHost"),
-    updateHost: notImplemented("updateHost"),
+    getHostControllerStatus: () => Promise.resolve(IDLE_CONTROLLER_STATUS),
+    convergeReady,
+    applyStaged: notImplemented("applyStaged"),
+    activateInstalled: notImplemented("activateInstalled"),
+    installVersion: notImplemented("installVersion"),
     uninstallHost: notImplemented("uninstallHost"),
     restartHost: notImplemented("restartHost"),
     uninstallTraycer: notImplemented("uninstallTraycer"),
@@ -136,14 +156,8 @@ function makeHostManagement(
     availableVersions: notImplemented("availableVersions"),
     installedRecord: () => Promise.resolve(null),
     registerService: notImplemented("registerService"),
-    ensureHost,
     deregisterService: notImplemented("deregisterService"),
     registryCheck: notImplemented("registryCheck"),
-    getOperationStatus: () => Promise.resolve({
-  revision: 0,
-  status: null,
-  lastEnsureOutcome: null,
-}),
     freePortAndRestart: (input) => Promise.resolve(input),
     cliManifest: () => Promise.resolve(null),
     getHostName: () =>
@@ -217,10 +231,10 @@ function withQueryClient(children: ReactNode): ReactNode {
 }
 
 function seedStoredToken(host: MockRunnerHost): void {
-  void host.tokenStore.set({
-    token: "test-token",
-    refreshToken: "test-refresh-token",
-  });
+  void host.tokenStore.signIn(
+    { token: "test-token", refreshToken: "test-refresh-token" },
+    { id: "user-1", email: "test@example.com", name: "Test User" },
+  );
 }
 
 function buildMessengerFactory(
@@ -493,28 +507,27 @@ describe("LocalHostGate", () => {
       { userId: "test-user", username: "Test User" },
       [],
     );
-    const ensureHost = vi.fn((): Promise<HostEnsureResult> =>
+    const convergeReady = vi.fn((): Promise<MutationOutcome<ConvergeReadyOk>> =>
       Promise.resolve({
-        action: "provisioned",
-        running: true,
-        version: "1.2.3",
+        kind: "ok",
+        value: { running: true, version: "1.2.3" },
       }),
     );
     const host = new DeferredInitialSnapshotHost(
       null,
-      makeHostManagement(ensureHost),
+      makeHostManagement(convergeReady),
     );
 
     mountGate(host, localEntry);
 
-    expect(ensureHost).not.toHaveBeenCalled();
+    expect(convergeReady).not.toHaveBeenCalled();
 
     act(() => {
       host.emitInitialSnapshot();
     });
 
     await waitFor(() => {
-      expect(ensureHost).toHaveBeenCalledTimes(1);
+      expect(convergeReady).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -736,7 +749,7 @@ describe("LocalHostGate", () => {
     expect(screen.queryByTestId("gate-children")).toBeNull();
   });
 
-  it("normal-launch Update host calls ensureHost with force=true", async () => {
+  it("normal-launch Update host calls convergeReady with force=true", async () => {
     useAuthStore.getState().setSignedIn(
       {
         userId: "test-user",
@@ -746,11 +759,10 @@ describe("LocalHostGate", () => {
       { userId: "test-user", username: "Test User" },
       [],
     );
-    const ensureHost = vi.fn((): Promise<HostEnsureResult> =>
+    const convergeReady = vi.fn((): Promise<MutationOutcome<ConvergeReadyOk>> =>
       Promise.resolve({
-        action: "provisioned",
-        running: true,
-        version: "1.2.4",
+        kind: "ok",
+        value: { running: true, version: "1.2.4" },
       }),
     );
     mountGateWithRuntime(
@@ -762,7 +774,7 @@ describe("LocalHostGate", () => {
         workspaceFolderPickerPaths: undefined,
         hasLocalHost: undefined,
         traycerCli: undefined,
-        hostManagement: makeHostManagement(ensureHost),
+        hostManagement: makeHostManagement(convergeReady),
       }),
       localEntry,
       () => {
@@ -781,9 +793,7 @@ describe("LocalHostGate", () => {
     fireEvent.click(update);
 
     await waitFor(() => {
-      expect(ensureHost).toHaveBeenCalledWith(
-        expect.objectContaining({ force: true }),
-      );
+      expect(convergeReady).toHaveBeenCalledWith(true);
     });
   });
 
@@ -798,18 +808,20 @@ describe("LocalHostGate", () => {
       [],
     );
     const hostRef: { current: MockRunnerHost | null } = { current: null };
-    const ensureHost = vi.fn((): Promise<HostEnsureResult> => {
-      const currentHost = hostRef.current;
-      if (currentHost === null) {
-        return Promise.reject(new Error("host not mounted"));
-      }
-      currentHost.setLocalHost(validSnapshot);
-      return Promise.resolve({
-        action: "host-busy",
-        running: true,
-        version: "1.2.3",
-      });
-    });
+    const convergeReady = vi.fn(
+      (): Promise<MutationOutcome<ConvergeReadyOk>> => {
+        const currentHost = hostRef.current;
+        if (currentHost === null) {
+          return Promise.reject(new Error("host not mounted"));
+        }
+        currentHost.setLocalHost(validSnapshot);
+        return Promise.resolve({
+          kind: "busy",
+          continuation: "retry-with-force",
+          message: "The running host has work in progress.",
+        });
+      },
+    );
     const host = new MockRunnerHost({
       signInUrl: "https://auth.traycer.invalid/sign-in",
       authnBaseUrl: "http://localhost:5005",
@@ -818,7 +830,7 @@ describe("LocalHostGate", () => {
       workspaceFolderPickerPaths: undefined,
       hasLocalHost: undefined,
       traycerCli: undefined,
-      hostManagement: makeHostManagement(ensureHost),
+      hostManagement: makeHostManagement(convergeReady),
     });
     hostRef.current = host;
 
@@ -853,11 +865,9 @@ describe("LocalHostGate", () => {
     fireEvent.click(refresh);
 
     await waitFor(() => {
-      expect(ensureHost).toHaveBeenCalledTimes(2);
+      expect(convergeReady).toHaveBeenCalledTimes(2);
     });
-    expect(ensureHost).toHaveBeenLastCalledWith(
-      expect.objectContaining({ force: false }),
-    );
+    expect(convergeReady).toHaveBeenLastCalledWith(false);
 
     const forceUpdate = await screen.findByRole("button", {
       name: "Force update host",
@@ -865,11 +875,9 @@ describe("LocalHostGate", () => {
     fireEvent.click(forceUpdate);
 
     await waitFor(() => {
-      expect(ensureHost).toHaveBeenCalledTimes(3);
+      expect(convergeReady).toHaveBeenCalledTimes(3);
     });
-    expect(ensureHost).toHaveBeenLastCalledWith(
-      expect.objectContaining({ force: true }),
-    );
+    expect(convergeReady).toHaveBeenLastCalledWith(true);
   });
 
   it("flips from children to Stage 1 loading, then Stage 2 unavailable, when a previously-valid snapshot becomes null", async () => {
@@ -1236,17 +1244,17 @@ describe("LocalHostGate + system tab modal guard integration", () => {
     const windowId = "real-gate-promote-back";
     window.localStorage.setItem(
       `traycer-gui-app:last-route:${windowId}`,
-      JSON.stringify({ entries: ["/epics/e/t0", "/epics/e/t1"], index: 1 }),
+      JSON.stringify({ entries: ["/draft/d0", "/draft/d1"], index: 1 }),
     );
 
     const rootRoute = createRootRoute({
       validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
       component: GuardedRootWithRealGate,
     });
-    const epicRoute = createRoute({
+    const draftRoute = createRoute({
       getParentRoute: () => rootRoute,
-      path: "/epics/$epicId/$tabId",
-      component: () => <div data-testid="epic-route" />,
+      path: "/draft/$draftId",
+      component: () => <div data-testid="draft-route" />,
     });
     const settingsRoute = createRoute({
       getParentRoute: () => rootRoute,
@@ -1254,7 +1262,7 @@ describe("LocalHostGate + system tab modal guard integration", () => {
       component: () => <div data-testid="settings-route" />,
     });
     const router = createRouter({
-      routeTree: rootRoute.addChildren([epicRoute, settingsRoute]),
+      routeTree: rootRoute.addChildren([draftRoute, settingsRoute]),
       history: createPersistentMemoryHistory(null, windowId),
     });
 
@@ -1282,7 +1290,7 @@ describe("LocalHostGate + system tab modal guard integration", () => {
     );
 
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/epics/e/t1");
+      expect(router.state.location.pathname).toBe("/draft/d1");
     });
     await waitFor(() => expect(modalProbe.current).not.toBeNull());
 
@@ -1335,7 +1343,7 @@ describe("LocalHostGate + system tab modal guard integration", () => {
 
     // One click: leaves settings AND the overlay entry is fully collapsed -
     // no lingering search flag, no dead forward/back step remains.
-    expect(router.state.location.pathname).toBe("/epics/e/t1");
+    expect(router.state.location.pathname).toBe("/draft/d1");
     expect(router.state.location.search).not.toHaveProperty("settingsOverlay");
 
     const controller = getHistoryController(router.history);
@@ -1343,8 +1351,8 @@ describe("LocalHostGate + system tab modal guard integration", () => {
       throw new Error("expected a persistent controller");
     }
     expect(controller.getEntries()).toEqual([
-      "/epics/e/t0",
-      "/epics/e/t1",
+      "/draft/d0",
+      "/draft/d1",
       "/settings/general",
     ]);
     expect(controller.getIndex()).toBe(1);

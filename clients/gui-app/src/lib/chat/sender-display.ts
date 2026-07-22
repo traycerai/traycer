@@ -151,8 +151,9 @@ const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
   amp: "Amp",
   devin: "Devin",
   pi: "Pi",
+  hermes: "Hermes Agent",
 };
 
-function agentProviderLabel(provider: GuiHarnessId): string {
+export function agentProviderLabel(provider: GuiHarnessId): string {
   return AGENT_PROVIDER_LABEL[provider];
 }

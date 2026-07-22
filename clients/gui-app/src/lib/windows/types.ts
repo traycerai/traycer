@@ -1,8 +1,15 @@
 import type {
-  HostOperationStatusEnvelope,
-  HostPendingRevisionState,
-  HostRegistryUpdateState,
-} from "@traycer-clients/shared/platform/runner-host";
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+
+export type {
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+import type { HostControllerStatus } from "@traycer-clients/shared/platform/runner-host";
 
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
@@ -107,11 +114,6 @@ export type DesktopMenuCommandId =
 export interface DesktopMenuCommandPayload {
   readonly command: DesktopMenuCommandId;
   readonly windowId: string;
-  // Only meaningful for `host.installUpdate`: the exact host version the
-  // native menu/tray row displayed. Echoed back as the update's
-  // `expectedVersion` so the shell refuses to install a target the user never
-  // confirmed (e.g. after a release-channel switch). `null` otherwise.
-  readonly hostUpdateVersion: string | null;
 }
 
 export interface DesktopZoomBridge {
@@ -250,21 +252,30 @@ export interface DesktopAppUpdatesBridge {
   };
 }
 
-export interface DesktopHostRegistryUpdatesBridge {
-  onChange(handler: (state: HostRegistryUpdateState) => void): {
+/**
+ * Wire snapshot pushed on `globalShortcutsChange` and returned by
+ * `getSnapshot`. `sequence` guards against an out-of-order frame overwriting
+ * a newer one in the renderer's store, the same monotonic pattern
+ * `DesktopAppUpdateSnapshot` uses.
+ */
+export interface DesktopGlobalShortcutsSnapshot {
+  readonly sequence: number;
+  readonly statuses: Readonly<Record<GlobalShortcutId, GlobalShortcutStatus>>;
+}
+
+export interface DesktopGlobalShortcutsBridge {
+  getSnapshot(): Promise<DesktopGlobalShortcutsSnapshot>;
+  set(
+    id: GlobalShortcutId,
+    intent: GlobalShortcutIntent,
+  ): Promise<GlobalShortcutStatus>;
+  onChange(handler: (snapshot: DesktopGlobalShortcutsSnapshot) => void): {
     dispose(): void;
   };
 }
 
-export interface DesktopHostOperationStatusBridge {
-  onChange(handler: (status: HostOperationStatusEnvelope) => void): {
-    dispose(): void;
-  };
-}
-
-export interface DesktopHostPendingRevisionBridge {
-  get(): Promise<HostPendingRevisionState>;
-  onChange(handler: (state: HostPendingRevisionState) => void): {
+export interface DesktopHostControllerStatusBridge {
+  onChange(handler: (status: HostControllerStatus) => void): {
     dispose(): void;
   };
 }

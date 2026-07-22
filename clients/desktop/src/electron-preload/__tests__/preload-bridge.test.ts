@@ -4,12 +4,7 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
-import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
-import {
-  buildFileDropsBridge,
-  createNativeClipboardReadGate,
-} from "../file-drops-bridge";
 
 /**
  * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
@@ -132,7 +127,6 @@ interface PreloadBridge {
       onChange(handler: (snapshot: unknown) => void): { dispose: () => void };
     };
   };
-  validateAuthToken(token: string): Promise<AuthTokenValidationResult>;
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
@@ -151,10 +145,16 @@ interface PreloadBridge {
     getPathForFile(file: File): string;
     writeTemporaryFile(input: unknown): Promise<string>;
     copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
-    readNativeClipboardFilePaths(): Promise<readonly string[]>;
     saveFile(input: unknown): Promise<string | null>;
   };
   requestHostRespawn(): Promise<void>;
+  hostManagement: {
+    convergeReady(force: boolean): Promise<unknown>;
+    applyStaged(trigger: "launch" | "manual", force: boolean): Promise<unknown>;
+    activateInstalled(force: boolean): Promise<unknown>;
+    installVersion(pin: string, force: boolean): Promise<unknown>;
+    registerService(): Promise<unknown>;
+  };
   menu: {
     onCommand(handler: (payload: unknown) => void): { dispose: () => void };
   };
@@ -163,14 +163,15 @@ interface PreloadBridge {
     revealLog(target: unknown): Promise<unknown>;
     tailLog(input: unknown): Promise<unknown>;
   };
-  hostManagement: {
-    onRegistryUpdateState(handler: (state: unknown) => void): {
-      dispose: () => void;
-    };
-  };
-  hostPendingRevision: {
-    get(): Promise<unknown>;
-    onChange(handler: (state: unknown) => void): { dispose: () => void };
+  service: {
+    install(): Promise<void>;
+    uninstall(purge: boolean): Promise<void>;
+    start(): Promise<void>;
+    stop(): Promise<void>;
+    restart(): Promise<void>;
+    upgrade(): Promise<void>;
+    enableLinger(): Promise<void>;
+    getLogTail(maxLines: number): Promise<string | null>;
   };
 }
 
@@ -308,6 +309,57 @@ describe("preload auth-callback replay", () => {
   });
 });
 
+describe("preload host-management mutation invokes", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+  });
+
+  it("passes every mutation intent through its exact IPC channel and payload", async () => {
+    const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
+      [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, ...args) => {
+        calls.push({ channel, args });
+        return Promise.resolve({ kind: "deferred", message: "not now" });
+      },
+      sendSyncFn: undefined,
+    });
+
+    await bridge.hostManagement.convergeReady(true);
+    await bridge.hostManagement.applyStaged("launch", false);
+    await bridge.hostManagement.activateInstalled(true);
+    await bridge.hostManagement.installVersion("2.0.0", false);
+    await bridge.hostManagement.registerService();
+
+    expect(calls).toEqual([
+      {
+        channel: RunnerHostInvoke.traycerHostConvergeReady,
+        args: [{ force: true }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostApplyStaged,
+        args: [{ trigger: "launch", force: false }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostActivateInstalled,
+        args: [{ force: true }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostInstallVersion,
+        args: [{ pin: "2.0.0", force: false }],
+      },
+      { channel: RunnerHostInvoke.traycerServiceRegister, args: [] },
+    ]);
+  });
+});
+
 describe("preload new-capability wiring", () => {
   beforeEach(() => {
     fakeElectron.reset();
@@ -330,36 +382,16 @@ describe("preload new-capability wiring", () => {
     expect(bridge.initialRoute).toBe("/epics/epic-a/tab-a");
   });
 
-  it("forwards validateAuthToken through ipcRenderer.invoke", async () => {
+  it("does not expose the unhandled metadata-only service-status invoke", async () => {
     const bridge = await loadPreload({
       authnApiUrl: undefined,
       desktopDev: undefined,
       initialRouteArg: undefined,
-      invokeFn: (channel, token) => {
-        if (channel !== RunnerHostInvoke.validateAuthToken) {
-          throw new Error(`unexpected channel ${channel}`);
-        }
-        expect(token).toBe("jwt-123");
-        return Promise.resolve({
-          kind: "valid",
-          profile: {
-            userId: "test-user",
-            userName: "Test User",
-            email: "test@example.com",
-          },
-        } satisfies AuthTokenValidationResult);
-      },
+      invokeFn: undefined,
       sendSyncFn: undefined,
     });
 
-    await expect(bridge.validateAuthToken("jwt-123")).resolves.toEqual({
-      kind: "valid",
-      profile: {
-        userId: "test-user",
-        userName: "Test User",
-        email: "test@example.com",
-      },
-    });
+    expect("status" in bridge.service).toBe(false);
   });
 
   it("forwards validateAuthTokenIdentity through ipcRenderer.invoke", async () => {
@@ -456,13 +488,6 @@ describe("preload new-capability wiring", () => {
     );
 
     await expect(
-      bridge.fileDrops.readNativeClipboardFilePaths(),
-    ).resolves.toEqual([]);
-    expect(invokeFn).not.toHaveBeenCalledWith(
-      RunnerHostInvoke.fileDropReadNativeClipboardPaths,
-    );
-
-    await expect(
       bridge.fileDrops.saveFile({
         name: "diagram.png",
         type: "image/png",
@@ -474,31 +499,6 @@ describe("preload new-capability wiring", () => {
       type: "image/png",
       bytes,
     });
-  });
-
-  it("limits native clipboard reads to a recent trusted paste", async () => {
-    let now = 1_000;
-    const invokeFn = vi.fn(() => Promise.resolve(["/repo/notes.txt"]));
-    fakeElectron.invokeFn = invokeFn;
-    const gate = createNativeClipboardReadGate(() => now);
-    const bridge = buildFileDropsBridge(gate);
-
-    await expect(bridge.readNativeClipboardFilePaths()).resolves.toEqual([]);
-    expect(invokeFn).not.toHaveBeenCalled();
-
-    // jsdom-created events are always untrusted, so exercise the same
-    // capture-listener callback through its trusted-event boundary.
-    gate.observePaste({ isTrusted: true });
-    await expect(bridge.readNativeClipboardFilePaths()).resolves.toEqual([
-      "/repo/notes.txt",
-    ]);
-    expect(invokeFn).toHaveBeenCalledWith(
-      RunnerHostInvoke.fileDropReadNativeClipboardPaths,
-    );
-
-    now += 2_001;
-    await expect(bridge.readNativeClipboardFilePaths()).resolves.toEqual([]);
-    expect(invokeFn).toHaveBeenCalledOnce();
   });
 
   it("exposes menu-command and support bridges", async () => {
@@ -717,169 +717,5 @@ describe("preload new-capability wiring", () => {
         email: "user@example.com",
       },
     });
-  });
-});
-
-// Cold-review #9: preload rejects registry-update payloads that lack a
-// boolean `includePreReleases` (query-key discriminator) so malformed/older
-// pushes cannot file under `undefined` and clobber the live channel key.
-describe("preload hostManagement registry-update-state guard", () => {
-  beforeEach(() => {
-    fakeElectron.reset();
-  });
-
-  afterEach(() => {
-    fakeElectron.reset();
-    vi.unstubAllGlobals();
-  });
-
-  function validRegistryState(
-    includePreReleases: boolean,
-  ): Record<string, unknown> {
-    return {
-      checkedAt: "2026-07-20T00:00:00.000Z",
-      latestVersion: "1.6.0-rc.1",
-      installedVersion: "1.4.2",
-      updateAvailable: true,
-      reachable: true,
-      errorMessage: null,
-      includePreReleases,
-    };
-  }
-
-  it("delivers HostRegistryUpdateState payloads with includePreReleases true and false", async () => {
-    const bridge = await loadPreload({
-      authnApiUrl: undefined,
-      desktopDev: undefined,
-      initialRouteArg: undefined,
-      invokeFn: undefined,
-      sendSyncFn: undefined,
-    });
-
-    const observed: unknown[] = [];
-    const subscription = bridge.hostManagement.onRegistryUpdateState(
-      (state) => {
-        observed.push(state);
-      },
-    );
-
-    const withTrue = validRegistryState(true);
-    const withFalse = validRegistryState(false);
-    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withTrue);
-    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withFalse);
-
-    expect(observed).toEqual([withTrue, withFalse]);
-    subscription.dispose();
-    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, withTrue);
-    expect(observed).toEqual([withTrue, withFalse]);
-  });
-
-  it("rejects payloads missing includePreReleases or with a non-boolean value", async () => {
-    const bridge = await loadPreload({
-      authnApiUrl: undefined,
-      desktopDev: undefined,
-      initialRouteArg: undefined,
-      invokeFn: undefined,
-      sendSyncFn: undefined,
-    });
-
-    const observed: unknown[] = [];
-    const subscription = bridge.hostManagement.onRegistryUpdateState(
-      (state) => {
-        observed.push(state);
-      },
-    );
-
-    const missing = {
-      checkedAt: "2026-07-20T00:00:00.000Z",
-      latestVersion: "1.6.0-rc.1",
-      installedVersion: "1.4.2",
-      updateAvailable: true,
-      reachable: true,
-      errorMessage: null,
-    };
-    const nonBoolean = {
-      ...missing,
-      includePreReleases: "true",
-    };
-    const nullValue = {
-      ...missing,
-      includePreReleases: null,
-    };
-
-    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, missing);
-    fakeElectron.emit(
-      RunnerHostEvent.hostRegistryUpdateStateChange,
-      nonBoolean,
-    );
-    fakeElectron.emit(RunnerHostEvent.hostRegistryUpdateStateChange, nullValue);
-
-    expect(observed).toEqual([]);
-    subscription.dispose();
-    fakeElectron.emit(
-      RunnerHostEvent.hostRegistryUpdateStateChange,
-      validRegistryState(true),
-    );
-    expect(observed).toEqual([]);
-  });
-});
-
-describe("preload pending host revision bridge", () => {
-  it("routes the snapshot invoke and every valid change through the composed preload surface", async () => {
-    const snapshot = {
-      pending: true,
-      durable: false,
-      cause: "update",
-      error: "ENOSPC: no space left on device",
-    };
-    const invokeFn = vi.fn((channel: string): Promise<unknown> => {
-      if (channel === RunnerHostInvoke.traycerHostPendingRevisionGet) {
-        return Promise.resolve(snapshot);
-      }
-      return Promise.resolve(undefined);
-    });
-    const bridge = await loadPreload({
-      authnApiUrl: undefined,
-      desktopDev: undefined,
-      initialRouteArg: undefined,
-      invokeFn,
-      sendSyncFn: undefined,
-    });
-
-    await expect(bridge.hostPendingRevision.get()).resolves.toEqual(snapshot);
-    expect(invokeFn).toHaveBeenCalledWith(
-      RunnerHostInvoke.traycerHostPendingRevisionGet,
-    );
-
-    const observed: unknown[] = [];
-    const subscription = bridge.hostPendingRevision.onChange((state) => {
-      observed.push(state);
-    });
-    const durable = {
-      pending: true,
-      durable: true,
-      cause: null,
-      error: null,
-    };
-    const cleared = {
-      pending: false,
-      durable: false,
-      cause: null,
-      error: null,
-    };
-    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, snapshot);
-    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, durable);
-    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, cleared);
-    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, {
-      ...cleared,
-      durable: "false",
-    });
-
-    // Negative check: malformed pushes must not overwrite a legitimate
-    // non-durable warning before the renderer gets to display it.
-    expect(observed).toEqual([snapshot, durable, cleared]);
-    subscription.dispose();
-    fakeElectron.emit(RunnerHostEvent.hostPendingRevisionChange, snapshot);
-    expect(observed).toEqual([snapshot, durable, cleared]);
   });
 });

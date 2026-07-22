@@ -77,12 +77,28 @@ describe("resolveProviderRateLimitViewState", () => {
     expect(state).toEqual({ kind: "empty" });
   });
 
-  it("is error when the last fetch attempt threw", () => {
+  it("retains cached data when a later refresh attempt throws, marked degraded with no specific reason", () => {
     const state = resolveProviderRateLimitViewState({
       isPending: false,
       isFetching: false,
       isError: true,
       envelope: envelopeOf(READY),
+    });
+    expect(state).toEqual({
+      kind: "data",
+      data: READY,
+      degraded: true,
+      degradedReason: null,
+      lastGoodAt: 1000,
+    });
+  });
+
+  it("is error when a refresh throws before any successful reading", () => {
+    const state = resolveProviderRateLimitViewState({
+      isPending: false,
+      isFetching: false,
+      isError: true,
+      envelope: undefined,
     });
     expect(state).toEqual({ kind: "error" });
   });
@@ -94,21 +110,33 @@ describe("resolveProviderRateLimitViewState", () => {
       isError: false,
       envelope: envelopeOf(READY),
     });
-    expect(state).toEqual({ kind: "data", data: READY });
+    expect(state).toEqual({
+      kind: "data",
+      data: READY,
+      degraded: false,
+      degradedReason: null,
+      lastGoodAt: 1000,
+    });
   });
 
-  it("is data for an authoritative unavailable reason (replaces, not retained)", () => {
+  it("is data for an authoritative unavailable reason (replaces, not retained), with no stale treatment or timestamp", () => {
     const state = resolveProviderRateLimitViewState({
       isPending: false,
       isFetching: false,
       isError: false,
       envelope: envelopeOf(UNAVAILABLE),
     });
-    expect(state).toEqual({ kind: "data", data: UNAVAILABLE });
+    expect(state).toEqual({
+      kind: "data",
+      data: UNAVAILABLE,
+      degraded: false,
+      degradedReason: null,
+      lastGoodAt: null,
+    });
   });
 
   it.each(["usage_fetch_failed", "timeout", "connection_failed"] as const)(
-    "retains the last good reading through a transient failure (%s)",
+    "retains the last good reading through a transient failure (%s), marked degraded with the original lastGoodAt",
     (reason) => {
       const state = resolveProviderRateLimitViewState({
         isPending: false,
@@ -121,11 +149,17 @@ describe("resolveProviderRateLimitViewState", () => {
           lastFailureAt: 2_000,
         },
       });
-      expect(state).toEqual({ kind: "data", data: ANOTHER_READY });
+      expect(state).toEqual({
+        kind: "data",
+        data: ANOTHER_READY,
+        degraded: true,
+        degradedReason: reason,
+        lastGoodAt: 1000,
+      });
     },
   );
 
-  it("shows the transient reason itself when there's no lastGood yet (cold-after-reload)", () => {
+  it("shows the transient reason itself when there's no lastGood yet (cold-after-reload), with no stale treatment", () => {
     const transient: ProviderRateLimits = {
       provider: "codex",
       available: false,
@@ -142,7 +176,13 @@ describe("resolveProviderRateLimitViewState", () => {
         lastFailureAt: 1_000,
       },
     });
-    expect(state).toEqual({ kind: "data", data: transient });
+    expect(state).toEqual({
+      kind: "data",
+      data: transient,
+      degraded: false,
+      degradedReason: null,
+      lastGoodAt: null,
+    });
   });
 });
 

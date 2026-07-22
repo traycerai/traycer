@@ -138,6 +138,10 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  useWorktreesSettingsViewStore,
+  type WorktreeSortMode,
+} from "@/stores/settings/worktrees-settings-view-store";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -145,11 +149,9 @@ type WorktreeRowDeleteStatus = "deleting";
 // `unknown` = the per-path query settled to an error (non-animated fallback, no
 // infinite spinner). `pending` and `unknown` are both un-enriched for filtering.
 type WorktreeEnrichmentState = "ready" | "pending" | "unknown";
-type WorktreeSortMode = "newest" | "oldest";
 // Multi-select status filter. An EMPTY set means "no filter" (show every tier);
 // a non-empty set shows only the selected tiers (union). Composes with search.
 type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
-const EMPTY_TIER_FILTER: WorktreeTierFilterSet = new Set();
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 
@@ -245,7 +247,7 @@ export function WorktreesSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Worktrees"
-      description="Git worktrees Traycer created under ~/.traycer/worktrees on the selected host. Remove ones you no longer need - including orphans whose chat or agent was deleted."
+      description="Git worktrees Traycer created under ~/.traycer/worktrees on the selected host. Remove ones you no longer need - including orphans whose agent was deleted."
       fillHeight
       bodyClassName="relative max-h-[min(85vh,52rem)]"
     >
@@ -929,11 +931,28 @@ export function WorktreesList(props: {
     () => buildTaskMergeRollups(mergedWorktrees),
     [mergedWorktrees],
   );
-  const [searchText, setSearchText] = useState("");
+  const searchText = useWorktreesSettingsViewStore((state) => state.searchText);
+  const setSearchText = useWorktreesSettingsViewStore(
+    (state) => state.setSearchText,
+  );
+  const sortMode = useWorktreesSettingsViewStore((state) => state.sortMode);
+  const setSortMode = useWorktreesSettingsViewStore(
+    (state) => state.setSortMode,
+  );
+  const tierFilterValues = useWorktreesSettingsViewStore(
+    (state) => state.tierFilters,
+  );
+  const toggleTierFilter = useWorktreesSettingsViewStore(
+    (state) => state.toggleTierFilter,
+  );
+  const clearTierFilters = useWorktreesSettingsViewStore(
+    (state) => state.clearTierFilters,
+  );
   const deferredSearchText = useDeferredValue(searchText);
-  const [sortMode, setSortMode] = useState<WorktreeSortMode>("newest");
-  const [tierFilters, setTierFilters] =
-    useState<WorktreeTierFilterSet>(EMPTY_TIER_FILTER);
+  const tierFilters = useMemo(
+    () => new Set(tierFilterValues),
+    [tierFilterValues],
+  );
   const searchHaystackByPath = useMemo(
     () => buildWorktreeSearchHaystackByPath(worktrees, taskTitlesByEpicId),
     [worktrees, taskTitlesByEpicId],
@@ -1020,13 +1039,6 @@ export function WorktreesList(props: {
     effectiveTierFilters,
     isPending,
   ]);
-  const toggleTierFilter = useCallback((tier: WorktreeTier) => {
-    setTierFilters((prev) => withMemberToggled(prev, tier));
-  }, []);
-  const clearTierFilters = useCallback(() => {
-    setTierFilters(EMPTY_TIER_FILTER);
-  }, []);
-
   // Refresh the host-wide list plus the shared worktree/binding caches the
   // file-tree / home / create-worktree surfaces read, captured against the
   // host the delete ran on.
@@ -1754,7 +1766,7 @@ function WorktreeSelectAllToggle(props: {
         "flex h-7 shrink-0 items-center gap-1.5 rounded-sm border px-2 text-ui-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
         allSelected || indeterminate
           ? "border-border bg-muted text-foreground"
-          : "border-border bg-background text-muted-foreground hover:border-foreground hover:bg-muted hover:text-foreground",
+          : "border-border bg-background text-foreground hover:border-foreground hover:bg-muted",
       )}
     >
       <span
@@ -2842,7 +2854,7 @@ function WorktreeSelectionControl(props: {
   if (props.canSelect || props.deleting) return checkbox;
   return (
     <TooltipWrapper
-      label="In use by an active chat or agent"
+      label="In use by an active agent"
       side="top"
       sideOffset={undefined}
       align="start"
@@ -2857,7 +2869,7 @@ const WORKTREE_DELETE_DISABLED_COPY: Record<
   { readonly ariaLabel: string }
 > = {
   "in-use": {
-    ariaLabel: "Delete worktree (in use by an active chat or agent)",
+    ariaLabel: "Delete worktree (in use by an active agent)",
   },
   checking: {
     ariaLabel: "Delete worktree (status is still being checked)",
@@ -2964,9 +2976,7 @@ function WorktreeScriptReviewDialog(props: {
       seedPending={false}
       errorNote={null}
       inUseNote={
-        target.inUse
-          ? "This worktree is in use by an active chat or agent."
-          : null
+        target.inUse ? "This worktree is in use by an active agent." : null
       }
       // Settings stashes the reviewed scripts synchronously for its delete flow;
       // wrap in a resolved promise so the shared dialog's success path runs.

@@ -55,7 +55,6 @@ export function HostReadyGate(props: {
       <LocalHostLoading
         stage="loading"
         progress={null}
-        operationKind={null}
         onConfigureShell={onConfigureShell}
       />
     ),
@@ -66,7 +65,6 @@ export function HostReadyGate(props: {
       <LocalHostLoading
         stage="slow"
         progress={null}
-        operationKind={null}
         onConfigureShell={onConfigureShell}
       />
     ),
@@ -77,7 +75,6 @@ export function HostReadyGate(props: {
       <LocalHostLoading
         stage="loading"
         progress={null}
-        operationKind={null}
         onConfigureShell={onConfigureShell}
       />
     ),

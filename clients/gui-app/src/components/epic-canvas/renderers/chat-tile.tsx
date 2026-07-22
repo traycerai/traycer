@@ -1902,6 +1902,7 @@ function useChatMissingWorktreeFocusRefresh(args: {
     params: { epicId: args.epicId, ownerId: args.chatId, ownerKind: "chat" },
     options: {
       enabled: args.hasBinding && args.surfaceVisible,
+      poll: false,
       staleTime: 0,
       refetchOnWindowFocus: true,
     },
@@ -2007,7 +2008,7 @@ function useCachedCollaborators(
     client,
     method: "epic.listCollaborators",
     params: { epicId },
-    options: { enabled: false },
+    options: { enabled: false, poll: false },
   });
   return useMemo(() => flattenCollaborators(data?.collaborators ?? []), [data]);
 }

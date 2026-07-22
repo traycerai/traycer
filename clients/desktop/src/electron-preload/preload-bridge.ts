@@ -1,12 +1,12 @@
 import { contextBridge } from "electron";
-import type { HostPendingRevisionState } from "@traycer-clients/shared/platform/runner-host";
 import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
 import { readInitialRouteArg } from "../ipc-contracts/window-bootstrap";
-import { buildAuthBridge } from "./auth-bridge";
+import { buildAuthBridge, buildAuthTokenStoreBridge } from "./auth-bridge";
 import { buildDeviceFlowBridge } from "./device-flow-bridge";
 import { buildHostBridge } from "./host-bridge";
 import {
+  buildHostControllerStatusSubscriber,
   buildHostManagementBridge,
   buildHostTrayCommandSubscriber,
 } from "./host-management-bridge";
@@ -15,6 +15,7 @@ import { buildWindowsBridge } from "./windows-bridge";
 import { buildMenuBridge } from "./menu-bridge";
 import { buildSupportBridge } from "./support-bridge";
 import { buildAppUpdateBridge } from "./app-update-bridge";
+import { buildGlobalShortcutsBridge } from "./global-shortcuts-bridge";
 import { buildLifecycleBridge } from "./lifecycle-bridge";
 import { buildMigrationBridge } from "./migration-bridge";
 import { buildServiceBridge } from "./service-bridge";
@@ -50,8 +51,6 @@ const nativeClipboardReadGate = createNativeClipboardReadGate(() => Date.now());
 
 window.addEventListener("paste", nativeClipboardReadGate.observePaste, true);
 
-const hostManagement = buildHostManagementBridge();
-
 contextBridge.exposeInMainWorld("runnerHost", {
   authnBaseUrl: config.authnBaseUrl,
   // Runtime-resolved in main (dev loopback port is dynamic), so it must be a
@@ -61,6 +60,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   initialRoute,
   sentryRendererDsn,
   ...buildAuthBridge(),
+  tokenStore: buildAuthTokenStoreBridge(),
   deviceFlow: buildDeviceFlowBridge(),
   ...buildHostBridge(),
   ...buildTrayBridge(),
@@ -68,6 +68,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   ...buildMenuBridge(),
   ...buildSupportBridge(),
   ...buildAppUpdateBridge(),
+  ...buildGlobalShortcutsBridge(),
   ...buildLifecycleBridge(),
   fileDrops: buildFileDropsBridge(nativeClipboardReadGate),
   service: buildServiceBridge(),
@@ -76,11 +77,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   platform: buildPlatformBridge(),
   power: buildPowerBridge(),
   ...buildZoomBridge(),
-  hostManagement,
-  hostPendingRevision: {
-    get: () => hostManagement.getPendingRevision(),
-    onChange: (handler: (state: HostPendingRevisionState) => void) =>
-      hostManagement.onPendingRevisionChange(handler),
-  },
+  hostManagement: buildHostManagementBridge(),
   hostTray: buildHostTrayCommandSubscriber(),
+  hostControllerStatus: buildHostControllerStatusSubscriber(),
 });

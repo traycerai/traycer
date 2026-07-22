@@ -1,23 +1,16 @@
 import { app } from "electron";
 import { spawn } from "node:child_process";
-import { access, rm } from "node:fs/promises";
+import { access, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join } from "node:path";
 import { config, isDevBuild } from "../../config";
 import {
+  getHostFsLayout,
   labelForEnvironment,
   smAppServiceAgentLabelId,
   userLaunchAgentPlistPath,
 } from "../host/host-paths";
-import {
-  hasPendingLoginItemRevision,
-  resolvePendingLoginItemRevisionAfterCycle,
-} from "../host/pending-login-item-revision";
-import {
-  markRegistrationIdentityApplied,
-  writeRegistrationStamp,
-} from "../host/registration-stamp";
-import type { RegisterCycleDecision } from "../host/host-register-cycle-decision";
+import type { Environment } from "../host/host-paths";
 import { isHostRemovedByUser } from "../host/host-removal-state";
 import { log } from "./logger";
 
@@ -47,10 +40,8 @@ const CLI_HOST_LABEL = labelForEnvironment(config.environment).id;
 // `smAppServiceAgentLabelId`'s doc for the full mechanism and the lockstep
 // sites. Matches the in-bundle plist written by `desktop-install-cloud.js`
 // (`hostAgentLabel`) and `scripts/prepack/inject-host-launch-agent.cjs`;
-// SMAppService resolves the plist by this exact filename. Exported so the
-// register-cycle state machine can query `launchctl print gui/<uid>/<label>` -
-// the sole darwin viable-spawn authority (Finding F).
-export const HOST_AGENT_LABEL = smAppServiceAgentLabelId(CLI_HOST_LABEL);
+// SMAppService resolves the plist by this exact filename.
+const HOST_AGENT_LABEL = smAppServiceAgentLabelId(CLI_HOST_LABEL);
 const HOST_SERVICE_NAME = `${HOST_AGENT_LABEL}.plist`;
 // The serviceName this app registered BEFORE the label split. The bundle
 // keeps shipping this plist inert (never registered) for a few releases so
@@ -62,16 +53,20 @@ const LEGACY_HOST_SERVICE_NAME = `${CLI_HOST_LABEL}.plist`;
 
 // Every SMAppService mutation for the host label must flow through this
 // promise tail. `registerHostLoginItem` is a non-atomic bootout → unregister
-// → register sequence; `ensureHost`, the pending-revision monitor, and
-// `respawnHost` can all need it independently. Letting any two of them cross
-// that boundary at the same time can leave BTM with the stale LWCR this module
-// is designed to clear.
+// → register sequence; `HostController`'s `convergeReady`, `applyStaged`,
+// `activateInstalled`, `installVersion`, `respawn`, `recoverIfDown`,
+// `freePortAndRestart` (all via `runLockedMacActivationCycle`), and
+// `applyPendingLoginItemRevisionIfIdle` can all need it independently.
+// Letting any two of them cross that boundary at the same time can leave BTM
+// with the stale LWCR this module is designed to clear.
 //
-// This intentionally serializes rather than coalesces. The callers own their
-// own policies (force-ensure handling, monitor failure budget, and respawn
-// dedup/backoff), so a second caller must receive its own eventual result
-// after the first cycle settles. The tail always resolves so a failed cycle
-// never wedges later callers.
+// This intentionally serializes rather than coalesces. Each caller is
+// already independently exclusive at the `HostController` level - the
+// mutation lane for enqueued intents, the desktop cli-lock for
+// `applyPendingLoginItemRevisionIfIdle` - so this tail is defense-in-depth
+// against the specific SMAppService boundary, not the primary exclusion
+// mechanism. The tail always resolves so a failed cycle never wedges later
+// callers.
 let hostLoginItemRegistrationTail: Promise<void> = Promise.resolve();
 
 export function withHostLoginItemRegistrationLock<Result>(
@@ -109,29 +104,15 @@ export type HostLoginItemStatus =
   | "not-supported";
 
 /**
- * `registerHostLoginItem`'s result:
- * - a `HostLoginItemStatus` — the cycle ran and settled on that status;
- * - `removed-by-user` — the locked section found the removal sentinel set and
- *   refused to run the cycle at all;
- * - `skip-join` — the state machine found a viable current-generation agent
- *   spawn and nothing to apply, so no cycle ran; the caller joins its
- *   readiness instead of failing;
- * - `deferred-busy` — the cycle was needed but the host is busy, so it was
- *   deferred and its pending-cycle marker persisted durably (the 30s monitor
- *   or next launch applies it);
- * - `deferred-busy-unpersisted` — same deferral, but the marker write failed;
- *   an in-memory pending-cycle flag drives the repair this launch (cross-launch
- *   durability is lost until the write later succeeds, surfaced never silent).
- *
- * See the reason-bearing state machine in `host-register-cycle-decision.ts`,
- * evaluated via `revalidateBeforeBootout` inside the registration lock.
+ * `registerHostLoginItem`'s result: the SMAppService status the cycle
+ * settled on, `removed-by-user` when the locked section found the removal
+ * sentinel set and refused to run the cycle at all, or `deferred-busy` when
+ * the caller's own `revalidateBeforeBootout` guard failed once the cycle
+ * reached the front of the registration lock's queue (see the re-check
+ * rationale in `registerHostLoginItemUnserialized`).
  */
 export type RegisterHostLoginItemResult =
-  | HostLoginItemStatus
-  | "removed-by-user"
-  | "skip-join"
-  | "deferred-busy"
-  | "deferred-busy-unpersisted";
+  HostLoginItemStatus | "removed-by-user" | "deferred-busy";
 
 // True only when this is a shipped macOS build that ships the in-bundle
 // LaunchAgent plist. Used by the ensure flow to decide whether the desktop
@@ -259,20 +240,18 @@ const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
  * synchronous status read can transiently say `not-registered` for
  * <100ms on cold-BTM (first-install) machines.
  */
-// `revalidateBeforeBootout`, when provided, evaluates the register-cycle state
-// machine (`host-register-cycle-decision.ts`) INSIDE the locked section
-// immediately before `bootoutStaleAgent()` - not just at the call site -
-// because a caller's own idle/busy check (e.g. the pending-revision fast path's
-// `probeHostActivityBusy`) can go stale while queued behind another in-flight
-// cycle (`respawnHost` and `runEnsureHost` share this same lock). Without a
-// re-check here, a cycle that was idle when queued could still boot out a host
-// that picked up real work while waiting its turn. The callback returns a
-// reason-bearing `RegisterCycleDecision`: `cycle` proceeds; `skip-join`,
-// `defer-busy`, and `defer-busy-unpersisted` each return without mutating
-// anything (see the mapping below). `undefined` means an unconditional cycle -
-// the explicit `respawnHost` restart path, which always cycles.
+// `revalidateBeforeBootout`, when provided, is called INSIDE the locked
+// section immediately before `bootoutStaleAgent()` - not just at the call
+// site - because a caller's own idle/busy check (e.g.
+// `HostController.applyPendingLoginItemRevisionIfIdle`'s `probeHostBusyVerdict`
+// probe) can go stale while queued behind another in-flight cycle (every
+// `HostController` SMAppService section shares this same lock). Without a
+// re-check here, a cycle that was idle when queued could still boot out a
+// host that picked up real work while waiting its turn.
+// Return `false` from the callback to defer without mutating anything;
+// `registerHostLoginItemUnserialized` reports that back as `"deferred-busy"`.
 export function registerHostLoginItem(
-  revalidateBeforeBootout: (() => Promise<RegisterCycleDecision>) | undefined,
+  revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
 ): Promise<RegisterHostLoginItemResult> {
   return withHostLoginItemRegistrationLock(() =>
     registerHostLoginItemUnserialized(revalidateBeforeBootout),
@@ -280,7 +259,7 @@ export function registerHostLoginItem(
 }
 
 async function registerHostLoginItemUnserialized(
-  revalidateBeforeBootout: (() => Promise<RegisterCycleDecision>) | undefined,
+  revalidateBeforeBootout: (() => Promise<boolean>) | undefined,
 ): Promise<RegisterHostLoginItemResult> {
   // Re-checked HERE, inside the locked section, not only at the callers'
   // entry points: an ensure can spend minutes streaming the CLI before its
@@ -296,29 +275,14 @@ async function registerHostLoginItemUnserialized(
     return "removed-by-user";
   }
 
-  if (revalidateBeforeBootout !== undefined) {
-    const decision = await revalidateBeforeBootout();
-    if (decision.kind === "skip-join") {
-      log.info(
-        "[host-login-item] register cycle skipped - a viable current-generation agent spawn exists and nothing needs applying; joining its readiness",
-      );
-      return "skip-join";
-    }
-    if (decision.kind === "defer-busy") {
-      log.info(
-        "[host-login-item] register cycle deferred - host busy once dequeued from the registration lock; pending-cycle marker persisted, the 30s monitor or next launch applies it",
-        { cause: decision.cause },
-      );
-      return "deferred-busy";
-    }
-    if (decision.kind === "defer-busy-unpersisted") {
-      log.warn(
-        "[host-login-item] register cycle deferred (host busy) but the pending-cycle marker write failed - the in-memory pending-cycle flag drives the repair this launch; cross-launch durability is lost until the write later succeeds",
-        { cause: decision.cause, error: decision.error },
-      );
-      return "deferred-busy-unpersisted";
-    }
-    // decision.kind === "cycle": fall through and run the cycle below.
+  if (
+    revalidateBeforeBootout !== undefined &&
+    !(await revalidateBeforeBootout())
+  ) {
+    log.info(
+      "[host-login-item] register cycle deferred - caller's guard failed once dequeued from the registration lock (host is no longer idle)",
+    );
+    return "deferred-busy";
   }
 
   const plistPath = inAppLaunchAgentPlistPath();
@@ -363,23 +327,7 @@ async function registerHostLoginItemUnserialized(
     // fast path applying a deferred install), the on-disk plist is now the
     // one active in launchd - any pending-revision marker the installer
     // left behind is resolved.
-    await resolvePendingLoginItemRevisionAfterCycle(config.environment);
-    // Restamp the build identity so a matching later ensure skips the
-    // stamp-mismatch cause. A failed persist must not silently re-cycle every
-    // ensure this launch: latch the applied identity in memory (which
-    // suppresses ONLY the stamp-mismatch reason - a later no-agent repair still
-    // cycles), and persistence is retried at the next ensure / next launch.
-    const restamped = await writeRegistrationStamp(
-      config.environment,
-      config.version,
-    );
-    if (!restamped) {
-      markRegistrationIdentityApplied(config.version);
-      log.warn(
-        "[host-login-item] register cycle succeeded but the registration stamp write failed - suppressing the stamp-mismatch cause in-memory for this launch; retrying persistence next ensure/launch",
-        { identity: config.version },
-      );
-    }
+    await clearPendingLoginItemRevision(config.environment);
   }
   return status;
 }
@@ -436,7 +384,71 @@ async function retireLegacyLabelRegistrations(): Promise<void> {
  * (permissions, race) is treated as "no pending revision" so a transient FS
  * hiccup never blocks the ensure fast path.
  */
-export { hasPendingLoginItemRevision };
+export async function hasPendingLoginItemRevision(
+  environment: Environment,
+): Promise<boolean> {
+  return fileExists(getHostFsLayout(environment).pendingLoginItemRevisionFile);
+}
+
+// M-B (finding): `clearPendingLoginItemRevision` is best-effort - a failed
+// unlink leaves the marker on disk AFTER a successful apply. A plain existence
+// check would then re-run the disruptive SMAppService cycle on every monitor
+// tick / convergeReady forever. Remember the mtime of a marker whose clear
+// failed so a marker that still carries that exact mtime reads as
+// already-resolved (suppress the redundant re-cycle), while a genuinely newer
+// revision - the installer rewrites the file, bumping its mtime - re-arms and
+// applies normally. In-memory only: a process restart re-reads the marker and
+// re-applies, which is correct (it is still on disk).
+let appliedPendingRevisionMtimeMs: number | null = null;
+
+/**
+ * Whether there is a pending LaunchAgent revision this process has NOT already
+ * applied. Differs from `hasPendingLoginItemRevision` only when a prior
+ * successful apply could not delete its marker (see M-B above): that lingering
+ * marker reads as "nothing pending" here, so the controller never churns
+ * re-registering an already-active plist.
+ */
+export async function hasUnappliedPendingLoginItemRevision(
+  environment: Environment,
+): Promise<boolean> {
+  const markerPath = getHostFsLayout(environment).pendingLoginItemRevisionFile;
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await stat(markerPath)).mtimeMs;
+  } catch {
+    // Absent or unreadable - same fail-open posture as
+    // `hasPendingLoginItemRevision` ("nothing pending").
+    return false;
+  }
+  return (
+    appliedPendingRevisionMtimeMs === null ||
+    mtimeMs !== appliedPendingRevisionMtimeMs
+  );
+}
+
+async function clearPendingLoginItemRevision(
+  environment: Environment,
+): Promise<void> {
+  const markerPath = getHostFsLayout(environment).pendingLoginItemRevisionFile;
+  try {
+    await rm(markerPath, { force: true });
+    // Cleared cleanly - there is no lingering marker to suppress.
+    appliedPendingRevisionMtimeMs = null;
+  } catch (err) {
+    // M-B: the marker for the revision we just applied could not be removed.
+    // Latch its mtime so `hasUnappliedPendingLoginItemRevision` stops treating
+    // it as pending; a newer revision (different mtime) still re-arms.
+    try {
+      appliedPendingRevisionMtimeMs = (await stat(markerPath)).mtimeMs;
+    } catch {
+      appliedPendingRevisionMtimeMs = null;
+    }
+    log.warn(
+      "[host-login-item] failed to clear pending LaunchAgent revision marker",
+      { err },
+    );
+  }
+}
 
 /**
  * Tear down the host's SMAppService login-item registration during an in-app

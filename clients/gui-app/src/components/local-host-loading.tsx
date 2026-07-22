@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import type {
-  HostOperationKind,
-  HostProgressEvent,
-} from "@traycer-clients/shared/platform/runner-host";
+import type { MutationProgress } from "@traycer-clients/shared/platform/runner-host";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,8 +13,7 @@ export type LocalHostLoadingStage = "loading" | "slow";
 
 export interface LocalHostLoadingProps {
   readonly stage: LocalHostLoadingStage;
-  readonly progress: HostProgressEvent | null;
-  readonly operationKind: HostOperationKind | null;
+  readonly progress: MutationProgress | null;
   /**
    * Called when the user clicks "Configure shell…". The caller drives
    * router navigation directly because the loading card is rendered
@@ -46,7 +42,7 @@ export function LocalHostLoading(props: LocalHostLoadingProps) {
     pollIntervalMs: showDetails ? BOOTSTRAP_TAIL_POLL_MS : null,
   });
   const tail = status.data?.bootstrapLogTail ?? "";
-  const progressView = buildProgressView(props.progress, props.operationKind);
+  const progressView = buildProgressView(props.progress);
 
   return (
     <div
@@ -130,15 +126,12 @@ export function LocalHostLoading(props: LocalHostLoadingProps) {
 interface ProgressView {
   readonly heading: string;
   readonly detail: string | null;
-  readonly stage: HostProgressEvent["stage"] | null;
+  readonly stage: string | null;
   readonly percent: number | null;
   readonly byteLabel: string | null;
 }
 
-function buildProgressView(
-  progress: HostProgressEvent | null,
-  operationKind: HostOperationKind | null,
-): ProgressView {
+function buildProgressView(progress: MutationProgress | null): ProgressView {
   if (progress === null) {
     return {
       heading: "Starting local Traycer Host…",
@@ -153,7 +146,10 @@ function buildProgressView(
       ? null
       : Math.min(100, Math.max(0, Math.round(progress.percent)));
   return {
-    heading: describeOperationHeading(progress.stage, operationKind),
+    heading:
+      progress.stage === "download"
+        ? "Downloading Traycer Host…"
+        : "Setting up Traycer Host…",
     detail: progress.message,
     stage: progress.stage,
     percent,
@@ -164,24 +160,6 @@ function buildProgressView(
   };
 }
 
-function describeOperationHeading(
-  stage: HostProgressEvent["stage"],
-  operationKind: HostOperationKind | null,
-): string {
-  if (operationKind === "update") return "Updating Traycer Host…";
-  if (operationKind === "install") return "Installing Traycer Host…";
-  if (operationKind === "register-service") {
-    return "Registering Traycer Host…";
-  }
-  if (operationKind === "restart") return "Restarting Traycer Host…";
-  if (operationKind === "free-port-and-restart") {
-    return "Restarting Traycer Host…";
-  }
-  return stage === "download"
-    ? "Downloading Traycer Host…"
-    : "Setting up Traycer Host…";
-}
-
 function formatBytes(bytes: number): string {
   const mib = bytes / (1024 * 1024);
   if (mib >= 10) return `${Math.round(mib)} MB`;
@@ -190,7 +168,7 @@ function formatBytes(bytes: number): string {
 
 interface HostDownloadProgressProps {
   readonly percent: number;
-  readonly stage: HostProgressEvent["stage"] | null;
+  readonly stage: string | null;
   readonly byteLabel: string | null;
 }
 
