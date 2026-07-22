@@ -671,6 +671,18 @@ describe("host.getRateLimitUsage v3.0 -> v2.1 / v1.2 grok downgrade bridges", ()
     ).toBe(false);
   });
 
+  it("rejects a grok period whose reset disagrees with its period end", () => {
+    expect(
+      providerRateLimitsSchema.safeParse({
+        ...grokAvailableWithPeriod,
+        period: {
+          ...grokAvailableWithPeriod.period,
+          resetsAt: grokAvailableWithPeriod.periodEnd + 1,
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("degrades a grok-available (with period) snapshot through the 3.0 -> 2.1 bridge", () => {
     const response = {
       totalTokens: 0,

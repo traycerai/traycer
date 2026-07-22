@@ -1037,8 +1037,8 @@ function formatGrokPeriodDate(epochMs: number): string {
 
 /**
  * The billing period's start-end range ("Jul 22, 2026 - Jul 29, 2026"), shown
- * in grok's zero-usage fallback where there's no usage bar to carry a reset
- * date. `null` unless both bounds are known.
+ * in grok's unmeasured-period fallback where there's no usage bar to carry a
+ * reset date. `null` unless both bounds are known.
  */
 function formatGrokPeriodRange(
   periodStart: number | null,
@@ -1049,9 +1049,8 @@ function formatGrokPeriodRange(
 }
 
 /**
- * Grok's zero-usage fallback: a real SuperGrok subscription that has reported
- * no usage this period returns only its tier and the billing period's bounds
- * (no usage percentage, so the host synthesizes no `period` window). Surfacing
+ * Grok's unmeasured-period fallback: an available subscription may report its
+ * tier and billing-period bounds without a measurable usage window. Surfacing
  * the plan and the period dates keeps the card meaningful instead of blank.
  * Each row drops out on its own when the field is absent.
  *
@@ -1092,8 +1091,8 @@ function GrokPeriodFallback({
  * - `period` present -> the period usage bar, reusing the shared `RateLimitWindowRow`
  *   so its "% used · Resets <date>" reads identically to codex/claude; the bar's
  *   label is the period cadence ("Weekly").
- * - `period` null -> the zero-usage fallback (`GrokPeriodFallback`): the plan
- *   tier and the billing period's dates.
+ * - `period` null -> the unmeasured-period fallback (`GrokPeriodFallback`): the
+ *   plan tier and the billing period's dates.
  * - the raw credit figures (prepaid balance, monthly limit, on-demand
  *   used/limit) render only where xAI actually reported them - it omits fields
  *   freely by account type - as neutral `$`-denominated rows, the same
