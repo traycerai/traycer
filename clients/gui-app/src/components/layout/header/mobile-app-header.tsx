@@ -62,7 +62,9 @@ function useMobileHeaderTitle(): string {
   const epicName = useEpicCanvasStore((state) =>
     epicTabId === undefined ? null : (state.tabsById[epicTabId]?.name ?? null),
   );
-  if (epicTabId !== undefined) return epicName ?? "";
+  // While the epic tab name is still unresolved, fall through to the app-name
+  // fallback rather than flashing an empty header.
+  if (epicTabId !== undefined && epicName !== null) return epicName;
   if (isSettingsPath(pathname)) return "Settings";
   if (isHistoryPath(pathname)) return "History";
   if (pathname.startsWith("/draft")) return "New task";
