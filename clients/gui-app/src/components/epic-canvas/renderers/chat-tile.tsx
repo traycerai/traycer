@@ -154,6 +154,7 @@ import {
 } from "@/lib/chat/snapshot-diff-tile";
 import {
   useActivePaneEffect,
+  usePaneFocused,
   usePaneVisible,
 } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
@@ -183,6 +184,7 @@ import {
 } from "./chat-tile-session-state";
 import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
 
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
@@ -676,16 +678,12 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
           <ChatTileErrorNoticeToasts handle={view.handle} />
           {/*
            * SurfaceActivityProvider narrows catalog/provider query subscriptions
-           * to the pane+tab that is actually visible. Hidden keep-alive chat panes
-           * (surfaceVisible = false) mark their harness-catalog and model-list
-           * queries as subscribed:false, releasing their cache observer slots. The
-           * queries remain in the cache and refetch on resubscribe (i.e. when the
-           * pane becomes visible again), so the composer never shows stale data on
-           * return. Providers compose by narrowing only — the context can never
-           * widen past the parent.
+           * to the one focused pane+tab. A visible split partner keeps rendering
+           * its transcript and scroll state, but releases catalog/provider query
+           * observers and cannot own palette/composer-global work.
            */}
           {view.snapshotLoaded ? (
-            <SurfaceActivityProvider active={view.surfaceVisible}>
+            <SurfaceActivityProvider active={view.surfaceFocused}>
               <ChatLowerInteractionSurfaces
                 epicId={view.currentEpicId}
                 chatId={view.node.id}
@@ -746,8 +744,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // unfocused split pane is still visible. The same chat rendered by several
   // surfaces rolls up to visible-if-any inside the handle.
   const paneVisible = usePaneVisible();
+  const paneFocused = usePaneFocused();
   const tabSelected = useTabBodySelected();
   const surfaceVisible = paneVisible && tabSelected;
+  const surfaceFocused = chatTileCatalogActivity(
+    paneFocused,
+    tabSelected,
+    isActive,
+  );
   useEffect(() => {
     handle.setSurfaceVisibility(viewTabId, surfaceVisible);
     return () => {
@@ -808,25 +812,32 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ),
   );
   const collaborators = useCachedCollaborators(currentEpicId);
+  // Label-only, cache-only projection: the focused composer's toolbar and the
+  // app-wide `HarnessCatalogPrefetcher` own the fetch; this reads the same
+  // host-keyed cache (never fetches) so ANY visible transcript — including a
+  // restored terminal-focused split with an inactive chat and no live catalog
+  // publisher — renders friendly model/reasoning labels immediately, and a
+  // host/user switch re-keys the query and swaps labels. Detaches when hidden.
   const modelCatalog = useGuiHarnessCatalog(null, {
-    enabled: true,
+    enabled: false,
     subscribed: surfaceVisible,
   });
+  const displayCatalog = modelCatalog.harnesses;
   const modelLabels = useMemo<ReadonlyMap<string, string>>(
     () =>
       new Map(
-        modelCatalog.harnesses.flatMap((harness) =>
+        displayCatalog.flatMap((harness) =>
           harness.models.map((model) => [
             agentModelKey(harness.id, model.slug),
             model.label,
           ]),
         ),
       ),
-    [modelCatalog.harnesses],
+    [displayCatalog],
   );
   const modelReasoningLabels = useMemo(
-    () => buildModelReasoningLabels(modelCatalog.harnesses),
-    [modelCatalog.harnesses],
+    () => buildModelReasoningLabels(displayCatalog),
+    [displayCatalog],
   );
   const handoffScope = useMemo<InitialChatHandoffScope>(
     () => ({
@@ -1667,6 +1678,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     messages: pinnedTodoRenderState.messages,
     minimapItems,
     surfaceVisible,
+    surfaceFocused,
     getMessageActions: messageActionsFor,
     nextStepActions,
     planActions,

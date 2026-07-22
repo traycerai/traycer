@@ -19,6 +19,7 @@ import { HarnessModelPicker } from "@/components/home/pickers/harness-model-pick
 import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
@@ -64,8 +65,9 @@ interface TerminalAgentForkDialogProps {
 }
 
 export function TerminalAgentForkDialog(props: TerminalAgentForkDialogProps) {
+  const presentedOpen = useFocusedPaneModalOpen(props.open);
   return (
-    <SurfaceActivityProvider active={props.open}>
+    <SurfaceActivityProvider active={presentedOpen}>
       <TerminalAgentForkDialogBody {...props} />
     </SurfaceActivityProvider>
   );

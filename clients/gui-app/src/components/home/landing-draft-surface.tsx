@@ -48,7 +48,7 @@ export function LandingDraftSurface() {
         <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6">
           <div className="shrink-0">
             <SurfaceActivityProvider
-              active={Boolean(activity.visible && !systemModalOpen)}
+              active={Boolean(activity.focused && !systemModalOpen)}
             >
               <LandingComposer
                 key={draftId}
@@ -60,7 +60,7 @@ export function LandingDraftSurface() {
           </div>
 
           <div className="mt-3 flex min-h-0 flex-1 flex-col pb-6">
-            {systemModalOpen ? null : (
+            {!systemModalOpen && activity.visible ? (
               <EpicsListPanel
                 variant="embedded"
                 onSelectEpic={null}
@@ -68,7 +68,7 @@ export function LandingDraftSurface() {
                 historyNowMs={null}
                 autoFocusSearch={false}
               />
-            )}
+            ) : null}
           </div>
         </div>
       </div>

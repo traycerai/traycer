@@ -20,6 +20,7 @@ import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
 import { useEpicCommentThreads } from "@/hooks/comments/use-epic-comment-threads";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
 import { CommentContent } from "./comment-content-renderer";
@@ -78,6 +79,9 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
   const showTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const floatingRef = useRef<HTMLButtonElement | null>(null);
+  // Render into the pane's portal host so a hover popover triggered inside a
+  // background split pane is hidden with that pane, not shown over the partner.
+  const paneContainer = usePanePortalContainer();
 
   // Read the cached thread snapshot without firing a fresh request - the
   // hover popover should never trigger network traffic.
@@ -167,7 +171,9 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
     };
     reposition();
     return autoUpdate(hover.anchor, floating, reposition);
-  }, [hover]);
+    // `paneContainer` dep: rebind positioning to the live node after the portal
+    // host settles (initially null → the pane container).
+  }, [hover, paneContainer]);
 
   if (hover === null) return null;
   if (typeof document === "undefined") return null;
@@ -231,7 +237,7 @@ export function ThreadAnchorHoverPopover(props: ThreadAnchorHoverPopoverProps) {
         {thread.comments.length === 1 ? "" : "s"} · click to open
       </p>
     </button>,
-    document.body,
+    paneContainer ?? document.body,
   );
 }
 

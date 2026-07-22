@@ -26,6 +26,11 @@ import {
 import { DialogOverlayBoundaryContext } from "@/providers/dialog-overlay-boundary-context";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import {
+  NewConversationTransientContext,
+  useNewConversationTransient,
+  type NewConversationTransientState,
+} from "./new-conversation-transient-context";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
 import { Button } from "@/components/ui/button";
 import {
@@ -305,6 +310,27 @@ function NewConversationModalDialog(props: {
   // recognizes their content as its own.
   const [overlayBoundaryEl, setOverlayBoundaryEl] =
     useState<HTMLElement | null>(null);
+  // The composer picker store outlives the body's focus-driven unmount. A fresh
+  // store is minted each time the modal opens, so a reopened modal starts clean,
+  // while it survives focus toggles within one open session (this dialog stays
+  // mounted throughout).
+  const [transientSession, setTransientSession] = useState<
+    NewConversationTransientState & { readonly open: boolean }
+  >(() => ({
+    open: props.open,
+    pickerStore: createComposerPickerStore(),
+  }));
+  if (props.open !== transientSession.open) {
+    setTransientSession((prev) =>
+      props.open
+        ? { open: true, pickerStore: createComposerPickerStore() }
+        : { ...prev, open: false },
+    );
+  }
+  const transient = useMemo<NewConversationTransientState>(
+    () => ({ pickerStore: transientSession.pickerStore }),
+    [transientSession.pickerStore],
+  );
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
@@ -336,14 +362,16 @@ function NewConversationModalDialog(props: {
         {props.open ? (
           <DialogOverlayBoundaryContext.Provider value={overlayBoundaryEl}>
             <SurfaceActivityProvider active>
-              <NewConversationModalBody
-                epicId={props.epicId}
-                tabId={props.tabId}
-                placement={props.placement}
-                parentId={props.parentId}
-                dismissPickerRef={dismissPickerRef}
-                onSubmitted={() => props.onOpenChange(false)}
-              />
+              <NewConversationTransientContext.Provider value={transient}>
+                <NewConversationModalBody
+                  epicId={props.epicId}
+                  tabId={props.tabId}
+                  placement={props.placement}
+                  parentId={props.parentId}
+                  dismissPickerRef={dismissPickerRef}
+                  onSubmitted={() => props.onOpenChange(false)}
+                />
+              </NewConversationTransientContext.Provider>
             </SurfaceActivityProvider>
           </DialogOverlayBoundaryContext.Provider>
         ) : null}
@@ -416,7 +444,10 @@ export function NewConversationModalBody(props: {
   const isDisconnected = connectionStatus === "closed";
   const canMutate = isEditableRole(permissionRole) && !isDisconnected;
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
-  const [pickerStore] = useState(() => createComposerPickerStore());
+  // The picker store is lifted onto the always-mounted dialog so it survives
+  // this body's focus-driven unmount (see the transient context); the hook falls
+  // back to a local store when rendered outside the dialog.
+  const { pickerStore } = useNewConversationTransient();
   // Bridge the editor's imperative picker dismiss up to the dialog's Escape
   // handler (see `NewConversationModalDialog`). Returns true when a picker was
   // open and got closed, so the dialog keeps itself open for that Escape.
@@ -459,6 +490,13 @@ export function NewConversationModalBody(props: {
       useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
         ?.content ?? seed.content,
   );
+  // Reseed the caret from the draft store on every (re)mount, so a focus
+  // round-trip that unmounts this body restores the selection, not just bytes.
+  const [initialSelection] = useState<{ from: number; to: number } | null>(
+    () =>
+      useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
+        ?.selection ?? null,
+  );
   const stagingKey = useMemo(
     () => newConversationModalStagingKey(epicId, parentId),
     [epicId, parentId],
@@ -468,6 +506,9 @@ export function NewConversationModalBody(props: {
     (state) => state.intentByKey[stagingKeyId] ?? null,
   );
   const setContent = useNewConversationModalStore((state) => state.setContent);
+  const setSelection = useNewConversationModalStore(
+    (state) => state.setSelection,
+  );
   const setSettings = useNewConversationModalStore(
     (state) => state.setSettings,
   );
@@ -805,10 +846,13 @@ export function NewConversationModalBody(props: {
     ],
   );
   const handleSnapshot = useCallback(
-    (content: JsonContent, _selection: { from: number; to: number }) => {
+    (content: JsonContent, selection: { from: number; to: number }) => {
       setContent(epicId, content);
+      // Persist the caret alongside the bytes so a focus round-trip that
+      // unmounts + remounts the editor restores it (see `initialSelection`).
+      setSelection(epicId, selection);
     },
-    [epicId, setContent],
+    [epicId, setContent, setSelection],
   );
   const handleRemoveImage = useCallback((id: string) => {
     editorRef.current?.removeImageAttachmentById(id);
@@ -822,7 +866,7 @@ export function NewConversationModalBody(props: {
       chatEditorIsActive={chatComposerActive}
       editorClassName={COMPOSER_EDITOR_CLASSNAME}
       initialContent={initialContent}
-      initialSelection={null}
+      initialSelection={initialSelection}
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
       attachmentPending={attachmentPending}

@@ -2,6 +2,7 @@ import { Outlet, useRouterState } from "@tanstack/react-router";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
+import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { AppShell } from "@/components/layout/app-shell";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
@@ -33,31 +34,27 @@ export function RootComponent() {
 
   return (
     <>
-      {/* Host-independent chrome: these are the ONLY surfaces pulled outside
-          HostReadyGate so they keep working while the page is gated on host
-          readiness (the "Setting up Traycer Host…" screen). The menu command
-          listener routes native menu items; the dialog host renders
-          host-independent About/Logs dialogs; notification emission drains
-          app-local persisted rows. All only depend on the runner host + auth +
-          local stores, which are available without a ready host. */}
+      {/* Always-mounted shell bridges remain available while any individual
+          surface projects its own readiness fallback. */}
       <MenuCommandListener />
+      <HostTrayCommandListener />
       <DesktopDialogHost />
       <NotificationEmissionController />
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization
           is hydration-gated inside the controller. */}
       {authStatus === "signed-in" ? <TabNavigationRouteBridge /> : null}
-      {/* Everything host-dependent stays BEHIND the gate, preserving the exact
-          mount timing it had when the gate wrapped the whole RouterProvider -
-          these bridges + the page only mount once the host is reachable (or the
-          route is a /settings bypass). */}
+      {/* One controller owns readiness subscriptions. The shell and top-level
+          host are always mounted; host-dependent bridges opt into their
+          declared default-host scope rather than creating route gates. */}
       <HostReadyGate>
-        <HostTrayCommandListener />
-        <PreventSleepController />
-        <TrayOpenEpicBridge />
-        <NotificationFocusBridge />
-        <EpicAccessCoordinator />
-        <ProviderProfileAddFlowHost />
+        <HostScopeReady scope="default-host">
+          <PreventSleepController />
+          <TrayOpenEpicBridge />
+          <NotificationFocusBridge />
+          <EpicAccessCoordinator />
+          <ProviderProfileAddFlowHost />
+        </HostScopeReady>
         <RootSurface
           showOnboarding={showOnboarding}
           isStandalone={isStandalone}

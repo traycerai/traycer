@@ -19,6 +19,7 @@ import { useCloseWsStreamClientOnReplace } from "@/lib/host/use-close-ws-stream-
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useSurfaceReadiness } from "@/components/layout/host-readiness-controller-context";
 import { useStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
 import { appLogger } from "@/lib/logger";
 
@@ -51,6 +52,7 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   const readiness = useReactiveHostReadiness(
     binding === null ? null : binding.hostClient,
   );
+  const defaultHostReadiness = useSurfaceReadiness("default-host", null);
   const transportKey = useReactiveHostTransportKey(
     binding === null ? null : binding.hostClient,
   );
@@ -59,10 +61,11 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // memo below keeps the SAME client rather than rebuilding on every
   // `transportKey` change. `null` until both are known - the "host
   // communication may start" gate, equivalent to the old `readiness.isReady`.
-  const identityKey =
-    readiness.hostId === null || readiness.requestContextUserId === null
-      ? null
-      : `${readiness.hostId}\x1f${readiness.requestContextUserId}`;
+  const identityKey = streamIdentityKey({
+    readinessKind: defaultHostReadiness.kind,
+    hostId: readiness.hostId,
+    requestContextUserId: readiness.requestContextUserId,
+  });
   // Liveness escape hatch: bumped when the served client turns out to be
   // closed (see the guard effect below), forcing the memo to mint a fresh
   // client even though the identity never changed.
@@ -143,6 +146,16 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       {props.children}
     </StreamRuntimeContext.Provider>
   );
+}
+
+function streamIdentityKey(args: {
+  readonly readinessKind: string;
+  readonly hostId: string | null;
+  readonly requestContextUserId: string | null;
+}): string | null {
+  if (args.readinessKind !== "ready") return null;
+  if (args.hostId === null || args.requestContextUserId === null) return null;
+  return `${args.hostId}\x1f${args.requestContextUserId}`;
 }
 
 /**

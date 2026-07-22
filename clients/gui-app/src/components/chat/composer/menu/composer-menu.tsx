@@ -23,6 +23,7 @@ import {
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
   isArtifactMentionStep,
@@ -93,11 +94,12 @@ export function ComposerMenu(props: ComposerMenuProps) {
   const { pickerStore } = props;
   const slice = useStore(pickerStore, useShallow(selectMenuSlice));
   const { open, kind, items, activeIndex, loading, fetching, step } = slice;
+  const paneFocused = usePaneFocused();
 
   const baseMenuId = useId();
   const menuId = `${baseMenuId}-menu`;
 
-  if (!open) return null;
+  if (!open || !paneFocused) return null;
   if (typeof document === "undefined") return null;
 
   return (

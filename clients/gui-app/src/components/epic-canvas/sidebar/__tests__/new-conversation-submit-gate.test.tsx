@@ -1,6 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
-import { createRef } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createRef, useRef, useState } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -9,7 +15,14 @@ import type { ComposerBodyProps } from "@/components/home/composer/composer-body
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
+import { Dialog, DialogContent } from "@/components/ui/dialog";
+import {
+  createComposerPickerStore,
+  type ComposerPickerStore,
+} from "@/components/chat/composer/picker/composer-picker-store";
 import { NewConversationModalBody } from "../new-conversation-modal";
+import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
 const DIRTY_CONTENT: JsonContent = {
   type: "doc",
@@ -23,6 +36,11 @@ const testState = vi.hoisted(() => ({
   ingesting: false,
   attachmentPresence: null as ((hash: string) => boolean) | null,
   bodyAttachmentPresence: null as ((hash: string) => boolean) | null,
+  bodyPickerStore: null as ComposerPickerStore | null,
+  bodyInitialSelection: null as { from: number; to: number } | null,
+  bodySnapshot: null as
+    | ((content: JsonContent, selection: { from: number; to: number }) => void)
+    | null,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -31,6 +49,9 @@ vi.mock("@/components/home/composer/composer-body", async () => {
     ComposerBody: (props: ComposerBodyProps) => {
       testState.bodySubmit = props.onSubmit;
       testState.bodyAttachmentPresence = props.hasPastedImageBytes;
+      testState.bodyPickerStore = props.pickerStore;
+      testState.bodyInitialSelection = props.initialSelection;
+      testState.bodySnapshot = props.onSnapshot;
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
@@ -173,7 +194,67 @@ afterEach(() => {
   testState.ingesting = false;
   testState.attachmentPresence = null;
   testState.bodyAttachmentPresence = null;
+  testState.bodyPickerStore = null;
+  testState.bodyInitialSelection = null;
+  testState.bodySnapshot = null;
   useNewConversationModalStore.getState().resetForTests();
+});
+
+function Med4Harness(props: { readonly focused: boolean }) {
+  // Mimics `NewConversationModalDialog`: the picker store lives ABOVE the
+  // `DialogContent` gate, so it survives the body's focus-driven unmount. The
+  // caret is persisted in the draft store, which also outlives the unmount.
+  const [transient] = useState(() => ({
+    pickerStore: createComposerPickerStore(),
+  }));
+  const dismissPickerRef = useRef<(() => boolean) | null>(null);
+  return (
+    <SurfacePresentationBoundary visible focused={props.focused}>
+      <Dialog open>
+        <DialogContent>
+          <NewConversationTransientContext.Provider value={transient}>
+            <NewConversationModalBody
+              epicId="epic-1"
+              tabId="tab-1"
+              placement={ACTIVE_TILE_PLACEMENT}
+              parentId={null}
+              dismissPickerRef={dismissPickerRef}
+              onSubmitted={() => undefined}
+            />
+          </NewConversationTransientContext.Provider>
+        </DialogContent>
+      </Dialog>
+    </SurfacePresentationBoundary>
+  );
+}
+
+describe("NewConversationModalBody focus round-trip (MED4)", () => {
+  it("preserves the composer picker store and editor selection when the pane loses and regains focus", () => {
+    const { rerender } = render(<Med4Harness focused />);
+    const pickerBefore = testState.bodyPickerStore;
+    expect(pickerBefore).not.toBeNull();
+
+    // The editor reports a caret; the body records it on its lifted holder.
+    act(() => {
+      testState.bodySnapshot?.(DIRTY_CONTENT, { from: 3, to: 5 });
+    });
+
+    // Focus away: DialogContent unmounts the whole body subtree.
+    act(() => {
+      rerender(<Med4Harness focused={false} />);
+    });
+    expect(
+      screen.queryByRole("button", { name: "Submit new conversation" }),
+    ).toBeNull();
+
+    // Focus back: the body remounts and reads the SAME lifted state, not a
+    // fresh picker store or a reset (null) selection.
+    act(() => {
+      rerender(<Med4Harness focused />);
+    });
+    expect(testState.bodyPickerStore).toBe(pickerBefore);
+    expect(testState.bodyInitialSelection).toEqual({ from: 3, to: 5 });
+  });
 });
 
 describe("NewConversationModalBody direct submit gate", () => {

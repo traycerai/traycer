@@ -22,6 +22,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -38,6 +39,17 @@ interface NewTerminalPickerProps {
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
+  // The picker's `PopoverContent` (a modal Radix popover) un-presents by
+  // unmounting when its pane is backgrounded, which silently resets the cmdk
+  // folder-search query inside `WorktreeFolderListBody` while the root stays
+  // logically open. Dismiss the picker on focus loss (the approved semantic) so
+  // it never reappears as a logically-open root with reset content.
+  const paneFocused = usePaneFocused();
+  const [focusedLastRender, setFocusedLastRender] = useState(paneFocused);
+  if (paneFocused !== focusedLastRender) {
+    setFocusedLastRender(paneFocused);
+    if (!paneFocused) setIsOpen(false);
+  }
   // The user's explicit pick. Null means "follow the auto-selected default";
   // the effective selection is derived below so a default never has to be
   // written into state via an effect.

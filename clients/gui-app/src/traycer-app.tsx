@@ -17,6 +17,10 @@ import {
   type MessengerFactory,
 } from "@/lib/host";
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
+import {
+  HostReadinessControllerProvider,
+  HostScopeReady,
+} from "@/components/layout/host-readiness-controller";
 import { queryClient } from "@/lib/query-client";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
@@ -60,7 +64,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { LazyMotion, domMax } from "motion/react";
-import { lazy, Suspense, useMemo, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useMemo, type ReactNode } from "react";
 
 const ReactQueryDevtools = import.meta.env.DEV
   ? lazy(() =>
@@ -125,6 +129,9 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
     ),
     [],
   );
+  const configureShell = useCallback(() => {
+    void router.navigate({ to: "/settings/shell" });
+  }, [router]);
 
   return (
     <RunnerHostProvider runnerHost={props.runnerHost}>
@@ -146,9 +153,13 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                     fallback={hostRuntimeFallback}
                   >
                     <HostCompatibilityProvider>
-                      <RootErrorBoundary router={router}>
-                        <TraycerAuthenticatedRuntime router={router} />
-                      </RootErrorBoundary>
+                      <HostReadinessControllerProvider
+                        onConfigureShell={configureShell}
+                      >
+                        <RootErrorBoundary router={router}>
+                          <TraycerAuthenticatedRuntime router={router} />
+                        </RootErrorBoundary>
+                      </HostReadinessControllerProvider>
                     </HostCompatibilityProvider>
                   </HostRuntimeProvider>
                 </KeybindingProvider>
@@ -197,7 +208,9 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                       <LandingTerminalTombstoneRecoveryBridge />
                       <EpicTabExistenceReconciler />
                       <HostStreamProvider>
-                        <WorktreeChangedStreamMount />
+                        <HostScopeReady scope="default-host">
+                          <WorktreeChangedStreamMount />
+                        </HostScopeReady>
                         <AppLocalNotificationsPersistLifecycleBridge>
                           <NotificationsSessionProvider>
                             <TraycerAppRuntimeSurface router={props.router} />

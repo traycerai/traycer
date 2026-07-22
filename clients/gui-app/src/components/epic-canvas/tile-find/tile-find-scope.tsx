@@ -4,7 +4,7 @@ import {
   type TileFindContextValue,
 } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { TileFindBar } from "@/components/epic-canvas/tile-find/tile-find-bar";
-import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { cn } from "@/lib/utils";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import {
@@ -24,7 +24,7 @@ interface TileFindScopeProps {
 
 export function TileFindScope(props: TileFindScopeProps): ReactNode {
   const { node, viewTabId, tileId, epicId, isActive, children } = props;
-  const paneVisible = usePaneVisible();
+  const paneFocused = usePaneFocused();
   const registerTarget = useTileFindStore((state) => state.registerTarget);
   const unregisterTargetRef = useRef<(() => void) | null>(null);
   const activeAdapterRef = useRef<TileFindAdapter | null>(null);
@@ -56,7 +56,7 @@ export function TileFindScope(props: TileFindScopeProps): ReactNode {
         tileId,
         epicId,
         tileKind: node.type,
-        isEligible: isActive && paneVisible,
+        isEligible: isActive && paneFocused,
         adapter: nextAdapter,
       });
     },
@@ -66,7 +66,7 @@ export function TileFindScope(props: TileFindScopeProps): ReactNode {
       node.id,
       node.instanceId,
       node.type,
-      paneVisible,
+      paneFocused,
       registerTarget,
       tileId,
       unregisterCurrentTarget,

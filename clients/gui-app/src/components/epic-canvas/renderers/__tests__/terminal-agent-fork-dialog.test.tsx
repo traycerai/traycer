@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 import type { ForkWorkspaceSeed } from "@/lib/worktree/fork-workspace-seed";
 import type { WorktreeFolderIntent } from "@traycer/protocol/host/worktree-schemas";
@@ -21,6 +22,7 @@ import {
   readSeededWorkspaceSnapshot,
   useSeededWorkspaceSnapshotStore,
 } from "@/stores/worktree/seeded-workspace-snapshot-store";
+import { PaneSurfaceActivityContext } from "@/components/epic-tabs/pane-visibility-context";
 
 const dialogMocks = vi.hoisted(() => ({
   create: vi.fn<(input: TerminalForkCreateInput) => Promise<string | null>>(),
@@ -356,6 +358,73 @@ describe("<TerminalAgentForkDialog />", () => {
     });
   });
 
+  it("un-presents a background fork portal without resetting the pending fork lifecycle", async () => {
+    const createState: {
+      resolve: ((value: string | null) => void) | null;
+    } = { resolve: null };
+    dialogMocks.create.mockImplementation(
+      () =>
+        new Promise<string | null>((resolve) => {
+          createState.resolve = resolve;
+        }),
+    );
+
+    function FocusHarness() {
+      const [focused, setFocused] = useState(true);
+      return (
+        <PaneSurfaceActivityContext.Provider value={{ visible: true, focused }}>
+          <button type="button" onClick={() => setFocused(false)}>
+            Focus partner
+          </button>
+          <button type="button" onClick={() => setFocused(true)}>
+            Focus fork
+          </button>
+          <TerminalAgentForkDialog
+            open
+            target={{
+              sourceAgent: sourceAgent(),
+              workspaceSeed: emptyWorkspaceSeed(),
+            }}
+            epicId="epic-test"
+            tabId="tab-test"
+            hostId="host-test"
+            hostClient={null}
+            onOpenChange={() => undefined}
+          />
+        </PaneSurfaceActivityContext.Provider>
+      );
+    }
+
+    render(<FocusHarness />);
+    const title = screen.getByRole("textbox", {
+      name: "Fork terminal agent title",
+    });
+    fireEvent.change(title, { target: { value: "Staged sibling fork" } });
+    fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+    await waitFor(() => {
+      expect(dialogMocks.create).toHaveBeenCalledTimes(1);
+    });
+    expectButtonDisabled(/^Fork/);
+
+    fireEvent.click(getDocumentButton("Focus partner"));
+    expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull();
+
+    fireEvent.click(getDocumentButton("Focus fork"));
+    expectTextInputValue("Fork terminal agent title", "Staged sibling fork");
+    expectButtonDisabled(/^Fork/);
+    fireEvent.click(screen.getByRole("button", { name: /^Fork/ }));
+    expect(dialogMocks.create).toHaveBeenCalledTimes(1);
+
+    const completeCreate = createState.resolve;
+    if (completeCreate === null) {
+      throw new Error("fork dialog did not start creation");
+    }
+    await act(async () => {
+      completeCreate("forked-agent");
+      await Promise.resolve();
+    });
+  });
+
   it("seeds the fork from the source agent's profile", async () => {
     dialogMocks.create.mockResolvedValue("forked-agent");
     render(
@@ -447,6 +516,32 @@ interface TerminalForkCreateInput {
         status: "preparing-workspace" | "forking-session" | "starting-terminal",
       ) => void)
     | null;
+}
+
+function expectButtonDisabled(name: RegExp): void {
+  const button = screen.getByRole("button", { name });
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("expected fork button");
+  }
+  expect(button.disabled).toBe(true);
+}
+
+function getDocumentButton(label: string): HTMLButtonElement {
+  const button = Array.from(document.querySelectorAll("button")).find(
+    (candidate) => candidate.textContent === label,
+  );
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`expected ${label} button`);
+  }
+  return button;
+}
+
+function expectTextInputValue(label: string, value: string): void {
+  const input = screen.getByRole("textbox", { name: label });
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error(`expected ${label} input`);
+  }
+  expect(input.value).toBe(value);
 }
 
 function sourceAgent(): TuiAgentProjection {

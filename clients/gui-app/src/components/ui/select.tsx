@@ -5,6 +5,10 @@ import { Select as SelectPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react";
+import {
+  usePaneCloseAutoFocusGuard,
+  usePaneFocused,
+} from "@/components/epic-tabs/pane-visibility-context";
 
 function Select({
   ...props
@@ -63,8 +67,17 @@ function SelectContent({
   position = "popper",
   align = "start",
   sideOffset = 4,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  // Select always drives Radix focus-trap + `hideOthers` while open and has no
+  // non-modal escape, so a background split pane must un-present it by unmounting
+  // (dropping that document-wide reach). The guard preventDefaults Radix's
+  // close-autofocus restore when the pane is no longer focused, so the unmount
+  // cannot reactivate the pane. Outside a pane this defaults to true.
+  const paneFocused = usePaneFocused();
+  const handleCloseAutoFocus = usePaneCloseAutoFocusGuard(onCloseAutoFocus);
+  if (!paneFocused) return null;
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
@@ -79,6 +92,7 @@ function SelectContent({
         position={position}
         align={align}
         sideOffset={sideOffset}
+        onCloseAutoFocus={handleCloseAutoFocus}
         {...props}
       >
         <SelectScrollUpButton />

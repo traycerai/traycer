@@ -32,6 +32,10 @@ import * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
+import {
+  isPresentationLossBlur,
+  usePanePortalContainer,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { Input } from "@/components/ui/input";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
@@ -668,6 +672,12 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const [displayText, setDisplayText] = useState("");
   const targetRef = useRef<LinkTarget | null>(null);
   const hrefDirtyRef = useRef(false);
+  // Render into the pane's portal host so this kept-mounted link editor (its
+  // typed URL/title survive focus changes) hides with the pane instead of
+  // covering a focused split partner. `null` outside a pane → `document.body`.
+  // Declared here (before the positioning effects) so those effects can depend
+  // on it and rebind to the live node once the host ref settles.
+  const paneContainer = usePanePortalContainer();
   const textDirtyRef = useRef(false);
   const expectedCaretPositionRef = useRef<number | null>(null);
   const focusEditUrlRef = useRef(false);
@@ -1259,7 +1269,9 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       active = false;
       stopAutoUpdate();
     };
-  }, [editor, scrollContainer, target]);
+    // `paneContainer` dep: the portal remounts the card into the live node once
+    // the host ref settles, so rebind `autoUpdate` to it, not the first node.
+  }, [editor, scrollContainer, target, paneContainer]);
 
   useEffect(() => {
     const card = cardRef.current;
@@ -1381,12 +1393,19 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const handleSurfaceBlur = (event: ReactFocusEvent<HTMLFormElement>): void => {
     const next = event.relatedTarget;
     if (next instanceof Node && event.currentTarget.contains(next)) return;
+    // A pane backgrounding forcibly blurs this field to relinquish keyboard
+    // ownership; that is not a user-approved commit. Keep the draft mounted (the
+    // typed URL/title survive) and let the card reappear on refocus.
+    if (isPresentationLossBlur()) return;
     commit();
   };
 
   const handlePreviewBlur = (event: ReactFocusEvent<HTMLDivElement>): void => {
     const next = event.relatedTarget;
     if (next instanceof Node && event.currentTarget.contains(next)) return;
+    // Presentation-loss blur (pane backgrounded) must not close the card; it
+    // hides with the pane and returns on refocus.
+    if (isPresentationLossBlur()) return;
     close();
   };
 
@@ -1484,6 +1503,6 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         </form>
       )}
     </div>,
-    document.body,
+    paneContainer ?? document.body,
   );
 }

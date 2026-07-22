@@ -23,6 +23,7 @@ import { HarnessModelPicker } from "@/components/home/pickers/harness-model-pick
 import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -93,11 +94,12 @@ interface ChatForkDialogProps {
 }
 
 export function ChatForkDialog(props: ChatForkDialogProps) {
+  const presentedOpen = useFocusedPaneModalOpen(props.open);
   // The dialog stays mounted per chat tile; gate the toolbar store's catalog
   // queries on `open` so a closed dialog holds no harness/model subscription
   // (the same semantics the old `activityEnabled` flag carried).
   return (
-    <SurfaceActivityProvider active={props.open}>
+    <SurfaceActivityProvider active={presentedOpen}>
       <ChatForkDialogBody {...props} />
     </SurfaceActivityProvider>
   );

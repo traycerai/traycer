@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { HostProgressEvent } from "@traycer-clients/shared/platform/runner-host";
 import { AppHeader } from "@/components/layout/header/app-header";
@@ -31,8 +31,65 @@ export interface LocalHostLoadingProps {
  */
 const BOOTSTRAP_TAIL_POLL_MS = 1500;
 
-export function LocalHostLoading(props: LocalHostLoadingProps) {
+/**
+ * Full-screen host-boot splash. Owns the outer app chrome (header + centered
+ * card) and its own respawn mutation, then delegates everything inside the
+ * card to `LocalHostLoadingContent`.
+ */
+export function LocalHostLoading(props: LocalHostLoadingProps): ReactNode {
   const respawn = useRunnerRequestHostRespawn();
+
+  return (
+    <div
+      data-testid="local-host-loading"
+      data-stage={props.stage}
+      className="flex min-h-svh w-full flex-col bg-background text-foreground"
+    >
+      <AppHeader variant="host-loading" />
+      <div className="flex flex-1 items-center justify-center p-6">
+        <Card className="w-full max-w-md shadow-sm">
+          <CardContent className="flex flex-col items-center gap-4 py-6 text-center text-ui-sm">
+            <LocalHostLoadingContent
+              stage={props.stage}
+              progress={props.progress}
+              onConfigureShell={props.onConfigureShell}
+              onRetry={() => respawn.mutate()}
+              retryPending={respawn.isPending}
+            />
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+export interface LocalHostLoadingContentProps {
+  readonly stage: LocalHostLoadingStage;
+  readonly progress: HostProgressEvent | null;
+  readonly onConfigureShell: () => void;
+  /**
+   * Drives the slow-stage Retry button. Injected rather than reading
+   * `useRunnerRequestHostRespawn()` directly so callers control who owns
+   * the respawn mutation - the full-screen `LocalHostLoading` splash owns
+   * its own, while the slot-sized readiness-controller fallback routes
+   * through the controller's single shared respawn lock.
+   */
+  readonly onRetry: () => void;
+  readonly retryPending: boolean;
+}
+
+/**
+ * Slot-friendly loading body: spinner, progress heading/detail, the
+ * download progress bar, slow-stage copy + Retry, and the bootstrap-log
+ * disclosure (with the "Configure shell…" shortcut). Deliberately has no
+ * outer full-screen chrome (no `min-h-svh` wrapper, no `<AppHeader>`, no
+ * `<Card>`) so it can be reused both by the full-screen `LocalHostLoading`
+ * splash and by a slot-sized fallback that already provides its own
+ * bounded, centered layout.
+ */
+export function LocalHostLoadingContent(
+  props: LocalHostLoadingContentProps,
+): ReactNode {
   const runnerHost = useRunnerHost();
   const hasCli = runnerHost.traycerCli !== null;
   const [showDetails, setShowDetails] = useState<boolean>(false);
@@ -45,81 +102,68 @@ export function LocalHostLoading(props: LocalHostLoadingProps) {
   const progressView = buildProgressView(props.progress);
 
   return (
-    <div
-      data-testid="local-host-loading"
-      data-stage={props.stage}
-      className="flex min-h-svh w-full flex-col bg-background text-foreground"
-    >
-      <AppHeader variant="host-loading" />
-      <div className="flex flex-1 items-center justify-center p-6">
-        <Card className="w-full max-w-md shadow-sm">
-          <CardContent className="flex flex-col items-center gap-4 py-6 text-center text-ui-sm">
-            <AgentSpinningDots
-              testId="local-host-loading-spinner"
-              variant="pulse"
-              className="h-8 min-w-8 text-title-md text-foreground"
-            />
-            <p className="text-ui font-medium text-foreground">
-              {progressView.heading}
-            </p>
-            {progressView.detail !== null ? (
-              <p
-                data-testid="local-host-loading-progress-detail"
-                className="text-ui-sm text-muted-foreground"
-              >
-                {progressView.detail}
-              </p>
-            ) : null}
-            {progressView.percent !== null ? (
-              <HostDownloadProgress
-                percent={progressView.percent}
-                stage={progressView.stage}
-                byteLabel={progressView.byteLabel}
-              />
-            ) : null}
-            {props.stage === "slow" ? (
-              <div
-                data-testid="local-host-loading-slow-copy"
-                className="flex flex-col items-center gap-3"
-              >
-                <p className="text-ui-sm text-muted-foreground">
-                  Local host is taking longer than expected.
-                </p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={respawn.isPending}
-                  onClick={() => {
-                    respawn.mutate();
-                  }}
-                  data-testid="local-host-retry"
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <span>Retry</span>
-                    {respawn.isPending ? (
-                      <AgentSpinningDots
-                        className={undefined}
-                        testId="local-host-retry-spinner"
-                        variant={undefined}
-                      />
-                    ) : null}
-                  </span>
-                </Button>
-              </div>
-            ) : null}
-            {hasCli ? (
-              <DetailsDisclosure
-                open={showDetails}
-                onToggle={() => setShowDetails((v) => !v)}
-                tail={tail}
-                onConfigureShell={props.onConfigureShell}
-              />
-            ) : null}
-          </CardContent>
-        </Card>
-      </div>
-    </div>
+    <>
+      <AgentSpinningDots
+        testId="local-host-loading-spinner"
+        variant="pulse"
+        className="h-8 min-w-8 text-title-md text-foreground"
+      />
+      <p className="text-ui font-medium text-foreground">
+        {progressView.heading}
+      </p>
+      {progressView.detail !== null ? (
+        <p
+          data-testid="local-host-loading-progress-detail"
+          className="text-ui-sm text-muted-foreground"
+        >
+          {progressView.detail}
+        </p>
+      ) : null}
+      {progressView.percent !== null ? (
+        <HostDownloadProgress
+          percent={progressView.percent}
+          stage={progressView.stage}
+          byteLabel={progressView.byteLabel}
+        />
+      ) : null}
+      {props.stage === "slow" ? (
+        <div
+          data-testid="local-host-loading-slow-copy"
+          className="flex flex-col items-center gap-3"
+        >
+          <p className="text-ui-sm text-muted-foreground">
+            Local host is taking longer than expected.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={props.retryPending}
+            onClick={props.onRetry}
+            data-testid="local-host-retry"
+          >
+            <span className="inline-flex items-center gap-1.5">
+              <span>Retry</span>
+              {props.retryPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="local-host-retry-spinner"
+                  variant={undefined}
+                />
+              ) : null}
+            </span>
+          </Button>
+        </div>
+      ) : null}
+      {hasCli ? (
+        <DetailsDisclosure
+          open={showDetails}
+          onToggle={() => setShowDetails((v) => !v)}
+          tail={tail}
+          onConfigureShell={props.onConfigureShell}
+        />
+      ) : null}
+    </>
   );
 }
 

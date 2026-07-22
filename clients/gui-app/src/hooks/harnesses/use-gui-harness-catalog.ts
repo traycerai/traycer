@@ -290,16 +290,22 @@ export function useGuiHarnessCatalog(
 ): GuiHarnessCatalog {
   const harnessesQuery = useGuiHarnessesQuery(activity);
   const client = useDefaultHostClient();
-  const active = activity.enabled && activity.subscribed;
+  // Fetching is gated by `enabled` (inside the sub-query hooks); the projection
+  // is gated by `subscribed` alone, so a cache-only reader
+  // (`{ enabled: false, subscribed: true }`) still surfaces the cached catalog
+  // for label lookup on any visible transcript, without owning a fetch. For
+  // every existing caller `enabled === subscribed`, so this is unchanged for
+  // them.
+  const attached = activity.subscribed;
 
   const harnessIds = useMemo(() => {
-    if (!active) return EMPTY_GUI_HARNESS_IDS;
+    if (!attached) return EMPTY_GUI_HARNESS_IDS;
     return (
       harnessesQuery.data?.harnesses.flatMap((harness) =>
         harness.available ? [harness.id] : [],
       ) ?? EMPTY_GUI_HARNESS_IDS
     );
-  }, [active, harnessesQuery.data?.harnesses]);
+  }, [attached, harnessesQuery.data?.harnesses]);
 
   const requests = useMemo(() => {
     if (harnessIds.length === 0) return EMPTY_GUI_MODEL_REQUESTS;
@@ -339,7 +345,7 @@ export function useGuiHarnessCatalog(
 
   const harnesses = useMemo<ReadonlyArray<GuiHarnessCatalogEntry>>(
     () =>
-      active && harnessesQuery.data !== undefined
+      attached && harnessesQuery.data !== undefined
         ? harnessesQuery.data.harnesses.map((harness) => {
             const modelQuery = queryByHarnessId.get(harness.id);
             return {
@@ -353,7 +359,7 @@ export function useGuiHarnessCatalog(
             };
           })
         : EMPTY_GUI_HARNESS_CATALOG_ENTRIES,
-    [active, harnessesQuery.data, queryByHarnessId],
+    [attached, harnessesQuery.data, queryByHarnessId],
   );
   const modelsLoading = useMemo(
     () => modelQueries.some((query) => query.isPending),

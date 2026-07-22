@@ -464,3 +464,79 @@ describe("useGuiHarnessCatalog (batched interval removal regression)", () => {
     expect(callCount).toBe(callsAfterInitialFailure);
   });
 });
+
+describe("useGuiHarnessCatalog cache-only label reader (MED5)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    hostBindingMock.current = null;
+    cleanup();
+  });
+
+  it("surfaces cached catalog labels to a visible-only reader that never fetches", async () => {
+    vi.useFakeTimers();
+    let harnessCalls = 0;
+    let modelCalls = 0;
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => {
+        harnessCalls += 1;
+        return { harnesses: harnesses(["opencode"]) };
+      },
+      "agent.gui.listModels": () => {
+        modelCalls += 1;
+        return modelsResponse(2);
+      },
+    });
+
+    // The prefetch/owner warms the host-keyed cache once.
+    const owner = renderHook(
+      () => useGuiHarnessCatalog(null, { enabled: true, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(harnessCalls).toBe(1);
+    expect(modelCalls).toBe(1);
+    owner.unmount();
+
+    // A VISIBLE-but-not-owning reader (enabled:false) reads the same cache with
+    // no live publisher and issues zero requests, yet gets friendly labels.
+    const reader = renderHook(
+      () => useGuiHarnessCatalog(null, { enabled: false, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(harnessCalls).toBe(1);
+    expect(modelCalls).toBe(1);
+    expect(reader.result.current.harnesses).toHaveLength(1);
+    expect(reader.result.current.harnesses[0].models).toHaveLength(2);
+    expect(reader.result.current.harnesses[0].models[0].label).toBe("Model 0");
+  });
+
+  it("detaches a hidden reader: subscribed:false yields no catalog even with a warm cache", async () => {
+    vi.useFakeTimers();
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => ({ harnesses: harnesses(["opencode"]) }),
+      "agent.gui.listModels": () => modelsResponse(2),
+    });
+    const owner = renderHook(
+      () => useGuiHarnessCatalog(null, { enabled: true, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    owner.unmount();
+
+    const hidden = renderHook(
+      () => useGuiHarnessCatalog(null, { enabled: false, subscribed: false }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(hidden.result.current.harnesses).toHaveLength(0);
+  });
+});

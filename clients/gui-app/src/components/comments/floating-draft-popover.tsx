@@ -20,6 +20,10 @@ import { type EpicArtifactKind } from "@traycer/protocol/common/registry";
 import type { CreateCommentThreadResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import { cn } from "@/lib/utils";
 import {
+  usePaneFocused,
+  usePanePortalContainer,
+} from "@/components/epic-tabs/pane-visibility-context";
+import {
   useCommentThreadsStore,
   useDraftRange,
 } from "@/stores/comments/comment-threads-store";
@@ -66,6 +70,15 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
   const createThread = useCreateCommentThread();
   const floatingRef = useRef<HTMLDialogElement | null>(null);
   const isDirtyRef = useRef(false);
+  // Render into the pane's portal host so this kept-mounted composer (its typed
+  // draft survives focus changes) is hidden with the pane instead of covering a
+  // focused split partner. `null` outside a pane falls back to `document.body`.
+  const paneContainer = usePanePortalContainer();
+  // The kept-mounted draft stays MOUNTED while its pane is a background split
+  // member, so its global (window, capture-phase) Escape listener must be gated
+  // on pane focus — otherwise Escape typed in the focused partner would dismiss
+  // this hidden draft.
+  const paneFocused = usePaneFocused();
 
   const dismiss = useCallback(
     (force: boolean) => {
@@ -107,13 +120,17 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
     };
     reposition();
     return autoUpdate(virtualReference, floating, reposition);
-  }, [editor, ownedDraft]);
+    // `paneContainer` is a dependency: when the portal host settles (initially
+    // null → the pane container), createPortal remounts the floating node, so
+    // the positioning effect must re-run to bind `autoUpdate` to the live node
+    // instead of the detached first-mount node.
+  }, [editor, ownedDraft, paneContainer]);
 
   // Esc cancels (with dirty-confirm) at the document level so the editor
   // doesn't have to forward keystrokes. The Tiptap editor's own Escape
   // handler already lets unhandled keys bubble.
   useEffect(() => {
-    if (!draftActive) return;
+    if (!draftActive || !paneFocused) return;
     window.addEventListener("keydown", handleDocumentKeyDown, {
       capture: true,
     });
@@ -122,7 +139,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
         capture: true,
       });
     };
-  }, [draftActive]);
+  }, [draftActive, paneFocused]);
 
   // Re-map the saved draft range through every editor transaction so local
   // and remote edits keep the from/to offsets aligned with the original
@@ -218,7 +235,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
         className={undefined}
       />
     </dialog>,
-    document.body,
+    paneContainer ?? document.body,
   );
 }
 

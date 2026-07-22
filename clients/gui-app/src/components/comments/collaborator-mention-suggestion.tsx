@@ -15,6 +15,7 @@ import {
 } from "@floating-ui/dom";
 import type { MentionCollaborator } from "@/hooks/comments/use-mention-collaborators";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
 import { cn } from "@/lib/utils";
 import { deriveInitials } from "./mention-utils";
 
@@ -76,6 +77,10 @@ function MentionSuggestionListContent({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const floatingRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  // Render into the pane's portal host (not `document.body`), so a mention
+  // list opened inside a background split pane's comment composer is hidden +
+  // inert with that pane instead of escaping over the focused partner.
+  const paneContainer = usePanePortalContainer();
 
   useImperativeHandle(
     ref,
@@ -127,7 +132,9 @@ function MentionSuggestionListContent({
     reposition();
     const cleanup = autoUpdate(virtualReference, floating, reposition);
     return cleanup;
-  }, [getReferenceClientRect, items.length]);
+    // `paneContainer` dep: the portal remounts into the live node once the host
+    // ref settles, so re-bind `autoUpdate` to it rather than the first node.
+  }, [getReferenceClientRect, items.length, paneContainer]);
 
   useLayoutEffect(() => {
     const node = itemRefs.current[selectedIndex];
@@ -195,7 +202,7 @@ function MentionSuggestionListContent({
         })
       )}
     </div>,
-    document.body,
+    paneContainer ?? document.body,
   );
 }
 

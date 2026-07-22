@@ -6,6 +6,8 @@ import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
+import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
+import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
@@ -32,14 +34,18 @@ export function AppShell(props: AppShellProps) {
             <AppHeader variant="app" />
             <main className="relative flex min-h-0 flex-1 flex-col">
               <div className="relative flex min-h-0 flex-1">
-                <TopLevelTabHost />
+                <TopLevelSurfaceActivationProvider>
+                  <TopLevelTabHost />
+                </TopLevelSurfaceActivationProvider>
                 <div
                   className="pointer-events-none absolute inset-0 flex h-full min-h-0 flex-col [&>*]:pointer-events-auto"
                   data-testid="route-adapter-layer"
                 >
                   {children}
                 </div>
-                <LandingTerminalHost />
+                <HostScopeReady scope="default-host">
+                  <LandingTerminalHost />
+                </HostScopeReady>
               </div>
               <TileFindOwnerBridge />
             </main>

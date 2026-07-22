@@ -1,7 +1,10 @@
 import { useMatch } from "@tanstack/react-router";
 import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-session-body";
 import { EpicSidebarColumn } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
-import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
@@ -33,29 +36,31 @@ export function EpicSurface(props: EpicSurfaceProps) {
       : null;
   const routeMatches = activeSearch !== null;
   return (
-    <PaneVisibilityContext.Provider value={activity.visible}>
-      <EpicSessionProvider epicId={props.epicId} tabId={props.tabId}>
-        <EpicViewTabContext.Provider value={props.tabId}>
-          <div
-            className="flex min-h-0 min-w-0 flex-1 flex-row"
-            data-epic-surface={props.tabId}
-          >
-            <EpicSidebarColumn epicId={props.epicId} tabId={props.tabId} />
-            <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-              <EpicRouteSessionBody
-                epicId={props.epicId}
-                tabId={props.tabId}
-                active={Boolean(activity.focused && routeMatches)}
-                focusedAt={activeSearch?.focusedAt}
-                focusArtifactId={activeSearch?.focusArtifactId}
-                focusThreadId={activeSearch?.focusThreadId}
-                focusPaneId={activeSearch?.focusPaneId}
-                focusTileInstanceId={activeSearch?.focusTileInstanceId}
-              />
+    <PaneSurfaceActivityContext.Provider value={activity}>
+      <PaneVisibilityContext.Provider value={activity.visible}>
+        <EpicSessionProvider epicId={props.epicId} tabId={props.tabId}>
+          <EpicViewTabContext.Provider value={props.tabId}>
+            <div
+              className="flex min-h-0 min-w-0 flex-1 flex-row"
+              data-epic-surface={props.tabId}
+            >
+              <EpicSidebarColumn epicId={props.epicId} tabId={props.tabId} />
+              <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+                <EpicRouteSessionBody
+                  epicId={props.epicId}
+                  tabId={props.tabId}
+                  active={Boolean(activity.focused && routeMatches)}
+                  focusedAt={activeSearch?.focusedAt}
+                  focusArtifactId={activeSearch?.focusArtifactId}
+                  focusThreadId={activeSearch?.focusThreadId}
+                  focusPaneId={activeSearch?.focusPaneId}
+                  focusTileInstanceId={activeSearch?.focusTileInstanceId}
+                />
+              </div>
             </div>
-          </div>
-        </EpicViewTabContext.Provider>
-      </EpicSessionProvider>
-    </PaneVisibilityContext.Provider>
+          </EpicViewTabContext.Provider>
+        </EpicSessionProvider>
+      </PaneVisibilityContext.Provider>
+    </PaneSurfaceActivityContext.Provider>
   );
 }

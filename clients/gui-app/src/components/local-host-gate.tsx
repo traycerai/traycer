@@ -365,7 +365,7 @@ interface ProvisioningLoadingProps {
   readonly progress: HostProgressEvent | null;
 }
 
-interface HostProvisioning {
+export interface HostProvisioning {
   readonly isProvisioning: boolean;
   readonly error: Error | null;
   readonly progress: HostProgressEvent | null;
@@ -385,6 +385,12 @@ interface HostProvisioning {
   // Reinstall escape hatch from the removed surface: clear the removal
   // sentinel, then re-run ensure to provision the host again.
   readonly reinstall: () => void;
+}
+
+export interface HostProvisioningLifecycle {
+  readonly localHostState: "unknown" | "ready" | "unavailable";
+  readonly slowStartStage: "loading" | "slow";
+  readonly provisioning: HostProvisioning;
 }
 
 // Fires `ensureHost` once per session when a signed-in local-host shell
@@ -530,6 +536,37 @@ function useHostProvisioning(args: {
     force: () => run(true, "update"),
     reinstall,
   };
+}
+
+/**
+ * Mounts the legacy local-host provisioning lifecycle without adding another
+ * route gate. The readiness controller owns this component once per shell;
+ * slot boundaries only consume its projected readiness.
+ */
+export function HostProvisioningController(props: {
+  readonly enabled: boolean;
+  readonly isReady: boolean;
+  readonly children: (lifecycle: HostProvisioningLifecycle) => ReactNode;
+}): ReactNode {
+  const runnerHost = useRunnerHost();
+  const { state, stage } = useLocalHostGateState(runnerHost);
+  const provisioning = useHostProvisioning({
+    enabled: props.enabled && state?.kind === "unavailable",
+    isReady: props.isReady,
+  });
+  const localHostState = localHostLifecycleState(state);
+  return props.children({
+    localHostState,
+    slowStartStage: stage,
+    provisioning,
+  });
+}
+
+function localHostLifecycleState(
+  state: LocalHostState | null,
+): HostProvisioningLifecycle["localHostState"] {
+  if (state === null) return "unknown";
+  return state.kind === "ready" ? "ready" : "unavailable";
 }
 
 // Shared compat verdict for host-backed launch. The provider owns the

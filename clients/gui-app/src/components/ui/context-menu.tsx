@@ -2,6 +2,10 @@ import * as React from "react";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  usePaneCloseAutoFocusGuard,
+  usePaneFocused,
+} from "@/components/epic-tabs/pane-visibility-context";
 
 function ContextMenu({
   ...props
@@ -19,8 +23,21 @@ function ContextMenuTrigger({
 
 function ContextMenuContent({
   className,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
+  // A modal context menu drives `hideOthers` + scroll-lock while open, so a
+  // background split pane un-presents it by unmounting. That unmount runs Radix
+  // FocusScope's close-autofocus, which — for a native/deep-link focus transfer
+  // (no outside DOM interaction, so Radix's own handler does NOT preventDefault)
+  // — restores focus to the element focused before the menu opened, i.e. back
+  // into the now-background pane, whose focus-capture then reactivates it. The
+  // guard reads the boundary's live `data-pane-focused` at unmount time and
+  // preventDefaults that restore while the pane is unfocused. Outside a pane it
+  // defaults to true, so an ordinary focused/app-global close restores normally.
+  const paneFocused = usePaneFocused();
+  const handleCloseAutoFocus = usePaneCloseAutoFocusGuard(onCloseAutoFocus);
+  if (!paneFocused) return null;
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
@@ -29,6 +46,7 @@ function ContextMenuContent({
           "z-50 min-w-40 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
+        onCloseAutoFocus={handleCloseAutoFocus}
         {...props}
       />
     </ContextMenuPrimitive.Portal>

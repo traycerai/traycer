@@ -4,6 +4,10 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
+import {
+  usePaneCloseAutoFocusGuard,
+  usePaneFocused,
+} from "@/components/epic-tabs/pane-visibility-context";
 
 function Dialog({
   ...props
@@ -49,10 +53,21 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
 }) {
+  // Dialog roots retain their logical open state so operation/staging state
+  // survives split focus changes. A modal dialog kept mounted in the background
+  // would keep aria-hiding + scroll-locking the focused split partner, so an
+  // unfocused pane un-presents by unmounting only its document portal. That
+  // unmount runs Radix's close-autofocus; the guard preventDefaults the
+  // restore when the pane is no longer focused, so it cannot reactivate the
+  // pane. Outside a pane the focus hook defaults to true.
+  const paneFocused = usePaneFocused();
+  const handleCloseAutoFocus = usePaneCloseAutoFocusGuard(onCloseAutoFocus);
+  if (!paneFocused) return null;
   return (
     <DialogPortal>
       <DialogOverlay />
@@ -62,6 +77,7 @@ function DialogContent({
           "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-ui-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
+        onCloseAutoFocus={handleCloseAutoFocus}
         {...props}
       >
         {children}
