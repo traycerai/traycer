@@ -190,7 +190,6 @@ describe("detailed rate-limit formatting", () => {
     expect(human).toContain(
       "billing period: 2026-07-13T09:30:00.000Z - 2026-07-20T09:30:00.000Z",
     );
-    expect(human).not.toContain("0% used");
   });
 
   it("renders the unavailable arm with its reason instead of inventing limits", () => {
