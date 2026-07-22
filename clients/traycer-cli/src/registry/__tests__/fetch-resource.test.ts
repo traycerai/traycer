@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   downloadToFile,
   fetchText,
+  type NetworkHeartbeat,
   waitForWriterDrain,
 } from "../fetch-resource";
 import { CliError } from "../../runner/errors";
@@ -23,11 +24,20 @@ import {
 } from "./fault-server-test-helpers";
 
 const RESOURCE_URL = "https://registry.example.test/host.tar.gz";
-const NATIVE_SET_IMMEDIATE = setImmediate;
-// Fail closed if a retry scenario genuinely cannot settle within its fake-time
-// budget. `settleRetryTimers` exits as soon as the promise resolves, so this is
-// no longer a wall-clock allowance for 100 unnecessary event-loop turns.
+// Retry tests keep production watchdogs frozen and advance only backoffs that
+// the download reports through its heartbeat. The timeout remains a fail-closed
+// guard for a genuine I/O hang; it is not used to poll fake time.
 const SETTLE_RETRY_TEST_TIMEOUT_MS = 15_000;
+
+function createRetryBackoffSignal() {
+  let notify = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    notify = resolve;
+  });
+  return { promise, notify };
+}
+
+let retryBackoffSignal = createRetryBackoffSignal();
 
 let workDir: string;
 let originalFetch: typeof globalThis.fetch;
@@ -36,6 +46,7 @@ const faultServers: Server[] = [];
 beforeEach(() => {
   workDir = mkdtempSync(join(tmpdir(), "traycer-fetch-resource-"));
   originalFetch = globalThis.fetch;
+  retryBackoffSignal = createRetryBackoffSignal();
 });
 
 afterEach(async () => {
@@ -65,10 +76,15 @@ function failingBody(
   firstChunk: string,
   message: string,
 ): ReadableStream<Uint8Array> {
+  let emittedFirstChunk = false;
   return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(firstChunk));
-      setTimeout(() => controller.error(new Error(message)), 1);
+    pull(controller) {
+      if (!emittedFirstChunk) {
+        emittedFirstChunk = true;
+        controller.enqueue(new TextEncoder().encode(firstChunk));
+        return;
+      }
+      controller.error(new Error(message));
     },
   });
 }
@@ -80,16 +96,14 @@ function downloadOptions(destPath: string, expected: string) {
     expectedSizeBytes: Buffer.byteLength(expected),
     expectedSha256: sha256(expected),
     onProgress: vi.fn(),
-    onHeartbeat: null,
+    onHeartbeat: (heartbeat: NetworkHeartbeat) => {
+      if (heartbeat.phase === "backoff") retryBackoffSignal.notify();
+    },
     signal: null,
   };
 }
 
 async function settleRetryTimers<T>(promise: Promise<T>): Promise<T> {
-  // Retries use a short production backoff. Advance enough timer turns to
-  // cover every attempt while allowing response/body microtasks to run. Stop
-  // once the operation settles: always running all 100 turns made these mocked
-  // tests CPU-contention-sensitive under parallel CI workers.
   let settled = false;
   const outcome = promise.then(
     (value) => {
@@ -101,19 +115,12 @@ async function settleRetryTimers<T>(promise: Promise<T>): Promise<T> {
       return { kind: "rejected" as const, error };
     },
   );
-  for (let index = 0; index < 100 && !settled; index += 1) {
-    await Promise.resolve();
-    // The download uses real fs streams even though fetch and retry timers are
-    // mocked. Yield a native libuv turn so buffered writes and close callbacks
-    // can land before advancing the production retry backoff. A microtask-only
-    // loop can outrun that I/O under parallel runner load, producing a stale
-    // zero-byte resume offset or exhausting the fake-time guard.
-    await new Promise<void>((resolve) => NATIVE_SET_IMMEDIATE(resolve));
+  const settlement = outcome.then(() => undefined);
+  while (!settled) {
+    await Promise.race([settlement, retryBackoffSignal.promise]);
     if (settled) break;
-    await vi.advanceTimersByTimeAsync(1_000);
-  }
-  if (!settled) {
-    throw new Error("retry scenario did not settle within 100 fake-time turns");
+    retryBackoffSignal = createRetryBackoffSignal();
+    await vi.advanceTimersToNextTimerAsync();
   }
   const result = await outcome;
   if (result.kind === "rejected") throw result.error;
