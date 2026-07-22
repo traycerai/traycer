@@ -746,7 +746,14 @@ describe("<MenuCommandListener />", () => {
     const navigation = latestNavigation();
     expect(navigation.to).toBe("/epics/$epicId/$tabId");
     expect(navigation.params).toEqual({ epicId: "e-a", tabId });
-    expect(navigation.replace).toBe(false);
+    // T10: closing the draft now routes through
+    // `tabCommandCoordinator.closeRefAfterConfirmed`, which synchronously
+    // promotes the epic tab to `activeItemId` as part of the close itself
+    // (survivor-at-group-position). By the time the navigation controller
+    // runs, the epic is already the coordinator's active item, so it
+    // correctly resolves this as a replace (syncing the URL to already-
+    // settled layout state) rather than a push.
+    expect(navigation.replace).toBe(true);
     expect(navigation.state).toEqual(expect.any(Function));
     expect(navigation.search).toMatchObject({
       focusedAt: undefined,

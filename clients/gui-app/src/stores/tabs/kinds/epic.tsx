@@ -1,16 +1,14 @@
 import { createElement, lazy } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import {
-  epicHasUnsyncedEdits,
-  releaseOpenEpicSessionIfUnused,
-} from "@/lib/registries/epic-session-registry";
+import { epicHasUnsyncedEdits } from "@/lib/registries/epic-session-registry";
 import { buildNestedFocusSearchPatch } from "@/lib/epic-nested-focus-route";
 import { epicPathname, epicTabRoute } from "@/lib/routes";
 import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
 import { duplicateEpicTab } from "@/lib/commands/actions/duplicate-tab";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import type { TabKindModule } from "@/stores/tabs/types";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   isTabCloseLocked,
   isTabStructurallyLocked,
@@ -101,9 +99,10 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       useEpicCanvasStore.getState().setActiveTab(intent.tabId);
     },
     requestClose: (tab) => {
-      if (isTabCloseLocked({ kind: "epic", id: tab.id })) return;
-      useEpicCanvasStore.getState().closeTab(tab.id);
-      releaseOpenEpicSessionIfUnused(tab.epicId);
+      tabCommandCoordinator.closeRefAfterConfirmed({
+        kind: "epic",
+        id: tab.id,
+      });
     },
     requiresCloseConfirm: (tab) => epicHasUnsyncedEdits(tab.epicId),
     openInNewWindow: (tab, deps) => {

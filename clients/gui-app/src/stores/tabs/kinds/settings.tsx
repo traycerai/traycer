@@ -1,9 +1,9 @@
 import { createElement, lazy } from "react";
 import { Settings } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useTabsStore } from "@/stores/tabs/store";
 import { settingsTabIntent } from "@/lib/tab-navigation/intents";
 import type { SystemTab, TabKindModule } from "@/stores/tabs/types";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
@@ -95,7 +95,10 @@ export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
       useLandingDraftStore.getState().clearActiveDraft();
     },
     requestClose: () => {
-      useTabsStore.getState().closeSystemTab("settings");
+      tabCommandCoordinator.closeRefAfterConfirmed({
+        kind: "settings",
+        id: "settings",
+      });
     },
     requiresCloseConfirm: () => false,
     openInNewWindow: (tab, deps) => {

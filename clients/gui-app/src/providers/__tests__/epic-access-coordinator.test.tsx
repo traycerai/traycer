@@ -35,6 +35,10 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
+import { useTabsStore } from "@/stores/tabs/store";
+import { flattenLayoutRefs } from "@/stores/tabs/layout";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import type { TabRef } from "@/stores/tabs/types";
 
 const { toastInfo } = vi.hoisted(() => ({ toastInfo: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
@@ -96,6 +100,50 @@ function seedTabs(
     mostRecentTabIdByEpicId: mostRecent,
     artifactTreeByEpicId: trees,
   });
+  // `handleEpicAccessLoss` derives its affected refs from the coordinator's
+  // OWN layout (`useTabsStore`), not from the canvas store - keep the two in
+  // sync here exactly as `installSourceReconciliation` keeps them in sync in
+  // the real app, or the access-loss command finds nothing to do.
+  const refs: ReadonlyArray<TabRef> = tabs.map((tab) => ({
+    kind: "epic",
+    id: tab.tabId,
+  }));
+  useTabsStore.setState({
+    version: 2,
+    items: refs.map((ref) => ({
+      kind: "tab" as const,
+      id: `tab:${ref.kind}:${ref.id}`,
+      ref,
+    })),
+    activeItemId: `tab:epic:${activeTabId}`,
+    stripOrder: refs,
+    systemTabs: { history: null, settings: null },
+  });
+}
+
+/** Pairs two epic refs into one split item spanning the whole strip. */
+function seedSplitOfEpics(
+  left: TabRef,
+  right: TabRef,
+  focusedRef: TabRef,
+): void {
+  useTabsStore.setState({
+    version: 2,
+    items: [
+      {
+        kind: "split",
+        id: "split-shared",
+        left: { kind: "tab", ref: left },
+        right: { kind: "tab", ref: right },
+        focusedSide: focusedRef.id === left.id ? "left" : "right",
+        routeBackingSide: focusedRef.id === left.id ? "left" : "right",
+        leftRatio: 0.5,
+      },
+    ],
+    activeItemId: "split-shared",
+    stripOrder: [left, right],
+    systemTabs: { history: null, settings: null },
+  });
 }
 
 function renderCoordinatorAt(pathname: string) {
@@ -144,6 +192,7 @@ describe("EpicAccessCoordinator", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
     useAuthStore.getState().setSignedOut();
     useComposerRunSettingsStore.getState().resetForTests();
     __getOpenEpicRegistryForTests().disposeAll();
@@ -156,7 +205,9 @@ describe("EpicAccessCoordinator", () => {
     __setEpicStreamClientFactoryForTests(null);
     useAuthStore.getState().setSignedOut();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
     useComposerRunSettingsStore.getState().resetForTests();
+    vi.restoreAllMocks();
   });
 
   it("force-closes the active tab and redirects to landing when the epic is deleted", async () => {
@@ -350,9 +401,12 @@ describe("EpicAccessCoordinator", () => {
       expect(router.state.location.pathname).toBe("/epics/epic-1/tab-1"),
     );
 
-    dispatchDeletedEpicStorageEvent("user-1", ["epic-1"], {
-      "epic-1": "Broadcast Title",
-    });
+    dispatchDeletedEpicStorageEvent(
+      "user-1",
+      ["epic-1"],
+      { "epic-1": "Broadcast Title" },
+      1,
+    );
 
     await waitFor(() =>
       expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
@@ -376,12 +430,120 @@ describe("EpicAccessCoordinator", () => {
       { id: "epic-access:epic-1", cancel: null },
     );
   });
+
+  it("T10: routes a multi-epic delete notification through ONE coordinated handleEpicAccessLoss call, not a per-epic loop", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
+    registerSession("epic-left");
+    registerSession("epic-right");
+    seedTabs(
+      [
+        { tabId: "tab-left", epicId: "epic-left", name: "Left" },
+        { tabId: "tab-right", epicId: "epic-right", name: "Right" },
+      ],
+      "tab-left",
+    );
+    const left: TabRef = { kind: "epic", id: "tab-left" };
+    const right: TabRef = { kind: "epic", id: "tab-right" };
+    seedSplitOfEpics(left, right, left);
+
+    const { router } = renderCoordinatorAt("/");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+
+    const handleEpicAccessLossSpy = vi.spyOn(
+      tabCommandCoordinator,
+      "handleEpicAccessLoss",
+    );
+
+    // Both epics behind the split are deleted together, in ONE notification -
+    // exactly the shape a real batch delete produces. Plan §9 requires this
+    // routed through ONE coordinated command, not one `handleEpicAccessLoss`
+    // call per epic: firing a separate coordinator transaction (and a
+    // separate persistence flush) per epic for what is semantically one
+    // event is exactly the bypass this ticket closes.
+    dispatchDeletedEpicStorageEvent(
+      "user-1",
+      ["epic-left", "epic-right"],
+      { "epic-left": "Left", "epic-right": "Right" },
+      2,
+    );
+
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+    // The whole split must be gone.
+    expect(flattenLayoutRefs(useTabsStore.getState())).toEqual([]);
+    expect(useTabsStore.getState().items).toEqual([]);
+    // The real discriminator: ONE call carrying both ids, not two single-id
+    // calls looped over the notification's array.
+    expect(handleEpicAccessLossSpy).toHaveBeenCalledTimes(1);
+    expect(handleEpicAccessLossSpy).toHaveBeenCalledWith([
+      "epic-left",
+      "epic-right",
+    ]);
+  });
+
+  it("T10: clears composer run settings for every batch epicId, including one without a resident tab", async () => {
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
+    registerSession("epic-open");
+    seedTabs(
+      [{ tabId: "tab-open", epicId: "epic-open", name: "Open" }],
+      "tab-open",
+    );
+    useComposerRunSettingsStore
+      .getState()
+      .setEpicRunSettings("epic-open", TEST_SETTINGS, 1);
+    // "epic-ghost" was deleted but never had a resident tab in this window -
+    // it must not silently keep its stale run settings just because it
+    // never reaches `announceEpicLoss`'s per-resident-epic loop.
+    useComposerRunSettingsStore
+      .getState()
+      .setEpicRunSettings("epic-ghost", TEST_SETTINGS, 1);
+
+    const { router } = renderCoordinatorAt("/");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/"));
+
+    dispatchDeletedEpicStorageEvent(
+      "user-1",
+      ["epic-open", "epic-ghost"],
+      { "epic-open": "Open", "epic-ghost": "Ghost" },
+      3,
+    );
+
+    await waitFor(() =>
+      expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]),
+    );
+    expect(
+      useComposerRunSettingsStore.getState().getEpicRunSettings("epic-open"),
+    ).toBeNull();
+    expect(
+      useComposerRunSettingsStore.getState().getEpicRunSettings("epic-ghost"),
+    ).toBeNull();
+  });
 });
 
 function dispatchDeletedEpicStorageEvent(
   userId: string,
   epicIds: ReadonlyArray<string>,
   epicTitlesById: Readonly<Record<string, string>>,
+  sequence: number,
 ): void {
   window.dispatchEvent(
     new StorageEvent("storage", {
@@ -390,7 +552,7 @@ function dispatchDeletedEpicStorageEvent(
         type: "epic-deleted",
         version: 1,
         originId: "other-window",
-        sequence: 1,
+        sequence,
         createdAt: Date.now(),
         hostId: "host-source",
         userId,

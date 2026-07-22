@@ -27,8 +27,8 @@ import {
   type CloudEpicTasksCacheScope,
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { publishDeletedEpicNotification } from "@/lib/epics/deleted-epic-events";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { pickNeighborAfterRemovingTabs } from "@/stores/tabs/neighbor";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -127,7 +127,7 @@ export function useEpicBatchDelete(): UseMutationResult<
           new Set(deletedIds),
         );
         useComposerRunSettingsStore.getState().clearEpicRunSettings(deletedIds);
-        useEpicCanvasStore.getState().closeTabsForEpics(deletedIds);
+        tabCommandCoordinator.handleEpicAccessLoss(deletedIds);
         if (ctx.userId !== null) {
           removeDeletedEpicsFromCloudTaskCaches(
             queryClient,

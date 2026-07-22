@@ -26,6 +26,8 @@ import {
   collectOpenEpicIds,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import {
   clearSessionCreatedEpics,
@@ -331,6 +333,16 @@ function installAuthFetch(): () => void {
 describe("HostCompatibilityProvider startup consumers", () => {
   beforeEach(() => {
     restoreFetch = installAuthFetch();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    // `EpicTabExistenceReconciler` now closes stale epics through
+    // `tabCommandCoordinator.handleEpicAccessLoss`, which derives its
+    // affected refs from the coordinator's OWN layout (`useTabsStore`), not
+    // from the canvas store directly. Install the real source-reconciliation
+    // subscription so every `openEpicTab*` call this file makes below is
+    // reflected into that layout exactly as it is in the running app,
+    // instead of hand-mirroring each auto-generated tab id into a second
+    // fixture.
+    tabCommandCoordinator.installSourceReconciliation();
   });
 
   afterEach(() => {

@@ -51,6 +51,7 @@ interface DesktopTabsPersistenceController {
   flush(): Promise<DesktopPerWindowStateUpdateAcknowledgement>;
   canApplySnapshot(snapshot: DesktopPerWindowSnapshot): boolean;
   commitAppliedSnapshot(snapshot: DesktopPerWindowSnapshot): void;
+  hasPending(): boolean;
   dispose(): void;
 }
 
@@ -144,6 +145,21 @@ export function flushDesktopTabsPersistence(): Promise<DesktopPerWindowStateUpda
     );
   }
   return activeController.flush();
+}
+
+/**
+ * True only when a controller is installed AND currently holds an
+ * unflushed, debounced write - i.e. exactly the condition under which a
+ * `flushDesktopTabsPersistence()` rejection reflects a genuine write
+ * failure (the update IPC rejecting, an unrecognizable acknowledgement, or
+ * a stale revision) rather than "there was nothing to wait on." Callers
+ * that only care about racing a specific mutation through to durability
+ * (e.g. the T10 move barrier) should skip the flush/abort dance entirely
+ * when this is false: an absent controller, or one with nothing pending,
+ * has nothing that could echo a stale snapshot back over that mutation.
+ */
+export function hasPendingDesktopTabsWrite(): boolean {
+  return activeController?.hasPending() ?? false;
 }
 
 /**
@@ -295,6 +311,7 @@ function createDesktopTabsPersistenceController(
       if (revision <= revisionFloor) return;
       revisionFloor = revision;
     },
+    hasPending: () => pending,
     dispose: () => {
       disposed = true;
       clearTimer();

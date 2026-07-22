@@ -7,10 +7,7 @@ import { epicAccessToast } from "@/lib/toast/channels";
 import { subscribeDeletedEpicNotifications } from "@/lib/epics/deleted-epic-events";
 import { isUnavailableEpicReason } from "@/lib/epics/unavailable-epic";
 import { liveEpicTitleFromHandle } from "@/lib/epic-selectors";
-import {
-  getOpenEpicRegistry,
-  releaseOpenEpicSessionIfUnused,
-} from "@/lib/registries/epic-session-registry";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { LANDING_ROUTE, readActiveEpicIdFromPath } from "@/lib/routes";
 import {
   collectOpenEpicIds,
@@ -19,6 +16,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 
 /**
@@ -75,8 +73,15 @@ export function EpicAccessCoordinator() {
     // short-circuit instead of re-walking every open session.
     let lastResidentSignature: string | null = null;
 
-    const runClose = (epicId: string, reason: DeadEpicReason): void => {
-      const wasActive = activeEpicIdRef.current === epicId;
+    // Toast + composer-settings bookkeeping only - no layout/source mutation.
+    // Kept separate from the mutation so a genuine multi-epic batch (see
+    // `applyDeletedEpicNotification`) can announce each epic individually
+    // while still routing the mutation through ONE coordinated
+    // `handleEpicAccessLoss` call. Two sequential single-epic calls would
+    // placeholder each side of a shared split independently, leaving BOTH
+    // sides stuck as `unavailable` instead of collapsing the group - only a
+    // single call carrying every lost epicId resolves both sides at once.
+    const announceEpicLoss = (epicId: string, reason: DeadEpicReason): void => {
       // One channel per epic, so a duplicate "epic is gone" signal (e.g. a
       // delete that also trips the unavailable-on-reconnect path) replaces the
       // eject toast instead of stacking a second.
@@ -89,6 +94,7 @@ export function EpicAccessCoordinator() {
             ? `${subject} was deleted by ${by}`
             : `${subject} was deleted`,
         );
+        useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
       } else if (reason.kind === "revoked") {
         channel.info(
           `You no longer have access to ${objectEpicSubject(epicId)}`,
@@ -96,15 +102,16 @@ export function EpicAccessCoordinator() {
       } else {
         channel.info(`${sentenceEpicSubject(epicId)} is no longer available`);
       }
-      if (reason.kind === "deleted") {
-        useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
-      }
-      useEpicCanvasStore.getState().closeTabsForEpics([epicId]);
-      releaseOpenEpicSessionIfUnused(epicId);
+    };
+
+    const runClose = (epicId: string, reason: DeadEpicReason): void => {
+      const wasActive = activeEpicIdRef.current === epicId;
+      announceEpicLoss(epicId, reason);
+      tabCommandCoordinator.handleEpicAccessLoss([epicId]);
       if (wasActive) {
-        // `closeTabsForEpics` recomputes `activeTabId` to a neighbor as a side
-        // effect; clear it so the route-driven strip highlight and the canvas
-        // store agree once we leave the epic for landing.
+        // `handleEpicAccessLoss` recomputes `activeTabId` to a neighbor as a
+        // side effect; clear it so the route-driven strip highlight and the
+        // canvas store agree once we leave the epic for landing.
         useEpicCanvasStore.setState({ activeTabId: null });
         void navigate({ ...LANDING_ROUTE, replace: true });
       }
@@ -123,18 +130,41 @@ export function EpicAccessCoordinator() {
         );
       }
       const openEpicIds = new Set(collectOpenEpicIds());
+      let anyWasActive = false;
+      const withoutResidentTab: Array<string> = [];
       for (const epicId of epicIds) {
-        if (openEpicIds.has(epicId) || activeEpicIdRef.current === epicId) {
-          runClose(epicId, {
-            kind: "deleted",
-            attribution: null,
-            title: readEpicTitle(epicTitlesById, epicId),
-          });
+        if (!openEpicIds.has(epicId) && activeEpicIdRef.current !== epicId) {
+          withoutResidentTab.push(epicId);
           continue;
         }
-        useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
-        useEpicCanvasStore.getState().closeTabsForEpics([epicId]);
-        releaseOpenEpicSessionIfUnused(epicId);
+        if (activeEpicIdRef.current === epicId) anyWasActive = true;
+        announceEpicLoss(epicId, {
+          kind: "deleted",
+          attribution: null,
+          title: readEpicTitle(epicTitlesById, epicId),
+        });
+      }
+      // `announceEpicLoss` above already cleared run settings for the
+      // resident epics (it's the deleted-reason branch's job). A deleted
+      // epic without a resident tab never reaches that call, but its run
+      // settings still need to go - it must not silently survive the epic
+      // it belonged to, matching `useEpicBatchDelete`'s unconditional clear
+      // over its whole batch.
+      if (withoutResidentTab.length > 0) {
+        useComposerRunSettingsStore
+          .getState()
+          .clearEpicRunSettings(withoutResidentTab);
+      }
+      // One coordinated call over the WHOLE notification batch - not a loop
+      // of single-epic calls - so a pair of Epics that are both sides of the
+      // same split (or that duplicate a ref across groups) collapse in one
+      // coordinator transaction instead of firing a separate transaction
+      // (and a separate persistence flush) per epic for what is semantically
+      // one event.
+      tabCommandCoordinator.handleEpicAccessLoss(epicIds);
+      if (anyWasActive) {
+        useEpicCanvasStore.setState({ activeTabId: null });
+        void navigate({ ...LANDING_ROUTE, replace: true });
       }
     };
 

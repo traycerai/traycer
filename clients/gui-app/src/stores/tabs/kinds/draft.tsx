@@ -6,6 +6,7 @@ import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-j
 import { draftRoute, draftPathname } from "@/lib/routes";
 import { draftTabIntent } from "@/lib/tab-navigation/intents";
 import type { TabKindModule } from "@/stores/tabs/types";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
 const DRAFT_LABEL_FALLBACK = "Start Page";
 
@@ -60,7 +61,10 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
       useLandingDraftStore.getState().setActiveDraft(intent.draftId);
     },
     requestClose: (tab) => {
-      useLandingDraftStore.getState().closeDraft(tab.id);
+      tabCommandCoordinator.closeRefAfterConfirmed({
+        kind: "draft",
+        id: tab.id,
+      });
     },
     requiresCloseConfirm: () => false,
     openInNewWindow: () => undefined,

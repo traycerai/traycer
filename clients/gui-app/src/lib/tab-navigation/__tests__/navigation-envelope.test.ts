@@ -1866,3 +1866,66 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
     expect(focusedRefKey()).toBe(`draft:${draftId}`);
   });
 });
+
+// T10 Area 3: a new desktop window opened via
+// `deps.bridge.requestNew(tab.route)` for a History/Settings tab boots with
+// a truly EMPTY layout (`resetStores()` below matches that exactly) and an
+// initial router location equal to the source tab's route. That is
+// architecturally identical to any other cold external navigation this
+// controller already resolves - `resolveExternalSystem` (reached through
+// the same `observeLocation` classification `TabNavigationRouteBridge` uses
+// at boot) materializes the system tab and focuses it. These tests prove
+// that path exists and stays wired for history/settings specifically -
+// "copy" new-window semantics need no new production code, only this
+// coverage.
+describe("T10 Area 3: external boot into a system-tab route (new-window copy)", () => {
+  beforeEach(async () => {
+    resetStores();
+    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetStores();
+  });
+
+  it("materializes and focuses the History tab from a cold external boot into /epics", () => {
+    const nav = makeDeferredNavigate();
+
+    commitExternal({
+      navigate: nav.asNavigate,
+      pathname: "/epics",
+      action: "PUSH",
+      key: "key-boot-history",
+      index: 0,
+    });
+
+    expect(useTabsStore.getState().systemTabs.history).not.toBeNull();
+    expect(focusedRefKey()).toBe("history:history");
+    // No draft/epic source store was touched by this boot resolution.
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+  });
+
+  it("materializes and focuses the Settings tab from a cold external boot into /settings/providers", () => {
+    const nav = makeDeferredNavigate();
+
+    commitExternal({
+      navigate: nav.asNavigate,
+      pathname: "/settings/providers",
+      action: "PUSH",
+      key: "key-boot-settings",
+      index: 0,
+    });
+
+    expect(useTabsStore.getState().systemTabs.settings).not.toBeNull();
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/providers",
+    );
+    expect(focusedRefKey()).toBe("settings:settings");
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+  });
+});

@@ -1,9 +1,9 @@
 import { createElement, lazy } from "react";
 import { History } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useTabsStore } from "@/stores/tabs/store";
 import { historyTabIntent } from "@/lib/tab-navigation/intents";
 import type { SystemTab, TabKindModule } from "@/stores/tabs/types";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 
 const HISTORY_TAB_LABEL = "History";
 const HISTORY_DEFAULT_PATH = "/epics";
@@ -49,7 +49,10 @@ export const historyTabModule: TabKindModule<"history", SystemTab> = {
       useLandingDraftStore.getState().clearActiveDraft();
     },
     requestClose: () => {
-      useTabsStore.getState().closeSystemTab("history");
+      tabCommandCoordinator.closeRefAfterConfirmed({
+        kind: "history",
+        id: "history",
+      });
     },
     requiresCloseConfirm: () => false,
     openInNewWindow: (tab, deps) => {

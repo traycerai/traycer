@@ -25,6 +25,7 @@ import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   selectHasActiveInitialChatHandoffForEpic,
   useInitialChatHandoffStore,
@@ -195,7 +196,7 @@ function EpicTabReconciliationPage(props: {
     );
     if (staleEpicIds.length > 0) {
       useComposerRunSettingsStore.getState().clearEpicRunSettings(staleEpicIds);
-      useEpicCanvasStore.getState().closeTabsForEpics(staleEpicIds);
+      tabCommandCoordinator.handleEpicAccessLoss(staleEpicIds);
     }
   }, [props.run.openEpicIds, terminalExistingEpicIds]);
 
