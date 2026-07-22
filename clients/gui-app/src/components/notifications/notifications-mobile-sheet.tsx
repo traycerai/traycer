@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useIsMobile } from "@/hooks/ui/use-mobile";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
 /**
  * Full-screen notifications surface for phones. Reuses the exact
@@ -32,6 +33,7 @@ export function NotificationsMobileSheet(): ReactNode {
         <DialogPrimitive.Content
           data-slot="dialog-content"
           data-testid="notifications-mobile-sheet"
+          data-mobile-shell-touch-scope=""
           aria-describedby={undefined}
           className="fixed inset-0 z-50 flex flex-col bg-background text-foreground outline-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
         >

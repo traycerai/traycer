@@ -2,6 +2,7 @@ import { type ReactNode } from "react";
 import { Menu } from "lucide-react";
 import { useMatch, useRouterState } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHeaderStore } from "@/stores/layout/mobile-header-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -22,6 +23,7 @@ export function MobileAppHeader(): ReactNode {
     <header
       data-testid="app-header"
       data-variant="app"
+      data-mobile-shell-touch-scope=""
       className="relative z-20 flex h-10 shrink-0 items-center gap-1 bg-canvas px-2 text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']"
     >
       <Button

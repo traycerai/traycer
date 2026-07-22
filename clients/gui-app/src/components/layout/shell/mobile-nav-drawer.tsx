@@ -17,6 +17,7 @@ import {
   SheetContent,
   SheetTitle,
 } from "@/components/ui/sheet";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { computeInitials } from "@/lib/auth/compute-initials";
 import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
@@ -111,6 +112,7 @@ export function MobileNavDrawer(): ReactNode {
         side="left"
         className="gap-0 p-0"
         data-testid="mobile-nav-drawer"
+        data-mobile-shell-touch-scope=""
       >
         <SheetTitle className="sr-only">Menu</SheetTitle>
         <div className="flex shrink-0 items-center gap-3 border-b border-border/60 p-4 pr-12">

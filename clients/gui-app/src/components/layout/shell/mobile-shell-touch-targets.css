@@ -1,0 +1,33 @@
+/*
+ * Mobile-shell-scoped touch-target enlargement, mirroring the settings/home
+ * pattern (settings-touch-targets.css / home-touch-targets.css).
+ *
+ * The phone shell's icon-size controls - the header hamburger and the
+ * drawer / notifications-sheet close buttons (Button icon-sm ~28px) - sit
+ * below the 44px touch-target guideline. These rules extend each control's
+ * *hit area* to >=44px via an invisible pseudo-element; visual size and layout
+ * are unchanged on every device, and the scope attribute (set on the mobile
+ * header, the nav drawer, and the notifications sheet) keeps the rest of the
+ * app untouched. The mobile shell only renders below md, so desktop never
+ * carries the scope.
+ *
+ * Vertical-only slop, matching precedent: flush horizontal neighbours would
+ * otherwise capture each other's taps. `.absolute` controls (the drawer's
+ * built-in close) skip the position:relative fallback - this file is unlayered
+ * CSS and would otherwise beat Tailwind's layered `absolute` utility and yank
+ * them into flow; an absolutely positioned control anchors its ::after itself.
+ */
+@media (pointer: coarse) {
+  [data-mobile-shell-touch-scope] [data-slot="button"]:not(.absolute) {
+    position: relative;
+  }
+
+  [data-mobile-shell-touch-scope] [data-slot="button"]::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    top: 50%;
+    height: max(100%, 44px);
+    transform: translateY(-50%);
+  }
+}
