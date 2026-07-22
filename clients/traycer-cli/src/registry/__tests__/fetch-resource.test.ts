@@ -23,6 +23,7 @@ import {
 } from "./fault-server-test-helpers";
 
 const RESOURCE_URL = "https://registry.example.test/host.tar.gz";
+const nativeSetImmediate = setImmediate;
 // Fail closed if a retry scenario genuinely cannot settle within its fake-time
 // budget. `settleRetryTimers` exits as soon as the promise resolves, so this is
 // no longer a wall-clock allowance for 100 unnecessary event-loop turns.
@@ -102,6 +103,12 @@ async function settleRetryTimers<T>(promise: Promise<T>): Promise<T> {
   );
   for (let index = 0; index < 100 && !settled; index += 1) {
     await Promise.resolve();
+    // The download uses real fs streams even though fetch and retry timers are
+    // mocked. Yield a native libuv turn so buffered writes and close callbacks
+    // can land before advancing the production retry backoff. A microtask-only
+    // loop can outrun that I/O under parallel runner load, producing a stale
+    // zero-byte resume offset or exhausting the fake-time guard.
+    await new Promise<void>((resolve) => nativeSetImmediate(resolve));
     if (settled) break;
     await vi.advanceTimersByTimeAsync(1_000);
   }
