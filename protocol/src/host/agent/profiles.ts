@@ -242,18 +242,36 @@ export const agentGetProviderProfileRateLimitsDowngradeV20ToV10 =
     to: { major: 1, minor: 0 },
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
+      // Grok is representable in the frozen provider enum (it predates Hermes),
+      // so a grok-available snapshot degrades to the unavailable
+      // `unsupported_provider` shape - the exact row a v1.0 host returns for
+      // grok today - rather than being dropped. A Hermes rate-limit read stays
+      // unrepresentable on the frozen v1.0 wire and still fails closed below.
+      const rateLimits =
+        response.rateLimits.available &&
+        response.rateLimits.provider === "grok"
+          ? {
+              provider: "grok",
+              available: false,
+              reason: "unsupported_provider",
+            }
+          : response.rateLimits;
       // A v1.0 caller only ever reads pre-hermes rate limits, so the common
       // case reparses cleanly through the frozen schema. Fails closed
-      // (rather than silently mis-decoding) for a Hermes rate-limit read.
+      // (rather than silently mis-decoding) for any provider unrepresentable
+      // on the frozen v1.0 wire (Hermes today).
       const parsed =
-        agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse(response);
+        agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse({
+          ...response,
+          rateLimits,
+        });
       if (!parsed.success) {
         return {
           ok: false,
           error: {
             code: "DOWNGRADE_UNSUPPORTED",
             message:
-              "Reading Hermes rate limits requires a newer Traycer client.",
+              "Reading rate limits for this provider requires a newer Traycer client.",
           },
         };
       }

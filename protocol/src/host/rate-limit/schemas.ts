@@ -87,6 +87,7 @@ export const rateLimitCapableProviderIdSchema = z.enum([
   "claude-code",
   "openrouter",
   "kilocode",
+  "grok",
 ]);
 export type RateLimitCapableProviderId = z.infer<
   typeof rateLimitCapableProviderIdSchema
@@ -205,6 +206,31 @@ const claudeCodeRateLimitsSchema = z.object({
     .nullable(),
 });
 
+// Grok arm - ephemeral-CLI-class provider (usage is read over the vendored
+// grok CLI's own `_x.ai/billing` ACP extension, so Traycer never touches the
+// grok OAuth token), but the payload is billing-period/credit-shaped rather
+// than rolling-window-shaped. Hybrid: a synthesized `period` window (so
+// severity rollups, a2a `rateLimitStatus`, and GUI status logic reuse the
+// shared window primitive with zero special-casing) plus the raw credit
+// fields. Every payload-derived field is nullable: xAI omits fields freely by
+// account type, and a zero-usage subscription reports only period + tier.
+// `period.resetsAt` duplicates `periodEnd` when both exist; `periodEnd` stays a
+// separate field because the period bounds are known even when no usage
+// percentage is reported.
+const grokRateLimitsSchema = z.object({
+  provider: z.literal(rateLimitCapableProviderIdSchema.enum.grok),
+  available: z.literal(true),
+  subscriptionTier: z.string().nullable(),
+  periodType: z.string().nullable(),
+  periodStart: z.number().nullable(),
+  periodEnd: z.number().nullable(),
+  period: providerRateLimitWindowSchema.nullable(),
+  monthlyLimit: z.number().nullable(),
+  onDemandCap: z.number().nullable(),
+  onDemandUsed: z.number().nullable(),
+  prepaidBalance: z.number().nullable(),
+});
+
 // Closed, Traycer-owned set of reasons a provider pull can fail to report
 // rate limits - unlike a provider's own plan/reached-type tokens (owned by
 // that provider, legitimately forward-compat as a bare string), every one of
@@ -310,13 +336,34 @@ export const providerRateLimitsSchemaV2 = z.union([
   unavailableProviderRateLimitsSchemaV2,
 ]);
 
-// Latest provider union (v3): identical to v2 except Codex reset credits may
-// include capped per-credit detail.
+// Frozen v2.1 provider union - a byte-for-byte snapshot of the live union as
+// shipped in `rateLimitUsageResponseSchemaV21` (host.getRateLimitUsage@2.1):
+// codex-with-per-credit-detail + claude-code + openrouter + kilocode +
+// unavailableV2, WITHOUT the grok arm. Feeds `rateLimitUsageResponseSchemaV21`
+// only, so that already-shipped v2.1 response never silently grows when the
+// live union below gains grok. New available arms travel behind a new major
+// (`host.getRateLimitUsage@3.0`) with a downgrade bridge, never an in-place
+// edit here. Do NOT widen this schema.
+export const providerRateLimitsSchemaV21 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV2,
+]);
+export type ProviderRateLimitsV21 = z.infer<
+  typeof providerRateLimitsSchemaV21
+>;
+
+// Latest provider union: identical to the frozen v2.1 union above plus the
+// grok available arm. Feeds the v3.0 host response and the unreleased,
+// still-growing a2a `agent.getProviderProfileRateLimits@2.0`.
 export const providerRateLimitsSchema = z.union([
   codexRateLimitsSchema,
   claudeCodeRateLimitsSchema,
   openRouterRateLimitsSchema,
   kiloCodeRateLimitsSchema,
+  grokRateLimitsSchema,
   unavailableProviderRateLimitsSchemaV2,
 ]);
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
@@ -382,13 +429,32 @@ export type RateLimitUsageResponseV20 = z.infer<
 // v2.1 adds capped per-credit Codex reset detail. The request and unavailable
 // reason set remain unchanged from v2.0. Released v2.0 stays frozen; the RPC
 // handler projects a canonical v2.1 response through the v2.0 schema for an
-// older caller, stripping the additive detail.
+// older caller, stripping the additive detail. Pinned to the frozen
+// `providerRateLimitsSchemaV21` (NOT the live union) so the grok arm added to
+// the live union never reaches this shipped response - grok travels on the
+// v3.0 line below.
 export const rateLimitUsageResponseSchemaV21 =
   rateLimitUsageResponseSchema.extend({
-    providerRateLimits: providerRateLimitsSchema.nullable(),
+    providerRateLimits: providerRateLimitsSchemaV21.nullable(),
   });
 export type RateLimitUsageResponseV21 = z.infer<
   typeof rateLimitUsageResponseSchemaV21
+>;
+
+// v3.0 response - identical to v2.1 except the provider-account snapshot ranges
+// over the live `providerRateLimitsSchema`, which adds the grok available arm.
+// The request shape is unchanged from v1.2/v2.x, so `hostGetRateLimitUsageV30`
+// in `contracts.ts` reuses `rateLimitUsageRequestSchemaV12` directly. Shipped
+// as a new major (not a v2.2 minor) because a new available union arm is not
+// strippable by the within-major skew handler - an old peer's frozen union has
+// no grok arm - so it needs an explicit downgrade bridge that degrades a
+// grok-available snapshot to the unavailable `unsupported_provider` shape.
+export const rateLimitUsageResponseSchemaV30 =
+  rateLimitUsageResponseSchema.extend({
+    providerRateLimits: providerRateLimitsSchema.nullable(),
+  });
+export type RateLimitUsageResponseV30 = z.infer<
+  typeof rateLimitUsageResponseSchemaV30
 >;
 
 /**

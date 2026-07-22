@@ -699,7 +699,11 @@ describe("agent.getProviderProfileRateLimits v1 <-> v2 hermes-provider translati
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
-    expect(downgraded.error.message).toMatch(/hermes/i);
+    // The message was generalized when grok joined the bridge: an
+    // unrepresentable provider (Hermes here) no longer names itself, since the
+    // bridge now pre-maps grok-available to the unavailable shape rather than
+    // failing closed on it.
+    expect(downgraded.error.message).toMatch(/newer Traycer client/i);
   });
 });
 
