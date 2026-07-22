@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { Environment, HostFsLayout } from "../../host/host-paths";
+import type { HostPendingRevisionState } from "@traycer-clients/shared/platform/runner-host";
 import type {
   HostEnsureError,
   HostEnsureResultPayload,
@@ -11,6 +12,7 @@ import type {
   HostLoginItemStatus,
   RegisterHostLoginItemResult,
 } from "../../app/host-login-item";
+import type { RegisterCycleDecision } from "../../host/host-register-cycle-decision";
 
 vi.mock("../../cli/cli-discovery", () => ({
   resolveBundledCliPath: () => Promise.resolve(null),
@@ -50,15 +52,63 @@ const hostManagesHostLoginItem: Mock<() => Promise<boolean>> = vi.fn();
 const hasPendingLoginItemRevision: Mock<
   (environment: Environment) => Promise<boolean>
 > = vi.fn();
-const registerHostLoginItem: Mock<() => Promise<RegisterHostLoginItemResult>> =
-  vi.fn();
+const registerHostLoginItem: Mock<
+  (
+    revalidate: (() => Promise<RegisterCycleDecision>) | undefined,
+  ) => Promise<RegisterHostLoginItemResult>
+> = vi.fn();
 const readHostLoginItemStatus: Mock<() => HostLoginItemStatus> = vi.fn();
 vi.mock("../../app/host-login-item", () => ({
+  HOST_AGENT_LABEL: "ai.traycer.host.agent",
   hostManagesHostLoginItem: () => hostManagesHostLoginItem(),
   hasPendingLoginItemRevision: (environment: Environment) =>
     hasPendingLoginItemRevision(environment),
-  registerHostLoginItem: () => registerHostLoginItem(),
+  registerHostLoginItem: (
+    revalidate: (() => Promise<RegisterCycleDecision>) | undefined,
+  ) => registerHostLoginItem(revalidate),
   readHostLoginItemStatus: () => readHostLoginItemStatus(),
+}));
+
+// The register-cycle state machine is mocked so the rebuilt skip-join wiring
+// test can drive the REAL `buildRegisterCycleRevalidate` closure (Mo-C) - which
+// computes `cliActionInstalled` from the CLI payload and feeds the machine seams
+// - and assert the decision it produces, rather than fabricating an unreachable
+// `installed`+`skip-join` combination on a fully-stubbed registerHostLoginItem.
+// Only tests that invoke the revalidate consult it; the rest stub
+// registerHostLoginItem's result directly.
+const evaluateRegisterCycleDecision: Mock<
+  (inputs: unknown) => Promise<RegisterCycleDecision>
+> = vi.fn();
+vi.mock("../../host/host-register-cycle-decision", () => ({
+  evaluateRegisterCycleDecision: (inputs: unknown) =>
+    evaluateRegisterCycleDecision(inputs),
+}));
+
+// The fast-path gate and the register-cycle machine seam read the pending state
+// from `../../host/pending-login-item-revision` (M-A/M-B). Mock it and drive the
+// gate through the same knob the login-item mock exposes so a single
+// `hasPendingLoginItemRevision.mockResolvedValue(...)` still controls "is there
+// a pending revision" across the whole flow.
+const hasPendingLoginItemRevisionOrPendingCycle: Mock<
+  (environment: Environment) => Promise<boolean>
+> = vi.fn();
+const hasUnappliedPendingLoginItemRevision: Mock<
+  (environment: Environment) => Promise<boolean>
+> = vi.fn();
+const isPendingCycleFlagSet: Mock<(environment: Environment) => boolean> =
+  vi.fn();
+const writePendingLoginItemRevision: Mock<
+  (environment: Environment, cause: string) => Promise<HostPendingRevisionState>
+> = vi.fn();
+vi.mock("../../host/pending-login-item-revision", () => ({
+  hasPendingLoginItemRevisionOrPendingCycle: (environment: Environment) =>
+    hasPendingLoginItemRevisionOrPendingCycle(environment),
+  hasUnappliedPendingLoginItemRevision: (environment: Environment) =>
+    hasUnappliedPendingLoginItemRevision(environment),
+  isPendingCycleFlagSet: (environment: Environment) =>
+    isPendingCycleFlagSet(environment),
+  writePendingLoginItemRevision: (environment: Environment, cause: string) =>
+    writePendingLoginItemRevision(environment, cause),
 }));
 
 const approvalRequiredMessage: Mock<() => string> = vi.fn();
@@ -190,6 +240,7 @@ interface HostOperationReservation {
   readonly operationId: string;
   readonly kind: HostOperationKind;
   readonly startedAt: string;
+  readonly cancelEpoch: number;
 }
 
 type PendingEnsureOutcome =
@@ -286,6 +337,7 @@ vi.mock("../host-management-ipc", () => ({
       operationId,
       kind,
       startedAt: "2026-05-15T00:00:00Z",
+      cancelEpoch: 0,
     };
     setEnvelope(
       bridge,
@@ -451,6 +503,31 @@ beforeEach(() => {
   isHostRemovedByUser.mockReset().mockResolvedValue(false);
   hostManagesHostLoginItem.mockReset().mockResolvedValue(true);
   hasPendingLoginItemRevision.mockReset().mockResolvedValue(false);
+  // Route both the fast-path gate (marker∨flag) and the machine's marker seam
+  // through the single `hasPendingLoginItemRevision` knob by default; individual
+  // tests can override to exercise the flag-only (M-A) or applied (M-B) cases.
+  hasPendingLoginItemRevisionOrPendingCycle
+    .mockReset()
+    .mockImplementation((environment) =>
+      hasPendingLoginItemRevision(environment),
+    );
+  hasUnappliedPendingLoginItemRevision
+    .mockReset()
+    .mockImplementation((environment) =>
+      hasPendingLoginItemRevision(environment),
+    );
+  isPendingCycleFlagSet.mockReset().mockReturnValue(false);
+  writePendingLoginItemRevision.mockReset().mockResolvedValue({
+    pending: true,
+    durable: true,
+    cause: null,
+    error: null,
+  });
+  // Consulted only when a test wires registerHostLoginItem to invoke the real
+  // revalidate (the Mo-C skip-join wiring tests); harmless for the rest.
+  evaluateRegisterCycleDecision
+    .mockReset()
+    .mockResolvedValue({ kind: "cycle", causes: ["stamp-mismatch"] });
   registerHostLoginItem.mockReset().mockResolvedValue("enabled");
   readHostLoginItemStatus.mockReset().mockReturnValue("enabled");
   probeHostActivityBusy.mockReset().mockResolvedValue(false);
@@ -544,6 +621,36 @@ describe("ensureHost fast path - pending LaunchAgent revision (applyPendingLogin
         darwinAgentAuthority: null,
       },
     );
+  });
+
+  it("M-A: a flag-only deferral (in-memory pending-cycle flag, NO disk marker) still applies on the idle fast path", async () => {
+    // The register cycle deferred while busy and its marker WRITE failed, leaving
+    // only the in-memory pending-cycle flag - no disk trace. The 30s monitor
+    // wakes on marker∨flag, so the fast path must apply this too: a disk-only
+    // gate returned null here and stranded the repair until a full relaunch
+    // while churning a no-op every tick (M-A).
+    hasPendingLoginItemRevision.mockResolvedValue(false); // no on-disk marker
+    isPendingCycleFlagSet.mockReturnValue(true);
+    hasPendingLoginItemRevisionOrPendingCycle.mockResolvedValue(true); // marker∨flag
+    probeHostActivityBusy.mockResolvedValue(false);
+    registerHostLoginItem.mockResolvedValue("enabled");
+    waitForHostReady.mockResolvedValue({
+      ready: true,
+      version: "9.9.9",
+      pid: 777,
+      reason: "ready",
+    });
+
+    const result = await invokeEnsure();
+
+    expect(result).toEqual({
+      action: "already-ready",
+      running: true,
+      version: "9.9.9",
+    });
+    // Exactly one register cycle applied the deferred repair.
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
   });
 
   it("throws the approval-required error when the idle refresh cycle ends requires-approval", async () => {
@@ -817,7 +924,10 @@ describe("ensureHost full-install skip-join wiring (Finding F / T6)", () => {
   // Shared full-install setup: a host is RUNNING but its endpoint is
   // unreachable, so the ensure falls through the reachable fast path and runs a
   // full install + SMAppService register cycle with prePid = the running pid.
-  function primeUnreachableRunningInstall(): void {
+  // `cliAction` drives the CLI payload's `action` so the REAL revalidate sees a
+  // realistic `cliActionInstalled` (Mo-C): "installed" for a fresh install,
+  // "up-to-date" for the reachable no-op that legitimately yields skip-join.
+  function primeUnreachableRunningEnsure(cliAction: string): void {
     canReachHostWebsocketUrl.mockResolvedValue(false);
     readServiceLifecycle.mockReturnValue({
       priorServiceState: null,
@@ -825,7 +935,7 @@ describe("ensureHost full-install skip-join wiring (Finding F / T6)", () => {
       postSwapError: null,
     });
     streamCliWithinReservedOperation.mockResolvedValue({
-      action: "installed",
+      action: cliAction,
       running: false,
       registered: false,
       version: "1.5.0",
@@ -833,13 +943,37 @@ describe("ensureHost full-install skip-join wiring (Finding F / T6)", () => {
     });
   }
 
-  it("skip-join makes readiness JOIN the running spawn (skipPid null, not prePid)", async () => {
+  // Route registerHostLoginItem through its REAL decision mapping: invoke the
+  // revalidate closure host-ensure built and translate the machine's decision
+  // exactly as the production helper does. This exercises the actual wiring
+  // (CLI payload -> cliActionInstalled -> machine -> status) instead of stubbing
+  // a status the machine could never have produced for that payload (Mo-C).
+  function wireRegisterToRealRevalidate(): void {
+    registerHostLoginItem.mockImplementation(async (revalidate) => {
+      if (revalidate === undefined) return "enabled";
+      const decision = await revalidate();
+      switch (decision.kind) {
+        case "skip-join":
+          return "skip-join";
+        case "defer-busy":
+          return "deferred-busy";
+        case "defer-busy-unpersisted":
+          return "deferred-busy-unpersisted";
+        case "cycle":
+          return "enabled";
+      }
+    });
+  }
+
+  it("skip-join (a reachable no-op: viable spawn, no definition change) makes readiness JOIN the running spawn (skipPid null)", async () => {
     // The register cycle finds a viable current-generation agent spawn and
-    // returns "skip-join", so readiness must join it: waitForHostReady is handed
-    // skipPid=null (accept the current pid) rather than prePid, which would skip
-    // the only host there is and wait forever for a fresh spawn that never comes.
-    primeUnreachableRunningInstall();
-    registerHostLoginItem.mockResolvedValue("skip-join");
+    // nothing to apply, so the REAL machine returns skip-join - reachable ONLY
+    // for a non-install CLI action (an "installed" payload is a definitionChange
+    // and would cycle). Readiness must then JOIN it: skipPid=null accepts the
+    // current pid rather than skipping the only host there is.
+    primeUnreachableRunningEnsure("up-to-date");
+    wireRegisterToRealRevalidate();
+    evaluateRegisterCycleDecision.mockResolvedValue({ kind: "skip-join" });
     waitForHostReady.mockResolvedValue({
       ready: true,
       version: "1.5.0",
@@ -850,7 +984,11 @@ describe("ensureHost full-install skip-join wiring (Finding F / T6)", () => {
     const result = await invokeEnsureWithServiceStatus(runningStatus);
 
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
-    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    // The decision was reached from a REACHABLE state: the real revalidate fed
+    // the machine cliActionInstalled=false (no install => no definitionChange).
+    expect(evaluateRegisterCycleDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ cliActionInstalled: false }),
+    );
     // The load-bearing wiring: skip-join => joinExistingSpawn => skipPid null.
     expect(waitForHostReady).toHaveBeenCalledWith(
       60_000,
@@ -866,14 +1004,19 @@ describe("ensureHost full-install skip-join wiring (Finding F / T6)", () => {
     });
   });
 
-  it("a cycling register (enabled) still skips the stale prePid - the contrast that makes the null load-bearing", async () => {
-    // Same full-install path, but the cycle actually ran (returns "enabled" -
-    // the old host was booted out). The lingering pid.json now belongs to the
-    // displaced host, so readiness MUST skip prePid and wait for the freshly
-    // spawned process. Pairing this with the skip-join case pins the
-    // `joinExistingSpawn ? null : prePid` wiring from both sides.
-    primeUnreachableRunningInstall();
-    registerHostLoginItem.mockResolvedValue("enabled");
+  it("an installed payload drives the machine to CYCLE (enabled) and readiness skips the stale prePid - the contrast that makes the null load-bearing", async () => {
+    // A fresh install IS a definitionChange, so the real revalidate feeds the
+    // machine cliActionInstalled=true and it cycles. The old host is booted out;
+    // its lingering pid.json now belongs to the displaced host, so readiness
+    // MUST skip prePid and wait for the freshly spawned process. Pairing this
+    // with the skip-join case pins the `joinExistingSpawn ? null : prePid`
+    // wiring from both sides, both from reachable machine decisions.
+    primeUnreachableRunningEnsure("installed");
+    wireRegisterToRealRevalidate();
+    evaluateRegisterCycleDecision.mockResolvedValue({
+      kind: "cycle",
+      causes: ["action-installed"],
+    });
     waitForHostReady.mockResolvedValue({
       ready: true,
       version: "1.5.0",
@@ -883,6 +1026,9 @@ describe("ensureHost full-install skip-join wiring (Finding F / T6)", () => {
 
     await invokeEnsureWithServiceStatus(runningStatus);
 
+    expect(evaluateRegisterCycleDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ cliActionInstalled: true }),
+    );
     expect(waitForHostReady).toHaveBeenCalledWith(
       60_000,
       PID_METADATA_FILE,

@@ -306,3 +306,103 @@ describe("pending-cycle flag query helpers (Finding F)", () => {
     ).resolves.toBe(false);
   });
 });
+
+describe("applied-despite-lingering-marker latch (M-B)", () => {
+  // A DIRECTORY at the marker's file path makes the best-effort
+  // `rm(path, { force: true })` (non-recursive) fail with EISDIR while
+  // `access(path, F_OK)` still reports the path present - modelling a successful
+  // cycle whose marker unlink fails (EACCES/EPERM/EBUSY in prod) without any
+  // uid-sensitive chmod, so the test is deterministic even under root.
+  function makeUnremovableMarker(environment: "production"): string {
+    const markerPath =
+      getHostFsLayout(environment).pendingLoginItemRevisionFile;
+    mkdirSync(markerPath, { recursive: true });
+    return markerPath;
+  }
+
+  it("a successful cycle whose marker unlink fails reads as applied, not pending, and stops waking the monitor", async () => {
+    const markerPath = makeUnremovableMarker("production");
+    const mod = await import("../pending-login-item-revision");
+
+    // The cycle applied the staged revision; its unlink then fails. The marker
+    // is latched as already-applied instead of reading pending forever.
+    await expect(
+      mod.resolvePendingLoginItemRevisionAfterCycle("production"),
+    ).resolves.toEqual({
+      pending: false,
+      durable: false,
+      cause: null,
+      error: null,
+    });
+    await expect(
+      mod.getPendingLoginItemRevisionState("production"),
+    ).resolves.toEqual({
+      pending: false,
+      durable: false,
+      cause: null,
+      error: null,
+    });
+    // The 30s monitor's wake predicate and the machine's marker cause both go
+    // quiet, so a healthy host is never re-cycled every tick.
+    await expect(
+      mod.hasPendingLoginItemRevisionOrPendingCycle("production"),
+    ).resolves.toBe(false);
+    await expect(
+      mod.hasUnappliedPendingLoginItemRevision("production"),
+    ).resolves.toBe(false);
+    // The raw marker is genuinely still on disk - the latch, not a removal, is
+    // what makes it read as applied.
+    await expect(mod.hasPendingLoginItemRevision("production")).resolves.toBe(
+      true,
+    );
+
+    rmSync(markerPath, { recursive: true, force: true });
+  });
+
+  it("a newly staged revision re-arms the pending state after the applied latch", async () => {
+    const markerPath = makeUnremovableMarker("production");
+    const mod = await import("../pending-login-item-revision");
+    await mod.resolvePendingLoginItemRevisionAfterCycle("production");
+    await expect(
+      mod.hasPendingLoginItemRevisionOrPendingCycle("production"),
+    ).resolves.toBe(false);
+
+    // Clear the directory so a real marker file can be staged, then stage one:
+    // a genuinely-new revision must NOT inherit the previous cycle's applied
+    // latch.
+    rmSync(markerPath, { recursive: true, force: true });
+    await mod.writePendingLoginItemRevision("production", "update");
+
+    await expect(
+      mod.getPendingLoginItemRevisionState("production"),
+    ).resolves.toEqual({
+      pending: true,
+      durable: true,
+      cause: null,
+      error: null,
+    });
+    await expect(
+      mod.hasUnappliedPendingLoginItemRevision("production"),
+    ).resolves.toBe(true);
+  });
+
+  it("the applied latch is in-memory: a fresh launch treats a still-present marker as pending once more (bounded one-cycle)", async () => {
+    const markerPath = makeUnremovableMarker("production");
+    const first = await import("../pending-login-item-revision");
+    await first.resolvePendingLoginItemRevisionAfterCycle("production");
+    await expect(
+      first.getPendingLoginItemRevisionState("production"),
+    ).resolves.toMatchObject({ pending: false });
+
+    // A relaunch drops the in-memory latch. The unremovable marker is still on
+    // disk, so the new process treats it as pending and gets exactly one more
+    // apply attempt - never an in-session churn loop.
+    vi.resetModules();
+    const afterRestart = await import("../pending-login-item-revision");
+    await expect(
+      afterRestart.getPendingLoginItemRevisionState("production"),
+    ).resolves.toMatchObject({ pending: true, durable: true });
+
+    rmSync(markerPath, { recursive: true, force: true });
+  });
+});

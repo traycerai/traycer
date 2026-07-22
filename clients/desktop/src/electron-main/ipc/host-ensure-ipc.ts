@@ -27,13 +27,14 @@ import { getHostFsLayout } from "../host/host-paths";
 import type { Environment } from "../host/host-paths";
 import { isHostRemovedByUser } from "../host/host-removal-state";
 import {
-  hasPendingLoginItemRevision,
   hostManagesHostLoginItem,
   HOST_AGENT_LABEL,
   readHostLoginItemStatus,
   registerHostLoginItem,
 } from "../app/host-login-item";
 import {
+  hasPendingLoginItemRevisionOrPendingCycle,
+  hasUnappliedPendingLoginItemRevision,
   isPendingCycleFlagSet,
   writePendingLoginItemRevision,
 } from "../host/pending-login-item-revision";
@@ -279,7 +280,10 @@ function buildRegisterCycleRevalidate(params: {
       identity: config.version,
       cliActionInstalled: params.cliActionInstalled,
       readAgentLabelPid,
-      hasPendingRevisionMarker: hasPendingLoginItemRevision,
+      // A marker a successful cycle already applied (unlink-failure latch) is
+      // NOT a definitionChange cause: without this a healthy host would re-cycle
+      // every monitor tick on a marker that cannot be removed (M-B).
+      hasPendingRevisionMarker: hasUnappliedPendingLoginItemRevision,
       isPendingCycleFlagSet,
       registrationStampMatches,
       isRegistrationIdentityApplied,
@@ -717,7 +721,13 @@ async function applyPendingLoginItemRevisionIfIdle(
 ): Promise<HostEnsureIpcResult | null> {
   if (!hostOwnsLoginItem) return null;
   if (pendingRevisionRefreshQuarantined) return null;
-  if (!(await hasPendingLoginItemRevision(environment))) return null;
+  // Marker ∨ in-memory pending-cycle flag (M-A): the 30s monitor wakes on
+  // either, so a deferral whose marker write failed (flag-only, no disk trace)
+  // must also get its idle apply here - a disk-only gate leaves that repair
+  // stranded until a full relaunch and churns a no-op every tick meanwhile.
+  if (!(await hasPendingLoginItemRevisionOrPendingCycle(environment))) {
+    return null;
+  }
   if (await probeHostActivityBusy(listenUrl)) {
     log.debug(
       "[host-ensure] pending LaunchAgent revision deferred - host busy",
@@ -774,10 +784,11 @@ async function applyPendingLoginItemRevisionIfIdle(
     return null;
   }
   if (status === "skip-join") {
-    // Defensive: the fast path only runs with a pending marker present, so the
-    // state machine sees a definitionChange and returns `cycle`/`defer`, never
-    // `skip-join`. If it somehow does, the host is already viable and nothing
-    // needs applying - fall through to the normal already-ready return.
+    // Defensive: the fast path only runs with an UNAPPLIED pending marker or the
+    // in-memory pending-cycle flag present, both definitionChange causes, so the
+    // state machine returns `cycle`/`defer`, never `skip-join`. If it somehow
+    // does, the host is already viable and nothing needs applying - fall through
+    // to the normal already-ready return.
     log.info(
       "[host-ensure] pending LaunchAgent revision: state machine reported a viable existing spawn, nothing to apply",
     );

@@ -957,10 +957,12 @@ function installFakeCliWithDeferredStream(): {
   readonly calls: RecordedCall[];
   readonly resolveStream: (data: unknown) => void;
   readonly rejectStream: (err: unknown) => void;
+  readonly emitEvent: (event: unknown) => void;
 } {
   const calls: RecordedCall[] = [];
   let resolveStream: (data: unknown) => void = () => undefined;
   let rejectStream: (err: unknown) => void = () => undefined;
+  let emitEvent: (event: unknown) => void = () => undefined;
   vi.doMock("../../cli/traycer-cli", () => ({
     runTraycerCliJson: vi.fn((args: readonly string[]) => {
       calls.push({ kind: "run", args: [...args], timeoutMs: undefined });
@@ -984,6 +986,7 @@ function installFakeCliWithDeferredStream(): {
           return Promise.resolve({ data: fakeHostAvailablePayload("1.7.0") });
         }
         return new Promise((resolve, reject) => {
+          emitEvent = onEvent;
           resolveStream = (data: unknown) => {
             onEvent({
               type: "progress",
@@ -1005,6 +1008,7 @@ function installFakeCliWithDeferredStream(): {
     calls,
     resolveStream: (data) => resolveStream(data),
     rejectStream: (err) => rejectStream(err),
+    emitEvent: (event) => emitEvent(event),
   };
 }
 
@@ -1376,6 +1380,65 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
     });
   });
 
+  it("Mo-B: a removal during an IN-FLIGHT ensure supersedes its late success (reservation cancel-epoch)", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const bridge = makeBridge();
+
+    // An ensure reserves the slot and begins streaming...
+    const reservation = mgmt.reserveHostOperation(
+      bridge as never,
+      "ensure",
+      "op-straddle",
+    );
+    const beforeRevision = mgmt.getHostOperationStatus().revision;
+
+    // ...the user hits Remove mid-flight. The removal-class mutator invalidates
+    // any retained outcome AND bumps the cancel-epoch.
+    mgmt.clearRetainedEnsureOutcome(bridge as never);
+
+    // The in-flight ensure now settles with a stale success. Its terminal
+    // outcome must NOT be published - a late join-only ensure would otherwise
+    // replay it as "host ready" right after the user removed the host.
+    mgmt.releaseHostOperation(reservation, {
+      operationId: "op-straddle",
+      result: { action: "provisioned", running: true, version: "1.7.0" },
+      busyHostPid: null,
+    });
+
+    const envelope = mgmt.getHostOperationStatus();
+    expect(envelope.status).toBeNull();
+    // Superseded (null), not the stale success.
+    expect(envelope.lastEnsureOutcome).toBeNull();
+    expect(envelope.revision).toBeGreaterThan(beforeRevision);
+  });
+
+  it("Mo-B: an ensure that reserves AFTER a removal still publishes its outcome (cancel-epoch is not a blanket suppressor)", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const bridge = makeBridge();
+
+    // A prior removal bumped the epoch, but this ensure reserves AFTER it, so
+    // its captured epoch matches at release and the outcome publishes (e.g. a
+    // post-removal ensure that legitimately reports `removed` must be visible).
+    mgmt.clearRetainedEnsureOutcome(bridge as never);
+    const reservation = mgmt.reserveHostOperation(
+      bridge as never,
+      "ensure",
+      "op-clean",
+    );
+    mgmt.releaseHostOperation(reservation, {
+      operationId: "op-clean",
+      result: { action: "provisioned", running: true, version: "1.7.0" },
+      busyHostPid: null,
+    });
+
+    expect(mgmt.getHostOperationStatus().lastEnsureOutcome).toMatchObject({
+      operationId: "op-clean",
+      result: { action: "provisioned", running: true, version: "1.7.0" },
+    });
+  });
+
   it("invalidates a retained ensure outcome before every untracked host mutation", async () => {
     installFakeCli({ runResult: {}, streamResult: {} });
     vi.doMock("../../host/host-removal-state", () => ({
@@ -1595,6 +1658,77 @@ describe("host-management IPC - single-flight guard on concurrent host mutations
       status: null,
       lastEnsureOutcome: null,
     });
+  });
+
+  it("Mi-1: a null-percent network heartbeat preserves the last-known percent instead of flashing back to Setting up", async () => {
+    writeOlderInstalledHost("production");
+    const fake = installFakeCliWithDeferredStream();
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke, RunnerHostEvent } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    const updatePromise = bridge.handlers.get(
+      RunnerHostInvoke.traycerHostUpdate,
+    )!(null, { operationId: "op-update" });
+    await waitForStreamCallCount(fake, 1);
+
+    // A real download tick lands at 60%.
+    fake.emitEvent({
+      type: "progress",
+      stage: "download",
+      percent: 60,
+      bytes: 60,
+      totalBytes: 100,
+      message: "downloading",
+    });
+    // Then a Range-retry heartbeat with NO percent/bytes - "still alive", not
+    // "back to zero". The bar must hold at 60%, only the message updating.
+    fake.emitEvent({
+      type: "progress",
+      stage: "download",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+      message: "connection reset, resuming download",
+    });
+
+    const latestStatus = () => {
+      const statusCalls = bridge.fanOut.mock.calls.filter(
+        ([channel]) => channel === RunnerHostEvent.hostOperationStatusChange,
+      );
+      return statusCalls[statusCalls.length - 1]?.[1] as {
+        readonly status: {
+          readonly percent: number | null;
+          readonly bytes: number | null;
+          readonly totalBytes: number | null;
+          readonly message: string | null;
+        } | null;
+      };
+    };
+    expect(latestStatus().status).toMatchObject({
+      percent: 60,
+      bytes: 60,
+      totalBytes: 100,
+      message: "connection reset, resuming download",
+    });
+    expect(mgmt.getHostOperationStatus().status).toMatchObject({
+      percent: 60,
+      message: "connection reset, resuming download",
+    });
+
+    fake.resolveStream({
+      version: "1.7.0",
+      installedAt: "2026-05-15T00:00:00Z",
+      executablePath: "/opt/traycer/host",
+      source: { kind: "registry", value: "1.7.0" },
+      archiveSha256: "a".repeat(64),
+      signatureKeyId: "k",
+      sizeBytes: 0,
+    });
+    await updatePromise;
   });
 
   it("a failed operation still clears the status so a retry isn't permanently blocked", async () => {

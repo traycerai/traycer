@@ -80,6 +80,13 @@ export interface DarwinAgentAuthority {
   // than the pid.json poll (each check spawns a subprocess). Carried on the
   // authority so tests can drive it deterministically.
   readonly probeIntervalMs: number;
+  // Hold an owned-terminal-marker death verdict for this long past the first
+  // confirmed miss, so a crashed agent's ONE launchd KeepAlive relaunch (no
+  // sooner than the plist ThrottleInterval) can publish a fresh pid before the
+  // wait fails onto an error card (Me-A). A live pid observed within the window
+  // resets the miss run and extends instead. Carried on the authority so tests
+  // can scale it against the probe cadence.
+  readonly relaunchGraceMs: number;
 }
 
 export interface WaitForHostReadyOptions {
@@ -109,6 +116,20 @@ const DARWIN_AGENT_PROBE_INTERVAL_MS = 3_000;
 // sustained absence; at DARWIN_AGENT_PROBE_INTERVAL_MS spacing that is a
 // ~3-6s confirmation delay, negligible against the extended readiness budget.
 const DARWIN_AGENT_MISS_CONFIRM_THRESHOLD = 2;
+
+// launchd relaunches a crashed KeepAlive agent no sooner than the host plist's
+// ThrottleInterval (scripts/prepack/inject-host-launch-agent.cjs: 10s). A
+// transient early crash writes an OWNED terminal marker, and confirmed-gone
+// (~6s) fires well before that one legal relaunch - so without a grace the wait
+// fails onto an error card for a host launchd revives seconds later, and because
+// the lifecycle event does not bump the readiness gate the recovery needs a
+// manual Retry (Me-A).
+const DARWIN_KEEPALIVE_THROTTLE_INTERVAL_MS = 10_000;
+// Hold the owned-terminal-marker death verdict for one full relaunch window past
+// the throttle: the throttle plus two probe intervals of slack so the relaunched
+// pid is observed at the coarse launchctl cadence before the grace expires.
+const DARWIN_KEEPALIVE_RELAUNCH_GRACE_MS =
+  DARWIN_KEEPALIVE_THROTTLE_INTERVAL_MS + 2 * DARWIN_AGENT_PROBE_INTERVAL_MS;
 
 export async function captureHostSpawnEvidenceBaseline(
   logPath: string,
@@ -157,6 +178,7 @@ export async function buildDarwinAgentAuthority(
       markerAuthoritySinceMs: Date.now(),
     },
     probeIntervalMs: DARWIN_AGENT_PROBE_INTERVAL_MS,
+    relaunchGraceMs: DARWIN_KEEPALIVE_RELAUNCH_GRACE_MS,
   };
 }
 
@@ -218,16 +240,22 @@ export async function waitForHostReady(
   // Only updated on a REAL probe (not the throttled cached-value path), so it
   // counts probe intervals of sustained absence, not poll iterations.
   let consecutiveAgentPidMisses = 0;
+  // When the current miss run began (first miss after the last live pid). Anchors
+  // the KeepAlive relaunch grace (Me-A); reset the instant a live pid returns.
+  let firstAgentPidMissAtMs: number | null = null;
+  const darwinRelaunchGraceMs = darwin === null ? 0 : darwin.relaunchGraceMs;
   const probeDarwinAgentPid = async (nowMs: number): Promise<number | null> => {
     if (darwin === null) return null;
     if (nowMs < nextAgentProbeAt) return lastAgentPid;
     nextAgentProbeAt = nowMs + darwin.probeIntervalMs;
     const pid = await darwin.readAgentLabelPid(darwin.agentLabel);
     if (pid === null) {
+      if (consecutiveAgentPidMisses === 0) firstAgentPidMissAtMs = nowMs;
       consecutiveAgentPidMisses += 1;
     } else {
       observedAgentPids.add(pid);
       consecutiveAgentPidMisses = 0;
+      firstAgentPidMissAtMs = null;
     }
     lastAgentPid = pid;
     return pid;
@@ -239,6 +267,16 @@ export async function waitForHostReady(
   const agentGenerationConfirmedGone = (): boolean =>
     lastAgentPid === null &&
     consecutiveAgentPidMisses >= DARWIN_AGENT_MISS_CONFIRM_THRESHOLD;
+  // Confirmed gone AND launchd's one throttled KeepAlive relaunch window has
+  // elapsed with no fresh pid (Me-A). Holding the death verdict this long lets a
+  // transient early crash self-heal (a relaunch resets the miss run above and
+  // extends) instead of failing readiness onto an error card for a host that
+  // revives seconds later. An EX_CONFIG-style pre-JS crash writes no OWNED
+  // marker, so it never rides this path and keeps its fail-fast at the deadline.
+  const agentGenerationDeadPastRelaunchGrace = (nowMs: number): boolean =>
+    agentGenerationConfirmedGone() &&
+    firstAgentPidMissAtMs !== null &&
+    nowMs - firstAgentPidMissAtMs >= darwinRelaunchGraceMs;
 
   // Post-baseline terminal markers within this attempt's authority window.
   const readDarwinTerminalMarkers = async (): Promise<
@@ -361,7 +399,7 @@ export async function waitForHostReady(
         if (agentPid !== null) {
           extended = true;
           lastReason = `${lastReason}; extending wait on live agent-label pid ${agentPid}`;
-        } else if (agentGenerationConfirmedGone()) {
+        } else if (agentGenerationDeadPastRelaunchGrace(now)) {
           const ownedReason = await darwinOwnedTerminalReason();
           return {
             ready: false,
@@ -422,7 +460,7 @@ export async function waitForHostReady(
     // extension death.
     if (darwin !== null) {
       await probeDarwinAgentPid(now);
-      if (agentGenerationConfirmedGone()) {
+      if (agentGenerationDeadPastRelaunchGrace(now)) {
         const ownedReason = await darwinOwnedTerminalReason();
         if (ownedReason !== null) {
           return {

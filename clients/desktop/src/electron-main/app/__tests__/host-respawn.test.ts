@@ -233,6 +233,41 @@ describe("respawnHost - host-owned login item path", () => {
     expect(waitForHostReady).not.toHaveBeenCalled();
   });
 
+  it("Mo-A: pre-flights approval for a RUNNING host and refuses to boot it out - throws WITHOUT cycling", async () => {
+    // The login item is toggled off in System Settings. The register cycle's
+    // leading bootout would kill the still-running host and then land on
+    // requires-approval anyway. Pre-flight and surface the approval error
+    // WITHOUT that destructive kill.
+    const host = new FakeHost(); // running, pid 42
+    hostManagesHostLoginItem.mockResolvedValueOnce(true);
+    readHostLoginItemStatus.mockReturnValueOnce("requires-approval");
+
+    await expect(respawnHost(host)).rejects.toThrow(approvalRequiredMessage());
+    // The destructive cycle never ran; the healthy running host was not killed.
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+    expect(host.notifyRespawningCalls).toBe(0);
+    expect(waitForHostReady).not.toHaveBeenCalled();
+    expect(host.respawnCalls).toBe(0);
+  });
+
+  it("Mo-A: with NO running host, a requires-approval login item still proceeds to the cycle (nothing to protect)", async () => {
+    const host = new FakeHost();
+    host.serviceStatus = {
+      state: "not-installed",
+      version: null,
+      listenUrl: null,
+      pid: null,
+    };
+    hostManagesHostLoginItem.mockResolvedValueOnce(true);
+    // prePid is null, so the pre-flight is skipped and the cycle runs and reports
+    // the approval state itself (the post-cycle path).
+    readHostLoginItemStatus.mockReturnValue("requires-approval");
+    registerHostLoginItem.mockResolvedValueOnce("requires-approval");
+
+    await expect(respawnHost(host)).rejects.toThrow(approvalRequiredMessage());
+    expect(registerHostLoginItem).toHaveBeenCalledOnce();
+  });
+
   it("returns silently (no error, no readiness wait) when the locked register cycle reports removed-by-user mid-respawn", async () => {
     // "Remove Traycer" ran while this respawn waited on the registration
     // lock - the cycle refused to resurrect the login item, and the respawn

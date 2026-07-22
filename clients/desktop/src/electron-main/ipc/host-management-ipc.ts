@@ -311,6 +311,17 @@ let currentOperationStatus: HostOperationStatusEnvelope = {
   lastEnsureOutcome: null,
 };
 
+// Monotonic cancel-epoch bumped by every removal-class mutation (uninstall,
+// app-uninstall, service-deregister). A reservation captures the epoch at start;
+// `releaseHostOperation` publishes its terminal outcome ONLY if the epoch is
+// unchanged. An ensure that STRADDLES a Remove (reserved before, settles after)
+// therefore cannot republish a now-stale success a late join-only ensure would
+// replay - it publishes a superseded (null) outcome instead. Nulling the
+// retained outcome alone only covered an ALREADY-settled ensure; an in-flight
+// one would re-null it back to success in its `finally` (Mo-B). This never
+// resets in production; it is only ever compared for equality.
+let operationCancelEpoch = 0;
+
 export type HostOperationEventListener = (event: NdjsonEvent) => void;
 
 type PendingEnsureOutcome =
@@ -333,6 +344,9 @@ export interface HostOperationReservation {
   readonly operationId: string;
   readonly kind: HostOperationKind;
   readonly startedAt: string;
+  // The cancel-epoch captured at reservation time; a removal-class mutation that
+  // bumps it invalidates this operation's terminal outcome (Mo-B).
+  readonly cancelEpoch: number;
 }
 
 export interface HostUpdateAdmission {
@@ -356,6 +370,7 @@ export function resetHostOperationStatusForTests(): void {
     status: null,
     lastEnsureOutcome: null,
   };
+  operationCancelEpoch = 0;
 }
 
 function setHostOperationStatus(
@@ -402,6 +417,7 @@ export function reserveHostOperation(
     operationId,
     kind,
     startedAt: new Date().toISOString(),
+    cancelEpoch: operationCancelEpoch,
   };
   setHostOperationStatus(
     bridge,
@@ -435,18 +451,23 @@ function publishHostOperationProgress(
   event: NdjsonEvent,
 ): void {
   if (event.type !== "progress") return;
-  if (
-    currentOperationStatus.status === null ||
-    currentOperationStatus.status.operationId !== reservation.operationId
-  ) {
+  const prior = currentOperationStatus.status;
+  if (prior === null || prior.operationId !== reservation.operationId) {
     return;
   }
+  // A network heartbeat (Range-retry / watchdog / backoff tick) is a progress
+  // event with a null percent/byte count - it means "still alive", not "back to
+  // zero". Carry the last-known percent/bytes through it so the bar holds steady
+  // instead of flashing back to the pending "Setting up" state (Mi-1).
+  const percent = event.percent ?? prior.percent;
+  const bytes = event.bytes ?? prior.bytes;
+  const totalBytes = event.totalBytes ?? prior.totalBytes;
   const payload: HostProgressEvent = {
     operationId: reservation.operationId,
     stage: event.stage,
-    percent: event.percent,
-    bytes: event.bytes,
-    totalBytes: event.totalBytes,
+    percent,
+    bytes,
+    totalBytes,
     message: event.message,
   };
   reservation.bridge.fanOut(RunnerHostEvent.cliOperationProgress, payload);
@@ -456,9 +477,9 @@ function publishHostOperationProgress(
       operationId: reservation.operationId,
       kind: reservation.kind,
       stage: event.stage,
-      percent: event.percent,
-      bytes: event.bytes,
-      totalBytes: event.totalBytes,
+      percent,
+      bytes,
+      totalBytes,
       message: event.message,
       startedAt: reservation.startedAt,
     },
@@ -490,7 +511,15 @@ export function releaseHostOperation(
   pendingEnsureOutcome: PendingEnsureOutcome,
 ): void {
   currentStatusForReservation(reservation);
-  setHostOperationStatus(reservation.bridge, null, pendingEnsureOutcome);
+  // A removal-class mutation during this operation makes its terminal outcome
+  // stale: a join-only ensure must never replay a success published after the
+  // user removed the host. Drop the outcome (publish null) so the join reads
+  // `lastEnsureOutcome === null` and returns superseded (Mo-B).
+  const outcome =
+    reservation.cancelEpoch === operationCancelEpoch
+      ? pendingEnsureOutcome
+      : null;
+  setHostOperationStatus(reservation.bridge, null, outcome);
 }
 
 /**
@@ -500,6 +529,12 @@ export function releaseHostOperation(
  * service deregistration.
  */
 export function clearRetainedEnsureOutcome(bridge: RunnerIpcBridge): void {
+  // Bump the cancel-epoch FIRST so an ensure reservation taken before this
+  // removal-class mutation cannot republish its (now-stale) success when it
+  // settles - `releaseHostOperation` compares the captured epoch and publishes a
+  // superseded/null outcome instead. Nulling the retained outcome alone only
+  // covered an ALREADY-settled ensure (Mo-B).
+  operationCancelEpoch += 1;
   setHostOperationStatus(bridge, currentOperationStatus.status, null);
 }
 

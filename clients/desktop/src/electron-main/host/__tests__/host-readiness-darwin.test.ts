@@ -82,6 +82,10 @@ async function darwinAuthority(
     readAgentLabelPid,
     terminalMarkerBaseline: baseline,
     probeIntervalMs: 5,
+    // Small scaled grace so the existing owned-marker / extension-death
+    // fail-fast tests still resolve quickly (no relaunch arrives within it).
+    // The Me-A relaunch-window test builds its own authority with a wider grace.
+    relaunchGraceMs: 15,
   };
 }
 
@@ -180,13 +184,18 @@ describe("waitForHostReady darwin agent-label authority (Finding F)", () => {
 
   it("fails once the agent-label pid disappears during the extended wait", async () => {
     // Alive through the base budget (so it extends), then gone: the extension
-    // is only valid while a live current-generation pid exists.
-    const started = Date.now();
+    // is only valid while a live current-generation pid exists. Gated on PROBE
+    // COUNT, not a wall-clock threshold: the 5ms probe throttle bounds the base
+    // budget (40ms) to ~8 real probes, so staying live for 12 provably extends
+    // before dying - deterministic under scheduler stalls, unlike the former
+    // real-90ms boundary a slow loop could cross early (Mi-3).
+    let probe = 0;
     const readAgentLabelPid = vi
       .fn<(label: string) => Promise<number | null>>()
-      .mockImplementation(async () =>
-        Date.now() - started < 90 ? 4242 : null,
-      );
+      .mockImplementation(async () => {
+        probe += 1;
+        return probe <= 12 ? 4242 : null;
+      });
     mocks.canReachHostWebsocketUrl.mockResolvedValue(false);
     const authority = await darwinAuthority(readAgentLabelPid);
 
@@ -227,6 +236,7 @@ describe("waitForHostReady darwin agent-label authority (Finding F)", () => {
       readAgentLabelPid,
       terminalMarkerBaseline: baseline,
       probeIntervalMs: 30,
+      relaunchGraceMs: 15,
     };
     await writeFile(logPath, terminalMarker(100, "EX_CONFIG"), "utf8");
 
@@ -314,5 +324,78 @@ describe("waitForHostReady darwin agent-label authority (Finding F)", () => {
 
     expect(result.ready).toBe(false);
     expect(result.reason).not.toContain("EX_CONFIG");
+  });
+
+  it("Me-A: a transient early crash whose KeepAlive relaunch lands within the grace extends to ready instead of failing on the owned marker", async () => {
+    // Gen 100 is observed once, then launchctl reports null across several probes
+    // (the crash + the plist ThrottleInterval wait) - long enough to be CONFIRMED
+    // GONE - and its OWNED terminal marker is on disk. WITHOUT the relaunch grace
+    // this fails immediately on that marker; WITH it, Gen 200 (the one throttled
+    // KeepAlive relaunch) publishes inside the window, resets the miss run, and
+    // the wait extends to ready. Scaled poll(10) < probe(5) « grace(60): A -> null
+    // (confirmed gone) -> B, exactly the prod A->null×N->B shape (Me-A).
+    const started = Date.now();
+    const readAgentLabelPid = vi
+      .fn<(label: string) => Promise<number | null>>()
+      .mockImplementation(async () => {
+        const elapsed = Date.now() - started;
+        if (elapsed < 5) return 100; // observed once, then it crashes
+        if (elapsed < 45) return null; // crash + throttle wait: confirmed gone
+        return 200; // the throttled KeepAlive relaunch
+      });
+    let reach = 0;
+    mocks.canReachHostWebsocketUrl.mockImplementation(async () => {
+      reach += 1;
+      return reach > 8; // reachable only after the relaunch extends the wait
+    });
+    await writeFile(pidPath, pidJson(200), "utf8");
+    const baseline = await captureHostSpawnEvidenceBaseline(logPath, pidPath);
+    const authority: DarwinAgentAuthority = {
+      agentLabel: AGENT_LABEL,
+      readAgentLabelPid,
+      terminalMarkerBaseline: baseline,
+      probeIntervalMs: 5,
+      relaunchGraceMs: 60,
+    };
+    await writeFile(logPath, terminalMarker(100, "EX_CONFIG"), "utf8");
+
+    const result = await waitForHostReady(40, pidPath, 10, null, {
+      spawnEvidenceBaseline: null,
+      extendedTimeoutMs: 5_000,
+      darwinAgentAuthority: authority,
+    });
+
+    expect(result.ready).toBe(true);
+  });
+
+  it("Me-A: the grace is bounded - a crash with NO relaunch inside the window still fails with the owned marker's reason", async () => {
+    // Same confirmed-gone owned-marker crash, but launchctl never reports a fresh
+    // pid. Once the relaunch grace elapses with no new pid, the wait fails with
+    // the owned terminal reason - the grace holds the verdict, it does not abandon
+    // it (a genuinely dead host still routes to Doctor).
+    const started = Date.now();
+    const readAgentLabelPid = vi
+      .fn<(label: string) => Promise<number | null>>()
+      .mockImplementation(async () => (Date.now() - started < 5 ? 100 : null));
+    mocks.canReachHostWebsocketUrl.mockResolvedValue(false);
+    await writeFile(pidPath, pidJson(100), "utf8");
+    const baseline = await captureHostSpawnEvidenceBaseline(logPath, pidPath);
+    const authority: DarwinAgentAuthority = {
+      agentLabel: AGENT_LABEL,
+      readAgentLabelPid,
+      terminalMarkerBaseline: baseline,
+      probeIntervalMs: 5,
+      relaunchGraceMs: 40,
+    };
+    await writeFile(logPath, terminalMarker(100, "EX_CONFIG"), "utf8");
+
+    const result = await waitForHostReady(200, pidPath, 10, null, {
+      spawnEvidenceBaseline: null,
+      extendedTimeoutMs: 5_000,
+      darwinAgentAuthority: authority,
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.reason).toContain("EX_CONFIG");
   });
 });

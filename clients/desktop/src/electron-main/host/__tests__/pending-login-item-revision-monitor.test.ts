@@ -186,6 +186,7 @@ interface HostOperationReservation {
   readonly operationId: string;
   readonly kind: HostOperationKind;
   readonly startedAt: string;
+  readonly cancelEpoch: number;
 }
 
 type PendingEnsureOutcome =
@@ -274,6 +275,7 @@ vi.mock("../../ipc/host-management-ipc", () => ({
       operationId,
       kind,
       startedAt: "2026-05-15T00:00:00Z",
+      cancelEpoch: 0,
     };
     setEnvelope(
       bridge,

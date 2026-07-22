@@ -279,6 +279,7 @@ interface HostOperationReservation {
   readonly operationId: string;
   readonly kind: HostOperationKind;
   readonly startedAt: string;
+  readonly cancelEpoch: number;
 }
 
 type PendingEnsureOutcome =
@@ -368,6 +369,7 @@ vi.mock("../../ipc/host-management-ipc", () => ({
       operationId,
       kind,
       startedAt: "2026-05-15T00:00:00Z",
+      cancelEpoch: 0,
     };
     setEnvelope(
       bridge,
@@ -605,6 +607,7 @@ describe("shared registration-cycle lock: respawnHost vs runEnsureHost", () => {
   it("never runs two unregister/register cycles at once - the second caller's cycle does not even start until the first fully settles", async () => {
     hostManagesHostLoginItemMock.mockResolvedValue(true);
     getLoginItemSettingsMock
+      .mockReturnValueOnce({ status: "enabled" }) // respawn approval pre-flight (running host, Mo-A)
       .mockReturnValueOnce({ status: "not-registered" }) // cycle 1: post-unregister log read
       .mockReturnValueOnce({ status: "not-registered" }) // cycle 1: poll iteration 1 -> real 100ms sleep
       .mockReturnValueOnce({ status: "not-registered" }) // cycle 1: poll iteration 2 -> real 100ms sleep
@@ -704,7 +707,8 @@ describe("shared registration-cycle lock: respawnHost vs runEnsureHost", () => {
     expect(respawnFakeHost.notifyRespawningCalls).toBe(1);
     expect(respawnFakeHost.respawnCalls).toBe(0);
     expect(setLoginItemSettingsMock).toHaveBeenCalledTimes(6);
-    expect(getLoginItemSettingsMock).toHaveBeenCalledTimes(6);
+    // 6 cycle reads + 1 respawn approval pre-flight read (running host, Mo-A).
+    expect(getLoginItemSettingsMock).toHaveBeenCalledTimes(7);
   });
 });
 

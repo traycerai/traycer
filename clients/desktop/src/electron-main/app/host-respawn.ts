@@ -103,6 +103,21 @@ async function respawnViaLoginItem(host: IpcHostLifecycle): Promise<void> {
   const preStatus = await host.getServiceStatus();
   const prePid = preStatus.state === "running" ? preStatus.pid : null;
 
+  // Pre-flight approval, mirroring the ensure path (host-ensure-ipc.ts): a login
+  // item toggled off in System Settings ("requires-approval") cannot be
+  // re-enabled by a register cycle - it would land on `requires-approval` again
+  // - but the cycle's leading bootout WOULD kill the still-running host first.
+  // When a host is actually running, surface the same approval error WITHOUT
+  // that destructive kill (only the user's System Settings toggle can fix it).
+  // With nothing running there is nothing to protect, so the cycle proceeds and
+  // reports the approval state itself (the post-cycle check below).
+  if (prePid !== null && readHostLoginItemStatus() === "requires-approval") {
+    log.info(
+      "[host-respawn] skipped register cycle - login item requires approval; not booting out the running host",
+    );
+    throw new Error(approvalRequiredMessage());
+  }
+
   // Capture the darwin readiness authority BEFORE the register cycle so this
   // respawn's post-baseline terminal markers are attributable to its spawn.
   // `respawnViaLoginItem` runs only on the SMAppService cohort.

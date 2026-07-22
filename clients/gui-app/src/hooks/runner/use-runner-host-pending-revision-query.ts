@@ -116,6 +116,15 @@ export function useRunnerHostPendingRevisionQuery(): UseQueryResult<HostPendingR
           queryKey: runnerQueryKeys.hostPendingRevision(bridge),
           queryFn: () => getPendingRevisionSnapshot(bridge),
           staleTime: 0,
+          // Mirror the operation-status snapshot's bounded-backoff retry
+          // (use-runner-host-operation-status-query): a transient bridge failure
+          // must not give up after the query client's default single retry and
+          // leave the pending-revision state silently unhydrated for the mount
+          // (Mi-2). The onChange subscription still corrects it on the next push;
+          // this keeps the initial snapshot resilient in the meantime.
+          retry: true,
+          retryDelay: (attemptIndex) =>
+            Math.min(30_000, 1_000 * 2 ** Math.min(attemptIndex, 5)),
         }),
       )
       .catch(() => undefined);
