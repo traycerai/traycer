@@ -23,9 +23,9 @@ import {
 } from "./fault-server-test-helpers";
 
 const RESOURCE_URL = "https://registry.example.test/host.tar.gz";
-// settleRetryTimers drives ~100 real event-loop turns to advance fake
-// timers past the production backoff; under CI CPU contention that real
-// wall-clock cost alone can exceed vitest's 5s default test timeout.
+// Fail closed if a retry scenario genuinely cannot settle within its fake-time
+// budget. `settleRetryTimers` exits as soon as the promise resolves, so this is
+// no longer a wall-clock allowance for 100 unnecessary event-loop turns.
 const SETTLE_RETRY_TEST_TIMEOUT_MS = 15_000;
 
 let workDir: string;
@@ -86,18 +86,31 @@ function downloadOptions(destPath: string, expected: string) {
 
 async function settleRetryTimers<T>(promise: Promise<T>): Promise<T> {
   // Retries use a short production backoff. Advance enough timer turns to
-  // cover every attempt while allowing response/body microtasks to run.
+  // cover every attempt while allowing response/body microtasks to run. Stop
+  // once the operation settles: always running all 100 turns made these mocked
+  // tests CPU-contention-sensitive under parallel CI workers.
+  let settled = false;
   const outcome = promise.then(
-    (value) => ({ kind: "fulfilled" as const, value }),
-    (error: unknown) => ({ kind: "rejected" as const, error }),
+    (value) => {
+      settled = true;
+      return { kind: "fulfilled" as const, value };
+    },
+    (error: unknown) => {
+      settled = true;
+      return { kind: "rejected" as const, error };
+    },
   );
-  for (let index = 0; index < 100; index += 1) {
+  for (let index = 0; index < 100 && !settled; index += 1) {
     await Promise.resolve();
+    if (settled) break;
     await vi.advanceTimersByTimeAsync(1_000);
   }
-  const settled = await outcome;
-  if (settled.kind === "rejected") throw settled.error;
-  return settled.value;
+  if (!settled) {
+    throw new Error("retry scenario did not settle within 100 fake-time turns");
+  }
+  const result = await outcome;
+  if (result.kind === "rejected") throw result.error;
+  return result.value;
 }
 
 describe("waitForWriterDrain", () => {
