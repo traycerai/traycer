@@ -110,7 +110,7 @@ export function MobileNavDrawer(): ReactNode {
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetContent
         side="left"
-        className="gap-0 p-0"
+        className="gap-0 p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
         data-testid="mobile-nav-drawer"
         data-mobile-shell-touch-scope=""
       >

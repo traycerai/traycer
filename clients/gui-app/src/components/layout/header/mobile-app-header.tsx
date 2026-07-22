@@ -24,7 +24,7 @@ export function MobileAppHeader(): ReactNode {
       data-testid="app-header"
       data-variant="app"
       data-mobile-shell-touch-scope=""
-      className="relative z-20 flex h-10 shrink-0 items-center gap-1 bg-canvas px-2 text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']"
+      className="relative z-20 flex h-[calc(2.5rem_+_env(safe-area-inset-top))] shrink-0 items-center gap-1 bg-canvas px-2 pt-[env(safe-area-inset-top)] text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']"
     >
       <Button
         type="button"

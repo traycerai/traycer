@@ -35,7 +35,7 @@ export function NotificationsMobileSheet(): ReactNode {
           data-testid="notifications-mobile-sheet"
           data-mobile-shell-touch-scope=""
           aria-describedby={undefined}
-          className="fixed inset-0 z-50 flex flex-col bg-background text-foreground outline-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
+          className="fixed inset-0 z-50 flex flex-col bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-foreground outline-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0"
         >
           {/* Close lives on the left so it never collides with the popover
               header's own top-right actions (mark all / clear / settings). The
