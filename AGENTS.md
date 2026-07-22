@@ -165,19 +165,43 @@ checkout. Non-obvious caveats:
   nvm Node 24 bin so `node --version` is v24; the repo's `engines` require it.
 - **`bun run lint` runs ESLint with `--fix`.** It can rewrite source in place, so
   re-check `git status` after linting.
-- **Running the app:** `make dev-desktop` (from repo root) is the E2E entrypoint.
-  It downloads + minisign-verifies the signed host from GitHub Releases, stages a
-  dev CLI wrapper, starts the host, and runs the Vite-HMR Electron shell against
-  the **production** cloud (`authn.traycer.ai` / `platform.traycer.ai`). The
-  renderer port is hash-derived per worktree (not 5173). Ctrl-C deregisters the
-  dev host but preserves `~/.traycer` user data.
-- **Headless Electron noise is benign.** `dbus`/`Gtk`/GPU `ERROR` lines and the
-  `systemctl --user daemon-reload ... No medium found` service-install warning do
-  not stop the run — the host still starts and the launch probe reports
-  `reachable: true`. There is no systemd user session in the VM.
-- **Auto-open-browser fails in the VM** ("Failed to execute default Web Browser —
-  Input/output error"). Sign-in uses an OAuth **device-code** flow: the app shows
-  a code + approval URL (`platform.traycer.ai/device`); open that URL manually in
-  Chrome (`DISPLAY=:1`) to approve. Full sign-in (and any epic/chat/terminal
-  action) needs a **real Traycer account** (GitHub/Google/email) — there are no
-  test credentials in this environment.
+- **Running the app:** `make dev-desktop` (repo root) is the documented E2E
+  entrypoint: it downloads + minisign-verifies the signed host from GitHub
+  Releases, stages a per-slot dev CLI wrapper
+  (`~/.traycer/cli/dev-runs/<slot>/bin/traycer`), and runs the Vite-HMR Electron
+  shell against the **production** cloud (`authn.traycer.ai` /
+  `platform.traycer.ai`). Renderer port is hash-derived per worktree (not 5173).
+- **No systemd in this VM (PID 1 is `tini`).** `systemctl --user` cannot work
+  (`systemd --user` refuses: "system has not been booted with systemd"). So the
+  desktop's Linux host convergence (`traycer host ensure` → `systemctl --user
+  start`) fails with a blocking modal, and `make dev-desktop`'s host auto-start
+  can't run the service. Workaround that avoids systemd entirely:
+  1. Start the host in the foreground (writes `pid.json`, no systemctl):
+     `~/.traycer/cli/dev-runs/<slot>/bin/traycer host start` (run under tmux).
+     The Linux `statusService` reports "running" from the unit file's presence +
+     a live `pid.json`, so once the host runs the desktop's `host ensure` is a
+     satisfied no-op (no `systemctl` call).
+  2. Run the desktop shell directly instead of `make dev-desktop`:
+     `DEV_DESKTOP_SLOT=<slot> PORT=<free> bun run --cwd clients/desktop dev`.
+- **Dev-desktop credential-path mismatch.** The downloaded host is a
+  **production** build and reads credentials from `~/.traycer/cli/credentials`,
+  but the **dev** desktop signs in to `~/.traycer/cli/dev/credentials`. A host
+  started against the dev slot then rejects RPCs with `UNAUTHORIZED: Host is not
+  provisioned - sign in on this machine to authorize it`. Since `make
+  dev-desktop` points the dev config at the production authn, the dev token is a
+  real production token — seed the prod path from it to provision the host:
+  `cp ~/.traycer/cli/dev/credentials ~/.traycer/cli/credentials` (and the
+  matching `.meta.json`), then restart `host start`.
+- **Auth is device-code.** Auto-open-browser fails in the VM ("Failed to execute
+  default Web Browser"); the app shows a code + `platform.traycer.ai/device` —
+  open it manually in Chrome (`DISPLAY=:1`) to approve. Needs a **real Traycer
+  account** (no test creds here). Tokens live in `~/.traycer`, so a fresh
+  Electron profile keeps you signed in.
+- **Headless rendering is fragile.** The Start Page renders, but editor-heavy
+  epic/task tabs often render **black**, and reloading the renderer (Ctrl+R)
+  crashes Electron (SIGTRAP). A corrupted GPU state (e.g. after forcing software
+  GL) can black out the whole renderer persistently — recover by resetting the
+  slot's Electron profile dir (`~/.config/Traycer Dev-<slot>/`). Do NOT force
+  `LIBGL_ALWAYS_SOFTWARE`/llvmpipe; it makes rendering worse. Verify backend
+  flows via `~/.traycer/host/dev-runs/<slot>/host.log` when a tab view won't
+  paint. Benign log noise: `dbus`/`Gtk`/GPU `ERROR` lines.
