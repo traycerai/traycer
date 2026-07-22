@@ -31,6 +31,7 @@ describe("invalidateQueries keeps a mounted useHostProviderRateLimitsQuery obser
     const { method, params, options } = providerRateLimitQueryOptions(
       "openrouter",
       null,
+      true,
     );
     const rendered = renderHook(
       () =>

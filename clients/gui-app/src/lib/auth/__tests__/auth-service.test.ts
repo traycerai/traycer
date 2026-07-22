@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  MockRunnerHost,
-  MockTraycerCli,
-} from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import type { StoredAuthTokens } from "@traycer-clients/shared/platform/runner-host";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type {
+  StoredAuthTokens,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+} from "@traycer-clients/shared/platform/runner-host";
 import {
   AuthService,
   type AuthSessionSnapshot,
@@ -12,6 +14,7 @@ import {
   AUTH_ERROR_LAUNCH_FAILED,
   AUTH_ERROR_SESSION_EXPIRED,
   AUTH_ERROR_SIGN_IN_FAILED,
+  AUTH_ERROR_STORE_UNAVAILABLE,
 } from "@/lib/auth/auth-service";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -252,6 +255,24 @@ function jwtExpiringInMs(fromNowMs: number): string {
   return `${header}.${payload}.signature`;
 }
 
+const DEFAULT_IDENTITY = {
+  id: "user-1",
+  email: "test@example.com",
+  name: "Test User",
+} as const;
+
+function expectedStored(token: string, refreshToken: string) {
+  return {
+    token,
+    refreshToken,
+    authnBaseUrl: "http://localhost:5005",
+    // `expect.any(String)` is an `any`-typed matcher; type it as the field it
+    // stands in for so the object literal stays free of unsafe `any` assignment.
+    savedAt: expect.any(String) as string,
+    user: { ...DEFAULT_IDENTITY },
+  };
+}
+
 describe("AuthService", () => {
   let restoreFetch: () => void = () => undefined;
 
@@ -274,10 +295,10 @@ describe("AuthService", () => {
 
   it("rehydrates a persisted token after AuthnV3 validation succeeds", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "persisted-token",
-      refreshToken: "persisted-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "persisted-token", refreshToken: "persisted-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
     const seenAuthHeaders: string[] = [];
     restoreFetch = installFetch((_input, init) => {
@@ -298,10 +319,10 @@ describe("AuthService", () => {
 
   it("does not drive auth transitions when disposed during startup validation", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "persisted-token",
-      refreshToken: "persisted-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "persisted-token", refreshToken: "persisted-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
     const deferred = createDeferredResponse();
     restoreFetch = installFetch(() => deferred.promise);
@@ -316,10 +337,10 @@ describe("AuthService", () => {
 
   it("publishes a live RequestContext through getRequestContextProvider() after sign-in", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "persisted-token",
-      refreshToken: "persisted-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "persisted-token", refreshToken: "persisted-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     await service.start();
 
     const provider = service.getRequestContextProvider();
@@ -332,10 +353,10 @@ describe("AuthService", () => {
 
   it("emits null on the provider when the user signs out", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "persisted-token",
-      refreshToken: "persisted-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "persisted-token", refreshToken: "persisted-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     await service.start();
 
     const events: Array<string | null> = [];
@@ -401,10 +422,10 @@ describe("AuthService", () => {
     // the scheduler's monotonic timer is frozen, so without a wake hook this
     // bearer would rot; the OS resume signal must drive an immediate refresh.
     const nearExpiry = jwtExpiringInMs(5 * 60_000);
-    await host.tokenStore.set({
-      token: nearExpiry,
-      refreshToken: `${nearExpiry}-refresh`,
-    });
+    await host.tokenStore.signIn(
+      { token: nearExpiry, refreshToken: `${nearExpiry}-refresh` },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     await service.start();
     expect(useAuthStore.getState().status).toBe("signed-in");
     expect(service.getCurrentSessionSnapshot().token).toBe(nearExpiry);
@@ -438,10 +459,10 @@ describe("AuthService", () => {
   it("does not refresh on OS resume when the bearer is still well within its TTL", async () => {
     const { service, host } = makeService();
     const farExpiry = jwtExpiringInMs(4 * 60 * 60_000);
-    await host.tokenStore.set({
-      token: farExpiry,
-      refreshToken: `${farExpiry}-refresh`,
-    });
+    await host.tokenStore.signIn(
+      { token: farExpiry, refreshToken: `${farExpiry}-refresh` },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     await service.start();
     expect(service.getCurrentSessionSnapshot().token).toBe(farExpiry);
 
@@ -484,10 +505,10 @@ describe("AuthService", () => {
 
   it("refreshes a persisted token when startup validation rejects before signing out", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "expired-token",
-      refreshToken: "expired-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "expired-token", refreshToken: "expired-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
     const calls: string[] = [];
     restoreFetch = installFetch((input, init) => {
@@ -518,24 +539,25 @@ describe("AuthService", () => {
 
     expect(useAuthStore.getState().status).toBe("signed-in");
     expect(service.getCurrentSessionSnapshot().token).toBe("refreshed-token");
-    expect(await host.tokenStore.get()).toEqual({
-      token: "refreshed-token",
-      refreshToken: "refreshed-token-refresh",
-    });
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("refreshed-token", "refreshed-token-refresh"),
+    );
     expect(service.getLastError()).toBeNull();
-    expect(calls).toEqual([
+    // collapseConsecutiveCalls: rotate's self-write may schedule a reconcile
+    // validate (same URL as the post-rotate revalidate) that is a no-op adopt.
+    expect(collapseConsecutiveCalls(calls)).toEqual([
       `GET ${VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
       `GET ${VALIDATION_URL}`,
     ]);
   });
 
-  it("surfaces session-expired when startup user lookup and refresh both fail", async () => {
+  it("surfaces session-expired on refresh-rejected but keeps the credentials file", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "stale-token",
-      refreshToken: "stale-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "stale-token", refreshToken: "stale-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
     const calls: string[] = [];
     restoreFetch = installFetch((input, init) => {
@@ -555,19 +577,22 @@ describe("AuthService", () => {
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
-    expect(await host.tokenStore.get()).toBeNull();
+    // Automatic failures never destroy the shared file (tech plan §5).
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("stale-token", "stale-token-refresh"),
+    );
     expect(collapseConsecutiveCalls(calls)).toEqual([
       `GET ${VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
     ]);
   });
 
-  it("clears tokenStore and surfaces session-expired when validation rejects with 401 on start()", async () => {
+  it("UI-only signs out with session-expired when validation rejects with 401 on start()", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "revoked-token",
-      refreshToken: "revoked-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "revoked-token", refreshToken: "revoked-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
     restoreFetch = installFetch(() => status(401));
 
@@ -576,15 +601,20 @@ describe("AuthService", () => {
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
-    expect(await host.tokenStore.get()).toBeNull();
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("revoked-token", "revoked-token-refresh"),
+    );
   });
 
-  it("clears tokenStore and surfaces session-expired when validation rejects with 404 on start()", async () => {
+  it("UI-only signs out with session-expired when validation rejects with 404 on start()", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "missing-user-token",
-      refreshToken: "missing-user-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      {
+        token: "missing-user-token",
+        refreshToken: "missing-user-token-refresh",
+      },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
     restoreFetch = installFetch(() => status(404));
 
@@ -592,16 +622,20 @@ describe("AuthService", () => {
 
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
-    expect(await host.tokenStore.get()).toBeNull();
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("missing-user-token", "missing-user-token-refresh"),
+    );
   });
 
-  it("treats a 200 response with no usable profile as session-expired on start()", async () => {
+  it("UI-only signs out when a 200 response has no usable profile on start()", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "profileless-token",
-      refreshToken: "profileless-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "profileless-token", refreshToken: "profileless-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
+    // Access validate rejects (unparseable profile); rotate's refresh also
+    // gets `{}` → rejected → refresh-rejected → session-expired, file kept.
     restoreFetch = installFetch(() => ok());
 
     await service.start();
@@ -609,7 +643,9 @@ describe("AuthService", () => {
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
-    expect(await host.tokenStore.get()).toBeNull();
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("profileless-token", "profileless-token-refresh"),
+    );
   });
 
   it("treats a 200 response with no usable profile as sign-in-failed on the device-poll path", async () => {
@@ -633,12 +669,14 @@ describe("AuthService", () => {
     expect(await host.tokenStore.get()).toBeNull();
   });
 
-  it("attempts refresh then surfaces session-expired when startup validation stays unreachable", async () => {
+  it("UI-only signs out (file kept, no session-expired) when startup stays offline", async () => {
+    // Transient refresh-network does not destroy the file and does not claim
+    // a dead credential (H1 / §5).
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "offline-token",
-      refreshToken: "offline-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "offline-token", refreshToken: "offline-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
     const calls: string[] = [];
     restoreFetch = installFetch((input, init) => {
@@ -652,8 +690,11 @@ describe("AuthService", () => {
 
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
-    expect(await host.tokenStore.get()).toBeNull();
-    expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("offline-token", "offline-token-refresh"),
+    );
+    // refresh-network is not a terminal authn reject.
+    expect(service.getLastError()).toBeNull();
     expect(collapseConsecutiveCalls(calls)).toEqual([
       `GET ${VALIDATION_URL}`,
       `POST ${REFRESH_URL}`,
@@ -702,10 +743,10 @@ describe("AuthService", () => {
 
   it("hits /api/v3/user (NOT the legacy /api/user) when validating a token", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "persisted-token",
-      refreshToken: "persisted-token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "persisted-token", refreshToken: "persisted-token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     restoreFetch();
     const seenUrls: string[] = [];
     restoreFetch = installFetch((input) => {
@@ -740,10 +781,9 @@ describe("AuthService", () => {
       expect(service.getCurrentSessionSnapshot().token).toBe("new-token");
     });
     expect(useAuthStore.getState().status).toBe("signed-in");
-    expect(await host.tokenStore.get()).toEqual({
-      token: "new-token",
-      refreshToken: "new-token-refresh",
-    });
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("new-token", "new-token-refresh"),
+    );
     expect(validationCalls).toContain(VALIDATION_URL);
   });
 
@@ -798,10 +838,10 @@ describe("AuthService", () => {
 
   it("clears tokenStore and resets state on signOut()", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "token",
-      refreshToken: "token-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "token", refreshToken: "token-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     await service.start();
 
     await service.signOut();
@@ -850,8 +890,9 @@ describe("AuthService", () => {
       traycerCli: undefined,
     });
     let authSubscribed = false;
-    let resolveLoad: (value: StoredAuthTokens | null) => void = () => undefined;
-    const pendingLoad = new Promise<StoredAuthTokens | null>((resolve) => {
+    let resolveLoad: (value: StoredCredentials | null) => void = () =>
+      undefined;
+    const pendingLoad = new Promise<StoredCredentials | null>((resolve) => {
       resolveLoad = resolve;
     });
 
@@ -860,7 +901,7 @@ describe("AuthService", () => {
       authSubscribed = true;
       return originalOnAuthCallback(handler);
     };
-    host.tokenStore.get = (): Promise<StoredAuthTokens | null> => pendingLoad;
+    host.tokenStore.get = (): Promise<StoredCredentials | null> => pendingLoad;
 
     const service = trackService(new AuthService({ runnerHost: host }));
     const startPromise = service.start();
@@ -898,18 +939,17 @@ describe("AuthService", () => {
     });
     expect(useAuthStore.getState().status).toBe("signed-in");
     expect(service.getLastError()).toBeNull();
-    expect(await host.tokenStore.get()).toEqual({
-      token: "retry-token",
-      refreshToken: "retry-token-refresh",
-    });
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("retry-token", "retry-token-refresh"),
+    );
   });
 
-  it("fails like a launch failure and clears any persisted token when device authorization fails", async () => {
+  it("fails like a launch failure without destroying a pre-existing credentials file", async () => {
     const { service, host } = makeService();
-    await host.tokenStore.set({
-      token: "stale",
-      refreshToken: "stale-refresh",
-    });
+    await host.tokenStore.signIn(
+      { token: "stale", refreshToken: "stale-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
     // A null authorization models a network/5xx authorize failure.
     host.deviceFlow.nextAuthorization = null;
 
@@ -918,7 +958,10 @@ describe("AuthService", () => {
     expect(useAuthStore.getState().status).toBe("signed-out");
     expect(service.getCurrentSessionSnapshot().token).toBeNull();
     expect(service.getLastError()).toBe(AUTH_ERROR_LAUNCH_FAILED);
-    expect(await host.tokenStore.get()).toBeNull();
+    // Only explicit sign-out deletes the file.
+    expect(await host.tokenStore.get()).toEqual(
+      expectedStored("stale", "stale-refresh"),
+    );
   });
 
   it("drops a device result whose epoch a newer signIn() superseded", async () => {
@@ -1011,10 +1054,9 @@ describe("AuthService", () => {
       });
       expect(service.getCurrentSessionSnapshot().token).toBe("device-token");
       expect(service.getDeviceProgress()).toBeNull();
-      expect(await host.tokenStore.get()).toEqual({
-        token: "device-token",
-        refreshToken: "device-token-refresh",
-      });
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("device-token", "device-token-refresh"),
+      );
     });
 
     it("completes sign-in from the poll alone when the browser-return signal never fires", async () => {
@@ -1251,10 +1293,9 @@ describe("AuthService", () => {
       expect(refreshCalls).toBe(1);
       expect(useAuthStore.getState().status).toBe("signed-in");
       expect(service.getCurrentSessionSnapshot().token).toBe("rotated-token");
-      expect(await host.tokenStore.get()).toEqual({
-        token: "rotated-token",
-        refreshToken: "rotated-token-refresh",
-      });
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("rotated-token", "rotated-token-refresh"),
+      );
       expect(service.getLastError()).toBeNull();
     });
 
@@ -1321,42 +1362,29 @@ describe("AuthService", () => {
       );
       expect(service.getCurrentSessionSnapshot()).toEqual(replacementSnapshot);
       expect(useAuthStore.getState().status).toBe("signed-in");
-      expect(await host.tokenStore.get()).toEqual({
-        token: "replacement-token",
-        refreshToken: "replacement-token-refresh",
-      });
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("replacement-token", "replacement-token-refresh"),
+      );
     });
   });
 
-  describe("local CLI provisioning (host owner gate)", () => {
-    it("provisions local CLI credentials BEFORE flipping to signed-in on the device happy path", async () => {
+  describe("credentials file write before signed-in (owner gate)", () => {
+    it("writes tokenStore.signIn BEFORE flipping to signed-in on the device happy path", async () => {
       // Device happy-path characterization:
       //   signIn → device poll authorized → applyTokenInternal →
-      //   ensureLocalProvisioning (cli.cliLogin) → applySignedIn.
-      // Pins that provisioning runs while the store is still "signing-in"
-      // (i.e. seeded BEFORE the signed-in projection enables host RPCs), and
-      // that the minted token/refresh pair is what gets seeded.
-      const cli = new MockTraycerCli();
-      const host = new MockRunnerHost({
-        signInUrl:
-          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-        authnBaseUrl: "http://localhost:5005",
-        localHost: null,
-        hosts: [],
-        workspaceFolderPickerPaths: undefined,
-        hasLocalHost: undefined,
-        traycerCli: cli,
-      });
-      const statusAtProvision: string[] = [];
-      const originalLogin = cli.cliLogin.bind(cli);
-      cli.cliLogin = async (
-        token: string,
-        refreshToken: string,
+      //   tokenStore.signIn (file write) → applySignedIn.
+      // Pins that the credentials file is written while the store is still
+      // "signing-in" (BEFORE the signed-in projection enables host RPCs).
+      const { service, host } = makeService();
+      const statusAtWrite: string[] = [];
+      const originalSignIn = host.tokenStore.signIn.bind(host.tokenStore);
+      host.tokenStore.signIn = async (
+        tokens: StoredAuthTokens,
+        identity: StoredCredentialsIdentity,
       ): Promise<void> => {
-        statusAtProvision.push(useAuthStore.getState().status);
-        await originalLogin(token, refreshToken);
+        statusAtWrite.push(useAuthStore.getState().status);
+        await originalSignIn(tokens, identity);
       };
-      const service = trackService(new AuthService({ runnerHost: host }));
 
       await service.start();
       await service.signIn();
@@ -1369,11 +1397,10 @@ describe("AuthService", () => {
       await vi.waitFor(() => {
         expect(useAuthStore.getState().status).toBe("signed-in");
       });
-      // Provisioning seeded the minted token pair...
-      expect(cli.lastLoginToken).toBe("happy-token");
-      expect(cli.lastLoginRefreshToken).toBe("happy-token-refresh");
-      // ...and ran BEFORE the signed-in projection (store still "signing-in").
-      expect(statusAtProvision).toEqual(["signing-in"]);
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("happy-token", "happy-token-refresh"),
+      );
+      expect(statusAtWrite).toEqual(["signing-in"]);
       expect(service.getCurrentSessionSnapshot().token).toBe("happy-token");
     });
   });
@@ -1416,35 +1443,16 @@ describe("AuthService", () => {
       expect(hostB.deviceFlow.startCalls).toBe(0);
     });
 
-    it("re-provisions the FULL pair to the local CLI on a reactive refresh", async () => {
-      const cli = new MockTraycerCli();
-      const host = new MockRunnerHost({
-        signInUrl:
-          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-        authnBaseUrl: "http://localhost:5005",
-        localHost: null,
-        hosts: [],
-        workspaceFolderPickerPaths: undefined,
-        hasLocalHost: undefined,
-        traycerCli: cli,
-      });
-      const service = trackService(new AuthService({ runnerHost: host }));
+    it("persists the rotated pair via tokenStore.rotate on a reactive refresh", async () => {
+      const { service, host } = makeService();
       await service.start();
-      await service.signIn();
-      host.deviceFlow.emitResult({
-        kind: "authorized",
-        token: "old-token",
-        refreshToken: "old-token-refresh",
-      });
-      await vi.waitFor(() => {
-        expect(useAuthStore.getState().status).toBe("signed-in");
-      });
-      // First sign-in provisions the full pair up front.
-      expect(cli.lastLoginToken).toBe("old-token");
-      expect(cli.lastLoginRefreshToken).toBe("old-token-refresh");
+      await deviceSignIn(service, host, "old-token");
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("old-token", "old-token-refresh"),
+      );
 
       // A reactive revalidation 401s on the current bearer, refreshes once, and
-      // rotates the live lease in place.
+      // rotates the live lease in place via the locked rotate op.
       restoreFetch();
       restoreFetch = installFetch((input, init) => {
         const url = typeof input === "string" ? input : String(input);
@@ -1473,32 +1481,20 @@ describe("AuthService", () => {
 
       expect(outcome?.kind).toBe("valid");
       expect(service.getCurrentSessionSnapshot().token).toBe("rotated-token");
-      // Fix (2): the reactive rotate path now re-provisions the FULL pair, so the
-      // CLI file never holds the fresh bearer beside the now-spent refresh token.
-      expect(cli.lastLoginToken).toBe("rotated-token");
-      expect(cli.lastLoginRefreshToken).toBe("rotated-token-refresh");
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("rotated-token", "rotated-token-refresh"),
+      );
     });
 
-    it("still provisions the FULL pair to the local CLI on a proactive refresh", async () => {
-      const cli = new MockTraycerCli();
-      const host = new MockRunnerHost({
-        signInUrl:
-          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-        authnBaseUrl: "http://localhost:5005",
-        localHost: null,
-        hosts: [],
-        workspaceFolderPickerPaths: undefined,
-        hasLocalHost: undefined,
-        traycerCli: cli,
-      });
+    it("persists the rotated pair via tokenStore.rotate on a proactive refresh", async () => {
+      const { service, host } = makeService();
       // 5m of life left → inside the proactive lead window, so an OS resume
       // drives an immediate force-refresh against `/api/v3/auth/refresh`.
       const nearExpiry = jwtExpiringInMs(5 * 60_000);
-      await host.tokenStore.set({
-        token: nearExpiry,
-        refreshToken: `${nearExpiry}-refresh`,
-      });
-      const service = trackService(new AuthService({ runnerHost: host }));
+      await host.tokenStore.signIn(
+        { token: nearExpiry, refreshToken: `${nearExpiry}-refresh` },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
       await service.start();
       expect(useAuthStore.getState().status).toBe("signed-in");
 
@@ -1517,10 +1513,9 @@ describe("AuthService", () => {
       await vi.waitFor(() => {
         expect(service.getCurrentSessionSnapshot().token).toBe(rotated);
       });
-      await vi.waitFor(() => {
-        expect(cli.lastLoginToken).toBe(rotated);
-      });
-      expect(cli.lastLoginRefreshToken).toBe(`${rotated}-refresh`);
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored(rotated, `${rotated}-refresh`),
+      );
     });
   });
 
@@ -1542,11 +1537,14 @@ describe("AuthService", () => {
       const saveStarted = new Promise<void>((resolve) => {
         signalSaveStarted = resolve;
       });
-      const originalSet = host.tokenStore.set.bind(host.tokenStore);
-      host.tokenStore.set = async (tokens: StoredAuthTokens): Promise<void> => {
+      const originalSignIn = host.tokenStore.signIn.bind(host.tokenStore);
+      host.tokenStore.signIn = async (
+        tokens: StoredAuthTokens,
+        identity: StoredCredentialsIdentity,
+      ): Promise<void> => {
         signalSaveStarted();
         await savePending;
-        await originalSet(tokens);
+        await originalSignIn(tokens, identity);
       };
 
       host.deviceFlow.emitResult({
@@ -1574,32 +1572,31 @@ describe("AuthService", () => {
       expect(await host.tokenStore.get()).toBeNull();
     });
 
-    it("a newer sign-in wins over a finalization awaiting local provisioning", async () => {
-      const cli = new MockTraycerCli();
-      let releaseLogin: () => void = () => undefined;
-      const loginPending = new Promise<void>((resolve) => {
-        releaseLogin = resolve;
-      });
-      let signalLoginStarted: () => void = () => undefined;
-      const loginStarted = new Promise<void>((resolve) => {
-        signalLoginStarted = resolve;
-      });
-      cli.cliLogin = async (): Promise<void> => {
-        signalLoginStarted();
-        await loginPending;
-      };
-      const host = new MockRunnerHost({
-        signInUrl:
-          "https://auth.traycer.ai/sign-in?redirect_uri=traycer%3A%2F%2Fauth",
-        authnBaseUrl: "http://localhost:5005",
-        localHost: null,
-        hosts: [],
-        workspaceFolderPickerPaths: undefined,
-        hasLocalHost: undefined,
-        traycerCli: cli,
-      });
-      const service = trackService(new AuthService({ runnerHost: host }));
+    it("a newer sign-in wins over a finalization awaiting the credentials signIn write", async () => {
+      const { service, host } = makeService();
       await service.start();
+
+      let releaseSave: () => void = () => undefined;
+      const savePending = new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+      let signalSaveStarted: () => void = () => undefined;
+      const saveStarted = new Promise<void>((resolve) => {
+        signalSaveStarted = resolve;
+      });
+      const originalSignIn = host.tokenStore.signIn.bind(host.tokenStore);
+      let hangNext = true;
+      host.tokenStore.signIn = async (
+        tokens: StoredAuthTokens,
+        identity: StoredCredentialsIdentity,
+      ): Promise<void> => {
+        if (hangNext) {
+          hangNext = false;
+          signalSaveStarted();
+          await savePending;
+        }
+        await originalSignIn(tokens, identity);
+      };
 
       await service.signIn();
       const sessionA = host.deviceFlow.lastSession;
@@ -1608,13 +1605,13 @@ describe("AuthService", () => {
         token: "token-a",
         refreshToken: "token-a-refresh",
       });
-      // Attempt A validated + saved and is now awaiting provisioning.
-      await loginStarted;
+      // Attempt A validated and is now awaiting the credentials write.
+      await saveStarted;
 
       await service.signIn();
       expect(useAuthStore.getState().status).toBe("signing-in");
 
-      releaseLogin();
+      releaseSave();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
       // A's finalization must not project its identity over attempt B.
@@ -1637,8 +1634,8 @@ describe("AuthService", () => {
       const { service, host } = makeService();
       await service.start();
 
-      const originalSet = host.tokenStore.set.bind(host.tokenStore);
-      host.tokenStore.set = (): Promise<void> =>
+      const originalSignIn = host.tokenStore.signIn.bind(host.tokenStore);
+      host.tokenStore.signIn = (): Promise<void> =>
         Promise.reject(new Error("disk full"));
 
       await service.signIn();
@@ -1655,7 +1652,7 @@ describe("AuthService", () => {
       expect(service.getCurrentSessionSnapshot().token).toBeNull();
 
       // Terminal failure, not a wedge: a retry with a healthy store succeeds.
-      host.tokenStore.set = originalSet;
+      host.tokenStore.signIn = originalSignIn;
       await deviceSignIn(service, host, "retry-after-save-failure");
       expect(useAuthStore.getState().status).toBe("signed-in");
     });
@@ -1665,10 +1662,10 @@ describe("AuthService", () => {
       // 5m of life left → inside the proactive lead window, so an OS resume
       // drives an immediate force-refresh against `/api/v3/auth/refresh`.
       const nearExpiry = jwtExpiringInMs(5 * 60_000);
-      await host.tokenStore.set({
-        token: nearExpiry,
-        refreshToken: `${nearExpiry}-refresh`,
-      });
+      await host.tokenStore.signIn(
+        { token: nearExpiry, refreshToken: `${nearExpiry}-refresh` },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
       restoreFetch();
       const deferredRefresh = createDeferredResponse();
       let signalRefreshStarted: () => void = () => undefined;
@@ -1686,15 +1683,15 @@ describe("AuthService", () => {
       await service.start();
       expect(useAuthStore.getState().status).toBe("signed-in");
 
-      // The wake-driven proactive refresh dispatches and hangs on /refresh.
+      // The wake-driven proactive refresh dispatches and hangs on /refresh
+      // inside `tokenStore.rotate`. `delete` is serialized behind that rotate
+      // (AuthTokenStore op chain), so signOut must be started while the rotate
+      // is in flight and the hang must be released before signOut can finish.
       host.emitSystemResumed();
       await refreshStarted;
 
-      await service.signOut();
-      expect(useAuthStore.getState().status).toBe("signed-out");
+      const signOutPromise = service.signOut();
 
-      // The refresh now resolves successfully - its tail must not resurrect
-      // the session in memory or on disk.
       const rotated = jwtExpiringInMs(4 * 60 * 60_000);
       deferredRefresh.resolve(
         new Response(
@@ -1705,8 +1702,11 @@ describe("AuthService", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
       );
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await signOutPromise;
 
+      // Identity-generation fence: the rotate tail must not re-project signed-in
+      // after an explicit sign-out won. The file is gone because delete ran after
+      // the in-flight rotate finished (op-chain serialization).
       expect(useAuthStore.getState().status).toBe("signed-out");
       expect(service.getCurrentSessionSnapshot().token).toBeNull();
       expect(await host.tokenStore.get()).toBeNull();
@@ -1714,10 +1714,10 @@ describe("AuthService", () => {
 
     it("start()'s rehydration defers to an interactive sign-in that began mid-validation", async () => {
       const { service, host } = makeService();
-      await host.tokenStore.set({
-        token: "persisted-token",
-        refreshToken: "persisted-token-refresh",
-      });
+      await host.tokenStore.signIn(
+        { token: "persisted-token", refreshToken: "persisted-token-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
       restoreFetch();
       const deferredValidate = createDeferredResponse();
       restoreFetch = installFetch(() => deferredValidate.promise);
@@ -1736,6 +1736,575 @@ describe("AuthService", () => {
       // the interactive attempt the user just started.
       expect(useAuthStore.getState().status).toBe("signing-in");
       expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    });
+  });
+
+  describe("credentials file authority (tech plan §5)", () => {
+    it("device-flow sign-in writes the file BEFORE the signed-in projection", async () => {
+      const { service, host } = makeService();
+      await service.start();
+
+      const statusAtWrite: string[] = [];
+      const originalSignIn = host.tokenStore.signIn.bind(host.tokenStore);
+      host.tokenStore.signIn = async (
+        tokens: StoredAuthTokens,
+        identity: StoredCredentialsIdentity,
+      ): Promise<void> => {
+        statusAtWrite.push(useAuthStore.getState().status);
+        await originalSignIn(tokens, identity);
+      };
+
+      await service.signIn();
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "gate-token",
+        refreshToken: "gate-token-refresh",
+      });
+      await vi.waitFor(() => {
+        expect(useAuthStore.getState().status).toBe("signed-in");
+      });
+      expect(statusAtWrite).toEqual(["signing-in"]);
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("gate-token", "gate-token-refresh"),
+      );
+    });
+
+    it("explicit signOut deletes the credentials file", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+      expect(await host.tokenStore.get()).not.toBeNull();
+
+      await service.signOut();
+
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(await host.tokenStore.get()).toBeNull();
+    });
+
+    it("stays signed in when signOut's delete rejects", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "sticky-token");
+
+      host.tokenStore.delete = (): Promise<void> =>
+        Promise.reject(new Error("EACCES: credentials locked"));
+
+      await service.signOut();
+
+      // Failed sign-out must never claim signed-out without the delete landing.
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe("sticky-token");
+      // The rejecting stub never removed the entry.
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("sticky-token", "sticky-token-refresh"),
+      );
+    });
+
+    it("reactive 401 rotates the live session and updates the file", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+
+      restoreFetch();
+      restoreFetch = installFetch((input, init) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === "Bearer live-token"
+        ) {
+          return status(401);
+        }
+        if (
+          url === REFRESH_URL &&
+          init?.headers?.Authorization === "Bearer live-token"
+        ) {
+          return okWithRefreshToken("post-401-token");
+        }
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === "Bearer post-401-token"
+        ) {
+          return okWithProfile();
+        }
+        return status(500);
+      });
+
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("valid");
+      expect(service.getCurrentSessionSnapshot().token).toBe("post-401-token");
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("post-401-token", "post-401-token-refresh"),
+      );
+    });
+
+    it("reactive refresh-rejected is UI-only (file kept, session-expired)", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "dead-token");
+
+      restoreFetch();
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === VALIDATION_URL) {
+          return status(401);
+        }
+        if (url === REFRESH_URL) {
+          return status(401);
+        }
+        return status(500);
+      });
+
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("rejected");
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("dead-token", "dead-token-refresh"),
+      );
+    });
+
+    it("start() maps get() faults to store-unavailable (resolves, no runtime teardown)", async () => {
+      const { service, host } = makeService();
+      host.tokenStore.get = (): Promise<StoredCredentials | null> =>
+        Promise.reject(new Error("EACCES: credentials unreadable"));
+
+      // Must resolve (not reject) so HostRuntimeProvider keeps the runtime.
+      await expect(service.start()).resolves.toBeUndefined();
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
+    });
+
+    it("start() maps rotate() faults to store-unavailable UI signed-out", async () => {
+      const { service, host } = makeService();
+      await host.tokenStore.signIn(
+        { token: "stale-token", refreshToken: "stale-token-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+      restoreFetch();
+      restoreFetch = installFetch(() => status(401));
+      host.tokenStore.rotate = (): Promise<TokenRotateResult> =>
+        Promise.reject(new Error("EIO: credentials store fault"));
+
+      await expect(service.start()).resolves.toBeUndefined();
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
+      // File kept — automatic failure never deletes.
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("stale-token", "stale-token-refresh"),
+      );
+    });
+
+    it("reactive rotate() faults map to store-unavailable (file kept)", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+
+      restoreFetch();
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === VALIDATION_URL) {
+          return status(401);
+        }
+        return status(500);
+      });
+      host.tokenStore.rotate = (): Promise<TokenRotateResult> =>
+        Promise.reject(new Error("EACCES: rotate blocked"));
+
+      const outcome = await service.revalidateCurrentContext();
+      expect(outcome?.kind).toBe("rejected");
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getLastError()).toBe(AUTH_ERROR_STORE_UNAVAILABLE);
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("live-token", "live-token-refresh"),
+      );
+    });
+
+    it("commit-failed with a foreign pair does not bind the foreign bearer", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+
+      restoreFetch();
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === VALIDATION_URL) {
+          return status(401);
+        }
+        return status(500);
+      });
+      host.tokenStore.rotate = () =>
+        Promise.resolve({
+          outcome: "commit-failed" as const,
+          pair: {
+            token: "foreign-token",
+            refreshToken: "foreign-refresh",
+            authnBaseUrl: "http://localhost:5005",
+            savedAt: new Date().toISOString(),
+            user: {
+              id: "other-user",
+              email: "other@example.com",
+              name: "Other User",
+            },
+          },
+        });
+
+      const outcome = await service.revalidateCurrentContext();
+      // Foreign commit-failed is treated as transient (network-error to the
+      // reactive path): session stays signed in on the original bearer.
+      expect(outcome?.kind).toBe("network-error");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe("live-token");
+      expect(service.getLastError()).toBeNull();
+    });
+  });
+
+  describe("credentials-file reconcile worker (tech plan §4)", () => {
+    it("signed-in + external delete → UI signed-out (no file write)", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+      expect(useAuthStore.getState().status).toBe("signed-in");
+
+      // External delete: mutate the map and fire the watcher event without
+      // going through AuthService.signOut (which would also clear the UI).
+      host.tokenStoreEntries.clear();
+      host.notifyTokenStoreChanged();
+
+      await vi.waitFor(() => {
+        expect(useAuthStore.getState().status).toBe("signed-out");
+      });
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+      // Reconcile never writes — file stays absent.
+      expect(await host.tokenStore.get()).toBeNull();
+    });
+
+    it("signed-in + external same-user rotation → adopts the new bearer (no write)", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+
+      // External rotation: put a new valid token for the same user and notify.
+      host.tokenStoreEntries.set("traycer.token", {
+        token: "external-rotated",
+        refreshToken: "external-rotated-refresh",
+        authnBaseUrl: "http://localhost:5005",
+        savedAt: new Date().toISOString(),
+        user: {
+          id: "user-1",
+          email: "test@example.com",
+          name: "Test User",
+        },
+      });
+      restoreFetch();
+      restoreFetch = installFetch((input, init) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (
+          url === VALIDATION_URL &&
+          init?.headers?.Authorization === "Bearer external-rotated"
+        ) {
+          return okWithProfile();
+        }
+        return status(500);
+      });
+      host.notifyTokenStoreChanged();
+
+      await vi.waitFor(() => {
+        expect(service.getCurrentSessionSnapshot().token).toBe(
+          "external-rotated",
+        );
+      });
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      // Still the external write — reconcile did not re-signIn.
+      expect(await host.tokenStore.get()).toEqual(
+        expect.objectContaining({ token: "external-rotated" }),
+      );
+    });
+
+    it("stale reconcile does not clobber a concurrent signIn", async () => {
+      const { service, host } = makeService();
+      await service.start();
+
+      // Hang the first validate so a reconcile from a pre-signIn notify stays
+      // mid-flight while the interactive sign-in completes.
+      restoreFetch();
+      const deferredValidate = createDeferredResponse();
+      let validateCalls = 0;
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === VALIDATION_URL) {
+          validateCalls += 1;
+          if (validateCalls === 1) {
+            return deferredValidate.promise;
+          }
+          return okWithProfile();
+        }
+        return status(500);
+      });
+
+      // Pre-seed a foreign/stale file and fire reconcile (validate hangs).
+      host.tokenStoreEntries.set("traycer.token", {
+        token: "stale-external",
+        refreshToken: "stale-external-refresh",
+        authnBaseUrl: "http://localhost:5005",
+        savedAt: new Date().toISOString(),
+        user: {
+          id: "user-1",
+          email: "test@example.com",
+          name: "Test User",
+        },
+      });
+      host.notifyTokenStoreChanged();
+      // Let the reconcile start its validate await.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      // Interactive sign-in wins (bumps identityGeneration).
+      await service.signIn();
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "fresh-sign-in",
+        refreshToken: "fresh-sign-in-refresh",
+      });
+      await vi.waitFor(() => {
+        expect(useAuthStore.getState().status).toBe("signed-in");
+      });
+      expect(service.getCurrentSessionSnapshot().token).toBe("fresh-sign-in");
+
+      // Release the stale reconcile's validation — it must drop on generation.
+      deferredValidate.resolve(await okWithProfile());
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(service.getCurrentSessionSnapshot().token).toBe("fresh-sign-in");
+    });
+
+    it("ingestProjectedSessionSnapshot drops a projection when generation moved", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+
+      restoreFetch();
+      const deferredValidate = createDeferredResponse();
+      restoreFetch = installFetch(() => deferredValidate.promise);
+
+      const generationBefore = service.getIdentityGeneration();
+      const ingestPromise = service.ingestProjectedSessionSnapshot({
+        status: "signed-in",
+        token: "projected-token",
+        profile: {
+          userId: "user-1",
+          userName: "Test User",
+          email: "test@example.com",
+          avatarUrl: null,
+        },
+        contextMetadata: null,
+      });
+
+      // Supersede the projection: local sign-out bumps identityGeneration.
+      await service.signOut();
+      expect(service.getIdentityGeneration()).toBeGreaterThan(generationBefore);
+      expect(useAuthStore.getState().status).toBe("signed-out");
+
+      deferredValidate.resolve(await okWithProfile());
+      await ingestPromise;
+
+      // Stale projection must not resurrect signed-in.
+      expect(useAuthStore.getState().status).toBe("signed-out");
+      expect(service.getCurrentSessionSnapshot().token).toBeNull();
+    });
+
+    it("ingestProjectedSessionSnapshot defers to a reconcile that adopts a newer bearer mid-validate", async () => {
+      const { service, host } = makeService();
+      await service.start();
+      await deviceSignIn(service, host, "live-token");
+
+      // Hang only the projection's validate; the reconcile's validate of the
+      // newer file token must still resolve so adopt can land mid-flight.
+      restoreFetch();
+      const deferredProjectionValidate = createDeferredResponse();
+      restoreFetch = installFetch((input, init) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url === VALIDATION_URL) {
+          const auth = init?.headers?.Authorization ?? "";
+          if (auth === "Bearer projected-token") {
+            return deferredProjectionValidate.promise;
+          }
+          if (auth === "Bearer file-newer-token") {
+            return okWithProfile();
+          }
+        }
+        return status(500);
+      });
+
+      const ingestPromise = service.ingestProjectedSessionSnapshot({
+        status: "signed-in",
+        token: "projected-token",
+        profile: {
+          userId: "user-1",
+          userName: "Test User",
+          email: "test@example.com",
+          avatarUrl: null,
+        },
+        contextMetadata: null,
+      });
+      // Let the ingest reach its hung validate await.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      // Concurrent file-watcher reconcile adopts a different valid token.
+      // This changes currentBearer without bumping identityGeneration.
+      host.tokenStoreEntries.set("traycer.token", {
+        token: "file-newer-token",
+        refreshToken: "file-newer-token-refresh",
+        authnBaseUrl: "http://localhost:5005",
+        savedAt: new Date().toISOString(),
+        user: {
+          id: "user-1",
+          email: "test@example.com",
+          name: "Test User",
+        },
+      });
+      host.notifyTokenStoreChanged();
+
+      await vi.waitFor(() => {
+        expect(service.getCurrentSessionSnapshot().token).toBe(
+          "file-newer-token",
+        );
+      });
+
+      deferredProjectionValidate.resolve(await okWithProfile());
+      await ingestPromise;
+
+      // Projection must not clobber the file-authoritative newer bearer.
+      expect(service.getCurrentSessionSnapshot().token).toBe(
+        "file-newer-token",
+      );
+      expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+  });
+
+  describe("legacy credentials migration (tech plan §6 start pre-step)", () => {
+    const LEGACY_ACCESS_KEY = "traycer.token";
+    const LEGACY_REFRESH_KEY = "traycer.refresh-token";
+
+    function seedLegacy(host: MockRunnerHost): void {
+      host.secureStorageEntries.set(LEGACY_ACCESS_KEY, "legacy-access");
+      host.secureStorageEntries.set(LEGACY_REFRESH_KEY, "legacy-refresh");
+    }
+
+    // `/api/v3/user` answers the identity probe + startup validate; the refresh
+    // endpoint mints the migrated pair (or rejects with a transport failure).
+    function installUserAndRefresh(refresh: "ok" | "network"): () => void {
+      return installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url.endsWith("/api/v3/auth/refresh")) {
+          return refresh === "network"
+            ? Promise.reject(new Error("refresh network"))
+            : Promise.resolve(
+                new Response(
+                  JSON.stringify({
+                    token: "migrated-token",
+                    refreshToken: "migrated-refresh",
+                  }),
+                  {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                  },
+                ),
+              );
+        }
+        return okWithProfile();
+      });
+    }
+
+    it("F absent + legacy present → migrates, wipes the legacy slots, and signs in", async () => {
+      const { service, host } = makeService();
+      seedLegacy(host);
+      restoreFetch = installUserAndRefresh("ok");
+
+      await service.start();
+
+      expect(host.secureStorageEntries.has(LEGACY_ACCESS_KEY)).toBe(false);
+      expect(host.secureStorageEntries.has(LEGACY_REFRESH_KEY)).toBe(false);
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(
+        service.getRequestContextProvider().current()?.identity.userId,
+      ).toBe("user-1");
+      // The file now holds the pair rotated from the legacy refresh token.
+      expect((await host.tokenStore.get())?.token).toBe("migrated-token");
+    });
+
+    it("F present + legacy present → file-wins, legacy wiped, existing session kept", async () => {
+      const { service, host } = makeService();
+      await host.tokenStore.signIn(
+        { token: "file-token", refreshToken: "file-refresh" },
+        { id: "user-1", email: "test@example.com", name: "Test User" },
+      );
+      seedLegacy(host);
+      restoreFetch = installUserAndRefresh("ok");
+
+      await service.start();
+
+      expect(host.secureStorageEntries.has(LEGACY_ACCESS_KEY)).toBe(false);
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      // The pre-existing file session is not overwritten by the legacy remnant.
+      expect((await host.tokenStore.get())?.token).toBe("file-token");
+    });
+
+    it("probe network error → retryable, keeps the legacy slots for a later launch", async () => {
+      const { service, host } = makeService();
+      seedLegacy(host);
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        // The identity probe itself fails: nothing is spent, migration defers.
+        return url.endsWith("/api/v3/user")
+          ? Promise.reject(new Error("user probe network"))
+          : Promise.reject(new Error("unexpected call"));
+      });
+
+      await service.start();
+
+      expect(host.secureStorageEntries.has(LEGACY_ACCESS_KEY)).toBe(true);
+      expect(host.secureStorageEntries.has(LEGACY_REFRESH_KEY)).toBe(true);
+      expect(useAuthStore.getState().status).toBe("signed-out");
+    });
+
+    it("terminal-dead (legacy refresh rejected, F absent) → wipes the legacy slots and lands signed out", async () => {
+      const { service, host } = makeService();
+      seedLegacy(host);
+      restoreFetch = installFetch((input) => {
+        const url = typeof input === "string" ? input : String(input);
+        // Identity probe valid, but the legacy refresh is explicitly rejected.
+        return url.endsWith("/api/v3/auth/refresh")
+          ? status(400)
+          : okWithProfile();
+      });
+
+      await service.start();
+
+      expect(host.secureStorageEntries.has(LEGACY_ACCESS_KEY)).toBe(false);
+      expect(host.secureStorageEntries.has(LEGACY_REFRESH_KEY)).toBe(false);
+      expect(useAuthStore.getState().status).toBe("signed-out");
+    });
+
+    it("identity-unknown (legacy access expired, F absent) → wipes the legacy slots and lands signed out", async () => {
+      const { service, host } = makeService();
+      seedLegacy(host);
+      restoreFetch = installFetch(() => status(401)); // /user rejects → unknowable
+
+      await service.start();
+
+      expect(host.secureStorageEntries.has(LEGACY_ACCESS_KEY)).toBe(false);
+      expect(useAuthStore.getState().status).toBe("signed-out");
+    });
+
+    it("no legacy slots → migration is a no-op and wipes nothing", async () => {
+      const { service, host } = makeService();
+      host.secureStorageEntries.set("unrelated.key", "keep-me");
+      restoreFetch = installFetch(() => okWithProfile());
+
+      await service.start();
+
+      expect(host.secureStorageEntries.get("unrelated.key")).toBe("keep-me");
+      expect(useAuthStore.getState().status).toBe("signed-out");
     });
   });
 });

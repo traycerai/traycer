@@ -118,10 +118,13 @@ function mountEpicsList(opts: MountOptions): MountResult {
     traycerCli: undefined,
   });
   if (opts.storedToken !== null) {
-    void host.tokenStore.set({
-      token: opts.storedToken,
-      refreshToken: `${opts.storedToken}-refresh`,
-    });
+    void host.tokenStore.signIn(
+      {
+        token: opts.storedToken,
+        refreshToken: `${opts.storedToken}-refresh`,
+      },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
   }
   setInitialAuthState(opts.authStatus);
 

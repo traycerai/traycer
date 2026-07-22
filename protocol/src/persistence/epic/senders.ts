@@ -380,6 +380,22 @@ export const piChatSessionAnchorSchema = z.object({
 });
 export type PiChatSessionAnchor = z.infer<typeof piChatSessionAnchorSchema>;
 
+// Hermes (ACP) resumes at session granularity only — `session/load` reloads
+// the whole ACP session, with no per-message truncation/fork point — so the
+// anchor carries just the ACP session id. `sessionId` is that ACP session id.
+export const hermesChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("hermes"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type HermesChatSessionAnchor = z.infer<
+  typeof hermesChatSessionAnchorSchema
+>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -397,5 +413,6 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   ampChatSessionAnchorSchema,
   devinChatSessionAnchorSchema,
   piChatSessionAnchorSchema,
+  hermesChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;

@@ -4,7 +4,11 @@ import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
 } from "@traycer/protocol/host";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  RateLimitFetchEligibility,
+  RateLimitProviderId,
+} from "@/lib/rate-limit-providers";
 import type {
   AvailableProviderRateLimits,
   ProviderRateLimitEnvelope,
@@ -19,6 +23,8 @@ type MockState = {
   configured: ReadonlyArray<{
     readonly providerId: RateLimitProviderId;
     readonly lane: "httpFetch" | "ephemeralProcess";
+    readonly profiles: ReadonlyArray<ProviderProfile>;
+    readonly fetchEligibility: RateLimitFetchEligibility;
   }>;
   results: Map<RateLimitProviderId, MockQueryResult>;
   profileIds: Map<RateLimitProviderId, string | null>;
@@ -114,8 +120,35 @@ function setProvider(
   lane: "httpFetch" | "ephemeralProcess",
   result: MockQueryResult,
 ): void {
-  mocks.configured = [...mocks.configured, { providerId, lane }];
+  mocks.configured = [
+    ...mocks.configured,
+    {
+      providerId,
+      lane,
+      profiles: [],
+      fetchEligibility: { ambient: true, managedProfiles: true },
+    },
+  ];
   mocks.results.set(providerId, result);
+}
+
+function setProviderWithProfiles(args: {
+  readonly providerId: RateLimitProviderId;
+  readonly lane: "httpFetch" | "ephemeralProcess";
+  readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly fetchEligibility: RateLimitFetchEligibility;
+  readonly result: MockQueryResult;
+}): void {
+  mocks.configured = [
+    ...mocks.configured,
+    {
+      providerId: args.providerId,
+      lane: args.lane,
+      profiles: args.profiles,
+      fetchEligibility: args.fetchEligibility,
+    },
+  ];
+  mocks.results.set(args.providerId, args.result);
 }
 
 function codexFixture(overrides: {
@@ -293,6 +326,57 @@ describe("useHeaderRateLimitBars", () => {
     expect(mocks.requests).toEqual([
       { providerId: "codex", profileId: "codex-work" },
       { providerId: "claude-code", profileId: "claude-personal" },
+    ]);
+  });
+
+  it("resolves fetch eligibility from the selected managed target instead of the signed-out ambient target", () => {
+    const ambient: ProviderProfile = {
+      profileId: "ambient",
+      kind: "ambient",
+      authType: "oauth",
+      label: "Terminal",
+      auth: {
+        status: "unauthenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+      identity: null,
+      usageUpdatedAt: null,
+      rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      duplicateOfProfileId: null,
+      accentColor: null,
+      ambientDriftNotice: null,
+    };
+    const managed: ProviderProfile = {
+      ...ambient,
+      profileId: "codex-work",
+      kind: "managed",
+      label: "Work",
+      auth: { ...ambient.auth, status: "authenticated" },
+    };
+    mocks.profileIds = new Map([["codex", "codex-work"]]);
+    setProviderWithProfiles({
+      providerId: "codex",
+      lane: "ephemeralProcess",
+      profiles: [ambient, managed],
+      fetchEligibility: { ambient: false, managedProfiles: true },
+      result: {
+        data: response(
+          codexFixture({
+            primary: rlWindow(40, 300),
+            secondary: rlWindow(20, 10_080),
+          }),
+        ),
+        isError: false,
+      },
+    });
+
+    renderHeaderRateLimitBars();
+
+    expect(mocks.requests).toEqual([
+      { providerId: "codex", profileId: "codex-work" },
     ]);
   });
 

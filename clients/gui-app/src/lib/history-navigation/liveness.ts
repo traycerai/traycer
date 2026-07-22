@@ -1,9 +1,6 @@
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import {
-  parseNestedFocusTargetFromHref,
-  resolveNestedFocusTarget,
-} from "@/lib/epic-nested-focus-route";
+import { parseNestedFocusTargetFromHref } from "@/lib/epic-nested-focus-route";
 import { hrefPathname } from "@/lib/routes";
 
 /**
@@ -19,12 +16,14 @@ import { hrefPathname } from "@/lib/routes";
  * Two route shapes are prunable, read from the SAME stores the route
  * `beforeLoad` / committed-effect guards consult:
  *
- * - `/epics/$epicId/$tabId` — top-level entries without nested pane/tile params
- *   are alive while the exact tab maps to `epicId`; once that tab is gone, dead
- *   ONLY when `resolveTabIdForEpic(epicId)` is null (no sibling tab). Nested
- *   pane/tile entries are exact session-local targets: they are alive only while
- *   the original tab maps to the epic and the target resolves in that tab's
- *   canvas. Sibling tabs must not salvage nested targets.
+ * - `/epics/$epicId/$tabId` — alive as long as the tab maps to `epicId`,
+ *   regardless of whether it's open or closed and regardless of whether a
+ *   nested pane/tile target resolves: a closed Task is handled by
+ *   back/forward skip-eligibility (not pruning) so it becomes reachable again
+ *   on reopen, and an unresolvable nested target under an open Task is the
+ *   preview-reopen case, not dead. Once the tab is gone entirely, dead ONLY
+ *   when `resolveTabIdForEpic(epicId)` finds no sibling tab (top-level
+ *   entries) - a nested target never salvages onto a sibling.
  * - `/draft/$draftId` — dead when `draftId` is absent from the landing-draft
  *   store (`src/routes/draft-route-components.tsx` redirects to `/` on the same
  *   condition). `/draft/new` is a distinct route and is always kept.
@@ -33,27 +32,19 @@ import { hrefPathname } from "@/lib/routes";
  * against the live stores at execution, not at install time.
  */
 export function isHistoryEntryDead(href: string): boolean {
-  const segments = parsePathSegments(href);
+  const epicTab = parseEpicTabHref(href);
 
-  // /epics/$epicId/$tabId — nested pane/tile targets are exact to this tab's
-  // canvas. Only top-level entries without nested params keep the legacy
-  // sibling-salvage behavior.
-  if (segments.length === 3 && segments[0] === "epics") {
-    const epicId = segments[1];
-    const tabId = segments[2];
-    const nestedTarget = parseNestedFocusTargetFromHref(href);
+  // /epics/$epicId/$tabId — a known tab (open or closed) is always alive
+  // here, nested target or not. Only a tab that's gone from `tabsById`
+  // entirely (deleted, or reassigned to a different epic) is a pruning
+  // candidate, handled below.
+  if (epicTab !== null) {
+    const { epicId, tabId } = epicTab;
     const state = useEpicCanvasStore.getState();
     if (state.tabsById[tabId]?.epicId === epicId) {
-      if (nestedTarget === null) {
-        return false;
-      }
-      const canvas = state.canvasByTabId[tabId];
-      if (canvas === undefined) {
-        return true;
-      }
-      const resolved = resolveNestedFocusTarget(canvas, nestedTarget);
-      return resolved === null;
+      return false;
     }
+    const nestedTarget = parseNestedFocusTargetFromHref(href);
     if (nestedTarget !== null) {
       return true;
     }
@@ -62,6 +53,7 @@ export function isHistoryEntryDead(href: string): boolean {
   }
 
   // /draft/$draftId — dead when the draft id is gone. `/draft/new` is kept.
+  const segments = parsePathSegments(href);
   if (
     segments.length === 2 &&
     segments[0] === "draft" &&
@@ -83,4 +75,23 @@ function parsePathSegments(href: string): ReadonlyArray<string> {
   return hrefPathname(href)
     .split("/")
     .filter((segment) => segment.length > 0);
+}
+
+export interface ParsedEpicTabHref {
+  readonly epicId: string;
+  readonly tabId: string;
+}
+
+/**
+ * Parses an `/epics/$epicId/$tabId` href into its route params, or `null` for
+ * any other route shape. Shared by liveness pruning and the back/forward
+ * skip-eligibility scan (`history-navigation/eligibility.ts`) so both read the
+ * same route shape off the same parser.
+ */
+export function parseEpicTabHref(href: string): ParsedEpicTabHref | null {
+  const segments = parsePathSegments(href);
+  if (segments.length !== 3 || segments[0] !== "epics") {
+    return null;
+  }
+  return { epicId: segments[1], tabId: segments[2] };
 }

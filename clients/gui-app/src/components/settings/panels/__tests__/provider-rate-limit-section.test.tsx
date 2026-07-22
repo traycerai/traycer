@@ -158,6 +158,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="codex"
         profileId="work-profile"
         usageUpdatedAt={123}
+        fetchEligible
       />,
     );
 
@@ -170,6 +171,7 @@ describe("ProviderRateLimitForProvider", () => {
       "codex",
       "work-profile",
       123,
+      true,
     );
   });
 
@@ -179,6 +181,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="traycer"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
     expect(container.firstChild).toBe(null);
@@ -192,6 +195,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="claude-code"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
     expect(screen.getByText("Usage limits")).toBeTruthy();
@@ -209,6 +213,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="claude-code"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
     expect(screen.getByText("Usage limits")).toBeTruthy();
@@ -222,6 +227,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="claude-code"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -238,6 +244,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="claude-code"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
     expect(screen.queryByText("Max")).toBeNull();
@@ -250,6 +257,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="claude-code"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -285,6 +293,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="claude-code"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -304,6 +313,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="claude-code"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -321,6 +331,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="codex"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -330,6 +341,94 @@ describe("ProviderRateLimitForProvider", () => {
     expect(screen.getByText("80% used")).toBeTruthy();
   });
 
+  it("keeps the last successful Codex reading when a later refresh fails, dimmed with a generic failed-refresh note", () => {
+    mocks.data = envelope(CODEX_RATE_LIMITS);
+    mocks.isError = true;
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+
+    expect(screen.getByText("42% used")).toBeTruthy();
+    expect(
+      screen.queryByText("Couldn't load usage limits. Try refreshing."),
+    ).toBeNull();
+    expect(screen.getByText(/Updated Just now · refresh failed/)).toBeTruthy();
+    expect(document.querySelectorAll(".opacity-60").length).toBeGreaterThan(0);
+  });
+
+  it("dims a retained reading and names the specific transient reason when the envelope itself carries usage_fetch_failed", () => {
+    mocks.data = {
+      latest: {
+        provider: "codex",
+        available: false,
+        reason: "usage_fetch_failed",
+      },
+      lastGood: CODEX_RATE_LIMITS,
+      lastGoodAt: Date.now(),
+      lastFailureAt: Date.now(),
+    };
+    mocks.isError = false;
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+
+    expect(screen.getByText("42% used")).toBeTruthy();
+    expect(
+      screen.getByText(/Updated Just now · failed to fetch usage/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/· refresh failed/)).toBeNull();
+    expect(document.querySelectorAll(".opacity-60").length).toBeGreaterThan(0);
+  });
+
+  it("does not dim or show a stale note for a fresh reading", () => {
+    mocks.data = envelope(CODEX_RATE_LIMITS);
+    mocks.isError = false;
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+
+    expect(screen.queryByText(/refresh failed/)).toBeNull();
+    expect(screen.queryByText(/Updated Just now/)).toBeNull();
+    expect(document.querySelectorAll(".opacity-60").length).toBe(0);
+  });
+
+  it("still replaces the picture (no stale treatment) for an authoritative unavailable reason", () => {
+    mocks.data = envelope({
+      provider: "codex",
+      available: false,
+      reason: "cli_not_found",
+    });
+    render(
+      <ProviderRateLimitForProvider
+        providerId="codex"
+        profileId={null}
+        usageUpdatedAt={null}
+        fetchEligible
+      />,
+    );
+
+    expect(
+      screen.getByText("Usage limits unavailable - the CLI isn't installed"),
+    ).toBeTruthy();
+    expect(screen.queryByText("42% used")).toBeNull();
+    expect(document.querySelectorAll(".opacity-60").length).toBe(0);
+  });
+
   it("maps a rateLimitReachedType token to a destructive badge", () => {
     mocks.data = envelope(CODEX_RATE_LIMITS);
     render(
@@ -337,6 +436,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="codex"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -350,6 +450,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="codex"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -363,6 +464,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="codex"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -377,6 +479,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="codex"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -408,6 +511,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="codex"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -434,6 +538,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="codex"
         profileId="work-profile"
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 
@@ -464,6 +569,7 @@ describe("ProviderRateLimitForProvider", () => {
         providerId="codex"
         profileId={null}
         usageUpdatedAt={null}
+        fetchEligible
       />,
     );
 

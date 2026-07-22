@@ -1,5 +1,8 @@
 import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
+import type { StoredCredentials } from "@traycer/protocol/config/credentials";
+
+export type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
 /**
  * Composite runner-host surface consumed by `gui-app` on standalone desktop
@@ -54,45 +57,17 @@ export interface IRunnerHost {
   readonly authnBaseUrl: string;
 
   /**
-   * Validates a Traycer bearer token against the shell-owned AuthnV3 base URL
-   * and projects the minimum profile shape the GUI needs for signed-in state.
-   * If the user lookup fails but the bundled refresh token is still accepted,
-   * implementations return a valid result with `refreshedToken`.
-   *
-   * Desktop shells perform this in Electron main so renderer-origin CORS does
-   * not decide auth success. Browser-only test/dev shells may satisfy the same
-   * contract with a direct HTTP fetch.
-   */
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult>;
-
-  /**
    * Validates a Traycer bearer token and returns the full AuthnV3 identity
-   * shape required to mint a client `RequestContext`. Desktop shells perform
-   * this in Electron main so renderer CSP/CORS cannot turn a valid OAuth
-   * callback into a false invalid-token result. Browser-only test/dev shells
-   * may call the shared HTTP helper directly.
+   * shape required to mint a client `RequestContext`. ACCESS-ONLY (tech plan
+   * §3): a single `/api/v3/user` lookup with NO refresh-on-401 fallback, so it
+   * can never spend a refresh token - a stale token comes back `rejected` and
+   * the caller routes the spend through the locked `tokenStore.rotate`. Desktop
+   * shells perform this in Electron main so renderer CSP/CORS cannot turn a
+   * valid OAuth callback into a false invalid-token result.
    */
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
-
-  /**
-   * Force-refreshes the access token against authn's `POST /api/v3/auth/refresh`
-   * WITHOUT a prior `/api/v3/user` validation, rotating both the bearer and the
-   * refresh token. The proactive refresh scheduler calls this shortly before the
-   * ~4h TTL so a long-open session never carries a dead bearer into a live host
-   * call. Desktop shells run this in Electron main so renderer-origin CORS does
-   * not block the authn request; browser/test shells may call the shared
-   * `refreshAuthTokenViaHttp` helper directly.
-   */
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult>;
 
   openExternalLink(url: string): Promise<void>;
 
@@ -486,21 +461,6 @@ export interface ITraycerCli {
     readonly value: string | null;
   }): Promise<void>;
   envOverrideDelete(input: { readonly key: string }): Promise<void>;
-  /**
-   * Seeds the CLI's stored credentials from a captured bearer + refresh token so
-   * the CLI keeps using them for host comms (and can self-refresh on a 401).
-   * The host pipes a JSON `{ token, refreshToken }` payload to the CLI over
-   * stdin (never argv) to keep the secrets out of the process list. Resolves
-   * once the credentials file has been written; rejects if the token was
-   * rejected by the authn service.
-   */
-  cliLogin(token: string, refreshToken: string): Promise<void>;
-  /**
-   * Deletes the machine-local CLI credentials so the host's owner-binding
-   * gate falls back to deny-by-default. Mirrors `cliLogin`: invoked at sign-out
-   * to deprovision the host on this machine.
-   */
-  cliLogout(): Promise<void>;
 }
 
 /**
@@ -613,31 +573,6 @@ export interface IDeviceFlowHost {
   start(): Promise<DeviceFlowSession | null>;
 }
 
-export interface AuthValidationProfile {
-  readonly userId: string;
-  readonly userName: string;
-  readonly email: string;
-}
-
-export type AuthTokenValidResult =
-  | {
-      readonly kind: "valid";
-      readonly profile: AuthValidationProfile;
-    }
-  | {
-      readonly kind: "valid";
-      readonly profile: AuthValidationProfile;
-      // A refresh rotates BOTH the bearer (`refreshedToken`) and the refresh
-      // token (`refreshedRefreshToken`); callers must persist both.
-      readonly refreshedToken: string;
-      readonly refreshedRefreshToken: string;
-    };
-
-export type AuthTokenValidationResult =
-  | AuthTokenValidResult
-  | { readonly kind: "rejected" }
-  | { readonly kind: "network-error" };
-
 /**
  * Outcome of a forced access-token refresh (`POST /api/v3/auth/refresh`),
  * independent of any `/api/v3/user` validation. `refreshed` rotates BOTH the
@@ -672,16 +607,161 @@ export interface StoredAuthTokens {
 }
 
 /**
- * Typed credential store owned by the shell. Narrower than `ISecureStorage` on
- * purpose: there is a single logical entry per shell, so callers never pick a
- * key. Desktop and mobile implementations back this with their native keychain;
- * in-memory implementations keep a single slot that round-trips through
- * `set` / `get` / `delete`.
+ * The identity block a caller supplies on interactive sign-in. The `authnBaseUrl`
+ * and `savedAt` are NOT supplied here — the main-process `FileTokenStore` stamps
+ * them (env-scoped `authnBaseUrl` from its own config, `savedAt` at write time),
+ * so the renderer can never write a mismatched authn origin into the shared file.
+ */
+export type StoredCredentialsIdentity = StoredCredentials["user"];
+
+/**
+ * Typed outcomes of the locked `rotate` op, mirrored from the credentials
+ * mutation store (tech plan §2). `rotate` never returns `tombstoned` (that is a
+ * guarded-first-write outcome), but the union is kept whole so callers switch
+ * exhaustively:
+ *   - `applied`         → the newly-committed rotated pair (adopt it);
+ *   - `superseded`      → a sibling already rotated; `pair` is the file's pair to adopt;
+ *   - `deleted`         → the file was signed out mid-rotate (sign-out wins);
+ *   - `user-mismatch`   → the file now holds a different account (`pair` is theirs);
+ *   - `lock-busy`       → a live holder held the lock; bounded retry, no state lost;
+ *   - `refresh-rejected`→ authn rejected the refresh; UI-only sign-out, file KEPT;
+ *   - `refresh-network` → transient; the access token in hand stays valid, retry;
+ *   - `commit-failed`   → spent + local-commit failed; `pair` is the minted pair
+ *                         the caller keeps active while main retries the commit.
+ */
+export type TokenRotateOutcome =
+  | "applied"
+  | "superseded"
+  | "deleted"
+  | "user-mismatch"
+  | "tombstoned"
+  | "lock-busy"
+  | "refresh-rejected"
+  | "refresh-network"
+  | "commit-failed";
+
+export interface TokenRotateResult {
+  readonly outcome: TokenRotateOutcome;
+  // The credentials the caller should act on: the committed/adopted/minted pair
+  // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
+  // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
+  // `refresh-rejected`/`refresh-network`).
+  readonly pair: StoredCredentials | null;
+}
+
+/**
+ * A change broadcast the store emits when the underlying credentials file
+ * changes (the §4 owned watcher — external writes AND self-writes). `present`
+ * is whether a file now exists; `userId` is the signed-in user id (or `null`
+ * when absent). `revision` is a monotonic emit counter (dedup / WindowsBridge
+ * fence hint). Consumers re-read the store before acting (events are a hint,
+ * disk is the truth). Reconcile never writes and never spends — a self-write
+ * echo is a guarded no-op, so there is no self-write suppression.
+ */
+export interface TokenStoreChange {
+  readonly present: boolean;
+  readonly userId: string | null;
+  readonly revision: number;
+}
+
+/**
+ * Terminal outcome of the one-time legacy→file credentials migration (tech plan
+ * §6). The renderer hands the decrypted legacy localStorage pair to the main
+ * store, which reconciles it against the shared file:
+ *   - `committed`              → the legacy refresh was spent under the lock and
+ *                                its rotated pair now lives in the file;
+ *   - `fallback-file-validated`→ the legacy refresh was dead but the file's own
+ *                                access is still valid (or its refresh landed the
+ *                                commit); the file session stands;
+ *   - `file-wins`              → the file already holds a live, different-or-same
+ *                                account; the legacy remnant is discarded;
+ *   - `terminal-dead`          → the legacy refresh was explicitly rejected;
+ *                                a present-but-invalid file is still left for
+ *                                start() to revive on its own token;
+ *   - `tombstoned`             → the file carries a sign-out tombstone; the
+ *                                legacy remnant must never resurrect it;
+ *   - `identity-unknown`       → the legacy access token expired AND no file to
+ *                                migrate onto, so identity was unknowable without
+ *                                spending; auto-migration declined (measured rare);
+ *   - `retryable`              → a pre-spend failure (network/lock-busy/abort)
+ *                                left the legacy pair unspent; re-migrate later;
+ *   - `commit-failed`          → spent, but the local commit failed; the minted
+ *                                pair is held in the store overlay and a
+ *                                background continuation is still landing it.
+ *
+ * The file — not this value — is authoritative for the resulting session: after
+ * migration the caller runs its normal file rehydrate, which itself revives a
+ * stale-access file via the locked `rotate`. So `terminal-dead`/`identity-unknown`
+ * only truly sign the user out when the file also cannot be revived.
+ */
+export type CredentialsMigrationOutcome =
+  | "committed"
+  | "fallback-file-validated"
+  | "file-wins"
+  | "terminal-dead"
+  | "tombstoned"
+  | "identity-unknown"
+  | "retryable"
+  | "commit-failed";
+
+/**
+ * Whether a completed migration should wipe the legacy localStorage token slots
+ * (tech plan §6). Wiped once the legacy pair is consolidated into the file or
+ * proven unusable; KEPT only while a retry could still land it — `retryable`
+ * (nothing was spent; re-migrate next launch) and `commit-failed` (spent and
+ * held in the store overlay; the legacy pair stays as the crash-recovery
+ * fallback until the background continuation commits).
+ */
+export function shouldWipeLegacyCredentials(
+  outcome: CredentialsMigrationOutcome,
+): boolean {
+  return outcome !== "retryable" && outcome !== "commit-failed";
+}
+
+/**
+ * Typed credential store owned by the shell, backed by the single machine-local
+ * `~/.traycer/cli/<env>/credentials` file (tech plan §3). It carries the FULL
+ * identity now (the host reads `user.id` from the same file to pin its owner
+ * gate), and every token *spend* happens inside the file lock via `rotate` — the
+ * renderer never refreshes a token itself.
+ *
+ *   - `get()`      — current credentials (with the process-local commit-failed
+ *                    overlay), or `null` when signed out. Rejects when the store
+ *                    is unavailable (I/O fault); the caller maps that to a
+ *                    UI-only signed-out state and never a write.
+ *   - `signIn()`   — interactive create/replace (device-flow sign-in). Supplies
+ *                    only the token pair + identity; the store stamps the rest.
+ *   - `rotate()`   — the locked adopt-or-refresh+commit (the spend lives here).
+ *   - `delete()`   — sign-out only. Rejects if the delete cannot land, so a
+ *                    failed sign-out stays signed in rather than lie.
+ *   - `subscribe()`— change notifications from the owned watcher.
+ *
+ * Desktop backs this with an IPC client of the main-process `FileTokenStore`;
+ * in-memory implementations (dev runner, tests) keep a single round-trippable
+ * slot and a no-op `subscribe`.
  */
 export interface ITokenStore {
-  get(): Promise<StoredAuthTokens | null>;
-  set(tokens: StoredAuthTokens): Promise<void>;
+  get(): Promise<StoredCredentials | null>;
+  signIn(
+    tokens: StoredAuthTokens,
+    identity: StoredCredentialsIdentity,
+  ): Promise<void>;
+  rotate(expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<TokenRotateResult>;
   delete(): Promise<void>;
+  subscribe(listener: (change: TokenStoreChange) => void): Disposable;
+  /**
+   * One-time migration of the legacy per-window localStorage token pair onto the
+   * shared file (tech plan §6). The renderer reads + decrypts the legacy slots
+   * and hands the pair here; main single-flights the reconcile across windows and
+   * never deletes the file. The caller wipes the legacy slots per
+   * `shouldWipeLegacyCredentials(outcome)`, then runs its normal file rehydrate.
+   */
+  migrateLegacyCredentials(
+    legacy: StoredAuthTokens,
+  ): Promise<CredentialsMigrationOutcome>;
 }
 
 export interface INotificationHost {
