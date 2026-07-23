@@ -34,9 +34,16 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 interface NewTerminalPickerProps {
   readonly epicId: string;
   readonly tabId: string;
+  /**
+   * Fired synchronously right after a terminal is launched (before the popover
+   * closes). The desktop sidebar passes `null`; the mobile switcher sheet uses
+   * it to close itself so the new terminal lands as the visible tile.
+   */
+  readonly onLaunched: (() => void) | null;
 }
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
+  const { onLaunched } = props;
   const [isOpen, setIsOpen] = useState(false);
   // The user's explicit pick. Null means "follow the auto-selected default";
   // the effective selection is derived below so a default never has to be
@@ -116,11 +123,13 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
       }),
     );
     setIsOpen(false);
+    if (onLaunched !== null) onLaunched();
   }, [
     navigateNested,
     prepareOpenTileInTabFocusTarget,
     props.epicId,
     props.tabId,
+    onLaunched,
     launchTarget,
   ]);
 

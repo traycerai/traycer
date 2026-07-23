@@ -180,7 +180,13 @@ function TerminalsPanelBodyLive(props: {
  * every host list update.
  */
 export function TerminalsPanelActions(props: LeftPanelSlotProps) {
-  return <NewTerminalPicker epicId={props.epicId} tabId={props.tabId} />;
+  return (
+    <NewTerminalPicker
+      epicId={props.epicId}
+      tabId={props.tabId}
+      onLaunched={null}
+    />
+  );
 }
 
 interface TerminalSidebarBodyProps {

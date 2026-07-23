@@ -108,7 +108,7 @@ function openPicker(): string {
   const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Epic");
   render(
     <TooltipProvider>
-      <NewTerminalPicker epicId="epic-1" tabId={tabId} />
+      <NewTerminalPicker epicId="epic-1" tabId={tabId} onLaunched={null} />
     </TooltipProvider>,
   );
   fireEvent.click(screen.getByTestId("epic-terminals-panel-add"));
