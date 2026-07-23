@@ -1,5 +1,6 @@
 import { Plus } from "lucide-react";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -73,7 +74,7 @@ export function SwitcherNewArtifactMenu(props: {
   readonly tabId: string;
   readonly onClose: () => void;
 }) {
-  const { create } = useSwitcherCreateArtifact(
+  const { create, isPending } = useSwitcherCreateArtifact(
     props.epicId,
     props.tabId,
     props.onClose,
@@ -87,9 +88,18 @@ export function SwitcherNewArtifactMenu(props: {
           size="icon-sm"
           aria-label="New artifact"
           data-testid="switcher-new-artifact"
+          disabled={isPending}
           className="text-muted-foreground hover:text-foreground"
         >
-          <Plus className="size-4" />
+          {isPending ? (
+            <AgentSpinningDots
+              className="size-4"
+              testId="switcher-new-artifact-pending"
+              variant="dots2"
+            />
+          ) : (
+            <Plus className="size-4" />
+          )}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

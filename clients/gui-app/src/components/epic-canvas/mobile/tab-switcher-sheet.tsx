@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Drawer,
   DrawerContent,
@@ -6,6 +6,7 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { SwitcherCategoryTabs } from "@/components/epic-canvas/mobile/switcher-category-tabs";
 import {
   MOBILE_SWITCHER_CATEGORY_DEFS,
@@ -15,7 +16,6 @@ import {
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherTerminalsList } from "@/components/epic-canvas/mobile/switcher-terminals-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
-import { SwitcherPanelEmbed } from "@/components/epic-canvas/mobile/switcher-panel-embed";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
 import {
@@ -31,6 +31,15 @@ import {
   type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
+
+// Lazy so the desktop File-tree / Git-diff bodies - and the heavy epic-sidebar
+// module they pull in - load only when a phone user opens those categories, and
+// never sit in the mobile tile view's eager module graph.
+const SwitcherPanelEmbed = lazy(() =>
+  import("@/components/epic-canvas/mobile/switcher-panel-embed").then((m) => ({
+    default: m.SwitcherPanelEmbed,
+  })),
+);
 
 interface TabSwitcherSheetProps {
   readonly epicId: string;
@@ -179,13 +188,37 @@ function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
       );
     case "file-tree":
       return (
-        <SwitcherPanelEmbed category="file-tree" epicId={epicId} tabId={tabId} />
+        <Suspense fallback={<SwitcherEmbedFallback />}>
+          <SwitcherPanelEmbed
+            category="file-tree"
+            epicId={epicId}
+            tabId={tabId}
+          />
+        </Suspense>
       );
     case "git-diff":
       return (
-        <SwitcherPanelEmbed category="git-diff" epicId={epicId} tabId={tabId} />
+        <Suspense fallback={<SwitcherEmbedFallback />}>
+          <SwitcherPanelEmbed
+            category="git-diff"
+            epicId={epicId}
+            tabId={tabId}
+          />
+        </Suspense>
       );
     default:
       return null;
   }
+}
+
+function SwitcherEmbedFallback() {
+  return (
+    <div className="flex min-h-24 flex-1 items-center justify-center p-6">
+      <AgentSpinningDots
+        className="size-4 text-muted-foreground"
+        testId="switcher-embed-loading"
+        variant="dots2"
+      />
+    </div>
+  );
 }
