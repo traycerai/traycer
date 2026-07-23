@@ -69,8 +69,10 @@ import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AgentReferenceMarkdown } from "./segments/agent-reference-markdown";
+import { AgentHeaderLink } from "./segments/agent-header-link";
+import { AgentMessageCopyButton } from "./segments/agent-message-copy-button";
+import { ReplyExpectedBadge } from "./segments/reply-expected-badge";
 import { SegmentCard } from "./segments/segment-card";
-import { SegmentPanel } from "./segments/segment-panel";
 import { useTombstonedProfileLabel } from "./use-tombstoned-profile-label";
 import { AccentDot } from "@/components/providers/accent-dot";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
@@ -239,9 +241,15 @@ function AgentMessageDisplayView({
       <span aria-hidden className="shrink-0 text-muted-foreground/40">
         ·
       </span>
-      <span className="min-w-0 flex-1 truncate text-ui-sm">
-        <span className="text-muted-foreground">from agent </span>
-        <span className="font-medium text-foreground/85">{senderName}</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
+        <span className="min-w-0 truncate">
+          <span className="text-muted-foreground">from agent </span>
+          <AgentHeaderLink
+            name={senderName}
+            onOpen={openTarget !== null ? openSenderTab : null}
+          />
+        </span>
+        {expectReply ? <ReplyExpectedBadge /> : null}
       </span>
     </>
   );
@@ -254,45 +262,20 @@ function AgentMessageDisplayView({
 
   const body = open ? (
     <div className="flex flex-col gap-2">
-      {openTarget !== null ? (
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={openSenderTab}
-            className="w-fit rounded px-1.5 py-0.5 text-ui-sm font-medium text-primary underline-offset-2 transition-colors hover:bg-primary/10 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            Open sending agent
-          </button>
-          {expectReply ? (
-            <>
-              <span aria-hidden className="text-muted-foreground/40">
-                ·
-              </span>
-              <span className="shrink-0 rounded border border-primary/30 bg-primary/10 px-1.5 text-overline font-medium uppercase text-primary">
-                reply expected
-              </span>
-            </>
-          ) : null}
+      <div className="relative min-w-0">
+        <div
+          data-chat-find-unit={bodyFindUnitId}
+          className="max-h-[min(40vh,24rem)] overflow-auto rounded-md border border-canvas-border/30 bg-canvas/40 px-3 py-2 pr-10"
+        >
+          <AgentReferenceMarkdown
+            isStreaming={false}
+            markdown={messageText}
+            proseSize="compact"
+            quotable={false}
+          />
         </div>
-      ) : null}
-      <SegmentPanel
-        label="Message"
-        copyValue={messageText}
-        tone="default"
-        bodyChrome="framed"
-        className={undefined}
-      >
-        <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
-          <div data-chat-find-unit={bodyFindUnitId}>
-            <AgentReferenceMarkdown
-              isStreaming={false}
-              markdown={messageText}
-              proseSize="compact"
-              quotable={false}
-            />
-          </div>
-        </div>
-      </SegmentPanel>
+        <AgentMessageCopyButton value={messageText} />
+      </div>
     </div>
   ) : null;
 

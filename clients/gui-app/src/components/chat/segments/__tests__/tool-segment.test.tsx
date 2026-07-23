@@ -133,12 +133,16 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     expect(screen.getByText("Sent message")).toBeTruthy();
     expect(screen.getByText("Receiver Agent")).toBeTruthy();
     expect(screen.getByText(/Please inspect the failing test/)).toBeTruthy();
-    expect(screen.queryByText("reply expected")).toBeNull();
+    // The badge sits in the always-visible header next to the receiver link,
+    // so it's already present before the card is expanded.
+    expect(screen.getByText("reply expected")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
-    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Receiver Agent" })).toBeTruthy();
     expect(screen.getByText("reply expected")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
     expect(screen.getByText("Please inspect the failing test.")).toBeTruthy();
     expect(
       screen
@@ -180,11 +184,11 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
       </>,
     );
 
-    expect(screen.queryByText("Open receiving agent")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Open sent A2A" }));
 
-    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
     expect(screen.getByText("reply expected")).toBeTruthy();
   });
 
@@ -220,11 +224,11 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Force sent A2A" }));
 
-    expect(screen.getByText("Open receiving agent")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
-    expect(screen.queryByText("Open receiving agent")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
   });
 
   it("keeps tools without an agentMessageSend payload on the generic tool surface", () => {
@@ -281,7 +285,7 @@ describe("<ToolSegment /> A2A send-message rendering", () => {
     fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
 
     expect(
-      screen.getByRole("button", { name: /Open receiving agent/i }),
+      screen.getByRole("button", { name: "Optimistic Receiver" }),
     ).toBeTruthy();
   });
 });

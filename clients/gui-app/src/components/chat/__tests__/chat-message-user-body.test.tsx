@@ -609,13 +609,17 @@ describe("<UserMessageBody /> agent messages", () => {
     expect(screen.getByText("Review Agent")).toBeTruthy();
     expect(screen.getByText(/Investigate this failure/)).toBeTruthy();
     expect(screen.queryByText("Message")).toBeNull();
-    expect(screen.queryByText("reply expected")).toBeNull();
+    // The badge sits in the always-visible header next to the sender link, so
+    // it's already present before the card is expanded.
+    expect(screen.getByText("reply expected")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Received message/ }));
 
-    expect(screen.getByText("Open sending agent")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Review Agent" })).toBeTruthy();
     expect(screen.getByText("reply expected")).toBeTruthy();
-    expect(screen.getByText("Message")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+    expect(screen.queryByText("Message")).toBeNull();
     expect(
       screen
         .getByText("Investigate this failure.")
@@ -636,12 +640,11 @@ describe("<UserMessageBody /> agent messages", () => {
       </>,
     );
 
-    expect(screen.queryByText("Open sending agent")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Open received A2A" }));
 
-    expect(screen.getByText("Open sending agent")).toBeTruthy();
-    expect(screen.getByText("Message")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
   });
 
   it("opens received A2A cards through find-force and releases on manual collapse", () => {
@@ -658,15 +661,11 @@ describe("<UserMessageBody /> agent messages", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Force received A2A" }));
 
-    expect(
-      screen.getByRole("button", { name: "Open sending agent" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /Received message/ }));
 
-    expect(
-      screen.queryByRole("button", { name: "Open sending agent" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
   });
 
   it("copies structured user messages as rich composer clipboard content", async () => {

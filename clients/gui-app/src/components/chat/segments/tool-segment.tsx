@@ -25,6 +25,9 @@ import type {
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { AgentReferenceMarkdown } from "./agent-reference-markdown";
+import { AgentHeaderLink } from "./agent-header-link";
+import { AgentMessageCopyButton } from "./agent-message-copy-button";
+import { ReplyExpectedBadge } from "./reply-expected-badge";
 import { SegmentCard } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
@@ -610,9 +613,15 @@ function A2ASendToolSegment(
   };
 
   const receiver = (
-    <span className="min-w-0 flex-1 truncate text-ui-sm">
-      <span className="text-muted-foreground">to agent </span>
-      <span className="font-medium text-foreground/85">{receiverName}</span>
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
+      <span className="min-w-0 truncate">
+        <span className="text-muted-foreground">to agent </span>
+        <AgentHeaderLink
+          name={receiverName}
+          onOpen={openTarget !== null ? openReceiverTab : null}
+        />
+      </span>
+      {send.expectReply ? <ReplyExpectedBadge /> : null}
     </span>
   );
 
@@ -639,45 +648,20 @@ function A2ASendToolSegment(
   const preview = <AgentMessagePreview message={send.message} tone="primary" />;
   const body = open ? (
     <div className="flex flex-col gap-2">
-      {openTarget !== null ? (
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={openReceiverTab}
-            className="w-fit rounded px-1.5 py-0.5 text-ui-sm font-medium text-primary underline-offset-2 transition-colors hover:bg-primary/10 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            Open receiving agent
-          </button>
-          {send.expectReply ? (
-            <>
-              <span aria-hidden className="text-muted-foreground/40">
-                ·
-              </span>
-              <span className="shrink-0 rounded border border-primary/30 bg-primary/10 px-1.5 text-overline font-medium uppercase text-primary">
-                reply expected
-              </span>
-            </>
-          ) : null}
+      <div className="relative min-w-0">
+        <div
+          data-chat-find-unit={bodyFindUnitId}
+          className="max-h-[min(40vh,24rem)] overflow-auto rounded-md border border-canvas-border/30 bg-canvas/40 px-3 py-2 pr-10"
+        >
+          <AgentReferenceMarkdown
+            isStreaming={false}
+            markdown={send.message}
+            proseSize="compact"
+            quotable={false}
+          />
         </div>
-      ) : null}
-      <SegmentPanel
-        label="Message"
-        copyValue={send.message}
-        tone="default"
-        bodyChrome="framed"
-        className={undefined}
-      >
-        <div className="max-h-[min(40vh,24rem)] overflow-auto px-3 py-2">
-          <div data-chat-find-unit={bodyFindUnitId}>
-            <AgentReferenceMarkdown
-              isStreaming={false}
-              markdown={send.message}
-              proseSize="compact"
-              quotable={false}
-            />
-          </div>
-        </div>
-      </SegmentPanel>
+        <AgentMessageCopyButton value={send.message} />
+      </div>
       {hasError ? (
         <SegmentPanel
           label="Error"
