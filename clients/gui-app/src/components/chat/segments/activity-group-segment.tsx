@@ -29,7 +29,6 @@ import {
 import { ResolvedApprovalSegment } from "./approval-segment";
 import { CommandSegment } from "./command-segment";
 import { FileChangeSegment } from "./file-change-segment";
-import { ReasoningSegment } from "./reasoning-segment";
 import { LiveElapsed } from "./segment-elapsed";
 import { SubagentSegment } from "./subagent-segment";
 import { ToolSegment } from "./tool-segment";
@@ -71,17 +70,10 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
         data-chat-find-unit={summaryFindUnitId}
         aria-label={group.label}
         className={cn(
-          "group/activity flex max-w-full items-center gap-2 overflow-hidden rounded-sm px-1 py-1 text-left text-muted-foreground transition-colors",
+          "group/activity flex max-w-full items-center gap-2 overflow-hidden rounded-sm py-1 pr-1 text-left text-muted-foreground transition-colors",
           "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         )}
       >
-        <ChevronRight
-          className={cn(
-            "size-3 shrink-0 text-muted-foreground/50 transition-transform",
-            "group-data-[state=open]/activity:rotate-90",
-          )}
-          aria-hidden
-        />
         <Box className="size-3.5 shrink-0 transition-colors" aria-hidden />
         {group.isActive ? (
           <Shimmer
@@ -108,6 +100,15 @@ export function ActivityGroupSegment(props: ActivityGroupSegmentProps) {
             <LiveElapsed startedAt={group.activeStartedAt} />
           </span>
         ) : null}
+        <ChevronRight
+          className={cn(
+            "size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color]",
+            "group-hover/activity:translate-x-0 group-hover/activity:text-foreground group-hover/activity:opacity-100",
+            "group-focus-visible/activity:translate-x-0 group-focus-visible/activity:text-foreground group-focus-visible/activity:opacity-100",
+            "group-data-[state=open]/activity:translate-x-0 group-data-[state=open]/activity:rotate-90 group-data-[state=open]/activity:text-foreground group-data-[state=open]/activity:opacity-100",
+          )}
+          aria-hidden
+        />
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="mt-0.5 ml-5 flex flex-col gap-0.5 border-l border-border/35 pl-3">
@@ -198,15 +199,6 @@ function ActivityChildSegment(props: ActivityChildSegmentProps) {
           workflowMeta={segment.workflowMeta}
           nested={segment.children}
           variant="row"
-        />
-      );
-    case "reasoning":
-      return (
-        <ReasoningSegment
-          findUnitId={headerFindUnitId}
-          markdown={segment.markdown}
-          isStreaming={segment.isStreaming}
-          durationMs={segment.durationMs}
         />
       );
     case "approval":
