@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import type { EpicArtifactRef, TilePane } from "@/stores/epics/canvas/types";
+import type {
+  EpicArtifactRef,
+  EpicCanvasTileRef,
+  TilePane,
+  WorkspaceFileRef,
+} from "@/stores/epics/canvas/types";
 
 const mobileState = vi.hoisted(() => ({ value: true }));
 vi.mock("@/hooks/ui/use-mobile", () => ({
@@ -94,11 +99,26 @@ function artifactRef(id: string, instanceId: string): EpicArtifactRef {
   return { id, instanceId, type: "spec", name: id, hostId: "host-A" };
 }
 
-function seedCanvasActiveTile(activeTabId: string): void {
+function workspaceFileRef(id: string, instanceId: string): WorkspaceFileRef {
+  return {
+    id,
+    instanceId,
+    type: "workspace-file",
+    name: id,
+    hostId: "host-A",
+    workspacePath: "/ws",
+    filePath: id,
+  };
+}
+
+function seedCanvas(
+  tilesByInstanceId: Record<string, EpicCanvasTileRef>,
+  activeTabId: string,
+): void {
   const root: TilePane = {
     kind: "pane",
     id: "pane-A",
-    tabInstanceIds: ["inst-1", "inst-2"],
+    tabInstanceIds: Object.keys(tilesByInstanceId),
     activeTabId,
     previewTabId: null,
     activationHistory: [activeTabId],
@@ -106,15 +126,7 @@ function seedCanvasActiveTile(activeTabId: string): void {
   useEpicCanvasStore.setState({
     tabsById: { [TAB_ID]: { tabId: TAB_ID, epicId: "epic-1", name: "Epic 1" } },
     canvasByTabId: {
-      [TAB_ID]: {
-        root,
-        activePaneId: "pane-A",
-        tilesByInstanceId: {
-          "inst-1": artifactRef("a1", "inst-1"),
-          "inst-2": artifactRef("a2", "inst-2"),
-        },
-        sizesByGroupId: {},
-      },
+      [TAB_ID]: { root, activePaneId: "pane-A", tilesByInstanceId, sizesByGroupId: {} },
     },
   });
 }
@@ -129,19 +141,35 @@ describe("<TabSwitcherSheet /> close-on-open", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
-  it("closes when the shown tile changes while open (an embed opened a tile)", () => {
-    seedCanvasActiveTile("inst-1");
+  it("closes when a file-tree/git-diff tap lands an embed-originated tile", () => {
+    const tiles = {
+      "inst-1": artifactRef("a1", "inst-1"),
+      "inst-2": workspaceFileRef("f1", "inst-2"),
+    };
+    seedCanvas(tiles, "inst-1");
     const onOpenChange = vi.fn();
     renderSheet(true, onOpenChange);
     expect(onOpenChange).not.toHaveBeenCalled();
-    // A file/diff open lands a different tile as the shown tile.
-    act(() => seedCanvasActiveTile("inst-2"));
+    act(() => seedCanvas(tiles, "inst-2")); // shown tile -> workspace-file
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("stays open when a background chat/artifact open changes the shown tile", () => {
+    const tiles = {
+      "inst-1": artifactRef("a1", "inst-1"),
+      "inst-2": artifactRef("a2", "inst-2"),
+    };
+    seedCanvas(tiles, "inst-1");
+    const onOpenChange = vi.fn();
+    renderSheet(true, onOpenChange);
+    // A background handoff/remote-delete lands a non-embed tile as shown.
+    act(() => seedCanvas(tiles, "inst-2"));
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 
   it("stays open when only the category changes (no tile opened)", async () => {
     const user = userEvent.setup();
-    seedCanvasActiveTile("inst-1");
+    seedCanvas({ "inst-1": artifactRef("a1", "inst-1") }, "inst-1");
     const onOpenChange = vi.fn();
     renderSheet(true, onOpenChange);
     await user.click(screen.getByRole("tab", { name: "Git Diff" }));

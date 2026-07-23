@@ -18,6 +18,12 @@ import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-
 import { SwitcherPanelEmbed } from "@/components/epic-canvas/mobile/switcher-panel-embed";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
+import {
+  isGitDiffTileRef,
+  isSnapshotDiffTileRef,
+  isWorkspaceFileRef,
+  type EpicCanvasTileRef,
+} from "@/stores/epics/canvas/types";
 import { useIsMobile } from "@/hooks/ui/use-mobile";
 import {
   useActiveLeftPanelId,
@@ -31,6 +37,15 @@ interface TabSwitcherSheetProps {
   readonly tabId: string;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+}
+
+/** Tile kinds only the embedded File-tree / Git-diff bodies open. */
+function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
+  return (
+    isWorkspaceFileRef(ref) ||
+    isGitDiffTileRef(ref) ||
+    isSnapshotDiffTileRef(ref)
+  );
 }
 
 /**
@@ -65,28 +80,32 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
   // Close-on-open for the embedded panel bodies. The flat lists close the sheet
   // explicitly (they own the open call), but the File-tree / Git-diff bodies
   // open a tile through their own internal navigation - which we do not fork -
-  // so instead watch the shown tile: when it changes while the sheet is open, a
-  // selection landed, so close. In-panel navigation (repo / workspace switch)
-  // opens no tile and leaves the shown tile - and the sheet - untouched.
+  // so instead watch the shown tile. Close ONLY when the newly-shown tile is an
+  // embed-originated kind (a file-tree tap -> `workspace-file`, a git-diff tap
+  // -> `git-diff` / `snapshot-diff`). A background chat/terminal/artifact open
+  // (agent handoff, remote-delete re-resolve, cross-window nav on the shared
+  // canvas store) also changes the shown tile, but must NOT close the sheet
+  // under the user mid-browse - those flat-list opens close via their own
+  // `onClose` instead.
   const canvas = useEpicCanvas(tabId);
-  const currentInstanceId = useMemo(
-    () => selectMobileTile(canvas)?.ref.instanceId ?? null,
+  const shownTile = useMemo(
+    () => selectMobileTile(canvas)?.ref ?? null,
     [canvas],
   );
-  const openedInstanceIdRef = useRef<string | null>(null);
+  const shownInstanceId = shownTile?.instanceId ?? null;
+  const shownInstanceIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!open) {
-      openedInstanceIdRef.current = null;
+      shownInstanceIdRef.current = null;
       return;
     }
-    if (openedInstanceIdRef.current === null) {
-      openedInstanceIdRef.current = currentInstanceId;
-      return;
-    }
-    if (currentInstanceId !== openedInstanceIdRef.current) {
+    const previous = shownInstanceIdRef.current;
+    shownInstanceIdRef.current = shownInstanceId;
+    if (previous === null || shownInstanceId === previous) return;
+    if (shownTile !== null && isEmbedOriginatedTileRef(shownTile)) {
       onOpenChange(false);
     }
-  }, [open, currentInstanceId, onOpenChange]);
+  }, [open, shownInstanceId, shownTile, onOpenChange]);
 
   if (!isMobile) return null;
 
