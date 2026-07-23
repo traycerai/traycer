@@ -24,9 +24,8 @@ import type {
 } from "@/stores/epics/open-epic/types";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { cn, formatSingleLine } from "@/lib/utils";
-import { AgentReferenceMarkdown } from "./agent-reference-markdown";
 import { AgentHeaderLink } from "./agent-header-link";
-import { AgentMessageCopyButton } from "./agent-message-copy-button";
+import { AgentMessageBody } from "./agent-message-body";
 import { ReplyExpectedBadge } from "./reply-expected-badge";
 import { SegmentCard } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
@@ -648,20 +647,7 @@ function A2ASendToolSegment(
   const preview = <AgentMessagePreview message={send.message} tone="primary" />;
   const body = open ? (
     <div className="flex flex-col gap-2">
-      <div className="flex min-w-0 items-start gap-1.5">
-        <div
-          data-chat-find-unit={bodyFindUnitId}
-          className="max-h-[min(40vh,24rem)] min-w-0 flex-1 overflow-auto rounded-md border border-canvas-border/30 bg-canvas/40 px-3 py-2"
-        >
-          <AgentReferenceMarkdown
-            isStreaming={false}
-            markdown={send.message}
-            proseSize="compact"
-            quotable={false}
-          />
-        </div>
-        <AgentMessageCopyButton value={send.message} />
-      </div>
+      <AgentMessageBody value={send.message} bodyFindUnitId={bodyFindUnitId} />
       {hasError ? (
         <SegmentPanel
           label="Error"

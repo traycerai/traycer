@@ -72,9 +72,8 @@ import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery"
 import { ComposerArea } from "@/components/home/composer/composer-shell";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import { AgentReferenceMarkdown } from "./segments/agent-reference-markdown";
 import { AgentHeaderLink } from "./segments/agent-header-link";
-import { AgentMessageCopyButton } from "./segments/agent-message-copy-button";
+import { AgentMessageBody } from "./segments/agent-message-body";
 import { ReplyExpectedBadge } from "./segments/reply-expected-badge";
 import { SegmentCard } from "./segments/segment-card";
 import { useTombstonedProfileLabel } from "./use-tombstoned-profile-label";
@@ -266,20 +265,7 @@ function AgentMessageDisplayView({
 
   const body = open ? (
     <div className="flex flex-col gap-2">
-      <div className="flex min-w-0 items-start gap-1.5">
-        <div
-          data-chat-find-unit={bodyFindUnitId}
-          className="max-h-[min(40vh,24rem)] min-w-0 flex-1 overflow-auto rounded-md border border-canvas-border/30 bg-canvas/40 px-3 py-2"
-        >
-          <AgentReferenceMarkdown
-            isStreaming={false}
-            markdown={messageText}
-            proseSize="compact"
-            quotable={false}
-          />
-        </div>
-        <AgentMessageCopyButton value={messageText} />
-      </div>
+      <AgentMessageBody value={messageText} bodyFindUnitId={bodyFindUnitId} />
     </div>
   ) : null;
 
