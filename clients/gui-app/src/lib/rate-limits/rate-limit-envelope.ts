@@ -105,12 +105,11 @@ export interface ProviderRateLimitEnvelope {
 }
 
 /**
- * Whether `response` carries a snapshot for one of the two providers that
- * support managed profiles (v1 is claude-code/codex only) - the only
- * providers `providers.list`'s per-profile `rateLimitStatus` can ever report
- * anything for. Openrouter/kilocode/traycer-aperture reads gate out here so a
- * convergence invalidation isn't spent on a provider that could never affect
- * the switch-prompt banner. Failed probes (`available: false` - timeout,
+ * Whether `response` carries a snapshot for a provider whose `providers.list`
+ * profile rows report cached `rateLimitStatus`: claude-code, codex, or grok.
+ * Openrouter/kilocode/traycer-aperture reads gate out here so a convergence
+ * invalidation isn't spent on a provider that could never affect the
+ * switch-prompt banner. Failed probes (`available: false` - timeout,
  * cli_not_found, ...) gate out too: they carry no usage the host's gauge cache
  * could have captured, so `providers.list` has nothing new to converge on.
  */
@@ -121,7 +120,9 @@ function isManagedProfileCapableRateLimitsResponse(
   return (
     provider !== null &&
     provider.available &&
-    (provider.provider === "codex" || provider.provider === "claude-code")
+    (provider.provider === "codex" ||
+      provider.provider === "claude-code" ||
+      provider.provider === "grok")
   );
 }
 
@@ -215,7 +216,7 @@ export function buildProviderRateLimitEnvelope(
  * for this purpose because it runs inside the same queryFn invocation that
  * will overwrite that slot.
  *
- * Also the single point where a resolved codex/claude-code fetch converges
+ * Also the single point where a resolved codex/claude-code/grok fetch converges
  * `providers.list` (`invalidateProvidersListForConvergence`) - every real
  * `host.getRateLimitUsage` fetch for those two providers folds through this
  * function (the ephemeral queue's own `queryFn`; every other observer of

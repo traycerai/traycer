@@ -4,7 +4,11 @@ import { resolveBundledHostArchive } from "../installer/bundled-host";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { ProgressInfo } from "../runner/output";
 import type { RuntimeContext } from "../runner/runtime";
-import { provisionHost, type HostProvisionResult } from "./provision";
+import {
+  provisionHost,
+  type HostProvisionResult,
+  type HostSatisfactionPolicy,
+} from "./provision";
 import { defaultRegistryHostVersionRequest } from "./supported-host-version";
 import { installSourceLogFields } from "./install-source-log-fields";
 
@@ -75,22 +79,31 @@ export async function ensureHost(
     ...installSourceLogFields(source),
   });
   const isOwnBuild = source.kind === "local-file";
-  const targetVersion = isOwnBuild
-    ? config.version
-    : source.kind === "registry" && source.versionRequest !== "latest"
-      ? source.versionRequest
-      : null;
+  const satisfaction: HostSatisfactionPolicy = isOwnBuild
+    ? { kind: "exact", version: config.version }
+    : opts.versionRequest !== null &&
+        source.kind === "registry" &&
+        source.versionRequest !== "latest"
+      ? { kind: "exact", version: source.versionRequest }
+      : source.kind === "registry" && source.versionRequest !== "latest"
+        ? {
+            kind: "implicit-registry-minimum",
+            version: source.versionRequest,
+          }
+        : { kind: "presence" };
   opts.runtime.logger.debug("Host ensure provisioning target computed", {
     environment: opts.runtime.environment,
     sourceKind: source.kind,
-    targetVersion: targetVersion ?? "presence-only",
+    satisfactionKind: satisfaction.kind,
+    satisfactionVersion:
+      satisfaction.kind === "presence" ? "presence-only" : satisfaction.version,
     recordVersionOverride: isOwnBuild ? "cli-build-version" : "none",
     registerService: !opts.noServiceRegister,
   });
   const result = await provisionHost({
     runtime: opts.runtime,
     resolveInstallSource: () => Promise.resolve(source),
-    targetVersion,
+    satisfaction,
     recordVersionOverride: isOwnBuild ? config.version : null,
     enableLinger: opts.enableLinger,
     allowSelfInvocation: opts.allowSelfInvocation,

@@ -6,9 +6,19 @@ import {
   removeHostPidMetadata,
 } from "../../host/pid-metadata";
 import {
+  captureSpawnEvidenceBaseline,
+  createSpawnEvidenceReader,
+  sleep,
+  type SpawnEvidenceBaseline,
+  type SpawnEvidenceReader,
+} from "../../host/spawn-evidence";
+import {
   WINDOWS_PROCESS_SCAN_TIMEOUT_MS,
   WINDOWS_SCHTASKS_END_TIMEOUT_MS,
+  WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
   WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
+  WINDOWS_START_SPAWN_POLL_MS,
+  WINDOWS_START_SPAWN_VERIFY_MS,
   WINDOWS_TASKKILL_TIMEOUT_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
@@ -39,35 +49,94 @@ export function createWindowsController(
 ): ServiceController {
   const run = runner ?? runCommand;
   return {
-    install: (options) => installService(options),
+    install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run),
     status: (label) => statusService(label),
     stop: (label) => stopService(label, run),
-    start: (label) => startService(label),
+    start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
   };
 }
 
-async function installService(options: InstallServiceOptions): Promise<void> {
+// Injectable evidence seams so unit tests can drive the post-`/Run`
+// verification ladder without a real filesystem or host process.
+export interface WindowsStartEvidenceDeps {
+  readonly captureBaseline: (
+    environment: ServiceLabel["environment"],
+  ) => Promise<SpawnEvidenceBaseline>;
+  readonly createEvidenceReader: (
+    baseline: SpawnEvidenceBaseline,
+  ) => SpawnEvidenceReader;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly verifyTimeoutMs: number;
+  readonly verifyPollMs: number;
+}
+
+const defaultStartEvidenceDeps: WindowsStartEvidenceDeps = {
+  captureBaseline: (environment) => captureSpawnEvidenceBaseline(environment),
+  createEvidenceReader: (baseline) => createSpawnEvidenceReader(baseline),
+  sleep,
+  verifyTimeoutMs: WINDOWS_START_SPAWN_VERIFY_MS,
+  verifyPollMs: WINDOWS_START_SPAWN_POLL_MS,
+};
+
+let startEvidenceDeps: WindowsStartEvidenceDeps = defaultStartEvidenceDeps;
+
+/** Test-only override for the start-verification evidence seams. */
+export function setWindowsStartEvidenceDepsForTests(
+  deps: WindowsStartEvidenceDeps | null,
+): void {
+  startEvidenceDeps = deps ?? defaultStartEvidenceDeps;
+}
+
+interface StagedWindowsTaskDefinition {
+  readonly tmpDir: string;
+  readonly xmlPath: string;
+}
+
+export interface WindowsTaskInstallDeps {
+  stageTaskDefinition(
+    options: InstallServiceOptions,
+  ): Promise<StagedWindowsTaskDefinition>;
+  removeStagedTaskDefinition(tmpDir: string): Promise<void>;
+}
+
+const defaultTaskInstallDeps: WindowsTaskInstallDeps = {
+  stageTaskDefinition: async (options) => {
+    const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
+    const xmlPath = join(tmpDir, "task.xml");
+    await writeHiddenHostLauncher(options);
+    const xmlBody = buildTaskXml({ label: options.label, cli: options.cli });
+    await writeFile(xmlPath, Buffer.from(`﻿${xmlBody}`, "utf16le"));
+    return { tmpDir, xmlPath };
+  },
+  removeStagedTaskDefinition: (tmpDir) =>
+    rm(tmpDir, { recursive: true, force: true }),
+};
+
+let taskInstallDeps: WindowsTaskInstallDeps = defaultTaskInstallDeps;
+
+/** Test-only replacement for task-definition filesystem staging. */
+export function setWindowsTaskInstallDepsForTests(
+  deps: WindowsTaskInstallDeps | null,
+): void {
+  taskInstallDeps = deps ?? defaultTaskInstallDeps;
+}
+
+async function installService(
+  options: InstallServiceOptions,
+  run: ProcessRunner,
+): Promise<void> {
   const taskName = windowsTaskName(options.label);
-  // schtasks /Create /XML reads the task definition from disk. Stage it inside a
-  // private per-invocation directory (mkdtemp ⇒ mode 0700 with an unguessable
-  // suffix) rather than a predictable name in the shared tmpdir, so a local
-  // attacker can't pre-create or symlink the path we're about to write.
-  const tmpDir = await mkdtemp(join(tmpdir(), "traycer-task-"));
-  const xmlPath = join(tmpDir, "task.xml");
-  // schtasks /Create /XML requires UTF-16 LE with BOM. Anything else
-  // fails with "The specified file is not a valid XML file". Node's
-  // built-in `utf16le` encoder paired with a leading U+FEFF BOM
-  // handles surrogate pairs / non-BMP code points (emoji, etc.) that
-  // the hand-rolled writeUInt16LE-per-char loop would corrupt.
-  await writeHiddenHostLauncher(options);
-  const xmlBody = buildTaskXml({ label: options.label, cli: options.cli });
-  await writeFile(xmlPath, Buffer.from(`﻿${xmlBody}`, "utf16le"));
+  // schtasks /Create /XML reads a UTF-16LE task definition from a private,
+  // per-invocation staging directory. Keep staging separate from the runner so
+  // the controller's install → verified `/Run` composition can be unit-tested
+  // without touching a real user service surface.
+  const staged = await taskInstallDeps.stageTaskDefinition(options);
   try {
-    await runCommand(
+    await run(
       "schtasks",
-      ["/Create", "/TN", taskName, "/XML", xmlPath, "/F"],
+      ["/Create", "/TN", taskName, "/XML", staged.xmlPath, "/F"],
       {
         env: undefined,
         cwd: undefined,
@@ -83,16 +152,12 @@ async function installService(options: InstallServiceOptions): Promise<void> {
       exitCode: 1,
     });
   } finally {
-    await rm(tmpDir, { recursive: true, force: true });
+    await taskInstallDeps.removeStagedTaskDefinition(staged.tmpDir);
   }
-  // Kick the task immediately so the host comes up without waiting
-  // for the next logon.
-  await runCommand("schtasks", ["/Run", "/TN", taskName], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: 30_000,
-    tolerateNonZeroExit: false,
-  });
+  // Registration is also the recovery launch. Verify this exact `/Run` so
+  // callers never baseline after it and mistake IgnoreNew's suppressed second
+  // run for a failed repair.
+  await runTaskAndVerifyStart(options.label, run);
 }
 
 async function uninstallService(
@@ -129,7 +194,7 @@ async function statusService(label: ServiceLabel): Promise<ServiceStatus> {
     await runCommand("schtasks", ["/Query", "/TN", taskName], {
       env: undefined,
       cwd: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
       tolerateNonZeroExit: false,
     });
     registered = true;
@@ -204,9 +269,24 @@ async function killHostProcessTree(
   );
 }
 
-async function startService(label: ServiceLabel): Promise<void> {
+async function startService(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<void> {
+  await runTaskAndVerifyStart(label, run);
+}
+
+async function runTaskAndVerifyStart(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<void> {
+  const taskName = windowsTaskName(label);
+  // Capture evidence baseline BEFORE /Run so a pre-existing pid.json or
+  // stale host.log residue cannot count as "spawned this attempt".
+  const baseline = await startEvidenceDeps.captureBaseline(label.environment);
+  const evidenceReader = startEvidenceDeps.createEvidenceReader(baseline);
   try {
-    await runCommand("schtasks", ["/Run", "/TN", windowsTaskName(label)], {
+    await run("schtasks", ["/Run", "/TN", taskName], {
       env: undefined,
       cwd: undefined,
       timeoutMs: WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
@@ -215,11 +295,110 @@ async function startService(label: ServiceLabel): Promise<void> {
   } catch (cause) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `schtasks /Run failed for ${windowsTaskName(label)}: ${describeCause(cause)}`,
-      details: { task: windowsTaskName(label), cause: describeCause(cause) },
+      message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
+      details: { task: taskName, cause: describeCause(cause) },
       exitCode: 1,
     });
   }
+  // Exit 0 from /Run only means the scheduler accepted the request. Poll
+  // for post-baseline spawn evidence (pid metadata written after the run
+  // baseline, or a post-baseline bootstrap marker). On none, surface the
+  // task's Last Run Result so Retry can escalate to a task rewrite.
+  const deadline = Date.now() + startEvidenceDeps.verifyTimeoutMs;
+  while (Date.now() < deadline) {
+    const evidence = await evidenceReader.collect(label.environment);
+    if (evidence !== null) {
+      return;
+    }
+    await startEvidenceDeps.sleep(startEvidenceDeps.verifyPollMs);
+  }
+  const lastRunResult = await readTaskLastRunResult(taskName, run);
+  throw cliError({
+    code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    message:
+      lastRunResult === null
+        ? `schtasks /Run for ${taskName} accepted the request but no host spawn evidence appeared within ${startEvidenceDeps.verifyTimeoutMs}ms`
+        : `schtasks /Run for ${taskName} accepted the request but no host spawn evidence appeared within ${startEvidenceDeps.verifyTimeoutMs}ms (Last Run Result: ${lastRunResult})`,
+    details: {
+      task: taskName,
+      lastRunResult,
+      verifyTimeoutMs: startEvidenceDeps.verifyTimeoutMs,
+    },
+    exitCode: 1,
+  });
+}
+
+/**
+ * Parse `Last Run Result` from a headerless `schtasks /Query /V /FO CSV`
+ * response. CSV's fixed output column is locale-independent, unlike the
+ * translated `Last Run Result` label from `/FO LIST`.
+ */
+async function readTaskLastRunResult(
+  taskName: string,
+  run: ProcessRunner,
+): Promise<string | null> {
+  try {
+    const result = await run(
+      "schtasks",
+      ["/Query", "/TN", taskName, "/V", "/FO", "CSV", "/NH"],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
+        tolerateNonZeroExit: true,
+      },
+    );
+    return parseSchtasksLastRunResult(result.stdout);
+  } catch {
+    return null;
+  }
+}
+
+export function parseSchtasksLastRunResult(stdout: string): string | null {
+  const csv = parseSchtasksCsvRow(stdout);
+  // `schtasks /FO CSV` uses column six (zero-based) for Last Run Result.
+  // The positions remain stable while their rendered headers are localized.
+  if (csv !== null && csv.length > 6) {
+    const value = (csv[6] ?? "").trim();
+    return value.length === 0 ? null : value;
+  }
+  // Compatibility for existing callers/tests that still hand us `/FO LIST`
+  // output. Production uses the CSV path above.
+  const match = /Last\s+Run\s+Result\s*:\s*(.+)\s*$/im.exec(stdout);
+  if (match === null) return null;
+  const value = (match[1] ?? "").trim();
+  return value.length === 0 ? null : value;
+}
+
+function parseSchtasksCsvRow(stdout: string): readonly string[] | null {
+  const line = stdout
+    .split(/\r?\n/)
+    .map((candidate) => candidate.trim())
+    .find((candidate) => candidate.length > 0);
+  if (line === undefined || !line.includes(",")) return null;
+  const values: string[] = [];
+  let value = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index] ?? "";
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+    if (character === "," && !quoted) {
+      values.push(value);
+      value = "";
+      continue;
+    }
+    value += character;
+  }
+  values.push(value);
+  return values;
 }
 
 async function restartService(
@@ -236,21 +415,10 @@ async function restartService(
   // Reap the orphaned host tree before re-running, otherwise the old node keeps
   // its port + install dir and the fresh task races a stale host.
   await killHostProcessTree(label, run);
-  try {
-    await run("schtasks", ["/Run", "/TN", taskName], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: WINDOWS_SCHTASKS_RUN_TIMEOUT_MS,
-      tolerateNonZeroExit: false,
-    });
-  } catch (cause) {
-    throw cliError({
-      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `schtasks /Run failed for ${taskName}: ${describeCause(cause)}`,
-      details: { task: taskName, cause: describeCause(cause) },
-      exitCode: 1,
-    });
-  }
+  // Restart reuses the verified start path (baseline + post-/Run evidence)
+  // so a stop-then-start that the scheduler accepts but never spawns fails
+  // with Last Run Result instead of a silent no-op.
+  await startService(label, run);
 }
 
 function statusNotInstalled(): ServiceStatus {
