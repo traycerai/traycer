@@ -53,3 +53,16 @@ export function SwitcherListEmpty(props: { readonly message: string }) {
     </div>
   );
 }
+
+/**
+ * Right-aligned header bar hosting a category's "+" create affordance. Renders
+ * nothing when `action` is null (a viewer with no create rights).
+ */
+export function SwitcherListHeader(props: { readonly action: ReactNode }) {
+  if (props.action === null) return null;
+  return (
+    <div className="flex shrink-0 items-center justify-end px-2 pt-1.5">
+      {props.action}
+    </div>
+  );
+}

@@ -107,6 +107,21 @@ vi.mock("@/hooks/terminal/use-terminal-kill-mutation", () => ({
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => vi.fn(),
 }));
+// Create affordances pull the modal funnel / host pickers; stub them so the
+// list headers render and we can assert editor-gating in isolation.
+vi.mock("@/components/epic-canvas/mobile/switcher-create-actions", () => ({
+  SwitcherNewAgentButton: () => (
+    <button type="button" data-testid="new-agent-action" />
+  ),
+  SwitcherNewArtifactMenu: () => (
+    <button type="button" data-testid="new-artifact-action" />
+  ),
+}));
+vi.mock("@/components/epic-canvas/sidebar/new-terminal-picker", () => ({
+  NewTerminalPicker: () => (
+    <button type="button" data-testid="new-terminal-action" />
+  ),
+}));
 
 const PROPS = { epicId: "epic-1", tabId: "tab-1", onClose: () => {} };
 
@@ -198,5 +213,40 @@ describe("<SwitcherArtifactsList />", () => {
     const row = screen.getByTestId("switcher-artifact-row-tk-1");
     expect(row.textContent).toContain("Ticket One");
     expect(screen.getByTitle("In Progress")).toBeTruthy();
+  });
+});
+
+describe("switcher create affordances (editor-gated)", () => {
+  it("shows New agent for an editor and hides it for a viewer", () => {
+    holder.records = [
+      { id: "chat-1", parentId: null, name: "Alpha", type: "chat", status: null, hostId: "host-A" },
+    ];
+    const editor = render(<SwitcherAgentsList {...PROPS} />);
+    expect(screen.getByTestId("new-agent-action")).toBeTruthy();
+    editor.unmount();
+
+    holder.role = "viewer";
+    render(<SwitcherAgentsList {...PROPS} />);
+    expect(screen.queryByTestId("new-agent-action")).toBeNull();
+  });
+
+  it("shows New terminal for an editor and hides it for a viewer", () => {
+    const editor = render(<SwitcherTerminalsList {...PROPS} />);
+    expect(screen.getByTestId("new-terminal-action")).toBeTruthy();
+    editor.unmount();
+
+    holder.role = "viewer";
+    render(<SwitcherTerminalsList {...PROPS} />);
+    expect(screen.queryByTestId("new-terminal-action")).toBeNull();
+  });
+
+  it("shows New artifact for an editor and hides it for a viewer", () => {
+    const editor = render(<SwitcherArtifactsList {...PROPS} />);
+    expect(screen.getByTestId("new-artifact-action")).toBeTruthy();
+    editor.unmount();
+
+    holder.role = "viewer";
+    render(<SwitcherArtifactsList {...PROPS} />);
+    expect(screen.queryByTestId("new-artifact-action")).toBeNull();
   });
 });
