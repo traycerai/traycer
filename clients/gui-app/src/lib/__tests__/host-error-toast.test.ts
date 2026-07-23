@@ -222,6 +222,35 @@ describe("toastFromHostError", () => {
     );
   });
 
+  it("shows upgrade copy for E_HOST_UNSUPPORTED without an app-local failure row", () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-1");
+
+    toastFromHostError(
+      new HostRpcError({
+        code: "E_HOST_UNSUPPORTED",
+        message: "host.notifications.resolve is not supported",
+        requestId: "req-unsupported-resolve",
+        method: "host.notifications.resolve",
+        fatalDetails: {
+          code: "E_HOST_UNSUPPORTED",
+          reason: "Method not advertised by this host",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      }),
+      "Couldn't dismiss the notification.",
+    );
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "This needs a newer Traycer host. Update the host to continue.",
+      {
+        id: "host-error:E_HOST_UNSUPPORTED:E_HOST_UNSUPPORTED",
+        cancel: null,
+      },
+    );
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
+  });
+
   it("shows the fallback for any other error code", () => {
     toastFromHostError(
       makeError("RPC_ERROR", "test error"),

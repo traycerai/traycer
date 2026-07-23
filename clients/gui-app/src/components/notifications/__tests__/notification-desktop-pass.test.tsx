@@ -197,6 +197,33 @@ function hostPrompt(
   };
 }
 
+function hostFailure(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+  taskTitle: string,
+): HostNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "agent.stopped",
+    sourceRef: id,
+    severity: "failure",
+    outcome: "errored",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      agentName: "Agent",
+      taskTitle,
+      outcome: "errored",
+    },
+  };
+}
+
 function applyHostSnapshot(
   entries: ReadonlyArray<HostNotificationEntry>,
   summary: { readonly unreadCount: number; readonly attentionCount: number },
@@ -433,6 +460,7 @@ function resetStores(): void {
     }
     if (
       method === "host.notifications.markRead" ||
+      method === "host.notifications.resolve" ||
       method === "host.notifications.markAllRead"
     ) {
       return Promise.resolve({ ok: true });
@@ -558,9 +586,22 @@ describe("notification desktop-pass design corrections", () => {
       expect(
         within(attention).getByTestId("notification-unread-rail"),
       ).not.toBeNull();
+      // Core dismiss fix: blocking Attention still exposes Dismiss after read.
+      expect(
+        within(attention).getByTestId("notification-dismiss"),
+      ).not.toBeNull();
+      expect(
+        within(attention).queryByTestId("notification-mark-read"),
+      ).toBeNull();
       expect(recentRead.dataset.notificationRead).toBe("true");
       expect(
         within(recentRead).queryByTestId("notification-unread-rail"),
+      ).toBeNull();
+      expect(
+        within(recentRead).queryByTestId("notification-dismiss"),
+      ).toBeNull();
+      expect(
+        within(recentRead).queryByTestId("notification-mark-read"),
       ).toBeNull();
       expect(recentUnread.dataset.notificationRead).toBe("false");
       expect(
@@ -701,6 +742,7 @@ describe("notification desktop-pass design corrections", () => {
       expect(
         within(navRead).queryByTestId("notification-acknowledge"),
       ).toBeNull();
+      expect(within(navRead).queryByTestId("notification-dismiss")).toBeNull();
 
       const ack = within(localUnread).getByTestId("notification-acknowledge");
       expect(ack.hasAttribute("disabled")).toBe(false);
@@ -720,6 +762,120 @@ describe("notification desktop-pass design corrections", () => {
         expect(
           within(live).queryByTestId("notification-acknowledge"),
         ).toBeNull();
+      });
+    });
+
+    it("exposes Dismiss only on blocking Attention and resolve does not activate the row", async () => {
+      applyHostSnapshot(
+        [
+          hostPrompt("blocking-read", 200, 50),
+          hostFailure("fail-unread", 180, null, "Failure task"),
+          hostDone("recent-unread", 90, null, "Recent unread task"),
+        ],
+        { unreadCount: 2, attentionCount: 2 },
+      );
+      renderPopoverRouter(noopFilterMenuOpenChange);
+
+      expect(await screen.findByText("Needs attention")).not.toBeNull();
+      function findRow(feedId: string): HTMLElement {
+        const row = screen
+          .getAllByTestId("notification-entry")
+          .find((entry) => entry.dataset.notificationId === feedId);
+        if (row === undefined) throw new Error(`missing row ${feedId}`);
+        return row;
+      }
+
+      const blocking = findRow("host:blocking-read");
+      const failure = findRow("host:fail-unread");
+      const recent = findRow("host:recent-unread");
+
+      expect(blocking.dataset.notificationRead).toBe("true");
+      const dismiss = within(blocking).getByTestId("notification-dismiss");
+      expect(dismiss.getAttribute("aria-label")).toBe("Dismiss");
+      expect(
+        within(blocking).queryByTestId("notification-mark-read"),
+      ).toBeNull();
+
+      expect(
+        within(failure).getByTestId("notification-mark-read"),
+      ).not.toBeNull();
+      expect(within(failure).queryByTestId("notification-dismiss")).toBeNull();
+
+      expect(
+        within(recent).getByTestId("notification-mark-read"),
+      ).not.toBeNull();
+      expect(within(recent).queryByTestId("notification-dismiss")).toBeNull();
+
+      fireEvent.click(dismiss);
+      await waitFor(() => {
+        expect(hostRequestMock).toHaveBeenCalledWith(
+          "host.notifications.resolve",
+          {
+            occurrences: [
+              {
+                id: "blocking-read",
+                updatedAt: 200,
+                sourceRef: "blocking-read",
+              },
+            ],
+          },
+        );
+      });
+
+      // No optimistic client write: row remains unresolved until the host frame.
+      const stillPending =
+        useHostNotificationsStore.getState().byId["blocking-read"];
+      expect(
+        "resolvedAt" in stillPending ? stillPending.resolvedAt : null,
+      ).toBeNull();
+      expect(
+        screen
+          .getAllByTestId("notification-entry")
+          .find(
+            (entry) => entry.dataset.notificationId === "host:blocking-read",
+          ),
+      ).not.toBeUndefined();
+
+      const resolvedAt = 888;
+      // blocking-read was already read; resolving it must not drop unreadCount
+      // (still 2: fail-unread + recent-unread). Only attentionCount decrements
+      // (fail-unread remains in Attention).
+      act(() => {
+        useHostNotificationsStore
+          .getState()
+          .applyReadStateFrame(["blocking-read"], {
+            readAt: resolvedAt,
+            resolvedAt,
+            removedIds: [],
+            summary: { unreadCount: 2, attentionCount: 1 },
+          });
+      });
+
+      await waitFor(() => {
+        const resolved =
+          useHostNotificationsStore.getState().byId["blocking-read"];
+        expect(resolved.readAt).toBe(resolvedAt);
+        expect("resolvedAt" in resolved ? resolved.resolvedAt : null).toBe(
+          resolvedAt,
+        );
+      });
+      expect(useHostNotificationsStore.getState().summary).toEqual({
+        unreadCount: 2,
+        attentionCount: 1,
+      });
+      await waitFor(() => {
+        const live = screen
+          .queryAllByTestId("notification-entry")
+          .find(
+            (entry) => entry.dataset.notificationId === "host:blocking-read",
+          );
+        if (live === undefined) {
+          // Left Attention after resolve - no longer in the blocking section.
+          expect(screen.queryByTestId("notification-dismiss")).toBeNull();
+          return;
+        }
+        expect(within(live).queryByTestId("notification-dismiss")).toBeNull();
+        expect(live.dataset.notificationRead).toBe("true");
       });
     });
   });
