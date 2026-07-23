@@ -67,6 +67,7 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+import { toast } from "sonner";
 import {
   type CreateTuiAgentStatus,
   useCreateTuiAgent,
@@ -229,7 +230,9 @@ describe("useCreateTuiAgent", () => {
           terminalAgentArgs: null,
           profileId: null,
         }),
-      ).rejects.toThrow("Couldn't prepare the workspace");
+      ).rejects.toThrow(
+        /Couldn't prepare the workspace .* branch already exists/,
+      );
     });
 
     // Launching against the partial binding never proceeds to harness work.
@@ -237,6 +240,13 @@ describe("useCreateTuiAgent", () => {
     expect(methodOrder).toContain("worktree.create");
     expect(methodOrder).not.toContain("agent.tui.prepareLaunch");
     expect(methodOrder).not.toContain("epic.createTuiAgent");
+
+    // The host's causal per-entry reason reaches the toast, not just the
+    // folder-name headline.
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      'Couldn\'t prepare the workspace for "workspace-a". The terminal agent was not launched.',
+      expect.objectContaining({ description: "branch already exists" }),
+    );
   });
 
   it("Worktree-mode (create) dispatches worktree.create BEFORE agent.tui.prepareLaunch", async () => {
