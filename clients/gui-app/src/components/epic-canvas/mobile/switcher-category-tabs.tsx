@@ -1,5 +1,8 @@
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { visibleSwitcherCategoryDefs } from "@/components/epic-canvas/mobile/switcher-categories";
+import {
+  switcherCategoryTitle,
+  visibleSwitcherCategoryDefs,
+} from "@/components/epic-canvas/mobile/switcher-categories";
 
 /**
  * The category tab bar for the mobile "Switch tab" sheet: a `line`-variant
@@ -21,11 +24,16 @@ export function SwitcherCategoryTabs() {
           <TabsTrigger
             key={definition.id}
             value={definition.id}
-            className="min-h-9 flex-none gap-1.5"
+            // Force the line-variant active state to underline-only: the base
+            // trigger's `data-active:bg-*` fill (which the `:where()`-neutralised
+            // line override can't out-specify) paints a solid box wherever the
+            // active `--background` differs from the sheet's `--popover`. Same
+            // `data-active:` prefix, so tailwind-merge drops the base fill.
+            className="min-h-9 flex-none gap-1.5 data-active:bg-transparent dark:data-active:bg-transparent"
             data-testid={`mobile-switcher-tab-${definition.id}`}
           >
             <Icon className="size-4" />
-            {definition.title}
+            {switcherCategoryTitle(definition)}
           </TabsTrigger>
         );
       })}

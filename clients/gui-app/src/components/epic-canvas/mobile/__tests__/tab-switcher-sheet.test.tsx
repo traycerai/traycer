@@ -16,6 +16,9 @@ vi.mock("@/hooks/ui/use-mobile", () => ({
   useIsMobile: () => mobileState.value,
   isMobileViewport: () => mobileState.value,
 }));
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
+}));
 
 // The category bodies pull the epic projection / host queries; this test covers
 // the shell + tabs + persistence, so stub the lists to markers.
@@ -34,7 +37,7 @@ vi.mock("@/components/epic-canvas/mobile/switcher-panel-embed", () => ({
 
 const TAB_ID = "tab-switcher-test";
 const CATEGORY_NAMES = [
-  "Agents",
+  "Chats",
   "Artifacts",
   "File Tree",
   "Git Diff",
@@ -66,6 +69,15 @@ describe("<TabSwitcherSheet />", () => {
       expect(screen.getByRole("tab", { name })).toBeTruthy();
     }
     expect(screen.getAllByRole("tab")).toHaveLength(5);
+  });
+
+  it("labels the chats category 'Chats' and forces the active tab's fill transparent", () => {
+    renderSheet(true, () => {});
+    const active = screen.getByRole("tab", { name: "Chats" });
+    expect(active.getAttribute("data-state")).toBe("active");
+    // The base `data-active:bg-*` fill is overridden so the active line tab is
+    // underline-only, not a solid box (the live-review defect).
+    expect(active.className).toContain("data-active:bg-transparent");
   });
 
   it("defaults to the Agents category and shows its body", () => {
