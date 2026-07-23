@@ -61,6 +61,7 @@ import {
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
+  type HostNotificationsResolveRequest,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
@@ -84,6 +85,10 @@ export interface MergedNotificationRow {
   /** Only host approval/interview rows carry a meaningful value; every other
    * row is `null` and never reads as an unresolved prompt. */
   readonly resolvedAt: number | null;
+  /** The host entry's `sourceRef` (approval/interview id), part of the
+   * dismiss occurrence token `(id, updatedAt, sourceRef)`. `null` for
+   * non-host rows and host rows without a source ref. */
+  readonly sourceRef: string | null;
   /** Product-vocabulary category, mapped from `source` at the projection
    * boundary so consumers never branch on the internal source seam. */
   readonly category: NotificationCategory;
@@ -91,6 +96,12 @@ export interface MergedNotificationRow {
 
 export interface MergedNotificationsActions {
   readonly markAsRead: (feedId: string) => void;
+  /** Dismiss an unresolved `needs_action` Attention row: stamps `resolvedAt`
+   * (and marks it read) so it leaves Attention without answering the
+   * underlying prompt. Takes the row (not just its id) because the request
+   * carries the immutable occurrence token `(id, updatedAt)`. Host rows only -
+   * no other source is blocking-eligible. */
+  readonly resolve: (row: MergedNotificationRow) => void;
   readonly markAllAsRead: () => void;
   readonly loadMoreHost: () => void;
   readonly canLoadMoreHost: boolean;
@@ -429,6 +440,80 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     },
   });
 
+  const resolveHost = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.resolve",
+    HostNotificationMutationContext,
+    {
+      readonly feedId: string;
+      readonly sourceId: string;
+      readonly updatedAt: number;
+      readonly sourceRef: string | null;
+    }
+  >({
+    client,
+    method: "host.notifications.resolve",
+    // Immutable occurrence token `(id, updatedAt, sourceRef)` - the host
+    // resolves only if this exact occurrence is still the unresolved row, so a
+    // newer prompt that reopened the same reusable id is never clobbered, even
+    // when it reopened within the same millisecond (equal `updatedAt`, new
+    // `sourceRef`).
+    mapVariables: (variables) => ({
+      occurrences: [
+        {
+          id: variables.sourceId,
+          updatedAt: variables.updatedAt,
+          sourceRef: variables.sourceRef,
+        },
+      ],
+    }),
+    options: {
+      mutationKey: notificationsMutationKeys.resolve(),
+      onMutate: () => captureHostNotificationMutationContext(client),
+      // No optimistic local write. The host stamps one authoritative
+      // `resolvedAt`/`readAt` and emits it as a non-suppressed
+      // `readStateChanged` frame, which is the single source that removes the
+      // row from Attention (and a fresh snapshot reconciles it on reconnect). A
+      // client-side write would either diverge from that timestamp or resolve a
+      // NEWER occurrence that reopened the same id between capture and success;
+      // if the occurrence has moved on, the host no-ops and emits nothing, so
+      // the row correctly stays in Attention.
+      onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        toastFromHostError(error, "Couldn't dismiss the notification.");
+      },
+    },
+  });
+
+  const resolveHostAll = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.resolve",
+    HostNotificationMutationContext,
+    HostNotificationsResolveRequest
+  >({
+    client,
+    method: "host.notifications.resolve",
+    // Batch dismiss for the "Mark all read" double-tick: the SAME token-guarded
+    // `host.notifications.resolve` path the row-level Dismiss uses, called with
+    // the currently-loaded Attention occurrence tokens. Zero new wire surface -
+    // the request already batches (depth-safe-chunked host-side).
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.resolveAll(),
+      onMutate: () => captureHostNotificationMutationContext(client),
+      // No optimistic write (same as the row-level resolve): the rows leave
+      // Attention via the host's authoritative `readStateChanged` frame.
+      onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        // On an older host the resolve method is `E_HOST_UNSUPPORTED`: the
+        // shared mapper surfaces upgrade guidance and creates no failure row,
+        // and its per-code dedupe collapses this with markAllRead's toast if
+        // that also degraded - so the partial degrade never double-toasts.
+        toastFromHostError(error, "Couldn't dismiss the notifications.");
+      },
+    },
+  });
+
   const markHostAllRead = useHostMutation<
     HostRpcRegistry,
     "host.notifications.markAllRead",
@@ -626,11 +711,57 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         }
         appLocalMarkAsRead(parsed.sourceId, Date.now());
       },
+      resolve: (row) => {
+        // Only host `needs_action` rows are dismiss-eligible (app-local rows
+        // are `failure`, global rows are `info` - neither reaches the blocking
+        // tier), so this is host-only by construction. `row.createdAt` is the
+        // host entry's `updatedAt` - the occurrence token the host guards on.
+        if (row.source !== "host") return;
+        if (client === null) return;
+        resolveHost.mutate({
+          feedId: row.feedId,
+          sourceId: row.sourceId,
+          updatedAt: row.createdAt,
+          sourceRef: row.sourceRef,
+        });
+      },
       markAllAsRead: () => {
         globalMarkAllAsRead();
         appLocalMarkAllAsRead(Date.now());
-        if (client !== null) {
+        // Both host halves - mark-all-read AND dismiss-all - apply only against
+        // an ACTIVE host. A disconnect keeps the runtime binding
+        // (`client !== null`) and the retained host replica, but drops the
+        // active host id to null and degrades the exact summary to unknown;
+        // firing host mutations then only yields unbound-rejection error toasts
+        // while the rendered rows cannot change. Gate BOTH on the same
+        // authoritative active-host signal (read fresh at click time, the same
+        // value `useReactiveActiveHostId` projects), NOT `client !== null`. The
+        // local global/app-local mark-all above always run.
+        if (client !== null && client.getActiveHostId() !== null) {
+          // Fire mark-all-read and dismiss-all CONCURRENTLY. mark-all-read is
+          // unchanged (released `markAllRead` semantics - a released client's
+          // plain mark-all must never start resolving prompts host-side). The
+          // dismiss-all portion is pure client-side composition: it resolves
+          // the currently-loaded blocking-tier Attention rows (host
+          // `needs_action`, still unresolved) through the same occurrence-token
+          // guarded `resolve` path the row-level Dismiss uses.
+          //
+          // Only LOADED rows are dismissed. `needs_action` rows beyond the
+          // Attention pagination boundary are intentionally NOT dismissed
+          // ("you can't dismiss what you haven't seen") - a host-side
+          // resolve-all would violate the token discipline by dismissing
+          // prompts the user never saw, including ones arriving this instant.
+          //
+          // If the host predates `resolve` the dismiss degrades with an upgrade
+          // toast (no failure row) while mark-all-read still applies; the
+          // loaded needs_action rows simply stay in Attention.
           markHostAllRead.mutate({ beforeUpdatedAt: Date.now() });
+          const occurrences = loadedBlockingAttentionOccurrences();
+          // The protocol requires >= 1 occurrence, so skip the RPC entirely
+          // when no blocking Attention rows are loaded.
+          if (occurrences.length > 0) {
+            resolveHostAll.mutate({ occurrences });
+          }
         }
       },
       loadMoreHost: () => {
@@ -669,6 +800,8 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       appLocalMarkAsRead,
       appLocalMarkAllAsRead,
       markHostRead,
+      resolveHost,
+      resolveHostAll,
       markHostAllRead,
       loadMoreHost,
       hostNextCursor,
@@ -754,6 +887,7 @@ export function rowFromHostEntry(
     severity: entry.severity,
     outcome: entry.outcome,
     resolvedAt: "resolvedAt" in entry ? entry.resolvedAt : null,
+    sourceRef: entry.sourceRef,
     category: categoryForNotificationSource("host"),
   };
 }
@@ -776,6 +910,7 @@ export function rowFromAppLocalEntry(
     severity: "failure",
     outcome: null,
     resolvedAt: null,
+    sourceRef: null,
     category: categoryForNotificationSource("app-local"),
   };
 }
@@ -798,6 +933,7 @@ export function rowFromGlobalEntry(
     severity: "info",
     outcome: null,
     resolvedAt: null,
+    sourceRef: null,
     category: categoryForNotificationSource("global"),
   };
 }
@@ -812,6 +948,28 @@ function parseFeedId(feedId: string): ParsedFeedId | null {
     return { source, sourceId };
   }
   return null;
+}
+
+/** The occurrence tokens of the currently-loaded blocking-tier Attention rows -
+ * host `needs_action` rows that are still unresolved, i.e. exactly the set the
+ * row-level Dismiss resolves, gathered for the "Mark all read" double-tick's
+ * dismiss-all composition. Reads the loaded replica only; unloaded rows past the
+ * Attention pagination boundary are intentionally excluded (see the note in
+ * `markAllAsRead` - occurrence-token discipline forbids resolving unseen
+ * prompts). */
+function loadedBlockingAttentionOccurrences(): HostNotificationsResolveRequest["occurrences"] {
+  return Object.values(useHostNotificationsStore.getState().byId)
+    .filter(
+      (entry) =>
+        entry.severity === "needs_action" &&
+        "resolvedAt" in entry &&
+        entry.resolvedAt === null,
+    )
+    .map((entry) => ({
+      id: entry.id,
+      updatedAt: entry.updatedAt,
+      sourceRef: entry.sourceRef,
+    }));
 }
 
 function captureHostNotificationMutationContext(

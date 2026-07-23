@@ -46,6 +46,7 @@ function row(title: string): MergedNotificationRow {
     severity: "done",
     outcome: "completed",
     resolvedAt: null,
+    sourceRef: null,
     category: "task",
   };
 }
