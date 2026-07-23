@@ -2063,6 +2063,140 @@ describe("accumulateEvent", () => {
     expect(block.startedAt).toBe(1000);
   });
 
+  // ── T8: new-run discriminator (differing non-null spawn ids) ──
+
+  it("subagent.started with a differing non-null spawnToolCallId reopens a terminal card as a new run", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1000,
+      name: "explorer",
+      agentType: "explore",
+      task: "Investigate the auth flow",
+      spawnToolCallId: "toolu_run1",
+      parentBlockId: "sa-parent",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.progress",
+      blockId: "sa1",
+      timestamp: 1500,
+      update: "rg --files",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2000,
+      outcome: "stopped",
+      result: "stopped by idle",
+    });
+
+    // Continuation restart: same blockId, new spawn tool id (SendMessage tool_use_id).
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 3000,
+      name: "explorer-restarted",
+      agentType: "explore",
+      task: "Continue from where you left off",
+      spawnToolCallId: "toolu_run2",
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("streaming");
+    expect(block.stopped).toBe(false);
+    expect(block.result).toBeNull();
+    expect(block.progressUpdates).toEqual([]);
+    expect(block.task).toBe("Continue from where you left off");
+    expect(block.spawnToolCallId).toBe("toolu_run2");
+    expect(block.timestamp).toBe(3000);
+    expect(block.startedAt).toBe(3000);
+    expect(block.workflowMeta).toBeNull();
+    // Identity fields carry over from the prior generation; the restart event
+    // does not rewrite them when the new-run discriminator fires.
+    expect(block.name).toBe("explorer");
+    expect(block.agentType).toBe("explore");
+    expect(block.parentBlockId).toBe("sa-parent");
+  });
+
+  it("subagent.started with the same spawnToolCallId refreshes without reopening a terminal card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1000,
+      name: "Subagent",
+      task: "Investigate",
+      spawnToolCallId: "toolu_same",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2000,
+      outcome: "completed",
+      result: "done",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 6000,
+      name: "Godel (explorer)",
+      task: "Investigate",
+      spawnToolCallId: "toolu_same",
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("completed");
+    expect(block.result).toBe("done");
+    expect(block.spawnToolCallId).toBe("toolu_same");
+    expect(block.timestamp).toBe(2000);
+    expect(block.startedAt).toBe(1000);
+    expect(block.name).toBe("Godel (explorer)");
+  });
+
+  it("subagent.started with no spawnToolCallId refreshes without reopening a terminal card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 1000,
+      name: "Subagent",
+      task: "Investigate",
+      spawnToolCallId: "toolu_9",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.progress",
+      blockId: "sa1",
+      timestamp: 1500,
+      update: "rg --files",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.completed",
+      blockId: "sa1",
+      timestamp: 2000,
+      outcome: "completed",
+      result: "done",
+    });
+    // Codex-style nickname re-emit after completion: no spawn tool id of its own.
+    blocks = accumulateEvent(blocks, {
+      type: "subagent.started",
+      blockId: "sa1",
+      timestamp: 6000,
+      name: "Godel (explorer)",
+      task: "Investigate",
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("completed");
+    expect(block.result).toBe("done");
+    expect(block.progressUpdates).toEqual(["rg --files"]);
+    expect(block.spawnToolCallId).toBe("toolu_9");
+    expect(block.timestamp).toBe(2000);
+    expect(block.startedAt).toBe(1000);
+    expect(block.name).toBe("Godel (explorer)");
+  });
+
   it("subagent.started(parentBlockId=A) followed by progress/completed persists parentBlockId=A", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
@@ -2355,6 +2489,151 @@ describe("accumulateEvent", () => {
     // A null re-emit intent does not clobber the previously known intent.
     expect(block.task).toBe("Review the diff");
     expect(block.workflowMeta?.intent).toBe("Review the diff");
+  });
+
+  // ── T8: workflow.started new-run discriminator (mirrors subagent) ──
+
+  it("workflow.started with a differing non-null spawnToolCallId reopens a terminal workflow card as a new run", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1000,
+      name: "review",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_wf_run1",
+      parentBlockId: "parent-block",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 1500,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 16,
+      agentsFinished: 3,
+      totalTokens: 120000,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf-1",
+      timestamp: 2000,
+      outcome: "stopped",
+      result: "stopped by idle",
+    });
+
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 3000,
+      name: "review-restarted",
+      intent: "Continue the review fleet",
+      spawnToolCallId: "toolu_wf_run2",
+    });
+
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("streaming");
+    expect(block.stopped).toBe(false);
+    expect(block.result).toBeNull();
+    expect(block.progressUpdates).toEqual([]);
+    expect(block.task).toBe("Continue the review fleet");
+    expect(block.spawnToolCallId).toBe("toolu_wf_run2");
+    expect(block.timestamp).toBe(3000);
+    expect(block.startedAt).toBe(3000);
+    // Prior-generation identity carries; run-scoped workflow counters reset.
+    expect(block.name).toBe("review");
+    expect(block.parentBlockId).toBe("parent-block");
+    expect(block.workflowMeta).toEqual({
+      name: "review",
+      intent: "Continue the review fleet",
+      activity: [],
+      agentsStarted: null,
+      agentsFinished: null,
+      totalTokens: null,
+    });
+  });
+
+  it("workflow.started with the same spawnToolCallId refreshes without reopening a terminal card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1000,
+      name: "review",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_wf_same",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf-1",
+      timestamp: 2000,
+      outcome: "completed",
+      result: "3 findings",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 6000,
+      name: "review (refreshed)",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_wf_same",
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("completed");
+    expect(block.result).toBe("3 findings");
+    expect(block.spawnToolCallId).toBe("toolu_wf_same");
+    expect(block.timestamp).toBe(2000);
+    expect(block.startedAt).toBe(1000);
+    expect(block.name).toBe("review (refreshed)");
+  });
+
+  it("workflow.started with no spawnToolCallId refreshes without reopening a terminal card", () => {
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 1000,
+      name: "review",
+      intent: "Review the diff",
+      spawnToolCallId: "toolu_wf_9",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.progress",
+      blockId: "wf-1",
+      timestamp: 1500,
+      activity: { kind: "phase", text: "Find" },
+      agentsStarted: 16,
+      agentsFinished: 0,
+      totalTokens: 5000,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.completed",
+      blockId: "wf-1",
+      timestamp: 2000,
+      outcome: "completed",
+      result: "3 findings",
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "workflow.started",
+      blockId: "wf-1",
+      timestamp: 6000,
+      name: "review (named)",
+      intent: null,
+    });
+
+    const block = blocks[0] as SubAgentBlock;
+    expect(block.status).toBe("completed");
+    expect(block.result).toBe("3 findings");
+    expect(block.progressUpdates).toEqual(["Find"]);
+    expect(block.spawnToolCallId).toBe("toolu_wf_9");
+    expect(block.timestamp).toBe(2000);
+    expect(block.startedAt).toBe(1000);
+    expect(block.name).toBe("review (named)");
+    // Null re-emit intent preserves the previously known intent.
+    expect(block.task).toBe("Review the diff");
+    expect(block.workflowMeta?.intent).toBe("Review the diff");
+    expect(block.workflowMeta?.agentsStarted).toBe(16);
   });
 });
 

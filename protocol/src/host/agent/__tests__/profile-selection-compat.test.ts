@@ -699,7 +699,80 @@ describe("agent.getProviderProfileRateLimits v1 <-> v2 hermes-provider translati
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
-    expect(downgraded.error.message).toMatch(/hermes/i);
+    // The message was generalized when grok joined the bridge: an
+    // unrepresentable provider (Hermes here) no longer names itself, since the
+    // bridge now pre-maps grok-available to the unavailable shape rather than
+    // failing closed on it.
+    expect(downgraded.error.message).toMatch(/newer Traycer client/i);
+  });
+
+  it("degrades a grok-available rate-limit read to unsupported_provider (never errors)", () => {
+    // Grok is in the frozen provider enum (it predates Hermes), so a
+    // grok-available snapshot degrades to the unavailable shape a v1.0 host
+    // returns for grok today - credit/period fields must be gone after reparse.
+    const downgraded =
+      agentGetProviderProfileRateLimitsDowngradeV20ToV10.downgradeResponse({
+        rateLimits: {
+          provider: "grok",
+          available: true,
+          subscriptionTier: "SuperGrok",
+          periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+          periodStart: 1753142400000,
+          periodEnd: 1753747200000,
+          period: {
+            usedPercent: 12,
+            resetsAt: 1753747200000,
+            durationMinutes: 10080,
+          },
+          monthlyLimit: null,
+          onDemandCap: 0,
+          onDemandUsed: 0,
+          prepaidBalance: 0,
+        },
+        usageUpdatedAt: 1753142400000,
+      });
+    expect(downgraded).toEqual({
+      ok: true,
+      value: {
+        rateLimits: {
+          provider: "grok",
+          available: false,
+          reason: "unsupported_provider",
+        },
+        usageUpdatedAt: 1753142400000,
+      },
+    });
+  });
+
+  it("degrades a period-less grok-available rate-limit read to unsupported_provider", () => {
+    const downgraded =
+      agentGetProviderProfileRateLimitsDowngradeV20ToV10.downgradeResponse({
+        rateLimits: {
+          provider: "grok",
+          available: true,
+          subscriptionTier: "SuperGrok",
+          periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+          periodStart: 1753142400000,
+          periodEnd: 1753747200000,
+          period: null,
+          monthlyLimit: null,
+          onDemandCap: null,
+          onDemandUsed: null,
+          prepaidBalance: null,
+        },
+        usageUpdatedAt: null,
+      });
+    expect(downgraded).toEqual({
+      ok: true,
+      value: {
+        rateLimits: {
+          provider: "grok",
+          available: false,
+          reason: "unsupported_provider",
+        },
+        usageUpdatedAt: null,
+      },
+    });
   });
 });
 
