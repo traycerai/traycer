@@ -3,9 +3,12 @@ import { v4 as uuidv4 } from "uuid";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 
 import type { ImageAttachmentAttrs } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
+import type { PastedComposerImage } from "@/components/chat/composer/editor/extensions/chat-paste-handler";
 import {
   collectImages,
   useComposerPasteEvents,
+  IMAGE_MIME_PREFIX,
+  MAX_IMAGE_BYTES,
   type ComposerImageIngest,
   type ComposerPasteEditorHandle,
   type PathInsertionCommit,
@@ -16,6 +19,7 @@ import {
   reserveLandingImageBudget,
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
+import { base64ToBytes } from "@/lib/composer/image-base64";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
   Analytics,
@@ -150,4 +154,30 @@ export function useLandingComposerPaste(
     [],
   );
   return useComposerPasteEvents(imageIngest, insertAttrs, filePaths);
+}
+
+// A base64 clipboard image whose decoded size would exceed the per-image cap is
+// dropped WITHOUT decoding, so a malformed/oversized structured payload can't
+// allocate far beyond the cap. base64 encodes 3 bytes per 4 chars, so
+// `length * 3 / 4` is the decoded size (padding makes this a slight
+// over-estimate, which only ever drops sooner).
+const MAX_PASTED_IMAGE_B64_LENGTH = Math.ceil((MAX_IMAGE_BYTES * 4) / 3) + 4;
+
+/**
+ * Synchronously validate one structured-paste inline-base64 image and return its
+ * bytes, or `null` if it must be rejected. Applies the exact same contract the
+ * file pipeline does — encoded-length cap, `image/*` MIME, decode, 5 MB — but
+ * WITHOUT building a `File` or inserting, because the in-place paste keeps the
+ * node in the document and only needs the raw bytes for the background
+ * hash + `putImage` job.
+ */
+export function decodeValidatedPastedImage(
+  image: PastedComposerImage,
+): Uint8Array<ArrayBuffer> | null {
+  if (image.b64content.length > MAX_PASTED_IMAGE_B64_LENGTH) return null;
+  if (!image.mimeType.startsWith(IMAGE_MIME_PREFIX)) return null;
+  const bytes = base64ToBytes(image.b64content);
+  if (bytes === null) return null;
+  if (bytes.byteLength > MAX_IMAGE_BYTES) return null;
+  return bytes;
 }
