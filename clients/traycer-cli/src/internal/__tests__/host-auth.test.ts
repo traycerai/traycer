@@ -1,12 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cliBearerStore, resolveHostAuth } from "../host-auth";
+import { resolveHostAuth } from "../host-auth";
 import { config } from "../../config";
 import { DEV_DESKTOP_SLOT_ENV } from "../../store/dev-desktop-slot";
-import {
-  deleteCredentials,
-  readCredentials,
-  writeCredentials,
-} from "../../store/credentials";
+import { readCredentials } from "../../store/credentials";
 
 const loggerMock = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -27,14 +23,10 @@ vi.mock("../../store/credentials", async (importOriginal) => {
   return {
     ...actual,
     readCredentials: vi.fn(),
-    writeCredentials: vi.fn(),
-    deleteCredentials: vi.fn(),
   };
 });
 
 const readMock = vi.mocked(readCredentials);
-const writeMock = vi.mocked(writeCredentials);
-const deleteMock = vi.mocked(deleteCredentials);
 
 const storedCreds = {
   token: "stored-token",
@@ -94,62 +86,5 @@ describe("resolveHostAuth", () => {
     process.env[DEV_DESKTOP_SLOT_ENV] = "!!!";
     readMock.mockResolvedValue(storedCreds);
     expect(await resolveHostAuth()).toBeNull();
-  });
-});
-
-describe("cliBearerStore", () => {
-  it("read returns the stored token, or null when absent", async () => {
-    readMock.mockResolvedValueOnce(storedCreds);
-    expect(await cliBearerStore.read()).toEqual({
-      token: "stored-token",
-      refreshToken: "stored-refresh",
-      userId: "u1",
-    });
-    readMock.mockResolvedValueOnce(null);
-    expect(await cliBearerStore.read()).toBeNull();
-  });
-
-  it("write merges the rotated token, preserving the advisory user + authnBaseUrl", async () => {
-    readMock.mockResolvedValue(storedCreds);
-    await cliBearerStore.write({
-      token: "rotated",
-      refreshToken: "rotated-refresh",
-    });
-    expect(writeMock).toHaveBeenCalledTimes(1);
-    const written = writeMock.mock.calls[0][0];
-    expect(written.token).toBe("rotated");
-    expect(written.user).toEqual(storedCreds.user);
-    expect(written.authnBaseUrl).toBe(storedCreds.authnBaseUrl);
-    expect(written.savedAt).not.toBe(storedCreds.savedAt);
-  });
-
-  it("write is a no-op when the credentials file vanished mid-flight", async () => {
-    readMock.mockResolvedValue(null);
-    await cliBearerStore.write({
-      token: "rotated",
-      refreshToken: "rotated-refresh",
-    });
-    expect(writeMock).not.toHaveBeenCalled();
-  });
-
-  it("clear deletes the credentials file", async () => {
-    deleteMock.mockResolvedValue(true);
-    await cliBearerStore.clear();
-    expect(deleteMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("regression: still deletes credentials when DEV_DESKTOP_SLOT sanitizes to an unusable slot", async () => {
-    // `devDesktopSlotForEnvironment` throws when DEV_DESKTOP_SLOT is set but
-    // sanitizes to empty - and `createCliLogger` hits that same throw via
-    // `cliLogPath`. Before the fix, both ran before deleting credentials, so
-    // this throw skipped the delete entirely - the one case a caller most
-    // wants `clear()` to succeed on: it never received a usable bearer to
-    // sign out from in the first place.
-    process.env[DEV_DESKTOP_SLOT_ENV] = "!!!";
-    deleteMock.mockResolvedValue(true);
-    await expect(cliBearerStore.clear()).rejects.toThrow(
-      "must contain a usable slot name",
-    );
-    expect(deleteMock).toHaveBeenCalledTimes(1);
   });
 });

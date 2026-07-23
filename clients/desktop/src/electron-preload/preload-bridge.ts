@@ -2,7 +2,7 @@ import { contextBridge } from "electron";
 import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
 import { readInitialRouteArg } from "../ipc-contracts/window-bootstrap";
-import { buildAuthBridge } from "./auth-bridge";
+import { buildAuthBridge, buildAuthTokenStoreBridge } from "./auth-bridge";
 import { buildDeviceFlowBridge } from "./device-flow-bridge";
 import { buildHostBridge } from "./host-bridge";
 import {
@@ -15,6 +15,7 @@ import { buildWindowsBridge } from "./windows-bridge";
 import { buildMenuBridge } from "./menu-bridge";
 import { buildSupportBridge } from "./support-bridge";
 import { buildAppUpdateBridge } from "./app-update-bridge";
+import { buildGlobalShortcutsBridge } from "./global-shortcuts-bridge";
 import { buildLifecycleBridge } from "./lifecycle-bridge";
 import { buildMigrationBridge } from "./migration-bridge";
 import { buildServiceBridge } from "./service-bridge";
@@ -59,6 +60,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   initialRoute,
   sentryRendererDsn,
   ...buildAuthBridge(),
+  tokenStore: buildAuthTokenStoreBridge(),
   deviceFlow: buildDeviceFlowBridge(),
   ...buildHostBridge(),
   ...buildTrayBridge(),
@@ -66,6 +68,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   ...buildMenuBridge(),
   ...buildSupportBridge(),
   ...buildAppUpdateBridge(),
+  ...buildGlobalShortcutsBridge(),
   ...buildLifecycleBridge(),
   fileDrops: buildFileDropsBridge(nativeClipboardReadGate),
   service: buildServiceBridge(),

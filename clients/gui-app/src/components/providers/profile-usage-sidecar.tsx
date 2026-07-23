@@ -166,26 +166,28 @@ function ProfileUsageSidecarContent({
           </div>
           <FreshnessLine entry={entry} now={now} />
         </div>
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          aria-label={`${refreshLabel} usage for ${profile.label}`}
-          aria-keyshortcuts="R"
-          disabled={!isHostReady || refreshing}
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={() => void entry.refresh()}
-        >
-          {refreshing ? (
-            <AgentSpinningDots
-              className="text-muted-foreground"
-              testId="profile-usage-refresh-spinner"
-              variant={undefined}
-            />
-          ) : null}
-          {refreshLabel}
-          <Kbd className="ml-0.5 font-mono">R</Kbd>
-        </Button>
+        {entry.fetchEligible ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            aria-label={`${refreshLabel} usage for ${profile.label}`}
+            aria-keyshortcuts="R"
+            disabled={!isHostReady || refreshing}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => void entry.refresh()}
+          >
+            {refreshing ? (
+              <AgentSpinningDots
+                className="text-muted-foreground"
+                testId="profile-usage-refresh-spinner"
+                variant={undefined}
+              />
+            ) : null}
+            {refreshLabel}
+            <Kbd className="ml-0.5 font-mono">R</Kbd>
+          </Button>
+        ) : null}
       </div>
       {!isHostReady ? (
         <p className="mt-2.5 rounded-md bg-muted/60 px-2 py-1.5 text-ui-xs text-muted-foreground">

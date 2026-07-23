@@ -12,10 +12,9 @@ describe("<ErrorSegment />", () => {
     useDesktopDialogStore.setState({ reportIssueAvailable: false });
   });
 
-  // Auth errors never reach this component - they're suppressed at the
-  // projection layer (`suppressAuthErrors`). This is the static chrome for every
-  // other (non-auth) error: the "Error" overline, the code badge, and the
-  // message.
+  // Every error - auth included - renders through this component as the
+  // failure's durable transcript record. This is the static chrome shared by
+  // all codes: the "Error" overline, the code badge, and the message.
   it("renders the error chrome with the code badge and message", () => {
     render(
       <ErrorSegment

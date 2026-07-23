@@ -177,6 +177,14 @@ interface RunStubs {
   readonly deps: Partial<RunHostStartDeps>;
 }
 
+const TERMINAL_WRITER_EXIT_CASES: ReadonlyArray<
+  readonly [string, number | null, NodeJS.Signals | null, number]
+> = [
+  ["clean exit", 0, null, 0],
+  ["crash exit", 7, null, 7],
+  ["signal exit", null, "SIGTERM", 143],
+];
+
 function makeRunStubs(
   installRecord: HostInstallRecord | null,
   existsOverride: ((path: string) => boolean) | null,
@@ -235,6 +243,14 @@ function makeRunStubs(
     }),
     writeMarker: async (environment, phase, fields) => {
       recorded.sequence.push(`marker:${phase}`);
+      recorded.markers.push({
+        environment,
+        phase,
+        fields: { ...fields } as Record<string, unknown>,
+      });
+    },
+    writeTerminalMarker: (environment, phase, fields) => {
+      recorded.sequence.push(`terminal-marker:${phase}`);
       recorded.markers.push({
         environment,
         phase,
@@ -442,6 +458,52 @@ describe("runHostStart - error surfaces", () => {
 });
 
 describe("runHostStart - signal/exit propagation", () => {
+  it("persists a terminal marker before synchronous exit when an async append would be abandoned", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    let exited = false;
+    const terminalMarkers: string[] = [];
+    const durabilityDeps: Partial<RunHostStartDeps> = {
+      ...deps,
+      writeMarker: async (environment, phase, fields) => {
+        if (phase === "starting") {
+          recorded.markers.push({
+            environment,
+            phase,
+            fields: { ...fields } as Record<string, unknown>,
+          });
+          return;
+        }
+        // Models an async append that cannot commit after process.exit().
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        if (!exited) terminalMarkers.push(phase);
+      },
+      writeTerminalMarker: (_environment, phase) => {
+        expect(exited).toBe(false);
+        terminalMarkers.push(phase);
+      },
+      exit: (code) => {
+        exited = true;
+        recorded.exited = code;
+        while (recorded.exitWaiters.length > 0) {
+          const waiter = recorded.exitWaiters.shift();
+          if (waiter !== undefined) waiter();
+        }
+      },
+    };
+
+    setTimeout(() => child.emit("exit", 7, null));
+    await runUntilExit(
+      () =>
+        runHostStart({ environment: "production", cwd: null }, durabilityDeps),
+      recorded,
+    );
+
+    expect(terminalMarkers).toEqual(["crashed"]);
+  });
+
   it("translates a SIGTERM-killed child into exit code 128+15", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";
     const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
@@ -453,6 +515,37 @@ describe("runHostStart - signal/exit propagation", () => {
     const killed = recorded.markers.find((m) => m.phase === "killed");
     expect(killed?.fields.signal).toBe("SIGTERM");
   });
+
+  it.each(TERMINAL_WRITER_EXIT_CASES)(
+    "preserves the original %s code when the synchronous terminal writer throws",
+    async (
+      _name,
+      code: number | null,
+      signal: NodeJS.Signals | null,
+      expected,
+    ) => {
+      const exec = "/opt/traycer/host/install/traycer-host";
+      const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+      const throwingWriter: Partial<RunHostStartDeps> = {
+        ...deps,
+        writeTerminalMarker: () => {
+          throw new Error("disk full");
+        },
+      };
+
+      setTimeout(() => child.emit("exit", code, signal));
+      await runUntilExit(
+        () =>
+          runHostStart(
+            { environment: "production", cwd: null },
+            throwingWriter,
+          ),
+        recorded,
+      );
+
+      expect(recorded.exited).toBe(expected);
+    },
+  );
 
   it("propagates a non-zero exit code as a `crashed` marker", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";

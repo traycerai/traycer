@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -16,6 +19,7 @@ import { queryKeys } from "@/lib/query-keys";
 import type { RunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
 import { __resetRateLimitQueueForTests } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
+import { rateLimitProviderState } from "./profile-usage-fixtures";
 
 // `useProfileUsageComparison` builds its target-host scope through
 // `useRunTargetHost`, which is separately covered by
@@ -27,6 +31,9 @@ import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelo
 const scopesRef = vi.hoisted(() => ({
   byHostId: new Map<string | null, RunTargetHost>(),
 }));
+const providerStateRef = vi.hoisted(() => ({
+  providers: [] as ReadonlyArray<ProviderCliState>,
+}));
 vi.mock("@/hooks/rate-limits/use-run-target-host", () => ({
   useRunTargetHost: (runTargetHostId: string | null) => {
     const scope = scopesRef.byHostId.get(runTargetHostId);
@@ -37,6 +44,11 @@ vi.mock("@/hooks/rate-limits/use-run-target-host", () => ({
     }
     return scope;
   },
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    data: { providers: providerStateRef.providers },
+  }),
 }));
 
 import { useProfileUsageComparison } from "@/hooks/rate-limits/use-profile-usage-comparison";
@@ -139,11 +151,16 @@ describe("useProfileUsageComparison", () => {
   beforeEach(() => {
     __resetRateLimitQueueForTests();
     scopesRef.byHostId.clear();
+    providerStateRef.providers = [
+      rateLimitProviderState("claude-code", "authenticated"),
+      rateLimitProviderState("openrouter", "authenticated"),
+    ];
   });
   afterEach(() => {
     cleanup();
     __resetRateLimitQueueForTests();
     scopesRef.byHostId.clear();
+    providerStateRef.providers = [];
   });
 
   it("issues zero host.getRateLimitUsage calls purely from mounting (cache-only observation)", () => {
@@ -272,6 +289,55 @@ describe("useProfileUsageComparison", () => {
     expect(result.current.entries.has(null)).toBe(true);
     expect(result.current.entries.has("ambient-sentinel-id")).toBe(false);
     expect(result.current.entries.get(null)?.detail.kind).toBe("fresh");
+  });
+
+  it("exposes refresh eligibility only for the authenticated managed target and never fetches ambient", async () => {
+    const queryClient = new QueryClient();
+    const calls: Array<unknown> = [];
+    const { scope } = buildHostScope("default-host", queryClient, (params) => {
+      calls.push(params);
+      return goodResponse();
+    });
+    scopesRef.byHostId.set(null, scope);
+    const ambient = profile("ambient-sentinel-id", "ambient", "Terminal", {
+      auth: {
+        status: "unauthenticated",
+        badgeText: null,
+        label: null,
+        detail: null,
+      },
+    });
+    const managed = profile("p-managed", "managed", "Work", {});
+    providerStateRef.providers = [
+      {
+        ...rateLimitProviderState("claude-code", "unauthenticated"),
+        authPending: true,
+      },
+    ];
+
+    const { result } = renderHook(
+      () =>
+        useProfileUsageComparison({
+          runTargetHostId: null,
+          providerId: "claude-code",
+          profiles: [ambient, managed],
+        }),
+      { wrapper: wrapperFor(queryClient) },
+    );
+
+    expect(result.current.entries.get(null)?.fetchEligible).toBe(false);
+    expect(result.current.entries.get("p-managed")?.fetchEligible).toBe(true);
+
+    await result.current.entries.get(null)?.refresh();
+    expect(calls).toEqual([]);
+    await result.current.entries.get("p-managed")?.refresh();
+    expect(calls).toEqual([
+      {
+        accountContext: DEFAULT_ACCOUNT_CONTEXT,
+        providerId: "claude-code",
+        profileId: "p-managed",
+      },
+    ]);
   });
 
   it("routes an explicit refresh to exactly the previewed profile via the ephemeralProcess queue, and never to a sibling profile", async () => {
