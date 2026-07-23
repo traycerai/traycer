@@ -148,6 +148,7 @@
     "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0",
     "uuid": "^14.0.1",
+    "vaul": "^1.1.2",
     "vite": "^8.1.5",
     "vitest": "^4.1.10",
     "y-protocols": "^1.0.7",
