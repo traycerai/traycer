@@ -647,7 +647,11 @@ function A2ASendToolSegment(
   const preview = <AgentMessagePreview message={send.message} tone="primary" />;
   const body = open ? (
     <div className="flex flex-col gap-2">
-      <AgentMessageBody value={send.message} bodyFindUnitId={bodyFindUnitId} />
+      <AgentMessageBody
+        value={send.message}
+        bodyFindUnitId={bodyFindUnitId}
+        isStreaming={isStreaming}
+      />
       {hasError ? (
         <SegmentPanel
           label="Error"

@@ -11,8 +11,9 @@ import { AgentMessageCopyButton } from "./agent-message-copy-button";
 export function AgentMessageBody(props: {
   readonly value: string;
   readonly bodyFindUnitId: string;
+  readonly isStreaming: boolean;
 }): ReactNode {
-  const { value, bodyFindUnitId } = props;
+  const { value, bodyFindUnitId, isStreaming } = props;
   return (
     <div className="flex min-w-0 items-start gap-1.5">
       <div
@@ -20,7 +21,7 @@ export function AgentMessageBody(props: {
         className="max-h-[min(40vh,24rem)] min-w-0 flex-1 overflow-auto rounded-md border border-canvas-border/30 bg-canvas/40 px-3 py-2"
       >
         <AgentReferenceMarkdown
-          isStreaming={false}
+          isStreaming={isStreaming}
           markdown={value}
           proseSize="compact"
           quotable={false}

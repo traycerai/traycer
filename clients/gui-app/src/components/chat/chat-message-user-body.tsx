@@ -265,7 +265,11 @@ function AgentMessageDisplayView({
 
   const body = open ? (
     <div className="flex flex-col gap-2">
-      <AgentMessageBody value={messageText} bodyFindUnitId={bodyFindUnitId} />
+      <AgentMessageBody
+        value={messageText}
+        bodyFindUnitId={bodyFindUnitId}
+        isStreaming={false}
+      />
     </div>
   ) : null;
 
