@@ -8,6 +8,10 @@ import {
   ComposerPromptEditor,
   type ComposerPromptEditorHandle,
 } from "./composer-prompt-editor";
+import type {
+  PastedComposerImage,
+  PastedComposerImageOutcome,
+} from "./editor/extensions/chat-paste-handler";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 
 const PLACEHOLDER =
@@ -22,6 +26,11 @@ interface ChatComposerEditorSlotProps {
   readonly initialSelection: { from: number; to: number } | null;
   readonly slashProviderId: GuiHarnessId;
   readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
+  readonly ingestPastedComposerImages:
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null;
   readonly isActive: boolean;
   readonly onSnapshot: (
     content: JsonContent,
@@ -47,6 +56,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
     initialSelection,
     slashProviderId,
     hasPastedImageBytes,
+    ingestPastedComposerImages,
     isActive,
     onSnapshot,
     onSubmit,
@@ -64,6 +74,7 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
       initialSelection={initialSelection}
       slashProviderId={slashProviderId}
       hasPastedImageBytes={hasPastedImageBytes}
+      ingestPastedComposerImages={ingestPastedComposerImages}
       isActive={isActive}
       disabled={false}
       placeholder={isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER}

@@ -36,6 +36,18 @@ interface SessionEntry {
 
 const session = new Map<string, SessionEntry>();
 
+/**
+ * Every hash whose bytes are reachable in THIS window's partition (session cache
+ * or IndexedDB) as far as we have observed this session. Seeded on write
+ * (`putImage`) and on any successful read (`getImageBytes`, which the
+ * restored-draft fetcher drives when an image renders), and pruned on
+ * `deleteImage`. Backs the synchronous landing paste presence predicate
+ * (`hasLandingImageBytes`): unlike the session map alone, it also reports a
+ * restored draft's IndexedDB-backed hash as present once its image has rendered,
+ * so a same-window copy→paste of that image is not falsely stripped.
+ */
+const knownHashes = new Set<string>();
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -98,22 +110,57 @@ async function sha256Hex(bytes: ImageBytes): Promise<string> {
  * session entry (bytes + a synchronously created object-URL) is created once.
  * Returns the content hash to embed in the image node.
  */
+// Single-flight writes per content hash. Concurrent callers with byte-identical
+// images (which hash equal) JOIN one in-flight write instead of each running
+// their own optimistic seed + rollback. That makes the rollback ownership
+// unambiguous: exactly one flight owns the seeding it added, so a failed durable
+// write can't revoke session/known entries a concurrent sibling is relying on.
+const inFlightPuts = new Map<string, Promise<string>>();
+
 export async function putImage(bytes: ImageBytes): Promise<string> {
   const hash = await sha256Hex(bytes);
+  const existing = inFlightPuts.get(hash);
+  if (existing !== undefined) return existing;
+  const flight = writeImageUnderHash(hash, bytes);
+  inFlightPuts.set(hash, flight);
+  try {
+    return await flight;
+  } finally {
+    inFlightPuts.delete(hash);
+  }
+}
+
+async function writeImageUnderHash(
+  hash: string,
+  bytes: ImageBytes,
+): Promise<string> {
   // Seed the session cache BEFORE the IndexedDB write so the invariant "bytes in
   // IndexedDB ⟹ hash present in the session cache" always holds. GC reconcile
   // treats the session set as a delete-root; if the write landed first, a
   // reconcile that observed the new IDB key without the matching session entry
   // could reap freshly pasted bytes.
-  if (!session.has(hash)) {
+  const seededSession = !session.has(hash);
+  if (seededSession) {
     session.set(hash, {
       bytes,
       objectUrl: URL.createObjectURL(new Blob([bytes])),
     });
   }
+  const seededKnown = !knownHashes.has(hash);
+  knownHashes.add(hash);
   const store = imageStore();
-  if ((await get(hash, store)) === undefined) {
-    await set(hash, bytes, store);
+  try {
+    if ((await get(hash, store)) === undefined) {
+      await set(hash, bytes, store);
+    }
+  } catch (error) {
+    // The durable write failed: roll back the optimistic seeding THIS call added
+    // (a dedupe hit that found the hash already cached is left intact). Without
+    // this, `hasLandingImageBytes` would report present with no durable bytes, so
+    // a later paste of that hash would pass validation into a blank preview.
+    if (seededSession) releaseSession(hash);
+    if (seededKnown) knownHashes.delete(hash);
+    throw error;
   }
   return hash;
 }
@@ -127,23 +174,57 @@ export async function getImageBytes(
   hash: string,
 ): Promise<ImageBytes | undefined> {
   const fromSession = session.get(hash);
-  if (fromSession !== undefined) return fromSession.bytes;
-  return get<ImageBytes>(hash, imageStore());
+  if (fromSession !== undefined) {
+    knownHashes.add(hash);
+    return fromSession.bytes;
+  }
+  const stored = await get<ImageBytes>(hash, imageStore());
+  if (stored !== undefined) knownHashes.add(hash);
+  return stored;
 }
 
 /** Delete the persisted bytes for `hash`. Does not touch the session cache. */
 export async function deleteImage(hash: string): Promise<void> {
+  // Prune presence only AFTER the durable delete succeeds. Pruning first would,
+  // on a rejected `del`, report the still-present bytes as absent until a later
+  // enumeration healed the set.
   await del(hash, imageStore());
+  knownHashes.delete(hash);
 }
 
 /** Every hash with bytes persisted in this runtime's partition. */
 export async function imageHashKeys(): Promise<string[]> {
-  return keys<string>(imageStore());
+  const keysList = await keys<string>(imageStore());
+  // Enumerating durable keys is the source of truth for presence, so fold them
+  // into `knownHashes`. This keeps `hasLandingImageBytes` honest even when a
+  // restored image rendered from the app-wide blob cache (a cache hit never
+  // calls the per-surface fetcher / `getImageBytes`, so that path wouldn't seed
+  // it). Cheap and idempotent; the module also runs this once at init below.
+  for (const hash of keysList) knownHashes.add(hash);
+  return keysList;
 }
 
 /** The same-session object-URL for `hash`, or `null` if not seen this session. */
 export function sessionObjectUrl(hash: string): string | null {
   return session.get(hash)?.objectUrl ?? null;
+}
+
+/**
+ * Whether `hash` has bytes reachable in this window's landing partition (session
+ * cache or IndexedDB), as observed this session. Backs the landing paste presence
+ * predicate (`hasPastedImageBytes` on the landing composer): a pasted hash-only
+ * node whose bytes are not landing-reachable is stripped, closing the
+ * phantom-preview fail-open. Synchronous, mirroring the chat composer's predicate.
+ *
+ * Reflects durable IndexedDB bytes regardless of how the image was rendered:
+ * `knownHashes` is seeded from the partition's stored keys at init (and on every
+ * `imageHashKeys` enumeration), plus by `putImage`/`getImageBytes`. So a restored
+ * image whose chip reused an app-wide blob-cache URL (never calling the
+ * per-surface fetcher) still reports present, and a same-window copy→paste of it
+ * is not a false negative.
+ */
+export function hasLandingImageBytes(hash: string): boolean {
+  return knownHashes.has(hash);
 }
 
 /**
@@ -172,3 +253,10 @@ export function releaseSession(hash: string): void {
   URL.revokeObjectURL(entry.objectUrl);
   session.delete(hash);
 }
+
+// Seed the presence set from durable IndexedDB keys at module init (best-effort),
+// so a restored draft's hash reports present before any GC reconcile has run and
+// regardless of whether its render went through the fetcher. `imageHashKeys`
+// folds the keys into `knownHashes`; a failure (no IndexedDB) just leaves the set
+// to be populated lazily by put/get/subsequent enumerations.
+void imageHashKeys().catch(() => undefined);
