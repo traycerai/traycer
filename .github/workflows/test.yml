@@ -50,6 +50,19 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
+      # Restore the Nx computation cache so a project whose inputs (own files +
+      # dependency source, see `test` inputs in nx.json) are unchanged replays a
+      # cached result in seconds instead of re-running the full suite. Keyed per
+      # matrix project so the legs don't clobber each other; the SHA suffix makes
+      # every run save the freshest cache while restore-keys pull the latest
+      # same-project cache (populated by pushes to main, readable by PRs).
+      - name: Cache Nx computation cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-${{ matrix.project }}-${{ github.sha }}
+          restore-keys: |
+            nx-${{ runner.os }}-${{ matrix.project }}-
       - run: bun install --frozen-lockfile
       - name: Test
         run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --tui=false
@@ -83,6 +96,17 @@ jobs:
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
+      # Same Nx computation cache as the `test` job. The runner.os in the key is
+      # load-bearing here: the desktop suite runs darwin-gated blocks that are
+      # skipped on Linux, so a Linux-computed result must never replay on macOS
+      # (and vice versa) — scoping the cache by OS keeps the two separate.
+      - name: Cache Nx computation cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .nx/cache
+          key: nx-${{ runner.os }}-@traycer-clients/desktop-${{ github.sha }}
+          restore-keys: |
+            nx-${{ runner.os }}-@traycer-clients/desktop-
       - run: bun install --frozen-lockfile
       - name: Desktop unit tests (darwin-gated blocks included)
         run: bunx nx run-many --target=test --projects="@traycer-clients/desktop" --tui=false
