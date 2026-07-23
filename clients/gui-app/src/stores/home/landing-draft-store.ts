@@ -109,6 +109,7 @@ const MAX_DRAFT_WORKSPACE_FOLDERS = 50;
 let localPersistenceEnabled = true;
 let desktopProjectionBridge: DesktopPerWindowProjectionBridge | null = null;
 let applyingDesktopProjection = false;
+let hasAppliedDesktopProjection = false;
 
 const landingDraftStorage: StateStorage = {
   getItem: (name) => window.localStorage.getItem(name),
@@ -128,6 +129,7 @@ export function setLandingDraftDesktopProjectionBridge(
   bridge: DesktopPerWindowProjectionBridge | null,
 ): void {
   desktopProjectionBridge = bridge;
+  hasAppliedDesktopProjection = false;
   setLandingDraftLocalPersistenceEnabled(bridge === null);
 }
 
@@ -137,16 +139,21 @@ export function applyLandingDraftDesktopProjection(
   const drafts = uniqueLandingDrafts(readProjectedDrafts(snapshot));
   const activeDraftId = readProjectedActiveDraftId(snapshot, drafts);
   const currentState = useLandingDraftStore.getState();
-  // [B1] Empty-inbound clobber guard. Landing drafts are per-window and this
-  // window's live in-memory state is authoritative while the window lives, so an
-  // EMPTY inbound snapshot must never replace NON-EMPTY in-memory drafts. Left
-  // unguarded, a spurious clear (registry churn) or a stale cold-start disk read
-  // would wipe an alive draft AND — via `markLandingDraftsReady` → reconcile with
-  // now-empty roots — reap its persisted image bytes. Re-project the in-memory
-  // truth outbound so disk reconverges, and do NOT flip the ready gate on this
-  // bad inbound (its roots are wrong; letting it fire the first reconcile is the
-  // exact byte-reaping path we are closing).
-  if (drafts.length === 0 && currentState.drafts.length > 0) {
+  // [B1] Empty-inbound clobber guard. The FIRST desktop projection is always
+  // authoritative, even when empty: pre-hydration in-memory drafts may be stale
+  // localStorage state from an earlier web-mode run. After that hydrate, landing
+  // drafts are per-window and this window's live in-memory state is authoritative,
+  // so a later EMPTY inbound snapshot must not replace NON-EMPTY live drafts.
+  // Left unguarded, a spurious clear (registry churn) would wipe an alive draft
+  // AND — via `markLandingDraftsReady` → reconcile with now-empty roots — reap
+  // its persisted image bytes. Re-project the in-memory truth outbound so disk
+  // reconverges, and do NOT flip the ready gate on this bad later inbound (its
+  // roots are wrong).
+  if (
+    hasAppliedDesktopProjection &&
+    drafts.length === 0 &&
+    currentState.drafts.length > 0
+  ) {
     projectLandingDraftsToDesktop(currentState);
     return;
   }
@@ -169,6 +176,7 @@ export function applyLandingDraftDesktopProjection(
   } finally {
     applyingDesktopProjection = false;
   }
+  hasAppliedDesktopProjection = true;
   // [B2] A non-empty authoritative snapshot confirms the landing roots are real,
   // so the GC's deleting sweep may run (reaping genuine orphans) without risking
   // freshly-restored bytes.

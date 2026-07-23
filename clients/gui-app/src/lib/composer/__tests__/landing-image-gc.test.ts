@@ -673,13 +673,23 @@ describe("landing-image-gc", () => {
     });
   });
 
-  it("[B1+B2] empty-inbound guard leaves readiness closed; mount then reaps unreferenced restored bytes", async () => {
-    // Real projection → GC seam (no stubbed gates): cold-start empty inbound
-    // must not flip ready or delete; markLandingEditorMounted opens readiness
-    // + the deletion gate and reaps genuine orphans while keeping draft roots.
-    // Also covers B1-P2: mount fires readiness even when B1 suppressed the
-    // projection's own markLandingDraftsReady call.
+  it("[B1+B2] later empty-inbound guard preserves roots; mount then reaps unreferenced restored bytes", async () => {
+    // Real projection → GC seam (no stubbed gates): the first empty desktop
+    // hydrate is authoritative and opens readiness, but NOT the deletion gate.
+    // After a live draft exists, a later spurious empty inbound preserves its
+    // roots. markLandingEditorMounted then opens the deletion gate and reaps
+    // genuine orphans while keeping the live draft's bytes.
     const m = await loadModules({ desktop: true });
+    m.draft.applyLandingDraftDesktopProjection({
+      epicTabs: [],
+      activeTabId: null,
+      canvasByTabId: {},
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    });
+    await flush();
+    expect(m.gc.landingDraftsReady()).toBe(true);
+
     await m.idb.set("keep", bytesOf([1, 1, 1]), m.store.imageStore());
     await m.idb.set("orphan", bytesOf([2, 2, 2]), m.store.imageStore());
 
@@ -693,9 +703,8 @@ describe("landing-image-gc", () => {
       ],
       activeDraftId: "alive",
     });
-    expect(m.gc.landingDraftsReady()).toBe(false);
 
-    // Spurious empty inbound: B1 preserves drafts and does NOT mark ready.
+    // Later spurious empty inbound: B1 preserves the live draft.
     m.draft.applyLandingDraftDesktopProjection({
       epicTabs: [],
       activeTabId: null,
@@ -705,12 +714,12 @@ describe("landing-image-gc", () => {
     });
     await flush();
 
-    expect(m.gc.landingDraftsReady()).toBe(false);
+    expect(m.gc.landingDraftsReady()).toBe(true);
     expect(m.draft.useLandingDraftStore.getState().drafts).toHaveLength(1);
     expect(await m.store.imageHashKeys()).toContain("keep");
     expect(await m.store.imageHashKeys()).toContain("orphan");
 
-    // Mount: readiness + B2 deletion gate open → orphan reaped, keep survives.
+    // Mount: B2 deletion gate opens → orphan reaped, keep survives.
     m.gc.markLandingEditorMounted();
     await vi.advanceTimersByTimeAsync(250);
     await flush();

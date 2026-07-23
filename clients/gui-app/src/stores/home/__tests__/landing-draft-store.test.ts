@@ -108,6 +108,7 @@ const WORKSPACE_C = {
   repoIdentifier: { owner: "traycerai", repo: "workspace-c" },
 };
 function resetStore(): void {
+  setLandingDraftDesktopProjectionBridge(null);
   useLandingDraftStore.setState({
     drafts: [],
     activeDraftId: null,
@@ -1293,6 +1294,9 @@ describe("useLandingDraftStore", () => {
       });
 
       try {
+        // The first host-owned snapshot is authoritative even when empty. Only
+        // later empty updates may be rejected as spurious live-window churn.
+        applyLandingDraftDesktopProjection(emptyWindowSnapshot({}));
         const id = useLandingDraftStore.getState().createDraft(null);
         useLandingDraftStore
           .getState()
@@ -1327,6 +1331,45 @@ describe("useLandingDraftStore", () => {
         setLandingDraftDesktopProjectionBridge(null);
         markReady.mockRestore();
         markAuthoritative.mockRestore();
+      }
+    });
+
+    it("applies the first empty desktop hydrate over stale local drafts", () => {
+      const markReady = vi
+        .spyOn(landingImageGc, "markLandingDraftsReady")
+        .mockImplementation(() => undefined);
+      const patches: DesktopPerWindowStatePatch[] = [];
+      setLandingDraftDesktopProjectionBridge({
+        update: (patch) => {
+          patches.push(patch);
+          return Promise.resolve();
+        },
+        flush: () => Promise.resolve(),
+        dispose: () => undefined,
+      });
+
+      try {
+        const staleId = useLandingDraftStore.getState().createDraft(null);
+        useLandingDraftStore
+          .getState()
+          .setDraftContent(staleId, textContent("stale local draft"), null);
+        patches.length = 0;
+        markReady.mockClear();
+
+        applyLandingDraftDesktopProjection(
+          emptyWindowSnapshot({
+            landingDrafts: [],
+            activeLandingDraftId: null,
+          }),
+        );
+
+        expect(useLandingDraftStore.getState().drafts).toEqual([]);
+        expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
+        expect(patches).toEqual([]);
+        expect(markReady).toHaveBeenCalledOnce();
+      } finally {
+        setLandingDraftDesktopProjectionBridge(null);
+        markReady.mockRestore();
       }
     });
 
