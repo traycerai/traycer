@@ -717,7 +717,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // tier), so this is host-only by construction. `row.createdAt` is the
         // host entry's `updatedAt` - the occurrence token the host guards on.
         if (row.source !== "host") return;
-        if (client === null) return;
+        // A retained-but-disconnected host keeps `client !== null` while its
+        // active host id drops to null; firing resolve then only yields an
+        // unbound-rejection toast while the row cannot change. Gate on the same
+        // authoritative active-host signal `markAllAsRead`'s dismiss-all half
+        // uses, NOT `client !== null`.
+        if (client === null || client.getActiveHostId() === null) return;
         resolveHost.mutate({
           feedId: row.feedId,
           sourceId: row.sourceId,

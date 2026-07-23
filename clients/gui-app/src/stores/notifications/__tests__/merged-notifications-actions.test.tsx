@@ -16,6 +16,7 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import {
   useAttentionNotificationIds,
+  useMergedNotificationRow,
   useMergedNotificationsActions,
 } from "@/stores/notifications/merged-notifications";
 import { __resetNotificationsStoreForTests } from "@/stores/notifications/notifications-store";
@@ -430,5 +431,110 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
     expect(result.current.attentionIds).toEqual(["host:prompt-old-host"]);
     expect(entryResolvedAt("prompt-old-host")).toBeNull();
+  });
+});
+
+describe("useMergedNotificationsActions row-level resolve", () => {
+  beforeEach(() => {
+    hostRequestMock.mockReset();
+    hostRequestMock.mockImplementation(defaultHostRequest);
+    hostBindingState.current = null;
+    vi.mocked(toastFromHostError).mockClear();
+    vi.mocked(toast.error).mockClear();
+    __resetNotificationsStoreForTests();
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: { entries: [], nextCursor: null },
+      summary: { unreadCount: 0, attentionCount: 0 },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    hostBindingState.current = null;
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  it("no-ops when the host binding is retained but has no active host", async () => {
+    // A disconnect keeps the runtime binding (`client !== null`) and the
+    // rendered blocking row, but drops the active host id to null. The Dismiss
+    // tick stays clickable, yet firing resolve then would only yield an
+    // unbound-rejection toast while the row cannot change - so it must no-op,
+    // mirroring markAllAsRead's dismiss-all active-host gate.
+    hostBindingState.current = {
+      hostClient: {
+        request: hostRequestMock,
+        getActiveHostId: () => null,
+      },
+    };
+    applyHostSnapshot([hostPrompt("prompt-a", 200, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow("host:prompt-a"),
+      }),
+      { wrapper: createWrapper() },
+    );
+
+    const row = result.current.row;
+    expect(row).not.toBeNull();
+    if (row === null) return;
+
+    act(() => {
+      result.current.actions.resolve(row);
+    });
+    // Flush any scheduled mutation so a regression that dropped the guard would
+    // surface the resolve RPC here rather than pass on an unflushed microtask.
+    await act(async () => {
+      await new Promise((done) => setTimeout(done, 0));
+    });
+
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.resolve",
+      ),
+    ).toBe(false);
+    expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+    expect(vi.mocked(toastFromHostError)).not.toHaveBeenCalled();
+  });
+
+  it("fires the resolve RPC with the occurrence token when an active host is bound", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostPrompt("prompt-a", 200, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow("host:prompt-a"),
+      }),
+      { wrapper: createWrapper() },
+    );
+
+    const row = result.current.row;
+    expect(row).not.toBeNull();
+    if (row === null) return;
+
+    act(() => {
+      result.current.actions.resolve(row);
+    });
+
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.some(
+          (call) => call[0] === "host.notifications.resolve",
+        ),
+      ).toBe(true);
+    });
   });
 });
