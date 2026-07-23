@@ -408,7 +408,9 @@ function applyPastedB64ImageOutcomesToFragment(
         const outcome = outcomes[cursor.index];
         cursor.index += 1;
         if (outcome.kind === "rejected") return;
-        children.push(node.type.create({ ...node.attrs, id: outcome.id }));
+        children.push(
+          node.type.create({ ...node.attrs, id: outcome.id }, null, node.marks),
+        );
         return;
       }
       if (node.isLeaf) {

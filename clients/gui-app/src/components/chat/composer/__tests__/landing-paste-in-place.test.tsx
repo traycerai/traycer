@@ -261,6 +261,41 @@ describe("landing paste in-place pending nodes", () => {
     expect(editor.state.doc.textContent).toBe("AB");
   });
 
+  it("raw HTML paste preserves marks while stamping the accepted image id", async () => {
+    const jobs: Array<Promise<void>> = [];
+    const source = makeEditorWithoutIngest();
+    const bytes = bytesOf([41, 42, 43]);
+    const hash = await sha256Hex(bytes);
+    source.commands.setContent(markedImageOnlyContent(bytesToBase64(bytes)));
+    expect(imageMarkNames(source)).toEqual([["bold"]]);
+    const wrapper = document.createElement("div");
+    wrapper.appendChild(
+      DOMSerializer.fromSchema(source.schema).serializeFragment(
+        source.state.doc.content,
+      ),
+    );
+
+    const editor = makeLandingEditor(jobs);
+    fireEvent.paste(editor.view.dom, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html"],
+        getData: (type: string) =>
+          type === "text/html" ? wrapper.innerHTML : "",
+      },
+    });
+
+    expect(imageMarkNames(editor)).toEqual([["bold"]]);
+    await waitFor(() => expect(setGates.has(hash)).toBe(true));
+    setGates.get(hash)?.release();
+    await Promise.all(jobs);
+    await waitFor(() => {
+      expect(imageSnapshots(editor)[0]?.hash).toBe(hash);
+    });
+    expect(imageMarkNames(editor)).toEqual([["bold"]]);
+  });
+
   // Finding 2: non-collapsed selection — image-leading paste lands at paste START.
   // Use raw HTML (open slice) so the paste merges inline into the paragraph,
   // matching a mid-paragraph native copy of an image atom + trailing text.
@@ -587,6 +622,30 @@ function imageOnlyContent(b64: string, fileName: string): JsonContent {
   };
 }
 
+function markedImageOnlyContent(b64: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "src-marked.png",
+              fileName: "marked.png",
+              b64content: b64,
+              mimeType: "image/png",
+              size: 3,
+            },
+            marks: [{ type: "bold" }],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
   return new Uint8Array(values);
 }
@@ -617,6 +676,16 @@ function imageSnapshots(editor: Editor): ImageSnapshot[] {
     return false;
   });
   return images;
+}
+
+function imageMarkNames(editor: Editor): string[][] {
+  const marks: string[][] = [];
+  editor.state.doc.descendants((node) => {
+    if (node.type.name !== "imageAttachment") return true;
+    marks.push(node.marks.map((mark) => mark.type.name));
+    return false;
+  });
+  return marks;
 }
 
 function paragraphInlineKinds(editor: Editor): string[] {
