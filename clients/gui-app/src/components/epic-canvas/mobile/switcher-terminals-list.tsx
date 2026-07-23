@@ -44,7 +44,7 @@ export function SwitcherTerminalsList(props: SwitcherListProps) {
   }
 
   return (
-    <div className="flex flex-col gap-0.5 p-1">
+    <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain p-1 pb-[env(safe-area-inset-bottom)]">
       {sessions.map((session) => (
         <SwitcherTerminalRow
           key={session.sessionId}

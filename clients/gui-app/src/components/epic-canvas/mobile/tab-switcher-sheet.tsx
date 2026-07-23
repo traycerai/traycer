@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Drawer,
   DrawerContent,
@@ -15,6 +15,9 @@ import {
 import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
 import { SwitcherTerminalsList } from "@/components/epic-canvas/mobile/switcher-terminals-list";
 import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
+import { SwitcherPanelEmbed } from "@/components/epic-canvas/mobile/switcher-panel-embed";
+import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
+import { useEpicCanvas } from "@/stores/epics/canvas/store";
 import { useIsMobile } from "@/hooks/ui/use-mobile";
 import {
   useActiveLeftPanelId,
@@ -33,10 +36,9 @@ interface TabSwitcherSheetProps {
 /**
  * The mobile "Switch tab" bottom sheet (the screenshot-2 surface). A
  * drag-dismissable `vaul` drawer whose category bar mirrors the desktop
- * left-panel registry and whose content region shows the active category's
- * body. Foundation ticket (P2.1): the bar + shell + category persistence ship
- * here; the per-category bodies are placeholders that P2.2 (flat lists) and P2.3
- * (panel embeds) replace in place.
+ * left-panel registry and whose content region shows the active category:
+ * flat lists for Agents/Terminals/Artifacts (P2.2) and the embedded desktop
+ * File-tree / Git-diff panel bodies (P2.3).
  *
  * Opened from the Phase-1 current-tile bar chevron. Only meaningful on phones -
  * it is mounted from `MobileEpicTileView`, which itself renders only under the
@@ -60,6 +62,32 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
 
   const handleClose = useCallback(() => onOpenChange(false), [onOpenChange]);
 
+  // Close-on-open for the embedded panel bodies. The flat lists close the sheet
+  // explicitly (they own the open call), but the File-tree / Git-diff bodies
+  // open a tile through their own internal navigation - which we do not fork -
+  // so instead watch the shown tile: when it changes while the sheet is open, a
+  // selection landed, so close. In-panel navigation (repo / workspace switch)
+  // opens no tile and leaves the shown tile - and the sheet - untouched.
+  const canvas = useEpicCanvas(tabId);
+  const currentInstanceId = useMemo(
+    () => selectMobileTile(canvas)?.ref.instanceId ?? null,
+    [canvas],
+  );
+  const openedInstanceIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) {
+      openedInstanceIdRef.current = null;
+      return;
+    }
+    if (openedInstanceIdRef.current === null) {
+      openedInstanceIdRef.current = currentInstanceId;
+      return;
+    }
+    if (currentInstanceId !== openedInstanceIdRef.current) {
+      onOpenChange(false);
+    }
+  }, [open, currentInstanceId, onOpenChange]);
+
   if (!isMobile) return null;
 
   return (
@@ -80,9 +108,13 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
           <div className="shrink-0 border-b border-canvas-border/70">
             <SwitcherCategoryTabs />
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[env(safe-area-inset-bottom)]">
+          <div className="flex min-h-0 flex-1 flex-col">
             {MOBILE_SWITCHER_CATEGORY_DEFS.map((definition) => (
-              <TabsContent key={definition.id} value={definition.id}>
+              <TabsContent
+                key={definition.id}
+                value={definition.id}
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
+              >
                 <SwitcherCategoryBody
                   categoryId={definition.id}
                   epicId={epicId}
@@ -106,16 +138,18 @@ interface SwitcherCategoryBodyProps {
 }
 
 /**
- * Content-region registry. The `chats`/`terminals`/`artifacts` categories are
- * flat lists (P2.2); `file-tree`/`git-diff` remain placeholders until P2.3
- * embeds the desktop panel bodies. `onClose` closes the sheet after a selection
- * so the chosen item becomes the full-screen mobile tile.
+ * Content-region registry: flat lists (P2.2) for the row-per-item categories;
+ * embedded desktop panel bodies (P2.3) for File tree + Git diff. The flat lists
+ * call `onClose` on selection; the embeds rely on the sheet's active-tile
+ * watcher.
  */
 function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
   const { categoryId, epicId, tabId, onClose } = props;
   switch (categoryId) {
     case "chats":
-      return <SwitcherAgentsList epicId={epicId} tabId={tabId} onClose={onClose} />;
+      return (
+        <SwitcherAgentsList epicId={epicId} tabId={tabId} onClose={onClose} />
+      );
     case "terminals":
       return (
         <SwitcherTerminalsList epicId={epicId} tabId={tabId} onClose={onClose} />
@@ -124,18 +158,15 @@ function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
       return (
         <SwitcherArtifactsList epicId={epicId} tabId={tabId} onClose={onClose} />
       );
+    case "file-tree":
+      return (
+        <SwitcherPanelEmbed category="file-tree" epicId={epicId} tabId={tabId} />
+      );
+    case "git-diff":
+      return (
+        <SwitcherPanelEmbed category="git-diff" epicId={epicId} tabId={tabId} />
+      );
     default:
-      return <SwitcherCategoryPlaceholder categoryId={categoryId} />;
+      return null;
   }
-}
-
-function SwitcherCategoryPlaceholder(props: { readonly categoryId: LeftPanelId }) {
-  return (
-    <div
-      data-testid={`mobile-switcher-panel-${props.categoryId}`}
-      className="flex min-h-24 items-center justify-center p-6 text-ui-sm text-muted-foreground"
-    >
-      Coming soon
-    </div>
-  );
 }

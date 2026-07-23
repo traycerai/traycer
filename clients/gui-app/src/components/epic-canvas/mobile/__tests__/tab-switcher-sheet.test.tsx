@@ -1,8 +1,10 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TabSwitcherSheet } from "@/components/epic-canvas/mobile/tab-switcher-sheet";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { EpicArtifactRef, TilePane } from "@/stores/epics/canvas/types";
 
 const mobileState = vi.hoisted(() => ({ value: true }));
 vi.mock("@/hooks/ui/use-mobile", () => ({
@@ -20,6 +22,9 @@ vi.mock("@/components/epic-canvas/mobile/switcher-terminals-list", () => ({
 }));
 vi.mock("@/components/epic-canvas/mobile/switcher-artifacts-list", () => ({
   SwitcherArtifactsList: () => <div data-testid="mock-artifacts-list" />,
+}));
+vi.mock("@/components/epic-canvas/mobile/switcher-panel-embed", () => ({
+  SwitcherPanelEmbed: () => <div data-testid="mock-panel-embed" />,
 }));
 
 const TAB_ID = "tab-switcher-test";
@@ -82,5 +87,64 @@ describe("<TabSwitcherSheet />", () => {
     mobileState.value = false;
     renderSheet(true, () => {});
     expect(screen.queryByTestId("mobile-tab-switcher-sheet")).toBeNull();
+  });
+});
+
+function artifactRef(id: string, instanceId: string): EpicArtifactRef {
+  return { id, instanceId, type: "spec", name: id, hostId: "host-A" };
+}
+
+function seedCanvasActiveTile(activeTabId: string): void {
+  const root: TilePane = {
+    kind: "pane",
+    id: "pane-A",
+    tabInstanceIds: ["inst-1", "inst-2"],
+    activeTabId,
+    previewTabId: null,
+    activationHistory: [activeTabId],
+  };
+  useEpicCanvasStore.setState({
+    tabsById: { [TAB_ID]: { tabId: TAB_ID, epicId: "epic-1", name: "Epic 1" } },
+    canvasByTabId: {
+      [TAB_ID]: {
+        root,
+        activePaneId: "pane-A",
+        tilesByInstanceId: {
+          "inst-1": artifactRef("a1", "inst-1"),
+          "inst-2": artifactRef("a2", "inst-2"),
+        },
+        sizesByGroupId: {},
+      },
+    },
+  });
+}
+
+describe("<TabSwitcherSheet /> close-on-open", () => {
+  beforeEach(() => {
+    mobileState.value = true;
+    useLeftPanelStore.setState({ activePanelIdByTabId: {} });
+  });
+  afterEach(() => {
+    cleanup();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  });
+
+  it("closes when the shown tile changes while open (an embed opened a tile)", () => {
+    seedCanvasActiveTile("inst-1");
+    const onOpenChange = vi.fn();
+    renderSheet(true, onOpenChange);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    // A file/diff open lands a different tile as the shown tile.
+    act(() => seedCanvasActiveTile("inst-2"));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("stays open when only the category changes (no tile opened)", async () => {
+    const user = userEvent.setup();
+    seedCanvasActiveTile("inst-1");
+    const onOpenChange = vi.fn();
+    renderSheet(true, onOpenChange);
+    await user.click(screen.getByRole("tab", { name: "Git Diff" }));
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 });
