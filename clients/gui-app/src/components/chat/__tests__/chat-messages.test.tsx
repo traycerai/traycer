@@ -994,9 +994,7 @@ describe("ChatMessages Virtuoso renderer", () => {
     expect(unitRoot?.dataset.chatFindUnit).toBe(
       chatFindA2AReceivedBodyUnitId(message.id),
     );
-    expect(
-      screen.getByRole("button", { name: "Open sending agent" }),
-    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Copy message" })).not.toBeNull();
     expect(range?.startContainer.parentElement?.closest("button")).toBeNull();
   });
 
