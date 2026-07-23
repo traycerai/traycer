@@ -158,6 +158,7 @@ function renderHost(): void {
       onContainerResize={vi.fn()}
       onWriterReady={vi.fn()}
       shouldFocusOnActivePane={false}
+      registerImperativeFocus
       findTargetId={null}
       keepAlive={false}
       chrome="padded"

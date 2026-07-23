@@ -23,37 +23,56 @@ import {
   sessionObjectUrl,
 } from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import * as idb from "idb-keyval";
+
+const gcMocks = vi.hoisted(() => ({
+  scheduleLandingImageReconcile: vi.fn(() => undefined),
+  actualScheduleLandingImageReconcile: null as null | (() => void),
+}));
 
 vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
   const actual =
     await importActual<typeof import("@/lib/composer/landing-image-gc")>();
+  gcMocks.actualScheduleLandingImageReconcile =
+    actual.scheduleLandingImageReconcile;
+  // Default: a no-op stub, not a call-through. The real scheduler starts a
+  // 250ms timer that later calls the real `reconcile()`, which would otherwise
+  // escape most tests' boundaries. Tests that need the real reclaim chain
+  // opt in via mockImplementation → actualScheduleLandingImageReconcile.
+  gcMocks.scheduleLandingImageReconcile.mockImplementation(() => undefined);
   return {
     ...actual,
-    // A no-op stub, not a call-through: the real scheduler starts a 250ms
-    // timer that later calls the real `reconcile()`, which would otherwise
-    // escape this test's boundary and run against a later test's IDB mock
-    // state. Only call presence is asserted here.
-    scheduleLandingImageReconcile: vi.fn(() => undefined),
+    // Export the vi.fn itself so beforeEach can mockClear it.
+    scheduleLandingImageReconcile: gcMocks.scheduleLandingImageReconcile,
   };
 });
 
 // In-memory stand-in for idb-keyval so `putImage` can persist + read back bytes
 // without a real IndexedDB. Mirrors the landing-image-store unit test.
+const idbData = vi.hoisted(() => new Map<string, unknown>());
+
+function idbStringKey(key: IDBValidKey): string {
+  if (typeof key !== "string") {
+    throw new Error("landing image store keys are string hashes");
+  }
+  return key;
+}
+
 vi.mock("idb-keyval", () => {
-  const data = new Map<string, unknown>();
   const dummyStore = () => Promise.reject(new Error("unused"));
   return {
     createStore: vi.fn(() => dummyStore),
-    get: vi.fn((key: string) => Promise.resolve(data.get(key))),
+    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
     set: vi.fn((key: string, value: unknown) => {
-      data.set(key, value);
+      idbData.set(key, value);
       return Promise.resolve();
     }),
     del: vi.fn((key: string) => {
-      data.delete(key);
+      idbData.delete(key);
       return Promise.resolve();
     }),
-    keys: vi.fn(() => Promise.resolve(Array.from(data.keys()))),
+    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
   };
 });
 
@@ -68,6 +87,10 @@ let urlCounter = 0;
 beforeEach(async () => {
   URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
   URL.revokeObjectURL = vi.fn();
+  vi.mocked(idb.set).mockImplementation((key, value) => {
+    idbData.set(idbStringKey(key), value);
+    return Promise.resolve();
+  });
   const hashes = await imageHashKeys();
   await Promise.all(
     hashes.map(async (hash) => {
@@ -77,10 +100,14 @@ beforeEach(async () => {
   );
   vi.mocked(toast.error).mockClear();
   vi.mocked(scheduleLandingImageReconcile).mockClear();
+  gcMocks.scheduleLandingImageReconcile.mockImplementation(() => undefined);
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
 });
 
 afterEach(() => {
   cleanup();
+  gcMocks.scheduleLandingImageReconcile.mockImplementation(() => undefined);
+  vi.useRealTimers();
 });
 
 // Default fixture for tests that don't care about file-path resolution at

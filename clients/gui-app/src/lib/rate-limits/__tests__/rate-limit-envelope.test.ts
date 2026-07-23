@@ -68,6 +68,24 @@ const CODEX_WITH_RESET_DETAILS: ProviderRateLimits = {
   rateLimitReachedType: null,
 };
 
+const GROK_GOOD: ProviderRateLimits = {
+  provider: "grok",
+  available: true,
+  subscriptionTier: "SuperGrok",
+  periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+  periodStart: 1_784_678_400_000,
+  periodEnd: 1_785_283_200_000,
+  period: {
+    usedPercent: 12,
+    resetsAt: 1_785_283_200_000,
+    durationMinutes: 10_080,
+  },
+  monthlyLimit: null,
+  onDemandCap: null,
+  onDemandUsed: null,
+  prepaidBalance: null,
+};
+
 function response(
   providerRateLimits: ProviderRateLimits | null,
 ): RateLimitUsageResponse {
@@ -454,6 +472,42 @@ describe("mapResponseToProviderRateLimitEnvelope providers.list convergence", ()
       queryKey: ["host", "host-a", "host.getRateLimitUsage", {}],
     });
     expect(invalidateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates providers.list when a grok fetch resolves", () => {
+    const queryClient = new QueryClient();
+    const invalidateSpy = invalidateSpyFor(queryClient);
+    const providersListKey = ["host", "host-a", "providers.list", {}];
+    const unrelatedKey = ["host", "host-a", "host.getRateLimitUsage", {}];
+    queryClient.setQueryData(providersListKey, { providers: [] });
+    queryClient.setQueryData(unrelatedKey, {
+      latest: null,
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+    });
+    mapResponseToProviderRateLimitEnvelope({
+      response: response(GROK_GOOD),
+      queryClient,
+      queryKey: unrelatedKey,
+    });
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    const predicate = invalidateSpy.mock.calls[0]?.[0]?.predicate;
+    const providersListQuery = queryClient
+      .getQueryCache()
+      .find({ queryKey: providersListKey, exact: true });
+    const unrelatedQuery = queryClient
+      .getQueryCache()
+      .find({ queryKey: unrelatedKey, exact: true });
+    if (
+      predicate === undefined ||
+      providersListQuery === undefined ||
+      unrelatedQuery === undefined
+    ) {
+      throw new Error("expected cached queries and invalidation predicate");
+    }
+    expect(predicate(providersListQuery)).toBe(true);
+    expect(predicate(unrelatedQuery)).toBe(false);
   });
 
   it("does not invalidate providers.list for openrouter/kilocode (never carry managed profiles)", () => {

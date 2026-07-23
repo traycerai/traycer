@@ -71,6 +71,7 @@ function makePaste(): UseComposerPasteResult {
     onDragEnter: vi.fn(),
     onDragLeave: vi.fn(),
     attachImageFiles: vi.fn(),
+    runPendingImageJob: vi.fn(),
     isDraggingFiles: true,
     dragOverlayVariant: "paths",
     isIngestingImages: false,
@@ -119,6 +120,8 @@ function renderComposerBody(
       dictationPreparing={null}
       paste={paste}
       hasPastedImageBytes={null}
+      ingestPastedComposerImages={null}
+      onEditorReady={null}
       onSubmit={vi.fn()}
       onStartTerminal={vi.fn()}
       onSnapshot={vi.fn()}

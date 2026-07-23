@@ -375,4 +375,42 @@ describe("resolveProviderPlanLabel", () => {
       }),
     ).toBeNull();
   });
+
+  it("returns Grok's subscriptionTier verbatim (not title-cased)", () => {
+    // "SuperGrok" is a branded display token - titleCaseFromToken would lower
+    // the intra-word capital to "Supergrok".
+    expect(
+      resolveProviderPlanLabel({
+        provider: "grok",
+        available: true,
+        subscriptionTier: "SuperGrok",
+        periodType: null,
+        periodStart: null,
+        periodEnd: null,
+        period: null,
+        monthlyLimit: null,
+        onDemandCap: null,
+        onDemandUsed: null,
+        prepaidBalance: null,
+      }),
+    ).toBe("SuperGrok");
+  });
+
+  it("is null when Grok did not report a subscriptionTier", () => {
+    expect(
+      resolveProviderPlanLabel({
+        provider: "grok",
+        available: true,
+        subscriptionTier: null,
+        periodType: null,
+        periodStart: null,
+        periodEnd: null,
+        period: null,
+        monthlyLimit: null,
+        onDemandCap: null,
+        onDemandUsed: null,
+        prepaidBalance: null,
+      }),
+    ).toBeNull();
+  });
 });

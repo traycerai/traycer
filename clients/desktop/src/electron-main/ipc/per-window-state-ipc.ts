@@ -63,6 +63,14 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
   const onPerWindowStateChange = (change: PerWindowStateChange): void => {
     // Don't bounce a window's own update back to it (see suppress note above).
     if (suppressEchoWindowIds.has(change.windowId)) return;
+    // A `clear` is a window-teardown wipe. Never push its empty snapshot to a
+    // renderer: for a genuinely-closed window the send would no-op anyway, but a
+    // window that dropped from the registry snapshot while its BrowserWindow is
+    // still alive (a reload / re-registration) would be clobbered with an empty
+    // snapshot — wiping a live draft and, downstream, reaping its image bytes.
+    // The durable delete still happened (genuine close cleanup is preserved); the
+    // "Clear local app state" path reloads the window, so it needs no echo.
+    if (change.origin === "clear") return;
     bridge.safeSendToWindow(
       change.windowId,
       RunnerHostEvent.perWindowStateChange,
