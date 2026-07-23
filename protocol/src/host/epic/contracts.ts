@@ -65,6 +65,8 @@ import {
   replyToCommentThreadResponseSchema,
   revokeEpicCollaboratorRequestSchema,
   revokeEpicCollaboratorResponseSchema,
+  setChatArchivedRequestSchema,
+  setChatArchivedResponseSchema,
   setCommentThreadResolvedRequestSchema,
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
@@ -317,6 +319,18 @@ export const epicReparentChatV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: reparentChatRequestSchema,
   responseSchema: reparentChatResponseSchema,
+});
+
+// Optional (non-floor) capability: durable host-backed archive toggle for a
+// chat or terminal-agent record. Registered with a `degrade: unsupported`
+// strategy (see registry.ts) so an old host that lacks it fails only this
+// call - it must never enter the released floor, which would be
+// handshake-fatal for existing peers. See the schema doc in `unary-schemas.ts`.
+export const epicSetChatArchivedV10 = defineRpcContract({
+  method: "epic.setChatArchived",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: setChatArchivedRequestSchema,
+  responseSchema: setChatArchivedResponseSchema,
 });
 
 export const epicCreateTuiAgentV10 = defineRpcContract({

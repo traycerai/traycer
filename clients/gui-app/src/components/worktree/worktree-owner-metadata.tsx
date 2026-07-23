@@ -2,6 +2,7 @@ import { useState, type ReactElement, type ReactNode } from "react";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import { HoverPreviewCard } from "@/components/ui/hover-preview-card";
 import { OwnerWorkspaceMetadataContent } from "@/components/worktree/worktree-pr-metadata";
+import { WorktreeOwnerSettingsHeader } from "@/components/worktree/worktree-owner-settings-header";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useWorktreeOwnerMetadata } from "@/hooks/worktree/use-worktree-owner-metadata-query";
 
@@ -29,6 +30,11 @@ export function WorktreeOwnerMetadataTooltip(props: {
           className="block w-[min(92vw,24rem)]"
           data-testid={`chat-navigator-worktree-hover-${props.ownerId}`}
         >
+          <WorktreeOwnerSettingsHeader
+            ownerId={props.ownerId}
+            hostId={props.hostId}
+            ownerKind={props.ownerKind}
+          />
           <OwnerWorkspaceMetadataContent
             binding={metadata.binding}
             worktrees={metadata.worktrees}

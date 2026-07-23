@@ -162,6 +162,7 @@ import {
   epicReplyToCommentThreadV10,
   epicResolveArtifactByPathV10,
   epicRevokeCollaboratorV10,
+  epicSetChatArchivedV10,
   epicSetCommentThreadResolvedV10,
   epicSetPinnedV10,
   epicSubscribeV10,
@@ -3248,6 +3249,26 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Optional (non-floor) capability: durable host-backed archive toggle for a
+  // chat OR terminal-agent record (single method keyed by id). The
+  // `degrade: unsupported` strategy EXCLUDES it from the released floor and the
+  // released-method-names snapshot - adding it to the floor would be
+  // handshake-fatal for existing clients. Old peers lack it in their optional
+  // manifest; the caller gets E_HOST_UNSUPPORTED for this call only and hides
+  // the archive affordance.
+  "epic.setChatArchived": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSetChatArchivedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "epic.createTuiAgent": {
     1: {

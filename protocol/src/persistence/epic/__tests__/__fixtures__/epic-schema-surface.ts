@@ -5096,6 +5096,17 @@ export const epicSchemaSurfaceBaseline = {
                 ],
               },
             },
+            archivedAt: {
+              default: null,
+              anyOf: [
+                {
+                  type: "number",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
           },
           required: [
             "parentId",
@@ -5666,6 +5677,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                archivedAt: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "number",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -5800,6 +5822,17 @@ export const epicSchemaSurfaceBaseline = {
                   anyOf: [
                     {
                       type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                archivedAt: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "number",
                     },
                     {
                       type: "null",
@@ -5953,6 +5986,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                archivedAt: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "number",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -6087,6 +6131,17 @@ export const epicSchemaSurfaceBaseline = {
                   anyOf: [
                     {
                       type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+                archivedAt: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "number",
                     },
                     {
                       type: "null",
@@ -11499,6 +11554,17 @@ export const epicSchemaSurfaceBaseline = {
                 additionalProperties: false,
               },
             },
+            archivedAt: {
+              default: null,
+              anyOf: [
+                {
+                  type: "number",
+                },
+                {
+                  type: "null",
+                },
+              ],
+            },
           },
           required: [
             "parentId",
@@ -11514,6 +11580,7 @@ export const epicSchemaSurfaceBaseline = {
             "claudePendingWakes",
             "messages",
             "events",
+            "archivedAt",
           ],
           additionalProperties: false,
         },
@@ -12082,6 +12149,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                archivedAt: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "number",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -12104,6 +12182,7 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellCommand",
                 "terminalShellArgs",
                 "profileId",
+                "archivedAt",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12228,6 +12307,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                archivedAt: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "number",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   default: null,
                   anyOf: [
@@ -12258,6 +12348,7 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellCommand",
                 "terminalShellArgs",
                 "profileId",
+                "archivedAt",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12382,6 +12473,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                archivedAt: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "number",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   type: "string",
                 },
@@ -12404,6 +12506,7 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellCommand",
                 "terminalShellArgs",
                 "profileId",
+                "archivedAt",
                 "harnessSessionId",
               ],
               additionalProperties: false,
@@ -12528,6 +12631,17 @@ export const epicSchemaSurfaceBaseline = {
                     },
                   ],
                 },
+                archivedAt: {
+                  default: null,
+                  anyOf: [
+                    {
+                      type: "number",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
                 harnessSessionId: {
                   default: null,
                   anyOf: [
@@ -12558,6 +12672,7 @@ export const epicSchemaSurfaceBaseline = {
                 "terminalShellCommand",
                 "terminalShellArgs",
                 "profileId",
+                "archivedAt",
                 "harnessSessionId",
               ],
               additionalProperties: false,

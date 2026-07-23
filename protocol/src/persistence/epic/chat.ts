@@ -59,6 +59,15 @@ export const chatSchema = z.object({
   claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema).default([]),
+  /**
+   * Wall-clock ms when this chat was archived, or `null` while active.
+   * Archiving is a durable, host-backed flag (see the "Archive Mechanism"
+   * in the chat-sidebar redesign plan): the sidebar hides an archived chat's
+   * whole subtree behind the "Show archived" filter. Set/cleared via the
+   * optional `epic.setChatArchived` RPC. Defaulted so records persisted
+   * before archiving existed parse unchanged.
+   */
+  archivedAt: z.number().nullable().default(null),
 });
 export type Chat = z.infer<typeof chatSchema>;
 
