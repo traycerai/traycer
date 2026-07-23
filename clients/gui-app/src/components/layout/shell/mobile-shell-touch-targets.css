@@ -33,4 +33,11 @@
     height: max(100%, 44px);
     transform: translateY(-50%);
   }
+
+  /* Command-palette opener rows (e.g. the empty-pane opener) stack vertically,
+     so enlarge the row itself to the 44px target instead of adding vertical
+     hit-slop that would overlap the neighbouring row. */
+  [data-mobile-shell-touch-scope] [data-slot="command-item"] {
+    min-height: 44px;
+  }
 }

@@ -9,6 +9,7 @@ import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useEpicCanvas } from "@/stores/epics/canvas/store";
 import { firstPaneId } from "@/stores/epics/canvas/tile-tree";
 import type { TileLayoutNode } from "@/stores/epics/canvas/types";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
 interface MobileEpicTileViewProps {
   readonly epicId: string;
@@ -103,6 +104,7 @@ function MobileEmptyEpicPane(props: MobileEmptyEpicPaneProps) {
   if (root === null) return null;
   return (
     <div
+      data-mobile-shell-touch-scope=""
       className="flex h-full min-h-0 w-full flex-col bg-canvas"
       data-testid="mobile-epic-empty-pane"
     >
