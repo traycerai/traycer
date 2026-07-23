@@ -4,9 +4,10 @@ import { AgentMessageCopyButton } from "./agent-message-copy-button";
 
 /**
  * Scrollable message text plus its copy affordance for an A2A send/received
- * segment body. The copy button is a static sibling in its own gutter column
- * (not overlaid on the scroll container) so it never intercepts the box's
- * native scrollbar.
+ * segment body. The copy button floats over the box's top-right corner
+ * (mirroring the artifact diff viewer's expand control); the box carries
+ * `pr-10` so text clears the button and keeps its own border + native
+ * scrollbar flush against that border.
  */
 export function AgentMessageBody(props: {
   readonly value: string;
@@ -15,10 +16,10 @@ export function AgentMessageBody(props: {
 }): ReactNode {
   const { value, bodyFindUnitId, isStreaming } = props;
   return (
-    <div className="flex min-w-0 items-start gap-1.5">
+    <div className="relative min-w-0">
       <div
         data-chat-find-unit={bodyFindUnitId}
-        className="max-h-[min(40vh,24rem)] min-w-0 flex-1 overflow-auto rounded-md border border-canvas-border/30 bg-canvas/40 px-3 py-2"
+        className="max-h-[min(40vh,24rem)] overflow-auto rounded-md border border-canvas-border/30 bg-canvas/40 px-3 py-2 pr-10"
       >
         <AgentReferenceMarkdown
           isStreaming={isStreaming}
