@@ -149,6 +149,7 @@ function Harness({
       disabled={false}
       slashProviderId="claude"
       hasPastedImageBytes={null}
+      ingestPastedComposerImages={null}
       stabilizeImageAttachmentCaret={false}
       onSnapshot={() => undefined}
       onSubmit={() => undefined}

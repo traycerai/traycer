@@ -6,6 +6,10 @@ import {
   ComposerPromptEditor,
   type ComposerPromptEditorHandle,
 } from "@/components/chat/composer/composer-prompt-editor";
+import type {
+  PastedComposerImage,
+  PastedComposerImageOutcome,
+} from "@/components/chat/composer/editor/extensions/chat-paste-handler";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 import type { ComposerDictationControl } from "@/components/home/toolbar/composer-mic-button";
@@ -53,6 +57,18 @@ export interface ComposerBodyProps {
   readonly dictationPreparing: DictationPreparingStatus | null;
   readonly paste: UseComposerPasteResult;
   readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
+  readonly ingestPastedComposerImages:
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null;
+  /**
+   * Forwarded to the chat `ComposerPromptEditor`'s `onEditorReady` (fired once
+   * when its async editor is created). Landing passes a callback that re-ingests
+   * a restored draft's still-pending b64 image nodes; `null` where the editor
+   * has nothing to resume (chat / new-conversation).
+   */
+  readonly onEditorReady: (() => void) | null;
   readonly onSubmit: () => void;
   readonly onStartTerminal: (launch: TerminalAgentLaunch) => void;
   readonly onSnapshot: (
@@ -82,6 +98,8 @@ export function ComposerBody({
   dictationPreparing,
   paste,
   hasPastedImageBytes,
+  ingestPastedComposerImages,
+  onEditorReady,
   onSubmit,
   onStartTerminal,
   onSnapshot,
@@ -114,6 +132,7 @@ export function ComposerBody({
                 initialSelection={initialSelection}
                 slashProviderId={harnessId}
                 hasPastedImageBytes={hasPastedImageBytes}
+                ingestPastedComposerImages={ingestPastedComposerImages}
                 isActive={chatEditorIsActive}
                 disabled={false}
                 placeholder={COMPOSER_PLACEHOLDER}
@@ -127,7 +146,7 @@ export function ComposerBody({
                 onKeyDown={undefined}
                 onFocus={NOOP}
                 onBlur={NOOP}
-                onEditorReady={null}
+                onEditorReady={onEditorReady}
               />
             </div>
             <div className={hiddenInChat}>

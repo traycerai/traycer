@@ -28,6 +28,7 @@ import {
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 const attachmentMocks = vi.hoisted(() => ({
@@ -39,6 +40,33 @@ const attachmentMocks = vi.hoisted(() => ({
 const composerPickerMocks = vi.hoisted(() => ({
   useComposerPickerItems: vi.fn(),
 }));
+const reportableErrorToastMock = vi.hoisted(() => vi.fn());
+const openEpicHandleMocks = vi.hoisted(() => {
+  const hasAttachmentBytes = vi.fn((_hash: string) => false);
+  const readAttachmentBytes = vi.fn(
+    (_hash: string, _signal: AbortSignal): Promise<Uint8Array | null> =>
+      Promise.resolve(null),
+  );
+  return {
+    hasAttachmentBytes,
+    readAttachmentBytes,
+    handle: null as {
+      store: {
+        getState: () => {
+          hasAttachmentBytes: (hash: string) => boolean;
+          readAttachmentBytes: (
+            hash: string,
+            signal: AbortSignal,
+          ) => Promise<Uint8Array | null>;
+        };
+      };
+    } | null,
+  };
+});
+
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: reportableErrorToastMock,
+}));
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
@@ -49,6 +77,16 @@ vi.mock("@/providers/use-runner-host", () => ({
       readNativeClipboardFilePaths: () => Promise.resolve([]),
     },
   }),
+}));
+
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => openEpicHandleMocks.handle,
+  useOpenEpicHandle: () => {
+    if (openEpicHandleMocks.handle === null) {
+      throw new Error("useOpenEpicHandle requires a handle in this test");
+    }
+    return openEpicHandleMocks.handle;
+  },
 }));
 
 function render(ui: ReactNode) {
@@ -707,6 +745,216 @@ describe("<UserMessageBody /> agent messages", () => {
       clipboard.restore();
     }
   });
+
+  it("re-inlines hash-only image bytes as b64content on copy when the epic has them", async () => {
+    const imageBytes = new Uint8Array([10, 20, 30]);
+    const imageHash = "resolved-image-hash";
+    openEpicHandleMocks.hasAttachmentBytes.mockImplementation(
+      (hash: string) => hash === imageHash,
+    );
+    openEpicHandleMocks.readAttachmentBytes.mockImplementation((hash: string) =>
+      Promise.resolve(hash === imageHash ? imageBytes : null),
+    );
+    openEpicHandleMocks.handle = {
+      store: {
+        getState: () => ({
+          hasAttachmentBytes: openEpicHandleMocks.hasAttachmentBytes,
+          readAttachmentBytes: openEpicHandleMocks.readAttachmentBytes,
+        }),
+      },
+    };
+    const clipboard = installRichClipboardMock();
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("with image"),
+              structuredContent: hashOnlyImageMessageContent(imageHash),
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+      await waitFor(() => {
+        expect(clipboard.write).toHaveBeenCalledTimes(1);
+      });
+      expect(openEpicHandleMocks.hasAttachmentBytes).toHaveBeenCalledWith(
+        imageHash,
+      );
+      expect(openEpicHandleMocks.readAttachmentBytes).toHaveBeenCalledWith(
+        imageHash,
+        expect.any(AbortSignal),
+      );
+      const payload = clipboard.payloads[0];
+      expect(payload).toBeDefined();
+      const copied = parseComposerClipboardHtml(
+        await payload["text/html"].text(),
+      );
+      expect(copied).toEqual({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "imageAttachment",
+                attrs: {
+                  id: "copied-image",
+                  fileName: "shot.png",
+                  b64content: bytesToBase64(imageBytes),
+                  mimeType: "image/png",
+                  size: 3,
+                },
+              },
+              { type: "text", text: " look" },
+            ],
+          },
+        ],
+      });
+    } finally {
+      clipboard.restore();
+      openEpicHandleMocks.handle = null;
+      openEpicHandleMocks.hasAttachmentBytes.mockReset();
+      openEpicHandleMocks.readAttachmentBytes.mockReset();
+    }
+  });
+
+  it("leaves a dangling hash-only image as hash-only when attachment bytes are absent", async () => {
+    const imageHash = "dangling-image-hash";
+    openEpicHandleMocks.hasAttachmentBytes.mockReturnValue(false);
+    openEpicHandleMocks.readAttachmentBytes.mockResolvedValue(null);
+    openEpicHandleMocks.handle = {
+      store: {
+        getState: () => ({
+          hasAttachmentBytes: openEpicHandleMocks.hasAttachmentBytes,
+          readAttachmentBytes: openEpicHandleMocks.readAttachmentBytes,
+        }),
+      },
+    };
+    const clipboard = installRichClipboardMock();
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("dangling image"),
+              structuredContent: hashOnlyImageMessageContent(imageHash),
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+      await waitFor(() => {
+        expect(clipboard.write).toHaveBeenCalledTimes(1);
+      });
+      expect(openEpicHandleMocks.hasAttachmentBytes).toHaveBeenCalledWith(
+        imageHash,
+      );
+      expect(openEpicHandleMocks.readAttachmentBytes).not.toHaveBeenCalled();
+      const payload = clipboard.payloads[0];
+      expect(payload).toBeDefined();
+      const copied = parseComposerClipboardHtml(
+        await payload["text/html"].text(),
+      );
+      // Bytes absent → hash-only payload stays hash-only (no b64content).
+      expect(copied).toEqual(hashOnlyImageMessageContent(imageHash));
+    } finally {
+      clipboard.restore();
+      openEpicHandleMocks.handle = null;
+      openEpicHandleMocks.hasAttachmentBytes.mockReset();
+      openEpicHandleMocks.readAttachmentBytes.mockReset();
+    }
+  });
+
+  it("toasts Images weren't copied when rich clipboard write fails on an image-bearing message", async () => {
+    reportableErrorToastMock.mockClear();
+    const clipboard = installRichClipboardMock();
+    clipboard.write.mockRejectedValue(new Error("clipboard write denied"));
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("with image"),
+              structuredContent: {
+                type: "doc",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [
+                      imageNode("img-copy", "shot.png"),
+                      { type: "text", text: " caption" },
+                    ],
+                  },
+                ],
+              },
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+      await waitFor(() => {
+        expect(clipboard.writeText).toHaveBeenCalled();
+      });
+      expect(reportableErrorToastMock).toHaveBeenCalledWith(
+        "Images weren't copied",
+        {
+          description:
+            "The text was copied, but this device couldn't place the images on the clipboard.",
+        },
+        {
+          title: "Images were not copied",
+          message: null,
+          code: null,
+          source: "Chat message",
+        },
+      );
+    } finally {
+      clipboard.restore();
+    }
+  });
+
+  it("does not toast Images weren't copied when rich clipboard write fails on text-only content", async () => {
+    reportableErrorToastMock.mockClear();
+    const clipboard = installRichClipboardMock();
+    clipboard.write.mockRejectedValue(new Error("clipboard write denied"));
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("text only"),
+              structuredContent: STRUCTURED_USER_CONTENT,
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+      await waitFor(() => {
+        expect(clipboard.writeText).toHaveBeenCalled();
+      });
+      expect(reportableErrorToastMock).not.toHaveBeenCalledWith(
+        "Images weren't copied",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      clipboard.restore();
+    }
+  });
 });
 
 function agentMessage(content: string): ChatMessageModel {
@@ -832,6 +1080,31 @@ function hashOnlyInlineEditContent(): JsonContent {
             },
           },
           { type: "text", text: " pasted" },
+        ],
+      },
+    ],
+  };
+}
+
+function hashOnlyImageMessageContent(hash: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "copied-image",
+              fileName: "shot.png",
+              b64content: null,
+              hash,
+              mimeType: "image/png",
+              size: 3,
+            },
+          },
+          { type: "text", text: " look" },
         ],
       },
     ],

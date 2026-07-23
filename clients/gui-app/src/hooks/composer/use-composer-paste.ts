@@ -239,6 +239,14 @@ export interface UseComposerPasteResult {
   onDragEnter: (event: DragEvent<HTMLElement>) => void;
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
   attachImageFiles: (files: ReadonlyArray<File>) => void;
+  /**
+   * Run a caller-provided async image job under the SAME pending accounting as
+   * `attachImageFiles` (so it counts toward `isIngestingImages`/submit gating)
+   * and abort signal (fired on unmount). Landing's in-place b64 paste uses this
+   * for its per-image hash+store+rewrite jobs, which insert nothing themselves —
+   * the node is already in the document.
+   */
+  runPendingImageJob: (job: (signal: AbortSignal) => Promise<void>) => void;
   isDraggingFiles: boolean;
   dragOverlayVariant: FileTransferDragOverlayVariant | null;
   isIngestingImages: boolean;
@@ -645,6 +653,7 @@ export function useComposerPasteEvents(
     onDragEnter,
     onDragLeave,
     attachImageFiles,
+    runPendingImageJob: trackPendingImageJob,
     isDraggingFiles: dragState.depth > 0,
     dragOverlayVariant: dragState.depth > 0 ? dragState.overlayVariant : null,
     isIngestingImages: pendingImageCount > 0,

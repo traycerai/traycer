@@ -3,23 +3,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 // In-memory stand-in for idb-keyval, mirroring landing-image-store.test. Keyed by
-// string hash; the store argument is ignored. Re-created on every
-// `vi.resetModules()` so each test starts with an empty IndexedDB.
+// string hash; the store argument is ignored. The Map is hoisted so tests can
+// reinstall a working `set` after a rejecting override without losing the body.
+const idbData = vi.hoisted(() => new Map<string, unknown>());
+
+function idbStringKey(key: IDBValidKey): string {
+  if (typeof key !== "string") {
+    throw new Error("landing image store keys are string hashes");
+  }
+  return key;
+}
+
 vi.mock("idb-keyval", () => {
-  const data = new Map<string, unknown>();
   const dummyStore = () => Promise.reject(new Error("unused"));
   return {
     createStore: vi.fn(() => dummyStore),
-    get: vi.fn((key: string) => Promise.resolve(data.get(key))),
+    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
     set: vi.fn((key: string, value: unknown) => {
-      data.set(key, value);
+      idbData.set(key, value);
       return Promise.resolve();
     }),
     del: vi.fn((key: string) => {
-      data.delete(key);
+      idbData.delete(key);
       return Promise.resolve();
     }),
-    keys: vi.fn(() => Promise.resolve(Array.from(data.keys()))),
+    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
   };
 });
 
@@ -33,6 +41,13 @@ let urlCounter = 0;
 
 function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
   return new Uint8Array(values);
+}
+
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 const EMPTY_DOC: JsonContent = {
@@ -77,6 +92,7 @@ async function loadModules(opts: {
   readonly desktop: boolean;
 }): Promise<Modules> {
   vi.resetModules();
+  idbData.clear();
   if (opts.desktop) {
     Reflect.set(globalThis, "runnerHost", {
       windows: { windowId: "win-test" },
@@ -84,11 +100,27 @@ async function loadModules(opts: {
   } else {
     Reflect.deleteProperty(globalThis, "runnerHost");
   }
+  const idb = await import("idb-keyval");
+  // Always reinstall a working set after reset - prior tests may have left a
+  // rejecting mockImplementation on the shared idb-keyval mock module.
+  vi.mocked(idb.set).mockImplementation((key, value) => {
+    idbData.set(idbStringKey(key), value);
+    return Promise.resolve();
+  });
+  vi.mocked(idb.get).mockImplementation((key) =>
+    Promise.resolve(idbData.get(idbStringKey(key))),
+  );
+  vi.mocked(idb.del).mockImplementation((key) => {
+    idbData.delete(idbStringKey(key));
+    return Promise.resolve();
+  });
+  vi.mocked(idb.keys).mockImplementation(() =>
+    Promise.resolve(Array.from(idbData.keys())),
+  );
   const store = await import("@/lib/composer/landing-image-store");
   const gc = await import("@/lib/composer/landing-image-gc");
   const draft = await import("@/stores/home/landing-draft-store");
   const composer = await import("@/stores/composer/landing-composer-store");
-  const idb = await import("idb-keyval");
   draft.useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   composer.useLandingComposerStore.setState({
     currentContent: EMPTY_DOC,
@@ -148,6 +180,12 @@ describe("landing-image-gc", () => {
 
   it("[C1] the first desktop projection flips the ready gate and runs the sweep", async () => {
     const m = await loadModules({ desktop: true });
+    // [B2] Open the deletion gate WITHOUT flipping readiness: a non-empty
+    // authoritative snapshot marks the roots trustworthy but, unlike
+    // `markLandingEditorMounted`, does not itself fire `markLandingDraftsReady`
+    // (which mount now does). That keeps `landingDraftsReady()` false below so
+    // this test still exercises the FIRST projection flipping the ready gate.
+    m.gc.markLandingDraftsAuthoritativeNonEmpty();
     await m.idb.set(
       "restored-orphan",
       bytesOf([7, 8, 9]),
@@ -170,8 +208,35 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).not.toContain("restored-orphan");
   });
 
+  it("[B2] defers orphan deletion on desktop while the roots are untrustworthy", async () => {
+    const m = await loadModules({ desktop: true });
+    // Restored bytes, ready gate open (draft set known), but NO trustworthy
+    // signal yet: neither markLandingDraftsAuthoritativeNonEmpty nor
+    // markLandingEditorMounted. A cold-start empty projection would otherwise
+    // reap every restored image as an "orphan".
+    await m.idb.set("cold-orphan", bytesOf([1, 2, 3, 4]), m.store.imageStore());
+    m.gc.markLandingDraftsReady();
+    await flush();
+
+    await m.gc.reconcile();
+    await flush();
+
+    // Gate closed → no delete.
+    expect(await m.store.imageHashKeys()).toContain("cold-orphan");
+
+    // Opening the gate (editor mounted) re-runs a scheduled reconcile so the
+    // genuine orphan is reaped once roots are trustworthy.
+    m.gc.markLandingEditorMounted();
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+
+    expect(await m.store.imageHashKeys()).not.toContain("cold-orphan");
+  });
+
   it("once ready, a referenced restored image survives while an unreferenced one is collected", async () => {
     const m = await loadModules({ desktop: true });
+    // [B2] Roots are trustworthy (landing editor mounted) so the sweep may delete.
+    m.gc.markLandingEditorMounted();
     await m.idb.set("restored-keep", bytesOf([4, 5, 6]), m.store.imageStore());
     await m.idb.set(
       "restored-orphan",
@@ -277,8 +342,12 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).toContain(pasted);
   });
 
-  it("deletes orphan bytes on the cold-start sweep (session empty)", async () => {
+  it("deletes orphan bytes once the sweep is unblocked (session empty)", async () => {
     const m = await loadModules({ desktop: true });
+    // [B2] The deleting sweep only runs once the roots are trustworthy; mounting
+    // the landing editor unblocks it. (The cold-start deferral itself — no delete
+    // while untrustworthy — is covered separately.)
+    m.gc.markLandingEditorMounted();
     await m.idb.set("orphan", bytesOf([1]), m.store.imageStore());
     m.gc.markLandingDraftsReady();
     await flush();
@@ -290,6 +359,9 @@ describe("landing-image-gc", () => {
 
   it("close reclaims the session entry, then the bytes on the settling sweep", async () => {
     const m = await loadModules({ desktop: true });
+    // [B2] Roots are trustworthy (landing editor mounted) so post-close sweeps
+    // may reclaim the session entry and then the bytes.
+    m.gc.markLandingEditorMounted();
     m.gc.markLandingDraftsReady();
     await flush();
 
@@ -526,5 +598,126 @@ describe("landing-image-gc", () => {
     await flush();
 
     expect(m.gc.landingDraftsReady()).toBe(true);
+  });
+
+  it("partial putImage failure rolls back failed presence and reclaims the successful sibling orphan", async () => {
+    // Real scheduleLandingImageReconcile + reconcile (not a no-op mock): after a
+    // multi-image ingest where one putImage rejects, the failed hash must not
+    // report present without durable bytes, and the successful sibling's now-
+    // unreferenced IDB bytes must be reclaimed by the two-phase reconcile chain.
+    const m = await loadModules({ desktop: false });
+    await flush();
+    expect(m.gc.landingDraftsReady()).toBe(true);
+
+    // Empty live roots (no drafts, empty composer mirror) so a successful put
+    // with no editor node is unreferenced and eligible for reclaim — the same
+    // shape as Promise.all multi-file attach after onRejected (no nodes inserted).
+    m.draft.useLandingDraftStore.setState({
+      drafts: [],
+      activeDraftId: null,
+    });
+    m.composer.useLandingComposerStore.setState({
+      currentContent: EMPTY_DOC,
+      createdDraftId: null,
+    });
+
+    const successBytes = bytesOf([11, 11, 11]);
+    const failBytes = bytesOf([22, 22, 22]);
+    const successHashExpected = await sha256Hex(successBytes);
+    const failedHash = await sha256Hex(failBytes);
+
+    // Reject by content hash so the failure is deterministic even if callers
+    // ever switch to concurrent putImage (call-count races which write fails).
+    vi.mocked(m.idb.set).mockImplementation((key, value) => {
+      const hash = idbStringKey(key);
+      if (hash === failedHash) {
+        return Promise.reject(new Error("idb write failed"));
+      }
+      idbData.set(hash, value);
+      return Promise.resolve();
+    });
+
+    const successHash = await m.store.putImage(successBytes);
+    expect(successHash).toBe(successHashExpected);
+    await expect(m.store.putImage(failBytes)).rejects.toThrow(
+      "idb write failed",
+    );
+
+    // (a) Failed hash is NOT left present with no durable bytes (putImage rollback).
+    expect(m.store.hasLandingImageBytes(failedHash)).toBe(false);
+    expect(await m.store.imageHashKeys()).not.toContain(failedHash);
+    expect(m.store.sessionObjectUrl(failedHash)).toBeNull();
+    // Successful sibling is still durable + session-cached (no node inserted).
+    expect(m.store.hasLandingImageBytes(successHash)).toBe(true);
+    expect(await m.store.imageHashKeys()).toContain(successHash);
+    expect(m.store.sessionObjectUrl(successHash)).not.toBeNull();
+
+    // (b) Real scheduler: onRejected would schedule reconcile. First sweep
+    // releases the unreferenced session entry and schedules a follow-up; the
+    // follow-up reclaims the now-unprotected IDB bytes.
+    m.gc.scheduleLandingImageReconcile();
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+    expect(m.store.sessionObjectUrl(successHash)).toBeNull();
+    expect(await m.store.imageHashKeys()).toContain(successHash);
+
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+    expect(await m.store.imageHashKeys()).not.toContain(successHash);
+    expect(m.store.hasLandingImageBytes(successHash)).toBe(false);
+
+    // Restore a working set so later cases (same idb mock module) are not poisoned.
+    vi.mocked(m.idb.set).mockImplementation((key, value) => {
+      idbData.set(idbStringKey(key), value);
+      return Promise.resolve();
+    });
+  });
+
+  it("[B1+B2] empty-inbound guard leaves readiness closed; mount then reaps unreferenced restored bytes", async () => {
+    // Real projection → GC seam (no stubbed gates): cold-start empty inbound
+    // must not flip ready or delete; markLandingEditorMounted opens readiness
+    // + the deletion gate and reaps genuine orphans while keeping draft roots.
+    // Also covers B1-P2: mount fires readiness even when B1 suppressed the
+    // projection's own markLandingDraftsReady call.
+    const m = await loadModules({ desktop: true });
+    await m.idb.set("keep", bytesOf([1, 1, 1]), m.store.imageStore());
+    await m.idb.set("orphan", bytesOf([2, 2, 2]), m.store.imageStore());
+
+    m.draft.useLandingDraftStore.setState({
+      drafts: [
+        makeDraft(m, {
+          id: "alive",
+          content: docWithImages(imageNode("keep", 3)),
+          lastTouchedAt: 1,
+        }),
+      ],
+      activeDraftId: "alive",
+    });
+    expect(m.gc.landingDraftsReady()).toBe(false);
+
+    // Spurious empty inbound: B1 preserves drafts and does NOT mark ready.
+    m.draft.applyLandingDraftDesktopProjection({
+      epicTabs: [],
+      activeTabId: null,
+      canvasByTabId: {},
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    });
+    await flush();
+
+    expect(m.gc.landingDraftsReady()).toBe(false);
+    expect(m.draft.useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(await m.store.imageHashKeys()).toContain("keep");
+    expect(await m.store.imageHashKeys()).toContain("orphan");
+
+    // Mount: readiness + B2 deletion gate open → orphan reaped, keep survives.
+    m.gc.markLandingEditorMounted();
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+
+    expect(m.gc.landingDraftsReady()).toBe(true);
+    const keys = await m.store.imageHashKeys();
+    expect(keys).toContain("keep");
+    expect(keys).not.toContain("orphan");
   });
 });

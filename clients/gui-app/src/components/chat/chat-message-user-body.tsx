@@ -39,6 +39,10 @@ import {
   composerClipboardPlainText,
   copyComposerContentToClipboard,
 } from "@/lib/composer/composer-clipboard";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { containsImageAtoms } from "@/lib/composer/image-atoms";
+import { stringValue } from "@/lib/composer/tiptap-json-content";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
@@ -721,6 +725,7 @@ function InlineUserMessageEditor({
         initialSelection={null}
         slashProviderId={editing.slashProviderId}
         hasPastedImageBytes={hasPastedImageBytes}
+        ingestPastedComposerImages={null}
         isActive
         disabled={editing.pending}
         placeholder="Edit message"
@@ -947,6 +952,68 @@ function MessageActionButton(props: {
 }
 
 /**
+ * Rewrite each hash-only `imageAttachment` node to carry inline `b64content`
+ * (resolved from the epic's attachments store) so the copied clipboard payload
+ * is self-contained. A hash whose bytes are unresolvable (a dangling ref) is
+ * left hash-only — the destination composer's paste validation strips it.
+ */
+async function inlineCopiedImageBytes(
+  content: JsonContent,
+  resolveBytes: (hash: string) => Promise<Uint8Array | null>,
+): Promise<JsonContent> {
+  const hashes = hashOnlyImageHashesInContent(content);
+  if (hashes.length === 0) return content;
+  const bytesByHash = new Map<string, Uint8Array>();
+  await Promise.all(
+    hashes.map(async (hash) => {
+      const bytes = await resolveBytes(hash);
+      if (bytes !== null) bytesByHash.set(hash, bytes);
+    }),
+  );
+  if (bytesByHash.size === 0) return content;
+  return inlineHashOnlyImageNodes(content, bytesByHash);
+}
+
+function hashOnlyImageHashesInContent(content: JsonContent): string[] {
+  const hashes = new Set<string>();
+  const visit = (node: JsonContent): void => {
+    if (node.type === "imageAttachment") {
+      const hash = stringValue(node.attrs?.hash);
+      const b64content = stringValue(node.attrs?.b64content);
+      if (hash !== null && b64content === null) hashes.add(hash);
+      return;
+    }
+    node.content?.forEach(visit);
+  };
+  visit(content);
+  return Array.from(hashes);
+}
+
+function inlineHashOnlyImageNodes(
+  node: JsonContent,
+  bytesByHash: ReadonlyMap<string, Uint8Array>,
+): JsonContent {
+  if (node.type === "imageAttachment") {
+    const hash = stringValue(node.attrs?.hash);
+    const b64content = stringValue(node.attrs?.b64content);
+    if (hash === null || b64content !== null) return node;
+    const bytes = bytesByHash.get(hash);
+    if (bytes === undefined) return node;
+    // An image node carries exactly one payload; swap the hash for base64.
+    const { hash: _hash, ...rest } = node.attrs ?? {};
+    return { ...node, attrs: { ...rest, b64content: bytesToBase64(bytes) } };
+  }
+  const children = node.content;
+  if (children === undefined) return node;
+  return {
+    ...node,
+    content: children.map((child) =>
+      inlineHashOnlyImageNodes(child, bytesByHash),
+    ),
+  };
+}
+
+/**
  * Copy-to-clipboard button for the user message action chip. Sits alongside
  * edit/delete but stays available even while a turn is streaming (when those
  * two are gated off), so a user can always grab their own prompt text.
@@ -963,18 +1030,61 @@ function MessageCopyButton({
     onSuccess: null,
     onError: handleCopyError,
   });
+  const handle = useMaybeOpenEpicHandle();
+  const resolveAttachmentBytes = useCallback(
+    async (hash: string): Promise<Uint8Array | null> => {
+      if (handle === null) return null;
+      const state = handle.store.getState();
+      // Only read hashes whose bytes are already local — `readAttachmentBytes`
+      // otherwise waits indefinitely for a cross-device sync, which would hang
+      // the clipboard write. An absent hash (a dangling ref from the old
+      // edit-flow bug) stays hash-only; downstream paste validation drops it.
+      if (!state.hasAttachmentBytes(hash)) return null;
+      const bytes = await state.readAttachmentBytes(
+        hash,
+        new AbortController().signal,
+      );
+      return bytes === null ? null : new Uint8Array(bytes);
+    },
+    [handle],
+  );
   const onClick = useCallback(() => {
     if (structuredContent === null) {
       copy(text);
       return;
     }
-    copyWith(() =>
-      copyComposerContentToClipboard({
-        content: structuredContent,
+    // Re-inline each hash-only image node's bytes as `b64content` before writing
+    // to the clipboard, so a paste onto the start page (or into another epic's
+    // chat) carries real bytes instead of a bare hash that resolves nowhere.
+    copyWith(async () => {
+      const content = await inlineCopiedImageBytes(
+        structuredContent,
+        resolveAttachmentBytes,
+      );
+      const result = await copyComposerContentToClipboard({
+        content,
         plainText: text,
-      }),
-    );
-  }, [copy, copyWith, structuredContent, text]);
+      });
+      // Image atoms serialize to no plain text, so a rich-write failure that
+      // silently degrades to plain text would drop every image while still
+      // resolving "copied". Surface that instead of a clean-looking success.
+      if (!result.richContentWritten && containsImageAtoms(content)) {
+        reportableErrorToast(
+          "Images weren't copied",
+          {
+            description:
+              "The text was copied, but this device couldn't place the images on the clipboard.",
+          },
+          {
+            title: "Images were not copied",
+            message: null,
+            code: null,
+            source: "Chat message",
+          },
+        );
+      }
+    });
+  }, [copy, copyWith, resolveAttachmentBytes, structuredContent, text]);
 
   return (
     <MessageActionButton
