@@ -46,6 +46,23 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicChatHarnessId: () => null,
   useMaybeEpicTuiAgentHarnessId: () => null,
   useEpicPermissionRole: () => holder.role,
+  // The lists sort by tree-node recency; expose nodes for the fixtures so the
+  // real epic-sort comparator resolves every id.
+  useEpicTreeIndex: () => ({
+    rootIds: [],
+    childrenByParent: {},
+    nodeById: Object.fromEntries(
+      holder.records.map((record, index) => [
+        record.id,
+        {
+          id: record.id,
+          title: record.name,
+          createdAt: index,
+          updatedAt: index,
+        },
+      ]),
+    ),
+  }),
 }));
 vi.mock("@/stores/epics/canvas/canvas-selectors", () => ({
   useIsActiveEpicArtifact: (_tabId: string, id: string) => holder.activeId === id,
@@ -111,11 +128,20 @@ describe("<SwitcherAgentsList />", () => {
     ];
   });
 
-  it("renders one row per chat + terminal-agent (artifacts excluded) from the projection", () => {
+  it("renders chats + terminal-agents interleaved by recency (artifacts excluded)", () => {
     render(<SwitcherAgentsList {...PROPS} />);
     expect(screen.getByTestId("switcher-agent-row-chat-1").textContent).toContain("Alpha");
     expect(screen.getByTestId("switcher-agent-row-tui-1").textContent).toContain("Beta");
     expect(screen.queryByTestId("switcher-agent-row-spec-1")).toBeNull();
+    // tui-1 (updatedAt 1) is more recent than chat-1 (updatedAt 0), so the list
+    // interleaves by recency rather than grouping all chats before agents.
+    const order = Array.from(
+      document.querySelectorAll('[data-testid^="switcher-agent-row-"]'),
+    ).map((row) => row.getAttribute("data-testid"));
+    expect(order).toEqual([
+      "switcher-agent-row-tui-1",
+      "switcher-agent-row-chat-1",
+    ]);
   });
 
   it("marks the active tile with a check and taps open it (chat ref)", () => {

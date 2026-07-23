@@ -6,6 +6,7 @@ import {
 } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row-actions";
 import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
+import { useOrderedSwitcherRecords } from "@/components/epic-canvas/mobile/switcher-record-order";
 import { useEpicArtifactRecords, type EpicTreeRecord } from "@/lib/epic-selectors";
 import {
   computeDescendantCounts,
@@ -37,7 +38,7 @@ interface SwitcherListProps {
  */
 export function SwitcherArtifactsList(props: SwitcherListProps) {
   const records = useEpicArtifactRecords();
-  const artifacts = useMemo(
+  const filtered = useMemo(
     () =>
       records.filter(
         (record) =>
@@ -45,6 +46,7 @@ export function SwitcherArtifactsList(props: SwitcherListProps) {
       ),
     [records],
   );
+  const artifacts = useOrderedSwitcherRecords(filtered);
 
   if (artifacts.length === 0) {
     return <SwitcherListEmpty message="No artifacts yet." />;
