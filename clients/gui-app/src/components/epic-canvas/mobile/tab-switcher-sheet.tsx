@@ -12,6 +12,9 @@ import {
   clampToSwitcherCategory,
   isSwitcherCategory,
 } from "@/components/epic-canvas/mobile/switcher-categories";
+import { SwitcherAgentsList } from "@/components/epic-canvas/mobile/switcher-agents-list";
+import { SwitcherTerminalsList } from "@/components/epic-canvas/mobile/switcher-terminals-list";
+import { SwitcherArtifactsList } from "@/components/epic-canvas/mobile/switcher-artifacts-list";
 import { useIsMobile } from "@/hooks/ui/use-mobile";
 import {
   useActiveLeftPanelId,
@@ -103,14 +106,27 @@ interface SwitcherCategoryBodyProps {
 }
 
 /**
- * Content-region registry. P2.1 ships a placeholder per category so the sheet
- * is functional end-to-end; P2.2 replaces the `chats`/`terminals`/`artifacts`
- * cases with flat lists and P2.3 the `file-tree`/`git-diff` cases with the
- * embedded desktop panel bodies. `onClose` is threaded now so those tickets can
- * close the sheet on selection without touching this signature.
+ * Content-region registry. The `chats`/`terminals`/`artifacts` categories are
+ * flat lists (P2.2); `file-tree`/`git-diff` remain placeholders until P2.3
+ * embeds the desktop panel bodies. `onClose` closes the sheet after a selection
+ * so the chosen item becomes the full-screen mobile tile.
  */
 function SwitcherCategoryBody(props: SwitcherCategoryBodyProps) {
-  return <SwitcherCategoryPlaceholder categoryId={props.categoryId} />;
+  const { categoryId, epicId, tabId, onClose } = props;
+  switch (categoryId) {
+    case "chats":
+      return <SwitcherAgentsList epicId={epicId} tabId={tabId} onClose={onClose} />;
+    case "terminals":
+      return (
+        <SwitcherTerminalsList epicId={epicId} tabId={tabId} onClose={onClose} />
+      );
+    case "artifacts":
+      return (
+        <SwitcherArtifactsList epicId={epicId} tabId={tabId} onClose={onClose} />
+      );
+    default:
+      return <SwitcherCategoryPlaceholder categoryId={categoryId} />;
+  }
 }
 
 function SwitcherCategoryPlaceholder(props: { readonly categoryId: LeftPanelId }) {

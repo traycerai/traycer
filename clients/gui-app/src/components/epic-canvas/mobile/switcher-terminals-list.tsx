@@ -1,0 +1,110 @@
+import { useCallback } from "react";
+import { Terminal } from "lucide-react";
+import { v4 as uuidv4 } from "uuid";
+import type { CanonicalTerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import {
+  SwitcherListEmpty,
+  SwitcherListRow,
+} from "@/components/epic-canvas/mobile/switcher-list-row";
+import { SwitcherRowActions } from "@/components/epic-canvas/mobile/switcher-row-actions";
+import { useSwitcherActivate } from "@/components/epic-canvas/mobile/use-switcher-activate";
+import { useHostClient } from "@/lib/host";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
+import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import {
+  deriveTitleSourceFromSessionTitle,
+  terminalSessionTitle,
+} from "@/lib/terminals/terminal-title";
+import { useIsActiveEpicArtifact } from "@/stores/epics/canvas/canvas-selectors";
+
+interface SwitcherListProps {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly onClose: () => void;
+}
+
+/**
+ * Terminals category: raw PTY sessions from the host `terminal.list` query
+ * (NOT the Y.Doc projection), filtered by the shared visibility rule. Sessions
+ * on an unreachable host are still shown (decision); opening one lands on the
+ * existing dead-tile handling.
+ */
+export function SwitcherTerminalsList(props: SwitcherListProps) {
+  const { epicId, tabId, onClose } = props;
+  const hostClient = useHostClient();
+  const list = useTerminalList({ kind: "epic", epicId }, hostClient);
+  const sessions = (list.data?.sessions ?? []).filter((session) =>
+    isVisibleEpicTerminalSession(session, epicId),
+  );
+
+  if (sessions.length === 0) {
+    return <SwitcherListEmpty message="No terminals yet." />;
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5 p-1">
+      {sessions.map((session) => (
+        <SwitcherTerminalRow
+          key={session.sessionId}
+          session={session}
+          epicId={epicId}
+          tabId={tabId}
+          onClose={onClose}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SwitcherTerminalRow(props: {
+  readonly session: CanonicalTerminalSessionInfo;
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly onClose: () => void;
+}) {
+  const { session, epicId, tabId, onClose } = props;
+  const activate = useSwitcherActivate(epicId, tabId, onClose);
+  const isActive = useIsActiveEpicArtifact(tabId, session.sessionId);
+  const hostId = useReactiveActiveHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const label = terminalSessionTitle({
+    title: session.title,
+    activeProcessName: session.activeProcessName,
+  });
+
+  const onSelect = useCallback(() => {
+    activate(session.sessionId, () => ({
+      id: session.sessionId,
+      instanceId: uuidv4(),
+      type: "terminal",
+      name: terminalSessionTitle({
+        title: session.title,
+        activeProcessName: session.activeProcessName,
+      }),
+      titleSource: deriveTitleSourceFromSessionTitle(session.title),
+      hostId,
+      cwd: session.cwd,
+    }));
+  }, [activate, hostId, session]);
+
+  return (
+    <SwitcherListRow
+      icon={<Terminal className="size-4 shrink-0 text-muted-foreground" />}
+      label={label}
+      active={isActive}
+      onSelect={onSelect}
+      selectTestId={`switcher-terminal-row-${session.sessionId}`}
+      actions={
+        <SwitcherRowActions
+          epicId={epicId}
+          tabId={tabId}
+          kind="terminal"
+          nodeId={session.sessionId}
+          name={label}
+          cascadeSummary={null}
+        />
+      }
+    />
+  );
+}

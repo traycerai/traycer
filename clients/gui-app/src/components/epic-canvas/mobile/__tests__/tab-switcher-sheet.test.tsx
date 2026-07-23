@@ -10,6 +10,18 @@ vi.mock("@/hooks/ui/use-mobile", () => ({
   isMobileViewport: () => mobileState.value,
 }));
 
+// The category bodies pull the epic projection / host queries; this test covers
+// the shell + tabs + persistence, so stub the lists to markers.
+vi.mock("@/components/epic-canvas/mobile/switcher-agents-list", () => ({
+  SwitcherAgentsList: () => <div data-testid="mock-agents-list" />,
+}));
+vi.mock("@/components/epic-canvas/mobile/switcher-terminals-list", () => ({
+  SwitcherTerminalsList: () => <div data-testid="mock-terminals-list" />,
+}));
+vi.mock("@/components/epic-canvas/mobile/switcher-artifacts-list", () => ({
+  SwitcherArtifactsList: () => <div data-testid="mock-artifacts-list" />,
+}));
+
 const TAB_ID = "tab-switcher-test";
 const CATEGORY_NAMES = [
   "Agents",
@@ -48,7 +60,7 @@ describe("<TabSwitcherSheet />", () => {
 
   it("defaults to the Agents category and shows its body", () => {
     renderSheet(true, () => {});
-    expect(screen.getByTestId("mobile-switcher-panel-chats")).toBeTruthy();
+    expect(screen.getByTestId("mock-agents-list")).toBeTruthy();
   });
 
   it("persists a category selection to the left-panel store and swaps the body", async () => {
@@ -58,7 +70,7 @@ describe("<TabSwitcherSheet />", () => {
     expect(useLeftPanelStore.getState().getActivePanelId(TAB_ID)).toBe(
       "artifacts",
     );
-    expect(screen.getByTestId("mobile-switcher-panel-artifacts")).toBeTruthy();
+    expect(screen.getByTestId("mock-artifacts-list")).toBeTruthy();
   });
 
   it("renders nothing when closed (controlled open prop)", () => {
