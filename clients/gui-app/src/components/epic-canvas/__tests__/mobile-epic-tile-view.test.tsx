@@ -50,6 +50,12 @@ vi.mock("@/components/epic-canvas/mobile/mobile-current-tile-bar", () => ({
   ),
 }));
 
+// The bottom-sheet is a leaf of the view but out of this test's scope; it pulls
+// the resolved-theme context (and much more), so stub it to nothing.
+vi.mock("@/components/epic-canvas/mobile/tab-switcher-sheet", () => ({
+  TabSwitcherSheet: () => null,
+}));
+
 function spec(n: number): EpicCanvasTileRef {
   return {
     id: `spec-${n}`,

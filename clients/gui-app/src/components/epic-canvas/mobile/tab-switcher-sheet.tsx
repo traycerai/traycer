@@ -25,11 +25,13 @@ import {
   type EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import { useIsMobile } from "@/hooks/ui/use-mobile";
+import { useResolvedTheme } from "@/providers/use-resolved-theme";
 import {
   useActiveLeftPanelId,
   useLeftPanelStore,
   type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
+import { cn } from "@/lib/utils";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 
 // Lazy so the desktop File-tree / Git-diff bodies - and the heavy epic-sidebar
@@ -71,6 +73,10 @@ function isEmbedOriginatedTileRef(ref: EpicCanvasTileRef): boolean {
 export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
   const { epicId, tabId, open, onOpenChange } = props;
   const isMobile = useIsMobile();
+  // The drawer content is portaled to <body>; re-assert the app's resolved
+  // theme on it so `--popover` / `--background` (and the preset tokens) resolve
+  // correctly inside the portal instead of falling back to the light :root.
+  const { resolvedTheme, themePreset } = useResolvedTheme();
   const persistedCategory = useActiveLeftPanelId(tabId);
   const setActivePanelId = useLeftPanelStore((s) => s.setActivePanelId);
   const activeCategory = clampToSwitcherCategory(persistedCategory);
@@ -123,7 +129,8 @@ export function TabSwitcherSheet(props: TabSwitcherSheetProps) {
       <DrawerContent
         data-mobile-shell-touch-scope=""
         data-testid="mobile-tab-switcher-sheet"
-        className="max-h-[min(90dvh,44rem)]"
+        data-theme={themePreset}
+        className={cn(resolvedTheme === "dark" && "dark", "h-[70dvh]")}
       >
         <DrawerHeader className="pb-2">
           <DrawerTitle>Switch tab</DrawerTitle>
