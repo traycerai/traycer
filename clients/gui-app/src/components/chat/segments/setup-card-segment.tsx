@@ -26,6 +26,7 @@ import {
 import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useFocusEpicTerminalSession } from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -189,12 +190,37 @@ export function SetupCardSegment(props: {
     // Script failures keep the in-place `retrySetup` path: the worktree
     // exists and only its setup script needs to re-run.
     if (workspace.retryFolderIntent !== null) {
-      worktreeCreate.mutate({
-        epicId: aggregate.epicId,
-        ownerId: aggregate.ownerId,
-        ownerKind: aggregate.ownerKind,
-        entries: [workspace.retryFolderIntent],
-      });
+      worktreeCreate.mutate(
+        {
+          epicId: aggregate.epicId,
+          ownerId: aggregate.ownerId,
+          ownerKind: aggregate.ownerKind,
+          entries: [workspace.retryFolderIntent],
+        },
+        {
+          // A failed entry does NOT reject the RPC - it rides `perEntry` on a
+          // successful response, so the hook's `onError` toast never sees it.
+          // Surface it here; the host separately appends a fresh
+          // `setup.failed` event that refreshes this card's reason.
+          onSuccess: (response) => {
+            const failed = response.perEntry.find(
+              (entry) =>
+                entry.workspacePath === workspace.workspacePath && !entry.ok,
+            );
+            if (failed === undefined) return;
+            reportableErrorToast(
+              failed.errorMessage ?? "Couldn't create worktree.",
+              undefined,
+              createReportIssueContext({
+                title: "Worktree re-provision failed",
+                message: failed.errorMessage,
+                code: null,
+                source: "Setup",
+              }),
+            );
+          },
+        },
+      );
       return;
     }
     retrySetup.mutate({
