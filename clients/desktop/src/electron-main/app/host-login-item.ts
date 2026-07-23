@@ -1,6 +1,6 @@
 import { app } from "electron";
 import { spawn } from "node:child_process";
-import { access, rm } from "node:fs/promises";
+import { access, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join } from "node:path";
 import { config, isDevBuild } from "../../config";
@@ -53,16 +53,20 @@ const LEGACY_HOST_SERVICE_NAME = `${CLI_HOST_LABEL}.plist`;
 
 // Every SMAppService mutation for the host label must flow through this
 // promise tail. `registerHostLoginItem` is a non-atomic bootout → unregister
-// → register sequence; `ensureHost`, the pending-revision monitor, and
-// `respawnHost` can all need it independently. Letting any two of them cross
-// that boundary at the same time can leave BTM with the stale LWCR this module
-// is designed to clear.
+// → register sequence; `HostController`'s `convergeReady`, `applyStaged`,
+// `activateInstalled`, `installVersion`, `respawn`, `recoverIfDown`,
+// `freePortAndRestart` (all via `runLockedMacActivationCycle`), and
+// `applyPendingLoginItemRevisionIfIdle` can all need it independently.
+// Letting any two of them cross that boundary at the same time can leave BTM
+// with the stale LWCR this module is designed to clear.
 //
-// This intentionally serializes rather than coalesces. The callers own their
-// own policies (force-ensure handling, monitor failure budget, and respawn
-// dedup/backoff), so a second caller must receive its own eventual result
-// after the first cycle settles. The tail always resolves so a failed cycle
-// never wedges later callers.
+// This intentionally serializes rather than coalesces. Each caller is
+// already independently exclusive at the `HostController` level - the
+// mutation lane for enqueued intents, the desktop cli-lock for
+// `applyPendingLoginItemRevisionIfIdle` - so this tail is defense-in-depth
+// against the specific SMAppService boundary, not the primary exclusion
+// mechanism. The tail always resolves so a failed cycle never wedges later
+// callers.
 let hostLoginItemRegistrationTail: Promise<void> = Promise.resolve();
 
 export function withHostLoginItemRegistrationLock<Result>(
@@ -238,11 +242,12 @@ const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
  */
 // `revalidateBeforeBootout`, when provided, is called INSIDE the locked
 // section immediately before `bootoutStaleAgent()` - not just at the call
-// site - because a caller's own idle/busy check (e.g. the pending-revision
-// fast path's `probeHostActivityBusy`) can go stale while queued behind
-// another in-flight cycle (`respawnHost` and `runEnsureHost` share this same
-// lock). Without a re-check here, a cycle that was idle when queued could
-// still boot out a host that picked up real work while waiting its turn.
+// site - because a caller's own idle/busy check (e.g.
+// `HostController.applyPendingLoginItemRevisionIfIdle`'s `probeHostBusyVerdict`
+// probe) can go stale while queued behind another in-flight cycle (every
+// `HostController` SMAppService section shares this same lock). Without a
+// re-check here, a cycle that was idle when queued could still boot out a
+// host that picked up real work while waiting its turn.
 // Return `false` from the callback to defer without mutating anything;
 // `registerHostLoginItemUnserialized` reports that back as `"deferred-busy"`.
 export function registerHostLoginItem(
@@ -385,14 +390,59 @@ export async function hasPendingLoginItemRevision(
   return fileExists(getHostFsLayout(environment).pendingLoginItemRevisionFile);
 }
 
+// M-B (finding): `clearPendingLoginItemRevision` is best-effort - a failed
+// unlink leaves the marker on disk AFTER a successful apply. A plain existence
+// check would then re-run the disruptive SMAppService cycle on every monitor
+// tick / convergeReady forever. Remember the mtime of a marker whose clear
+// failed so a marker that still carries that exact mtime reads as
+// already-resolved (suppress the redundant re-cycle), while a genuinely newer
+// revision - the installer rewrites the file, bumping its mtime - re-arms and
+// applies normally. In-memory only: a process restart re-reads the marker and
+// re-applies, which is correct (it is still on disk).
+let appliedPendingRevisionMtimeMs: number | null = null;
+
+/**
+ * Whether there is a pending LaunchAgent revision this process has NOT already
+ * applied. Differs from `hasPendingLoginItemRevision` only when a prior
+ * successful apply could not delete its marker (see M-B above): that lingering
+ * marker reads as "nothing pending" here, so the controller never churns
+ * re-registering an already-active plist.
+ */
+export async function hasUnappliedPendingLoginItemRevision(
+  environment: Environment,
+): Promise<boolean> {
+  const markerPath = getHostFsLayout(environment).pendingLoginItemRevisionFile;
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await stat(markerPath)).mtimeMs;
+  } catch {
+    // Absent or unreadable - same fail-open posture as
+    // `hasPendingLoginItemRevision` ("nothing pending").
+    return false;
+  }
+  return (
+    appliedPendingRevisionMtimeMs === null ||
+    mtimeMs !== appliedPendingRevisionMtimeMs
+  );
+}
+
 async function clearPendingLoginItemRevision(
   environment: Environment,
 ): Promise<void> {
+  const markerPath = getHostFsLayout(environment).pendingLoginItemRevisionFile;
   try {
-    await rm(getHostFsLayout(environment).pendingLoginItemRevisionFile, {
-      force: true,
-    });
+    await rm(markerPath, { force: true });
+    // Cleared cleanly - there is no lingering marker to suppress.
+    appliedPendingRevisionMtimeMs = null;
   } catch (err) {
+    // M-B: the marker for the revision we just applied could not be removed.
+    // Latch its mtime so `hasUnappliedPendingLoginItemRevision` stops treating
+    // it as pending; a newer revision (different mtime) still re-arms.
+    try {
+      appliedPendingRevisionMtimeMs = (await stat(markerPath)).mtimeMs;
+    } catch {
+      appliedPendingRevisionMtimeMs = null;
+    }
     log.warn(
       "[host-login-item] failed to clear pending LaunchAgent revision marker",
       { err },

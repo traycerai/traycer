@@ -199,7 +199,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v2.0 downgrade never leaks the new fields to a v2.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      4,
+      5,
       2,
       { providers: [stateWithRegistryFields] },
     );
@@ -215,7 +215,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v3.0 downgrade never leaks the new fields to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      4,
+      5,
       3,
       { providers: [stateWithRegistryFields] },
     );
@@ -230,11 +230,11 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
 });
 
 describe("providers.list old-host upgrade fills honest defaults for the new fields", () => {
-  it("upgrades a pre-registry v3.0 response to v4.0 with the new fields null/false", () => {
+  it("upgrades a pre-registry v3.0 response to v5.0 with the new fields null/false", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 3, minor: 0 },
-      { major: 4, minor: 0 },
+      { major: 5, minor: 0 },
       providersListResponseSchemaV30.parse({
         providers: [providerState("amp")],
       }),
@@ -244,11 +244,11 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
     expect(upgraded.providers[0].advisory).toBeNull();
   });
 
-  it("upgrades a v2.0 response to v4.0 with the new fields null along the chain", () => {
+  it("upgrades a v2.0 response to v5.0 with the new fields null along the chain", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 2, minor: 0 },
-      { major: 4, minor: 0 },
+      { major: 5, minor: 0 },
       providersListResponseSchemaV20.parse({
         providers: [providerState("codex")],
       }),

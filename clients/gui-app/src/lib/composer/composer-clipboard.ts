@@ -26,6 +26,16 @@ interface ComposerClipboardCopyArgs {
   readonly plainText: string;
 }
 
+export interface ComposerClipboardCopyResult {
+  /**
+   * True when the structured (rich HTML) payload reached the clipboard; false
+   * when the write degraded to plain text only. Image attachment nodes serialize
+   * to no plain text, so on a `false` result any images in `content` were
+   * dropped — the caller surfaces that instead of reporting a clean copy.
+   */
+  readonly richContentWritten: boolean;
+}
+
 interface ComposerClipboardPayload {
   readonly schema: typeof CLIPBOARD_SCHEMA;
   readonly version: typeof CLIPBOARD_VERSION;
@@ -38,7 +48,7 @@ interface ClipboardTextContext {
 
 export async function copyComposerContentToClipboard(
   args: ComposerClipboardCopyArgs,
-): Promise<void> {
+): Promise<ComposerClipboardCopyResult> {
   const html = buildComposerClipboardHtml(args.content, args.plainText);
   const clipboard = navigator.clipboard;
   if (
@@ -52,16 +62,17 @@ export async function copyComposerContentToClipboard(
           "text/plain": new Blob([args.plainText], { type: "text/plain" }),
         }),
       ]);
-      return;
+      return { richContentWritten: true };
     } catch (error) {
       appLogger.warn("[composer-clipboard] rich clipboard write failed", {
         error: error instanceof Error ? error.name : typeof error,
       });
       await clipboard.writeText(args.plainText);
-      return;
+      return { richContentWritten: false };
     }
   }
   await clipboard.writeText(args.plainText);
+  return { richContentWritten: false };
 }
 
 export function composerClipboardPlainText(content: JsonContent): string {

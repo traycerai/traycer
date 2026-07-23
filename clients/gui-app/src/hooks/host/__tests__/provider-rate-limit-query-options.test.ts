@@ -2,19 +2,39 @@ import { describe, expect, it } from "vitest";
 import { providerRateLimitQueryOptions } from "@/hooks/host/provider-rate-limit-query-options";
 
 describe("providerRateLimitQueryOptions", () => {
-  it("gives an httpFetch provider its own refetchInterval and keeps TanStack's default refetchOnMount", () => {
-    const { options } = providerRateLimitQueryOptions("openrouter", null);
+  it("opts an httpFetch provider into table-owned fixed polling and keeps TanStack's default refetchOnMount", () => {
+    const { options } = providerRateLimitQueryOptions("openrouter", null, true);
     expect(options.enabled).toBe(true);
     expect(options.gcTime).toBe(Infinity);
-    expect(options.refetchInterval).toBe(15 * 60 * 1000);
+    expect(options.poll).toBe(true);
+    expect(options.retry).toBe(false);
     expect(options.refetchOnMount).toBe(true);
   });
 
-  it("disables the query observer, refetchInterval, and refetchOnMount for an ephemeralProcess provider", () => {
-    const { options } = providerRateLimitQueryOptions("codex", null);
+  it("opts an ephemeralProcess provider out of observer polling and disables remount refetch", () => {
+    const { options } = providerRateLimitQueryOptions("codex", null, true);
     expect(options.enabled).toBe(false);
     expect(options.gcTime).toBe(Infinity);
-    expect(options.refetchInterval).toBe(false);
+    expect(options.poll).toBe(false);
+    expect(options.retry).toBe(false);
+    expect(options.refetchOnMount).toBe(false);
+  });
+
+  it("disables every automatic trigger for an httpFetch provider when fetching is ineligible", () => {
+    const { options } = providerRateLimitQueryOptions(
+      "openrouter",
+      null,
+      false,
+    );
+    expect(options.enabled).toBe(false);
+    expect(options.poll).toBe(false);
+    expect(options.refetchOnMount).toBe(false);
+  });
+
+  it("keeps an ineligible ephemeralProcess query passive", () => {
+    const { options } = providerRateLimitQueryOptions("codex", null, false);
+    expect(options.enabled).toBe(false);
+    expect(options.poll).toBe(false);
     expect(options.refetchOnMount).toBe(false);
   });
 });

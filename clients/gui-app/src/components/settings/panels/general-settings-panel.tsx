@@ -262,7 +262,7 @@ function PrereleaseUpdatesRow() {
         queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
       });
       void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostRegistryUpdateScope(management),
+        queryKey: runnerQueryKeys.hostRegistryUpdate(management),
       });
     },
     onError: (error) =>

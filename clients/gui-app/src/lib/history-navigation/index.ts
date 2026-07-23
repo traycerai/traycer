@@ -18,7 +18,16 @@ export {
   useHistoryNavState,
   type HistoryNavState,
 } from "@/lib/history-navigation/use-history-nav-state";
-export { isHistoryEntryDead } from "@/lib/history-navigation/liveness";
+export {
+  isHistoryEntryDead,
+  parseEpicTabHref,
+  type ParsedEpicTabHref,
+} from "@/lib/history-navigation/liveness";
+export {
+  isHistoryEntryEligible,
+  findEligibleOffset,
+  type HistoryEligibilityState,
+} from "@/lib/history-navigation/eligibility";
 export {
   installPruneScheduler,
   type PruneSchedulerOptions,

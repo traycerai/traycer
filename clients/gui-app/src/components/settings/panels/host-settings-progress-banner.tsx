@@ -10,12 +10,15 @@ interface HostProgressBannerProps {
 }
 
 export function HostProgressBanner(props: HostProgressBannerProps) {
-  const { kind, event } = props.progress;
+  const { kind, progress } = props.progress;
   const percent =
-    event.percent !== null
-      ? Math.max(0, Math.min(100, Math.round(event.percent)))
+    progress !== null && progress.percent !== null
+      ? Math.max(0, Math.min(100, Math.round(progress.percent)))
       : null;
-  const transferLabel = formatTransfer(event.bytes, event.totalBytes);
+  const transferLabel =
+    progress !== null
+      ? formatTransfer(progress.bytes, progress.totalBytes)
+      : null;
   return (
     <output
       className="flex flex-col gap-2 border-b border-border/40 bg-muted/30 px-5 py-3 text-ui-sm"
@@ -32,9 +35,11 @@ export function HostProgressBanner(props: HostProgressBannerProps) {
           <span className="font-medium text-foreground">
             {formatProgressKind(kind)}
           </span>
-          <span className="font-mono text-code-xs text-muted-foreground">
-            {event.stage}
-          </span>
+          {progress?.stage !== null && progress?.stage !== undefined ? (
+            <span className="font-mono text-code-xs text-muted-foreground">
+              {progress.stage}
+            </span>
+          ) : null}
         </div>
         <ProgressLabel percent={percent} transferLabel={transferLabel} />
       </div>
@@ -46,9 +51,9 @@ export function HostProgressBanner(props: HostProgressBannerProps) {
           />
         </div>
       ) : null}
-      {event.message !== null && event.message.length > 0 ? (
+      {progress?.message !== null && progress?.message !== undefined ? (
         <div className="truncate text-ui-xs text-muted-foreground">
-          {event.message}
+          {progress.message}
         </div>
       ) : null}
     </output>

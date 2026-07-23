@@ -138,6 +138,10 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  useWorktreesSettingsViewStore,
+  type WorktreeSortMode,
+} from "@/stores/settings/worktrees-settings-view-store";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -145,11 +149,9 @@ type WorktreeRowDeleteStatus = "deleting";
 // `unknown` = the per-path query settled to an error (non-animated fallback, no
 // infinite spinner). `pending` and `unknown` are both un-enriched for filtering.
 type WorktreeEnrichmentState = "ready" | "pending" | "unknown";
-type WorktreeSortMode = "newest" | "oldest";
 // Multi-select status filter. An EMPTY set means "no filter" (show every tier);
 // a non-empty set shows only the selected tiers (union). Composes with search.
 type WorktreeTierFilterSet = ReadonlySet<WorktreeTier>;
-const EMPTY_TIER_FILTER: WorktreeTierFilterSet = new Set();
 const WORKTREES_REFRESH_TIMEOUT_MS = 10_000;
 const EMPTY_REPO_KEY_SET: ReadonlySet<string> = new Set();
 
@@ -929,11 +931,28 @@ export function WorktreesList(props: {
     () => buildTaskMergeRollups(mergedWorktrees),
     [mergedWorktrees],
   );
-  const [searchText, setSearchText] = useState("");
+  const searchText = useWorktreesSettingsViewStore((state) => state.searchText);
+  const setSearchText = useWorktreesSettingsViewStore(
+    (state) => state.setSearchText,
+  );
+  const sortMode = useWorktreesSettingsViewStore((state) => state.sortMode);
+  const setSortMode = useWorktreesSettingsViewStore(
+    (state) => state.setSortMode,
+  );
+  const tierFilterValues = useWorktreesSettingsViewStore(
+    (state) => state.tierFilters,
+  );
+  const toggleTierFilter = useWorktreesSettingsViewStore(
+    (state) => state.toggleTierFilter,
+  );
+  const clearTierFilters = useWorktreesSettingsViewStore(
+    (state) => state.clearTierFilters,
+  );
   const deferredSearchText = useDeferredValue(searchText);
-  const [sortMode, setSortMode] = useState<WorktreeSortMode>("newest");
-  const [tierFilters, setTierFilters] =
-    useState<WorktreeTierFilterSet>(EMPTY_TIER_FILTER);
+  const tierFilters = useMemo(
+    () => new Set(tierFilterValues),
+    [tierFilterValues],
+  );
   const searchHaystackByPath = useMemo(
     () => buildWorktreeSearchHaystackByPath(worktrees, taskTitlesByEpicId),
     [worktrees, taskTitlesByEpicId],
@@ -1020,13 +1039,6 @@ export function WorktreesList(props: {
     effectiveTierFilters,
     isPending,
   ]);
-  const toggleTierFilter = useCallback((tier: WorktreeTier) => {
-    setTierFilters((prev) => withMemberToggled(prev, tier));
-  }, []);
-  const clearTierFilters = useCallback(() => {
-    setTierFilters(EMPTY_TIER_FILTER);
-  }, []);
-
   // Refresh the host-wide list plus the shared worktree/binding caches the
   // file-tree / home / create-worktree surfaces read, captured against the
   // host the delete ran on.

@@ -88,6 +88,7 @@ import {
   providerIdToGuiHarnessId,
   sortGuiHarnessesByProviderOrder,
 } from "@/lib/provider-ordering";
+import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -965,7 +966,7 @@ function degradedHarnessIdsFromProviderStates(
 function providerNeedsPickerReauth(provider: ProviderCliState): boolean {
   return (
     provider.enabled &&
-    (provider.auth.status === "unauthenticated" ||
+    (isProviderAmbientSignedOut(provider) ||
       (provider.apiKey.supported && !provider.apiKey.configured))
   );
 }

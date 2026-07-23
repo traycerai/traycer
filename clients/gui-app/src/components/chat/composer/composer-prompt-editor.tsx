@@ -24,6 +24,10 @@ import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-c
 import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 
 import { buildComposerExtensions } from "./editor/editor-config";
+import type {
+  PastedComposerImage,
+  PastedComposerImageOutcome,
+} from "./editor/extensions/chat-paste-handler";
 import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
 import {
   skillSuggestionPluginKey,
@@ -67,6 +71,19 @@ export interface ComposerPromptEditorHandle {
   readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly removeImageAttachmentById: (id: string) => void;
   /**
+   * Flip a pending base64 image node (located by `id`) to its stored content
+   * hash IN PLACE, preserving its document position. A landing paste inserts
+   * image nodes in order carrying `b64content`; each node's background
+   * hash+store job calls this to convert it to `{hash}` once bytes are durable.
+   * Returns the command's result: `false` when no node with that id exists (the
+   * user removed the pending node before the write settled, or the editor is
+   * gone) so the caller can reclaim the now-unrooted bytes.
+   */
+  readonly rewriteImageAttachmentHashById: (
+    id: string,
+    hash: string,
+  ) => boolean;
+  /**
    * Insert a finalized dictation segment at the caret (with a trailing space
    * so consecutive segments don't run together). Focuses first so the
    * insertion lands at the live cursor and the caret advances past it -
@@ -97,6 +114,17 @@ export interface ComposerPromptEditorProps {
   readonly disabled: boolean;
   readonly slashProviderId: GuiHarnessId;
   readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
+  /**
+   * Landing-only: validates a paste's inline-base64 images + starts their
+   * in-place background ingest jobs, returning a verdict per image. `null` on
+   * chat surfaces, where base64 nodes are inserted verbatim. See
+   * `ChatPasteHandlerDeps`.
+   */
+  readonly ingestPastedComposerImages:
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null;
   readonly onSnapshot: (
     content: JsonContent,
     selection: { from: number; to: number },
@@ -141,6 +169,24 @@ function usePastedImageBytesPresenceGetter(
   return useCallback(() => latest.current, []);
 }
 
+function useIngestPastedComposerImagesGetter(
+  ingestPastedComposerImages:
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null,
+): () =>
+  | ((
+      images: ReadonlyArray<PastedComposerImage>,
+    ) => ReadonlyArray<PastedComposerImageOutcome>)
+  | null {
+  const latest = useRef(ingestPastedComposerImages);
+  useLayoutEffect(() => {
+    latest.current = ingestPastedComposerImages;
+  }, [ingestPastedComposerImages]);
+  return useCallback(() => latest.current, []);
+}
+
 function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   const {
     initialContent,
@@ -153,6 +199,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     disabled,
     slashProviderId,
     hasPastedImageBytes,
+    ingestPastedComposerImages,
     onSnapshot,
     onSubmit,
     onPaste,
@@ -196,6 +243,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   );
   const getHasPastedImageBytes =
     usePastedImageBytesPresenceGetter(hasPastedImageBytes);
+  const getIngestPastedComposerImages = useIngestPastedComposerImagesGetter(
+    ingestPastedComposerImages,
+  );
   const extensions = useMemo(
     () =>
       buildComposerExtensions({
@@ -204,9 +254,11 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         onSubmit: stableSubmitHolder,
         slashProviderId,
         getHasPastedImageBytes,
+        getIngestPastedComposerImages,
       }),
     [
       getHasPastedImageBytes,
+      getIngestPastedComposerImages,
       pickerStore,
       placeholder,
       slashProviderId,
@@ -398,6 +450,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor],
   );
 
+  const rewriteImageAttachmentHashById = useCallback(
+    (id: string, hash: string): boolean => {
+      if (editor === null || editor.isDestroyed) return false;
+      return editor.commands.rewriteImageAttachmentHashById(id, hash);
+    },
+    [editor],
+  );
+
   const insertDictatedText = useCallback(
     (text: string) => {
       if (editor === null) return;
@@ -456,6 +516,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       insertImageAttachments,
       beginPathInsertion,
       removeImageAttachmentById,
+      rewriteImageAttachmentHashById,
       insertDictatedText,
       dismissActiveSuggestion,
     }),
@@ -471,6 +532,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       isEmpty,
       isReady,
       removeImageAttachmentById,
+      rewriteImageAttachmentHashById,
       setContent,
     ],
   );

@@ -60,6 +60,11 @@ export function providerRateLimitWindows(
           window.secondary,
         ]),
       ].filter((window): window is ProviderRateLimitWindow => window !== null);
+    case "grok":
+      // Hybrid arm: the synthesized billing-period window feeds the shared
+      // severity/rollup path. A period-less snapshot (tier + dates only, no
+      // usage percentage) carries no window.
+      return rateLimits.period !== null ? [rateLimits.period] : [];
     case "openrouter":
     case "kilocode":
       return [];

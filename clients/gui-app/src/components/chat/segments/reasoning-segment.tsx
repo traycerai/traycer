@@ -138,10 +138,17 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
         aria-expanded={expanded}
         aria-controls={bodyShown ? bodyId : undefined}
         className={cn(
-          "group/reasoning flex max-w-full items-center gap-2 overflow-hidden rounded-md py-1 pr-1 text-left text-ui-sm text-muted-foreground transition-colors",
+          "group/reasoning flex max-w-full items-center gap-2 overflow-hidden rounded-md px-1 py-1 text-left text-ui-sm text-muted-foreground transition-colors",
           "hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         )}
       >
+        <ChevronRight
+          className={cn(
+            "size-3 shrink-0 text-muted-foreground/50 transition-transform",
+            expanded && "rotate-90",
+          )}
+          aria-hidden
+        />
         <Brain className="size-3.5 shrink-0 transition-colors" aria-hidden />
         {isStreaming ? (
           <Shimmer
@@ -163,15 +170,6 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
             {label}
           </span>
         )}
-        <ChevronRight
-          className={cn(
-            "size-3.5 shrink-0 -translate-x-1 text-muted-foreground/65 opacity-0 transition-[opacity,transform,color]",
-            "group-hover/reasoning:translate-x-0 group-hover/reasoning:text-foreground group-hover/reasoning:opacity-100",
-            "group-focus-visible/reasoning:translate-x-0 group-focus-visible/reasoning:text-foreground group-focus-visible/reasoning:opacity-100",
-            expanded && "translate-x-0 rotate-90 text-foreground opacity-100",
-          )}
-          aria-hidden
-        />
       </button>
       {body}
     </div>

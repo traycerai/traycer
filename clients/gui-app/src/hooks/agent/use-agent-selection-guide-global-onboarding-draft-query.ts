@@ -5,7 +5,6 @@ import { useHostClient } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 
 const GLOBAL_ONBOARDING_DRAFT_PARAMS = {};
-const ONBOARDING_DRAFT_PROVIDER_SETTLE_POLL_MS = 750;
 
 /**
  * Reads the global guide for onboarding without creating the file when it is
@@ -24,13 +23,6 @@ export function useAgentSelectionGuideGlobalOnboardingDraftQuery(): UseQueryResu
     params: GLOBAL_ONBOARDING_DRAFT_PARAMS,
     options: {
       refetchOnMount: "always",
-      refetchInterval: (query) => {
-        const data = query.state.data;
-        if (data?.content === null && !data.providersSettled) {
-          return ONBOARDING_DRAFT_PROVIDER_SETTLE_POLL_MS;
-        }
-        return false;
-      },
       refetchIntervalInBackground: false,
       refetchOnWindowFocus: false,
     },

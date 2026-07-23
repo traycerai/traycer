@@ -11,11 +11,12 @@ import { log } from "../app/logger";
  * Persistent "the user removed Traycer's background components" sentinel.
  *
  * Set by the in-app "Remove Traycer" action (Settings → General → Danger
- * Zone). While set, every auto-provision / respawn path
- * (`traycerHostEnsure`, `respawnHost`, the launch-time auto-update
- * reconcile) short-circuits, so a removed host is never silently
- * reinstalled when it goes unreachable - which is exactly what the app does
- * today whenever the host goes down. Cleared by an explicit reinstall.
+ * Zone). While set, every auto-provision / respawn `HostController` intent
+ * (`convergeReady`, `respawn`, `recoverIfDown`, the launch-time
+ * `applyStaged` reconcile) short-circuits, so a removed host is never
+ * silently reinstalled when it goes unreachable - which is exactly what the
+ * app does today whenever the host goes down. Cleared by an explicit
+ * reinstall.
  *
  * Lives under `userData` (a desktop-app-level decision), NOT under
  * `~/.traycer` - removal does not touch the user's data directory.
@@ -86,4 +87,16 @@ export async function clearHostRemovedByUser(): Promise<void> {
   cached = { removedByUser: false };
   await getStore().save(cached);
   log.info("[host-removal] cleared removed-by-user");
+}
+
+/**
+ * Test-only: both the in-memory cache and the memoized store handle are
+ * module-level and would otherwise leak across test cases that point
+ * `app.getPath("userData")` at a fresh temp dir per test (e.g. a
+ * `HostController` suite exercising `removeTraycer`/`uninstallHost` against
+ * real on-disk state).
+ */
+export function __resetHostRemovalStateForTest(): void {
+  store = null;
+  cached = null;
 }

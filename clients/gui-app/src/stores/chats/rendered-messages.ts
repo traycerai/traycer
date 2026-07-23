@@ -22,7 +22,6 @@ import {
   turnCheckpointManifestSchema,
   type TurnCheckpointManifest,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
-import { AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
   buildAttachmentsFromJSONContent,
   extractPlainTextFromComposerJSONContent,
@@ -2470,9 +2469,11 @@ function buildAssistantSegments(
     }
   }
   const nested = suppressRedundantResumeMarkers(nestSubagentChildren(flat));
-  const visible = suppressAuthErrors(
-    suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested)),
-  );
+  // Auth errors (`code: "auth"`) deliberately render as normal error segments:
+  // suppressing them made a headless (A2A-triggered) auth failure completely
+  // invisible after the transient re-auth banner cleared. Like rate-limit
+  // errors, the transcript row and the composer banner now coexist.
+  const visible = suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested));
   // The card's merged change rides on the `artifact_operation` block itself
   // (set at emit from the turn's checkpoint builder), so no manifest enrichment
   // is needed for the card - it's available the moment the edit completes.
@@ -2504,20 +2505,6 @@ function artifactChangeRowsFromManifest(
       },
     ];
   });
-}
-
-/**
- * Drop `error` segments tagged `code: "auth"`. A signed-out provider is a
- * connection condition surfaced live above the composer (the re-auth banner),
- * not a transcript row - so the failed turn collapses to an empty slice instead
- * of leaving a scary red error card. An auth-only turn renders zero segments.
- */
-function suppressAuthErrors<T extends MessageSegment>(
-  flat: ReadonlyArray<T>,
-): ReadonlyArray<T> {
-  return flat.filter(
-    (s) => !(s.kind === "error" && s.code === AUTH_ERROR_CODE),
-  );
 }
 
 function isSubagentChildSegment(

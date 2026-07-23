@@ -189,7 +189,12 @@ function handleUsageMenuKeyDown(
 ): void {
   if (MENU_NAVIGATION_KEYS.has(event.key)) event.stopPropagation();
   if (!isRefreshShortcut(event)) return;
-  if (entry === undefined || entry.refreshStatus !== "idle" || !isHostReady) {
+  if (
+    entry === undefined ||
+    !entry.fetchEligible ||
+    entry.refreshStatus !== "idle" ||
+    !isHostReady
+  ) {
     return;
   }
   event.preventDefault();
@@ -228,7 +233,10 @@ export function ProfileRateLimitSwitchBanner(
     props.probeTarget === null
       ? undefined
       : usagePresentation.entries.get(props.probeTarget.profileId);
-  const probeReady = probeEntry !== undefined && usagePresentation.isHostReady;
+  const probeReady =
+    probeEntry !== undefined &&
+    probeEntry.fetchEligible &&
+    usagePresentation.isHostReady;
   useEffect(() => {
     if (!probeReady || autoCheckSpentRef.current) return;
     autoCheckSpentRef.current = true;
@@ -574,7 +582,7 @@ function ProfileRateLimitMenuRow({
         readOnly,
       })}
       aria-disabled={!row.selectable}
-      aria-keyshortcuts={usageEntry === undefined ? undefined : "R"}
+      aria-keyshortcuts={usageEntry?.fetchEligible ? "R" : undefined}
       className={cn("gap-2 py-1.5 pr-1.5", !row.selectable && "opacity-60")}
       onFocus={(event) => onFocusPreview(row.profile, event.currentTarget)}
       onPointerMove={(event) => onPreview(row.profile, event.currentTarget)}

@@ -22,8 +22,20 @@ vi.mock("../../cli/traycer-cli", () => ({
 }));
 
 import { HostLifecycle, PRODUCTION_LABEL } from "../host-lifecycle";
+import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
 import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types";
 import type { HostFsLayout } from "../host-paths";
+
+// The retry scenarios use a stable synthetic pid while the test controls the
+// endpoint probe. A platform liveness probe has no positive result for that
+// pid, so model the indeterminate branch locally: the handshake remains
+// authoritative while a positively dead/recycled pid is rejected elsewhere.
+function useIndeterminateProcessLiveness(): () => void {
+  const restore = __setAsyncProcessLivenessReaderForTest(
+    async () => "indeterminate",
+  );
+  return () => __setAsyncProcessLivenessReaderForTest(restore);
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,6 +61,8 @@ function layoutIn(dir: string): HostFsLayout {
     logFile: join(dir, "host.log"),
     installDir: join(dir, "install"),
     installRecordFile: join(dir, "install", "install.json"),
+    stagedDir: join(dir, "staged"),
+    stagedRecordFile: join(dir, "staged", "staged.json"),
     pendingLoginItemRevisionFile: join(dir, "pending-login-item-revision.json"),
     environment: "production" as const,
   };
@@ -93,6 +107,7 @@ describe("HostLifecycle reachability retry ladder", () => {
           return probeResult;
         },
       });
+      const restoreLiveness = useIndeterminateProcessLiveness();
       const changes: (DesktopLocalHostSnapshot | null)[] = [];
       lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
         changes.push(snapshot);
@@ -129,6 +144,7 @@ describe("HostLifecycle reachability retry ladder", () => {
         await sleep(1_200);
         expect(probeCalls).toBe(settledCalls);
       } finally {
+        restoreLiveness();
         lifecycle.dispose();
         await rm(dir, { recursive: true, force: true });
       }
@@ -204,6 +220,7 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
         return true;
       },
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     try {
       // Malformed: present but INDETERMINATE, not absent - the ladder must
       // arm without ever reaching the probe (there is no URL to probe yet).
@@ -222,6 +239,7 @@ describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", ()
       );
       expect(probeCalls).toBeGreaterThanOrEqual(1);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
     }

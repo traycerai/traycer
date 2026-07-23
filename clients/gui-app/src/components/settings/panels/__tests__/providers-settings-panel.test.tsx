@@ -480,6 +480,8 @@ import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
 } from "@/components/settings/panels/use-provider-profile-login-flow";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
@@ -750,6 +752,20 @@ function firstRemoveProfileCall(): readonly [
   return call;
 }
 
+// A non-null runner host so the desktop external-link path (preventDefault +
+// openExternalLink) runs; host-less renders fall back to native anchor nav.
+function createRunnerHost(): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.example/sign-in",
+    authnBaseUrl: "https://auth.example",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
     providerMocks.listResult.data = {
@@ -902,6 +918,84 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(
       screen.queryByRole("button", { name: "Add custom path" }),
+    ).toBeNull();
+  });
+
+  it("selects Hermes' PATH candidate without rendering a bundled row", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "hermes",
+          selected: { kind: "path" },
+          candidates: [
+            {
+              kind: "path",
+              path: "/usr/local/bin/hermes",
+              version: "0.1.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const pathRadio = screen.getByRole<HTMLInputElement>("radio", {
+      name: "Select /usr/local/bin/hermes",
+    });
+    expect(pathRadio.checked).toBe(true);
+    expect(
+      screen.queryByRole("radio", { name: "Select bundled binary" }),
+    ).toBeNull();
+  });
+
+  it("shows Hermes' PATH-only not-found guidance without a bundled row", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "hermes",
+          selected: { kind: "path" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <RunnerHostContext.Provider value={createRunnerHost()}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(
+      screen.getByText(
+        "Hermes must be installed on this machine. It ships without a bundled binary.",
+      ),
+    ).toBeDefined();
+    const guide = screen.getByRole("link", {
+      name: "Hermes installation guide",
+    });
+    expect(guide.getAttribute("href")).toBe(
+      "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+    );
+    fireEvent.click(guide);
+    expect(providerMocks.openExternalLink).toHaveBeenCalledWith(
+      "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+    );
+    expect(
+      screen.getByRole("button", { name: "Add custom path" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("radio", { name: "Select bundled binary" }),
     ).toBeNull();
   });
 
@@ -1266,11 +1360,16 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(manageProfileButton.getAttribute("data-variant")).toBe("outline");
     expect(manageProfileButton.getAttribute("data-size")).toBe("xs");
-    const profileSummaryActions = manageProfileButton.closest(".flex-wrap");
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
     if (!(profileSummaryActions instanceof HTMLElement)) {
       throw new Error("Expected profile summary and actions row");
     }
-    expect(within(profileSummaryActions).getByText("No plan")).toBeDefined();
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
     fireEvent.focus(manageProfileButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "Change the profile name and accent color, sign in again, or remove this profile.",
@@ -1725,7 +1824,32 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Signed out, Signed out" }),
     );
-    expect(screen.getAllByText("Signed out").length).toBeGreaterThan(0);
+    const manageProfileButton = screen.getByRole("button", {
+      name: "Manage profile",
+    });
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
+    if (!(profileSummaryActions instanceof HTMLElement)) {
+      throw new Error("Expected signed-out profile summary and actions row");
+    }
+    expect(
+      within(profileSummaryActions).getByText("Signed out", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", { name: "Sign in" }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", {
+        name: "Manage profile",
+      }),
+    ).toBe(manageProfileButton);
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
   });
 
   it("redacts a profile's email by default and reveals it on toggle", () => {

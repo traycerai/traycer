@@ -110,15 +110,6 @@ export type MenuCommandId =
 export interface MenuCommandPayload {
   readonly command: MenuCommandId;
   readonly windowId: string;
-  // Only meaningful for `host.installUpdate`: the exact host version captured
-  // into the native tray item callback when the row was labelled
-  // ("Update to <version>"). Captured at menu-build time, not read from live
-  // MenuController state at click time, so an already-open stale menu still
-  // pins the version the user saw (cold-review #3). The renderer echoes it
-  // back as the update's `expectedVersion` so main refuses a mismatch.
-  // `null` for every other command, and for an install row built without a
-  // known version.
-  readonly hostUpdateVersion: string | null;
 }
 
 export type SupportLogTarget = "desktop" | "host";

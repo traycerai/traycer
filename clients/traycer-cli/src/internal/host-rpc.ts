@@ -5,7 +5,6 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/registry";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
-import { createBearerRevalidator } from "../../../shared/auth/bearer-revalidator";
 import { createAuthAwareMessenger } from "../../../shared/host-transport/auth-aware-messenger";
 import {
   createRetryingMessenger,
@@ -18,8 +17,9 @@ import {
   HostRpcError,
   type RequestOfMethod,
   type ResponseOfMethod,
+  HostRequestAuthority,
+  HostTransportEndpoint,
 } from "../../../shared/host-transport/host-messenger";
-import type { HostTransportEndpoint } from "../../../shared/host-transport/ws-rpc-client";
 import { WsRpcClient } from "../../../shared/host-transport/ws-rpc-client";
 import { createWhatwgWebSocketFactory } from "../../../shared/host-transport/whatwg-ws-factory";
 import { config } from "../config";
@@ -29,7 +29,11 @@ import {
   readHostPidMetadata,
 } from "../host/pid-metadata";
 import { isProcessAlive } from "../store/cli-lock";
-import { cliBearerStore, resolveHostAuth, type HostAuth } from "./host-auth";
+import {
+  createCliCredentialsStore,
+  createStoreBackedRevalidator,
+} from "../store/credentials-store";
+import { resolveHostAuth, type HostAuth } from "./host-auth";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import {
   compatRecoveryHint,
@@ -45,9 +49,10 @@ const FRAME_TIMEOUT_MS = 15_000;
  * frame parsing, timeouts) is the shared `WsRpcClient` that the Desktop renderer
  * also uses - the CLI no longer hand-rolls it. The bearer comes from the stored
  * credentials (`resolveHostAuth`), seeded by `traycer login`; on a host
- * `UNAUTHORIZED` the shared auth-aware wrapper refreshes the bearer (rotating
- * the lease + persisting via `cliBearerStore`) and retries once before the error
- * surfaces.
+ * `UNAUTHORIZED` the shared auth-aware wrapper refreshes the bearer via the
+ * store-backed revalidator - the refresh spend runs inside the shared credentials
+ * file lock (`store.rotate`, §7) - rotates the lease, and retries once before the
+ * error surfaces.
  */
 export async function callHostRpc<
   Method extends keyof HostRpcRegistry & string,
@@ -188,33 +193,35 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
 ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
   const logger = createCliLogger(config.environment);
   const lease = new MutableBearerLease(auth.token, auth.userId);
-  const revalidator = createBearerRevalidator({
-    authnBaseUrl: auth.authnBaseUrl,
-    lease,
-    store: cliBearerStore,
-    clearOnReject: false,
-    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  });
+  // On a host UNAUTHORIZED the auth-aware messenger drives the refresh through
+  // the locked `rotate` (§7): a short-lived store for this one call, disposed
+  // once the request settles so a `commit-failed` continuation timer never
+  // outlives the command.
+  const store = createCliCredentialsStore();
+  const revalidator = createStoreBackedRevalidator({ store, lease });
 
   const messenger = createRetryingMessenger<HostRpcRegistry>(
     createAuthAwareMessenger<HostRpcRegistry>(
       new WsRpcClient<HostRpcRegistry>({
         registry: hostRpcRegistry,
-        endpoint: () => endpoint,
-        bearer: () => lease,
         requestId: () => randomUUID(),
         webSocketFactory: createWhatwgWebSocketFactory(),
         dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
         frameTimeoutMs: FRAME_TIMEOUT_MS,
       }),
       revalidator,
-      { retry: { bearer: () => lease } },
     ),
     retryPolicy,
   );
 
+  const callLifetime = new AbortController();
+  const authority: HostRequestAuthority = {
+    endpoint,
+    bearer: lease,
+    abortSignal: callLifetime.signal,
+  };
   try {
-    const response = await messenger.request(method, params);
+    const response = await messenger.request(method, params, authority);
     logger.debug("Host RPC completed", {
       environment: config.environment,
       method,
@@ -232,6 +239,9 @@ async function requestAtEndpoint<Method extends keyof HostRpcRegistry & string>(
       errorName: error.name,
     });
     throw err;
+  } finally {
+    callLifetime.abort("cli-call-settled");
+    store.dispose();
   }
 }
 

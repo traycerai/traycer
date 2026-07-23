@@ -3,6 +3,7 @@ import { cleanup, renderHook } from "@testing-library/react";
 import type {
   ProviderAuthStatus,
   ProviderCliState,
+  ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import type {
   AvailableProviderRateLimits,
@@ -166,7 +167,12 @@ describe("useVisibleRateLimitProviders", () => {
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([
-      { providerId: "codex", lane: "ephemeralProcess", profiles: [] },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
     ]);
   });
 
@@ -184,7 +190,12 @@ describe("useVisibleRateLimitProviders", () => {
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([
-      { providerId: "codex", lane: "ephemeralProcess", profiles: [] },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: true, managedProfiles: true },
+      },
     ]);
   });
 
@@ -203,7 +214,12 @@ describe("useVisibleRateLimitProviders", () => {
     const { result } = renderHook(() => useVisibleRateLimitProviders());
 
     expect(result.current).toEqual([
-      { providerId: "codex", lane: "ephemeralProcess", profiles: [] },
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
     ]);
   });
 
@@ -223,7 +239,7 @@ describe("useVisibleRateLimitProviders", () => {
     expect(result.current).toEqual([]);
   });
 
-  it("does not keep showing a signed-out provider from stale cached usage", () => {
+  it("keeps a signed-out provider visible from its last cached usage without making it poll-eligible", () => {
     mocks.providers = [
       providerState({
         providerId: "codex",
@@ -238,8 +254,66 @@ describe("useVisibleRateLimitProviders", () => {
       isError: false,
     });
 
-    const { result } = renderHook(() => useVisibleRateLimitProviders());
+    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const configured = renderHook(() => useConfiguredRateLimitProviders());
 
-    expect(result.current).toEqual([]);
+    expect(visible.result.current).toEqual([
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ]);
+    expect(configured.result.current).toEqual([]);
+  });
+
+  it("keeps an authenticated managed profile visible without cache under aggregate authPending while excluding the unauthenticated ambient target from the queue", () => {
+    const ambient: ProviderProfile = {
+      profileId: "ambient",
+      kind: "ambient",
+      authType: "oauth",
+      label: "Terminal",
+      auth: auth("unauthenticated"),
+      identity: null,
+      usageUpdatedAt: null,
+      rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      duplicateOfProfileId: null,
+      accentColor: null,
+      ambientDriftNotice: null,
+    };
+    const managed: ProviderProfile = {
+      ...ambient,
+      profileId: "work-profile",
+      kind: "managed",
+      label: "Work",
+      auth: auth("authenticated"),
+    };
+    mocks.providers = [
+      {
+        ...providerState({
+          providerId: "codex",
+          status: "unauthenticated",
+          enabled: true,
+          authPending: true,
+          availabilityPending: false,
+        }),
+        profiles: [ambient, managed],
+      },
+    ];
+
+    const visible = renderHook(() => useVisibleRateLimitProviders());
+    const configured = renderHook(() => useConfiguredRateLimitProviders());
+
+    expect(visible.result.current).toEqual([
+      {
+        providerId: "codex",
+        lane: "ephemeralProcess",
+        profiles: [ambient, managed],
+        fetchEligibility: { ambient: false, managedProfiles: true },
+      },
+    ]);
+    expect(configured.result.current).toEqual([]);
   });
 });

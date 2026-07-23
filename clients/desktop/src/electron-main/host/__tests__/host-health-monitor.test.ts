@@ -16,13 +16,9 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-// The production default for `respawn` drags in the SMAppService login-item
-// chain; every test injects its own respawn, so stub the module out.
-vi.mock("../../app/host-respawn", () => ({
-  respawnHost: vi.fn(async () => {}),
-}));
-
 import { startHostHealthMonitor } from "../host-health-monitor";
+import { HostRecoveryDeferredError } from "../../startup/host-health-respawn";
+import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
 
 const INTERVAL_MS = 1_000;
 
@@ -30,7 +26,7 @@ const SNAPSHOT: DesktopLocalHostSnapshot = {
   hostId: "host-1",
   websocketUrl: "ws://127.0.0.1:55555/rpc",
   version: "1.0.0",
-  pid: 4242,
+  pid: process.pid,
   systemHostName: "test-host",
   displayName: "Test Host",
 };
@@ -46,15 +42,20 @@ function fakeHost(overrides: Partial<IpcHostLifecycle>): IpcHostLifecycle {
     isDisposed: false,
     reloadSnapshotFromDisk: vi.fn(async () => null),
     ensureWatcherInstalled: vi.fn(),
-    getServiceStatus: vi.fn(async () => ({
-      state: "running" as const,
-      version: "1.0.0",
-      listenUrl: SNAPSHOT.websocketUrl,
-      pid: SNAPSHOT.pid,
-    })),
     getRecentLogTail: vi.fn(async () => null),
     ...overrides,
   } as IpcHostLifecycle;
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 describe("startHostHealthMonitor", () => {
@@ -150,6 +151,40 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
+  it("F2: treats a handshake-reachable stale PID as down instead of resetting the recovery counters", async () => {
+    const staleSnapshot: DesktopLocalHostSnapshot = {
+      ...SNAPSHOT,
+      pid: 999_999,
+    };
+    const restoreLiveness = __setAsyncProcessLivenessReaderForTest(
+      async () => "dead",
+    );
+    const reload = vi.fn(async () => null);
+    const respawn = vi.fn(async () => {});
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => staleSnapshot,
+        reloadSnapshotFromDisk: reload,
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => true),
+      readMetadata: vi.fn(async () => staleSnapshot),
+      respawn,
+    });
+
+    try {
+      await ticks(2);
+      // The second outage reload demotes the stale snapshot; the recovery
+      // attempt then performs its own reload-confirmation before relinquishing
+      // ownership, so this is two reloads rather than a bare healthy reset.
+      expect(reload).toHaveBeenCalledTimes(2);
+      expect(respawn).toHaveBeenCalledTimes(1);
+    } finally {
+      monitor.dispose();
+      __setAsyncProcessLivenessReaderForTest(restoreLiveness);
+    }
+  });
+
   it("treats missing pid metadata as a deliberate stop: demote, never respawn", async () => {
     const respawn = vi.fn(async () => {});
     const reload = vi.fn(async () => null);
@@ -180,6 +215,146 @@ describe("startHostHealthMonitor", () => {
     monitor.dispose();
   });
 
+  it("P5: retries a lock-deferred recovery after the monitor has demoted its snapshot", async () => {
+    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
+    let respawnCalls = 0;
+    const respawn = vi.fn(async () => {
+      respawnCalls += 1;
+      if (respawnCalls === 1) throw new HostRecoveryDeferredError();
+    });
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => snapshot,
+        reloadSnapshotFromDisk: vi.fn(async () => {
+          snapshot = null;
+          return null;
+        }),
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn,
+    });
+
+    await ticks(2);
+    expect(respawn).toHaveBeenCalledTimes(1);
+
+    await ticks(1);
+    expect(respawn).toHaveBeenCalledTimes(2);
+    monitor.dispose();
+  });
+
+  it("F5: retains recovery ownership until a retry is followed by a reload-confirmed snapshot", async () => {
+    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
+    let respawnCalls = 0;
+    const reload = vi.fn(async () => {
+      if (respawnCalls === 0) {
+        snapshot = null;
+        return null;
+      }
+      // A foreign actor brought the host up while the monitor's first
+      // recovery was deferred. `recoverIfDown` can now return `ok` via its
+      // head-of-lane recheck without reloading lifecycle itself.
+      snapshot = SNAPSHOT;
+      return SNAPSHOT;
+    });
+    const respawn = vi.fn(async () => {
+      respawnCalls += 1;
+      if (respawnCalls === 1) throw new HostRecoveryDeferredError();
+    });
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => snapshot,
+        reloadSnapshotFromDisk: reload,
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn,
+    });
+
+    await ticks(2);
+    expect(respawn).toHaveBeenCalledTimes(1);
+    expect(snapshot).toBeNull();
+
+    await ticks(1);
+    expect(respawn).toHaveBeenCalledTimes(2);
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(snapshot).toBe(SNAPSHOT);
+    monitor.dispose();
+  });
+
+  it("F6: counts generic retry failures while the monitor owns a null snapshot", async () => {
+    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
+    let respawnCalls = 0;
+    const respawn = vi.fn(async () => {
+      respawnCalls += 1;
+      if (respawnCalls === 1) throw new HostRecoveryDeferredError();
+      throw new Error("restart failed");
+    });
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => snapshot,
+        reloadSnapshotFromDisk: vi.fn(async () => {
+          snapshot = null;
+          return null;
+        }),
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => SNAPSHOT),
+      respawn,
+    });
+
+    // The first attempt is lock-deferred (not a restart). The next three
+    // failed restart attempts consume the full recovery budget; tick six
+    // must not initiate a fourth failed restart from the null-snapshot arm.
+    await ticks(6);
+    expect(respawn).toHaveBeenCalledTimes(4);
+    monitor.dispose();
+  });
+
+  it("F13: does not start a null-snapshot retry after disposal during its metadata read", async () => {
+    let snapshot: DesktopLocalHostSnapshot | null = SNAPSHOT;
+    const metadataGate = deferred<DesktopLocalHostSnapshot | null>();
+    let metadataReads = 0;
+    let respawnCalls = 0;
+    const respawn = vi.fn(async () => {
+      respawnCalls += 1;
+      if (respawnCalls === 1) throw new HostRecoveryDeferredError();
+    });
+    const monitor = startHostHealthMonitor({
+      host: fakeHost({
+        getSnapshot: () => snapshot,
+        reloadSnapshotFromDisk: vi.fn(async () => {
+          snapshot = null;
+          return null;
+        }),
+      }),
+      intervalMs: INTERVAL_MS,
+      probe: vi.fn(async () => false),
+      readMetadata: vi.fn(async () => {
+        metadataReads += 1;
+        // F2 now reads published metadata on every positive-health decision:
+        // tick one, tick two, and the post-demotion recovery decision all
+        // observe the stable record. The next null-snapshot retry is gated.
+        return metadataReads <= 3 ? SNAPSHOT : metadataGate.promise;
+      }),
+      respawn,
+    });
+
+    await ticks(2);
+    expect(respawn).toHaveBeenCalledTimes(1);
+    await ticks(1);
+    expect(metadataReads).toBe(4);
+
+    monitor.dispose();
+    metadataGate.resolve(SNAPSHOT);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(respawn).toHaveBeenCalledTimes(1);
+  });
+
   it("stops auto-respawning after the budget is exhausted without a recovery", async () => {
     const respawn = vi.fn(async () => {});
     const reload = vi.fn(async () => null);
@@ -193,10 +368,9 @@ describe("startHostHealthMonitor", () => {
     // Each confirmed outage takes 2 failed ticks; budget is 3 respawns.
     await ticks(8);
     expect(respawn).toHaveBeenCalledTimes(3);
-    // Reload-first convergence runs at every confirmed outage (4 over these
-    // ticks); when it keeps yielding null the respawn budget still caps the
-    // restarts above.
-    expect(reload).toHaveBeenCalledTimes(4);
+    // Every attempted restart gets a second reload-confirmation before the
+    // monitor releases ownership (four outage reloads + three confirmations).
+    expect(reload).toHaveBeenCalledTimes(7);
     monitor.dispose();
   });
 
