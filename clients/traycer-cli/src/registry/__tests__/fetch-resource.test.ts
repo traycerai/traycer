@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   downloadToFile,
   fetchText,
+  type NetworkHeartbeat,
   waitForWriterDrain,
 } from "../fetch-resource";
 import { CliError } from "../../runner/errors";
@@ -23,10 +24,20 @@ import {
 } from "./fault-server-test-helpers";
 
 const RESOURCE_URL = "https://registry.example.test/host.tar.gz";
-// settleRetryTimers drives ~100 real event-loop turns to advance fake
-// timers past the production backoff; under CI CPU contention that real
-// wall-clock cost alone can exceed vitest's 5s default test timeout.
+// Retry tests keep production watchdogs frozen and advance only backoffs that
+// the download reports through its heartbeat. The timeout remains a fail-closed
+// guard for a genuine I/O hang; it is not used to poll fake time.
 const SETTLE_RETRY_TEST_TIMEOUT_MS = 15_000;
+
+function createRetryBackoffSignal() {
+  let notify = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    notify = resolve;
+  });
+  return { promise, notify };
+}
+
+let retryBackoffSignal = createRetryBackoffSignal();
 
 let workDir: string;
 let originalFetch: typeof globalThis.fetch;
@@ -35,6 +46,7 @@ const faultServers: Server[] = [];
 beforeEach(() => {
   workDir = mkdtempSync(join(tmpdir(), "traycer-fetch-resource-"));
   originalFetch = globalThis.fetch;
+  retryBackoffSignal = createRetryBackoffSignal();
 });
 
 afterEach(async () => {
@@ -64,10 +76,15 @@ function failingBody(
   firstChunk: string,
   message: string,
 ): ReadableStream<Uint8Array> {
+  let emittedFirstChunk = false;
   return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(firstChunk));
-      setTimeout(() => controller.error(new Error(message)), 1);
+    pull(controller) {
+      if (!emittedFirstChunk) {
+        emittedFirstChunk = true;
+        controller.enqueue(new TextEncoder().encode(firstChunk));
+        return;
+      }
+      controller.error(new Error(message));
     },
   });
 }
@@ -79,25 +96,35 @@ function downloadOptions(destPath: string, expected: string) {
     expectedSizeBytes: Buffer.byteLength(expected),
     expectedSha256: sha256(expected),
     onProgress: vi.fn(),
-    onHeartbeat: null,
+    onHeartbeat: (heartbeat: NetworkHeartbeat) => {
+      if (heartbeat.phase === "backoff") retryBackoffSignal.notify();
+    },
     signal: null,
   };
 }
 
 async function settleRetryTimers<T>(promise: Promise<T>): Promise<T> {
-  // Retries use a short production backoff. Advance enough timer turns to
-  // cover every attempt while allowing response/body microtasks to run.
+  let settled = false;
   const outcome = promise.then(
-    (value) => ({ kind: "fulfilled" as const, value }),
-    (error: unknown) => ({ kind: "rejected" as const, error }),
+    (value) => {
+      settled = true;
+      return { kind: "fulfilled" as const, value };
+    },
+    (error: unknown) => {
+      settled = true;
+      return { kind: "rejected" as const, error };
+    },
   );
-  for (let index = 0; index < 100; index += 1) {
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(1_000);
+  const settlement = outcome.then(() => undefined);
+  while (!settled) {
+    await Promise.race([settlement, retryBackoffSignal.promise]);
+    if (settled) break;
+    retryBackoffSignal = createRetryBackoffSignal();
+    await vi.advanceTimersToNextTimerAsync();
   }
-  const settled = await outcome;
-  if (settled.kind === "rejected") throw settled.error;
-  return settled.value;
+  const result = await outcome;
+  if (result.kind === "rejected") throw result.error;
+  return result.value;
 }
 
 describe("waitForWriterDrain", () => {

@@ -1,6 +1,7 @@
 import "../../../../../__tests__/test-browser-apis";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -9,7 +10,10 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
-import type { WorktreeWorkspaceSummary } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeFolderIntent,
+  WorktreeWorkspaceSummary,
+} from "@traycer/protocol/host/worktree-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   contrastRatio,
@@ -65,6 +69,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
   };
 });
 
+import { FolderBranchControl } from "../folder-branch-control";
 import { FolderLocationControl } from "../folder-location-control";
 import { FolderRow } from "../folder-row";
 import { WorkspaceFolderRows } from "../workspace-folder-rows";
@@ -564,20 +569,19 @@ describe("FolderRow", () => {
       NOOP,
     );
     fireEvent.click(screen.getByTestId("folder-branch-import-trigger"));
-    expect(screen.getByTestId("import-worktree-branch-form")).toBeTruthy();
-    expect(
-      screen
-        .getByTestId("import-worktree-source-branch")
-        .getAttribute("aria-selected"),
-    ).toBe("true");
-    expect(
-      screen.getByTestId("import-worktree-source-branch").textContent,
-    ).toContain("development");
-    const branchNameInput = screen.getByTestId("import-worktree-branch-name");
-    if (!(branchNameInput instanceof HTMLInputElement)) {
-      throw new Error("Expected imported worktree branch name input");
-    }
-    expect(branchNameInput.value).toBe("feat/login");
+    const details = screen.getByTestId("import-worktree-branch-form");
+    expect(details).toBeInstanceOf(HTMLDListElement);
+    expect(within(details).queryByRole("listbox")).toBeNull();
+    expect(within(details).queryByRole("option")).toBeNull();
+    expect(within(details).queryByRole("button")).toBeNull();
+    const sourceBranch = screen.getByTestId("import-worktree-source-branch");
+    expect(sourceBranch).not.toBeInstanceOf(HTMLInputElement);
+    expect(sourceBranch.textContent).toBe("development");
+    const branchName = screen.getByTestId("import-worktree-branch-name");
+    expect(branchName).not.toBeInstanceOf(HTMLInputElement);
+    expect(branchName.textContent).toBe("feat/login");
+    expect(screen.getByText("Source branch")).toBeTruthy();
+    expect(screen.getByText("Current branch")).toBeTruthy();
     expect(screen.queryByTestId("folder-branch-trigger")).toBeNull();
   });
 
@@ -1141,6 +1145,123 @@ describe("WorkspaceSummaryTrigger", () => {
         document.querySelector('[data-slot="hover-card-content"]'),
       ).toBeNull();
     });
+  });
+});
+
+describe("FolderBranchControl — Escape close", () => {
+  const AUTOSAVE_DELAY_MS = 500;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("commits the pending autosave draft when Escape closes the popover", async () => {
+    const onEmit = vi.fn<(intent: WorktreeFolderIntent) => void>();
+    render(
+      <TooltipProvider delayDuration={0}>
+        <FolderBranchControl
+          item={item({
+            mode: "worktree",
+            currentIntent: null,
+            branchLabel: "traycer/swift-otter",
+            summary: GIT_SUMMARY,
+            onEmit,
+          })}
+          boundaryEl={null}
+          readOnly={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const chip = screen.getByRole("button", {
+      name: "Choose worktree branch",
+    });
+    fireEvent.click(chip);
+    const popover = await screen.findByTestId("folder-branch-popover");
+    const name = screen.getByTestId("new-worktree-branch-name");
+    fireEvent.change(name, { target: { value: "feat/escape-commits" } });
+    expect(onEmit).not.toHaveBeenCalled();
+
+    // Escape before debounce: unmount flush still commits (no cancel path).
+    act(() => {
+      vi.advanceTimersByTime(AUTOSAVE_DELAY_MS - 1);
+    });
+    expect(onEmit).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(popover, { key: "Escape", code: "Escape" });
+
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(AUTOSAVE_DELAY_MS + 200);
+      await Promise.resolve();
+    });
+
+    expect(onEmit).toHaveBeenCalledTimes(1);
+    expect(onEmit.mock.calls[0][0]).toMatchObject({
+      branch: { name: "feat/escape-commits" },
+    });
+    expect(screen.queryByTestId("folder-branch-popover")).toBeNull();
+  });
+
+  it("returns focus to the chip on Escape without opening the chip tooltip from focus restore", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <FolderBranchControl
+          item={item({
+            mode: "worktree",
+            currentIntent: null,
+            branchLabel: "traycer/swift-otter",
+            summary: GIT_SUMMARY,
+          })}
+          boundaryEl={null}
+          readOnly={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const chip = screen.getByRole("button", {
+      name: "Choose worktree branch",
+    });
+    fireEvent.click(chip);
+    const popover = await screen.findByTestId("folder-branch-popover");
+    expect(popover).toBeTruthy();
+
+    // Escape closes the popover and restores focus to the trigger. Production
+    // arms suppress via onCloseAutoFocus (no preventDefault) so the chip
+    // tooltip does not open solely from that focus return.
+    fireEvent.keyDown(popover, { key: "Escape", code: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByTestId("folder-branch-popover")).toBeNull();
+    });
+
+    // Do not preventDefault onCloseAutoFocus for Escape — chip must regain focus.
+    expect(document.activeElement).toBe(chip);
+
+    // Drain focusin microtask + 150ms suppress fallback so any delayed open
+    // would surface. With delayDuration={0}, a suppress miss would show a
+    // tooltip role for the chip label.
+    await act(async () => {
+      await Promise.resolve();
+      vi.advanceTimersByTime(200);
+      await Promise.resolve();
+    });
+
+    expect(document.activeElement).toBe(chip);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(
+      document.querySelector(
+        '[data-slot="tooltip-content"][data-state="open"]',
+      ),
+    ).toBeNull();
+    expect(
+      document.querySelector(
+        '[data-slot="tooltip-content"][data-state="delayed-open"]',
+      ),
+    ).toBeNull();
   });
 });
 
