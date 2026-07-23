@@ -536,5 +536,11 @@ describe("useMergedNotificationsActions row-level resolve", () => {
         ),
       ).toBe(true);
     });
+    // The resolve carries the row's immutable occurrence token
+    // (id, updatedAt, sourceRef) - the exact tuple the host guards on - not just
+    // the method name.
+    expect(resolveCallOccurrences()).toEqual([
+      { id: "prompt-a", updatedAt: 200, sourceRef: "prompt-a" },
+    ]);
   });
 });
