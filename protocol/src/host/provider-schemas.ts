@@ -880,6 +880,42 @@ export type ProviderMutationCliStateV20 = z.infer<
   typeof providerMutationCliStateSchemaV20
 >;
 
+// ── Frozen major-2.1 mutation-response provider state (pre-registry) ───────
+// The same freeze discipline as `providerMutationCliStateSchemaV20` above,
+// one minor later - and applied for the same reason it was needed there.
+//
+// The 2.1 line shipped (host-v1.1.7) as "the frozen 2.0 mutation shape plus
+// `profiles[]` plus the code-paste-capable login capability", but it was
+// WIRED to the LIVE `providerCliStateSchema` instead of a pinned shape. So
+// when the provider-pack-registry fields (`managedInstallState`,
+// `versionVisibility`, `advisory`) landed on the live state they silently
+// leaked onto ten already-released @2.1 echoes that no released peer ever
+// sends - exactly the drift the 2.0 pin was introduced to stop after
+// `profiles` did the same thing. Pinning the shape here restores the released
+// 2.1 wire byte-for-byte.
+//
+// This is the honest model, not merely a compat patch: a state echo can never
+// carry registry state in the first place. Enabling a provider, setting an
+// API key, or completing a login cannot change what is installed, so
+// `providers.list` - whose v5.0 line is properly versioned for these fields -
+// is their only carrier. Do not add new fields here; add them to the live
+// `providerCliStateBaseShape` and let `providers.list` publish them.
+//
+// The field set reuses `providerCliStateBaseShapeV40` (the list line's
+// hand-frozen v4.0 shape) because that is exactly what 2.1 released. Both are
+// frozen, so neither can drift into the other. `providerId` stays the LIVE
+// enum for the same reason the 2.0 pin keeps it: an echo returns the id the
+// caller just named, so enum growth stays request-gated (see the
+// `providers.set*` / `providers.add*` entries in compat-exceptions.json).
+export const providerMutationCliStateSchemaV21 = z.object({
+  providerId: providerIdSchema,
+  ...providerCliStateBaseShapeV40,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+});
+export type ProviderMutationCliStateV21 = z.infer<
+  typeof providerMutationCliStateSchemaV21
+>;
+
 export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,
   selection: providerSelectionSchema,
@@ -893,7 +929,7 @@ export type ProvidersSetSelectionRequest = z.infer<
 >;
 
 export const providersSetSelectionResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersSetSelectionResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -918,7 +954,7 @@ export type ProvidersAddCustomPathRequest = z.infer<
 >;
 
 export const providersAddCustomPathResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersAddCustomPathResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -943,7 +979,7 @@ export type ProvidersRemoveCustomPathRequest = z.infer<
 >;
 
 export const providersRemoveCustomPathResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersRemoveCustomPathResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -968,7 +1004,7 @@ export type ProvidersSetEnabledRequest = z.infer<
 >;
 
 export const providersSetEnabledResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersSetEnabledResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1013,7 +1049,7 @@ export type ProvidersSetApiKeyRequest = z.infer<
 >;
 
 export const providersSetApiKeyResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersSetApiKeyResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1036,7 +1072,7 @@ export type ProvidersClearApiKeyRequest = z.infer<
 >;
 
 export const providersClearApiKeyResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersClearApiKeyResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1062,7 +1098,7 @@ export type ProvidersSetTerminalAgentArgsRequest = z.infer<
 >;
 
 export const providersSetTerminalAgentArgsResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersSetTerminalAgentArgsResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1090,7 +1126,7 @@ export type ProvidersSetEnvOverrideRequest = z.infer<
 >;
 
 export const providersSetEnvOverrideResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersSetEnvOverrideResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1115,7 +1151,7 @@ export type ProvidersDeleteEnvOverrideRequest = z.infer<
 >;
 
 export const providersDeleteEnvOverrideResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersDeleteEnvOverrideResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1253,7 +1289,7 @@ export type ProvidersAwaitLoginRequest = z.infer<
 export const providersAwaitLoginResponseSchema = z.object({
   // The provider's state after the login child closed and auth was re-probed.
   // Null when no login was in flight for this provider (nothing to await).
-  state: providerCliStateSchema.nullable(),
+  state: providerMutationCliStateSchemaV21.nullable(),
   // Create-profile only: when the authenticated account already belongs to
   // an active profile, the host discards the pending profile instead of
   // activating a duplicate and identifies the existing profile here. Ships

@@ -856,13 +856,18 @@ function upgradeProviderStateFromV10(
   return upgradeProviderCliStateV10ToMutationV20(state);
 }
 
-// Applied wherever a pre-@2.1-line provider-state echo (or providers.list's
-// pre-v4.0 line) upgrades to the live shape, alongside the existing
-// `profiles: []` fill. An old host predates the provider pack registry
-// entirely, so it has no managed-install lifecycle, no other-session
-// version-visibility signal, and no Phase-2 advisory to report - "nothing to
-// show" is the honest projection, matching how `profiles: []` reads "old
-// host never had this feature."
+// Applied where `providers.list`'s pre-v4.0 line upgrades to the live shape,
+// alongside the existing `profiles: []` fill. An old host predates the
+// provider pack registry entirely, so it has no managed-install lifecycle, no
+// other-session version-visibility signal, and no Phase-2 advisory to report -
+// "nothing to show" is the honest projection, matching how `profiles: []`
+// reads "old host never had this feature."
+//
+// `providers.list` is the ONLY carrier: the provider.* mutation echoes are
+// pinned to the frozen `providerMutationCliStateSchemaV21`, which does not
+// model these fields at all (a state echo cannot change what is installed -
+// see that schema's comment), so their 2.0 -> 2.1 upgrades must not fill
+// them.
 const PROVIDER_LIVE_FIELDS_PRE_REGISTRY = {
   managedInstallState: null,
   versionVisibility: null,
@@ -1181,7 +1186,6 @@ export const providersSetSelectionUpgradeV20ToV21 = defineUpgradePath<
     state: {
       ...response.state,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(
         response.state.loginCapability,
       ),
@@ -1263,7 +1267,6 @@ export const providersAddCustomPathUpgradeV20ToV21 = defineUpgradePath<
     state: {
       ...response.state,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(
         response.state.loginCapability,
       ),
@@ -1345,7 +1348,6 @@ export const providersRemoveCustomPathUpgradeV20ToV21 = defineUpgradePath<
     state: {
       ...response.state,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(
         response.state.loginCapability,
       ),
@@ -1478,7 +1480,6 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
         : {
             ...response.state,
             profiles: [],
-            ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
             loginCapability: upgradeLoginCapabilityFromV10(
               response.state.loginCapability,
             ),
@@ -1640,7 +1641,6 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
     state: {
       ...response.state,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(
         response.state.loginCapability,
       ),
@@ -1727,7 +1727,6 @@ export const providersSetApiKeyUpgradeV20ToV21 = defineUpgradePath<
     state: {
       ...response.state,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(
         response.state.loginCapability,
       ),
@@ -1806,7 +1805,6 @@ export const providersClearApiKeyUpgradeV20ToV21 = defineUpgradePath<
     state: {
       ...response.state,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(
         response.state.loginCapability,
       ),
@@ -1888,7 +1886,6 @@ export const providersSetTerminalAgentArgsUpgradeV20ToV21 = defineUpgradePath<
     state: {
       ...response.state,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(
         response.state.loginCapability,
       ),
@@ -1970,7 +1967,6 @@ export const providersSetEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
     state: {
       ...response.state,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(
         response.state.loginCapability,
       ),
@@ -2052,7 +2048,6 @@ export const providersDeleteEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
     state: {
       ...response.state,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(
         response.state.loginCapability,
       ),

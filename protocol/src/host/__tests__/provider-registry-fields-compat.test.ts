@@ -14,9 +14,11 @@ import {
   providerCliStateSchemaV30,
   providerManagedInstallStateSchema,
   providerMutationCliStateSchemaV20,
+  providerMutationCliStateSchemaV21,
   providerVersionVisibilitySchema,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
+  providersSetEnabledResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -259,7 +261,13 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
   });
 });
 
-describe("provider.* mutation major-2 lines predate the provider-pack-registry fields", () => {
+// The provider.* state-echo mutations never carry the registry fields on ANY
+// line. Both their released majors are pinned to frozen shapes that don't
+// model them, so a host whose in-memory state carries the fields (every host
+// after T3) still emits the exact wire a released 2.0/2.1 peer expects. This
+// is what `providers.list` - the sole carrier, properly versioned at v5.0 -
+// exists for; see `providerMutationCliStateSchemaV21`'s comment.
+describe("provider.* mutation lines never carry the provider-pack-registry fields", () => {
   it("providerMutationCliStateSchemaV20 drops the unmodeled keys on parse", () => {
     const parsed = providerMutationCliStateSchemaV20.parse(
       stateWithRegistryFields,
@@ -269,7 +277,20 @@ describe("provider.* mutation major-2 lines predate the provider-pack-registry f
     expect(parsed).not.toHaveProperty("advisory");
   });
 
-  it("upgrades a released 2.0 setSelection response to 2.1 with the new fields null", () => {
+  it("providerMutationCliStateSchemaV21 drops the unmodeled keys on parse but keeps profiles", () => {
+    const parsed = providerMutationCliStateSchemaV21.parse({
+      ...stateWithRegistryFields,
+      profiles: [],
+    });
+    expect(parsed).not.toHaveProperty("managedInstallState");
+    expect(parsed).not.toHaveProperty("versionVisibility");
+    expect(parsed).not.toHaveProperty("advisory");
+    // `profiles` DID ship on the 2.1 line - the pin freezes that wire as
+    // released, it doesn't roll it back to 2.0.
+    expect(parsed.profiles).toEqual([]);
+  });
+
+  it("upgrades a released 2.0 setSelection response to 2.1 without inventing the fields", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.setSelection"],
       { major: 2, minor: 0 },
@@ -280,12 +301,13 @@ describe("provider.* mutation major-2 lines predate the provider-pack-registry f
         ),
       },
     );
-    expect(upgraded.state.managedInstallState).toBeNull();
-    expect(upgraded.state.versionVisibility).toBeNull();
-    expect(upgraded.state.advisory).toBeNull();
+    expect(upgraded.state).not.toHaveProperty("managedInstallState");
+    expect(upgraded.state).not.toHaveProperty("versionVisibility");
+    expect(upgraded.state).not.toHaveProperty("advisory");
+    expect(upgraded.state.profiles).toEqual([]);
   });
 
-  it("upgrades a released 2.0 awaitLogin response to 2.1 with the new fields null (including the null-state branch)", () => {
+  it("upgrades a released 2.0 awaitLogin response to 2.1 without inventing the fields (including the null-state branch)", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.awaitLogin"],
       { major: 2, minor: 0 },
@@ -296,7 +318,9 @@ describe("provider.* mutation major-2 lines predate the provider-pack-registry f
         ),
       },
     );
-    expect(upgraded.state?.managedInstallState).toBeNull();
+    expect(upgraded.state).not.toHaveProperty("managedInstallState");
+    expect(upgraded.state).not.toHaveProperty("versionVisibility");
+    expect(upgraded.state).not.toHaveProperty("advisory");
 
     const upgradedNull = upgradeResponseToVersion(
       hostRpcRegistry["providers.awaitLogin"],
@@ -305,5 +329,20 @@ describe("provider.* mutation major-2 lines predate the provider-pack-registry f
       { state: null },
     );
     expect(upgradedNull.state).toBeNull();
+  });
+
+  // The regression this pin exists to stop: the host builds ONE live-shaped
+  // state (`toWire`) and echoes it from both `providers.list` and every
+  // mutation, so the mutation response schema is the only thing standing
+  // between the registry fields and an already-released 2.1 wire that never
+  // carried them (cli-/host-v1.1.7 negotiate 2.1). This schema is what
+  // `providersSetEnabledV21` is wired to.
+  it("strips the fields from a live-shaped host echo at the 2.1 wire boundary", () => {
+    const onWire = providersSetEnabledResponseSchema.parse({
+      state: stateWithRegistryFields,
+    });
+    expect(onWire.state).not.toHaveProperty("managedInstallState");
+    expect(onWire.state).not.toHaveProperty("versionVisibility");
+    expect(onWire.state).not.toHaveProperty("advisory");
   });
 });
