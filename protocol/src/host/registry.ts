@@ -812,13 +812,22 @@ function unsupportedProviderStateDowngrade(
 // Accepts either the live (latest) state or the frozen v2.0 state - see
 // `downgradeProviderCliStateToV10`'s comment. `providersListDowngradeV2ToV1`
 // downgrades from v2.0 (already `profiles`-free); every other caller
-// downgrades from the live state.
+// downgrades from the live state. The provider-pack-registry fields are
+// already optional on `ProviderCliState` itself, so no extra typing is
+// needed for those. `loginCapability` is widened to also accept the frozen-v10
+// capability shape (some callers pass a frozen state lifted via
+// `upgradeLoginCapabilityFromV10`); the strict v1.0 parse keeps only
+// `oauthArgs`/`token` regardless.
+type DowngradableToV10ProviderState = Omit<
+  ProviderCliState,
+  "profiles" | "loginCapability"
+> & {
+  profiles?: ProviderCliState["profiles"];
+  loginCapability: ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
+};
+
 function downgradeProviderStateForV10(
-  state: Omit<ProviderCliState, "profiles" | "loginCapability"> & {
-    profiles?: ProviderCliState["profiles"];
-    loginCapability:
-      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
-  },
+  state: DowngradableToV10ProviderState,
 ): DowngradeResult<ProviderCliStateV10> {
   const downgraded = downgradeProviderCliStateToV10(state);
   if (downgraded === null) {
@@ -828,11 +837,7 @@ function downgradeProviderStateForV10(
 }
 
 function downgradeProviderStateListForV10(
-  states: readonly (Omit<ProviderCliState, "profiles" | "loginCapability"> & {
-    profiles?: ProviderCliState["profiles"];
-    loginCapability:
-      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
-  })[],
+  states: readonly DowngradableToV10ProviderState[],
 ): ProviderCliStateV10[] {
   return states.flatMap((state) => {
     const downgraded = downgradeProviderCliStateToV10(state);
@@ -852,6 +857,24 @@ function upgradeProviderStateFromV10(
   return upgradeProviderCliStateV10ToMutationV20(state);
 }
 
+// Applied where `providers.list`'s pre-v4.0 line upgrades to the live shape,
+// alongside the existing `profiles: []` fill. An old host predates the
+// provider pack registry entirely, so it has no managed-install lifecycle, no
+// other-session version-visibility signal, and no Phase-2 advisory to report -
+// "nothing to show" is the honest projection, matching how `profiles: []`
+// reads "old host never had this feature."
+//
+// `providers.list` is the ONLY carrier: the provider.* mutation echoes are
+// pinned to the frozen `providerMutationCliStateSchemaV21`, which does not
+// model these fields at all (a state echo cannot change what is installed -
+// see that schema's comment), so their 2.0 -> 2.1 upgrades must not fill
+// them.
+const PROVIDER_LIVE_FIELDS_PRE_REGISTRY = {
+  managedInstallState: null,
+  versionVisibility: null,
+  advisory: null,
+} as const;
+
 // Fills the code-paste capability slot a frozen pre-`codePaste` state (v1.0,
 // v2.0, v3.0) never carries - same "old host never had this feature"
 // semantics as the `profiles: []` fill these upgrade bridges already apply
@@ -867,7 +890,6 @@ function upgradeLoginCapabilityFromV10(
     ? null
     : { ...loginCapability, codePaste: null };
 }
-
 function downgradeProviderRequestForV10<T>(
   schema: {
     safeParse: (
@@ -977,12 +999,14 @@ export const providersListUpgradeV3ToV4 = defineUpgradePath<
   // the v3.0 line (and below) predates it, so its providers upgrade to
   // `profiles: []` (same "old host never had this feature" semantics as the
   // v1.0 -> v2.0 `availabilityPending` fill above). Devin/Pi absence needs no
-  // transform - a v3.0 provider set is a valid v4.0 subset.
+  // transform - a v3.0 provider set is a valid v4.0 subset. The provider-pack-
+  // registry fields ship the same way - see `PROVIDER_LIVE_FIELDS_PRE_REGISTRY`.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     providers: response.providers.map((provider) => ({
       ...provider,
       profiles: [],
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(provider.loginCapability),
     })),
   }),

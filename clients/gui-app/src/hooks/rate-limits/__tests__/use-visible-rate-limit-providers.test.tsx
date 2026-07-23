@@ -80,6 +80,9 @@ function providerState(args: {
     providerId: args.providerId,
     auth: auth(args.status),
     profiles: [],
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
   };
 }
 

@@ -598,6 +598,9 @@ function providerCliState(input: {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }
@@ -632,6 +635,9 @@ function providerCliStateWithProfiles(input: {
         ? { oauthArgs: ["auth", "login"], token: null, codePaste: null }
         : input.loginCapability,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: input.profiles,
   };
 }
