@@ -252,6 +252,23 @@ function keyDown(init: KeyboardEventInit): KeyboardEvent {
   return dispatchKeyboard("keydown", init);
 }
 
+function terminalKeyDown(init: KeyboardEventInit): KeyboardEvent {
+  const terminalHost = document.createElement("div");
+  terminalHost.setAttribute("data-terminal-host", "");
+  const textarea = document.createElement("textarea");
+  terminalHost.append(textarea);
+  document.body.append(terminalHost);
+  const event = new KeyboardEvent("keydown", {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  act(() => {
+    textarea.dispatchEvent(event);
+  });
+  return event;
+}
+
 function keyUp(init: KeyboardEventInit): KeyboardEvent {
   return dispatchKeyboard("keyup", init);
 }
@@ -591,6 +608,98 @@ describe("<KeybindingProvider /> visual leader hints", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expectModHintVisible(false);
+  });
+
+  it("passes non-mac shell-policy Ctrl chords through when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyK",
+      key: "k",
+      ctrlKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("reserves non-mac app-policy Ctrl digit chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "Digit2",
+      key: "2",
+      ctrlKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("reserves non-encodable non-mac Ctrl punctuation chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const settings = terminalKeyDown({
+      code: "Comma",
+      key: ",",
+      ctrlKey: true,
+    });
+    const zoomOut = terminalKeyDown({
+      code: "Minus",
+      key: "-",
+      ctrlKey: true,
+    });
+
+    expect(settings.defaultPrevented).toBe(true);
+    expect(zoomOut.defaultPrevented).toBe(true);
+  });
+
+  it("reserves the palette secondary chord when a terminal is focused", () => {
+    platformMock.mac = false;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyP",
+      key: "p",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("reserves explicit user-rebound Ctrl chords when a terminal is focused", () => {
+    platformMock.mac = false;
+    useKeybindingStore.setState({
+      bindings: {
+        ...getDefaultBindings(),
+        "group.split.horizontal": "mod+shift+x",
+      },
+    });
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyX",
+      key: "x",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("reserves macOS Command chords when a terminal is focused", () => {
+    platformMock.mac = true;
+    renderProbe("/epics/e1");
+
+    const event = terminalKeyDown({
+      code: "KeyK",
+      key: "k",
+      metaKey: true,
+    });
+
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("clears pending timers and visible hints on window blur", () => {

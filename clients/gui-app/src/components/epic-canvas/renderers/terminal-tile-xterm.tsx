@@ -601,6 +601,7 @@ function createXtermEntry(
   const containerEl = document.createElement("div");
   containerEl.className = "h-full w-full overflow-hidden";
   containerEl.dataset.testid = "terminal-xterm-host";
+  containerEl.setAttribute("data-terminal-host", "");
 
   const term = new Terminal(initialOptions);
   const fitAddon = new FitAddon();

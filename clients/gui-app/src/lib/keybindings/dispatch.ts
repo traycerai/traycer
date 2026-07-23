@@ -19,7 +19,10 @@ import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import {
   ACTION_IDS,
   ACTION_META,
+  resolveActionDefaultChord,
+  resolveActionSecondaryChord,
   type ActionId,
+  type TerminalPolicy,
 } from "@/lib/keybindings/actions";
 import {
   digitFromCode,
@@ -121,13 +124,40 @@ export function registerDynamicActionHandler(
 // Chord lookup
 // ---------------------------------------------------------------------------
 
-export function findActionForChord(chord: ChordString): ActionId | null {
+export interface ActionChordMatch {
+  readonly actionId: ActionId;
+  readonly terminalPolicy: TerminalPolicy;
+}
+
+export function findActionMatchForChord(
+  chord: ChordString,
+): ActionChordMatch | null {
   const bindings = useKeybindingStore.getState().bindings;
   for (const id of ACTION_IDS) {
-    if (ACTION_META[id].kind !== "chord") continue;
-    if (bindings[id] === chord) return id;
+    const meta = ACTION_META[id];
+    if (meta.kind !== "chord") continue;
+    const binding = bindings[id];
+    if (binding === null) continue;
+    if (binding === chord) {
+      const terminalPolicy =
+        binding === resolveActionDefaultChord(meta)
+          ? meta.terminalPolicy
+          : "app";
+      return { actionId: id, terminalPolicy };
+    }
+    const secondaryChord = resolveActionSecondaryChord(meta);
+    if (secondaryChord === chord) {
+      return {
+        actionId: id,
+        terminalPolicy: meta.secondaryTerminalPolicy ?? meta.terminalPolicy,
+      };
+    }
   }
   return null;
+}
+
+export function findActionForChord(chord: ChordString): ActionId | null {
+  return findActionMatchForChord(chord)?.actionId ?? null;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,8 +6,8 @@ import {
 } from "@/lib/keybindings/chord";
 import {
   dispatchAction,
+  findActionMatchForChord,
   type DigitActionMatch,
-  findActionForChord,
   isExternallyHandled,
   isRepeatSensitiveAction,
   matchDigitAction,
@@ -17,6 +17,8 @@ import {
 import { subscribeLeaderScopes } from "@/lib/keybindings/leader-scope";
 import { getHistoryController } from "@/lib/history-navigation";
 import type { ActionId } from "@/lib/keybindings/actions";
+import { ACTION_META, type TerminalPolicy } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
 import {
   routerAdapterFor,
   type KeybindingRouterSource,
@@ -306,6 +308,14 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // is the primary key + at least one modifier is held.
       const digitMatch = matchDigitAction(event);
       if (digitMatch !== null) {
+        if (
+          shouldPassCtrlChordToFocusedTerminal(
+            event,
+            ACTION_META[digitMatch.actionId].terminalPolicy,
+          )
+        ) {
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         handleDigitMatch(digitMatch, digitSequenceRef, digitSequenceTimerRef);
@@ -316,11 +326,19 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
 
       const actionId = resolveReservedAction(event);
       if (actionId === null) return;
+      if (
+        shouldPassCtrlChordToFocusedTerminal(
+          event,
+          actionId.terminalPolicy,
+        )
+      ) {
+        return;
+      }
 
       // Toggles (e.g. the model picker) must act once per physical press. Still
       // reserve the chord on OS key-repeat so the browser default can't run,
       // but skip re-dispatch so a held chord doesn't flip the toggle rapidly.
-      if (event.repeat && isRepeatSensitiveAction(actionId)) {
+      if (event.repeat && isRepeatSensitiveAction(actionId.actionId)) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -332,7 +350,7 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
       // (Cmd+Alt+Left/Right = history back/forward on Chrome+Safari).
       event.preventDefault();
       event.stopPropagation();
-      dispatchAction(actionId, adapter);
+      dispatchAction(actionId.actionId, adapter);
     };
 
     // Mouse back/forward (buttons 3/4). Desktop-only: gated on the current
@@ -437,12 +455,37 @@ export function KeybindingProvider(props: KeybindingProviderProps) {
  * OUTSIDE this dispatcher (e.g. dictation, owned by a capture-phase hook) -
  * reserving those would swallow the key when the owner is inactive.
  */
-function resolveReservedAction(event: KeyboardEvent): ActionId | null {
+interface ReservedAction {
+  readonly actionId: ActionId;
+  readonly terminalPolicy: TerminalPolicy;
+}
+
+function resolveReservedAction(event: KeyboardEvent): ReservedAction | null {
   const chord = resolveMatchingChord(event);
   if (chord === null) return null;
-  const actionId = findActionForChord(chord);
-  if (actionId === null) return null;
-  return isExternallyHandled(actionId) ? null : actionId;
+  const match = findActionMatchForChord(chord);
+  if (match === null) return null;
+  if (isExternallyHandled(match.actionId)) return null;
+  return match;
+}
+
+function shouldPassCtrlChordToFocusedTerminal(
+  event: KeyboardEvent,
+  terminalPolicy: TerminalPolicy,
+): boolean {
+  return (
+    !isMac() &&
+    event.ctrlKey &&
+    terminalPolicy === "shell" &&
+    isTerminalEventTarget(event.target)
+  );
+}
+
+function isTerminalEventTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    target.closest("[data-terminal-host]") !== null
+  );
 }
 
 function isArtifactEditorLinkShortcut(event: KeyboardEvent): boolean {
