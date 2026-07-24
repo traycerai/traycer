@@ -282,27 +282,27 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().defaultPermission).toBe("full_access");
   });
 
-  it("defaults new runs to epic mode", () => {
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("epic");
+  it("defaults new runs to regular mode", () => {
+    expect(useSettingsStore.getState().defaultAgentMode).toBe("regular");
   });
 
-  it("persists regular mode when selected", () => {
-    useSettingsStore.getState().setDefaultAgentMode("regular");
+  it("persists epic mode when selected", () => {
+    useSettingsStore.getState().setDefaultAgentMode("epic");
     const persistedSettings = window.localStorage.getItem(
       "traycer-gui-app:settings",
     );
 
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("regular");
+    expect(useSettingsStore.getState().defaultAgentMode).toBe("epic");
     expect(persistedSettings).not.toBeNull();
-    expect(persistedSettings ?? "").toContain('"defaultAgentMode":"regular"');
+    expect(persistedSettings ?? "").toContain('"defaultAgentMode":"epic"');
   });
 
-  it("rehydrates regular mode from persisted settings", async () => {
+  it("rehydrates epic mode from persisted settings", async () => {
     window.localStorage.setItem(
       "traycer-gui-app:settings",
       JSON.stringify({
         state: {
-          defaultAgentMode: "regular",
+          defaultAgentMode: "epic",
         },
         version: 1,
       }),
@@ -310,7 +310,7 @@ describe("useSettingsStore", () => {
 
     await useSettingsStore.persist.rehydrate();
 
-    expect(useSettingsStore.getState().defaultAgentMode).toBe("regular");
+    expect(useSettingsStore.getState().defaultAgentMode).toBe("epic");
   });
 
   it("accepts valid persisted default permissions", async () => {
