@@ -34,7 +34,13 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 
 export type MentionProviderId =
-  "files" | "folders" | "worktree" | "git" | "epic" | "chat" | EpicArtifactKind;
+  | "files"
+  | "folders"
+  | "worktree"
+  | "git"
+  | "epic"
+  | "chat"
+  | EpicArtifactKind;
 
 export interface MentionMenuCopy {
   readonly header: string;
@@ -80,7 +86,8 @@ export type WorkspaceGitMentionMethod =
   | "workspace.mentionGitCommits";
 
 export type WorkspaceMentionMethod =
-  WorkspacePathMentionMethod | WorkspaceGitMentionMethod;
+  | WorkspacePathMentionMethod
+  | WorkspaceGitMentionMethod;
 
 export type EpicMentionMethod =
   | "epic.mentionEpics"
@@ -949,22 +956,23 @@ function workspacePathOrSearchRequests(
   if (context.roots.length === 0) return EMPTY_WORKSPACE_REQUESTS;
   const epicId = context.currentEpicId;
   if (epicId === null) {
-    return [legacyPathRequestForRoots(context, [...context.roots], legacyMethod)];
+    return [
+      legacyPathRequestForRoots(context, [...context.roots], legacyMethod),
+    ];
   }
 
-  const requests: MentionWorkspaceRequest[] = [];
-  const legacyRoots: string[] = [];
-  for (const root of context.roots) {
-    if (context.epicAttachedRoots.has(root)) {
-      requests.push(
-        searchPathsMentionRequest(context, epicId, root, suggestionKind),
-      );
-    } else {
-      legacyRoots.push(root);
-    }
-  }
+  const requests: MentionWorkspaceRequest[] = context.roots
+    .filter((root) => context.epicAttachedRoots.has(root))
+    .map((root) =>
+      searchPathsMentionRequest(context, epicId, root, suggestionKind),
+    );
+  const legacyRoots = context.roots.filter(
+    (root) => !context.epicAttachedRoots.has(root),
+  );
   if (legacyRoots.length > 0) {
-    requests.push(legacyPathRequestForRoots(context, legacyRoots, legacyMethod));
+    requests.push(
+      legacyPathRequestForRoots(context, legacyRoots, legacyMethod),
+    );
   }
   return requests.length > 0 ? requests : EMPTY_WORKSPACE_REQUESTS;
 }

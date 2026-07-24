@@ -57,6 +57,7 @@ import {
 import type {
   WorkspaceFileTreeNode,
   WorkspaceSearchPathResult,
+  WorkspaceSearchPathsResponse,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import { type GitStatusEntry } from "@pierre/trees";
@@ -1103,6 +1104,23 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
   );
 }
 
+function readyWorkspacePathSearchData(
+  response: WorkspaceSearchPathsResponse | undefined,
+  epicId: string,
+  root: string,
+) {
+  if (
+    response === undefined ||
+    !("root" in response) ||
+    response.epicId !== epicId ||
+    response.root !== root ||
+    response.outcome !== "ready"
+  ) {
+    return null;
+  }
+  return response;
+}
+
 function FileTreePanelBodyForWorkspace(props: {
   readonly epicId: string;
   readonly tabId: string;
@@ -1152,15 +1170,13 @@ function FileTreePanelBodyForWorkspace(props: {
   // (unattached/moved/escaped/cross-host) is treated as "not ready", so the
   // panel keeps the browse tree + local filter instead of showing an empty
   // search that looks like "no matches".
-  const searchData =
-    searchActive &&
-    searchPathsQuery.data !== undefined &&
-    "root" in searchPathsQuery.data &&
-    searchPathsQuery.data.epicId === props.epicId &&
-    searchPathsQuery.data.root === props.workspacePath &&
-    searchPathsQuery.data.outcome === "ready"
-      ? searchPathsQuery.data
-      : null;
+  const searchData = searchActive
+    ? readyWorkspacePathSearchData(
+        searchPathsQuery.data,
+        props.epicId,
+        props.workspacePath,
+      )
+    : null;
   const searchResultFiles = useMemo(
     () =>
       searchData === null
