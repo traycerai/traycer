@@ -442,32 +442,26 @@ async function dispatchWorktreeIntent(
       .filter((entryResult) => entryResult.ok)
       .map((entryResult) => entryResult.workspacePath),
   );
-  const failedEntries = intent.entries
+  const failedPaths = intent.entries
     .map((entry) => entry.workspacePath)
-    .filter((workspacePath) => !okPaths.has(workspacePath))
-    .map((workspacePath) => ({
-      workspacePath,
-      // A failed entry rides `perEntry` with `ok: false` and the host's causal
-      // `errorMessage` (git stderr tail, checked-out-elsewhere, …); an entry
-      // the host reported nothing about has no row, hence no reason.
-      errorMessage:
-        result.perEntry.find(
-          (entryResult) =>
-            entryResult.workspacePath === workspacePath && !entryResult.ok,
-        )?.errorMessage ?? null,
-    }));
-  if (failedEntries.length > 0) {
-    const folder = workspaceFolderName(failedEntries[0].workspacePath);
+    .filter((workspacePath) => !okPaths.has(workspacePath));
+  if (failedPaths.length > 0) {
+    const folder = workspaceFolderName(failedPaths[0]);
     const scope =
-      failedEntries.length === 1
+      failedPaths.length === 1
         ? `"${folder}"`
-        : `${failedEntries.length} folders, starting with "${folder}"`;
+        : `${failedPaths.length} folders, starting with "${folder}"`;
+    // The reason must describe the SAME entry `scope` names, so read it off
+    // `failedPaths[0]` rather than the first entry that happens to carry one -
+    // a later entry's message would misattribute the failure. A failed entry
+    // rides `perEntry` with `ok: false` and the host's causal `errorMessage`
+    // (git stderr tail, checked-out-elsewhere, …); an entry the host reported
+    // nothing about has no row, so the headline stands alone.
     const reason =
-      failedEntries
-        .map((entry) => entry.errorMessage)
-        .find(
-          (errorMessage): errorMessage is string => errorMessage !== null,
-        ) ?? null;
+      result.perEntry.find(
+        (entryResult) =>
+          entryResult.workspacePath === failedPaths[0] && !entryResult.ok,
+      )?.errorMessage ?? null;
     const message = `Couldn't prepare the workspace for ${scope}. The terminal agent was not launched.`;
     reportableErrorToast(
       message,
