@@ -96,6 +96,7 @@ import {
 import {
   useAncestorIds,
   useEpicActiveAgentIds,
+  useEpicAgentRoleClaims,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicArtifactRecords,
@@ -108,6 +109,7 @@ import {
   useEpicTreeNode,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
+import { AgentRoleBadges } from "./agent-role-badges";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -1447,6 +1449,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     onToggleSelection,
   } = props;
   const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
+  const roleClaims = useEpicAgentRoleClaims(nodeId);
   const dragData = useMemo<EpicCanvasSidebarNodeDragData>(
     () => ({
       kind: SIDEBAR_NODE_DND_TYPE,
@@ -1545,6 +1548,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <ChatSidebarNodeIconSlot>{nodeIcon}</ChatSidebarNodeIconSlot>
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+          {resourceOwnerKind === null ? null : (
+            <AgentRoleBadges claims={roleClaims} />
+          )}
         </span>
       </label>
     );
@@ -1573,6 +1579,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <ChatSidebarNodeIconSlot>{nodeIcon}</ChatSidebarNodeIconSlot>
         <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+        {resourceOwnerKind === null ? null : (
+          <AgentRoleBadges claims={roleClaims} />
+        )}
         {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
           <OwnerResourceChip
             epicId={epicId}

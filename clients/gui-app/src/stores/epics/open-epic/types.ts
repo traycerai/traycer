@@ -23,6 +23,7 @@ import type {
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingWorkspaceMode } from "@traycer/protocol/host/worktree-schemas";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
@@ -150,6 +151,10 @@ export interface TerminalAgentsSlice {
   readonly allIds: readonly string[];
 }
 
+export interface AgentRolesSlice {
+  readonly byAgentId: Readonly<Record<string, readonly RoleClaim[]>>;
+}
+
 export interface TreeNode {
   readonly id: string;
   readonly parentId: string | null;
@@ -197,6 +202,7 @@ export interface EpicProjectedSlices {
   readonly deletedArtifacts: DeletedArtifactsSlice;
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
+  readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
   readonly contentRevByArtifactId: Readonly<Record<string, number>>;
 }
@@ -207,6 +213,10 @@ export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
   stateByArtifactRoomId: Object.freeze(
     {} as Record<string, EpicArtifactRoomAvailability>,
   ),
+});
+
+export const EMPTY_AGENT_ROLES_SLICE: AgentRolesSlice = Object.freeze({
+  byAgentId: Object.freeze({} as Record<string, readonly RoleClaim[]>),
 });
 
 export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
@@ -231,6 +241,7 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
     byId: Object.freeze({} as Record<string, TuiAgentProjection>),
     allIds: EMPTY_ARRAY,
   }),
+  agentRoles: EMPTY_AGENT_ROLES_SLICE,
   tree: Object.freeze({
     rootIds: EMPTY_ARRAY,
     childrenByParent: Object.freeze({} as Record<string, readonly string[]>),

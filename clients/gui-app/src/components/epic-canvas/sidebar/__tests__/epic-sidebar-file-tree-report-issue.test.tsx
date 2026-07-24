@@ -231,6 +231,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
   useChildIds: () => [],
   useEpicActiveAgentIds: () => new Set<string>(),
+  useEpicAgentRoleClaims: () => [],
   useEpicArtifact: () => null,
   useEpicArtifactRecords: () => [],
   useEpicArtifactStatus: () => null,
