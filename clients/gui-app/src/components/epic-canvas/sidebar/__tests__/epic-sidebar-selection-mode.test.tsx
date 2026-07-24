@@ -727,9 +727,7 @@ describe("epic sidebar selection mode", () => {
     expect(more.className).toContain("hidden");
     expect(more.className).toContain("@max-[21rem]:inline-flex");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start artifact selection" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Select artifacts" }));
     expect(
       section.querySelector('[data-panel-header-mode="selection"]'),
     ).not.toBeNull();
