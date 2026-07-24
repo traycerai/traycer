@@ -3,6 +3,7 @@ import type {
   ComposerMentionProviderContext,
   MentionFlowStep,
   MentionMenuEntry,
+  MentionSearchPathsRequest,
 } from "../providers";
 import { mentionProviderRegistry, ROOT_MENTION_STEP } from "../providers";
 
@@ -16,6 +17,7 @@ function context(
     workspaceEntries: [],
     epicEntries: [],
     currentEpicId: null,
+    epicAttachedRoots: new Set(),
     chatEntries: [],
     ...overrides,
   };
@@ -329,6 +331,102 @@ describe("mention provider registry", () => {
       "epic.mentionTickets",
       "epic.mentionStories",
       "epic.mentionReviews",
+    ]);
+  });
+
+  it("scopes an Epic-attached root to searchPaths and keeps unattached roots legacy", () => {
+    const requests = mentionProviderRegistry.workspaceRequests(
+      ROOT_MENTION_STEP,
+      context({
+        query: "index",
+        roots: ["/attached", "/global"],
+        currentEpicId: "epic-1",
+        epicAttachedRoots: new Set(["/attached"]),
+      }),
+    );
+    const scoped = requests.filter(
+      (request): request is MentionSearchPathsRequest =>
+        request.method === "workspace.searchPaths",
+    );
+    // The attached root produces one scoped request per file/folder provider.
+    expect(scoped).toHaveLength(2);
+    for (const request of scoped) {
+      expect(request.root).toBe("/attached");
+      expect(request.params.epicId).toBe("epic-1");
+      expect("root" in request.params.reference).toBe(true);
+      if ("root" in request.params.reference) {
+        expect(request.params.reference.root).toBe("/attached");
+      }
+    }
+    expect(scoped.map((request) => request.method)).toEqual([
+      "workspace.searchPaths",
+      "workspace.searchPaths",
+    ]);
+    // Each provider requests exactly its own kind so folders are never starved
+    // by files sharing the limit.
+    expect(
+      scoped.map((request) => ({
+        kind: request.suggestionKind,
+        kinds: request.params.kinds,
+      })),
+    ).toEqual([
+      { kind: "file", kinds: "files" },
+      { kind: "folder", kinds: "folders" },
+    ]);
+
+    // The unattached root keeps the legacy raw-root RPCs (files + folders).
+    const legacyFileRoots = requests.flatMap((request) =>
+      request.method === "workspace.mentionFiles" ? [request.params.roots] : [],
+    );
+    expect(legacyFileRoots).toEqual([["/global"]]);
+    const legacyFolderRoots = requests.flatMap((request) =>
+      request.method === "workspace.mentionFolders"
+        ? [request.params.roots]
+        : [],
+    );
+    expect(legacyFolderRoots).toEqual([["/global"]]);
+  });
+
+  it("emits no legacy file/folder request when every root is Epic-attached", () => {
+    const requests = mentionProviderRegistry.workspaceRequests(
+      ROOT_MENTION_STEP,
+      context({
+        query: "index",
+        roots: ["/a", "/b"],
+        currentEpicId: "epic-1",
+        epicAttachedRoots: new Set(["/a", "/b"]),
+      }),
+    );
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "workspace.mentionFiles" ||
+          request.method === "workspace.mentionFolders",
+      ),
+    ).toBe(false);
+    // Two roots x two providers (files + folders) = four scoped requests.
+    expect(
+      requests.filter((request) => request.method === "workspace.searchPaths"),
+    ).toHaveLength(4);
+  });
+
+  it("uses only legacy RPCs when there is no current Epic, even with attached roots", () => {
+    const requests = mentionProviderRegistry.workspaceRequests(
+      ROOT_MENTION_STEP,
+      context({
+        query: "index",
+        roots: ["/a"],
+        currentEpicId: null,
+        epicAttachedRoots: new Set(["/a"]),
+      }),
+    );
+    expect(
+      requests.some((request) => request.method === "workspace.searchPaths"),
+    ).toBe(false);
+    expect(requests.map((request) => request.method)).toEqual([
+      "workspace.mentionFiles",
+      "workspace.mentionFolders",
+      "workspace.mentionWorktrees",
     ]);
   });
 

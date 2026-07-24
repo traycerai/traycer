@@ -51,6 +51,8 @@ import {
   removeEpicRepoResponseSchema,
   resolveArtifactByPathRequestSchema,
   resolveArtifactByPathResponseSchema,
+  searchArtifactsRequestSchema,
+  searchArtifactsResponseSchema,
   renameArtifactRequestSchema,
   renameArtifactResponseSchema,
   renameChatRequestSchema,
@@ -395,6 +397,17 @@ export const epicResolveArtifactByPathV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: resolveArtifactByPathRequestSchema,
   responseSchema: resolveArtifactByPathResponseSchema,
+});
+
+// `epic.searchArtifacts@1.0` - Epic-scoped artifact title/path/body search over
+// the epic's on-disk Markdown mirror + authoritative Y.Doc metadata. Optional
+// (non-floor): an old host lacks it in its optional manifest and returns
+// E_HOST_UNSUPPORTED for this call only, so the sidebar degrades to no search.
+export const epicSearchArtifactsV10 = defineRpcContract({
+  method: "epic.searchArtifacts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: searchArtifactsRequestSchema,
+  responseSchema: searchArtifactsResponseSchema,
 });
 
 export { epicSubscribeV10 };

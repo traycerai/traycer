@@ -13,6 +13,7 @@ import { useArtifactsOpenerItems } from "@/lib/commands/sources/open/artifacts-s
 import { useChatsOpenerItems } from "@/lib/commands/sources/open/chats-subpage";
 import { useDiffOpenerItems } from "@/lib/commands/sources/open/diff-subpage";
 import { useFilesOpenerItems } from "@/lib/commands/sources/open/files-subpage";
+import { useSearchOpenerItems } from "@/lib/commands/sources/open/search-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
 import { useTuiOpenerItems } from "@/lib/commands/sources/open/tui-subpage";
 import type {
@@ -65,6 +66,12 @@ const OPENER_CATEGORIES: ReadonlyArray<OpenerCategory> = [
     title: "Diff",
     keywords: ["diff", "changes"],
     useItems: useDiffOpenerItems,
+  },
+  {
+    id: "search",
+    title: "Text search",
+    keywords: ["search", "text", "grep", "find", "content", "code"],
+    useItems: useSearchOpenerItems,
   },
 ];
 

@@ -41,9 +41,12 @@ import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picke
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tree-theme";
 import { useWorkspaceListFileTree } from "@/hooks/workspace/use-list-file-tree-query";
+import { useWorkspaceSearchPaths } from "@/hooks/workspace/use-workspace-search-paths-query";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useHostClient } from "@/lib/host";
+import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
 import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
@@ -51,7 +54,10 @@ import {
   type EpicNodeRef,
   type WorkspaceFileRef,
 } from "@/stores/epics/canvas/types";
-import type { WorkspaceFileTreeNode } from "@traycer/protocol/host/workspace/unary-schemas";
+import type {
+  WorkspaceFileTreeNode,
+  WorkspaceSearchPathResult,
+} from "@traycer/protocol/host/workspace/unary-schemas";
 import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
 import { type GitStatusEntry } from "@pierre/trees";
 import {
@@ -151,6 +157,8 @@ import {
   useArtifactReadStateStore,
 } from "@/stores/epics/artifact-read-state-store";
 import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
+import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
+import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import { cn } from "@/lib/utils";
 import {
   CheckCheck,
@@ -208,6 +216,8 @@ import { useShallow } from "zustand/react/shallow";
 const EMPTY_FILE_TREE_FILES: ReadonlyArray<WorkspaceFileTreeNode> =
   Object.freeze([]);
 const EMPTY_GIT_STATUS: ReadonlyArray<GitStatusEntry> = Object.freeze([]);
+const EMPTY_SEARCH_PATH_RESULTS: ReadonlyArray<WorkspaceSearchPathResult> =
+  Object.freeze([]);
 
 interface ArtifactReadTarget {
   readonly id: string;
@@ -1103,21 +1113,89 @@ function FileTreePanelBodyForWorkspace(props: {
   // resolving against the same host after a default-host swap or
   // reload (CLAUDE.md: tabs are bound to a host for life).
   const activeHostId = useReactiveActiveHostId();
+  const hostClient = useHostClient();
   const query = useWorkspaceListFileTree(props.workspacePath);
   const files = query.data?.files ?? EMPTY_FILE_TREE_FILES;
   const gitStatus = query.data?.gitStatus ?? EMPTY_GIT_STATUS;
 
   // The host's `files` list is the source of truth for "what is an
-  // openable file and what is its display name". `treePaths` feeds
-  // Pierre (which builds the visual tree, synthesizing directory rows);
-  // `nameByTreePath` lets handlers resolve a clicked path to a file name
+  // openable file and what is its display name" while browsing. `treePaths`
+  // feeds Pierre (which builds the visual tree, synthesizing directory rows);
+  // `browseNameByTreePath` lets handlers resolve a clicked path to a file name
   // without parsing the path string, and a path absent from the map is
   // a directory row and not openable.
   const treePaths = useMemo(() => files.map((file) => file.path), [files]);
-  const nameByTreePath = useMemo(
+  const browseNameByTreePath = useMemo(
     () => new Map(files.map((file) => [file.path, file.name])),
     [files],
   );
+
+  // Active-query search is host-owned: instead of scanning the full tree in the
+  // renderer, we ask `workspace.searchPaths` (scoped to this Epic + workspace)
+  // for host-ranked file matches. Browsing (empty query) keeps the local tree.
+  const [searchQuery, setSearchQuery] = useState("");
+  const debouncedQuery = useDebouncedValue(searchQuery, 200);
+  const searchActive = debouncedQuery.trim().length > 0;
+  const searchPathsQuery = useWorkspaceSearchPaths({
+    client: hostClient,
+    epicId: props.epicId,
+    root: props.workspacePath,
+    query: debouncedQuery,
+    // The panel finds files to open; matched files still reveal their ancestor
+    // folders in the tree. Folder-name matches are a mention-picker concern.
+    kinds: "files",
+    enabled: searchActive,
+  });
+  // Trust the response only when its echoed Epic+root still match the current
+  // selection (so a late reply from a previous workspace never renders here)
+  // AND the host actually searched the root. A `root_unavailable` outcome
+  // (unattached/moved/escaped/cross-host) is treated as "not ready", so the
+  // panel keeps the browse tree + local filter instead of showing an empty
+  // search that looks like "no matches".
+  const searchData =
+    searchActive &&
+    searchPathsQuery.data !== undefined &&
+    "root" in searchPathsQuery.data &&
+    searchPathsQuery.data.epicId === props.epicId &&
+    searchPathsQuery.data.root === props.workspacePath &&
+    searchPathsQuery.data.outcome === "ready"
+      ? searchPathsQuery.data
+      : null;
+  const searchResultFiles = useMemo(
+    () =>
+      searchData === null
+        ? EMPTY_SEARCH_PATH_RESULTS
+        : searchData.results.filter((result) => result.kind === "file"),
+    [searchData],
+  );
+  const rpcResultsReady = searchData !== null;
+
+  // Paths Pierre renders: the ranked host results once a search resolves, else
+  // the full browse tree. The local `hide-non-matches` filter runs only as a
+  // fallback - while the host result is still in flight, or on an old host that
+  // does not support the RPC - so the user gets instant client-side filtering
+  // that the host result silently replaces when it lands.
+  const effectivePaths = useMemo(
+    () =>
+      rpcResultsReady
+        ? searchResultFiles.map((result) => result.relPath)
+        : treePaths,
+    [rpcResultsReady, searchResultFiles, treePaths],
+  );
+  const effectiveSearch =
+    searchActive && !rpcResultsReady ? debouncedQuery : null;
+
+  // Result names come from the RPC (host-computed basename), merged over the
+  // browse map so a matched file the git-based browse listing did not enumerate
+  // still resolves to an openable ref.
+  const nameByTreePath = useMemo(() => {
+    if (!rpcResultsReady) return browseNameByTreePath;
+    const merged = new Map(browseNameByTreePath);
+    for (const result of searchResultFiles) {
+      merged.set(result.relPath, result.name);
+    }
+    return merged;
+  }, [rpcResultsReady, browseNameByTreePath, searchResultFiles]);
 
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
@@ -1193,41 +1271,23 @@ function FileTreePanelBodyForWorkspace(props: {
       handlersRef.current.onSelect(selectedPath);
     },
   });
-  const [searchQuery, setSearchQuery] = useState("");
-  const searchDebounceTimerRef = useRef<number | null>(null);
-  const clearPendingSearchDebounce = useCallback(() => {
-    if (searchDebounceTimerRef.current === null) return;
-    window.clearTimeout(searchDebounceTimerRef.current);
-    searchDebounceTimerRef.current = null;
-  }, []);
-  const applySearchQuery = useCallback(
-    (query: string) => {
-      model.setSearch(query.length > 0 ? query : null);
-      model.setGitStatus(gitStatus);
-    },
-    [model, gitStatus],
-  );
   const handleSearchQueryChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      const nextQuery = event.target.value;
-      setSearchQuery(nextQuery);
-      clearPendingSearchDebounce();
-      searchDebounceTimerRef.current = window.setTimeout(() => {
-        searchDebounceTimerRef.current = null;
-        applySearchQuery(nextQuery);
-      }, 150);
+      setSearchQuery(event.target.value);
     },
-    [applySearchQuery, clearPendingSearchDebounce],
+    [],
   );
 
-  useEffect(() => clearPendingSearchDebounce, [clearPendingSearchDebounce]);
-
-  // Paths and git status arrive from the host RPC asynchronously; push
-  // them into Pierre's imperative model whenever the query result
-  // changes. Pierre dedupes its own work on stable inputs.
+  // Push the derived paths, search filter, and git status into Pierre's
+  // imperative model. `effectivePaths` is the ranked host results while a
+  // search is resolved, else the browse tree; `effectiveSearch` applies the
+  // local filter only in the fallback window. Pierre dedupes on stable inputs.
   useEffect(() => {
-    model.resetPaths(treePaths);
-  }, [model, treePaths]);
+    model.resetPaths(effectivePaths);
+  }, [model, effectivePaths]);
+  useEffect(() => {
+    model.setSearch(effectiveSearch);
+  }, [model, effectiveSearch]);
   useEffect(() => {
     model.setGitStatus(gitStatus);
   }, [model, gitStatus]);
@@ -1937,11 +1997,41 @@ function MarkAllArtifactsReadButton(props: {
   );
 }
 
+/**
+ * Enters artifact search mode. Only rendered once the Epic holds enough
+ * artifacts for filtering to beat scanning - below that the header carries no
+ * search affordance at all.
+ */
+function ArtifactSearchButton(props: { readonly collapsed: boolean }) {
+  const available = useArtifactSearchAvailable();
+  const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
+  if (!available) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      onClick={() => openSearch("artifacts", "")}
+      aria-label="Search artifacts"
+      title="Search artifacts"
+      data-testid="epic-sidebar-search-artifacts"
+      disabled={props.collapsed}
+      className={cn(
+        "text-muted-foreground hover:text-foreground",
+        PANEL_HEADER_ACTION_REVEAL_CLASS,
+      )}
+    >
+      <Search className="size-4" />
+    </Button>
+  );
+}
+
 function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
   const selection = useSidebarBulkSelection();
   if (selection.selectionMode) return <SidebarBulkSelectionActions />;
   return (
     <div className="flex items-center gap-0.5">
+      <ArtifactSearchButton collapsed={props.collapsed} />
       <ArtifactFilterMenu epicId={props.epicId} disabled={props.collapsed} />
       <MarkAllArtifactsReadButton
         epicId={props.epicId}

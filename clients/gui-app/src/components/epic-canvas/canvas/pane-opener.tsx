@@ -35,6 +35,12 @@ import {
 } from "@/components/command-palette/palette-cmdk-controller";
 import { getOpenerItems } from "@/lib/commands/registry";
 import { PaletteQueryProvider } from "@/lib/commands/palette-query-context";
+import { SearchRunView } from "@/components/epic-canvas/canvas/search-run-view";
+import {
+  isSearchRunSubpageId,
+  parseSearchRunSubpageId,
+} from "@/lib/commands/sources/open/search-target";
+import { isFilesResultSubpageId } from "@/lib/commands/sources/open/files-result-subpage";
 import type { CommandContext } from "@/lib/commands/types";
 
 export interface PaneOpenerProps {
@@ -86,6 +92,51 @@ export function PaneOpener(props: PaneOpenerProps) {
   const openerItems = useMemo(() => getOpenerItems(ctx), [ctx]);
   const { activeSubpage, runItem, popSubpage } = controller;
 
+  // The text-search step-2 sub-page is rendered by a bespoke view (query +
+  // options + results) rather than the generic fuzzy list, and cmdk's own
+  // filtering is disabled for it: content search is literal/regex, so the
+  // pattern must never fuzzy-filter the result rows.
+  const searchRunTarget =
+    activeSubpage !== null && isSearchRunSubpageId(activeSubpage.id)
+      ? parseSearchRunSubpageId(activeSubpage.id)
+      : null;
+
+  // The Files step-2 result lists come pre-ranked from `workspace.searchPaths`
+  // (host Fuse, typo/transposition tolerant). cmdk's own filter must NOT
+  // re-score/re-order them or drop typo matches, and must not hide the typed
+  // notice/truncation rows under a non-matching query. Its filtering stays ON
+  // for the Files step-1 source picker and every other opener page.
+  const hostRankedResultSubpage =
+    activeSubpage !== null && isFilesResultSubpageId(activeSubpage.id);
+
+  const inputPlaceholder = (): string => {
+    if (searchRunTarget !== null) return "Text search…";
+    return activeSubpage !== null ? activeSubpage.title : "Open into pane…";
+  };
+
+  const renderListBody = () => {
+    if (searchRunTarget !== null) {
+      return (
+        <SearchRunView
+          key={activeSubpage?.id}
+          target={searchRunTarget}
+          ctx={ctx}
+        />
+      );
+    }
+    if (activeSubpage !== null) {
+      return (
+        <SubpageView
+          key={activeSubpage.id}
+          subpage={activeSubpage}
+          ctx={ctx}
+          onSelect={runItem}
+        />
+      );
+    }
+    return <OpenerRootView items={openerItems} onSelect={runItem} />;
+  };
+
   // Typing re-filters the list; `handleQueryChange` keeps the auto-selected
   // first match in view by snapping the scroll container back to the top.
   const { listRef, handleQueryChange } = usePaletteScrollReset(setQuery);
@@ -111,6 +162,7 @@ export function PaneOpener(props: PaneOpenerProps) {
     >
       <Command
         filter={paletteFilter}
+        shouldFilter={searchRunTarget === null && !hostRankedResultSubpage}
         onKeyDown={handleKeyDown}
         className="h-full min-h-0 bg-transparent"
       >
@@ -129,24 +181,13 @@ export function PaneOpener(props: PaneOpenerProps) {
                 </InputGroupButton>
               ) : undefined
             }
-            placeholder={
-              activeSubpage !== null ? activeSubpage.title : "Open into pane…"
-            }
+            placeholder={inputPlaceholder()}
             aria-label="Open into pane"
           />
           {/* `max-h-none` overrides the primitive's `max-h-72` cap so the list
               fills the full pane height instead of clipping mid-way. */}
           <CommandList ref={listRef} className="max-h-none min-h-0 flex-1">
-            {activeSubpage !== null ? (
-              <SubpageView
-                key={activeSubpage.id}
-                subpage={activeSubpage}
-                ctx={ctx}
-                onSelect={runItem}
-              />
-            ) : (
-              <OpenerRootView items={openerItems} onSelect={runItem} />
-            )}
+            {renderListBody()}
           </CommandList>
         </PaletteQueryProvider>
       </Command>

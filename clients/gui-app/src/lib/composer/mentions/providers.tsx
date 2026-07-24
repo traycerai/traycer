@@ -99,6 +99,13 @@ type WorkspacePathMentionRequestParams = RequestOfMethod<
   "workspace.mentionFiles"
 >;
 
+type WorkspaceSearchPathsRequestParams = RequestOfMethod<
+  HostRpcRegistry,
+  "workspace.searchPaths"
+>;
+
+const WORKSPACE_SEARCH_PATHS_MENTION_LIMIT = 50;
+
 type WorkspaceGitMentionRequestParams = RequestOfMethod<
   HostRpcRegistry,
   "workspace.mentionGitRoot"
@@ -114,6 +121,20 @@ type EpicArtifactMentionRequestParams = RequestOfMethod<
   "epic.mentionSpecs"
 >;
 
+/**
+ * Scoped file/folder search over ONE Epic-attached root. Emitted (instead of
+ * the legacy raw-root `workspace.mentionFiles`/`mentionFolders`) only for roots
+ * demonstrably attached to the current Epic on this host. `suggestionKind` says
+ * which result kind the reconstruction keeps; `root` is the known, already
+ * authorized root the reconstruction joins against.
+ */
+export interface MentionSearchPathsRequest {
+  readonly method: "workspace.searchPaths";
+  readonly params: WorkspaceSearchPathsRequestParams;
+  readonly suggestionKind: "file" | "folder";
+  readonly root: string;
+}
+
 export type MentionWorkspaceRequest =
   | {
       readonly method: WorkspacePathMentionMethod;
@@ -122,7 +143,8 @@ export type MentionWorkspaceRequest =
   | {
       readonly method: WorkspaceGitMentionMethod;
       readonly params: WorkspaceGitMentionRequestParams;
-    };
+    }
+  | MentionSearchPathsRequest;
 
 export type MentionEpicRequest =
   | {
@@ -141,6 +163,14 @@ export interface ComposerMentionProviderContext {
   readonly workspaceEntries: ReadonlyArray<WorkspaceEntry>;
   readonly epicEntries: ReadonlyArray<EpicMentionEntry>;
   readonly currentEpicId: string | null;
+  /**
+   * The subset of `roots` demonstrably attached to `currentEpicId` on this
+   * host (a binding running dir or resolved workspace folder). File/folder
+   * mentions for these roots use the scoped `workspace.searchPaths`; roots
+   * outside this set (global folders, or any root when there is no current
+   * Epic) keep the legacy raw-root RPC so a suggestion never disappears.
+   */
+  readonly epicAttachedRoots: ReadonlySet<string>;
   readonly chatEntries: ReadonlyArray<EpicChatMentionEntry>;
 }
 
@@ -238,8 +268,11 @@ class FileMentionProvider extends ComposerMentionProvider {
   rootWorkspaceRequests(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionWorkspaceRequest> {
-    if (context.roots.length === 0) return EMPTY_WORKSPACE_REQUESTS;
-    return [workspacePathRequest(context, "workspace.mentionFiles")];
+    return workspacePathOrSearchRequests(
+      context,
+      "workspace.mentionFiles",
+      "file",
+    );
   }
 
   workspaceRequests(
@@ -290,8 +323,11 @@ class FolderMentionProvider extends ComposerMentionProvider {
   rootWorkspaceRequests(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionWorkspaceRequest> {
-    if (context.roots.length === 0) return EMPTY_WORKSPACE_REQUESTS;
-    return [workspacePathRequest(context, "workspace.mentionFolders")];
+    return workspacePathOrSearchRequests(
+      context,
+      "workspace.mentionFolders",
+      "folder",
+    );
   }
 
   workspaceRequests(
@@ -343,7 +379,15 @@ class WorktreeMentionProvider extends ComposerMentionProvider {
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionWorkspaceRequest> {
     if (context.roots.length === 0) return EMPTY_WORKSPACE_REQUESTS;
-    return [workspacePathRequest(context, "workspace.mentionWorktrees")];
+    // Worktrees are directory-context mentions, not file/folder path search, so
+    // they stay on the legacy raw-root RPC.
+    return [
+      legacyPathRequestForRoots(
+        context,
+        [...context.roots],
+        "workspace.mentionWorktrees",
+      ),
+    ];
   }
 
   workspaceRequests(
@@ -877,14 +921,72 @@ function scoreChatEntry(
   return null;
 }
 
-function workspacePathRequest(
+/**
+ * Build the file/folder mention requests for the current roots, splitting them
+ * between the scoped `workspace.searchPaths` (for roots attached to the current
+ * Epic on this host) and the legacy raw-root RPC (for everything else, and for
+ * all roots when there is no current Epic). A root that cannot be scoped always
+ * falls back to legacy, so a suggestion is never dropped by scoping.
+ */
+function workspacePathOrSearchRequests(
   context: ComposerMentionProviderContext,
+  legacyMethod: WorkspacePathMentionMethod,
+  suggestionKind: "file" | "folder",
+): ReadonlyArray<MentionWorkspaceRequest> {
+  if (context.roots.length === 0) return EMPTY_WORKSPACE_REQUESTS;
+  const epicId = context.currentEpicId;
+  if (epicId === null) {
+    return [legacyPathRequestForRoots(context, [...context.roots], legacyMethod)];
+  }
+
+  const requests: MentionWorkspaceRequest[] = [];
+  const legacyRoots: string[] = [];
+  for (const root of context.roots) {
+    if (context.epicAttachedRoots.has(root)) {
+      requests.push(
+        searchPathsMentionRequest(context, epicId, root, suggestionKind),
+      );
+    } else {
+      legacyRoots.push(root);
+    }
+  }
+  if (legacyRoots.length > 0) {
+    requests.push(legacyPathRequestForRoots(context, legacyRoots, legacyMethod));
+  }
+  return requests.length > 0 ? requests : EMPTY_WORKSPACE_REQUESTS;
+}
+
+function searchPathsMentionRequest(
+  context: ComposerMentionProviderContext,
+  epicId: string,
+  root: string,
+  suggestionKind: "file" | "folder",
+): MentionSearchPathsRequest {
+  return {
+    method: "workspace.searchPaths",
+    suggestionKind,
+    root,
+    params: {
+      epicId,
+      reference: { root },
+      query: context.query.trim(),
+      limit: WORKSPACE_SEARCH_PATHS_MENTION_LIMIT,
+      // Request exactly the kind this provider renders so the host spends the
+      // whole limit on it (a folder mention is never starved by files).
+      kinds: suggestionKind === "folder" ? "folders" : "files",
+    },
+  };
+}
+
+function legacyPathRequestForRoots(
+  context: ComposerMentionProviderContext,
+  roots: ReadonlyArray<string>,
   method: WorkspacePathMentionMethod,
 ): MentionWorkspaceRequest {
   return {
     method,
     params: {
-      roots: [...context.roots],
+      roots: [...roots],
       query: context.query.trim(),
       limit: context.limit,
     },
