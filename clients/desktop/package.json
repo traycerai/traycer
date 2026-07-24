@@ -197,6 +197,7 @@
     "linux": {
       "artifactName": "traycer-desktop-linux-${arch}.${ext}",
       "executableName": "traycer-desktop",
+      "icon": "icons",
       "maintainer": "Traycer AI <support@traycer.ai>",
       "target": [
         {
