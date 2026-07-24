@@ -21,6 +21,10 @@ jobs:
   test:
     name: test (${{ matrix.project }})
     runs-on: ${{ matrix.project == 'traycer-clients-gui-app' && 'ubuntu-latest-8-cores' || 'ubuntu-latest' }}
+    # The GUI suite deliberately runs only two fork workers so large fake-timer
+    # tests remain reliable on CI. Its cold run can exceed the organisation's
+    # ten-minute default once runner setup is included.
+    timeout-minutes: 20
     strategy:
       # Run every project even if one fails, so a single red project doesn't
       # mask the others.

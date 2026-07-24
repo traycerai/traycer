@@ -1206,11 +1206,12 @@ function FileTreePanelBodyForWorkspace(props: {
   // still resolves to an openable ref.
   const nameByTreePath = useMemo(() => {
     if (!rpcResultsReady) return browseNameByTreePath;
-    const merged = new Map(browseNameByTreePath);
-    for (const result of searchResultFiles) {
-      merged.set(result.relPath, result.name);
-    }
-    return merged;
+    return new Map([
+      ...browseNameByTreePath,
+      ...searchResultFiles.map(
+        (result) => [result.relPath, result.name] as const,
+      ),
+    ]);
   }, [rpcResultsReady, browseNameByTreePath, searchResultFiles]);
 
   const navigateNested = useEpicNestedFocusNavigation();

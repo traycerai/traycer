@@ -1461,7 +1461,7 @@ export const SEARCH_ARTIFACT_SNIPPET_MAX_BYTES = 512;
  * match past that bound is dropped rather than pointing outside `text`.
  */
 export const searchArtifactSnippetSchema = z.object({
-  lineNumber: z.number().int().nonnegative(),
+  lineNumber: z.number().int().positive(),
   text: z.string(),
   ranges: z.array(
     z

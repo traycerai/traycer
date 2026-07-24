@@ -160,13 +160,13 @@ describe("buildArtifactPathIndex", () => {
       },
     ];
     // Same outcome regardless of iteration order - no first/last wins.
-    for (const order of [collide, [...collide].reverse()]) {
+    [collide, [...collide].reverse()].forEach((order) => {
       const { tree, artifacts } = slices(order);
       const index = buildArtifactPathIndex(tree, artifacts);
       expect(index.get("dupes/clash")).toBeUndefined();
       // The unambiguous parent path is unaffected.
       expect(index.get("dupes")?.id).toBe("p");
-    }
+    });
   });
 
   it("keeps a colliding path closed even with a third claimant", () => {
