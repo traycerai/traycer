@@ -14,6 +14,14 @@
  * - FALLBACK: hosts older than the stream method reject it as unknown, and
  *   the panel transparently keeps using the unary `workspace.listFileTree`
  *   snapshot (25k files, 10s poll) with the git status that response carries.
+ *
+ * Filtering has its own source, because lazy coverage makes a local filter
+ * structurally incomplete - it can only match rows the panel already loaded.
+ * With a live tree and a host that has `workspace.searchPaths`, a non-empty
+ * filter is answered by that host-ranked search over the whole root; without
+ * it (old host, refused root, reply in flight) the tree adapter's own
+ * `hide-non-matches` filter runs over the loaded rows instead. See
+ * `FileTreeMode`.
  */
 import {
   useCallback,
@@ -33,6 +41,12 @@ import type {
 } from "@pierre/trees";
 import { Search } from "lucide-react";
 import type { GitChangedFile } from "@traycer/protocol/host";
+import type {
+  WorkspaceListFileTreeResponse,
+  WorkspaceSearchPathResult,
+} from "@traycer/protocol/host/workspace/unary-schemas";
+import type { UseQueryResult } from "@tanstack/react-query";
+import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   getWorkspaceFileDragId,
   WORKSPACE_FILE_DND_TYPE,
@@ -52,8 +66,17 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useGitListChangedFilesSubscription } from "@/hooks/git/use-git-list-changed-files-subscription";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { useWorkspaceListFileTree } from "@/hooks/workspace/use-list-file-tree-query";
-import { useWorkspaceFileListSubscription } from "@/hooks/workspace/use-workspace-file-list-subscription";
+import {
+  useWorkspaceFileListSubscription,
+  type WorkspaceFileListSubscriptionResult,
+} from "@/hooks/workspace/use-workspace-file-list-subscription";
+import {
+  readSearchPathsResponseForSource,
+  useWorkspaceSearchPaths,
+} from "@/hooks/workspace/use-workspace-search-paths-query";
+import { useHostClient } from "@/lib/host";
 import { gitChangedFileToPierreStatusEntry } from "@/lib/git/panel-file-rendering";
 import {
   useStreamMethodSupport,
@@ -65,6 +88,10 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
 import { mergeExpandedDirectoryPaths } from "@/lib/workspace/workspace-file-list-tree";
 import {
+  projectWorkspaceSearchPaths,
+  type WorkspaceSearchPathsProjection,
+} from "@/lib/workspace/workspace-path-search-projection";
+import {
   useFileTreeExpandedPaths,
   useFileTreeStore,
 } from "@/stores/file-tree/file-tree-store";
@@ -72,16 +99,41 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const WORKSPACE_FILE_LIST_METHOD = "workspace.subscribeFileList";
 
+/** Filter-box pause before either filter source runs. */
+const SEARCH_DEBOUNCE_MS = 200;
+
 const EMPTY_TREE_PATHS: ReadonlyArray<string> = Object.freeze([]);
 const EMPTY_GIT_STATUS: ReadonlyArray<GitStatusEntry> = Object.freeze([]);
 const EMPTY_CHANGED_FILES: ReadonlyArray<GitChangedFile> = Object.freeze([]);
 const EMPTY_FILE_NAMES: ReadonlyMap<string, string> = new Map();
+const EMPTY_SEARCH_PATH_RESULTS: ReadonlyArray<WorkspaceSearchPathResult> =
+  Object.freeze([]);
+
+/**
+ * Which of the three inputs is currently building the tree.
+ *
+ * - `browse` - no filter query: the live listings (or the unary snapshot).
+ * - `host-search` - the host answered `workspace.searchPaths` for this query,
+ *   so its ranked matches ARE the tree. The only mode that can surface a file
+ *   the panel never listed, which is the whole point: with lazy coverage the
+ *   local filter can only ever match rows already loaded.
+ * - `local-filter` - a query with no usable host answer (host too old, root
+ *   refused, response still in flight, or the panel is on the unary snapshot
+ *   and already holds every path): the tree adapter's own `hide-non-matches`
+ *   filter runs over the loaded rows, exactly as before.
+ */
+type FileTreeMode = "browse" | "host-search" | "local-filter";
 
 interface FileTreeSource {
+  readonly mode: FileTreeMode;
   readonly paths: ReadonlyArray<string>;
   /** Openable rows only; a path absent here is a directory row. */
   readonly fileNameByPath: ReadonlyMap<string, string>;
   readonly gitStatus: ReadonlyArray<GitStatusEntry>;
+  /** What the tree adapter's own filter should match, or `null` for no filter. */
+  readonly localFilterQuery: string | null;
+  /** Rows to force open so host matches are visible; `null` outside search. */
+  readonly searchExpandedPaths: ReadonlyArray<string> | null;
   readonly isLoading: boolean;
   readonly hasError: boolean;
   readonly truncationNotice: string | null;
@@ -93,6 +145,8 @@ function useFileTreeSource(args: {
   readonly epicId: string;
   readonly hostId: string | null;
   readonly workspacePath: string;
+  /** Already debounced by the caller - this drives the host RPC. */
+  readonly searchQuery: string;
 }): FileTreeSource {
   const wsStreamClient = useWsStreamClient();
   const streamSupport = useStreamMethodSupport(WORKSPACE_FILE_LIST_METHOD);
@@ -149,24 +203,92 @@ function useFileTreeSource(args: {
     ];
   }, [changedFiles, streamIgnoredPaths]);
 
+  const search = useHostPathSearch({
+    epicId: args.epicId,
+    hostId: args.hostId,
+    workspacePath: args.workspacePath,
+    query: args.searchQuery,
+    // Host search only earns its keep against the LIVE tree, where the loaded
+    // rows are just the expanded directories. The unary snapshot already holds
+    // every path, so filtering it locally is both complete and free.
+    enabled: !useUnaryFallback,
+  });
+
+  const localFilterQuery =
+    args.searchQuery.trim().length > 0 ? args.searchQuery : null;
+
   if (useUnaryFallback) {
-    return {
+    return unaryFileTreeSource({
+      unary,
       paths: unaryPaths,
       fileNameByPath: unaryFileNameByPath,
-      gitStatus: unary.data?.gitStatus ?? EMPTY_GIT_STATUS,
-      isLoading: unary.isLoading,
-      hasError: unary.error !== null && unaryPaths.length === 0,
-      truncationNotice:
-        unary.data?.truncated === true
-          ? `Showing the first ${unaryPaths.length.toLocaleString()} files - this workspace exceeds the preview limit.`
-          : null,
-      isLive: false,
-    };
+      localFilterQuery,
+    });
   }
+  if (search !== null) {
+    return hostSearchFileTreeSource(search, liveGitStatus);
+  }
+  return liveFileTreeSource(stream, liveGitStatus, localFilterQuery);
+}
+
+function unaryFileTreeSource(args: {
+  readonly unary: UseQueryResult<WorkspaceListFileTreeResponse, HostRpcError>;
+  readonly paths: ReadonlyArray<string>;
+  readonly fileNameByPath: ReadonlyMap<string, string>;
+  readonly localFilterQuery: string | null;
+}): FileTreeSource {
+  const { unary, paths, localFilterQuery } = args;
   return {
+    mode: localFilterQuery === null ? "browse" : "local-filter",
+    paths,
+    fileNameByPath: args.fileNameByPath,
+    gitStatus: unary.data?.gitStatus ?? EMPTY_GIT_STATUS,
+    localFilterQuery,
+    searchExpandedPaths: null,
+    isLoading: unary.isLoading,
+    hasError: unary.error !== null && paths.length === 0,
+    truncationNotice:
+      unary.data?.truncated === true
+        ? `Showing the first ${paths.length.toLocaleString()} files - this workspace exceeds the preview limit.`
+        : null,
+    isLive: false,
+  };
+}
+
+function hostSearchFileTreeSource(
+  search: HostPathSearchResult,
+  gitStatus: ReadonlyArray<GitStatusEntry>,
+): FileTreeSource {
+  return {
+    mode: "host-search",
+    paths: search.projection.paths,
+    fileNameByPath: search.projection.fileNameByPath,
+    gitStatus,
+    // The host already ranked and filtered; re-running the row filter on top
+    // would drop matches whose NAME does not contain the query verbatim.
+    localFilterQuery: null,
+    searchExpandedPaths: search.projection.expandedDirectoryPaths,
+    isLoading: false,
+    hasError: false,
+    truncationNotice: search.truncated
+      ? `Showing the first ${search.projection.paths.length.toLocaleString()} matches - narrow the filter to see more.`
+      : null,
+    isLive: true,
+  };
+}
+
+function liveFileTreeSource(
+  stream: WorkspaceFileListSubscriptionResult,
+  gitStatus: ReadonlyArray<GitStatusEntry>,
+  localFilterQuery: string | null,
+): FileTreeSource {
+  return {
+    mode: localFilterQuery === null ? "browse" : "local-filter",
     paths: stream.paths,
     fileNameByPath: stream.fileNameByPath,
-    gitStatus: liveGitStatus,
+    gitStatus,
+    localFilterQuery,
+    searchExpandedPaths: null,
     isLoading: stream.isPending,
     hasError: stream.error !== null && stream.paths.length === 0,
     truncationNotice: stream.truncated
@@ -174,6 +296,82 @@ function useFileTreeSource(args: {
       : null,
     isLive: true,
   };
+}
+
+interface HostPathSearchResult {
+  readonly projection: WorkspaceSearchPathsProjection;
+  readonly truncated: boolean;
+}
+
+/**
+ * Host-ranked path search for the current filter query, or `null` whenever the
+ * panel must keep filtering locally.
+ *
+ * `null` covers every degrade in one value: no query, the response still in
+ * flight, a late reply whose echoed Epic/root no longer matches this panel, a
+ * `root_unavailable` outcome (the root is not attached/authorized for this
+ * Epic on this host), and a host that predates the method. That last one is
+ * latched per (host, workspace): `workspace.searchPaths` is off the released
+ * floor, so an old host rejects it CLIENT-side with `E_HOST_UNSUPPORTED` from
+ * the negotiated manifest - cheap, but retried per keystroke otherwise, and
+ * each new query mints a new cache key with a clean error slate. Latching
+ * turns that into one verdict per host+workspace; changing either scope
+ * re-probes, since the state is compared against the live scope key rather
+ * than reset by an effect.
+ */
+function useHostPathSearch(args: {
+  readonly epicId: string;
+  readonly hostId: string | null;
+  readonly workspacePath: string;
+  readonly query: string;
+  readonly enabled: boolean;
+}): HostPathSearchResult | null {
+  const hostClient = useHostClient();
+  const scopeKey = `${args.hostId ?? ""}|${args.workspacePath}`;
+  const [unsupportedScopeKey, setUnsupportedScopeKey] = useState<string | null>(
+    null,
+  );
+  const unsupported = unsupportedScopeKey === scopeKey;
+
+  const searchQuery = useWorkspaceSearchPaths({
+    client: hostClient,
+    epicId: args.epicId,
+    root: args.workspacePath,
+    query: args.query,
+    // Files AND folders: this is a file-tree filter, so a folder whose name
+    // matches is a legitimate destination, not just a container.
+    kinds: "both",
+    enabled: args.enabled && !unsupported,
+  });
+
+  if (
+    searchQuery.error?.code === "E_HOST_UNSUPPORTED" &&
+    unsupportedScopeKey !== scopeKey
+  ) {
+    setUnsupportedScopeKey(scopeKey);
+  }
+
+  const searchSource = useMemo(
+    () => ({ root: args.workspacePath }),
+    [args.workspacePath],
+  );
+  const view = readSearchPathsResponseForSource(
+    searchQuery.data,
+    args.epicId,
+    searchSource,
+  );
+  const results =
+    view !== null && view.outcome === "ready"
+      ? view.results
+      : EMPTY_SEARCH_PATH_RESULTS;
+  const projection = useMemo(
+    () => projectWorkspaceSearchPaths(results),
+    [results],
+  );
+  if (!args.enabled || unsupported) return null;
+  if (args.query.trim().length === 0) return null;
+  if (view === null || view.outcome !== "ready") return null;
+  return { projection, truncated: view.truncated };
 }
 
 export function FileTreePanelBodyForWorkspace(props: {
@@ -186,10 +384,16 @@ export function FileTreePanelBodyForWorkspace(props: {
   // resolving against the same host after a default-host swap or
   // reload (CLAUDE.md: tabs are bound to a host for life).
   const activeHostId = useReactiveActiveHostId();
+  // The box is a filter, not a search field: the query is applied on a pause,
+  // and the same debounced value gates both the host RPC and the local row
+  // filter so the two can never disagree about what is being filtered for.
+  const [searchQuery, setSearchQuery] = useState("");
+  const debouncedQuery = useDebouncedValue(searchQuery, SEARCH_DEBOUNCE_MS);
   const source = useFileTreeSource({
     epicId: props.epicId,
     hostId: activeHostId,
     workspacePath: props.workspacePath,
+    searchQuery: debouncedQuery,
   });
 
   // The source's path list is the source of truth for "what is an openable
@@ -272,34 +476,20 @@ export function FileTreePanelBodyForWorkspace(props: {
       handlersRef.current.onSelect(selectedPath);
     },
   });
-  const [searchQuery, setSearchQuery] = useState("");
-  const searchDebounceTimerRef = useRef<number | null>(null);
-  const clearPendingSearchDebounce = useCallback(() => {
-    if (searchDebounceTimerRef.current === null) return;
-    window.clearTimeout(searchDebounceTimerRef.current);
-    searchDebounceTimerRef.current = null;
-  }, []);
-  const applySearchQuery = useCallback(
-    (query: string) => {
-      model.setSearch(query.length > 0 ? query : null);
-      model.setGitStatus(gitStatus);
-    },
-    [model, gitStatus],
-  );
   const handleSearchQueryChange = useCallback(
     (event: ChangeEvent<HTMLInputElement>) => {
-      const nextQuery = event.target.value;
-      setSearchQuery(nextQuery);
-      clearPendingSearchDebounce();
-      searchDebounceTimerRef.current = window.setTimeout(() => {
-        searchDebounceTimerRef.current = null;
-        applySearchQuery(nextQuery);
-      }, 150);
+      setSearchQuery(event.target.value);
     },
-    [applySearchQuery, clearPendingSearchDebounce],
+    [],
   );
 
-  useEffect(() => clearPendingSearchDebounce, [clearPendingSearchDebounce]);
+  // Runs BEFORE the path reset below, deliberately. Clearing the tree
+  // adapter's filter restores the expansion it captured when the filter was
+  // applied; doing that after a reset would collapse the rows the reset just
+  // opened for the host matches (the local-filter -> host-search handover).
+  useEffect(() => {
+    model.setSearch(source.localFilterQuery);
+  }, [model, source.localFilterQuery]);
 
   useWorkspaceFileTreeExpansion({
     model,
@@ -308,7 +498,8 @@ export function FileTreePanelBodyForWorkspace(props: {
     workspacePath: props.workspacePath,
     treePaths,
     enabled: source.isLive,
-    searchQuery,
+    mode: source.mode,
+    searchExpandedPaths: source.searchExpandedPaths,
   });
 
   // Git status arrives from its own subscription; push it into Pierre's
@@ -415,9 +606,10 @@ export function FileTreePanelBodyForWorkspace(props: {
  * re-read on each tick (a set comparison, and the store write is a no-op when
  * nothing moved).
  *
- * While a filter query is active the tree expands matches on its own and
- * restores the previous state when the query clears; that transient is not
- * user expansion and must not churn the stream's coverage, so syncing pauses.
+ * While a filter query is active - either mode - expansion is driven by the
+ * filter (the tree adapter expands its own matches; host search expands the
+ * ancestors of the ranked results) rather than by the user, so syncing pauses
+ * and the stream's coverage stays exactly where browsing left it.
  */
 function useWorkspaceFileTreeExpansion(args: {
   readonly model: PierreFileTreeModel;
@@ -426,10 +618,19 @@ function useWorkspaceFileTreeExpansion(args: {
   readonly workspacePath: string;
   readonly treePaths: ReadonlyArray<string>;
   readonly enabled: boolean;
-  readonly searchQuery: string;
+  readonly mode: FileTreeMode;
+  readonly searchExpandedPaths: ReadonlyArray<string> | null;
 }): void {
-  const { model, epicId, hostId, workspacePath, treePaths, enabled } = args;
-  const searchActive = args.searchQuery.length > 0;
+  const {
+    model,
+    epicId,
+    hostId,
+    workspacePath,
+    treePaths,
+    enabled,
+    mode,
+    searchExpandedPaths,
+  } = args;
   const setExpandedPaths = useFileTreeStore((s) => s.setExpandedPaths);
   const expandedPaths = useFileTreeExpandedPaths(epicId, hostId, workspacePath);
   const directoryPaths = useMemo(
@@ -437,8 +638,8 @@ function useWorkspaceFileTreeExpansion(args: {
     [treePaths],
   );
 
-  // Only a NEW path list resets the tree; `expandedPaths` is a dependency
-  // because the reset re-seeds from it, not a trigger of its own (re-seeding
+  // Only a NEW path list resets the tree; the expansion sets are dependencies
+  // because the reset re-seeds from them, not triggers of their own (re-seeding
   // on every expansion write would fight the user).
   const appliedPathsRef = useRef<ReadonlyArray<string>>(EMPTY_TREE_PATHS);
   useEffect(() => {
@@ -448,15 +649,19 @@ function useWorkspaceFileTreeExpansion(args: {
       model.resetPaths(treePaths);
       return;
     }
+    // Host results are a flat ranked list, so nothing is visible until their
+    // ancestors are open; browsing re-seeds the durable set instead. Either
+    // way the reset owns expansion - the tree adapter's own default would
+    // close everything.
     model.resetPaths(treePaths, {
-      initialExpandedPaths: [...expandedPaths],
+      initialExpandedPaths: [...(searchExpandedPaths ?? expandedPaths)],
     });
-  }, [enabled, expandedPaths, model, treePaths]);
+  }, [enabled, expandedPaths, model, searchExpandedPaths, treePaths]);
 
   useEffect(() => {
     if (!enabled || hostId === null) return;
     const syncExpansion = () => {
-      if (searchActive) return;
+      if (mode !== "browse") return;
       setExpandedPaths(
         epicId,
         hostId,
@@ -475,8 +680,8 @@ function useWorkspaceFileTreeExpansion(args: {
     epicId,
     expandedPaths,
     hostId,
+    mode,
     model,
-    searchActive,
     setExpandedPaths,
     workspacePath,
   ]);

@@ -109,6 +109,20 @@ export function selectWatchableDirectoryPaths(
 }
 
 /**
+ * Every ancestor directory token of a path, root-first: `"src/lib/a.ts"` ->
+ * `["src/", "src/lib/"]`. Mirrors how the tree adapter derives directory rows
+ * from a flat path list, so a caller can name exactly the rows that have to be
+ * open for that path to be visible.
+ */
+export function ancestorDirectoryPathsOf(path: string): ReadonlyArray<string> {
+  const withoutTrailingSlash = path.endsWith("/") ? path.slice(0, -1) : path;
+  const segments = withoutTrailingSlash.split("/");
+  return segments
+    .slice(0, -1)
+    .map((_segment, index) => `${segments.slice(0, index + 1).join("/")}/`);
+}
+
+/**
  * Folds the tree's live expansion back into the durable set.
  *
  * A directory the tree does not know about YET must survive: on mount (and on

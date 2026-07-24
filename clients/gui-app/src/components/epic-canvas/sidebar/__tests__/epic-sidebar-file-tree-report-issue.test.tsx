@@ -315,14 +315,27 @@ vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
 
 // The active-query path search is a separate host query; this panel test only
 // exercises the browse/error state, so stub it to an inert idle result.
-vi.mock("@/hooks/workspace/use-workspace-search-paths-query", () => ({
-  useWorkspaceSearchPaths: () => ({
-    data: undefined,
-    isError: false,
-    isLoading: false,
-    isFetching: false,
-  }),
-}));
+// The panel reads the response through this module's real echo guard, so only
+// the request hook is stubbed out (this harness has no host client).
+vi.mock(
+  "@/hooks/workspace/use-workspace-search-paths-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/workspace/use-workspace-search-paths-query")
+      >();
+    return {
+      ...actual,
+      useWorkspaceSearchPaths: () => ({
+        data: undefined,
+        error: null,
+        isError: false,
+        isLoading: false,
+        isFetching: false,
+      }),
+    };
+  },
+);
 
 vi.mock("@pierre/trees/react", () => ({
   FileTree: () => <div data-testid="pierre-file-tree-stub" />,
