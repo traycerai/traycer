@@ -30,9 +30,44 @@ import type { ComposerPickerStore } from "../../picker/composer-picker-store";
 
 const BOLD_MARK = { type: "bold" };
 
+/**
+ * An inline-base64 image found in a landing paste. Handed to the landing ingest
+ * for synchronous validation; accepted ones stay in the inserted document as
+ * pending nodes (b64) and their background hash+store job converts them in place.
+ */
+export interface PastedComposerImage {
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly b64content: string;
+}
+
+/**
+ * The landing ingest's verdict for one pasted image, parallel to the input
+ * array: `accepted` carries the fresh uuid to stamp on the in-document node (its
+ * background job is already running, keyed by that id); `rejected` means the node
+ * is dropped from the inserted content.
+ */
+export type PastedComposerImageOutcome =
+  | { readonly kind: "accepted"; readonly id: string }
+  | { readonly kind: "rejected" };
+
 export interface ChatPasteHandlerDeps {
   readonly pickerStore: ComposerPickerStore;
   readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
+  /**
+   * Landing-only: validate a paste's inline-base64 images synchronously (decode,
+   * MIME/5MB, budget), mint fresh ids for accepted ones, and START their
+   * background hash+`putImage`+rewrite-by-id jobs. Returns a verdict per image so
+   * the handler can insert the FULL content in document order — accepted images
+   * kept in place as pending b64 nodes (fresh id), rejected ones dropped.
+   * `null` on chat / new-conversation, where base64 nodes are inserted verbatim.
+   * Read through a getter because the paste plugin is built once.
+   */
+  readonly getIngestPastedComposerImages: () =>
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null;
 }
 
 export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
@@ -48,7 +83,7 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
       // `pasteSliceWithValidatedImages` below instead, which strips directly
       // against the parsed `Slice`'s `Fragment` so an inline paste's open
       // boundaries survive a strip.
-      const pasteWithValidatedImages = (
+      const validateAndPasteComposerContent = (
         view: EditorView,
         content: JsonContent,
       ): boolean => {
@@ -73,6 +108,27 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
         }
         return pasted;
       };
+      const pasteWithValidatedImages = (
+        view: EditorView,
+        content: JsonContent,
+      ): boolean => {
+        const ingest = deps.getIngestPastedComposerImages();
+        // Landing only: keep the base64 image nodes IN the content (in document
+        // order) and insert everything synchronously. The ingest validates each
+        // image, mints its fresh id, and starts its background hash+store job; we
+        // stamp those ids / drop rejected images, then insert. Each accepted node
+        // renders its b64 immediately and flips to a hash in place when its job
+        // resolves. Chat passes a null ingest and inserts base64 nodes verbatim.
+        let workingContent = content;
+        if (ingest !== null) {
+          const images = collectPastedB64Images(content);
+          if (images.length > 0) {
+            const outcomes = ingest(images);
+            workingContent = applyPastedB64ImageOutcomes(content, outcomes);
+          }
+        }
+        return validateAndPasteComposerContent(view, workingContent);
+      };
       const pasteSliceWithValidatedImages = (
         view: EditorView,
         slice: Slice,
@@ -82,19 +138,37 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
           view.dispatch(tr.scrollIntoView());
           return true;
         };
-        const hashes = hashOnlyImageFragmentHashes(slice.content);
+        // Landing only: native editor HTML (a plain Cmd+C of an image atom) also
+        // serializes `data-b64content`. Run those base64 images through the SAME
+        // in-place ingest as the structured path — keep them in the slice (fresh
+        // id / drop rejected) and start their background jobs — so raw HTML can't
+        // persist inline base64 that skips MIME/5MB/budget/pending/reconcile.
+        const ingest = deps.getIngestPastedComposerImages();
+        let workingSlice = slice;
+        if (ingest !== null) {
+          const images = collectPastedB64ImagesFromFragment(slice.content);
+          if (images.length > 0) {
+            const outcomes = ingest(images);
+            workingSlice = new Slice(
+              applyPastedB64ImageOutcomesToFragment(slice.content, outcomes),
+              slice.openStart,
+              slice.openEnd,
+            );
+          }
+        }
+        const hashes = hashOnlyImageFragmentHashes(workingSlice.content);
         const hasPastedImageBytes = deps.getHasPastedImageBytes();
         if (hashes.length === 0 || hasPastedImageBytes === null) {
-          return dispatchSlice(slice);
+          return dispatchSlice(workingSlice);
         }
         const availableHashes = new Set(
           hashes.filter((hash) => hasPastedImageBytes(hash)),
         );
         if (availableHashes.size === hashes.length) {
-          return dispatchSlice(slice);
+          return dispatchSlice(workingSlice);
         }
         const filtered = filterUnavailablePastedImageSlice(
-          slice,
+          workingSlice,
           availableHashes,
         );
         const pasted = dispatchSlice(filtered.slice);
@@ -221,6 +295,136 @@ function pasteComposerContent(view: EditorView, content: JsonContent): boolean {
   );
   view.dispatch(tr.scrollIntoView());
   return true;
+}
+
+// Collect a landing paste's inline-base64 images in document order, as
+// descriptors for the ingest to validate. The nodes are NOT removed here — they
+// stay in the content and are updated in place by `applyPastedB64ImageOutcomes`
+// once the ingest returns its per-image verdicts (same traversal order).
+function collectPastedB64Images(content: JsonContent): PastedComposerImage[] {
+  const images: PastedComposerImage[] = [];
+  collectPastedB64ImagesNode(content, images);
+  return images;
+}
+
+function collectPastedB64ImagesNode(
+  node: JsonContent,
+  images: PastedComposerImage[],
+): void {
+  if (node.type === "imageAttachment") {
+    const b64content = stringValue(node.attrs?.b64content);
+    if (b64content !== null)
+      images.push(pastedComposerImage(node.attrs, b64content));
+    return;
+  }
+  node.content?.forEach((child) => collectPastedB64ImagesNode(child, images));
+}
+
+function collectPastedB64ImagesFromFragment(
+  fragment: Fragment,
+): PastedComposerImage[] {
+  const images: PastedComposerImage[] = [];
+  const visit = (frag: Fragment): void => {
+    frag.forEach((node) => {
+      if (node.type.name === "imageAttachment") {
+        const b64content = stringValue(node.attrs.b64content);
+        if (b64content !== null) {
+          images.push(pastedComposerImage(node.attrs, b64content));
+        }
+        return;
+      }
+      if (node.isLeaf) return;
+      visit(node.content);
+    });
+  };
+  visit(fragment);
+  return images;
+}
+
+function pastedComposerImage(
+  attrs: Record<string, unknown> | undefined,
+  b64content: string,
+): PastedComposerImage {
+  return {
+    fileName: stringValue(attrs?.fileName) ?? "image",
+    mimeType: stringValue(attrs?.mimeType) ?? "image/png",
+    b64content,
+  };
+}
+
+// Apply the ingest's per-image verdicts to the content, walking the b64 image
+// nodes in the SAME order they were collected: an accepted node keeps its b64
+// payload but takes the fresh id its background job is keyed on; a rejected node
+// (and any `attachmentGroup` left empty) is dropped.
+function applyPastedB64ImageOutcomes(
+  content: JsonContent,
+  outcomes: ReadonlyArray<PastedComposerImageOutcome>,
+): JsonContent {
+  const cursor = { index: 0 };
+  return (
+    applyPastedB64ImageOutcomesNode(content, outcomes, cursor) ?? {
+      type: "doc",
+      content: [],
+    }
+  );
+}
+
+function applyPastedB64ImageOutcomesNode(
+  node: JsonContent,
+  outcomes: ReadonlyArray<PastedComposerImageOutcome>,
+  cursor: { index: number },
+): JsonContent | null {
+  if (node.type === "imageAttachment") {
+    if (stringValue(node.attrs?.b64content) === null) return node;
+    // Outcomes are 1:1 with the b64 nodes collected in this same traversal
+    // order, so `cursor.index` always lands on this node's verdict.
+    const outcome = outcomes[cursor.index];
+    cursor.index += 1;
+    if (outcome.kind === "rejected") return null;
+    return { ...node, attrs: { ...node.attrs, id: outcome.id } };
+  }
+  if (node.content === undefined) return node;
+  const children = node.content.flatMap((child) => {
+    const applied = applyPastedB64ImageOutcomesNode(child, outcomes, cursor);
+    return applied === null ? [] : [applied];
+  });
+  if (node.type === "attachmentGroup" && children.length === 0) return null;
+  return { ...node, content: children };
+}
+
+function applyPastedB64ImageOutcomesToFragment(
+  fragment: Fragment,
+  outcomes: ReadonlyArray<PastedComposerImageOutcome>,
+): Fragment {
+  const cursor = { index: 0 };
+  const visit = (frag: Fragment): Fragment => {
+    const children: ProseMirrorNode[] = [];
+    frag.forEach((node) => {
+      if (node.type.name === "imageAttachment") {
+        if (stringValue(node.attrs.b64content) === null) {
+          children.push(node);
+          return;
+        }
+        const outcome = outcomes[cursor.index];
+        cursor.index += 1;
+        if (outcome.kind === "rejected") return;
+        children.push(
+          node.type.create({ ...node.attrs, id: outcome.id }, null, node.marks),
+        );
+        return;
+      }
+      if (node.isLeaf) {
+        children.push(node);
+        return;
+      }
+      const inner = visit(node.content);
+      if (node.type.name === "attachmentGroup" && inner.childCount === 0)
+        return;
+      children.push(node.copy(inner));
+    });
+    return Fragment.fromArray(children);
+  };
+  return visit(fragment);
 }
 
 function hashOnlyImageHashes(content: JsonContent): string[] {

@@ -97,6 +97,7 @@ function BridgeHarness({
       disabled={false}
       slashProviderId="claude"
       hasPastedImageBytes={hasPastedImageBytes}
+      ingestPastedComposerImages={null}
       stabilizeImageAttachmentCaret={false}
       onSnapshot={() => undefined}
       onSubmit={() => undefined}

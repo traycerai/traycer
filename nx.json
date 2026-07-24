@@ -24,14 +24,7 @@
     },
     "test": {
       "cache": true,
-      "inputs": [
-        "{projectRoot}/**/*.ts",
-        "{projectRoot}/**/*.tsx",
-        "{projectRoot}/**/*.js",
-        "{projectRoot}/**/*.jsx",
-        "{projectRoot}/vitest.config.*",
-        "{projectRoot}/jest.config.*"
-      ]
+      "inputs": ["default", "^production", "sharedGlobals"]
     },
     "format": {
       "cache": true,

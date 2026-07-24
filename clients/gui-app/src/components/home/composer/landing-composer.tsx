@@ -10,9 +10,28 @@ import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 
+import { v4 as uuidv4 } from "uuid";
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
-import { sessionObjectUrl } from "@/lib/composer/landing-image-store";
+import {
+  hasLandingImageBytes,
+  putImage,
+  sessionObjectUrl,
+} from "@/lib/composer/landing-image-store";
+import {
+  markLandingEditorMounted,
+  reserveLandingImageBudget,
+  scheduleLandingImageReconcile,
+} from "@/lib/composer/landing-image-gc";
+import {
+  collectImageAtoms,
+  type ComposerImageAtom,
+} from "@/lib/composer/image-atoms";
+import type {
+  PastedComposerImage,
+  PastedComposerImageOutcome,
+} from "@/components/chat/composer/editor/extensions/chat-paste-handler";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
@@ -26,7 +45,10 @@ import { COMPOSER_EDITOR_CLASSNAME } from "@/components/home/composer/composer-e
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
-import { useLandingComposerPaste } from "@/hooks/composer/use-landing-composer-paste";
+import {
+  decodeValidatedPastedImage,
+  useLandingComposerPaste,
+} from "@/hooks/composer/use-landing-composer-paste";
 import { isAttachmentIngestPending } from "@/hooks/composer/use-composer-paste";
 import { useLandingComposerMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -102,6 +124,15 @@ export function LandingComposer(props: LandingComposerProps) {
     return () => {
       flushPendingLandingDraftContent();
     };
+  }, []);
+
+  // [B2] The landing surface is gated on windows-bridge hydration, so its mount
+  // means the authoritative draft snapshot is in and the live-editor + draft
+  // roots are trustworthy. This unblocks the landing image GC's deleting sweep,
+  // which is otherwise deferred so a cold-start reconcile (empty session cache,
+  // possibly stale-empty projected roots) can't reap freshly-restored bytes.
+  useEffect(() => {
+    markLandingEditorMounted();
   }, []);
 
   const globalLastRunSettings = useComposerRunSettingsStore(
@@ -224,6 +255,162 @@ export function LandingComposer(props: LandingComposerProps) {
     runnerHost.fileDrops,
     mentionRoots,
   );
+  const runPendingImageJob = paste.runPendingImageJob;
+  // Background job for ONE pending image node (already in the document, carrying
+  // b64 + `id`): hash + store the bytes, then flip that node's payload to the
+  // hash IN PLACE. Runs under the shared pending accounting so submit stays gated
+  // until it settles. Editor-gone / store-failure paths drop the node (if still
+  // present) and reclaim the bytes.
+  const startPendingImageIngest = useCallback(
+    (id: string, bytes: Uint8Array<ArrayBuffer>) => {
+      runPendingImageJob(async (signal) => {
+        try {
+          const hash = await putImage(bytes);
+          const handle = editorRef.current;
+          if (signal.aborted || handle === null || !handle.isReady()) {
+            // Editor unmounted mid-ingest: the pending node is gone from THIS
+            // mount, so reclaim the just-stored bytes on the next sweep. (If a
+            // remount kept the b64 node, its own mount-time re-entry re-ingests
+            // and re-roots this hash before the debounced sweep runs.)
+            scheduleLandingImageReconcile();
+            return;
+          }
+          if (!handle.rewriteImageAttachmentHashById(id, hash)) {
+            // The pending node was removed (the user deleted it before the write
+            // settled), so the just-stored bytes are unrooted — reclaim them.
+            scheduleLandingImageReconcile();
+          }
+        } catch {
+          if (signal.aborted) {
+            // The editor unmounted mid-ingest; a successor mount (if any)
+            // re-ingests this node via mount-time re-entry. Don't toast for a
+            // surface the user already left (matching the shared file-paste
+            // path's abort handling) — just reclaim the bytes.
+            scheduleLandingImageReconcile();
+            return;
+          }
+          // Hashing / IndexedDB write failed: drop the pending node and reclaim.
+          editorRef.current?.removeImageAttachmentById(id);
+          reportableErrorToast(
+            "Couldn't attach the image.",
+            { description: "Please try adding it again." },
+            {
+              title: "Could not attach image",
+              message: null,
+              code: null,
+              source: "Chat composer",
+            },
+          );
+          scheduleLandingImageReconcile();
+        }
+      });
+    },
+    [runPendingImageJob],
+  );
+  // Synchronously validate a landing paste's inline-base64 images (decode,
+  // MIME/5MB, budget), mint a fresh id + start the background job for each
+  // accepted one, and report a verdict per image. The paste handler keeps the
+  // accepted nodes IN document order (stamped with these ids) and drops rejected
+  // ones — no positions are ever discarded.
+  const ingestPastedComposerImages = useCallback(
+    (
+      images: ReadonlyArray<PastedComposerImage>,
+    ): ReadonlyArray<PastedComposerImageOutcome> => {
+      const decoded = images.map((image) => decodeValidatedPastedImage(image));
+      const acceptedBytes = decoded.filter(
+        (bytes): bytes is Uint8Array<ArrayBuffer> => bytes !== null,
+      );
+      const incomingBytes = acceptedBytes.reduce(
+        (sum, bytes) => sum + bytes.byteLength,
+        0,
+      );
+      // One budget reservation for the whole paste (evicts oldest inactive
+      // drafts, or blocks with its own toast if it still can't fit).
+      const budgetOk =
+        acceptedBytes.length === 0 || reserveLandingImageBudget(incomingBytes);
+      // Count ONLY undecodable images toward the generic "corrupted or too large"
+      // toast. A valid image blocked solely by the aggregate budget is already
+      // covered by `reserveLandingImageBudget`'s own accurate budget toast, so
+      // adding this one would double-toast it with a false cause — matching the
+      // shared file-paste path, which returns after the budget toast.
+      let corruptedCount = 0;
+      const outcomes = decoded.map((bytes): PastedComposerImageOutcome => {
+        if (bytes === null) {
+          corruptedCount += 1;
+          return { kind: "rejected" };
+        }
+        if (!budgetOk) return { kind: "rejected" };
+        const id = uuidv4();
+        startPendingImageIngest(id, bytes);
+        return { kind: "accepted", id };
+      });
+      if (corruptedCount > 0) {
+        reportableErrorToast(
+          corruptedCount === 1
+            ? "Couldn't attach a pasted image."
+            : "Couldn't attach some pasted images.",
+          { description: "The image was corrupted or too large." },
+          {
+            title: "Could not attach image",
+            message: null,
+            code: null,
+            source: "Chat composer",
+          },
+        );
+      }
+      return outcomes;
+    },
+    [startPendingImageIngest],
+  );
+  // Mount-time re-entry completes the pending-node model: the b64 image node IS
+  // the work token, so whichever mount owns the editor restarts its ingest. This
+  // covers the null-bound first paste (which creates a draft and key-remounts the
+  // composer) and any in-session navigate-away-and-back — the b64 node survives
+  // in the canonical in-memory draft (`setDraftContent` no longer strips) and its
+  // ingest resumes here. Idempotent by construction: `putImage` is content-
+  // addressed + single-flight and the rewrite is by id, so re-ingesting a node an
+  // aborted prior job already stored just re-roots the same hash. Budget is NOT
+  // re-reserved — a node already in the document was admitted this session and the
+  // module-level budget survives the remount. Fired once per editor instance.
+  const reingestPendingImages = useCallback(() => {
+    const handle = editorRef.current;
+    if (handle === null || !handle.isReady()) return;
+    const pending = collectImageAtoms(handle.getJSON()).filter(
+      (atom): atom is ComposerImageAtom & { readonly b64content: string } =>
+        atom.b64content !== null,
+    );
+    if (pending.length === 0) return;
+    let corruptedCount = 0;
+    for (const atom of pending) {
+      const bytes = decodeValidatedPastedImage({
+        fileName: atom.fileName,
+        mimeType: atom.mimeType,
+        b64content: atom.b64content,
+      });
+      if (bytes === null) {
+        // A corrupt/oversized b64 node (only reachable via a manually corrupted
+        // restore) can't be ingested: drop it with the single shared toast.
+        handle.removeImageAttachmentById(atom.id);
+        corruptedCount += 1;
+        continue;
+      }
+      startPendingImageIngest(atom.id, bytes);
+    }
+    if (corruptedCount > 0) {
+      reportableErrorToast(
+        corruptedCount === 1
+          ? "Couldn't attach a pasted image."
+          : "Couldn't attach some pasted images.",
+        { description: "The image was corrupted or too large." },
+        {
+          title: "Could not attach image",
+          message: null,
+          code: null,
+          source: "Chat composer",
+        },
+      );
+    }
+  }, [startPendingImageIngest]);
   const attachmentPending = isAttachmentIngestPending(paste);
   const canSubmit =
     !isSubmitting &&
@@ -345,7 +532,9 @@ export function LandingComposer(props: LandingComposerProps) {
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
-      hasPastedImageBytes={null}
+      hasPastedImageBytes={hasLandingImageBytes}
+      ingestPastedComposerImages={ingestPastedComposerImages}
+      onEditorReady={reingestPendingImages}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onSnapshot={handleSnapshot}

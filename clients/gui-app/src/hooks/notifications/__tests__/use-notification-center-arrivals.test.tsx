@@ -4,6 +4,7 @@ import {
   computeLiveArrivalKeys,
   useNotificationCenterArrivals,
 } from "@/hooks/notifications/use-notification-center-arrivals";
+import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import type { MergedNotificationOccurrenceEntry } from "@/stores/notifications/merged-notifications";
 
 /** Build full `{feedId, occurrenceKey}` entries from `feedId@createdAt` keys. */
@@ -17,6 +18,17 @@ function entries(
       occurrenceKey: key,
     };
   });
+}
+
+function occurrenceEntry(input: {
+  readonly feedId: string;
+  readonly createdAt: number;
+  readonly sourceRef: string | null;
+}): MergedNotificationOccurrenceEntry {
+  return {
+    feedId: input.feedId,
+    occurrenceKey: occurrenceKeyForNotification(input),
+  };
 }
 
 describe("computeLiveArrivalKeys", () => {
@@ -67,6 +79,29 @@ describe("computeLiveArrivalKeys", () => {
         entries("host:n-1@100", "host:other@50"),
       ),
     ).toEqual([]);
+  });
+
+  it("counts a same-feedId same-createdAt re-open under a new sourceRef", () => {
+    // Same-millisecond prompt supersede: feedId + createdAt stable, sourceRef
+    // changes → new occurrence key → "N new" must fire.
+    const prior = occurrenceEntry({
+      feedId: "host:approval.requested:chat-1",
+      createdAt: 100,
+      sourceRef: "refA",
+    });
+    const reopened = occurrenceEntry({
+      feedId: "host:approval.requested:chat-1",
+      createdAt: 100,
+      sourceRef: "refB",
+    });
+    const other = occurrenceEntry({
+      feedId: "host:other",
+      createdAt: 50,
+      sourceRef: "other",
+    });
+    expect(computeLiveArrivalKeys([prior, other], [reopened, other])).toEqual([
+      reopened.occurrenceKey,
+    ]);
   });
 
   it("never treats a paginated older page appended at the tail as live", () => {
@@ -233,6 +268,44 @@ describe("useNotificationCenterArrivals", () => {
       isAtTop: false,
       fullOrder: entries("host:approval@200"),
       visibleOccurrenceKeys: ["host:approval@200"],
+    });
+
+    expect(result.current.newCount).toBe(1);
+  });
+
+  it("counts a same-id same-createdAt new-sourceRef arrival while scrolled", () => {
+    const prior = occurrenceEntry({
+      feedId: "host:approval.requested:chat-1",
+      createdAt: 100,
+      sourceRef: "refA",
+    });
+    const reopened = occurrenceEntry({
+      feedId: "host:approval.requested:chat-1",
+      createdAt: 100,
+      sourceRef: "refB",
+    });
+
+    const { result, rerender } = renderHook(
+      (props: {
+        readonly isAtTop: boolean;
+        readonly fullOrder: ReadonlyArray<MergedNotificationOccurrenceEntry>;
+        readonly visibleOccurrenceKeys: ReadonlyArray<string>;
+      }) => useNotificationCenterArrivals(props),
+      {
+        initialProps: {
+          isAtTop: false,
+          fullOrder: [prior],
+          visibleOccurrenceKeys: [prior.occurrenceKey],
+        },
+      },
+    );
+
+    expect(result.current.newCount).toBe(0);
+
+    rerender({
+      isAtTop: false,
+      fullOrder: [reopened],
+      visibleOccurrenceKeys: [reopened.occurrenceKey],
     });
 
     expect(result.current.newCount).toBe(1);
