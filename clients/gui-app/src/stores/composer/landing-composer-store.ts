@@ -24,8 +24,9 @@ const EMPTY_CONTENT: JsonContent = EMPTY_LANDING_DRAFT_CONTENT;
 // not the draft; the tab title and persistence only need eventual consistency),
 // so steady-state writes to an EXISTING bound draft are debounced. Writes made
 // while the binding is still `null` (the keystrokes that create the draft and
-// land before the keyed remount commits) are synchronous - the remount reads the
-// content back at mount, so a trailing write would seed it stale.
+// land before React re-renders with the new active id) are synchronous - the
+// mount key is pre-minted so the editor is not remounted, but same-tick follow-up
+// snapshots still target the just-created draft via `createdDraftId`.
 // `flushPendingLandingDraftContent` commits the pending write immediately and is
 // called on composer unmount / rebind so switching away from and back to a draft
 // restores the latest content.
@@ -92,7 +93,7 @@ interface LandingComposerStore {
   readonly currentContent: JsonContent;
   /**
    * Draft created by `setSnapshot(null, ...)` while this binding session is
-   * still `null` (the remount keyed on the new id hasn't committed yet). Routes
+   * still `null` (React has not yet re-rendered with the new active id). Routes
    * the session's follow-up snapshots to that same draft so same-tick edits
    * can't mint a second draft.
    */
@@ -111,11 +112,17 @@ interface LandingComposerStore {
    * + selection into that draft (creating it on the first non-empty edit of a
    * `null` binding) so draft persistence is a side-effect of typing rather than
    * a callback the parent has to thread.
+   *
+   * `createWithId` is used only on the null-binding create branch: when the
+   * parent pre-minted the React mount key for the null-draft landing, pass that
+   * same id so `activeDraftId` flips null→id without changing the keyed mount.
+   * Pass `undefined` to allocate a fresh id (or when `draftId` is non-null).
    */
   readonly setSnapshot: (
     draftId: string | null,
     content: JsonContent,
     selection: DraftSelection | null,
+    createWithId: string | undefined,
   ) => void;
   /**
    * Wipe the snapshot back to an empty document. Called after submission so
@@ -142,7 +149,7 @@ export const useLandingComposerStore = create<LandingComposerStore>(
       return content;
     },
 
-    setSnapshot: (draftId, content, selection) => {
+    setSnapshot: (draftId, content, selection, createWithId) => {
       const previousContent = get().currentContent;
       set({ currentContent: content });
       // In-editor image removal drops a hash from the live mirror — reconcile so
@@ -158,18 +165,20 @@ export const useLandingComposerStore = create<LandingComposerStore>(
       const draftStore = useLandingDraftStore.getState();
       const createdDraftId = get().createdDraftId;
       if (createdDraftId !== null) {
-        // Still pre-remount: keep the just-created draft current synchronously,
-        // so the keyed remount reads the latest content.
+        // Still in the null-binding session before React re-renders with the new
+        // active id: keep the just-created draft current synchronously.
         draftStore.setDraftContent(createdDraftId, content, selection);
         return;
       }
       const text = extractPlainTextFromComposerJSONContent(content);
       if (text.length === 0 && !containsImageAtoms(content)) return;
-      // Creating the draft flips the bound id null -> id, which remounts the
-      // composer (keyed by draft id); that mount reads the content back, so this
-      // first write must be synchronous or the just-typed content would be lost.
+      // Creating the draft flips activeDraftId null -> id. The landing shell
+      // pre-mints that id as the React mount key (`createWithId`), so the editor
+      // is not remounted; the first write is still synchronous so same-tick
+      // follow-ups and any residual keyed remount see the latest content.
       const id = draftStore.createDraft(
         useComposerRunSettingsStore.getState().globalLastRunSettings,
+        createWithId,
       );
       draftStore.setDraftContent(id, content, selection);
       set({ createdDraftId: id });
