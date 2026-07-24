@@ -393,6 +393,8 @@ export const HOST_METHOD_POLL_TABLE = {
   "workspace.listFileTree": { ...LATEST_SCHEDULING, poll: null },
   "workspace.listDirectory": { ...LATEST_SCHEDULING, poll: null },
   "workspace.readFile": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.searchPaths": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.searchText": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionFiles": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionFolders": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionWorktrees": { ...LATEST_SCHEDULING, poll: null },
@@ -536,6 +538,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
+  "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
   // Opening paths changes state in the user's editor.
   "editor.openPaths": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "git.listChangedFiles": {
@@ -584,6 +587,11 @@ export const HOST_METHOD_POLL_TABLE = {
   "worktree.import": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Changing an entry mode mutates its worktree binding.
   "worktree.setEntryMode": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "worktree.setRepoScripts": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

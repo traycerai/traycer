@@ -5,6 +5,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 
 import { useEpicMentionEntries } from "@/hooks/composer/use-epic-mention-entries";
 import { useWorkspaceEntries } from "@/hooks/composer/use-workspace-entries";
+import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
@@ -95,6 +96,23 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   const { active, sessionId, query, step } = slice;
   const debouncedQuery = useDebouncedValue(query, MENTION_QUERY_DEBOUNCE_MS);
 
+  // The Epic's attached roots (binding running dirs + workspace paths on this
+  // host) drive which mention roots are eligible for the scoped
+  // `workspace.searchPaths`; anything not in this set (global folders, or every
+  // root when there is no open Epic) keeps the legacy raw-root RPC. Gated on the
+  // picker being open with a current Epic so a closed composer holds no
+  // bindings subscription.
+  const bindingsQuery = useWorktreeListBindingsForEpicForClient({
+    client: hostClient,
+    epicId: currentEpicId ?? "",
+    enabled: active && currentEpicId !== null,
+  });
+  const epicAttachedRoots = useMemo<ReadonlySet<string>>(() => {
+    const rows = bindingsQuery.data?.rows ?? [];
+    if (rows.length === 0) return EMPTY_ATTACHED_ROOTS;
+    return new Set(rows.flatMap((row) => [row.runningDir, row.workspacePath]));
+  }, [bindingsQuery.data?.rows]);
+
   // The @-mention Agent list is the ONLY consumer of the open-epic chat and
   // TUI-agent records, and only while the picker is open. Source it HERE, gated
   // on `active`, rather than threading it as an eager prop from the chat tile: a
@@ -174,9 +192,10 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       workspaceEntries: EMPTY_WORKSPACE_ENTRIES,
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
+      epicAttachedRoots,
       agentEntries: EMPTY_AGENT_ENTRIES,
     }),
-    [currentEpicId, mentionRoots, query],
+    [currentEpicId, epicAttachedRoots, mentionRoots, query],
   );
 
   const debouncedRequestContext = useMemo<ComposerMentionProviderContext>(
@@ -187,9 +206,10 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       workspaceEntries: EMPTY_WORKSPACE_ENTRIES,
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
+      epicAttachedRoots,
       agentEntries: EMPTY_AGENT_ENTRIES,
     }),
-    [currentEpicId, debouncedQuery, mentionRoots],
+    [currentEpicId, debouncedQuery, epicAttachedRoots, mentionRoots],
   );
 
   const workspaceRequests = useMemo<ReadonlyArray<MentionWorkspaceRequest>>(
@@ -282,10 +302,12 @@ export function useMentionItems(params: UseMentionItemsParams): void {
           : EMPTY_WORKSPACE_ENTRIES,
       epicEntries: epicRequests.length > 0 ? epicEntries : EMPTY_EPIC_ENTRIES,
       currentEpicId,
+      epicAttachedRoots,
       agentEntries: epicAgentEntries,
     }),
     [
       currentEpicId,
+      epicAttachedRoots,
       epicAgentEntries,
       epicEntries,
       epicRequests.length,
@@ -347,6 +369,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   }, [active, fetching, pickerStore]);
 }
 
+const EMPTY_ATTACHED_ROOTS: ReadonlySet<string> = new Set();
 const EMPTY_AGENT_ENTRIES: ReadonlyArray<EpicAgentMentionEntry> = [];
 const EMPTY_ARTIFACT_ENTRIES: ReadonlyArray<EpicMentionArtifactSuggestion> = [];
 const EMPTY_TITLE_MAP: ReadonlyMap<string, string> = new Map();

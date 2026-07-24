@@ -1375,3 +1375,135 @@ export const resolveArtifactByPathResponseSchema = z.object({
 export type ResolveArtifactByPathResponse = z.infer<
   typeof resolveArtifactByPathResponseSchema
 >;
+
+// ─── Search artifacts (epic.searchArtifacts@1.0 wire shape) ──────────────────
+// Epic-scoped artifact search. `epicId` is ALWAYS required: the protocol cannot
+// represent an omitted epic, an "all epics" sentinel, or a cross-epic scope, so
+// artifact search can never grow into a cloud-wide index (search decision log,
+// "Context-derived search scope"). `fields` selects which of title / relative
+// path / Markdown body are searched; title/path are Fuse-ranked over authoritative
+// artifact metadata, body is ripgrep-matched over the epic's on-disk Markdown
+// mirror. All paths returned are RELATIVE to the epic's artifact root - a
+// host-absolute path is never exposed.
+
+/** Which of the artifact's searchable surfaces a query is run against. */
+export const searchArtifactsFieldsSchema = z.object({
+  title: z.boolean(),
+  path: z.boolean(),
+  body: z.boolean(),
+});
+export type SearchArtifactsFields = z.infer<typeof searchArtifactsFieldsSchema>;
+
+/**
+ * Server-side filters composed with the query. `kinds`/`statuses` restrict by
+ * artifact metadata; `subtreePath` restricts to a subtree of the artifact tree,
+ * expressed as a POSIX path RELATIVE to the epic artifact root (never an
+ * absolute filesystem root - the host derives and authorizes the real root
+ * internally). A `null` field means "no restriction on this axis".
+ */
+export const searchArtifactsFiltersSchema = z.object({
+  kinds: z.array(LatestEpicArtifactKindSchema).nullable(),
+  statuses: z.array(z.number().int()).nullable(),
+  subtreePath: z.string().nullable(),
+});
+export type SearchArtifactsFilters = z.infer<
+  typeof searchArtifactsFiltersSchema
+>;
+
+export const searchArtifactsRequestSchema = z.object({
+  epicId: z.string(),
+  query: z.string(),
+  fields: searchArtifactsFieldsSchema,
+  filters: searchArtifactsFiltersSchema,
+  limit: z.number().int().min(1).max(1_000),
+});
+export type SearchArtifactsRequest = z.infer<
+  typeof searchArtifactsRequestSchema
+>;
+
+/** Which surface produced a hit. A hit may carry more than one source. */
+export const searchArtifactMatchSourceSchema = z.enum([
+  "title",
+  "path",
+  "body",
+]);
+export type SearchArtifactMatchSource = z.infer<
+  typeof searchArtifactMatchSourceSchema
+>;
+
+/**
+ * Maximum size, in UTF-8 bytes, of a single {@link searchArtifactSnippetSchema}
+ * `text`. The host enforces this bound (ripgrep's `--max-columns` does NOT bound
+ * the JSON `lines.text` payload), truncating on a UTF-8 character boundary and
+ * clamping/dropping highlight ranges so every returned range still addresses the
+ * returned text. Bounds response weight against a pathological single-line body.
+ */
+export const SEARCH_ARTIFACT_SNIPPET_MAX_BYTES = 512;
+
+/**
+ * One body-match line. `ranges` are BYTE offsets into the UTF-8 encoding of
+ * `text` (ripgrep submatch offsets), not UTF-16/JS string indices, so a
+ * consumer that wants character indices converts deliberately. `text` is bounded
+ * to {@link SEARCH_ARTIFACT_SNIPPET_MAX_BYTES} bytes host-side; a highlight for a
+ * match past that bound is dropped rather than pointing outside `text`.
+ */
+export const searchArtifactSnippetSchema = z.object({
+  lineNumber: z.number().int().nonnegative(),
+  text: z.string(),
+  ranges: z.array(
+    z
+      .object({
+        startByte: z.number().int().nonnegative(),
+        endByte: z.number().int().nonnegative(),
+      })
+      .refine((range) => range.endByte >= range.startByte, {
+        message: "endByte must not precede startByte",
+      }),
+  ),
+});
+export type SearchArtifactSnippet = z.infer<typeof searchArtifactSnippetSchema>;
+
+/**
+ * One ranked artifact hit. `artifactId`/`kind`/`title` are authoritative
+ * (resolved against the epic's Y.Doc index, so a stale disk entry for a deleted
+ * artifact never appears); `status` is read from the trusted disk mirror.
+ * `relativePath` and `breadcrumb` are relative to the epic artifact root. The
+ * hit is NOT authoritative for opening: the caller re-resolves the path through
+ * the existing `epic.resolveArtifactByPath` route so a stale disk result cannot
+ * mutate or resurrect deleted state.
+ */
+export const searchArtifactHitSchema = z.object({
+  artifactId: z.string(),
+  kind: LatestEpicArtifactKindSchema,
+  title: z.string(),
+  status: z.number().int().nullable(),
+  relativePath: z.string(),
+  breadcrumb: z.array(z.string()),
+  sources: z.array(searchArtifactMatchSourceSchema),
+  score: z.number(),
+  snippets: z.array(searchArtifactSnippetSchema),
+});
+export type SearchArtifactHit = z.infer<typeof searchArtifactHitSchema>;
+
+/**
+ * `ready` = the mirror was searched (an empty `results` is a legitimate
+ * zero-match). `mirror-unavailable` = the epic's on-disk mirror does not exist
+ * yet / is not a directory - a DISTINCT typed condition from zero matches, so a
+ * caller can tell "nothing matched" apart from "nothing to search yet".
+ */
+export const searchArtifactsOutcomeSchema = z.enum([
+  "ready",
+  "mirror-unavailable",
+]);
+export type SearchArtifactsOutcome = z.infer<
+  typeof searchArtifactsOutcomeSchema
+>;
+
+export const searchArtifactsResponseSchema = z.object({
+  outcome: searchArtifactsOutcomeSchema,
+  results: z.array(searchArtifactHitSchema),
+  truncated: z.boolean(),
+});
+export type SearchArtifactsResponse = z.infer<
+  typeof searchArtifactsResponseSchema
+>;

@@ -165,6 +165,7 @@ import {
   epicReparentChatV10,
   epicReplyToCommentThreadV10,
   epicResolveArtifactByPathV10,
+  epicSearchArtifactsV10,
   epicRevokeCollaboratorV10,
   epicSetCommentThreadResolvedV10,
   epicSetPinnedV10,
@@ -184,6 +185,8 @@ import {
   workspacePrepareFoldersV10,
   workspaceReadFileV10,
   workspaceResolvePathsByRepoIdentifiersV10,
+  workspaceSearchPathsV10,
+  workspaceSearchTextV10,
 } from "@traycer/protocol/host/workspace/contracts";
 import {
   terminalCreateDowngradeV20ToV10,
@@ -2961,6 +2964,40 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Additive, post-v1.0.0 optional method: a host that predates it simply lacks
+  // it and the renderer falls back to its local file-tree filter, so it rides
+  // the optional-capability channel (`degrade: unsupported`) and stays out of
+  // the released floor / baseline surface.
+  "workspace.searchPaths": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceSearchPathsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Additive, post-v1.0.0 optional method: scoped code TEXT search. A host that
+  // predates it simply lacks it and the renderer disables the text-search flow,
+  // so it rides the optional-capability channel (`degrade: unsupported`) and
+  // stays out of the released floor / baseline surface.
+  "workspace.searchText": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceSearchTextV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "workspace.mentionFiles": {
     1: {
       latestMinor: 0,
@@ -3459,6 +3496,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Optional (non-floor) capability: Epic-scoped artifact search. An old peer
+  // lacks it in its optional manifest; callers get E_HOST_UNSUPPORTED for this
+  // call only and the sidebar degrades to no search (no cross-Epic fallback).
+  "epic.searchArtifacts": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSearchArtifactsV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "editor.openPaths": {
     1: {
