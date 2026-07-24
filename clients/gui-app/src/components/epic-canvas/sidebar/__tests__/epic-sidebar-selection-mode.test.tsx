@@ -681,6 +681,60 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByRole("button", { name: "Select all" })).not.toBeNull();
   });
 
+  it("gives selection controls the full header row without changing its height", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const section = screen.getByTestId("epic-left-panel-section-chats");
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+
+    const selectionHeader = section.querySelector(
+      '[data-panel-header-mode="selection"]',
+    );
+    expect(selectionHeader).not.toBeNull();
+    expect(selectionHeader?.className).toContain("h-9");
+    expect(
+      screen.getByRole("button", { name: "Cancel selection" }),
+    ).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel selection" }));
+    expect(
+      section.querySelector('[data-panel-header-mode="selection"]'),
+    ).toBeNull();
+    expect(screen.getByText("Agents")).not.toBeNull();
+  });
+
+  it("uses container-aware overflow before header actions can squeeze the artifact title", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const section = screen.getByTestId("epic-left-panel-section-artifacts");
+    expect(section.firstElementChild?.className).toContain("@container");
+    expect(
+      screen.getByRole("button", { name: "Select artifacts" }).className,
+    ).toContain("@max-[21rem]:hidden");
+    expect(
+      screen.getByTestId("epic-sidebar-collapse-all-artifacts").className,
+    ).toContain("@max-[21rem]:hidden");
+    expect(
+      screen.getByTestId("epic-sidebar-mark-all-artifacts-read").className,
+    ).toContain("@max-[21rem]:hidden");
+
+    const more = screen.getByTestId("epic-sidebar-more-artifacts");
+    expect(more.className).toContain("hidden");
+    expect(more.className).toContain("@max-[21rem]:inline-flex");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Start artifact selection" }),
+    );
+    expect(
+      section.querySelector('[data-panel-header-mode="selection"]'),
+    ).not.toBeNull();
+  });
+
   it("renders loading chat and artifact panels before the epic session handle exists", () => {
     testState.sessionReady = false;
 
