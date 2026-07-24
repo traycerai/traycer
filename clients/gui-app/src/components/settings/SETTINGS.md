@@ -268,9 +268,9 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   swap reseeds from that device's file. Backed by `agent.selectionGuide.getGlobal`
   (returns `{ content, generatedDefaultContent }`), `agent.selectionGuide.setGlobal`,
   and `agent.selectionGuide.resetGlobalToDefault` through the agent selection
-  guide hooks. Settings only edits the global scope; the panel hint points users
-  at per-workspace `.traycer/agent-selection-guide.md` files, which layer on top
-  of the global guide (see the agent selection guide hierarchy in the host).
+  guide hooks. The global guide is the only scope: per-workspace
+  `.traycer/agent-selection-guide.md` overrides were removed (older hosts may
+  still send them, current clients ignore them).
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,
