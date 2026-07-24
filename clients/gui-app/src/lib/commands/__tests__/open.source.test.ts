@@ -48,6 +48,7 @@ describe("openSource", () => {
       "Artifacts",
       "Files",
       "Diff",
+      "Text search",
     ]);
     for (const item of items) {
       expect(item.group).toBe("open");
