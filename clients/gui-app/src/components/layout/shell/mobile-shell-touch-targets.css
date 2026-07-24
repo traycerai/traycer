@@ -27,6 +27,14 @@
   [data-mobile-shell-touch-scope]
     :is([data-slot="button"], [data-slot="tabs-trigger"])::after {
     content: "";
+    /* Pure hit-area - this pseudo must NEVER paint. An element has a single
+       `::after`, so this rule merges with a control's own `::after` (e.g.
+       ui/tabs' `line`-variant active indicator, `after:bg-foreground`). Being
+       unlayered we win the geometry (`height:max(100%,44px)`, centred) while
+       the control's `background`/`opacity` would otherwise survive and paint a
+       full-cover, opaque box over the label. Forcing the background transparent
+       keeps the slop invisible for every current and future control it wraps. */
+    background: transparent;
     position: absolute;
     inset-inline: 0;
     top: 50%;
