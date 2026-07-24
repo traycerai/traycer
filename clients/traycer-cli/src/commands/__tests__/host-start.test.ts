@@ -343,24 +343,40 @@ describe("runHostStart - incumbent host guard", () => {
     expect(recorded.spawnCalls).toHaveLength(1);
   });
 
-  it("checks for an incumbent only after the install record resolves", async () => {
-    // A missing install record must still surface its own stable error code
-    // rather than being masked by the guard.
+  // A live incumbent settles what this invocation should do regardless of
+  // whether THIS label can resolve its own install target. Resolving first
+  // exited 69, which `KeepAlive.SuccessfulExit = false` treats as
+  // restartable, so launchd relaunched the job into a throttled crash loop
+  // while a healthy host was serving. Reachable whenever the record breaks
+  // after the incumbent came up: uninstall, failed install, or the window
+  // where `host install` has swapped `install/` aside.
+  it("declines with exit 0 when a host owns the data dir even if the install record is broken", async () => {
     const { recorded, deps } = makeRunStubs(null, null);
-    let probed = false;
     const guarded: Partial<RunHostStartDeps> = {
       ...deps,
-      findIncumbentHost: async () => {
-        probed = true;
-        return null;
-      },
+      findIncumbentHost: async () => ({
+        pid: 40769,
+        version: "1.1.8",
+        websocketUrl: "ws://127.0.0.1:58036/rpc",
+      }),
     };
 
     await runHostStart({ environment: "production", cwd: null }, guarded);
 
-    expect(probed).toBe(false);
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(0);
+    // Not a spawn attempt, so no failed-to-spawn marker either.
+    expect(recorded.markers).toHaveLength(0);
+  });
+
+  it("still surfaces the install-record error when no host owns the data dir", async () => {
+    const { recorded, deps } = makeRunStubs(null, null);
+
+    await runHostStart({ environment: "production", cwd: null }, deps);
+
     expect(recorded.exited).toBe(69);
     expect(recorded.spawnCalls).toHaveLength(0);
+    expect(recorded.markers.map((m) => m.phase)).toContain("failed-to-spawn");
   });
 });
 

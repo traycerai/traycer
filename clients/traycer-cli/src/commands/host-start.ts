@@ -217,55 +217,20 @@ export async function runHostStart(
     supervisorPid,
   });
 
-  let target: HostStartTarget;
-  try {
-    target = await resolveHostStartTarget(opts, deps);
-  } catch (err) {
-    if (err instanceof CliError) {
-      logger.warn("Host supervisor target resolution failed", {
-        environment: opts.environment,
-        code: err.code,
-        exitCode: err.exitCode,
-        attemptId,
-      });
-      const detailLine = JSON.stringify({
-        code: err.code,
-        message: err.message,
-        details: err.details,
-      });
-      await deps.writeMarker(
-        opts.environment,
-        "failed-to-spawn",
-        markerFields(attemptId, supervisorPid, {
-          shell: undefined,
-          args: undefined,
-          bundle: undefined,
-          exitCode: undefined,
-          signal: undefined,
-          error: `${err.code}: ${err.message}`,
-        }),
-      );
-      deps.onError(`traycer host start: ${err.code}: ${err.message}`);
-      deps.onError(detailLine);
-      return deps.exit(err.exitCode);
-    }
-    logger.error(
-      "Host supervisor target resolution threw unexpectedly",
-      { environment: opts.environment, exitCode: 1 },
-      errorFromUnknown(err),
-    );
-    throw err;
-  }
-
-  logger.info("Host supervisor target resolved", {
-    environment: opts.environment,
-    version: target.record.version,
-    argCount: target.args.length,
-    hasCwdOverride: opts.cwd !== null,
-  });
-
   // Best-effort backstop against stacking a second host on a live one.
   // BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT COVER.
+  //
+  // Runs BEFORE `resolveHostStartTarget` on purpose. Another host already
+  // owning this data dir settles what this invocation should do regardless
+  // of whether THIS label can resolve its own install target, and the two
+  // exit codes disagree: a resolution failure exits 69 / 1, which
+  // `KeepAlive.SuccessfulExit = false` treats as restartable, so launchd
+  // relaunches this job into a throttled crash loop while a perfectly
+  // healthy host is serving. Probing first turns that into a quiet exit 0.
+  // The record can be missing or invalid while a host is live - an
+  // uninstall, a failed install, or the window where `host install` has
+  // swapped `install/` aside - so this is reachable, not theoretical. With
+  // no incumbent the resolution error still surfaces exactly as before.
   //
   // Covered (deterministic): any STAGGERED start where a host is already
   // publishing - a raw `traycer host start` against a running host, one
@@ -313,13 +278,59 @@ export async function runHostStart(
         incumbentPid: incumbent.pid,
         incumbentVersion: incumbent.version,
         incumbentWebsocketUrl: incumbent.websocketUrl,
-        resolvedVersion: target.record.version,
         attemptId,
         supervisorPid,
       },
     );
     return deps.exit(0);
   }
+
+  let target: HostStartTarget;
+  try {
+    target = await resolveHostStartTarget(opts, deps);
+  } catch (err) {
+    if (err instanceof CliError) {
+      logger.warn("Host supervisor target resolution failed", {
+        environment: opts.environment,
+        code: err.code,
+        exitCode: err.exitCode,
+        attemptId,
+      });
+      const detailLine = JSON.stringify({
+        code: err.code,
+        message: err.message,
+        details: err.details,
+      });
+      await deps.writeMarker(
+        opts.environment,
+        "failed-to-spawn",
+        markerFields(attemptId, supervisorPid, {
+          shell: undefined,
+          args: undefined,
+          bundle: undefined,
+          exitCode: undefined,
+          signal: undefined,
+          error: `${err.code}: ${err.message}`,
+        }),
+      );
+      deps.onError(`traycer host start: ${err.code}: ${err.message}`);
+      deps.onError(detailLine);
+      return deps.exit(err.exitCode);
+    }
+    logger.error(
+      "Host supervisor target resolution threw unexpectedly",
+      { environment: opts.environment, exitCode: 1 },
+      errorFromUnknown(err),
+    );
+    throw err;
+  }
+
+  logger.info("Host supervisor target resolved", {
+    environment: opts.environment,
+    version: target.record.version,
+    argCount: target.args.length,
+    hasCwdOverride: opts.cwd !== null,
+  });
 
   const envOverrides = await deps.readEnvOverrides();
   logger.debug("Host supervisor loaded env overrides", {
