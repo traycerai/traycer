@@ -74,7 +74,9 @@ describe("search-path suggestion reconstruction", () => {
   it("stays within the root when a malformed relPath contains traversal", () => {
     // The host jails relPath; this only proves the client never escapes even on
     // a malformed payload.
-    expect(joinWithinRoot("/repo", "../../etc/passwd")).toBe("/repo/etc/passwd");
+    expect(joinWithinRoot("/repo", "../../etc/passwd")).toBe(
+      "/repo/etc/passwd",
+    );
     expect(joinWithinRoot("/repo", "/leading/slash")).toBe(
       "/repo/leading/slash",
     );

@@ -227,13 +227,6 @@ function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
     // deleted/renamed/not-yet-projected artifact is absent → drop the row.
     const entry = pathIndex.get(normalizeArtifactLogicalPath(result.relPath));
     if (entry === undefined) return [];
-    const ref: EpicArtifactRef = {
-      id: entry.id,
-      instanceId: uuidv4(),
-      type: entry.kind,
-      name: entry.title,
-      hostId: defaultHostId,
-    };
     return [
       openerActionLeaf({
         id: `open:files:artifacts:${entry.id}`,
@@ -243,6 +236,13 @@ function artifactLeaves(args: ArtifactLeavesArgs): ReadonlyArray<CommandItem> {
         label: entry.titlePath.length > 0 ? entry.titlePath : entry.title,
         keywords: [result.relPath, result.name, entry.title, entry.titlePath],
         run: () => {
+          const ref: EpicArtifactRef = {
+            id: entry.id,
+            instanceId: uuidv4(),
+            type: entry.kind,
+            name: entry.title,
+            hostId: defaultHostId,
+          };
           openTileIntoTargetGroup({
             tabId: ctx.activeTabId,
             groupId: ctx.targetGroupId,

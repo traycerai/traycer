@@ -119,7 +119,11 @@ export function highlightSegmentsFromByteRanges(
     cursorChar = endChar;
   }
   if (cursorChar < text.length) {
-    segments.push({ text: text.slice(cursorChar), highlighted: false, start: cursorChar });
+    segments.push({
+      text: text.slice(cursorChar),
+      highlighted: false,
+      start: cursorChar,
+    });
   }
   return segments;
 }

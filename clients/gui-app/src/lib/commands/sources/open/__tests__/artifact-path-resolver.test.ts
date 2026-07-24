@@ -62,8 +62,20 @@ function slices(nodes: readonly Node[]): {
 describe("buildArtifactPathIndex", () => {
   it("maps each artifact's logical folder-chain path to its identity", () => {
     const { tree, artifacts } = slices([
-      { id: "a", parentId: null, folderName: "tickets", kind: "story", title: "Tickets" },
-      { id: "b", parentId: "a", folderName: "my-ticket", kind: "ticket", title: "My Ticket" },
+      {
+        id: "a",
+        parentId: null,
+        folderName: "tickets",
+        kind: "story",
+        title: "Tickets",
+      },
+      {
+        id: "b",
+        parentId: "a",
+        folderName: "my-ticket",
+        kind: "ticket",
+        title: "My Ticket",
+      },
     ]);
     const index = buildArtifactPathIndex(tree, artifacts);
     expect(index.get("tickets")).toEqual({
@@ -82,7 +94,13 @@ describe("buildArtifactPathIndex", () => {
 
   it("returns null-equivalent (no entry) for an unknown logical path", () => {
     const { tree, artifacts } = slices([
-      { id: "a", parentId: null, folderName: "specs", kind: "spec", title: "Specs" },
+      {
+        id: "a",
+        parentId: null,
+        folderName: "specs",
+        kind: "spec",
+        title: "Specs",
+      },
     ]);
     const index = buildArtifactPathIndex(tree, artifacts);
     expect(index.get("tickets/gone")).toBeUndefined();
@@ -90,8 +108,20 @@ describe("buildArtifactPathIndex", () => {
 
   it("skips an artifact whose chain cannot resolve (empty folder name)", () => {
     const { tree, artifacts } = slices([
-      { id: "a", parentId: null, folderName: "", kind: "spec", title: "Legacy" },
-      { id: "b", parentId: null, folderName: "reviews", kind: "review", title: "Reviews" },
+      {
+        id: "a",
+        parentId: null,
+        folderName: "",
+        kind: "spec",
+        title: "Legacy",
+      },
+      {
+        id: "b",
+        parentId: null,
+        folderName: "reviews",
+        kind: "review",
+        title: "Reviews",
+      },
     ]);
     const index = buildArtifactPathIndex(tree, artifacts);
     // The malformed (empty folder) entry contributes no path; the valid one does.
@@ -107,9 +137,27 @@ describe("buildArtifactPathIndex", () => {
   it("fails closed (no entry) when two live artifacts share a logical path", () => {
     // Two distinct artifacts both projecting to `dupes/clash` is ambiguous.
     const collide: readonly Node[] = [
-      { id: "p", parentId: null, folderName: "dupes", kind: "story", title: "Dupes" },
-      { id: "a", parentId: "p", folderName: "clash", kind: "ticket", title: "A" },
-      { id: "b", parentId: "p", folderName: "clash", kind: "ticket", title: "B" },
+      {
+        id: "p",
+        parentId: null,
+        folderName: "dupes",
+        kind: "story",
+        title: "Dupes",
+      },
+      {
+        id: "a",
+        parentId: "p",
+        folderName: "clash",
+        kind: "ticket",
+        title: "A",
+      },
+      {
+        id: "b",
+        parentId: "p",
+        folderName: "clash",
+        kind: "ticket",
+        title: "B",
+      },
     ];
     // Same outcome regardless of iteration order - no first/last wins.
     for (const order of [collide, [...collide].reverse()]) {
@@ -123,10 +171,30 @@ describe("buildArtifactPathIndex", () => {
 
   it("keeps a colliding path closed even with a third claimant", () => {
     const { tree, artifacts } = slices([
-      { id: "a", parentId: null, folderName: "clash", kind: "ticket", title: "A" },
-      { id: "b", parentId: null, folderName: "clash", kind: "ticket", title: "B" },
-      { id: "c", parentId: null, folderName: "clash", kind: "ticket", title: "C" },
+      {
+        id: "a",
+        parentId: null,
+        folderName: "clash",
+        kind: "ticket",
+        title: "A",
+      },
+      {
+        id: "b",
+        parentId: null,
+        folderName: "clash",
+        kind: "ticket",
+        title: "B",
+      },
+      {
+        id: "c",
+        parentId: null,
+        folderName: "clash",
+        kind: "ticket",
+        title: "C",
+      },
     ]);
-    expect(buildArtifactPathIndex(tree, artifacts).get("clash")).toBeUndefined();
+    expect(
+      buildArtifactPathIndex(tree, artifacts).get("clash"),
+    ).toBeUndefined();
   });
 });

@@ -18,9 +18,9 @@ function joinedText(
 
 describe("highlightSegmentsFromByteRanges", () => {
   it("returns an empty list for empty text", () => {
-    expect(highlightSegmentsFromByteRanges("", [{ startByte: 0, endByte: 1 }])).toEqual(
-      [],
-    );
+    expect(
+      highlightSegmentsFromByteRanges("", [{ startByte: 0, endByte: 1 }]),
+    ).toEqual([]);
   });
 
   it("returns a single non-highlighted segment when there are no ranges", () => {

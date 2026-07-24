@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -56,6 +56,19 @@ function wrapper(props: { children: ReactNode }) {
     <QueryClientProvider client={queryClient}>
       {props.children}
     </QueryClientProvider>
+  );
+}
+
+function isScopedSearchForEpic(
+  call: { readonly method: string; readonly params: unknown },
+  epicId: string,
+) {
+  return (
+    call.method === "workspace.searchPaths" &&
+    typeof call.params === "object" &&
+    call.params !== null &&
+    "epicId" in call.params &&
+    call.params.epicId === epicId
   );
 }
 
@@ -130,6 +143,21 @@ describe("useWorkspaceEntries", () => {
       params: {
         epicId: "epic-1",
         reference: { root: "/repo" },
+        query: "app",
+        limit: 50,
+        kinds: "files" as const,
+      },
+    };
+  }
+
+  function scopedFileSearchRequest(root: string, epicId: string) {
+    return {
+      method: "workspace.searchPaths" as const,
+      suggestionKind: "file" as const,
+      root,
+      params: {
+        epicId,
+        reference: { root },
         query: "app",
         limit: 50,
         kinds: "files" as const,
@@ -328,6 +356,72 @@ describe("useWorkspaceEntries", () => {
 
     await waitFor(() => expect(result.current.isFetching).toBe(false));
     expect(result.current.data).toHaveLength(0);
+  });
+
+  it("does not reuse a pending root's placeholder state after the request slot changes", async () => {
+    let resolveFirst: (() => void) | null = null;
+    messenger.setHandlers({
+      "workspace.searchPaths": (params) => {
+        if ("root" in params.reference && params.reference.root === "/repo-a") {
+          return new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          }).then(() => ({
+            epicId: params.epicId,
+            root: "/repo-a",
+            outcome: "root_unavailable" as const,
+            results: [],
+            truncated: false,
+          }));
+        }
+        return {
+          epicId: params.epicId,
+          root: "root" in params.reference ? params.reference.root : "",
+          outcome: "ready" as const,
+          results: [],
+          truncated: false,
+        };
+      },
+      "workspace.mentionFiles": () => ({ entries: [legacyFileSuggestion()] }),
+    });
+
+    const { result, rerender } = renderHook(
+      ({ request }) =>
+        useWorkspaceEntries({ client: hostClient, requests: [request] }),
+      {
+        initialProps: {
+          request: scopedFileSearchRequest("/repo-a", "epic-a"),
+        },
+        wrapper,
+      },
+    );
+
+    await waitFor(() =>
+      expect(
+        messenger.calls.some((call) => isScopedSearchForEpic(call, "epic-a")),
+      ).toBe(true),
+    );
+
+    rerender({ request: scopedFileSearchRequest("/repo-b", "epic-b") });
+
+    await waitFor(() =>
+      expect(
+        messenger.calls.some((call) => isScopedSearchForEpic(call, "epic-b")),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.data).toHaveLength(0);
+    expect(messenger.calls.map((call) => call.method)).not.toContain(
+      "workspace.mentionFiles",
+    );
+
+    act(() => {
+      resolveFirst?.();
+    });
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.data).toHaveLength(0);
+    expect(messenger.calls.map((call) => call.method)).not.toContain(
+      "workspace.mentionFiles",
+    );
   });
 });
 

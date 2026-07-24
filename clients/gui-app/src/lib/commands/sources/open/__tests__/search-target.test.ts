@@ -28,4 +28,10 @@ describe("search-target sub-page id round-trip", () => {
     expect(isSearchRunSubpageId("open:search:target:artifact")).toBe(false);
     expect(parseSearchRunSubpageId("open:files:x")).toBeNull();
   });
+
+  it("rejects malformed percent-encoded code ids without throwing", () => {
+    const id = "open:search:run:code:host-a:%";
+    expect(isSearchRunSubpageId(id)).toBe(true);
+    expect(parseSearchRunSubpageId(id)).toBeNull();
+  });
 });

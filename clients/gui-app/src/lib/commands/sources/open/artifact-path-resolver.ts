@@ -76,7 +76,11 @@ export function useArtifactPathResolver(
 ): (logicalPath: string) => ResolvedArtifact | null {
   const projection = useActiveEpicProjection(epicId);
   const index = useMemo(
-    () => buildArtifactPathIndex(projection?.tree ?? null, projection?.artifacts ?? null),
+    () =>
+      buildArtifactPathIndex(
+        projection?.tree ?? null,
+        projection?.artifacts ?? null,
+      ),
     [projection],
   );
   return useCallback(

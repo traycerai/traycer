@@ -59,21 +59,22 @@ export function useWorkspaceEntries(
     [params.requests],
   );
 
-  const searchQueries = useHostQueries<HostRpcRegistry, "workspace.searchPaths">(
-    {
-      client: params.client,
-      cacheKeyIdentity: undefined,
-      requests: useMemo(
-        () =>
-          searchRequests.map((request) => ({
-            method: request.method,
-            params: request.params,
-          })),
-        [searchRequests],
-      ),
-      options: { staleTime: 30_000, placeholderData: keepPreviousData },
-    },
-  );
+  const searchQueries = useHostQueries<
+    HostRpcRegistry,
+    "workspace.searchPaths"
+  >({
+    client: params.client,
+    cacheKeyIdentity: undefined,
+    requests: useMemo(
+      () =>
+        searchRequests.map((request) => ({
+          method: request.method,
+          params: request.params,
+        })),
+      [searchRequests],
+    ),
+    options: { staleTime: 30_000, placeholderData: keepPreviousData },
+  });
 
   // Fall back to the legacy RPC for any scoped root the host could not search:
   // a query error (e.g. an old host that lacks `workspace.searchPaths`, or a
@@ -92,17 +93,21 @@ export function useWorkspaceEntries(
     [searchRequests, searchQueries],
   );
 
-  const legacyQueries = useHostQueries<HostRpcRegistry, WorkspaceMentionMethod>({
-    client: params.client,
-    cacheKeyIdentity: undefined,
-    requests: useMemo(
-      () => [...legacyRequests, ...fallbackRequests],
-      [legacyRequests, fallbackRequests],
-    ),
-    options: { staleTime: 30_000, placeholderData: keepPreviousData },
-  });
+  const legacyQueries = useHostQueries<HostRpcRegistry, WorkspaceMentionMethod>(
+    {
+      client: params.client,
+      cacheKeyIdentity: undefined,
+      requests: useMemo(
+        () => [...legacyRequests, ...fallbackRequests],
+        [legacyRequests, fallbackRequests],
+      ),
+      options: { staleTime: 30_000, placeholderData: keepPreviousData },
+    },
+  );
 
-  const legacyData = legacyQueries.flatMap((query) => query.data?.entries ?? EMPTY);
+  const legacyData = legacyQueries.flatMap(
+    (query) => query.data?.entries ?? EMPTY,
+  );
   const searchData = searchRequests.flatMap((request, index) => {
     const data = searchQueries[index]?.data;
     if (data === undefined) return EMPTY;

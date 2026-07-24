@@ -38,9 +38,13 @@ export function parseSearchRunSubpageId(id: string): SearchRunTarget | null {
   const rest = id.slice(CODE_PREFIX.length);
   const sep = rest.indexOf(":");
   if (sep === -1) return null;
-  return {
-    kind: "code",
-    hostId: decodeURIComponent(rest.slice(0, sep)),
-    root: decodeURIComponent(rest.slice(sep + 1)),
-  };
+  try {
+    return {
+      kind: "code",
+      hostId: decodeURIComponent(rest.slice(0, sep)),
+      root: decodeURIComponent(rest.slice(sep + 1)),
+    };
+  } catch {
+    return null;
+  }
 }

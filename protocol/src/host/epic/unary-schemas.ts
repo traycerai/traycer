@@ -1404,7 +1404,20 @@ export type SearchArtifactsFields = z.infer<typeof searchArtifactsFieldsSchema>;
 export const searchArtifactsFiltersSchema = z.object({
   kinds: z.array(LatestEpicArtifactKindSchema).nullable(),
   statuses: z.array(z.number().int()).nullable(),
-  subtreePath: z.string().nullable(),
+  subtreePath: z
+    .string()
+    .min(1)
+    .refine(
+      (path) =>
+        !path.startsWith("/") &&
+        path
+          .split("/")
+          .every(
+            (segment) => segment !== "" && segment !== "." && segment !== "..",
+          ),
+      "subtreePath must be a non-empty relative POSIX path without traversal",
+    )
+    .nullable(),
 });
 export type SearchArtifactsFilters = z.infer<
   typeof searchArtifactsFiltersSchema

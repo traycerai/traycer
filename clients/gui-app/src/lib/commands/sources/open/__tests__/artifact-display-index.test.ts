@@ -85,8 +85,14 @@ describe("buildArtifactDisplayPathIndex", () => {
       { id: "b", folderName: "dup", title: "B", parentId: null },
       { id: "a", folderName: "dup", title: "A", parentId: null },
     ]);
-    expect(buildArtifactDisplayPathIndex(forward.tree, forward.artifacts).has("dup")).toBe(false);
-    expect(buildArtifactDisplayPathIndex(reversed.tree, reversed.artifacts).has("dup")).toBe(false);
+    expect(
+      buildArtifactDisplayPathIndex(forward.tree, forward.artifacts).has("dup"),
+    ).toBe(false);
+    expect(
+      buildArtifactDisplayPathIndex(reversed.tree, reversed.artifacts).has(
+        "dup",
+      ),
+    ).toBe(false);
   });
 
   it("keeps a third claimant from re-adding an ambiguous path", () => {
