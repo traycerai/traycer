@@ -67,6 +67,7 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+import { toast } from "sonner";
 import {
   type CreateTuiAgentStatus,
   useCreateTuiAgent,
@@ -76,6 +77,7 @@ import { peekPreparedTerminalAgentLaunch } from "@/stores/terminals/prepared-ter
 const EPIC_ID = "epic-1";
 const TAB_ID = "tab-1";
 const WORKSPACE_PATH = "/tmp/workspace-a";
+const SECOND_WORKSPACE_PATH = "/tmp/workspace-b";
 
 function queryClientWrapper(
   queryClient: QueryClient,
@@ -229,7 +231,9 @@ describe("useCreateTuiAgent", () => {
           terminalAgentArgs: null,
           profileId: null,
         }),
-      ).rejects.toThrow("Couldn't prepare the workspace");
+      ).rejects.toThrow(
+        /Couldn't prepare the workspace .* branch already exists/,
+      );
     });
 
     // Launching against the partial binding never proceeds to harness work.
@@ -237,6 +241,98 @@ describe("useCreateTuiAgent", () => {
     expect(methodOrder).toContain("worktree.create");
     expect(methodOrder).not.toContain("agent.tui.prepareLaunch");
     expect(methodOrder).not.toContain("epic.createTuiAgent");
+
+    // The host's causal per-entry reason reaches the toast, not just the
+    // folder-name headline.
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      'Couldn\'t prepare the workspace for "workspace-a". The terminal agent was not launched.',
+      expect.objectContaining({ description: "branch already exists" }),
+    );
+  });
+
+  it("does not borrow a later entry's reason for the folder the message names", async () => {
+    vi.mocked(toast.error).mockClear();
+    hookMocks.request.mockImplementation((method, payload) => {
+      if (method === "worktree.create") {
+        // Both entries failed, but only the SECOND carries a reason. The
+        // headline names the first, so attributing the second's message to it
+        // would misreport which folder hit what.
+        return Promise.resolve({
+          binding: { entries: [] },
+          perEntry: [
+            {
+              workspacePath: WORKSPACE_PATH,
+              ok: false,
+              worktreePath: null,
+              branch: null,
+              errorMessage: null,
+            },
+            {
+              workspacePath: SECOND_WORKSPACE_PATH,
+              ok: false,
+              worktreePath: null,
+              branch: null,
+              errorMessage: "branch already exists",
+            },
+          ],
+        });
+      }
+      return Promise.resolve(worktreeCreateOkResponse(payload));
+    });
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    const worktreeEntry = (
+      workspacePath: string,
+    ): WorktreeIntent["entries"][number] => ({
+      kind: "worktree",
+      scripts: null,
+      workspacePath,
+      repoIdentifier: { owner: "traycerai", repo: "traycer" },
+      isPrimary: workspacePath === WORKSPACE_PATH,
+      branch: {
+        type: "new",
+        name: "traycer/fix-x",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+    });
+    const intent: WorktreeIntent = {
+      entries: [
+        worktreeEntry(WORKSPACE_PATH),
+        worktreeEntry(SECOND_WORKSPACE_PATH),
+      ],
+    };
+
+    await act(async () => {
+      await expect(
+        result.current.create({
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          parentId: null,
+          title: "",
+          placement: { kind: "active-tile" },
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          agentMode: "regular",
+          forkSourceHarnessSessionId: null,
+          onStatusChange: null,
+          workspaceMode: "inherit",
+          worktreeIntent: intent,
+          terminalAgentArgs: null,
+          profileId: null,
+        }),
+      ).rejects.toThrow(/^Couldn't prepare the workspace for 2 folders/);
+    });
+
+    // Falls back to the folder-only headline: no description, and the other
+    // folder's reason never rides along.
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      'Couldn\'t prepare the workspace for 2 folders, starting with "workspace-a". The terminal agent was not launched.',
+    );
   });
 
   it("Worktree-mode (create) dispatches worktree.create BEFORE agent.tui.prepareLaunch", async () => {

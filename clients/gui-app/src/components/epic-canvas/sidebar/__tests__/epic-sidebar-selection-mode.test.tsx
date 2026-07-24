@@ -118,6 +118,19 @@ const testState = vi.hoisted<TestState>(() => ({
   activeHostClient: { getActiveHostId: () => "host-1" },
 }));
 
+// The artifact panel now hosts a search box; keep its host query inert so these
+// tree-focused tests need no QueryClient. An empty query renders no results.
+vi.mock("@/hooks/epic/use-epic-search-artifacts-query", () => ({
+  useEpicSearchArtifacts: () => ({
+    isSuccess: false,
+    isError: false,
+    isFetching: false,
+    data: undefined,
+    error: null,
+    refetch: () => undefined,
+  }),
+}));
+
 vi.mock("@/components/epic-canvas/dnd/epic-canvas-dnd-context-value", () => ({
   useEpicCanvasDnd: () => ({
     activeSource: null,
@@ -750,7 +763,7 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
   });
 
-  it("subscripts only TUI harness brands", () => {
+  it("brands only TUI agent rows", () => {
     seedChatTree();
     testState.chatHarnessIds = {
       "chat-root": "codex",
@@ -760,11 +773,9 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    expect(
-      screen
-        .getByTestId("sidebar-agent-harness-chat-root")
-        .getAttribute("data-agent-surface"),
-    ).toBe("gui");
+    // A persisted chat harness must NOT reach the row: chat rows keep the plain
+    // chat glyph so the panel isn't a column of multi-colored provider marks.
+    expect(screen.queryByTestId("sidebar-agent-harness-chat-root")).toBeNull();
     expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
     expect(
       screen
@@ -778,7 +789,7 @@ describe("epic sidebar selection mode", () => {
     ).toBe("tui");
   });
 
-  it("does not subscript harness brands in a GUI-only task", () => {
+  it("renders no harness brand in a GUI-only task", () => {
     seedGuiChatTree();
     testState.chatHarnessIds = {
       "chat-root": "codex",
@@ -787,6 +798,8 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
+    expect(screen.queryByTestId("sidebar-agent-harness-chat-root")).toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-harness-chat-child")).toBeNull();
     expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
     expect(screen.queryByTestId("sidebar-agent-surface-chat-child")).toBeNull();
   });
