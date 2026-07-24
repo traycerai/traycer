@@ -29,7 +29,7 @@ bun run build
 bun run compile                 # never tsc directly
 bun run test && bun run lint && bun run format
 bunx nx run @traycer-clients/traycer-cli:build   # single package
-pre-commit run --all-files
+pre-commit run --all-files      # explicit full-repo / CI-style validation
 
 make dev-desktop                # signed host from Releases + HMR desktop
 make dev-desktop VERSION=1.2.3  # pin host release
