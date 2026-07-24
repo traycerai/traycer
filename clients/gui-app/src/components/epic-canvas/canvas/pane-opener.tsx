@@ -24,6 +24,7 @@ import { Command, CommandInput, CommandList } from "@/components/ui/command";
 import { InputGroupButton } from "@/components/ui/input-group";
 import { useCommandPaletteRouter } from "@/components/command-palette/command-palette-context";
 import {
+  OpenerDeepView,
   OpenerRootView,
   SubpageView,
 } from "@/components/command-palette/palette-cmdk";
@@ -145,7 +146,19 @@ export function PaneOpener(props: PaneOpenerProps) {
                 onSelect={runItem}
               />
             ) : (
-              <OpenerRootView items={openerItems} onSelect={runItem} />
+              <>
+                <OpenerRootView items={openerItems} onSelect={runItem} />
+                {/* Deep search: while typing at the root, every sub-page leaf
+                    (n levels down) is also searchable, labelled with its full
+                    path ("Agents → New agent (Chat)"). */}
+                {query.trim() !== "" ? (
+                  <OpenerDeepView
+                    items={openerItems}
+                    ctx={ctx}
+                    onSelect={runItem}
+                  />
+                ) : null}
+              </>
             )}
           </CommandList>
         </PaletteQueryProvider>
