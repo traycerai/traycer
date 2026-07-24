@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
+import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import {
@@ -35,6 +36,10 @@ interface NotificationRowProps {
   readonly alwaysShowRail: boolean;
   readonly onActivate: (row: MergedNotificationRow) => void;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
+  /** Dismiss an unresolved `needs_action` Attention row (stamps `resolvedAt`).
+   * Only reached for blocking-tier Attention rows; every other row uses
+   * `onAcknowledge`. */
+  readonly onResolve: (row: MergedNotificationRow) => void;
 }
 
 /**
@@ -60,6 +65,12 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   const isRead = row.readAt !== null;
   const isNavigable = row.payload !== null;
   const showRail = props.alwaysShowRail || !isRead;
+  // A blocking-tier Attention row (unresolved `needs_action`) keeps its
+  // trailing control even once navigation marked it read - its only exit from
+  // Attention is `resolvedAt`, which `onAcknowledge` (readAt-only) can't set.
+  const lifecycle = classifyNotificationLifecycle(row);
+  const isBlockingAttention =
+    lifecycle.section === "attention" && lifecycle.tier === "blocking";
   const glyph = notificationRowGlyph(row);
   const Icon = glyph.icon;
 
@@ -104,51 +115,90 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       )}
       <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
         <NotificationTimestamp createdAt={row.createdAt} />
-        <NotificationRowAcknowledgeControl
+        <NotificationRowTrailingControl
           row={row}
           isNavigable={isNavigable}
           isRead={isRead}
+          isBlockingAttention={isBlockingAttention}
           onAcknowledge={props.onAcknowledge}
+          onResolve={props.onResolve}
         />
       </div>
     </li>
   );
 }
 
-interface NotificationRowAcknowledgeControlProps {
+interface NotificationRowTrailingControlProps {
   readonly row: MergedNotificationRow;
   readonly isNavigable: boolean;
   readonly isRead: boolean;
+  readonly isBlockingAttention: boolean;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
+  readonly onResolve: (row: MergedNotificationRow) => void;
 }
 
-/** The sibling acknowledge control for both row shapes - "mark as read" on a
- * navigable row, "acknowledge" (the only control) on a payload-less one.
- * Once read, the control disappears entirely rather than lingering as a
- * disabled button: a row that's already been acknowledged has nothing left
- * to press, and a dead-looking (grayed, unclickable) control read as broken
- * rather than done. */
-function NotificationRowAcknowledgeControl(
-  props: NotificationRowAcknowledgeControlProps,
+/** The sibling trailing control. On an unresolved `needs_action` Attention row
+ * it is a "Dismiss" affordance - the same right-edge tick normal rows carry,
+ * but wired to `onResolve` (which stamps `resolvedAt`) so the row leaves
+ * Attention without answering the underlying prompt. It stays available even
+ * after navigation marked the row read, because Attention membership here is
+ * keyed on `resolvedAt`, not `readAt`. Every other row keeps the original
+ * acknowledge control - "Mark as read" on a navigable row, "Acknowledge" on a
+ * payload-less one - shown only while unread: a read Recent row has nothing
+ * left to press, and a dead-looking (grayed, unclickable) control reads as
+ * broken rather than done. */
+function NotificationRowTrailingControl(
+  props: NotificationRowTrailingControlProps,
 ): ReactNode {
+  if (props.isBlockingAttention) {
+    return (
+      <NotificationRowControlButton
+        label="Dismiss"
+        testId="notification-dismiss"
+        onClick={() => props.onResolve(props.row)}
+      />
+    );
+  }
   if (props.isRead) return null;
-  const label = props.isNavigable ? "Mark as read" : "Acknowledge";
+  return (
+    <NotificationRowControlButton
+      label={props.isNavigable ? "Mark as read" : "Acknowledge"}
+      testId={
+        props.isNavigable
+          ? "notification-mark-read"
+          : "notification-acknowledge"
+      }
+      onClick={() => props.onAcknowledge(props.row)}
+    />
+  );
+}
+
+interface NotificationRowControlButtonProps {
+  readonly label: string;
+  readonly testId: string;
+  readonly onClick: () => void;
+}
+
+/** The shared right-edge tick button. Dismiss / mark-as-read / acknowledge are
+ * the same affordance visually (same icon, size, and styling / testid family);
+ * only the label, testid, and click target differ. It is a sibling of the
+ * navigable body button, never nested inside it, so a click can't activate the
+ * row. */
+function NotificationRowControlButton(
+  props: NotificationRowControlButtonProps,
+): ReactNode {
   return (
     <TooltipWrapper
-      label={label}
+      label={props.label}
       side="left"
       sideOffset={undefined}
       align={undefined}
     >
       <button
         type="button"
-        onClick={() => props.onAcknowledge(props.row)}
-        aria-label={label}
-        data-testid={
-          props.isNavigable
-            ? "notification-mark-read"
-            : "notification-acknowledge"
-        }
+        onClick={props.onClick}
+        aria-label={props.label}
+        data-testid={props.testId}
         className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <Check className="size-3.5" aria-hidden />

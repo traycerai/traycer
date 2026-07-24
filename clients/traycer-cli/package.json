@@ -32,7 +32,7 @@
     "@sentry/node": "catalog:",
     "commander": "catalog:",
     "node-stream-zip": "catalog:",
-    "tar": "^7.5.20",
+    "tar": "^7.5.21",
     "zod": "catalog:"
   },
   "devDependencies": {
