@@ -264,27 +264,46 @@ export async function runHostStart(
     hasCwdOverride: opts.cwd !== null,
   });
 
-  // One host per data dir. launchd runs at most one instance of a LABEL, but
-  // the CLI label (`ai.traycer.host`) and Desktop's SMAppService agent label
-  // (`ai.traycer.host.agent`) are distinct labels that both invoke this
-  // supervisor against the same data dir - and both carry `RunAtLoad`. On a
-  // machine that ended up with both registered, every login spawned two
-  // hosts racing the same pid.json and stores, with the loser invisible to
-  // new clients.
+  // Best-effort backstop against stacking a second host on a live one.
+  // BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT COVER.
   //
-  // Declining is the whole policy here: never evict the incumbent.
-  // Intentional version replacement belongs to the install lifecycle
-  // (`beforeSwap` stops the running host before the swap), which knows it is
-  // an upgrade; this supervisor cannot tell an upgrade from an accidental
-  // second job. Evicting from here would also deadlock against KeepAlive -
-  // the victim's `Crashed = true` restarts it, it evicts us back, and the
-  // two labels flap forever.
+  // Covered (deterministic): any STAGGERED start where a host is already
+  // publishing - a raw `traycer host start` against a running host, one
+  // launchd label starting while the other's host is up, a crash-restart of
+  // one label mid-session. That is the shape of the field bug: an install
+  // bootstrapping the CLI label beside Desktop's already-running agent.
   //
-  // Exit 0 specifically: the macOS plists set `KeepAlive.SuccessfulExit =
-  // false`, so a clean exit leaves this job down until the next login
-  // instead of relaunching it in a loop. No bootstrap marker is written -
-  // declining is not a spawn attempt, and the existing phases all describe
-  // one.
+  // NOT covered: two supervisors starting SIMULTANEOUSLY, which is what a
+  // cold login does when a machine carries both the CLI label
+  // (`ai.traycer.host`) and Desktop's SMAppService label
+  // (`ai.traycer.host.agent`), since both set `RunAtLoad`. pid.json does not
+  // exist yet - the host unlinks it on graceful shutdown and publishes only
+  // after `listen()` succeeds - so both callers observe no incumbent and
+  // both spawn. This check is a read-only observation with no reservation
+  // behind it; it cannot serialise that. The host binds an ephemeral port
+  // (`listenPort: 0`), so there is no OS-level collision to fall back on
+  // either.
+  //
+  // That residual is contained elsewhere, not here: `installService`'s
+  // ownership refusals stop a dual registration from being CREATED at all,
+  // and Desktop's `retireLegacyLabelRegistrations` deletes the legacy plist
+  // and boots out the stale label - killing a duplicate mid-session, not
+  // only at next login. Real mutual exclusion belongs in the host process
+  // as a single-instance lock held for its lifetime, which is tracked
+  // separately.
+  //
+  // Declining is the whole policy: never evict the incumbent. Intentional
+  // version replacement belongs to the install lifecycle (`beforeSwap`
+  // stops the running host before the swap), which knows it is an upgrade;
+  // this supervisor cannot tell an upgrade from an accidental second job.
+  // Evicting would also flap against KeepAlive - a signal-killed supervisor
+  // exits 128+N, which `SuccessfulExit: false` treats as restartable, so
+  // the victim comes back and evicts us in turn.
+  //
+  // Exit 0 specifically: `KeepAlive.SuccessfulExit = false` leaves a
+  // cleanly-exited job down until the next login instead of relaunching it
+  // in a loop. No bootstrap marker is written - declining is not a spawn
+  // attempt, and the existing phases all describe one.
   const incumbent = await deps.findIncumbentHost(opts.environment);
   if (incumbent !== null) {
     logger.warn(
