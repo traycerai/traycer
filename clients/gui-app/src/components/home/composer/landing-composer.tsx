@@ -80,6 +80,12 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface LandingComposerProps {
   readonly draftId: string | null;
+  /**
+   * Pre-minted draft id used as the React mount key while `draftId` is null.
+   * Threaded into `setSnapshot`'s create branch so the first substantive edit
+   * creates the draft under that same id (no editor remount). Null when bound.
+   */
+  readonly pendingCreateId: string | null;
   readonly initialSettings: ChatRunSettings | null;
   readonly workspaceControls: ReactNode;
 }
@@ -426,9 +432,14 @@ export function LandingComposer(props: LandingComposerProps) {
 
   const handleSnapshot = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
-      setSnapshot(draftId, content, selection);
+      setSnapshot(
+        draftId,
+        content,
+        selection,
+        draftId === null ? (props.pendingCreateId ?? undefined) : undefined,
+      );
     },
-    [draftId, setSnapshot],
+    [draftId, props.pendingCreateId, setSnapshot],
   );
 
   const handleSubmit = useCallback(() => {
