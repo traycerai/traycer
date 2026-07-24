@@ -423,13 +423,12 @@ export type AgentSelectionGuideRequest = z.infer<
   typeof agentSelectionGuideRequestSchema
 >;
 
-// A single contributing guide file. The host resolves every non-empty guide
-// and hands the formatter everything it needs to render without parsing:
-//   - `workspacePath` (workspace scope only) is the workspace root the guide
-//     governs, used for the section header — no path stripping at render time.
-//   - `priority` orders the layered output (higher = more specific; wins on
-//     conflict), so the formatter never relies on array order.
-//   - `path` is the absolute guide file, kept for attribution.
+// A single contributing guide file. Current hosts emit exactly one `global`
+// source (`~/.traycer/agent-selection-guide.md`, `priority` fixed at 1, `path`
+// kept for attribution). The `workspace` variant is legacy wire shape: older
+// hosts still emit per-workspace `.traycer/agent-selection-guide.md` sources,
+// and released 1.0 responses must keep parsing, but current clients ignore
+// workspace entries instead of layering them over the global guide.
 export const agentSelectionGuideSourceSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("workspace"),
@@ -467,10 +466,10 @@ export type AgentSelectionGuideResponse = z.infer<
 >;
 
 // Settings/onboarding surface for the global guide file (~/.traycer/...).
-// Distinct from `agent.selectionGuide`, which resolves the full
-// workspace+global hierarchy for an agent. These are default-host scoped and
-// carry no epic. Provider choices are already host state, so the host computes
-// the generated default from its current provider configuration.
+// Distinct from `agent.selectionGuide`, which serves the guide to an agent.
+// These are default-host scoped and carry no epic. Provider choices are
+// already host state, so the host computes the generated default from its
+// current provider configuration.
 export const agentSelectionGuideGlobalGetRequestSchema = z.object({});
 export type AgentSelectionGuideGlobalGetRequest = z.infer<
   typeof agentSelectionGuideGlobalGetRequestSchema
