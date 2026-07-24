@@ -72,9 +72,17 @@ interface OpenerRootViewProps {
   readonly onSelect: (item: CommandItemShape) => void;
 }
 
+/** The full "Agents → New agent (Chat)" trail a deep row represents. */
+function deepRowName(path: ReadonlyArray<string>, label: string): string {
+  return [...path, label].join(" → ");
+}
+
 /**
  * Deep-row label: the sub-page path dimmed ("Agents → "), then the leaf label
  * through `SubpageItemLabel` so file-path labels keep their directory dimming.
+ * The row carries an explicit `aria-label` (see `deepRowName`) because the
+ * separators here are split across elements and styled with a flex `gap` - the
+ * name computed from text content alone would run them together.
  */
 function DeepPathLabel(props: {
   readonly path: ReadonlyArray<string>;
@@ -124,6 +132,7 @@ function OpenerDeepRows(props: OpenerDeepRowsProps) {
               ...item.keywords,
               ...path.map((segment) => segment.toLowerCase()),
             ]}
+            aria-label={deepRowName(path, item.label)}
             onSelect={() => onSelect(item)}
           >
             <DeepPathLabel path={path} label={item.label} />

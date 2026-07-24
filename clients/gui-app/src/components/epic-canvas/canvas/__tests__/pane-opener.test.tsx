@@ -135,6 +135,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * The opener's search box. cmdk renders its input as a combobox (same accessor
+ * shape the modal palette's tests use), named by the `aria-label` the opener
+ * sets.
+ */
+function searchInput(): HTMLElement {
+  return screen.getByRole("combobox", { name: "Open into pane" });
+}
+
 describe("PaneOpener", () => {
   it("renders the opener categories inline in the pane", () => {
     render(
@@ -212,7 +221,7 @@ describe("PaneOpener", () => {
   });
 
   it("root query surfaces leaves n levels deep with their full path", () => {
-    const { container } = render(
+    render(
       <PaneOpener
         epicId="epic-1"
         tabId="tab-deep"
@@ -221,19 +230,21 @@ describe("PaneOpener", () => {
       />,
     );
     // Deep rows are absent while the query is empty.
-    expect(screen.queryByText("Deep Create Leaf")).toBeNull();
+    expect(
+      screen.queryByRole("option", { name: /Deep Create Leaf/ }),
+    ).toBeNull();
 
-    const input = container.querySelector<HTMLInputElement>(
-      'input[data-slot="command-input"]',
-    );
-    if (input === null) throw new Error("missing command input");
-    fireEvent.change(input, { target: { value: "create" } });
+    fireEvent.change(searchInput(), { target: { value: "create" } });
 
-    // The level-3 leaf matches from the root, labelled with its full path.
-    expect(screen.getByText("Deep Create Leaf")).not.toBeNull();
-    expect(screen.getByText("Category → Nested →")).not.toBeNull();
+    // The level-3 leaf matches from the root; its accessible name carries the
+    // full path, so the hierarchy is what the user actually reads.
+    expect(
+      screen.getByRole("option", {
+        name: "Category → Nested → Deep Create Leaf",
+      }),
+    ).not.toBeNull();
 
-    fireEvent.click(screen.getByText("Deep Create Leaf"));
+    fireEvent.click(screen.getByRole("option", { name: /Deep Create Leaf/ }));
     expect(spies.openTileIntoTargetGroup).toHaveBeenCalledWith({
       tabId: "tab-deep",
       groupId: "group-deep",
@@ -241,7 +252,7 @@ describe("PaneOpener", () => {
   });
 
   it("selecting a deep row that bears a sub-page drills into it", () => {
-    const { container } = render(
+    render(
       <PaneOpener
         epicId="epic-1"
         tabId="tab-drill"
@@ -249,16 +260,14 @@ describe("PaneOpener", () => {
         active={false}
       />,
     );
-    const input = container.querySelector<HTMLInputElement>(
-      'input[data-slot="command-input"]',
-    );
-    if (input === null) throw new Error("missing command input");
-    fireEvent.change(input, { target: { value: "nested" } });
+    fireEvent.change(searchInput(), { target: { value: "nested" } });
 
-    fireEvent.click(screen.getByText("Nested"));
+    fireEvent.click(screen.getByRole("option", { name: "Category → Nested" }));
 
     // Now inside the "Nested" sub-page: its leaf shows, Back is available.
-    expect(screen.getByText("Deep Create Leaf")).not.toBeNull();
+    expect(
+      screen.getByRole("option", { name: "Deep Create Leaf" }),
+    ).not.toBeNull();
     expect(screen.getByRole("button", { name: "Back" })).not.toBeNull();
   });
 

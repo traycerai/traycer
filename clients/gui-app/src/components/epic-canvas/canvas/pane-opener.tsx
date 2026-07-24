@@ -110,8 +110,12 @@ export function PaneOpener(props: PaneOpenerProps) {
       data-group-id={groupId}
       className="flex h-full min-h-0 w-full flex-col"
     >
+      {/* `label` is what actually names the search box: cmdk points the input's
+          `aria-labelledby` at its own hidden label element, so without this the
+          input's `aria-label` is overridden by an empty name. */}
       <Command
         filter={paletteFilter}
+        label="Open into pane"
         onKeyDown={handleKeyDown}
         className="h-full min-h-0 bg-transparent"
       >
