@@ -326,7 +326,7 @@ async function timed(
 // (two documented sync-filesystem exceptions: the GPU preference read in
 // app/gpu-acceleration.ts and the memory-backed /proc write in
 // app/core-dump-guard.ts, which must land before Chromium spawns children).
-function runPreReady(state: BootState): void {
+export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
   applyHardwareAccelerationPreference();
