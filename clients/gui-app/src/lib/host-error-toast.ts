@@ -101,6 +101,12 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   if (isLastOwnerRevokeError(error.message)) {
     return "Can't revoke the only Owner. Transfer ownership first.";
   }
+  // An optional method the active host predates (declared `degrade:
+  // unsupported`). This is a version gap, not a failed operation, so the copy
+  // points at the fix rather than restating the operation name.
+  if (error.code === "E_HOST_UNSUPPORTED") {
+    return "This needs a newer Traycer host. Update the host to continue.";
+  }
   if (error.code === "FORBIDDEN") {
     return "You don't have permission to do that.";
   }
@@ -181,6 +187,13 @@ function emitHostFatalErrorNotification(
   message: string,
 ): void {
   if (error.fatalDetails === null) return;
+  // A capability gap (older host lacking an optional method) is not a genuine
+  // operation failure - it carries fatal details but must not spawn a
+  // persistent app-local failure row. The one-shot toast already delivers the
+  // upgrade guidance; a lingering feed entry would just be noise. This mirrors
+  // `toastFromBackgroundHostError`, which suppresses `E_HOST_UNSUPPORTED`
+  // outright.
+  if (error.code === "E_HOST_UNSUPPORTED") return;
   const dedupeKey = hostErrorDedupeKey(error);
   emitHostErrorNotification({
     id: dedupeKey ?? `${error.method}:${error.requestId}`,

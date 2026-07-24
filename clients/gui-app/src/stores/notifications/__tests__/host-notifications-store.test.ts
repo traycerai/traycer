@@ -59,9 +59,16 @@ function entry(
 }
 
 function promptEntry(id: string): HostNotificationEntry {
+  return promptOccurrence(id, 10);
+}
+
+function promptOccurrence(
+  id: string,
+  updatedAt: number,
+): HostNotificationEntry {
   return {
     id,
-    updatedAt: 10,
+    updatedAt,
     readAt: null,
     kind: "interview.requested",
     sourceRef: id,
@@ -525,6 +532,49 @@ describe("host notifications store", () => {
       });
 
     expect(useHostNotificationsStore.getState().byId.target.readAt).toBeNull();
+  });
+
+  it("lets a newer same-id upsert re-open Attention after a resolve frame", () => {
+    // Approval/interview ids are stable per chat; a later prompt reuses the id
+    // with a fresh updatedAt. With no optimistic resolve write, the client
+    // simply trusts frames: resolve then a newer unresolved upsert must leave
+    // the row pending again (the new occurrence wins).
+    const stableId = "approval.requested:chat-1";
+    const older = promptOccurrence(stableId, 100);
+    const newer = promptOccurrence(stableId, 200);
+    applySimpleSnapshot({
+      entries: [older],
+      summary: defaultSummaryFor([older]),
+      recentCursor: null,
+      attentionNext: null,
+    });
+
+    useHostNotificationsStore.getState().applyReadStateFrame([stableId], {
+      readAt: 150,
+      resolvedAt: 150,
+      removedIds: [],
+      summary: { unreadCount: 0, attentionCount: 0 },
+    });
+    expect(useHostNotificationsStore.getState().byId[stableId]).toMatchObject({
+      updatedAt: 100,
+      readAt: 150,
+      resolvedAt: 150,
+    });
+
+    useHostNotificationsStore.getState().applyUpsertFrame(newer, [], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    expect(useHostNotificationsStore.getState().byId[stableId]).toMatchObject({
+      updatedAt: 200,
+      readAt: null,
+      resolvedAt: null,
+    });
+    expect(useHostNotificationsStore.getState().summary).toEqual({
+      unreadCount: 1,
+      attentionCount: 1,
+    });
   });
 
   it("merges pages into byId and advances only the matching cursor track", () => {
