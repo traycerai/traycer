@@ -5,6 +5,7 @@
  * opener root view. Non-component helpers (filter, row value, controller hook)
  * live in `palette-cmdk-controller.ts`.
  */
+import { Fragment } from "react";
 import { CommandEmpty, CommandGroup } from "@/components/ui/command";
 import { PaletteItemRow } from "@/components/command-palette/palette-item-row";
 import { buildCmdkValue } from "@/components/command-palette/palette-cmdk-controller";
@@ -69,6 +70,119 @@ export function SubpageView(props: SubpageViewProps) {
 interface OpenerRootViewProps {
   readonly items: ReadonlyArray<CommandItemShape>;
   readonly onSelect: (item: CommandItemShape) => void;
+}
+
+/** The full "Agents → New agent (Chat)" trail a deep row represents. */
+function deepRowName(path: ReadonlyArray<string>, label: string): string {
+  return [...path, label].join(" → ");
+}
+
+/**
+ * Deep-row label: the sub-page path dimmed ("Agents → "), then the leaf label
+ * through `SubpageItemLabel` so file-path labels keep their directory dimming.
+ * The row carries an explicit `aria-label` (see `deepRowName`) because the
+ * separators here are split across elements and styled with a flex `gap` - the
+ * name computed from text content alone would run them together.
+ */
+function DeepPathLabel(props: {
+  readonly path: ReadonlyArray<string>;
+  readonly label: string;
+}) {
+  const { path, label } = props;
+  return (
+    <span className="flex min-w-0 items-baseline gap-1">
+      <span className="truncate text-muted-foreground">
+        {path.join(" → ")} →
+      </span>
+      <SubpageItemLabel label={label} />
+    </span>
+  );
+}
+
+/**
+ * Depth bound for the deep view's recursion. The opener's own sub-pages bottom
+ * out at level 3 (category → workspace → file); the cap only exists so a future
+ * self-referential sub-page can't recurse the renderer to a hang.
+ */
+const OPENER_DEEP_MAX_DEPTH = 4;
+
+interface OpenerDeepRowsProps {
+  readonly subpage: CommandSubpage;
+  readonly ctx: CommandContext;
+  readonly path: ReadonlyArray<string>;
+  readonly onSelect: (item: CommandItemShape) => void;
+}
+
+/**
+ * One sub-page's rows for the deep view, recursing into nested sub-pages.
+ * Recursion is per-component (one `useItems` hook call each), so a dynamic
+ * number of nested sub-pages stays rules-of-hooks safe. The path segments are
+ * appended to the row's keywords so combined queries like "agents new" match.
+ */
+function OpenerDeepRows(props: OpenerDeepRowsProps) {
+  const { subpage, ctx, path, onSelect } = props;
+  const items = subpage.useItems(ctx);
+  return (
+    <>
+      {items.map((item) => (
+        <Fragment key={item.id}>
+          <PaletteItemRow
+            value={buildCmdkValue(item)}
+            keywords={[
+              ...item.keywords,
+              ...path.map((segment) => segment.toLowerCase()),
+            ]}
+            aria-label={deepRowName(path, item.label)}
+            onSelect={() => onSelect(item)}
+          >
+            <DeepPathLabel path={path} label={item.label} />
+          </PaletteItemRow>
+          {item.subpage !== null && path.length < OPENER_DEEP_MAX_DEPTH ? (
+            <OpenerDeepRows
+              subpage={item.subpage}
+              ctx={ctx}
+              path={[...path, item.label]}
+              onSelect={onSelect}
+            />
+          ) : null}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+interface OpenerDeepViewProps {
+  readonly items: ReadonlyArray<CommandItemShape>;
+  readonly ctx: CommandContext;
+  readonly onSelect: (item: CommandItemShape) => void;
+}
+
+/**
+ * Flattened deep matches for the opener root: every sub-page leaf, any number
+ * of levels down, rendered with its full category path so a root query like
+ * "create" surfaces "Agents → New agent (Chat)" without drilling in. Mounted
+ * only while a query is typed (the empty-query root shows categories alone);
+ * cmdk's filter owns which rows actually show.
+ */
+export function OpenerDeepView(props: OpenerDeepViewProps) {
+  const { items, ctx, onSelect } = props;
+  const categories = items.filter(
+    (item): item is CommandItemShape & { readonly subpage: CommandSubpage } =>
+      item.subpage !== null,
+  );
+  return (
+    <CommandGroup>
+      {categories.map((item) => (
+        <OpenerDeepRows
+          key={item.id}
+          subpage={item.subpage}
+          ctx={ctx}
+          path={[item.label]}
+          onSelect={onSelect}
+        />
+      ))}
+    </CommandGroup>
+  );
 }
 
 /**
