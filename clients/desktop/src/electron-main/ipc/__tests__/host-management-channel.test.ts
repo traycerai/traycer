@@ -18,6 +18,22 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import type { IpcHostController } from "../runner-ipc-bridge";
+import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
+  ConvergeReadyOk,
+  HostControllerStatus,
+  InstallVersionOk,
+  MutationOutcome,
+  MutationProgress,
+  MutationKind,
+  MutationLaneStatus,
+  RemoveTraycerOk,
+  ServiceRegistrationOk,
+  UninstallOk,
+} from "../../host/host-controller-types";
 
 // Ticket 29cf341f - Desktop host-management IPC must respect the same
 // prod/dev environment selected by Desktop main and `HostLifecycle`. These
@@ -129,6 +145,204 @@ function installFakeCli(opts: {
   return { calls, runResult: opts.runResult, streamResult: opts.streamResult };
 }
 
+interface RecordedControllerCall {
+  readonly method: string;
+  readonly args: readonly unknown[];
+}
+
+/**
+ * Fake `HostController` for the handlers `host-management-ipc.ts` now
+ * delegates to (install/update/uninstall/remove/restart/register/deregister
+ * /free-port-and-restart/ensure). Records every call so a test can assert
+ * delegation + argument threading without spawning a real CLI subprocess;
+ * `installVersionResult` / `applyStagedResult` / etc. are mutable so a test
+ * can steer a specific outcome kind (busy/deferred/failed) before invoking
+ * the handler. Deep behavioural coverage of what each `HostController`
+ * method itself does (macOS SMAppService cycles, busy detection, dev-slot
+ * CLI argv, ...) lives in `host-controller.test.ts` - this fake only proves
+ * the IPC layer wires the right method + args and re-shapes the outcome.
+ */
+class FakeHostController implements IpcHostController {
+  readonly calls: RecordedControllerCall[] = [];
+  private progressListeners = new Set<(progress: MutationProgress) => void>();
+
+  installVersionResult: MutationOutcome<InstallVersionOk> = {
+    kind: "ok",
+    value: { installedVersion: "1.7.0", runningActivated: true },
+  };
+  applyStagedResult: MutationOutcome<ApplyStagedOk> = {
+    kind: "ok",
+    value: { appliedVersion: "1.7.0", runningActivated: true },
+  };
+  activateInstalledResult: MutationOutcome<ActivateInstalledOk> = {
+    kind: "ok",
+    value: { activated: true },
+  };
+  uninstallHostResult: MutationOutcome<UninstallOk> = {
+    kind: "ok",
+    value: { removedInstallDir: true, deregisteredService: true },
+  };
+  removeTraycerResult: MutationOutcome<RemoveTraycerOk> = {
+    kind: "ok",
+    value: {
+      removedHost: true,
+      deregisteredService: true,
+      removedLoginItem: false,
+    },
+  };
+  respawnResult: MutationOutcome<ActivateInstalledOk> = {
+    kind: "ok",
+    value: { activated: true },
+  };
+  registerServiceResult: MutationOutcome<ServiceRegistrationOk> = {
+    kind: "ok",
+    value: { registered: true },
+  };
+  deregisterServiceResult: MutationOutcome<ServiceRegistrationOk> = {
+    kind: "ok",
+    value: { registered: false },
+  };
+  freePortAndRestartResult: MutationOutcome<ActivateInstalledOk> = {
+    kind: "ok",
+    value: { activated: true },
+  };
+  convergeReadyResult: MutationOutcome<ConvergeReadyOk> = {
+    kind: "ok",
+    value: { running: true, version: "1.7.0" },
+  };
+  // Fixup B1: `refreshRegistryUpdateState` now reads `getStatus().updateReady`
+  // to project the legacy `updateAvailable` field - every handler that
+  // force-refreshes after a mutation calls it, so this fake must answer
+  // rather than throw.
+  getStatusResult: HostControllerStatus = {
+    download: null,
+    mutation: null,
+    installedVersion: null,
+    latestVersion: null,
+    stagedVersion: null,
+    installedRuntimeVersion: null,
+    runningRuntimeVersion: null,
+    updateReady: false,
+    activation: "unavailable",
+    reachable: false,
+    removedByUser: false,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  // Lets a test simulate the forced post-mutation registry refresh's
+  // `getStatus()` read rejecting (fs/identity/endpoint work can genuinely
+  // fail) without touching the mutation call itself.
+  getStatusError: Error | null = null;
+
+  async getStatus(): Promise<HostControllerStatus> {
+    if (this.getStatusError !== null) {
+      throw this.getStatusError;
+    }
+    return this.getStatusResult;
+  }
+  async convergeReady(
+    force: boolean,
+  ): Promise<MutationOutcome<ConvergeReadyOk>> {
+    this.calls.push({ method: "convergeReady", args: [force] });
+    return this.convergeReadyResult;
+  }
+  async stageLatest(): Promise<void> {
+    this.calls.push({ method: "stageLatest", args: [] });
+  }
+  // Set to defer `applyStaged`'s resolution until `resolveApplyStaged` is
+  // called - lets a test observe an in-flight mutation (progress broadcast,
+  // status-get mid-operation, a second concurrent call landing) instead of
+  // the call resolving synchronously.
+  applyStagedDeferred = false;
+  private pendingApplyStaged: Array<
+    (outcome: MutationOutcome<ApplyStagedOk>) => void
+  > = [];
+
+  async applyStaged(
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
+    this.calls.push({ method: "applyStaged", args: [trigger, force] });
+    if (this.applyStagedDeferred) {
+      return new Promise((resolve) => {
+        this.pendingApplyStaged.push(resolve);
+      });
+    }
+    return this.applyStagedResult;
+  }
+
+  // Fixup B16: resolves exactly the OLDEST still-pending `applyStaged` call
+  // (FIFO), one per invocation - mirrors the real `HostController`'s
+  // exclusive mutation lane, where a second concurrent call doesn't settle
+  // until the first one's own job has. The previous version resolved every
+  // pending call at once regardless of submission order, which is why the
+  // concurrent-call test never actually exercised the legacy shim's
+  // cross-attribution bug (fixup B16) - nothing ever queued behind
+  // anything else's still-running progress window.
+  resolveApplyStaged(outcome: MutationOutcome<ApplyStagedOk>): void {
+    const resolve = this.pendingApplyStaged.shift();
+    if (resolve !== undefined) resolve(outcome);
+  }
+  async activateInstalled(
+    force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    this.calls.push({ method: "activateInstalled", args: [force] });
+    return this.activateInstalledResult;
+  }
+  async installVersion(
+    pin: string,
+    force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>> {
+    this.calls.push({ method: "installVersion", args: [pin, force] });
+    return this.installVersionResult;
+  }
+  async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    this.calls.push({ method: "registerService", args: [] });
+    return this.registerServiceResult;
+  }
+  async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    this.calls.push({ method: "deregisterService", args: [] });
+    return this.deregisterServiceResult;
+  }
+  async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
+    this.calls.push({ method: "respawn", args: [] });
+    return this.respawnResult;
+  }
+  async recoverIfDown(): Promise<
+    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
+  > {
+    throw new Error(
+      "FakeHostController.recoverIfDown: not used by these tests",
+    );
+  }
+  async freePortAndRestart(
+    pid: number | null,
+    port: number | null,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    this.calls.push({ method: "freePortAndRestart", args: [pid, port] });
+    return this.freePortAndRestartResult;
+  }
+  async uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>> {
+    this.calls.push({ method: "uninstallHost", args: [all] });
+    return this.uninstallHostResult;
+  }
+  async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {
+    this.calls.push({ method: "removeTraycer", args: [] });
+    return this.removeTraycerResult;
+  }
+  isPendingRevisionRefreshQuarantined(): boolean {
+    return false;
+  }
+  onMutationProgress(
+    listener: (progress: MutationProgress) => void,
+  ): () => void {
+    this.progressListeners.add(listener);
+    return () => {
+      this.progressListeners.delete(listener);
+    };
+  }
+}
+
 interface FakeBridge {
   readonly handlers: Map<
     string,
@@ -139,7 +353,9 @@ interface FakeBridge {
   readonly options: {
     readonly host: {
       readonly reloadSnapshotFromDisk: Mock;
+      readonly getSnapshot: Mock;
     };
+    readonly hostController: FakeHostController;
   };
   handleInvoke(
     environment: string,
@@ -148,6 +364,12 @@ interface FakeBridge {
 }
 
 function makeBridge(): FakeBridge {
+  return makeBridgeWithHostController(new FakeHostController());
+}
+
+function makeBridgeWithHostController(
+  hostController: FakeHostController,
+): FakeBridge {
   const handlers = new Map<
     string,
     (event: unknown, raw: unknown) => Promise<unknown>
@@ -159,7 +381,9 @@ function makeBridge(): FakeBridge {
     options: {
       host: {
         reloadSnapshotFromDisk: vi.fn(() => Promise.resolve(null)),
+        getSnapshot: vi.fn(() => ({ version: "1.7.0" })),
       },
+      hostController,
     },
     handleInvoke(environment, handler) {
       handlers.set(environment, async (event, raw) => handler(event, raw));
@@ -309,12 +533,12 @@ describe("host-management IPC - installed record reads the active environment", 
 });
 
 describe("host-management IPC - CLI subprocess argv carries NO --environment (CLI derives its slot)", () => {
-  it("production environment passes no --environment for host install/update/uninstall/restart/logs/doctor/available", async () => {
+  it("production environment passes no --environment for host logs/doctor/available", async () => {
     const fake = installFakeCli({
       runResult: {
         // `host available` projector needs a manifest envelope; the
-        // other run-style callers (logs, doctor, uninstall, restart)
-        // tolerate this shape since they only read specific fields.
+        // other run-style callers (logs, doctor) tolerate this shape since
+        // they only read specific fields.
         manifest: {
           generatedAt: "2026-05-15T00:00:00Z",
           latest: "1.7.0",
@@ -324,15 +548,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
         manifestUrl: "https://example.invalid/versions.json",
         issues: [],
       },
-      streamResult: {
-        version: "1.7.0",
-        installedAt: "2026-05-15T00:00:00Z",
-        executablePath: "/opt/traycer/host",
-        source: { kind: "registry", value: "1.7.0" },
-        archiveSha256: "a".repeat(64),
-        signatureKeyId: "k",
-        sizeBytes: 0,
-      },
+      streamResult: {},
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("production");
@@ -341,17 +557,6 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     const bridge = makeBridge();
     mgmt.registerHostManagementIpc(bridge as never);
 
-    await bridge.handlers.get(RunnerHostInvoke.traycerHostInstall)!(null, {
-      version: "1.7.0",
-      operationId: "op-install",
-    });
-    await bridge.handlers.get(RunnerHostInvoke.traycerHostUpdate)!(null, {
-      operationId: "op-update",
-    });
-    await bridge.handlers.get(RunnerHostInvoke.traycerHostUninstall)!(null, {
-      all: true,
-    });
-    await bridge.handlers.get(RunnerHostInvoke.traycerHostRestart)!(null, null);
     await bridge.handlers.get(RunnerHostInvoke.traycerHostLogs)!(null, {
       tailLines: 50,
     });
@@ -360,22 +565,196 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
       null,
       null,
     );
-    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(null, {
-      operationId: "op-register",
-    });
-    await bridge.handlers.get(RunnerHostInvoke.traycerServiceDeregister)!(
-      null,
-      null,
-    );
 
     // No --environment - the CLI resolves its slot from config.environment.
     for (const call of fake.calls) {
       expect(call.args).not.toContain("--environment");
     }
-    const installCall = fake.calls.find(
-      (c) => c.args.includes("install") && c.args.includes("host"),
+  });
+
+  // Host Update Layer Redesign Tech Plan ("Single-writer cutover"): install /
+  // update / uninstall / remove / restart / register / deregister /
+  // free-port-and-restart no longer shell out to the CLI directly from this
+  // IPC layer - they delegate to `HostController`, the single writer, which
+  // owns the CLI invocation (and the macOS SMAppService path) itself. These
+  // tests pin the delegation + argument threading; `HostController`'s own
+  // CLI argv (including the dev-slot service-install flags) is covered by
+  // `host-controller.test.ts`.
+  it("delegates install/update/uninstall/remove/restart/register/deregister/free-port to HostController with the right args", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("production");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const hostController = bridge.options.hostController;
+
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostInstallVersion)!(
+      null,
+      { pin: "1.7.0", force: true },
     );
-    expect(installCall?.args.slice(0, 3)).toEqual(["host", "install", "1.7.0"]);
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostApplyStaged)!(null, {
+      trigger: "manual",
+      force: false,
+    });
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostUninstall)!(null, {
+      all: true,
+    });
+    await bridge.handlers.get(RunnerHostInvoke.traycerAppUninstall)!(
+      null,
+      null,
+    );
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostRestart)!(null, null);
+    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(
+      null,
+      null,
+    );
+    await bridge.handlers.get(RunnerHostInvoke.traycerServiceDeregister)!(
+      null,
+      null,
+    );
+    await bridge.handlers.get(RunnerHostInvoke.traycerFreePortAndRestart)!(
+      null,
+      { port: 7000, pid: 1234, processName: "rogue" },
+    );
+
+    expect(hostController.calls).toEqual([
+      { method: "installVersion", args: ["1.7.0", true] },
+      { method: "applyStaged", args: ["manual", false] },
+      { method: "uninstallHost", args: [true] },
+      { method: "removeTraycer", args: [] },
+      { method: "respawn", args: [] },
+      { method: "registerService", args: [] },
+      { method: "deregisterService", args: [] },
+      { method: "freePortAndRestart", args: [1234, 7000] },
+    ]);
+  });
+
+  it("returns applyStaged's committed ok outcome when its post-apply registry projection rejects", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.getStatusError = new Error(
+      "status projection failed",
+    );
+    bridge.options.hostController.applyStagedResult = {
+      kind: "ok",
+      value: { appliedVersion: "2.0.0", runningActivated: true },
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostApplyStaged)!(null, {
+        trigger: "manual",
+        force: false,
+      }),
+    ).resolves.toEqual(bridge.options.hostController.applyStagedResult);
+  });
+
+  it("returns installVersion's committed ok outcome when its post-pin registry projection rejects", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.getStatusError = new Error(
+      "status projection failed",
+    );
+    bridge.options.hostController.installVersionResult = {
+      kind: "ok",
+      value: { installedVersion: "2.0.0", runningActivated: true },
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostInstallVersion)!(null, {
+        pin: "2.0.0",
+        force: false,
+      }),
+    ).resolves.toEqual(bridge.options.hostController.installVersionResult);
+  });
+
+  it("passes applyStaged's busy continuation through unchanged", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.applyStagedResult = {
+      kind: "busy",
+      continuation: "activate",
+      message: "finish activating the installed host",
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostApplyStaged)!(null, {
+        trigger: "manual",
+        force: false,
+      }),
+    ).resolves.toEqual(bridge.options.hostController.applyStagedResult);
+  });
+
+  it("passes activateInstalled's deferred outcome through unchanged", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.activateInstalledResult = {
+      kind: "deferred",
+      message: "the host is unavailable",
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostActivateInstalled)!(
+        null,
+        {
+          force: true,
+        },
+      ),
+    ).resolves.toEqual(bridge.options.hostController.activateInstalledResult);
+  });
+
+  it("passes installVersion's installed-not-converged outcome through unchanged", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.installVersionResult = {
+      kind: "installed-not-converged",
+      message: "installed but not reachable",
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerHostInstallVersion)!(null, {
+        pin: "2.0.0",
+        force: true,
+      }),
+    ).resolves.toEqual(bridge.options.hostController.installVersionResult);
+  });
+
+  it("passes registerService's failed outcome through unchanged", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    bridge.options.hostController.registerServiceResult = {
+      kind: "failed",
+      message: "service registration failed",
+    };
+    mgmt.registerHostManagementIpc(bridge as never);
+
+    await expect(
+      bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(null, null),
+    ).resolves.toEqual(bridge.options.hostController.registerServiceResult);
   });
 
   it("passes --include-pre-releases to host available only when requested", async () => {
@@ -414,18 +793,10 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     ]);
   });
 
-  it("dev environment passes no --environment for the same set of CLI calls", async () => {
+  it("dev environment passes no --environment for host doctor", async () => {
     const fake = installFakeCli({
       runResult: { issues: [] },
-      streamResult: {
-        version: "DEV-2.0.0",
-        installedAt: "2026-05-15T00:00:00Z",
-        executablePath: "/opt/traycer/dev-host",
-        source: { kind: "registry", value: "DEV-2.0.0" },
-        archiveSha256: "b".repeat(64),
-        signatureKeyId: "k",
-        sizeBytes: 0,
-      },
+      streamResult: {},
     });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("dev");
@@ -434,136 +805,55 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     const bridge = makeBridge();
     mgmt.registerHostManagementIpc(bridge as never);
 
-    await bridge.handlers.get(RunnerHostInvoke.traycerHostInstall)!(null, {
-      version: "latest",
-      operationId: "op-install",
-    });
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostDoctor)!(null, null);
+
+    for (const call of fake.calls) {
+      expect(call.args).not.toContain("--environment");
+    }
+  });
+
+  // Dev-slot CLI argv (the `--allow-self-invocation` dev wrapper flag,
+  // Ticket f0ae4530) is now HostController's own concern
+  // (`devServiceInstallExtras()` on the controller, environment-aware since
+  // it already carries `environment`) - pinned by `host-controller.test.ts`.
+  // This IPC layer only has to prove it delegates register/deregister/
+  // install/uninstall/restart to the controller regardless of which
+  // environment is active, and never itself threads an `--environment` flag
+  // anywhere (there is nothing left here that could).
+  it("dev environment delegates install/uninstall/restart/register/deregister to HostController", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
+    const mgmt = await import("../host-management-ipc");
+    mgmt.setActiveEnvironment("dev");
+    const { RunnerHostInvoke } =
+      await import("../../../ipc-contracts/ipc-channels");
+    const bridge = makeBridge();
+    mgmt.registerHostManagementIpc(bridge as never);
+    const hostController = bridge.options.hostController;
+
+    await bridge.handlers.get(RunnerHostInvoke.traycerHostInstallVersion)!(
+      null,
+      { pin: "latest", force: true },
+    );
     await bridge.handlers.get(RunnerHostInvoke.traycerHostUninstall)!(null, {
       all: true,
     });
     await bridge.handlers.get(RunnerHostInvoke.traycerHostRestart)!(null, null);
-    await bridge.handlers.get(RunnerHostInvoke.traycerHostDoctor)!(null, null);
+    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(
+      null,
+      null,
+    );
     await bridge.handlers.get(RunnerHostInvoke.traycerServiceDeregister)!(
       null,
       null,
     );
 
-    // No --environment - the CLI resolves its slot from config.environment.
-    for (const call of fake.calls) {
-      expect(call.args).not.toContain("--environment");
-    }
-    const uninstall = fake.calls.find((c) => c.args.includes("uninstall"));
-    expect(uninstall?.args).toContain("--all");
-    // --purge was removed: uninstall must never wipe ~/.traycer user data.
-    expect(uninstall?.args).not.toContain("--purge");
-  });
-
-  // Ticket f0ae4530 - dev service reregister must resolve the dev CLI
-  // wrapper (staged by `make dev-desktop` at
-  // `~/.traycer/cli/dev/bin/traycer`). The CLI no longer accepts an
-  // explicit `--cli-bin <path>` override (that flag was removed -
-  // see `traycer-cli/src/service/cli-binary.ts` `override` comment), so
-  // the IPC handler simply passes `--allow-self-invocation` and trusts
-  // the well-known bin-dir convention to resolve the wrapper.
-  it("dev service register passes --allow-self-invocation", async () => {
-    const fake = installFakeCli({ runResult: {}, streamResult: {} });
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("dev");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const bridge = makeBridge();
-    mgmt.registerHostManagementIpc(bridge as never);
-
-    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(null, {
-      operationId: "op-register",
-    });
-
-    const call = fake.calls[0];
-    expect(call.args).not.toContain("--environment");
-    expect(call.args.slice(0, 3)).toEqual(["host", "service", "install"]);
-    expect(call.args).toContain("--allow-self-invocation");
-    // `--cli-bin` was removed from the CLI surface; if the IPC handler
-    // ever sends it again the CLI will reject the call with
-    // `unknown option '--cli-bin'`.
-    expect(call.args).not.toContain("--cli-bin");
-  });
-
-  it("prod service register does NOT pass --allow-self-invocation even if dev wrapper exists on disk", async () => {
-    const fake = installFakeCli({ runResult: {}, streamResult: {} });
-    // Simulate a developer machine that has both prod packaged Desktop
-    // and a staged dev wrapper. The prod IPC path must ignore dev state.
-    const wrapperFilename =
-      process.platform === "win32" ? "traycer.cmd" : "traycer";
-    const wrapperDir = join(workHome, ".traycer", "cli", "dev", "bin");
-    mkdirSync(wrapperDir, { recursive: true });
-    closeSync(openSync(join(wrapperDir, wrapperFilename), "w"));
-
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const bridge = makeBridge();
-    mgmt.registerHostManagementIpc(bridge as never);
-
-    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(null, {
-      operationId: "op-register",
-    });
-    const call = fake.calls[0];
-    expect(call.args).toEqual(["host", "service", "install"]);
-  });
-
-  it("dev deregister + reregister does not mutate prod service/install state", async () => {
-    const fake = installFakeCli({ runResult: {}, streamResult: {} });
-    // Pre-seed both prod and dev install records.
-    writeInstallRecord("production", {
-      version: "PROD-1.7.0",
-      platform: process.platform,
-      arch: process.arch,
-      installedAt: "2026-05-15T00:00:00Z",
-      executablePath: "/opt/traycer/prod-host",
-      source: { kind: "registry", value: "PROD-1.7.0" },
-      archiveSha256: "a".repeat(64),
-      signatureKeyId: "prod-key",
-      sizeBytes: 1234,
-    });
-    writeInstallRecord("dev", {
-      version: "DEV-2.0.0",
-      platform: process.platform,
-      arch: process.arch,
-      installedAt: "2026-05-15T01:00:00Z",
-      executablePath: "/opt/traycer/dev-host",
-      source: { kind: "registry", value: "DEV-2.0.0" },
-      archiveSha256: "b".repeat(64),
-      signatureKeyId: "dev-key",
-      sizeBytes: 4321,
-    });
-    const wrapperFilename =
-      process.platform === "win32" ? "traycer.cmd" : "traycer";
-    const wrapperDir = join(workHome, ".traycer", "cli", "dev", "bin");
-    mkdirSync(wrapperDir, { recursive: true });
-    closeSync(openSync(join(wrapperDir, wrapperFilename), "w"));
-
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("dev");
-    const { RunnerHostInvoke } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const bridge = makeBridge();
-    mgmt.registerHostManagementIpc(bridge as never);
-
-    await bridge.handlers.get(RunnerHostInvoke.traycerServiceDeregister)!(
-      null,
-      null,
-    );
-    await bridge.handlers.get(RunnerHostInvoke.traycerServiceRegister)!(null, {
-      operationId: "op-rereg",
-    });
-
-    // Every emitted call must omit --environment; the CLI resolves its slot
-    // from config.environment, so a dev re-register sequence never
-    // accidentally touches the prod environment.
-    for (const call of fake.calls) {
-      expect(call.args).not.toContain("--environment");
-    }
+    expect(hostController.calls).toEqual([
+      { method: "installVersion", args: ["latest", true] },
+      { method: "uninstallHost", args: [true] },
+      { method: "respawn", args: [] },
+      { method: "registerService", args: [] },
+      { method: "deregisterService", args: [] },
+    ]);
   });
 
   // Pin the per-environment CLI manifest path read by Settings → Host
@@ -638,24 +928,22 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     expect(result?.binaryPath).toBe("/usr/local/bin/traycer-dev");
   });
 
-  it("omits --environment for host free-port-and-restart so slot resolution stays CLI-owned", async () => {
-    const fake = installFakeCli({
-      runResult: { port: 7000, pid: 1234, processName: "rogue" },
-      streamResult: {},
-    });
+  it("echoes the confirmed port/pid/processName back after HostController.freePortAndRestart succeeds", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
     mgmt.setActiveEnvironment("dev");
     const { RunnerHostInvoke } =
       await import("../../../ipc-contracts/ipc-channels");
     const bridge = makeBridge();
     mgmt.registerHostManagementIpc(bridge as never);
-    await bridge.handlers.get(RunnerHostInvoke.traycerFreePortAndRestart)!(
-      null,
-      { port: 7000, pid: 1234, processName: "rogue" },
-    );
-    const call = fake.calls[0];
-    expect(call.args).not.toContain("--environment");
-    expect(call.args.slice(0, 2)).toEqual(["host", "free-port-and-restart"]);
+    const result = await bridge.handlers.get(
+      RunnerHostInvoke.traycerFreePortAndRestart,
+    )!(null, { port: 7000, pid: 1234, processName: "rogue" });
+    expect(result).toEqual({ port: 7000, pid: 1234, processName: "rogue" });
+    expect(bridge.options.hostController.calls).toContainEqual({
+      method: "freePortAndRestart",
+      args: [1234, 7000],
+    });
   });
 });
 
@@ -770,267 +1058,147 @@ describe("host-management IPC - verify-disabled normalisation for dev builds", (
   });
 });
 
-// Ticket: host-update-race-conditions. The banner and Settings → Host each
-// run their own independent `useMutation`, so two near-simultaneous clicks
-// used to spawn two `traycer host …` subprocesses that raced the CLI's
-// file lock - the loser waited 30s then surfaced `CLI_LOCK_BUSY` while the
-// winner's UI kept spinning. Main is now the single-flight serializer: a
-// second concurrent install/update/register-service call is rejected
-// synchronously, before a second subprocess is ever spawned, and every
-// surface (any open window) observes the same canonical
-// `hostOperationStatusChange` broadcast regardless of which one triggered it.
-function installFakeCliWithDeferredStream(): {
-  readonly calls: RecordedCall[];
-  readonly resolveStream: (data: unknown) => void;
-  readonly rejectStream: (err: unknown) => void;
-} {
-  const calls: RecordedCall[] = [];
-  let resolveStream: (data: unknown) => void = () => undefined;
-  let rejectStream: (err: unknown) => void = () => undefined;
-  vi.doMock("../../cli/traycer-cli", () => ({
-    runTraycerCliJson: vi.fn((args: readonly string[]) => {
-      calls.push({ kind: "run", args: [...args] });
-      return Promise.resolve({});
-    }),
-    streamTraycerCliJson: vi.fn(
-      ({
-        args,
-        onEvent,
-      }: {
-        readonly args: readonly string[];
-        readonly onEvent: (event: unknown) => void;
-      }) => {
-        calls.push({ kind: "stream", args: [...args] });
-        return new Promise((resolve, reject) => {
-          resolveStream = (data: unknown) => {
-            onEvent({
-              type: "progress",
-              stage: "download",
-              percent: 50,
-              bytes: 50,
-              totalBytes: 100,
-              message: "downloading",
-            });
-            resolve({ data });
-          };
-          rejectStream = reject;
-        });
-      },
-    ),
-    TraycerCliError: class extends Error {},
-  }));
-  return {
-    calls,
-    resolveStream: (data) => resolveStream(data),
-    rejectStream: (err) => rejectStream(err),
-  };
-}
-
-// Both `traycerHostUpdate` et al. and `trackHostOperation`'s single-flight
-// check are separated by an `await clearHostRemovalIfSet()`, so a call's
-// promise being created doesn't guarantee the guard has run yet. Poll for the
-// CLI subprocess call landing (proof the guard already ran) before treating a
-// call as "in flight" - asserting or firing a second call any earlier would
-// be racing the same microtask ordering these tests exist to pin down.
-async function waitForStreamCallCount(
-  fake: { readonly calls: RecordedCall[] },
-  count: number,
-): Promise<void> {
-  await vi.waitFor(() => {
-    if (fake.calls.filter((c) => c.kind === "stream").length < count) {
-      throw new Error("stream call not reached yet");
-    }
-  });
-}
-
-describe("host-management IPC - single-flight guard on concurrent host mutations", () => {
-  it("rejects a second concurrent host update without spawning a second CLI subprocess", async () => {
-    const fake = installFakeCliWithDeferredStream();
+// Renderer surfaces cutover (Host Update Layer Redesign Tech Plan): the old
+// `traycerHostEnsure` handler (collapsed in from the deleted
+// `host-ensure-ipc.ts`) re-shaped `HostController.convergeReady`'s outcome
+// into a bespoke `HostEnsureResult` union (`action: "provisioned" |
+// "removed" | "host-busy"`) and rejected the invoke on a deferred/failed
+// outcome. `traycerHostConvergeReady` replaces it with a raw pass-through of
+// `MutationOutcome<ConvergeReadyOk>` - every renderer surface branches on
+// `kind` itself now, so there is no re-shaping left to pin, and "wait-never-
+// reject" means a failed/deferred outcome resolves rather than rejects. The
+// busy-outcome-triggers-a-disk-reload side effect is gone too: the old
+// mapping needed a live `version` to synthesize a plausible
+// `HostEnsureResult`; the new outcome only needs to forward `continuation`
+// and `message`, so nothing needs re-reading from disk. What every branch
+// still owned by `HostController.convergeReady` itself (reachability,
+// SMAppService registration, busy detection, readiness polling) does is
+// covered by `host-controller.test.ts`.
+describe("host-management IPC - traycerHostConvergeReady delegates to HostController.convergeReady", () => {
+  it("forwards force and returns the raw ok outcome unchanged", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
     const { RunnerHostInvoke } =
       await import("../../../ipc-contracts/ipc-channels");
     const bridge = makeBridge();
     mgmt.registerHostManagementIpc(bridge as never);
-    const updateHandler = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!;
+    bridge.options.hostController.convergeReadyResult = {
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
+    };
 
-    const first = updateHandler(null, { operationId: "op-first" });
-    await waitForStreamCallCount(fake, 1);
-    // The first call's `streamTraycerCliJson` is still pending (deferred),
-    // so a second call landing now is exactly the banner-then-Settings race.
-    await expect(
-      updateHandler(null, { operationId: "op-second" }),
-    ).rejects.toThrow(/already in progress/i);
+    const result = await bridge.handlers.get(
+      RunnerHostInvoke.traycerHostConvergeReady,
+    )!(null, { force: true });
 
-    // Only ONE CLI subprocess was ever spawned - the second click never
-    // reached the CLI lock at all.
-    expect(fake.calls.filter((c) => c.kind === "stream")).toHaveLength(1);
-
-    fake.resolveStream({
-      version: "1.7.0",
-      installedAt: "2026-05-15T00:00:00Z",
-      executablePath: "/opt/traycer/host",
-      source: { kind: "registry", value: "1.7.0" },
-      archiveSha256: "a".repeat(64),
-      signatureKeyId: "k",
-      sizeBytes: 0,
+    expect(result).toEqual({
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
     });
-    await first;
+    expect(bridge.options.hostController.calls).toContainEqual({
+      method: "convergeReady",
+      args: [true],
+    });
   });
 
-  it("blocks an install while an update is in flight (the lock is not scoped per-kind)", async () => {
-    const fake = installFakeCliWithDeferredStream();
+  it("defaults force to false when omitted", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
     const { RunnerHostInvoke } =
       await import("../../../ipc-contracts/ipc-channels");
     const bridge = makeBridge();
     mgmt.registerHostManagementIpc(bridge as never);
+    bridge.options.hostController.convergeReadyResult = {
+      kind: "ok",
+      value: { running: false, version: null },
+    };
 
-    const updatePromise = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!(null, { operationId: "op-update" });
-    await waitForStreamCallCount(fake, 1);
-    await expect(
-      bridge.handlers.get(RunnerHostInvoke.traycerHostInstall)!(null, {
-        version: "latest",
-        operationId: "op-install",
-      }),
-    ).rejects.toThrow(/already in progress/i);
+    const result = await bridge.handlers.get(
+      RunnerHostInvoke.traycerHostConvergeReady,
+    )!(null, null);
 
-    fake.resolveStream({
-      version: "1.7.0",
-      installedAt: "2026-05-15T00:00:00Z",
-      executablePath: "/opt/traycer/host",
-      source: { kind: "registry", value: "1.7.0" },
-      archiveSha256: "a".repeat(64),
-      signatureKeyId: "k",
-      sizeBytes: 0,
+    expect(result).toEqual({
+      kind: "ok",
+      value: { running: false, version: null },
     });
-    await updatePromise;
+    expect(bridge.options.hostController.calls).toContainEqual({
+      method: "convergeReady",
+      args: [false],
+    });
   });
 
-  it("broadcasts hostOperationStatusChange on start, on progress, and clears it to null on settle", async () => {
-    const fake = installFakeCliWithDeferredStream();
+  it("forwards a busy outcome unchanged, with no disk-reload side effect", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
-    const { RunnerHostInvoke, RunnerHostEvent } =
-      await import("../../../ipc-contracts/ipc-channels");
-    const bridge = makeBridge();
-    mgmt.registerHostManagementIpc(bridge as never);
-
-    const updatePromise = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!(null, { operationId: "op-update" });
-    await waitForStreamCallCount(fake, 1);
-
-    // Started: broadcast with no progress yet.
-    const statusCalls = () =>
-      bridge.fanOut.mock.calls.filter(
-        ([channel]) => channel === RunnerHostEvent.hostOperationStatusChange,
-      );
-    expect(statusCalls()[0]?.[1]).toMatchObject({
-      kind: "update",
-      percent: null,
-    });
-    expect(mgmt.getHostOperationStatus()).toMatchObject({ kind: "update" });
-
-    fake.resolveStream({
-      version: "1.7.0",
-      installedAt: "2026-05-15T00:00:00Z",
-      executablePath: "/opt/traycer/host",
-      source: { kind: "registry", value: "1.7.0" },
-      archiveSha256: "a".repeat(64),
-      signatureKeyId: "k",
-      sizeBytes: 0,
-    });
-    await updatePromise;
-
-    // The deferred stream fixture fires one progress tick right before
-    // resolving - assert it landed before the terminal null.
-    const afterSettle = statusCalls();
-    const progressCall = afterSettle.find(
-      ([, payload]) =>
-        payload !== null &&
-        typeof payload === "object" &&
-        (payload as { percent: number | null }).percent === 50,
-    );
-    expect(progressCall).toBeDefined();
-    expect(afterSettle[afterSettle.length - 1]?.[1]).toBeNull();
-    expect(mgmt.getHostOperationStatus()).toBeNull();
-  });
-
-  it("a failed operation still clears the status so a retry isn't permanently blocked", async () => {
-    const fake = installFakeCliWithDeferredStream();
-    const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
     const { RunnerHostInvoke } =
       await import("../../../ipc-contracts/ipc-channels");
     const bridge = makeBridge();
     mgmt.registerHostManagementIpc(bridge as never);
+    bridge.options.hostController.convergeReadyResult = {
+      kind: "busy",
+      continuation: "activate",
+      message: "host busy",
+    };
 
-    const updatePromise = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!(null, { operationId: "op-update" });
-    await waitForStreamCallCount(fake, 1);
-    fake.rejectStream(new Error("network unreachable"));
-    await expect(updatePromise).rejects.toThrow(/network unreachable/);
+    const result = await bridge.handlers.get(
+      RunnerHostInvoke.traycerHostConvergeReady,
+    )!(null, null);
 
-    expect(mgmt.getHostOperationStatus()).toBeNull();
-    // A subsequent attempt is allowed through - the failed op didn't wedge
-    // the guard. Reuses the same fake CLI: each `streamTraycerCliJson` call
-    // creates a fresh deferred promise, so `resolveStream` below settles
-    // THIS retry, not the already-rejected first attempt.
-    const retryHandler = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!;
-    const retry = retryHandler(null, { operationId: "op-retry" });
-    await waitForStreamCallCount(fake, 2);
-    expect(mgmt.getHostOperationStatus()).toMatchObject({ kind: "update" });
-    fake.resolveStream({
-      version: "1.7.0",
-      installedAt: "2026-05-15T00:00:00Z",
-      executablePath: "/opt/traycer/host",
-      source: { kind: "registry", value: "1.7.0" },
-      archiveSha256: "a".repeat(64),
-      signatureKeyId: "k",
-      sizeBytes: 0,
+    expect(result).toEqual({
+      kind: "busy",
+      continuation: "activate",
+      message: "host busy",
     });
-    await retry;
+    expect(bridge.options.host.reloadSnapshotFromDisk).not.toHaveBeenCalled();
   });
 
-  it("traycerHostOperationStatusGet reflects the in-flight operation for a component that mounts mid-operation", async () => {
-    const fake = installFakeCliWithDeferredStream();
+  it("resolves (never rejects) a deferred/failed outcome", async () => {
+    installFakeCli({ runResult: {}, streamResult: {} });
     const mgmt = await import("../host-management-ipc");
-    mgmt.setActiveEnvironment("production");
     const { RunnerHostInvoke } =
       await import("../../../ipc-contracts/ipc-channels");
     const bridge = makeBridge();
     mgmt.registerHostManagementIpc(bridge as never);
+    bridge.options.hostController.convergeReadyResult = {
+      kind: "failed",
+      message: "no host installed",
+    };
 
-    const statusHandler = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostOperationStatusGet,
-    )!;
-    expect(await statusHandler(null, null)).toBeNull();
+    const result = await bridge.handlers.get(
+      RunnerHostInvoke.traycerHostConvergeReady,
+    )!(null, null);
 
-    const updatePromise = bridge.handlers.get(
-      RunnerHostInvoke.traycerHostUpdate,
-    )!(null, { operationId: "op-update" });
-    await waitForStreamCallCount(fake, 1);
-    expect(await statusHandler(null, null)).toMatchObject({ kind: "update" });
-
-    fake.resolveStream({
-      version: "1.7.0",
-      installedAt: "2026-05-15T00:00:00Z",
-      executablePath: "/opt/traycer/host",
-      source: { kind: "registry", value: "1.7.0" },
-      archiveSha256: "a".repeat(64),
-      signatureKeyId: "k",
-      sizeBytes: 0,
+    expect(result).toEqual({
+      kind: "failed",
+      message: "no host installed",
     });
-    await updatePromise;
-    expect(await statusHandler(null, null)).toBeNull();
   });
 });
+
+// Renderer surfaces cutover (Host Update Layer Redesign Tech Plan): this
+// whole describe block ("legacy progress broadcast over HostController's
+// mutation lane") pinned the caller-supplied-`operationId` attribution layer
+// - `cliOperationProgress`/`hostOperationStatusChange` events,
+// `getHostOperationStatus()`/`traycerHostOperationStatusGet`, and the
+// `*ForOperation` fake-controller overloads that carried a renderer-chosen id
+// through to progress ticks. None of it exists in production
+// `host-management-ipc.ts` anymore (`registerHostManagementIpc` no longer
+// registers those channels or exports `getHostOperationStatus`) - it's
+// superseded by `host-controller-status-broadcast.ts`, which pushes the
+// single canonical `HostControllerStatus.mutation` value (no caller-supplied
+// id) to every window.
+//
+// The "attribution" problem these tests solved (which of several concurrent
+// legacy calls does a progress tick belong to?) does not exist in the new
+// model: `HostController`'s mutation lane is exclusive - there is only ever
+// one lane-owning operation, so there is nothing to attribute between. That
+// exclusivity, and "a second concurrent submission is served (FIFO), never
+// rejected," are pinned at the source in `host-controller.test.ts` (see "two
+// concurrent applyStaged submissions both resolve - no 'Another host
+// operation' rejection" and the "P10: ... coalesce" cluster). "Status clears
+// so a retry isn't blocked" is structural in the new design too: the
+// broadcaster always re-reads `hostController.getStatus()` fresh, so a
+// settled/failed mutation is reflected as `mutation: null` on the very next
+// tick, with no separate clear-up step that could leave a wedge.
+// `host-controller-status-broadcast.test.ts` covers the broadcaster's own
+// push/poll behavior directly.

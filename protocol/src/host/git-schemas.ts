@@ -344,6 +344,22 @@ export type GitSubscribeStatusRequest = z.infer<
   typeof gitSubscribeStatusRequestSchema
 >;
 
+/**
+ * `git.subscribeStatus@1.2` open request. `freshNonce` is opaque correlation
+ * for a manual stream replacement: `null` preserves an ordinary subscription;
+ * a string asks the host to wait for a poll that starts after registration.
+ *
+ * This deliberately lives on a distinct schema. The v1.0/v1.1 request shape is
+ * released and must stay byte-for-byte stable for negotiated older peers.
+ */
+export const gitSubscribeStatusRequestSchemaV12 =
+  gitSubscribeStatusRequestSchema.extend({
+    freshNonce: z.string().nullable(),
+  });
+export type GitSubscribeStatusRequestV12 = z.infer<
+  typeof gitSubscribeStatusRequestSchemaV12
+>;
+
 // ---- Submodule-aware v1.1 ------------------------------------------------ //
 //
 // Everything below is exclusive to the v1.1 surfaces: the unary
@@ -543,11 +559,10 @@ export type GitListChangedFilesResponseV11 = z.infer<
  * `changedPaths`). Snapshot frames carry plain `submoduleChangesetSchema`
  * sections (full state, no delta).
  */
-export const submoduleChangesetUpdatedSchemaV11 = submoduleChangesetSchema.extend(
-  {
+export const submoduleChangesetUpdatedSchemaV11 =
+  submoduleChangesetSchema.extend({
     changedPaths: z.array(z.string()),
-  },
-);
+  });
 export type SubmoduleChangesetUpdatedV11 = z.infer<
   typeof submoduleChangesetUpdatedSchemaV11
 >;
@@ -605,4 +620,52 @@ export const gitSubscribeStatusEventSchemaV11 = z.discriminatedUnion("type", [
 ]);
 export type GitSubscribeStatusEventV11 = z.infer<
   typeof gitSubscribeStatusEventSchemaV11
+>;
+
+// ---- Stream v1.2: guaranteed-fresh replacement correlation -------------- //
+//
+// `freshNonce` is required on every snapshot/updated v1.2 frame. Ordinary
+// subscriptions carry `null`; a targeted replacement snapshot echoes the
+// opaque nonce supplied at open. Errors remain shape-identical to older
+// minors. Resolver projection explicitly strips this additive field for
+// negotiated minors 0 and 1.
+
+export const gitSubscribeStatusEventSchemaV12 = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("snapshot"),
+    runningDir: z.string(),
+    headSha: z.string(),
+    branch: z.string().nullable(),
+    files: z.array(gitChangedFileV11Schema),
+    fingerprint: z.string(),
+    nestedFingerprint: z.string(),
+    repoMode: repoModeSchema,
+    repoState: repoStateSchema,
+    submodules: z.array(submoduleChangesetSchema),
+    pollStartedAtMs: z.number().int(),
+    freshNonce: z.string().nullable(),
+  }),
+  z.object({
+    type: z.literal("updated"),
+    runningDir: z.string(),
+    headSha: z.string(),
+    branch: z.string().nullable(),
+    files: z.array(gitChangedFileV11Schema),
+    fingerprint: z.string(),
+    nestedFingerprint: z.string(),
+    repoMode: repoModeSchema,
+    repoState: repoStateSchema,
+    changedPaths: z.array(z.string()),
+    submodules: z.array(submoduleChangesetUpdatedSchemaV11),
+    pollStartedAtMs: z.number().int(),
+    freshNonce: z.string().nullable(),
+  }),
+  z.object({
+    type: z.literal("error"),
+    message: z.string(),
+    isFatal: z.boolean(),
+  }),
+]);
+export type GitSubscribeStatusEventV12 = z.infer<
+  typeof gitSubscribeStatusEventSchemaV12
 >;

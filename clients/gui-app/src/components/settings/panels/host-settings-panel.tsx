@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
+import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
 import { ActionsRow } from "@/components/settings/panels/host-settings-actions-row";
 import { AdvancedDisclosure } from "@/components/settings/panels/host-settings-advanced-disclosure";
 import { DoctorSheet } from "@/components/settings/panels/host-settings-doctor-sheet";
@@ -18,7 +19,6 @@ import {
   deriveStatus,
   extractErrorMessage,
   findReleasedAt,
-  type HostProgressState,
 } from "@/components/settings/panels/host-settings-panel-model";
 import { HostProgressBanner } from "@/components/settings/panels/host-settings-progress-banner";
 import { InstallationDetailsDisclosure } from "@/components/settings/panels/host-settings-installation-details";
@@ -36,17 +36,43 @@ import {
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
+import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
+import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
+import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
+import { useRunnerInstallVersion } from "@/hooks/runner/use-runner-install-version-mutation";
 import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
 import type {
+  ApplyStagedOk,
+  BusyContinuation,
   CliInstallManifestSnapshot,
   HostAvailableSnapshot,
   HostInstalledRecord,
   HostNameSettings,
-  HostOperationStatus,
   HostRegistryUpdateState,
   IHostManagement,
+  InstallVersionOk,
   IRunnerHost,
+  MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
+
+type SettingsUpdateIntent = "apply" | "installVersion";
+
+interface SettingsBusyState {
+  readonly intent: SettingsUpdateIntent;
+  readonly continuation: BusyContinuation;
+  readonly message: string;
+  // The pin being installed, when `intent === "installVersion"` - needed so
+  // a `"retry-with-force"` Force click re-submits `installVersion{pin, force}`
+  // rather than losing which version was being pinned.
+  readonly pin: string | null;
+}
+
+interface SettingsTerminalOutcomeState {
+  readonly intent: SettingsUpdateIntent;
+  readonly message: string;
+  readonly pin: string | null;
+}
 
 export function HostSettingsPanel() {
   const runnerHost = useRunnerHost();
@@ -169,38 +195,23 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   >(null);
   const [restartConfirmOpen, setRestartConfirmOpen] = useState<boolean>(false);
   const [includePreReleases, setIncludePreReleases] = useState(false);
+  const [busy, setBusy] = useState<SettingsBusyState | null>(null);
+  const [terminalOutcome, setTerminalOutcome] =
+    useState<SettingsTerminalOutcomeState | null>(null);
   const localHost = useLocalHostSnapshot(runnerHost);
 
-  // Canonical cross-surface "is a host mutation running" status (Ticket:
-  // host-update-race-conditions), shared with the landing-page banner and any
-  // other open window via the same query key. Drives the progress banner and
-  // the disable-gating below regardless of which surface (or the background
-  // auto-update reconciler) actually started the operation - so this panel no
-  // longer needs its own per-mutation `onProgress` callback or local
-  // `progress` state.
-  const { data: operationStatus } = useQuery(
-    queryOptions<HostOperationStatus | null>({
-      queryKey: runnerQueryKeys.hostOperationStatus(management),
-      queryFn: () => management.getOperationStatus(),
-      staleTime: Infinity,
-    }),
-  );
-  const sharedOperationActive =
-    operationStatus !== undefined && operationStatus !== null;
-  const progress: HostProgressState | null =
-    operationStatus !== undefined && operationStatus !== null
-      ? {
-          kind: operationStatus.kind,
-          event: {
-            operationId: operationStatus.operationId,
-            stage: operationStatus.stage ?? "",
-            percent: operationStatus.percent,
-            bytes: operationStatus.bytes,
-            totalBytes: operationStatus.totalBytes,
-            message: operationStatus.message,
-          },
-        }
-      : null;
+  // Canonical two-lane `HostControllerStatus` (Host Update Layer Redesign
+  // Tech Plan), shared with the landing-page banner, the tray/menu, and any
+  // other open window via the same query key. The mutation lane drives the
+  // progress banner and the disable-gating below regardless of which surface
+  // (or the background auto-update reconciler) actually started the
+  // operation; the download lane is purely informational here and never
+  // disables anything (Renderer surfaces cutover ticket).
+  const statusQuery = useRunnerHostControllerStatusQuery();
+  const controllerStatus = statusQuery.data;
+  const mutationLane = controllerStatus?.mutation ?? null;
+  const sharedMutationActive = mutationLane !== null;
+  const progress = mutationLane;
 
   const {
     data: availableSnapshot,
@@ -268,38 +279,123 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     });
   };
 
-  const installMutation = useMutation({
-    mutationKey: runnerMutationKeys.hostInstall(),
-    mutationFn: (version: string | null) =>
-      management.installHost({ version, onProgress: null }),
-    onSuccess: (data) => {
-      toast.success(`Installed host v${data.version}`);
-      useHostUpdateBannerStore.getState().clearSnooze(data.version);
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostInstalledRecord(management),
-      });
-      invalidate();
-    },
-    onError: (err) => {
-      toastFromRunnerError(err, "Couldn't install host");
-    },
-  });
+  // Bootstrap "Install host" (shown only when `status === "not-installed"`).
+  // Busy is structurally unreachable here (nothing can hold the mutation
+  // lane on a host that was never installed), so this reuses the gate's
+  // throw-on-non-ok convergeReady hook rather than the Force/Defer flow.
+  const convergeReadyMutation = useRunnerConvergeReady();
 
-  const updateMutation = useMutation({
-    mutationKey: runnerMutationKeys.hostUpdate(),
-    mutationFn: () => management.updateHost({ onProgress: null }),
-    onSuccess: (data) => {
-      toast.success(`Updated host to v${data.version}`);
-      useHostUpdateBannerStore.getState().clearSnooze(data.version);
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostInstalledRecord(management),
-      });
+  const applyStagedMutation = useRunnerApplyStaged();
+  const activateInstalledMutation = useRunnerActivateInstalled();
+  const installVersionMutation = useRunnerInstallVersion();
+
+  const handleApplyOutcome = (
+    outcome: MutationOutcome<ApplyStagedOk>,
+  ): void => {
+    if (outcome.kind === "ok") {
+      toast.success(`Updated host to v${outcome.value.appliedVersion}`);
+      useHostUpdateBannerStore
+        .getState()
+        .clearSnooze(outcome.value.appliedVersion);
+      setBusy(null);
+      setTerminalOutcome(null);
       invalidate();
-    },
-    onError: (err) => {
-      toastFromRunnerError(err, "Couldn't update host");
-    },
-  });
+      return;
+    }
+    if (outcome.kind === "busy") {
+      setBusy({
+        intent: "apply",
+        continuation: outcome.continuation,
+        message: outcome.message,
+        pin: null,
+      });
+      return;
+    }
+    setBusy(null);
+    setTerminalOutcome({
+      intent: "apply",
+      message: outcome.message,
+      pin: null,
+    });
+  };
+
+  const handleInstallVersionOutcome = (
+    outcome: MutationOutcome<InstallVersionOk>,
+    pin: string,
+  ): void => {
+    if (outcome.kind === "ok") {
+      toast.success(`Installed host v${outcome.value.installedVersion}`);
+      useHostUpdateBannerStore
+        .getState()
+        .clearSnooze(outcome.value.installedVersion);
+      setBusy(null);
+      setTerminalOutcome(null);
+      invalidate();
+      return;
+    }
+    if (outcome.kind === "busy") {
+      setBusy({
+        intent: "installVersion",
+        continuation: outcome.continuation,
+        message: outcome.message,
+        pin,
+      });
+      return;
+    }
+    setBusy(null);
+    setTerminalOutcome({
+      intent: "installVersion",
+      message: outcome.message,
+      pin,
+    });
+  };
+
+  const runApply = (force: boolean): void => {
+    applyStagedMutation.mutate(
+      { trigger: "manual", force },
+      { onSuccess: handleApplyOutcome },
+    );
+  };
+
+  const runInstallVersion = (pin: string, force: boolean): void => {
+    installVersionMutation.mutate(
+      { pin, force },
+      { onSuccess: (outcome) => handleInstallVersionOutcome(outcome, pin) },
+    );
+  };
+
+  // Force continuation after a post-commit busy outcome (packaged macOS):
+  // activates the already-committed install rather than re-running the
+  // consumed apply/pin.
+  const runForceActivate = (): void => {
+    if (busy === null) return;
+    const { intent, pin } = busy;
+    activateInstalledMutation.mutate(
+      { force: true },
+      {
+        onSuccess: (outcome) => {
+          if (outcome.kind === "ok") {
+            toast.success("Host activated");
+            setBusy(null);
+            setTerminalOutcome(null);
+            invalidate();
+            return;
+          }
+          if (outcome.kind === "busy") {
+            setBusy({
+              intent,
+              continuation: outcome.continuation,
+              message: outcome.message,
+              pin,
+            });
+            return;
+          }
+          setBusy(null);
+          setTerminalOutcome({ intent, message: outcome.message, pin });
+        },
+      },
+    );
+  };
 
   const restartMutation = useMutation({
     mutationKey: runnerMutationKeys.hostRestart(),
@@ -320,7 +416,13 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
 
   const registerServiceMutation = useMutation({
     mutationKey: runnerMutationKeys.hostRegisterService(),
-    mutationFn: () => management.registerService({ onProgress: null }),
+    mutationFn: async () => {
+      const outcome = await management.registerService();
+      if (outcome.kind !== "ok") {
+        throw new Error(outcome.message);
+      }
+      return outcome.value;
+    },
     onSuccess: () => {
       toast.success("Service registered");
       void queryClient.invalidateQueries({
@@ -374,32 +476,29 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
     onError: (err) => toastFromRunnerError(err, "Couldn't update host name"),
   });
 
+  // Disables off the mutation lane only - a background download (the
+  // download lane) must never disable unrelated actions here (Renderer
+  // surfaces cutover ticket).
   const anyPending =
-    installMutation.isPending ||
-    updateMutation.isPending ||
+    convergeReadyMutation.isPending ||
+    applyStagedMutation.isPending ||
+    activateInstalledMutation.isPending ||
+    installVersionMutation.isPending ||
     restartMutation.isPending ||
     registerServiceMutation.isPending ||
     deregisterServiceMutation.isPending ||
     // A mutation started from another surface (the landing-page banner, a
-    // second window, or the background auto-update reconciler) - none of
-    // this panel's own mutations are pending, but the CLI lock is still
-    // held, so every trigger here must stay disabled too.
-    sharedOperationActive;
+    // second window, the tray/menu, or the background auto-update
+    // reconciler) - none of this panel's own mutations are pending, but the
+    // mutation lane is still held, so every trigger here must stay disabled
+    // too.
+    sharedMutationActive;
   const installPending =
-    installMutation.isPending ||
-    (operationStatus !== undefined &&
-      operationStatus !== null &&
-      operationStatus.kind === "install");
+    convergeReadyMutation.isPending || mutationLane?.kind === "ensure";
   const updatePending =
-    updateMutation.isPending ||
-    (operationStatus !== undefined &&
-      operationStatus !== null &&
-      operationStatus.kind === "update");
+    applyStagedMutation.isPending || mutationLane?.kind === "apply";
   const registerPending =
-    registerServiceMutation.isPending ||
-    (operationStatus !== undefined &&
-      operationStatus !== null &&
-      operationStatus.kind === "register-service");
+    registerServiceMutation.isPending || mutationLane?.kind === "register";
 
   const status = deriveStatus(localHost, installedRecord);
   const statusPending = status === undefined;
@@ -419,6 +518,39 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
       description="Local background service that runs Traycer on your machine."
     >
       {progress !== null ? <HostProgressBanner progress={progress} /> : null}
+      {terminalOutcome !== null ? (
+        <div
+          data-testid="settings-host-deferred-outcome"
+          className="flex items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/10 px-5 py-3 text-ui-sm text-destructive"
+        >
+          <span className="min-w-0 flex-1">{terminalOutcome.message}</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              const { intent, pin } = terminalOutcome;
+              setTerminalOutcome(null);
+              if (intent === "apply") {
+                runApply(false);
+              } else if (pin !== null) {
+                runInstallVersion(pin, false);
+              }
+            }}
+            data-testid="settings-host-deferred-retry"
+          >
+            Retry
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => setTerminalOutcome(null)}
+          >
+            Dismiss
+          </Button>
+        </div>
+      ) : null}
       {packageManagerUpgrade !== null ? (
         <PackageManagerUpgradeHint hint={packageManagerUpgrade} />
       ) : null}
@@ -445,7 +577,26 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         anyPending={anyPending}
         installPending={installPending}
         restartPending={restartMutation.isPending}
-        onInstall={() => installMutation.mutate(null)}
+        onInstall={() =>
+          convergeReadyMutation.mutate(
+            { force: false },
+            {
+              onSuccess: (outcome) => {
+                if (outcome.kind === "ok" && outcome.value.running) {
+                  toast.success(
+                    outcome.value.version !== null
+                      ? `Installed host v${outcome.value.version}`
+                      : "Host installed",
+                  );
+                }
+                invalidate();
+              },
+              onError: (err) => {
+                toastFromRunnerError(err, "Couldn't install host");
+              },
+            },
+          )
+        }
         onRestart={() => setRestartConfirmOpen(true)}
         onOpenDoctor={() => setDoctorOpen(true)}
       />
@@ -467,7 +618,10 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
           updatePending={updatePending}
           latestReleasedAt={latestReleasedAt}
           nowMs={nowMs}
-          onUpdate={() => updateMutation.mutate()}
+          updateReady={controllerStatus?.updateReady ?? false}
+          stagedVersion={controllerStatus?.stagedVersion ?? null}
+          downloadProgress={controllerStatus?.download?.progress ?? null}
+          onUpdate={() => runApply(false)}
           onRefresh={handleRefreshRegistry}
         />
       )}
@@ -491,7 +645,7 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         anyPending={anyPending}
         registerPending={registerPending}
         deregisterPending={deregisterServiceMutation.isPending}
-        onInstallVersion={(version) => installMutation.mutate(version)}
+        onInstallVersion={(version) => runInstallVersion(version, false)}
         onRegisterService={() => registerServiceMutation.mutate()}
         onDeregisterService={() => deregisterServiceMutation.mutate()}
         onRefreshAvailable={handleRefreshRegistry}
@@ -502,6 +656,33 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
         open={doctorOpen}
         onOpenChange={setDoctorOpen}
         management={management}
+      />
+      <HostBusyForceDeferDialog
+        open={busy !== null}
+        message={busy?.message ?? ""}
+        isForcing={
+          applyStagedMutation.isPending ||
+          installVersionMutation.isPending ||
+          activateInstalledMutation.isPending
+        }
+        forceLabel={
+          busy?.continuation === "activate" ? "Force restart" : "Force update"
+        }
+        onForce={() => {
+          if (busy === null) return;
+          if (busy.continuation === "activate") {
+            runForceActivate();
+            return;
+          }
+          if (busy.intent === "apply") {
+            runApply(true);
+          } else if (busy.pin !== null) {
+            runInstallVersion(busy.pin, true);
+          }
+        }}
+        onDefer={() => {
+          setBusy(null);
+        }}
       />
     </SettingsPanelShell>
   );

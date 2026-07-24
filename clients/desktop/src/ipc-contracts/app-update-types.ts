@@ -28,6 +28,8 @@ export interface DesktopAppUpdateSnapshot {
   readonly sequence: number;
   readonly status: DesktopAppUpdateStatus;
   readonly currentVersion: string;
+  /** Whether update checks may select release candidates and prereleases. */
+  readonly allowPrerelease: boolean;
   readonly latestVersion: string | null;
   // Whole-percent download progress (0-100) while `status` is "downloading";
   // null in every other state (including before a user-initiated download).

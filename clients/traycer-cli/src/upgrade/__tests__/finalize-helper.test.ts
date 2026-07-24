@@ -15,14 +15,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 //  - scheduleFinalizationHelper writes a platform-appropriate script,
 //    invokes the spawn stub with detached/ignored stdio flags, and
 //    returns a structured result identifying the helper pid.
-//  - The PowerShell script body contains the parent pid, live binary
-//    path, staged binary path, and service id so a real PowerShell
-//    run would do the right thing - we don't actually execute it
-//    here, but the contract is asserted on the rendered body.
+//  - The rendered script body contains the parent pid + live/staged
+//    binary paths and, once the parent exits, hands off to the staged
+//    binary's own hidden `cli finalize-upgrade` command (tested
+//    separately in commands/__tests__/cli-finalize-upgrade*.test.ts) -
+//    we don't actually execute the rendered script here, but the
+//    contract is asserted on the rendered body.
 //  - reconcilePostFinalizeMarker folds a "swapped" marker into the
 //    CLI install manifest (clears pendingUpgrade, promotes version),
 //    leaves the manifest unchanged on "swap-failed"/"parent-still-
 //    alive", and consumes the marker either way.
+
+// `store/paths` binds its home root from `os.homedir()` at module load.
+// Keep the environment mutation below, but redirect `homedir()` too.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
 
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
@@ -31,6 +41,7 @@ let workHome: string;
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-finalize-helper-test-"));
+  osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
   vi.resetModules();
@@ -96,12 +107,6 @@ describe("scheduleFinalizationHelper", () => {
       environment: "production",
       stagedBinaryPath: "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
       livePath: "C:/Users/dev/AppData/.traycer/cli/traycer.exe",
-      serviceLabel: {
-        id: "ai.traycer.host.prod",
-        displayName: "Traycer Host",
-        environment: "production",
-        devSlot: null,
-      },
       parentPid: 4242,
       parentExitTimeoutSeconds: 60,
       platform: "win32",
@@ -137,15 +142,16 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).toContain(
       "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
     );
-    // Service id and the per-user Scheduled Task name must both be
-    // present so the helper can fall back when Start-Service isn't
-    // wired up for this label.
-    expect(body).toContain("ai.traycer.host.prod");
-    expect(body).toContain("\\Traycer\\Host");
-    // Marker write contract - the helper writes the post-finalize
-    // marker into ~/.traycer/cli/post-finalize.json so the next CLI
-    // invocation can reconcile.
+    // The parked-still-alive marker write (only reachable path owned by
+    // this script now) still targets post-finalize.json.
     expect(body).toContain("post-finalize.json");
+    // Binary swap + service start hand off to the staged binary's own
+    // hidden `cli finalize-upgrade` command - it acquires cli-lock
+    // under its own PID + start-time identity (Host Update Layer
+    // Redesign Tech Plan, "Windows CLI-finalize helper").
+    expect(body).toContain("$StagedBinary cli finalize-upgrade");
+    expect(body).not.toContain("Move-Item -Force -LiteralPath $StagedBinary");
+    expect(body).not.toContain("Start-Service");
   });
 
   it("renders a POSIX shell script with parent pid + paths and spawns /bin/sh detached on linux", async () => {
@@ -159,12 +165,6 @@ describe("scheduleFinalizationHelper", () => {
       environment: "production",
       stagedBinaryPath: "/usr/local/share/traycer/cli/traycer-1.5.0",
       livePath: "/usr/local/share/traycer/cli/traycer",
-      serviceLabel: {
-        id: "ai.traycer.host.prod",
-        displayName: "Traycer Host",
-        environment: "production",
-        devSlot: null,
-      },
       parentPid: 4242,
       parentExitTimeoutSeconds: 60,
       platform: "linux",
@@ -183,7 +183,12 @@ describe("scheduleFinalizationHelper", () => {
     expect(body).toContain("#!/usr/bin/env sh");
     expect(body).toContain("4242");
     expect(body).toContain("/usr/local/share/traycer/cli/traycer");
-    expect(body).toContain("ai.traycer.host.prod");
+    // Binary swap + service start hand off to the staged binary's own
+    // hidden `cli finalize-upgrade` command, same as the Windows script.
+    expect(body).toContain('"$STAGED" cli finalize-upgrade');
+    expect(body).not.toContain('mv -f "$STAGED" "$LIVE"');
+    expect(body).not.toContain("launchctl");
+    expect(body).not.toContain("systemctl");
   });
 
   it("returns status='failed' when the write stub throws and never invokes spawn", async () => {
@@ -193,12 +198,6 @@ describe("scheduleFinalizationHelper", () => {
       environment: "production",
       stagedBinaryPath: "/tmp/staged",
       livePath: "/tmp/live",
-      serviceLabel: {
-        id: "ai.traycer.host.prod",
-        displayName: "Traycer Host",
-        environment: "production",
-        devSlot: null,
-      },
       parentPid: 4242,
       parentExitTimeoutSeconds: 60,
       platform: "win32",
@@ -221,12 +220,6 @@ describe("scheduleFinalizationHelper", () => {
       environment: "production",
       stagedBinaryPath: "/tmp/staged",
       livePath: "/tmp/live",
-      serviceLabel: {
-        id: "ai.traycer.host.prod",
-        displayName: "Traycer Host",
-        environment: "production",
-        devSlot: null,
-      },
       parentPid: 4242,
       parentExitTimeoutSeconds: 60,
       platform: "win32",
@@ -262,12 +255,6 @@ describe("scheduleFinalizationHelper", () => {
       environment: "production",
       stagedBinaryPath: "/tmp/staged",
       livePath: "/tmp/live",
-      serviceLabel: {
-        id: "ai.traycer.host.prod",
-        displayName: "Traycer Host",
-        environment: "production",
-        devSlot: null,
-      },
       parentPid: 4242,
       parentExitTimeoutSeconds: 60,
       platform: "linux",

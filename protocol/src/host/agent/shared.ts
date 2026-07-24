@@ -6,6 +6,7 @@ import {
   type AgentMode,
 } from "@traycer/protocol/common/schemas";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 
 export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 
@@ -31,12 +32,15 @@ export { DEFAULT_AGENT_MODE, agentModeSchema, type AgentMode };
 // `TuiHarnessId extends HarnessId` are both true at the type level, so a
 // surface-narrow value passes everywhere a `HarnessId` is expected.
 //
-// Cursor supports BOTH surfaces at the schema level: the GUI chat tab drives
-// the `@cursor/sdk` agent runtime in local mode, and the TUI tab can launch the
-// `cursor-agent` CLI in a PTY. It is therefore listed in `harnessIdSchema` and
-// in BOTH `guiHarnessIdSchema` and `tuiHarnessIdSchema`. The TUI surface is
-// hidden in the renderer for now (the adapter advertises only the GUI mode via
-// `listGuiHarnesses`'s `modes` field) until the CLI reaches feature parity.
+// Cursor is GUI-only in the product today: the GUI chat tab drives the
+// `@cursor/sdk` agent runtime in local mode. It is listed in `harnessIdSchema`
+// and `guiHarnessIdSchema`, and it stays in `tuiHarnessIdSchema` as a RESERVED
+// compatibility value only - a stable reserved id so existing persisted Cursor
+// Terminal-interface records keep parsing - NOT because a Cursor Terminal
+// launch path exists. There is none today: the host
+// adapter does not implement the TUI surface, the runtime TUI catalog omits
+// Cursor, and `epic.createTuiAgent` / `agent.create` reject `harnessId: "cursor"`
+// on the Terminal interface.
 export const harnessIdSchema = getRecordSchema(
   commonRecordRegistry,
   "harness-id",
@@ -61,6 +65,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "amp",
   "devin",
   "pi",
+  "hermes",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -108,10 +113,9 @@ export type GuiHarnessIdV20 = z.infer<typeof guiHarnessIdSchemaV20>;
 /**
  * Frozen harness id set as shipped in protocol v3.0 (with Amp, before Devin/Pi).
  * Used only by the frozen v3.0 response schema of `agent.gui.listHarnesses` so
- * already-shipped v3.0 clients never receive post-v3.0 ids; the v4.0 line adds
- * them and v4→v3 / v4→v2 / v4→v1 bridges filter them for older callers. Do NOT
- * add new harnesses here - extend the latest `guiHarnessIdSchema` and use the
- * existing v4 bridge instead.
+ * already-shipped v3.0 clients never receive post-v3.0 ids. Do NOT add new
+ * harnesses here - extend the latest `guiHarnessIdSchema` and use the
+ * existing version bridges instead.
  */
 export const guiHarnessIdSchemaV30 = harnessIdSchema.extract([
   "claude",
@@ -130,6 +134,35 @@ export const guiHarnessIdSchemaV30 = harnessIdSchema.extract([
   "amp",
 ]);
 export type GuiHarnessIdV30 = z.infer<typeof guiHarnessIdSchemaV30>;
+
+/**
+ * Frozen harness id set as shipped in protocol v4.0 (with Devin/Pi, before
+ * Hermes). Used only by the frozen v4.0 response schema of
+ * `agent.gui.listHarnesses` so already-shipped v4.0 clients never receive
+ * post-v4.0 ids; the v5.0 line adds them and v5→v4 / v5→v3 / v5→v2 / v5→v1
+ * bridges filter them for older callers. Do NOT add new harnesses here -
+ * extend the latest `guiHarnessIdSchema` and use the existing v5 bridge
+ * instead.
+ */
+export const guiHarnessIdSchemaV40 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+]);
+export type GuiHarnessIdV40 = z.infer<typeof guiHarnessIdSchemaV40>;
 
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",
@@ -193,6 +226,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "amp",
   "devin",
   "pi",
+  "hermes",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -308,7 +342,8 @@ export type ConcreteProfileSelection = z.infer<
  * `model`, `agentMode`, `reasoningEffort`, and `fastMode` are explicit
  * nullable overrides. `null` means "not requested"; the resolver fills
  * defaults and returns warnings for currently unsupported combinations instead
- * of rejecting the whole create.
+ * of rejecting the whole create. `permissionMode` arrives in v3 below; v1 and
+ * v2 remain frozen to their released request shapes.
  *
  * The new agent's `parentId` is set to `senderAgentId` so the epic projection
  * can render the spawn lineage without a separate join.
@@ -345,7 +380,7 @@ export const createAgentResponseSchema = z.object({
 export type CreateAgentResponse = z.infer<typeof createAgentResponseSchema>;
 
 /**
- * `agent.create@2.0` request - identical to v1.0 except the nullable
+ * Frozen `agent.create@2.0` request - identical to v1.0 except the nullable
  * `profileId` override is replaced by an explicit `profileSelection` (see
  * `ProfileSelection` above). Removing `profileId` is why this ships as a new
  * major rather than an additive minor: v1.0 stays frozen and reachable
@@ -367,6 +402,18 @@ export const createAgentRequestSchemaV20 = z.object({
   profileSelection: profileSelectionSchema,
 });
 export type CreateAgentRequestV20 = z.infer<typeof createAgentRequestSchemaV20>;
+
+/**
+ * `agent.create@3.0` adds the required permission-mode choice. `null` is a
+ * compatibility-only sentinel emitted by the v2->v3 upgrade path so released
+ * callers retain their legacy sender-inheritance behavior; current tool/CLI
+ * callers always send a concrete mode. Making the field required keeps the
+ * released v2.0 wire immutable.
+ */
+export const createAgentRequestSchemaV30 = createAgentRequestSchemaV20.extend({
+  permissionMode: permissionModeSchema.nullable(),
+});
+export type CreateAgentRequestV30 = z.infer<typeof createAgentRequestSchemaV30>;
 
 export const agentSelectionGuideRequestSchema = z.object({
   epicId: z.string(),
@@ -520,8 +567,8 @@ export type ListHarnessModelsResponse = z.infer<
  * uuid-keyed map) so the wire shape lines up with `listEpicCollaborators`
  * and the rest of the `list*` family in this registry.
  *
- * `surface` lets a caller route to the right per-agent UI (e.g. fetch a
- * GUI chat transcript vs a TUI scrollback) without a second round-trip.
+ * `surface` lets a caller route to the right per-agent UI (e.g. a GUI chat
+ * interface vs a TUI terminal interface) without a second round-trip.
  * `isLocal` is the host's authoritative answer to "did I mint this
  * session?" - `hostId` equals the responding host's id. Cross-host
  * entries are returned for read-only enumeration; mutating RPCs
@@ -626,9 +673,8 @@ export type ListAgentsResponseV20 = z.infer<typeof listAgentsResponseSchemaV20>;
 // `agent.list` enumerates every agent in the epic - including Devin/Pi GUI
 // harness chats a newer client created - so an already-shipped v3.0 client
 // would hit a strict enum on those rows. v3.0 is frozen here as actually
-// shipped (with Amp); the v4.0 line carries Devin/Pi rows and v4→v3 / v4→v2 /
-// v4→v1 bridges drop them for older callers. Do not add new harnesses here -
-// use the existing v4 bridge.
+// shipped (with Amp). Do not add new harnesses here - use the existing
+// version bridges.
 export const agentSummarySchemaV30 = agentSummarySchema.extend({
   harnessId: guiHarnessIdSchemaV30.nullable(),
 });
@@ -636,6 +682,21 @@ export const listAgentsResponseSchemaV30 = listAgentsResponseSchema.extend({
   agents: z.array(agentSummarySchemaV30),
 });
 export type ListAgentsResponseV30 = z.infer<typeof listAgentsResponseSchemaV30>;
+
+// ── Frozen protocol-v4.0 agent.list response (with Devin/Pi, before Hermes) ─
+// `agent.list` enumerates every agent in the epic - including Hermes GUI
+// harness chats a newer client created - so an already-shipped v4.0 client
+// would hit a strict enum on those rows. v4.0 is frozen here as actually
+// shipped (with Devin/Pi); the v5.0 line carries Hermes rows and v5→v4 /
+// v5→v3 / v5→v2 / v5→v1 bridges drop them for older callers. Do not add new
+// harnesses here - use the existing v5 bridge.
+export const agentSummarySchemaV40 = agentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV40.nullable(),
+});
+export const listAgentsResponseSchemaV40 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV40),
+});
+export type ListAgentsResponseV40 = z.infer<typeof listAgentsResponseSchemaV40>;
 
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to
@@ -689,10 +750,11 @@ export type SendAgentMessageResponse = z.infer<
  * XML-tagged string so a sibling agent can read it without re-implementing
  * the discriminated `messageSchema` shape. For GUI agents the host
  * serializes the persisted `messageSchema` array (`<user>` / `<assistant>`
- * blocks); for TUI agents the host best-effort returns whatever
- * scrollback its PTY buffer holds. TUI scrollback is not persisted, so the
- * resolver errors when the target TUI session is not local and currently
- * present in this host's PTY manager.
+ * blocks); for supported TUI agents the host reads structured conversation
+ * history through the harness provider SDK. Provider history survives the PTY
+ * closing; there is deliberately no raw scrollback fallback. TUI transcript
+ * reads remain local to the agent's bound host because its provider session
+ * store and credentials are host-local.
  */
 export const getAgentTranscriptRequestSchema = z.object({
   epicId: z.string(),

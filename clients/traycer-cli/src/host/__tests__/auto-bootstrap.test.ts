@@ -21,7 +21,9 @@ import { noopLogger } from "../../logger";
 // initialized before the factory runs. The hoisted block also keeps
 // the mocks reusable across test cases via the returned handle.
 const mocks = vi.hoisted(() => ({
-  installHostMock: vi.fn(),
+  stageHostInstallSourceMock: vi.fn(),
+  commitHostInstallSourceMock: vi.fn(),
+  discardStagedHostInstallSourceMock: vi.fn(),
   resolveBundledHostArchiveMock: vi.fn(),
   readHostInstallRecordMock: vi.fn(),
   resolveServiceCliInvocationMock: vi.fn(),
@@ -32,7 +34,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../installer", () => ({
-  installHost: mocks.installHostMock,
+  stageHostInstallSource: mocks.stageHostInstallSourceMock,
+  commitHostInstallSource: mocks.commitHostInstallSourceMock,
+  discardStagedHostInstallSource: mocks.discardStagedHostInstallSourceMock,
 }));
 
 vi.mock("../../installer/bundled-host", () => ({
@@ -65,7 +69,9 @@ vi.mock("../busy-check", () => ({
 }));
 
 const {
-  installHostMock,
+  stageHostInstallSourceMock,
+  commitHostInstallSourceMock,
+  discardStagedHostInstallSourceMock,
   resolveBundledHostArchiveMock,
   readHostInstallRecordMock,
   resolveServiceCliInvocationMock,
@@ -314,8 +320,11 @@ describe("evaluateAutoBootstrap", () => {
 });
 
 describe("maybeAutoBootstrap", () => {
-  it("service-only recovery: installed host + missing service registers service without running installHost", async () => {
-    readHostInstallRecordMock.mockReturnValue({ version: "1.5.0" });
+  it("service-only recovery: installed host + missing service registers service without staging/committing an install", async () => {
+    readHostInstallRecordMock.mockReturnValue({
+      installId: "install-1.5.0",
+      version: "1.5.0",
+    });
     const fake = makeFakeServiceController({
       state: "not-installed",
       installCalls: 0,
@@ -330,7 +339,8 @@ describe("maybeAutoBootstrap", () => {
       onProgress: null,
     });
 
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
     expect(fake.controller.install).toHaveBeenCalledTimes(1);
     expect(decision.status).toBe("service-registered");
     expect(decision.reason).toBe("service-registered");
@@ -338,7 +348,7 @@ describe("maybeAutoBootstrap", () => {
     expect(decision.error).toBeNull();
   });
 
-  it("missing host → runs the full install pipeline (installHost called)", async () => {
+  it("missing host → runs the full install pipeline (stages then commits)", async () => {
     readHostInstallRecordMock.mockReturnValue(null);
     const fake = makeFakeServiceController({
       state: "not-installed",
@@ -347,9 +357,18 @@ describe("maybeAutoBootstrap", () => {
       installShouldThrow: null,
     });
     createServiceControllerMock.mockReturnValue(fake.controller);
-    installHostMock.mockResolvedValue({
-      record: { version: "1.5.0" },
+    stageHostInstallSourceMock.mockResolvedValue({
+      stagingDir: "/tmp/staged",
+      version: "1.5.0",
+    });
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: {
+        installId: "install-1.5.0",
+        version: "1.5.0",
+        runtimeVersion: null,
+      },
       previous: null,
+      installGeneration: "id:install-1.5.0",
     });
     // After install, status reports running (simulate post-install state).
     fake.controller.status.mockImplementation(async () => ({
@@ -365,12 +384,15 @@ describe("maybeAutoBootstrap", () => {
       onProgress: null,
     });
 
-    expect(installHostMock).toHaveBeenCalledTimes(1);
-    expect(installHostMock).toHaveBeenCalledWith(
+    expect(commitHostInstallSourceMock).toHaveBeenCalledTimes(1);
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source: { kind: "registry", versionRequest: "latest" },
       }),
     );
+    // commitHostInstallSource already owns cleanup of what it committed -
+    // a successful install must never also discard it.
+    expect(discardStagedHostInstallSourceMock).not.toHaveBeenCalled();
     expect(decision.status).toBe("installed");
     expect(decision.reason).toBe("installed");
     expect(decision.installedVersion).toBe("1.5.0");
@@ -386,9 +408,18 @@ describe("maybeAutoBootstrap", () => {
       installShouldThrow: null,
     });
     createServiceControllerMock.mockReturnValue(fake.controller);
-    installHostMock.mockResolvedValue({
-      record: { version: "1.7.2" },
+    stageHostInstallSourceMock.mockResolvedValue({
+      stagingDir: "/tmp/staged",
+      version: "1.7.2",
+    });
+    commitHostInstallSourceMock.mockResolvedValue({
+      record: {
+        installId: "install-1.7.2",
+        version: "1.7.2",
+        runtimeVersion: null,
+      },
       previous: null,
+      installGeneration: "id:install-1.7.2",
     });
     fake.controller.status.mockImplementation(async () => ({
       state: "running",
@@ -403,7 +434,7 @@ describe("maybeAutoBootstrap", () => {
       onProgress: null,
     });
 
-    expect(installHostMock).toHaveBeenCalledWith(
+    expect(stageHostInstallSourceMock).toHaveBeenCalledWith(
       expect.objectContaining({
         source: { kind: "registry", versionRequest: "1.7.2" },
       }),
@@ -412,7 +443,7 @@ describe("maybeAutoBootstrap", () => {
     expect(decision.installedVersion).toBe("1.7.2");
   });
 
-  it("already ready → no-op (no installHost, no service.install)", async () => {
+  it("already ready → no-op (no stage/commit, no service.install)", async () => {
     readHostInstallRecordMock.mockReturnValue({ version: "1.5.0" });
     const fake = makeFakeServiceController({
       state: "running",
@@ -428,13 +459,14 @@ describe("maybeAutoBootstrap", () => {
       onProgress: null,
     });
 
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
     expect(fake.controller.install).not.toHaveBeenCalled();
     expect(decision.status).toBe("ready");
     expect(decision.reason).toBe("already-installed");
   });
 
-  it("noninteractive + service missing → skipped (no installHost, no service.install)", async () => {
+  it("noninteractive + service missing → skipped (no stage/commit, no service.install)", async () => {
     readHostInstallRecordMock.mockReturnValue({ version: "1.5.0" });
     const fake = makeFakeServiceController({
       state: "not-installed",
@@ -450,13 +482,14 @@ describe("maybeAutoBootstrap", () => {
       onProgress: null,
     });
 
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
     expect(fake.controller.install).not.toHaveBeenCalled();
     expect(decision.status).toBe("skipped");
     expect(decision.reason).toBe("noninteractive-cannot-prompt");
   });
 
-  it("--no-bootstrap + service missing → skipped (no installHost, no service.install)", async () => {
+  it("--no-bootstrap + service missing → skipped (no stage/commit, no service.install)", async () => {
     readHostInstallRecordMock.mockReturnValue({ version: "1.5.0" });
     const fake = makeFakeServiceController({
       state: "not-installed",
@@ -472,13 +505,14 @@ describe("maybeAutoBootstrap", () => {
       onProgress: null,
     });
 
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
     expect(fake.controller.install).not.toHaveBeenCalled();
     expect(decision.status).toBe("skipped");
     expect(decision.reason).toBe("explicit-no-bootstrap");
   });
 
-  it("offline registry must not block service-only recovery (installHost is never called)", async () => {
+  it("offline registry must not block service-only recovery (install is never staged)", async () => {
     config.supportedHostVersion = "1.7.2";
     readHostInstallRecordMock.mockReturnValue({ version: "1.5.0" });
     const fake = makeFakeServiceController({
@@ -488,10 +522,10 @@ describe("maybeAutoBootstrap", () => {
       installShouldThrow: null,
     });
     createServiceControllerMock.mockReturnValue(fake.controller);
-    // Set up installHost to throw - if the wrong branch is taken,
-    // the test will fail with an offline-style error rather than
-    // succeeding with `service-registered`.
-    installHostMock.mockRejectedValue(
+    // Set up staging to throw - if the wrong branch is taken, the test
+    // will fail with an offline-style error rather than succeeding with
+    // `service-registered`.
+    stageHostInstallSourceMock.mockRejectedValue(
       new Error("registry unreachable (E_REGISTRY_UNREACHABLE)"),
     );
 
@@ -501,7 +535,7 @@ describe("maybeAutoBootstrap", () => {
       onProgress: null,
     });
 
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
     expect(decision.status).toBe("service-registered");
     expect(decision.error).toBeNull();
   });
@@ -522,7 +556,8 @@ describe("maybeAutoBootstrap", () => {
       onProgress: null,
     });
 
-    expect(installHostMock).not.toHaveBeenCalled();
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
     expect(decision.status).toBe("failed");
     expect(decision.reason).toBe("service-registration-failed");
     expect(decision.error?.message).toContain("launchctl denied");

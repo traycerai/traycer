@@ -8,8 +8,12 @@ import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/ve
 import {
   agentCreateV10,
   agentCreateV20,
+  agentCreateV30,
   agentCreateDowngradeV20ToV10,
+  agentCreateDowngradeV30ToV10,
+  agentCreateDowngradeV30ToV20,
   agentCreateUpgradeV10ToV20,
+  agentCreateUpgradeV20ToV30,
   agentGetTranscriptV10,
   agentListHarnessModelsDowngradeV2ToV1,
   agentListHarnessModelsV10,
@@ -21,13 +25,19 @@ import {
   agentListDowngradeV4ToV1,
   agentListDowngradeV4ToV2,
   agentListDowngradeV4ToV3,
+  agentListDowngradeV5ToV1,
+  agentListDowngradeV5ToV2,
+  agentListDowngradeV5ToV3,
+  agentListDowngradeV5ToV4,
   agentListUpgradeV1ToV2,
   agentListUpgradeV2ToV3,
   agentListUpgradeV3ToV4,
+  agentListUpgradeV4ToV5,
   agentListV10,
   agentListV20,
   agentListV30,
   agentListV40,
+  agentListV50,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -37,9 +47,18 @@ import {
   agentStopV10,
 } from "@traycer/protocol/host/agent/contracts";
 import {
+  agentConfigureDowngradeV20ToV10,
   agentConfigureV10,
+  agentConfigureV20,
+  agentConfigureUpgradeV10ToV20,
+  agentGetProviderProfileRateLimitsDowngradeV20ToV10,
   agentGetProviderProfileRateLimitsV10,
+  agentGetProviderProfileRateLimitsV20,
+  agentGetProviderProfileRateLimitsUpgradeV10ToV20,
+  agentListProviderProfilesDowngradeV20ToV10,
   agentListProviderProfilesV10,
+  agentListProviderProfilesV20,
+  agentListProviderProfilesUpgradeV10ToV20,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxReadV10,
@@ -54,15 +73,21 @@ import {
   agentGuiListHarnessesDowngradeV4ToV1,
   agentGuiListHarnessesDowngradeV4ToV2,
   agentGuiListHarnessesDowngradeV4ToV3,
+  agentGuiListHarnessesDowngradeV5ToV1,
+  agentGuiListHarnessesDowngradeV5ToV2,
+  agentGuiListHarnessesDowngradeV5ToV3,
+  agentGuiListHarnessesDowngradeV5ToV4,
   agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
   agentGuiListHarnessesUpgradeV3ToV4,
+  agentGuiListHarnessesUpgradeV4ToV5,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
   agentGuiListHarnessesV30,
   agentGuiListHarnessesV40,
+  agentGuiListHarnessesV50,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -91,11 +116,15 @@ import {
   hostGetRateLimitUsageV12,
   hostGetRateLimitUsageV20,
   hostGetRateLimitUsageV21,
+  hostGetRateLimitUsageV30,
   hostGetRateLimitUsageUpgradeV10ToV11,
   hostGetRateLimitUsageUpgradeV11ToV12,
   hostGetRateLimitUsageUpgradeV12ToV20,
   hostGetRateLimitUsageUpgradeV20ToV21,
+  hostGetRateLimitUsageUpgradeV21ToV30,
   hostGetRateLimitUsageDowngradeV2ToV1,
+  hostGetRateLimitUsageDowngradeV3ToV2,
+  hostGetRateLimitUsageDowngradeV3ToV1,
   providersConsumeRateLimitResetCreditV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
@@ -127,7 +156,10 @@ import {
   epicRemoveRepoV10,
   epicRenameArtifactV10,
   epicRenameChatV10,
+  epicUpdateChatProfileV10,
+  epicUpdateChatRunSettingsUpgradeV10ToV11,
   epicUpdateChatRunSettingsV10,
+  epicUpdateChatRunSettingsV11,
   epicRenameTuiAgentV10,
   epicReparentArtifactV10,
   epicReparentChatV10,
@@ -162,10 +194,12 @@ import {
   terminalCreateV20,
   terminalCreateUpgradeV10ToV20,
   terminalKillV10,
-  terminalListDowngradeV20ToV10,
+  terminalListDowngradeV21ToV10,
   terminalListV10,
   terminalListV20,
+  terminalListV21,
   terminalListUpgradeV10ToV20,
+  terminalListUpgradeV20ToV21,
   terminalRenameV10,
   terminalSubscribeV10,
   terminalSubscribeV11,
@@ -180,11 +214,16 @@ import {
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
-  hostNotificationsList,
+  hostNotificationsListDowngradeV20ToV10,
+  hostNotificationsListUpgradeV10ToV20,
+  hostNotificationsListV10,
+  hostNotificationsListV20,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
+  hostNotificationsResolve,
   hostNotificationsSetConfig,
-  hostNotificationsSubscribe,
+  hostNotificationsFeedSubscribeV10,
+  hostNotificationsSubscribeV10,
   notificationsSubscribeV10,
 } from "@traycer/protocol/host/notifications/contracts";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
@@ -192,6 +231,8 @@ import {
   resourcesSubscribeV10,
   resourcesSubscribeV11,
   resourcesSubscribeV12,
+  resourcesSubscribeV13,
+  resourcesKillV10,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
   speechEnsureModelV10,
@@ -214,6 +255,7 @@ import {
   gitGetCapabilitiesV10,
   gitSubscribeStatusV10,
   gitSubscribeStatusV11,
+  gitSubscribeStatusV12,
 } from "@traycer/protocol/host/git-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
@@ -309,9 +351,11 @@ import {
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
+  providersListResponseSchemaV40,
   downgradeProviderCliStateToV10,
   downgradeProviderCliStateListToV20,
   downgradeProviderCliStateListToV30,
+  downgradeProviderCliStateListToV40,
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateV10ToMutationV20,
   providersRemoveCustomPathRequestSchema,
@@ -922,7 +966,7 @@ export const providersListV40 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 4, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
-  responseSchema: providersListResponseSchema,
+  responseSchema: providersListResponseSchemaV40,
 });
 
 export const providersListUpgradeV3ToV4 = defineUpgradePath<
@@ -982,6 +1026,88 @@ export const providersListDowngradeV4ToV1 = defineDowngradePath<
   typeof providersListV10
 >({
   from: { major: 4, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: downgradeProviderStateListForV10(response.providers),
+    }),
+  }),
+});
+
+export const providersListV50 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 5, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
+  responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV4ToV5 = defineUpgradePath<
+  typeof providersListV40,
+  typeof providersListV50
+>({
+  from: { major: 4, minor: 0 },
+  to: { major: 5, minor: 0 },
+  // A v4.0 response without Hermes is a valid v5.0 response (purely
+  // additive), and the request shape is identical - both upgrades are
+  // identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersListDowngradeV5ToV4 = defineDowngradePath<
+  typeof providersListV50,
+  typeof providersListV40
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Hermes so an already-shipped v4.0 client's strict decode never
+  // sees it.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV40.parse({
+      providers: downgradeProviderCliStateListToV40(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV5ToV3 = defineDowngradePath<
+  typeof providersListV50,
+  typeof providersListV30
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV5ToV2 = defineDowngradePath<
+  typeof providersListV50,
+  typeof providersListV20
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV5ToV1 = defineDowngradePath<
+  typeof providersListV50,
+  typeof providersListV10
+>({
+  from: { major: 5, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -2068,6 +2194,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: { 1: hostGetRateLimitUsageDowngradeV2ToV1 },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV30,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV21ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        2: hostGetRateLimitUsageDowngradeV3ToV2,
+        1: hostGetRateLimitUsageDowngradeV3ToV1,
+      },
+    },
   },
   "providers.consumeRateLimitResetCredit": {
     degrade: { kind: "unsupported" },
@@ -2088,11 +2227,23 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsList,
+          contract: hostNotificationsListV10,
           upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsListV20,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostNotificationsListDowngradeV20ToV10,
+      },
     },
   },
   "host.notificationHooks.status": {
@@ -2167,6 +2318,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: hostNotificationsMarkRead,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.resolve": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsResolve,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -2324,6 +2488,21 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         3: agentGuiListHarnessesDowngradeV4ToV3,
       },
     },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV50,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV4ToV5,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV5ToV1,
+        2: agentGuiListHarnessesDowngradeV5ToV2,
+        3: agentGuiListHarnessesDowngradeV5ToV3,
+        4: agentGuiListHarnessesDowngradeV5ToV4,
+      },
+    },
   },
   "agent.gui.listModels": {
     1: {
@@ -2445,6 +2624,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: { 1: agentCreateDowngradeV20ToV10 },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentCreateV30,
+          upgradeFromPreviousVersion: agentCreateUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentCreateDowngradeV30ToV10,
+        2: agentCreateDowngradeV30ToV20,
+      },
     },
   },
   "agent.selectionGuide": {
@@ -2577,6 +2769,21 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: agentListDowngradeV4ToV1,
         2: agentListDowngradeV4ToV2,
         3: agentListDowngradeV4ToV3,
+      },
+    },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV50,
+          upgradeFromPreviousVersion: agentListUpgradeV4ToV5,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV5ToV1,
+        2: agentListDowngradeV5ToV2,
+        3: agentListDowngradeV5ToV3,
+        4: agentListDowngradeV5ToV4,
       },
     },
   },
@@ -3049,10 +3256,36 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   // persist-on-next-send behavior.
   "epic.updateChatRunSettings": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicUpdateChatRunSettingsV10,
+          upgradeFromPreviousVersion: null,
+        },
+        // v1.1: wire-strict settings tuple - a subset-field patch fails
+        // validation at the canonical minor instead of silently null-
+        // clobbering omitted fields. Profile-only changes belong on
+        // `epic.updateChatProfile`.
+        1: {
+          contract: epicUpdateChatRunSettingsV11,
+          upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  // Optional (non-floor) capability: narrow profile-only update of a chat's
+  // persisted run settings - the host patches its own authoritative tuple, so
+  // clients never rebuild (and stale-patch) the full tuple to move a chat's
+  // profile. Old peers lack it; callers get E_HOST_UNSUPPORTED for this call
+  // only and degrade to persist-on-next-send.
+  "epic.updateChatProfile": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicUpdateChatProfileV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -3381,6 +3614,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Brand-new v1.0 method (not on `RELEASED_FLOOR_METHOD_NAMES`): an old host
+  // simply lacks it, so callers get per-call upgrade guidance instead of a
+  // fatal handshake mismatch. Same pattern as `providers.submitLoginCode`.
+  "resources.kill": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: resourcesKillV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "terminal.list": {
     1: {
       latestMinor: 0,
@@ -3393,14 +3642,18 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: terminalListV20,
           upgradeFromPreviousVersion: terminalListUpgradeV10ToV20,
         },
+        1: {
+          contract: terminalListV21,
+          upgradeFromPreviousVersion: terminalListUpgradeV20ToV21,
+        },
       },
-      downgradePathsFromLatest: { 1: terminalListDowngradeV20ToV10 },
+      downgradePathsFromLatest: { 1: terminalListDowngradeV21ToV10 },
     },
   },
   "terminal.rename": {
@@ -3636,6 +3889,21 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: providersListDowngradeV4ToV1,
         2: providersListDowngradeV4ToV2,
         3: providersListDowngradeV4ToV3,
+      },
+    },
+    5: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV50,
+          upgradeFromPreviousVersion: providersListUpgradeV4ToV5,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV5ToV1,
+        2: providersListDowngradeV5ToV2,
+        3: providersListDowngradeV5ToV3,
+        4: providersListDowngradeV5ToV4,
       },
     },
   },
@@ -4038,6 +4306,18 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV20,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListProviderProfilesDowngradeV20ToV10,
+      },
+    },
   },
   "agent.getProviderProfileRateLimits": {
     degrade: { kind: "unsupported" },
@@ -4051,6 +4331,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV20,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV20ToV10,
+      },
+    },
   },
   "agent.configure": {
     degrade: { kind: "unsupported" },
@@ -4063,6 +4356,16 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV20,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: { 1: agentConfigureDowngradeV20ToV10 },
     },
   },
 } as const;
@@ -4146,7 +4449,17 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       latestMinor: 0,
       versions: {
         0: {
-          contract: hostNotificationsSubscribe,
+          contract: hostNotificationsSubscribeV10,
+        },
+      },
+    },
+  },
+  "host.notifications.feed.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsFeedSubscribeV10,
         },
       },
     },
@@ -4175,7 +4488,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "git.subscribeStatus": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: gitSubscribeStatusV10,
@@ -4187,12 +4500,18 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         1: {
           contract: gitSubscribeStatusV11,
         },
+        // Guaranteed-fresh stream replacement: required `freshNonce` on the
+        // v1.2 open and snapshot/updated frames. Lower-minor projection stays
+        // explicit in the host resolver because streams have no bridges.
+        2: {
+          contract: gitSubscribeStatusV12,
+        },
       },
     },
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -4202,6 +4521,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         2: {
           contract: resourcesSubscribeV12,
+        },
+        3: {
+          contract: resourcesSubscribeV13,
         },
       },
     },

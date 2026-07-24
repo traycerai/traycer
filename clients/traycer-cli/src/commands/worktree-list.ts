@@ -15,6 +15,7 @@ import {
   toAgentCliError,
 } from "../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES, toCliError } from "../runner/errors";
+import { parsePositiveIntegerArg } from "../runner/parse-positive-integer-arg";
 import type { CommandFn } from "../runner/runner";
 
 // A client-side ask, not a guarantee: the host clamps page size by request mode
@@ -112,8 +113,8 @@ export function buildWorktreeListCommand(
 
 export function parseWorktreeListLimit(value: string | null): number | null {
   if (value === null) return null;
-  const limit = Number(value);
-  if (Number.isSafeInteger(limit) && limit > 0) return limit;
+  const limit = parsePositiveIntegerArg(value);
+  if (limit !== null) return limit;
   throw cliError({
     code: CLI_ERROR_CODES.INVALID_ARGUMENT,
     message: "traycer worktree list: --limit must be a positive integer.",

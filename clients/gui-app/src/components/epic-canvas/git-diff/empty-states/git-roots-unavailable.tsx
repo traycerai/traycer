@@ -43,7 +43,7 @@ export function GitRootsUnavailable(props: {
             Git workspaces unavailable
           </p>
           <p className="text-ui-xs text-muted-foreground/50">
-            None of the workspaces in this chat could be read. They may have
+            None of the workspaces in this agent could be read. They may have
             been moved or deleted.
           </p>
         </div>
@@ -69,7 +69,7 @@ export function GitRootsUnavailable(props: {
         <ReportIssueAction
           context={createReportIssueContext({
             title: "Git workspaces unavailable",
-            message: "The Git workspaces in this chat could not be read.",
+            message: "The Git workspaces in this agent could not be read.",
             code: null,
             source: "Git changes",
           })}

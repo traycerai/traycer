@@ -18,6 +18,8 @@ vi.mock("@/lib/epic-selectors", () => ({
     },
   ],
   useOpenEpicId: () => "epic-1",
+  useEpicChatHarnessId: () => null,
+  useMaybeEpicTuiAgentHarnessId: () => null,
 }));
 
 vi.mock("@/components/ui/tooltip-wrapper", () => ({

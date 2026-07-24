@@ -2314,4 +2314,33 @@ describe("createOpenEpicStore", () => {
     expect(settled).toBe(true);
     expect(await pending).toBeNull();
   });
+
+  it("synchronously reports attachment bytes in the local root replica", () => {
+    const hostDoc = new Y.Doc();
+    hostDoc
+      .getMap("attachments")
+      .set("present-hash", new Uint8Array([1, 2, 3]));
+    const { factory, handle } = fakeFactory();
+    const opened = createOpenEpicStore({
+      epicId: "epic-a",
+      streamClientFactory: factory,
+      userId: null,
+      onAuthError: null,
+    });
+
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      Y.encodeStateAsUpdate(hostDoc),
+    );
+
+    expect(opened.store.getState().hasAttachmentBytes("present-hash")).toBe(
+      true,
+    );
+    expect(opened.store.getState().hasAttachmentBytes("missing-hash")).toBe(
+      false,
+    );
+
+    opened.dispose();
+    hostDoc.destroy();
+  });
 });

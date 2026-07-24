@@ -20,8 +20,10 @@ import {
   gitGetFileDiffsResponseSchema,
   gitGetCapabilitiesResponseSchema,
   gitSubscribeStatusRequestSchema,
+  gitSubscribeStatusRequestSchemaV12,
   gitSubscribeStatusEventSchema,
   gitSubscribeStatusEventSchemaV11,
+  gitSubscribeStatusEventSchemaV12,
 } from "./git-schemas";
 
 /**
@@ -172,5 +174,19 @@ export const gitSubscribeStatusV11 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: gitSubscribeStatusRequestSchema,
   serverFrameSchema: gitSubscribeStatusEventSchemaV11,
+  clientFrameSchema: noClientFramesSchema,
+});
+
+/**
+ * `git.subscribeStatus@1.2` adds opaque fresh-replacement correlation. The
+ * distinct request and event schemas keep the released v1.0/v1.1 wire shapes
+ * frozen; streams have no bridge, so the host resolver projects v1.2 frames
+ * down for negotiated lower minors.
+ */
+export const gitSubscribeStatusV12 = defineStreamRpcContract({
+  method: "git.subscribeStatus",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: gitSubscribeStatusRequestSchemaV12,
+  serverFrameSchema: gitSubscribeStatusEventSchemaV12,
   clientFrameSchema: noClientFramesSchema,
 });

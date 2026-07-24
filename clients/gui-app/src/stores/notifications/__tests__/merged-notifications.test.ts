@@ -6,9 +6,6 @@ import {
 } from "@traycer/protocol/notifications/notification-entry";
 import {
   appLocalFeedId,
-  globalFeedId,
-  hostFeedId,
-  mergeNotificationFeedIds,
   mergedUnreadCount,
   rowFromAppLocalEntry,
   rowFromGlobalEntry,
@@ -72,28 +69,13 @@ function appLocalEntry(
     kind: "stream.transport.error",
     sourceRef: id,
     payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
-    message: "Chat stream closed unexpectedly",
+    message: "Agent stream closed unexpectedly",
     detail: null,
     displayedUpdatedAt: null,
   };
 }
 
 describe("merged notifications feed", () => {
-  it("merges sources into one newest-first id projection", () => {
-    const ids = mergeNotificationFeedIds(
-      [hostEntry("host-old", 10, null), hostEntry("host-new", 30, null)],
-      [{ feedId: appLocalFeedId("app-local-mid"), createdAt: 25 }],
-      [globalEntry("global-mid", 20, null)],
-    );
-
-    expect(ids).toEqual([
-      hostFeedId("host-new"),
-      appLocalFeedId("app-local-mid"),
-      globalFeedId("global-mid"),
-      hostFeedId("host-old"),
-    ]);
-  });
-
   it("aggregates unread badge counts across all source seams", () => {
     expect(
       mergedUnreadCount({
@@ -194,20 +176,59 @@ describe("merged notifications feed", () => {
         outcome: "errored",
       },
     };
-    const interview: HostNotificationEntry = {
+    const interviewPayload = {
+      kind: "interview" as const,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
+      interviewBlockId: "block-1",
+    };
+    const interviewWaiting: HostNotificationEntry = {
       ...base,
       kind: "interview.requested",
       severity: "needs_action",
       outcome: null,
       resolvedAt: null,
-      payload: {
-        kind: "interview",
-        epicId: "epic-1",
-        chatId: "chat-1",
-        chatTitle: "Deploy checkout fix",
-        taskTitle: "Checkout notifications",
-        interviewBlockId: "block-1",
-      },
+      payload: interviewPayload,
+    };
+    // resolvedAt is the only resolved/unresolved signal for this kind
+    // (outcome is always null) - presentation must branch on that field alone.
+    const interviewResolved: HostNotificationEntry = {
+      ...base,
+      id: "notification-interview-resolved",
+      kind: "interview.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: 99,
+      payload: interviewPayload,
+    };
+    const approvalPayload = {
+      kind: "approval" as const,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
+      approvalId: "approval-1",
+    };
+    const approvalWaiting: HostNotificationEntry = {
+      ...base,
+      id: "notification-approval-waiting",
+      kind: "approval.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: null,
+      payload: approvalPayload,
+    };
+    // Same resolvableRequestStatus branch as interview - resolvedAt only.
+    const approvalResolved: HostNotificationEntry = {
+      ...base,
+      id: "notification-approval-resolved",
+      kind: "approval.requested",
+      severity: "needs_action",
+      outcome: null,
+      resolvedAt: 99,
+      payload: approvalPayload,
     };
 
     expect(rowFromHostEntry(stopped)).toMatchObject({
@@ -227,9 +248,21 @@ describe("merged notifications feed", () => {
       body: "Deploy checkout fix • Worktree creation failed",
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
     });
-    expect(rowFromHostEntry(interview)).toMatchObject({
+    expect(rowFromHostEntry(interviewWaiting)).toMatchObject({
       title: "Checkout notifications",
       body: "Deploy checkout fix • Question waiting",
+    });
+    expect(rowFromHostEntry(interviewResolved)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Question resolved",
+    });
+    expect(rowFromHostEntry(approvalWaiting)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Approval requested",
+    });
+    expect(rowFromHostEntry(approvalResolved)).toMatchObject({
+      title: "Checkout notifications",
+      body: "Deploy checkout fix • Approval resolved",
     });
   });
 
@@ -347,7 +380,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(futureShape)).toMatchObject({
       title: "Task",
-      body: "Chat • Done",
+      body: "Agent • Done",
       payload: null,
     });
 
@@ -371,7 +404,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(crossKind)).toMatchObject({
       title: "Task",
-      body: "Chat • Approval requested",
+      body: "Agent • Approval requested",
       payload: null,
     });
 
@@ -394,7 +427,7 @@ describe("merged notifications feed", () => {
     };
     expect(rowFromHostEntry(malformed)).toMatchObject({
       title: "Task",
-      body: "Chat • Done",
+      body: "Agent • Done",
       payload: null,
     });
   });
@@ -406,7 +439,7 @@ describe("merged notifications feed", () => {
       sourceId: "setup",
       createdAt: 10,
       readAt: null,
-      title: "Chat stream closed unexpectedly",
+      title: "Agent stream closed unexpectedly",
       body: "Traycer notification",
       payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
       hostKind: null,
@@ -414,6 +447,48 @@ describe("merged notifications feed", () => {
       globalEntry: null,
       severity: "failure",
       outcome: null,
+      resolvedAt: null,
+      sourceRef: null,
+      category: "system",
+    });
+  });
+
+  it("projects host resolvedAt and category onto merged rows", () => {
+    const unresolved = hostEntry("approval", 10, null);
+    expect(rowFromHostEntry(unresolved)).toMatchObject({
+      resolvedAt: null,
+      category: "task",
+      severity: "needs_action",
+    });
+
+    // Build a resolved approval row without spreading a union-typed entry
+    // (TS loses the `approval.requested` arm under `{...entry, resolvedAt}`).
+    const resolved = hostEntry("approval", 10, null);
+    expect(
+      rowFromHostEntry({
+        id: resolved.id,
+        updatedAt: resolved.updatedAt,
+        readAt: resolved.readAt,
+        kind: "approval.requested",
+        sourceRef: resolved.sourceRef,
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: 99,
+        epicId: resolved.epicId,
+        chatId: resolved.chatId,
+        payload: resolved.payload,
+      }),
+    ).toMatchObject({
+      resolvedAt: 99,
+      category: "task",
+    });
+  });
+
+  it("projects global category as collaboration", () => {
+    expect(rowFromGlobalEntry(globalEntry("global", 10, null))).toMatchObject({
+      category: "collaboration",
+      resolvedAt: null,
+      severity: "info",
     });
   });
 });

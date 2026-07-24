@@ -95,3 +95,49 @@ export function rateLimitSeverityTier(
   if (severity === null) return 0;
   return severity === "near_limit" ? 1 : 2;
 }
+
+/**
+ * Two-dimensional rate-limit evidence for destination ranking: whether the
+ * profile's state is KNOWN at all, and - only when known - its severity for
+ * the selected model. Unknown is incomparable, not a tier: a profile whose
+ * gauge was never read, went stale, or last probed with a failure must never
+ * satisfy a "strictly better" comparison, no matter how limited the current
+ * profile is. (`effectiveProfileRateLimitSeverity` stays the WARNING-side
+ * read, where unknown and healthy both mean "don't warn".)
+ */
+export type ProfileRateLimitAssessment =
+  | { readonly known: false }
+  | {
+      readonly known: true;
+      readonly severity: ProfileRateLimitSeverity | null;
+    };
+
+const UNKNOWN_ASSESSMENT: ProfileRateLimitAssessment = { known: false };
+
+export function assessProfileRateLimit(
+  profile: ProviderProfile,
+  model: ModelOption | null,
+): ProfileRateLimitAssessment {
+  const matching = matchingRateLimitScopes(profile, model);
+  if (matching !== null) {
+    if (matching.length === 0) return { known: true, severity: null };
+    return {
+      known: true,
+      severity: matching.some((scope) => scope.severity === "hard_limit")
+        ? "hard_limit"
+        : "near_limit",
+    };
+  }
+  // No per-scope data (old host / never-read / stale / failed-probe gauge)
+  // or no resolved model: the profile-level enum is the remaining evidence.
+  // "ok" is a real derivation from a successful read - known healthy;
+  // "unknown" is the absence (or failure) of evidence.
+  if (profile.rateLimitStatus === "near_limit") {
+    return { known: true, severity: "near_limit" };
+  }
+  if (profile.rateLimitStatus === "hard_limit") {
+    return { known: true, severity: "hard_limit" };
+  }
+  if (profile.rateLimitStatus === "ok") return { known: true, severity: null };
+  return UNKNOWN_ASSESSMENT;
+}

@@ -88,6 +88,7 @@ import {
   providerIdToGuiHarnessId,
   sortGuiHarnessesByProviderOrder,
 } from "@/lib/provider-ordering";
+import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
@@ -923,11 +924,8 @@ function modelPickerSelectionSummary(
   return `${label} · Thinking ${reasoningLabel}`;
 }
 
-// Restrict to harnesses whose adapter advertises a TUI surface. This is the
-// runtime capability (`modes`), not the schema id: Cursor is a TUI harness at
-// the schema level but its adapter currently advertises only `gui`, so it stays
-// hidden from the terminal launcher until the CLI ships - and reappears on its
-// own once the host starts advertising `tui`, with no code change here.
+// Restrict to harnesses whose adapter advertises a TUI surface. Runtime
+// capability (`modes`) is the source of truth for the terminal launcher.
 function isTuiCapable(harness: HarnessOption): boolean {
   return harness.modes.includes("tui");
 }
@@ -968,7 +966,7 @@ function degradedHarnessIdsFromProviderStates(
 function providerNeedsPickerReauth(provider: ProviderCliState): boolean {
   return (
     provider.enabled &&
-    (provider.auth.status === "unauthenticated" ||
+    (isProviderAmbientSignedOut(provider) ||
       (provider.apiKey.supported && !provider.apiKey.configured))
   );
 }

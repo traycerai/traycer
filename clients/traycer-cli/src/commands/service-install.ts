@@ -7,6 +7,7 @@ import {
   windowsTaskName,
 } from "../service";
 import { withCliLock } from "../store/cli-lock";
+import { attestInstallRuntime } from "../host/attested-install-runtime";
 
 // `traycer host service install [--no-linger]` - register the OS service
 // for the current environment. `--no-linger` skips `loginctl
@@ -74,6 +75,7 @@ export function buildServiceInstallCommand(
             environment: label.environment,
             manifestPath,
             cli: { command: cli.command, args: cli.args },
+            ...(await attestInstallRuntime(ctx.runtime.environment)),
           },
           human: `service '${label.id}' registered (environment=${label.environment})`,
           exitCode: 0,

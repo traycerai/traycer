@@ -37,8 +37,11 @@ export interface LeftPanelMetadataDefinition {
 export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> =
   [
     {
+      // `id` is an internal panel identifier on the compatibility boundary
+      // (persisted layout, selection state, command ids) - only the product
+      // copy moves to the Agent model.
       id: "chats",
-      title: "Chats",
+      title: "Agents",
       icon: MessagesSquare,
       isVisible: () => true,
       supportsHeaderSearch: false,

@@ -7,6 +7,7 @@ import type {
   GitListChangedFilesResponseV11,
   GitSubscribeStatusEvent,
   GitSubscribeStatusEventV11,
+  GitSubscribeStatusEventV12,
 } from "@traycer/protocol/host/git-schemas";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
@@ -30,7 +31,10 @@ import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
 import { __resetRichSlotOrderingForTesting } from "@/lib/git/git-rich-slot-ordering";
 import {
   useGitListChangedFilesSubscription,
+  refreshGitSubscriptionWithFreshNonce,
+  useGitSubscriptionRefreshState,
   __resetSubscriptionsForTesting,
+  type GitListChangedFilesSubscriptionResult,
 } from "../use-git-list-changed-files-subscription";
 
 // Mock stream session for testing.
@@ -49,6 +53,10 @@ class MockStreamSession implements IStreamSession {
 
   sendClientFrame(): void {
     // No-op for this test.
+  }
+
+  requestReconnect(): void {
+    // No-op for this test; reconnect is owned by the real StreamSession.
   }
 
   close(): void {
@@ -128,7 +136,15 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   getSession(method: string, params: unknown): MockStreamSession | undefined {
     const key = JSON.stringify({ method, params });
-    return this.sessions.get(key);
+    const exact = this.sessions.get(key);
+    if (exact !== undefined) return exact;
+    if (typeof params !== "object" || params === null) return undefined;
+    return this.sessions.get(
+      JSON.stringify({
+        method,
+        params: { ...params, freshNonce: null },
+      }),
+    );
   }
 
   override getMethodSchemaVersion<
@@ -147,6 +163,72 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
   notifySupportChanged(): void {
     this.supportListeners.forEach((listener) => listener());
   }
+}
+
+function makeSwappableStreamWrapper(
+  queryClient: QueryClient,
+  initialStreamClient: WsStreamClient<HostStreamRpcRegistry>,
+) {
+  const holder: { current: WsStreamClient<HostStreamRpcRegistry> } = {
+    current: initialStreamClient,
+  };
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      <StreamRuntimeContext.Provider value={{ wsStreamClient: holder.current }}>
+        {children}
+      </StreamRuntimeContext.Provider>
+    </QueryClientProvider>
+  );
+  return { wrapper, holder };
+}
+
+// Shared "swap the context to a fresh replacement client, then prove it takes
+// over the subscription and delivers a snapshot without surfacing an error"
+// flow used by the replacement-recovery tests below.
+async function swapToReplacementClientAndAssertHeadSha(
+  holder: { current: WsStreamClient<HostStreamRpcRegistry> },
+  rerender: () => void,
+  result: { readonly current: GitListChangedFilesSubscriptionResult },
+  headSha: string,
+) {
+  const replacementClient = new MockWsStreamClient();
+  holder.current = replacementClient;
+  rerender();
+
+  await waitFor(() => {
+    expect(replacementClient.subscribeCallCount).toBe(1);
+  });
+  const replacementSession = replacementClient.getSession(
+    "git.subscribeStatus",
+    {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    },
+  );
+  if (replacementSession === undefined) {
+    throw new Error("Replacement session should exist");
+  }
+  replacementSession.emitFrame(
+    {
+      type: "snapshot",
+      runningDir: "/repo",
+      headSha,
+      branch: "main",
+      files: [],
+      fingerprint: `${headSha}-fingerprint`,
+      repoMode: "normal",
+      repoState: { kind: "clean" },
+      pollStartedAtMs: 1_000,
+    },
+    null,
+  );
+
+  await waitFor(() => {
+    expect(result.current.data?.headSha).toBe(headSha);
+  });
+  expect(result.current.error).toBeNull();
+  expect(result.current.isPending).toBe(false);
 }
 
 describe("useGitListChangedFilesSubscription", () => {
@@ -182,6 +264,7 @@ describe("useGitListChangedFilesSubscription", () => {
     __resetSubscriptionsForTesting();
     __resetRichSlotOrderingForTesting();
     queryClient.clear();
+    vi.useRealTimers();
   });
 
   it("single consumer receives snapshot event", async () => {
@@ -642,7 +725,7 @@ describe("useGitListChangedFilesSubscription", () => {
     expect(session.closed).toBe(true);
   });
 
-  it("a closed stream client surfaces an error via the inert session", async () => {
+  it("waits for a replacement client and recovers without surfacing CLIENT_CLOSED", async () => {
     const closedClient = new WsStreamClient<HostStreamRpcRegistry>({
       registry: hostStreamRpcRegistry,
       endpoint: () => null,
@@ -665,15 +748,12 @@ describe("useGitListChangedFilesSubscription", () => {
     const warnSpy = vi
       .spyOn(console, "warn")
       .mockImplementation(() => undefined);
-    const closedWrapper = ({ children }: { children: ReactNode }) => (
-      <QueryClientProvider client={queryClient}>
-        <StreamRuntimeContext.Provider value={{ wsStreamClient: closedClient }}>
-          {children}
-        </StreamRuntimeContext.Provider>
-      </QueryClientProvider>
+    const { wrapper, holder } = makeSwappableStreamWrapper(
+      queryClient,
+      closedClient,
     );
 
-    const { result } = renderHook(
+    const { result, rerender } = renderHook(
       () =>
         useGitListChangedFilesSubscription({
           hostId: "host1",
@@ -681,21 +761,90 @@ describe("useGitListChangedFilesSubscription", () => {
           ignoreWhitespace: false,
           enabled: true,
         }),
-      { wrapper: closedWrapper },
+      { wrapper },
+    );
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.isPending).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    await swapToReplacementClientAndAssertHeadSha(
+      holder,
+      rerender,
+      result,
+      "replacement-head",
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("detaches when the live client closes underneath and rebinds to a replacement", async () => {
+    const liveClient = new MockWsStreamClient();
+    const { wrapper, holder } = makeSwappableStreamWrapper(
+      queryClient,
+      liveClient,
+    );
+
+    const { result, rerender } = renderHook(
+      () =>
+        useGitListChangedFilesSubscription({
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+          enabled: true,
+        }),
+      { wrapper },
     );
 
     await waitFor(() => {
-      expect(result.current.error).not.toBeNull();
+      expect(liveClient.subscribeCallCount).toBe(1);
     });
-    const error = result.current.error;
-    if (error === null || error.type !== "error") {
-      throw new Error("Expected an error event");
+    const liveSession = liveClient.getSession("git.subscribeStatus", {
+      hostId: "host1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+    });
+    if (liveSession === undefined) {
+      throw new Error("Live session should exist");
     }
-    expect(error.isFatal).toBe(true);
-    expect(error.message).toContain("CLIENT_CLOSED");
-    expect(result.current.isPending).toBe(false);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    warnSpy.mockRestore();
+
+    liveSession.emitFrame(
+      {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "initial-head",
+        branch: "main",
+        files: [],
+        fingerprint: "initial-fingerprint",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        pollStartedAtMs: 1_000,
+      },
+      null,
+    );
+    await waitFor(() => {
+      expect(result.current.data?.headSha).toBe("initial-head");
+    });
+
+    // Close the LIVE client underneath the consumer with NO parent rerender.
+    // The `onClosed` subscription in `useWsStreamClient` must notify on its own,
+    // flip the served snapshot to null, and drive the consumer to detach - its
+    // effect cleanup closes the session - WITHOUT surfacing CLIENT_CLOSED. If
+    // the subscribe branch were dropped, nothing would re-read the snapshot on
+    // this close and the consumer would cling to the dead client's session.
+    act(() => {
+      liveClient.close("closed-underneath");
+    });
+
+    expect(liveSession.closed).toBe(true);
+    expect(result.current.error).toBeNull();
+
+    // A replacement client reaches context (the provider's liveness rebuild).
+    await swapToReplacementClientAndAssertHeadSha(
+      holder,
+      rerender,
+      result,
+      "replacement-head",
+    );
   });
 
   it("a rebuilt stream client gets a fresh subscription (per-client keying)", async () => {
@@ -1116,5 +1265,307 @@ describe("useGitListChangedFilesSubscription", () => {
     ).toMatchObject({ fingerprint: "parent-2" });
     expect(mockWsStreamClient.subscribeCallCount).toBe(1);
     unmountFirst();
+  });
+
+  it("shares a v1.2 nonce refresh, ignores stale/non-matching frames, and preserves the cache until the match", async () => {
+    mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 2 };
+    const randomUuid = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValue("11111111-1111-1111-1111-111111111111");
+    try {
+      const { result: subscription } = renderHook(
+        () =>
+          useGitListChangedFilesSubscription({
+            hostId: "host1",
+            runningDir: "/repo",
+            ignoreWhitespace: false,
+            enabled: true,
+          }),
+        { wrapper: createWrapper() },
+      );
+      const { result: refreshState } = renderHook(
+        () =>
+          useGitSubscriptionRefreshState({
+            wsStreamClient: mockWsStreamClient,
+            hostId: "host1",
+            runningDir: "/repo",
+            ignoreWhitespace: false,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() =>
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1),
+      );
+      const oldSession = mockWsStreamClient.getSession("git.subscribeStatus", {
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+      });
+      if (oldSession === undefined) throw new Error("Expected initial session");
+
+      const startRefresh = () =>
+        refreshGitSubscriptionWithFreshNonce({
+          wsStreamClient: mockWsStreamClient,
+          queryClient,
+          hostId: "host1",
+          runningDir: "/repo",
+          ignoreWhitespace: false,
+        });
+      const first = startRefresh();
+      const second = startRefresh();
+      if (first === null || second === null)
+        throw new Error("Expected v1.2 refresh");
+      expect(second).toBe(first);
+      expect(oldSession.closed).toBe(true);
+      await waitFor(() => expect(refreshState.current).toBe(true));
+
+      const replacement = mockWsStreamClient.getSession("git.subscribeStatus", {
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+        freshNonce: "11111111-1111-1111-1111-111111111111",
+      });
+      if (replacement === undefined)
+        throw new Error("Expected replacement session");
+      const event = (
+        freshNonce: string,
+        headSha: string,
+      ): GitSubscribeStatusEventV12 => ({
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha,
+        branch: "main",
+        files: [],
+        fingerprint: `parent-${headSha}`,
+        nestedFingerprint: `nested-${headSha}`,
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        submodules: [],
+        pollStartedAtMs: 1_000,
+        freshNonce,
+      });
+      oldSession.emitFrame(
+        event("11111111-1111-1111-1111-111111111111", "old-generation"),
+        null,
+      );
+      replacement.emitFrame(event("wrong-nonce", "wrong"), null);
+      await Promise.resolve();
+      expect(subscription.current.data).toBeNull();
+      expect(refreshState.current).toBe(true);
+
+      replacement.emitFrame(
+        event("11111111-1111-1111-1111-111111111111", "fresh"),
+        null,
+      );
+      await expect(first).resolves.toBeUndefined();
+      await waitFor(() => expect(refreshState.current).toBe(false));
+      expect(subscription.current.data?.headSha).toBe("fresh");
+    } finally {
+      randomUuid.mockRestore();
+    }
+  });
+
+  it("keeps a matching-nonce updated frame pending until the targeted snapshot", async () => {
+    mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 2 };
+    const randomUuid = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValue("44444444-4444-4444-4444-444444444444");
+    try {
+      const { result: subscription } = renderHook(
+        () =>
+          useGitListChangedFilesSubscription({
+            hostId: "host1",
+            runningDir: "/repo",
+            ignoreWhitespace: false,
+            enabled: true,
+          }),
+        { wrapper: createWrapper() },
+      );
+      const { result: refreshState } = renderHook(
+        () =>
+          useGitSubscriptionRefreshState({
+            wsStreamClient: mockWsStreamClient,
+            hostId: "host1",
+            runningDir: "/repo",
+            ignoreWhitespace: false,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() =>
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1),
+      );
+
+      const refresh = refreshGitSubscriptionWithFreshNonce({
+        wsStreamClient: mockWsStreamClient,
+        queryClient,
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+      });
+      if (refresh === null) throw new Error("Expected v1.2 refresh");
+      await waitFor(() => expect(refreshState.current).toBe(true));
+
+      const replacement = mockWsStreamClient.getSession("git.subscribeStatus", {
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+        freshNonce: "44444444-4444-4444-4444-444444444444",
+      });
+      if (replacement === undefined)
+        throw new Error("Expected replacement session");
+
+      const matchingUpdated: GitSubscribeStatusEventV12 = {
+        type: "updated",
+        runningDir: "/repo",
+        headSha: "updated",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-updated",
+        nestedFingerprint: "nested-updated",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        changedPaths: [],
+        submodules: [],
+        pollStartedAtMs: 1_001,
+        freshNonce: "44444444-4444-4444-4444-444444444444",
+      };
+      replacement.emitFrame(matchingUpdated, null);
+      await Promise.resolve();
+
+      expect(refreshState.current).toBe(true);
+      expect(subscription.current.data).toBeNull();
+
+      const matchingSnapshot: GitSubscribeStatusEventV12 = {
+        type: "snapshot",
+        runningDir: "/repo",
+        headSha: "fresh",
+        branch: "main",
+        files: [],
+        fingerprint: "parent-fresh",
+        nestedFingerprint: "nested-fresh",
+        repoMode: "normal",
+        repoState: { kind: "clean" },
+        submodules: [],
+        pollStartedAtMs: 1_002,
+        freshNonce: "44444444-4444-4444-4444-444444444444",
+      };
+      replacement.emitFrame(matchingSnapshot, null);
+      await expect(refresh).resolves.toBeUndefined();
+      await waitFor(() => expect(refreshState.current).toBe(false));
+      expect(subscription.current.data?.headSha).toBe("fresh");
+    } finally {
+      randomUuid.mockRestore();
+    }
+  });
+
+  it("settles a shared refresh once at 10 seconds while leaving its replacement stream alive", async () => {
+    vi.useFakeTimers();
+    mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 2 };
+    const randomUuid = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValue("22222222-2222-2222-2222-222222222222");
+    try {
+      renderHook(
+        () =>
+          useGitListChangedFilesSubscription({
+            hostId: "host1",
+            runningDir: "/repo",
+            ignoreWhitespace: false,
+            enabled: true,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      const first = refreshGitSubscriptionWithFreshNonce({
+        wsStreamClient: mockWsStreamClient,
+        queryClient,
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+      });
+      const second = refreshGitSubscriptionWithFreshNonce({
+        wsStreamClient: mockWsStreamClient,
+        queryClient,
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+      });
+      if (first === null || second === null)
+        throw new Error("Expected v1.2 refresh");
+      expect(second).toBe(first);
+      let settlements = 0;
+      void first.then(() => {
+        settlements += 1;
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(first).resolves.toBeUndefined();
+      expect(settlements).toBe(1);
+      const replacement = mockWsStreamClient.getSession("git.subscribeStatus", {
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+        freshNonce: "22222222-2222-2222-2222-222222222222",
+      });
+      expect(replacement?.closed).toBe(false);
+    } finally {
+      randomUuid.mockRestore();
+    }
+  });
+
+  it("settles a pending refresh on a terminal replacement error and closes that stream", async () => {
+    mockWsStreamClient.methodSchemaVersion = { major: 1, minor: 2 };
+    const randomUuid = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValue("33333333-3333-3333-3333-333333333333");
+    try {
+      renderHook(
+        () =>
+          useGitListChangedFilesSubscription({
+            hostId: "host1",
+            runningDir: "/repo",
+            ignoreWhitespace: false,
+            enabled: true,
+          }),
+        { wrapper: createWrapper() },
+      );
+      await waitFor(() =>
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1),
+      );
+
+      const refresh = refreshGitSubscriptionWithFreshNonce({
+        wsStreamClient: mockWsStreamClient,
+        queryClient,
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+      });
+      if (refresh === null) throw new Error("Expected v1.2 refresh");
+
+      const replacement = mockWsStreamClient.getSession("git.subscribeStatus", {
+        hostId: "host1",
+        runningDir: "/repo",
+        ignoreWhitespace: false,
+        freshNonce: "33333333-3333-3333-3333-333333333333",
+      });
+      if (replacement === undefined)
+        throw new Error("Expected replacement session");
+
+      let settlements = 0;
+      void refresh.then(() => {
+        settlements += 1;
+      });
+      replacement.emitFrame(
+        { type: "error", message: "fatal git error", isFatal: true },
+        null,
+      );
+
+      await expect(refresh).resolves.toBeUndefined();
+      await Promise.resolve();
+      expect(settlements).toBe(1);
+      expect(replacement.closed).toBe(true);
+    } finally {
+      randomUuid.mockRestore();
+    }
   });
 });

@@ -24,8 +24,10 @@ function entry(
 ): ProfileDropdownUsageEntry {
   return {
     profileId: "p-a",
+    fetchEligible: true,
     refreshStatus: "idle",
     refresh: vi.fn(() => Promise.resolve()),
+    ensureFresh: vi.fn(() => Promise.resolve()),
     projection,
   };
 }

@@ -2,10 +2,11 @@ import { contextBridge } from "electron";
 import { RunnerHostSync } from "../ipc-contracts/ipc-channels";
 import { config } from "../config";
 import { readInitialRouteArg } from "../ipc-contracts/window-bootstrap";
-import { buildAuthBridge } from "./auth-bridge";
+import { buildAuthBridge, buildAuthTokenStoreBridge } from "./auth-bridge";
 import { buildDeviceFlowBridge } from "./device-flow-bridge";
 import { buildHostBridge } from "./host-bridge";
 import {
+  buildHostControllerStatusSubscriber,
   buildHostManagementBridge,
   buildHostTrayCommandSubscriber,
 } from "./host-management-bridge";
@@ -14,13 +15,17 @@ import { buildWindowsBridge } from "./windows-bridge";
 import { buildMenuBridge } from "./menu-bridge";
 import { buildSupportBridge } from "./support-bridge";
 import { buildAppUpdateBridge } from "./app-update-bridge";
+import { buildGlobalShortcutsBridge } from "./global-shortcuts-bridge";
 import { buildLifecycleBridge } from "./lifecycle-bridge";
 import { buildMigrationBridge } from "./migration-bridge";
 import { buildServiceBridge } from "./service-bridge";
 import { buildTraycerCliBridge } from "./traycer-cli-bridge";
 import { buildPlatformBridge } from "./platform-bridge";
 import { buildPowerBridge } from "./power-bridge";
-import { buildFileDropsBridge } from "./file-drops-bridge";
+import {
+  buildFileDropsBridge,
+  createNativeClipboardReadGate,
+} from "./file-drops-bridge";
 import { buildZoomBridge } from "./zoom-bridge";
 import { readSyncString } from "./sync-bootstrap";
 
@@ -42,6 +47,9 @@ import { readSyncString } from "./sync-bootstrap";
 const windowId = readSyncString(RunnerHostSync.windowId, "primary");
 const sentryRendererDsn = readSyncString(RunnerHostSync.sentryRendererDsn, "");
 const initialRoute = readInitialRouteArg(process.argv);
+const nativeClipboardReadGate = createNativeClipboardReadGate(() => Date.now());
+
+window.addEventListener("paste", nativeClipboardReadGate.observePaste, true);
 
 contextBridge.exposeInMainWorld("runnerHost", {
   authnBaseUrl: config.authnBaseUrl,
@@ -52,6 +60,7 @@ contextBridge.exposeInMainWorld("runnerHost", {
   initialRoute,
   sentryRendererDsn,
   ...buildAuthBridge(),
+  tokenStore: buildAuthTokenStoreBridge(),
   deviceFlow: buildDeviceFlowBridge(),
   ...buildHostBridge(),
   ...buildTrayBridge(),
@@ -59,8 +68,9 @@ contextBridge.exposeInMainWorld("runnerHost", {
   ...buildMenuBridge(),
   ...buildSupportBridge(),
   ...buildAppUpdateBridge(),
+  ...buildGlobalShortcutsBridge(),
   ...buildLifecycleBridge(),
-  fileDrops: buildFileDropsBridge(),
+  fileDrops: buildFileDropsBridge(nativeClipboardReadGate),
   service: buildServiceBridge(),
   traycerCli: buildTraycerCliBridge(),
   migration: buildMigrationBridge(),
@@ -69,4 +79,5 @@ contextBridge.exposeInMainWorld("runnerHost", {
   ...buildZoomBridge(),
   hostManagement: buildHostManagementBridge(),
   hostTray: buildHostTrayCommandSubscriber(),
+  hostControllerStatus: buildHostControllerStatusSubscriber(),
 });

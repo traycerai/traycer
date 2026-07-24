@@ -7,10 +7,8 @@ import { type HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { QueryActivityOptions } from "@/hooks/harnesses/use-gui-harness-catalog";
-import {
-  PROVIDERS_LIST_REFRESH_MS,
-  providersListRefetchInterval,
-} from "@/hooks/providers/providers-list-refetch-interval";
+
+const PROVIDERS_LIST_REFRESH_MS = 15 * 60 * 1_000;
 
 /**
  * Tab-scoped `providers.list`: identical to `useProvidersList` but bound to the
@@ -36,8 +34,6 @@ export function useTabProvidersList(
       enabled: activity.enabled,
       subscribed: activity.subscribed,
       staleTime: PROVIDERS_LIST_REFRESH_MS,
-      refetchInterval: (query) =>
-        providersListRefetchInterval(query.state.data),
     },
   });
 }

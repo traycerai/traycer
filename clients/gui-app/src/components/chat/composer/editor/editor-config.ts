@@ -16,7 +16,11 @@ import {
 import { AttachmentGroupNode } from "./extensions/attachment-group-extension";
 import { ImageAttachmentNode } from "./extensions/image-attachment-extension";
 import { ChatListKeymap } from "./extensions/chat-list-keymap";
-import { createChatPasteHandler } from "./extensions/chat-paste-handler";
+import {
+  createChatPasteHandler,
+  type PastedComposerImage,
+  type PastedComposerImageOutcome,
+} from "./extensions/chat-paste-handler";
 import { ChatCopySerializer } from "./extensions/chat-copy-serializer";
 
 export interface BuildComposerExtensionsArgs {
@@ -24,6 +28,12 @@ export interface BuildComposerExtensionsArgs {
   readonly placeholder: string;
   readonly onSubmit: { readonly current: () => void };
   readonly slashProviderId: GuiHarnessId;
+  readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
+  readonly getIngestPastedComposerImages: () =>
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null;
 }
 
 // Blockquote is button-only (T5): the composer schema stays blockquote-valid
@@ -74,7 +84,11 @@ export function buildComposerExtensions(
       onSubmit: args.onSubmit,
       pickerStore: args.pickerStore,
     }),
-    createChatPasteHandler({ pickerStore: args.pickerStore }),
+    createChatPasteHandler({
+      pickerStore: args.pickerStore,
+      getHasPastedImageBytes: args.getHasPastedImageBytes,
+      getIngestPastedComposerImages: args.getIngestPastedComposerImages,
+    }),
     // Cmd+C / Cmd+X -> structured plain text (list markers, mentions, slash
     // commands) instead of ProseMirror's default blank-line-joined textContent.
     ChatCopySerializer,

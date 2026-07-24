@@ -22,7 +22,7 @@ const testState = vi.hoisted(() => ({
 vi.mock("@/hooks/git/use-git-submodule-snapshot-refresh", () => ({
   useGitSubmoduleSnapshotRefresh: (args: RefreshHookArgs) => {
     testState.refreshArgs.push(args);
-    return testState.refresh;
+    return { refresh: testState.refresh, isRefreshing: false };
   },
 }));
 

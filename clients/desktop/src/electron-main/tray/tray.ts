@@ -100,7 +100,13 @@ export async function loadTrayIconImage(
  */
 export interface DesktopTrayControllerOptions {
   readonly onEpicSelected: ((epicId: string) => void) | null;
-  readonly onCommand: ((command: MenuCommandId) => void) | null;
+  // `hostUpdateVersion` is the version captured into a `host.installUpdate`
+  // item when that row was built ("Update to <version>"). Every other command
+  // passes `null`. The callback must not re-read live presentation state -
+  // an already-open native menu can still fire the old item's click after
+  // presentation has moved on.
+  readonly onCommand:
+    ((command: MenuCommandId, hostUpdateVersion: string | null) => void) | null;
 }
 
 /**
@@ -163,7 +169,15 @@ export class DesktopTrayController {
     hostUpdateAvailableVersion: null,
   };
   private onEpicSelected: ((epicId: string) => void) | null;
-  private onCommand: ((command: MenuCommandId) => void) | null;
+  private onCommand:
+    ((command: MenuCommandId, hostUpdateVersion: string | null) => void) | null;
+  // Display-only - `registerAccelerator: false` on the "Open Traycer" item's
+  // `accelerator` below means the OS never binds this key combo from the
+  // menu; the real registration lives solely in the global-shortcuts
+  // registry (`electron-main/app/shortcuts.ts`). `null` when the summon
+  // shortcut is disabled or the OS refused it, so the item shows no
+  // accelerator rather than one that wouldn't actually fire.
+  private summonAccelerator: string | null = null;
 
   constructor(
     window: TrayManagedWindow,
@@ -187,7 +201,11 @@ export class DesktopTrayController {
     this.onEpicSelected = handler;
   }
 
-  setCommandHandler(handler: ((command: MenuCommandId) => void) | null): void {
+  setCommandHandler(
+    handler:
+      | ((command: MenuCommandId, hostUpdateVersion: string | null) => void)
+      | null,
+  ): void {
     this.onCommand = handler;
   }
 
@@ -203,6 +221,14 @@ export class DesktopTrayController {
 
   setPresentation(presentation: DesktopTrayPresentation): void {
     this.presentation = presentation;
+    this.rebuildMenu();
+  }
+
+  setSummonAccelerator(accelerator: string | null): void {
+    if (this.summonAccelerator === accelerator) {
+      return;
+    }
+    this.summonAccelerator = accelerator;
     this.rebuildMenu();
   }
 
@@ -265,18 +291,30 @@ export class DesktopTrayController {
       isSignedIn && account !== null
         ? [{ label: formatAccountLabel(account), enabled: false }]
         : [];
+    // Capture the labelled version into the item's click closure. An open
+    // native tray menu can still fire this click after presentation has been
+    // rebuilt to a different version; re-reading live state would send the
+    // new version and defeat main's expected-version guard (cold-review #3).
+    const hostUpdateVersion = this.presentation.hostUpdateAvailableVersion;
     const updateItems =
-      this.presentation.hostUpdateAvailableVersion !== null
+      hostUpdateVersion !== null
         ? [
             {
-              label: `Update to ${this.presentation.hostUpdateAvailableVersion}`,
-              click: () => this.runCommand("host.installUpdate"),
+              label: `Update to ${hostUpdateVersion}`,
+              click: () =>
+                this.runCommand("host.installUpdate", hostUpdateVersion),
             },
           ]
         : [];
     const menu = Menu.buildFromTemplate([
       {
         label: "Open Traycer",
+        // Display-only: `registerAccelerator: false` means the OS never
+        // binds this from the menu - the global-shortcuts registry owns the
+        // real registration. `undefined` (not `null`) is what Electron's
+        // MenuItemConstructorOptions expects for "no accelerator".
+        accelerator: this.summonAccelerator ?? undefined,
+        registerAccelerator: false,
         click: () => this.showMainWindow(),
       },
       { type: "separator" },
@@ -284,28 +322,29 @@ export class DesktopTrayController {
       { type: "separator" },
       {
         label: "Settings…",
-        click: () => this.runCommand("app.openSettings"),
+        click: () => this.runCommand("app.openSettings", null),
       },
       ...updateItems,
       {
         label: "Check for Updates",
         enabled: this.presentation.canCheckForUpdates,
-        click: () => this.runCommand("app.checkForUpdates"),
+        click: () => this.runCommand("app.checkForUpdates", null),
       },
       {
         label: "Restart Host",
-        click: () => this.runCommand("host.restart"),
+        click: () => this.runCommand("host.restart", null),
       },
       {
         label: "Open Logs",
-        click: () => this.runCommand("app.openLogs"),
+        click: () => this.runCommand("app.openLogs", null),
       },
       { type: "separator" },
       ...accountItems,
       {
         label: isSignedIn ? "Sign Out" : "Sign In",
         enabled: authStatus !== "signing-in",
-        click: () => this.runCommand(isSignedIn ? "app.signOut" : "app.signIn"),
+        click: () =>
+          this.runCommand(isSignedIn ? "app.signOut" : "app.signIn", null),
       },
       { type: "separator" },
       {
@@ -319,7 +358,10 @@ export class DesktopTrayController {
     this.tray.setContextMenu(menu);
   }
 
-  private runCommand(command: MenuCommandId): void {
+  private runCommand(
+    command: MenuCommandId,
+    hostUpdateVersion: string | null,
+  ): void {
     if (this.onCommand === null) {
       return;
     }
@@ -328,6 +370,6 @@ export class DesktopTrayController {
     // the user sees the result (settings pane, sign-in screen, confirm
     // modal) instead of it landing in an invisible window.
     this.showMainWindow();
-    this.onCommand(command);
+    this.onCommand(command, hostUpdateVersion);
   }
 }

@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -16,6 +19,7 @@ import { queryKeys } from "@/lib/query-keys";
 import type { RunTargetHost } from "@/hooks/rate-limits/use-run-target-host";
 import { __resetRateLimitQueueForTests } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelope";
+import { rateLimitProviderState } from "./profile-usage-fixtures";
 
 // Mirrors `use-profile-usage-comparison.test.tsx`'s mocking approach:
 // `useProfileUsagePresentation` calls straight through to
@@ -23,6 +27,9 @@ import type { RateLimitUsageResponse } from "@/lib/rate-limits/rate-limit-envelo
 // two-real-`HostClient`-scopes-over-spyable-messengers pattern applies here.
 const scopesRef = vi.hoisted(() => ({
   byHostId: new Map<string | null, RunTargetHost>(),
+}));
+const providerStateRef = vi.hoisted(() => ({
+  providers: [] as ReadonlyArray<ProviderCliState>,
 }));
 vi.mock("@/hooks/rate-limits/use-run-target-host", () => ({
   useRunTargetHost: (runTargetHostId: string | null) => {
@@ -34,6 +41,11 @@ vi.mock("@/hooks/rate-limits/use-run-target-host", () => ({
     }
     return scope;
   },
+}));
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    data: { providers: providerStateRef.providers },
+  }),
 }));
 
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
@@ -136,11 +148,15 @@ describe("useProfileUsagePresentation", () => {
   beforeEach(() => {
     __resetRateLimitQueueForTests();
     scopesRef.byHostId.clear();
+    providerStateRef.providers = [
+      rateLimitProviderState("claude-code", "authenticated"),
+    ];
   });
   afterEach(() => {
     cleanup();
     __resetRateLimitQueueForTests();
     scopesRef.byHostId.clear();
+    providerStateRef.providers = [];
   });
 
   it("issues zero host.getRateLimitUsage calls purely from mounting (cache-only observation)", () => {

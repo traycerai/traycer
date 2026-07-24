@@ -1,7 +1,15 @@
 import type {
-  HostOperationStatus,
-  HostRegistryUpdateState,
-} from "@traycer-clients/shared/platform/runner-host";
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+
+export type {
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+import type { HostControllerStatus } from "@traycer-clients/shared/platform/runner-host";
 
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
@@ -209,6 +217,7 @@ export interface DesktopAppUpdateSnapshot {
   readonly sequence: number;
   readonly status: DesktopAppUpdateStatus;
   readonly currentVersion: string;
+  readonly allowPrerelease: boolean;
   readonly latestVersion: string | null;
   // Whole-percent download progress (0-100) while `status` is "downloading";
   // null in every other state (including before a user-initiated download).
@@ -233,6 +242,9 @@ export interface DesktopAppUpdatesBridge {
   checkForUpdates(
     intent: DesktopAppUpdateCheckIntent,
   ): Promise<DesktopAppUpdateSnapshot>;
+  setAllowPrerelease(
+    allowPrerelease: boolean,
+  ): Promise<DesktopAppUpdateSnapshot>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
@@ -240,14 +252,30 @@ export interface DesktopAppUpdatesBridge {
   };
 }
 
-export interface DesktopHostRegistryUpdatesBridge {
-  onChange(handler: (state: HostRegistryUpdateState) => void): {
+/**
+ * Wire snapshot pushed on `globalShortcutsChange` and returned by
+ * `getSnapshot`. `sequence` guards against an out-of-order frame overwriting
+ * a newer one in the renderer's store, the same monotonic pattern
+ * `DesktopAppUpdateSnapshot` uses.
+ */
+export interface DesktopGlobalShortcutsSnapshot {
+  readonly sequence: number;
+  readonly statuses: Readonly<Record<GlobalShortcutId, GlobalShortcutStatus>>;
+}
+
+export interface DesktopGlobalShortcutsBridge {
+  getSnapshot(): Promise<DesktopGlobalShortcutsSnapshot>;
+  set(
+    id: GlobalShortcutId,
+    intent: GlobalShortcutIntent,
+  ): Promise<GlobalShortcutStatus>;
+  onChange(handler: (snapshot: DesktopGlobalShortcutsSnapshot) => void): {
     dispose(): void;
   };
 }
 
-export interface DesktopHostOperationStatusBridge {
-  onChange(handler: (status: HostOperationStatus | null) => void): {
+export interface DesktopHostControllerStatusBridge {
+  onChange(handler: (status: HostControllerStatus) => void): {
     dispose(): void;
   };
 }

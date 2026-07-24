@@ -316,6 +316,73 @@ describe("createTerminalSessionStore", () => {
     );
   });
 
+  it("stashes a resize arriving while the session is lost and flushes it after the reconnect snapshot", () => {
+    const harness = createHarness();
+
+    harness.callbacks().onConnectionStatus("open", null);
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+    harness.sendAction.mockClear();
+
+    // Stream drops -> "lost". A container resize landing now (pane relayout
+    // while disconnected) must be remembered, not dropped: the xterm engine
+    // records every report in its own dedupe before the store sees it, so a
+    // drop here is never re-offered and the session stays latched at the
+    // pre-disconnect grid after the reconnect.
+    harness.callbacks().onConnectionStatus("closed", null);
+    expect(harness.handle.store.getState().status).toBe("lost");
+    const actionId = harness.handle.store.getState().requestResize(132, 40);
+    expect(actionId).toBeNull();
+    expect(harness.sendAction).not.toHaveBeenCalled();
+    expect(harness.handle.store.getState()).toMatchObject({
+      requestedCols: 132,
+      requestedRows: 40,
+    });
+
+    // Reconnect: on "open" the session is still "lost", so nothing flushes
+    // yet; the snapshot restores it to running and flushes the stashed size.
+    harness.callbacks().onConnectionStatus("open", null);
+    expect(harness.sendAction).not.toHaveBeenCalled();
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+    expect(harness.sendAction).toHaveBeenCalledTimes(1);
+    expect(harness.sendAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: "resize",
+        cols: 132,
+        rows: 40,
+      }),
+    );
+  });
+
+  it("re-dispatches a repeated resize while the host never adopted it, and dedupes once it did", () => {
+    const harness = createHarness();
+
+    harness.callbacks().onConnectionStatus("open", null);
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+    harness.sendAction.mockClear();
+
+    // First report: dispatched, but suppose the frame was lost in flight -
+    // the host's grid never becomes 132x40.
+    harness.handle.store.getState().requestResize(132, 40);
+    expect(harness.sendAction).toHaveBeenCalledTimes(1);
+
+    // The engine's latch self-heal re-reports the SAME size. Deduping on
+    // `requested` alone would strand it; it must reach the wire to retry.
+    harness.handle.store.getState().requestResize(132, 40);
+    expect(harness.sendAction).toHaveBeenCalledTimes(2);
+
+    // Once the host adopts the size (echo), the same request is redundant
+    // and dedupes again.
+    harness.callbacks().onResized({
+      kind: "resized",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      cols: 132,
+      rows: 40,
+    });
+    expect(harness.handle.store.getState().requestResize(132, 40)).toBeNull();
+    expect(harness.sendAction).toHaveBeenCalledTimes(2);
+  });
+
   it("stores active process metadata from session updates", () => {
     const harness = createHarness();
 

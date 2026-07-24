@@ -1,13 +1,31 @@
 import { useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import {
+  Analytics,
+  AnalyticsEvent,
+  analyticsCountBucket,
+} from "@/lib/analytics";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { notificationsMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   buildPayloadFromEvent,
   type NotificationPayload,
 } from "@/lib/notifications";
+import {
+  categoryForNotificationSource,
+  type NotificationCategory,
+} from "@/lib/notifications/notification-category";
+import {
+  classifyNotificationLifecycle,
+  compareAttentionOrder,
+  compareFeedIdAscending,
+  type NotificationAttentionTier,
+} from "@/lib/notifications/notification-lifecycle";
+import { occurrenceKeyForNotification } from "@/lib/notifications/notification-occurrence";
 import {
   useAppLocalNotificationById,
   useAppLocalNotificationIds,
@@ -17,31 +35,34 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import {
   type HostNotificationFeedEntry,
-  selectHostNotificationNextCursor,
+  selectHostNotificationAttentionCursor,
+  selectHostNotificationRecentCursor,
+  selectHostNotificationSummary,
+  selectHostNotificationUnreadRecentCursor,
+  selectHostNotificationUnreadRecentHasLoadedOnce,
   useHostNotificationById,
   useHostNotificationIds,
   useHostNotificationUnreadCount,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
+import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import {
+  useNotificationEntries,
   useNotificationEntryById,
   useNotificationEntryIds,
   useNotificationUnreadCount,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
 import {
-  deriveHostNotificationStoppedReason,
+  formatHostNotificationPresentation,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationKnownPayload,
   type HostNotificationOutcome,
   type HostNotificationSeverity,
+  type HostNotificationsAttentionCursor,
+  type HostNotificationsChronologicalCursor,
+  type HostNotificationsResolveRequest,
 } from "@traycer/protocol/host/notifications/contracts";
-import {
-  PROVIDER_DISPLAY_NAMES,
-  providerIdSchema,
-  type ProviderId,
-} from "@traycer/protocol/host/provider-schemas";
-import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
 
@@ -61,15 +82,39 @@ export interface MergedNotificationRow {
   readonly globalEntry: NotificationEntry | null;
   readonly severity: HostNotificationSeverity;
   readonly outcome: HostNotificationOutcome | null;
+  /** Only host approval/interview rows carry a meaningful value; every other
+   * row is `null` and never reads as an unresolved prompt. */
+  readonly resolvedAt: number | null;
+  /** The host entry's `sourceRef` (approval/interview id), part of the
+   * dismiss occurrence token `(id, updatedAt, sourceRef)`. `null` for
+   * non-host rows and host rows without a source ref. */
+  readonly sourceRef: string | null;
+  /** Product-vocabulary category, mapped from `source` at the projection
+   * boundary so consumers never branch on the internal source seam. */
+  readonly category: NotificationCategory;
 }
 
 export interface MergedNotificationsActions {
   readonly markAsRead: (feedId: string) => void;
+  /** Dismiss an unresolved `needs_action` Attention row: stamps `resolvedAt`
+   * (and marks it read) so it leaves Attention without answering the
+   * underlying prompt. Takes the row (not just its id) because the request
+   * carries the immutable occurrence token `(id, updatedAt)`. Host rows only -
+   * no other source is blocking-eligible. */
+  readonly resolve: (row: MergedNotificationRow) => void;
   readonly markAllAsRead: () => void;
-  readonly clearAll: () => void;
   readonly loadMoreHost: () => void;
   readonly canLoadMoreHost: boolean;
   readonly isLoadingMoreHost: boolean;
+  readonly hasHostLoadError: boolean;
+  readonly loadMoreAttention: () => void;
+  readonly canLoadMoreAttention: boolean;
+  readonly isLoadingMoreAttention: boolean;
+  readonly hasAttentionLoadError: boolean;
+  readonly loadMoreUnreadRecent: () => void;
+  readonly canLoadMoreUnreadRecent: boolean;
+  readonly isLoadingMoreUnreadRecent: boolean;
+  readonly hasUnreadRecentLoadError: boolean;
 }
 
 interface FeedCandidate {
@@ -85,6 +130,7 @@ interface ParsedFeedId {
 interface HostNotificationMutationContext {
   readonly hostId: string | null;
   readonly snapshotEpoch: number;
+  readonly liveLifecycleRevision: number;
 }
 
 export function hostFeedId(id: string): string {
@@ -99,28 +145,13 @@ export function appLocalFeedId(id: string): string {
   return `app-local:${id}`;
 }
 
-export function mergeNotificationFeedIds(
-  hostEntries: ReadonlyArray<HostNotificationFeedEntry>,
-  appLocalEntries: ReadonlyArray<FeedCandidate>,
-  globalEntries: ReadonlyArray<NotificationEntry>,
-): ReadonlyArray<string> {
-  const candidates: FeedCandidate[] = [
-    ...hostEntries.map((entry) => ({
-      feedId: hostFeedId(entry.id),
-      createdAt: entry.updatedAt,
-    })),
-    ...appLocalEntries,
-    ...globalEntries.map((entry) => ({
-      feedId: globalFeedId(entry.id),
-      createdAt: entry.createdAt,
-    })),
-  ];
-  candidates.sort((a, b) => {
-    const createdAtDelta = b.createdAt - a.createdAt;
-    if (createdAtDelta !== 0) return createdAtDelta;
-    return b.feedId.localeCompare(a.feedId);
-  });
-  return candidates.map((candidate) => candidate.feedId);
+/** Newest-first; an ascending feed-id tie-break matches the host's SQLite
+ * `id ASC` order so equal-timestamp rows don't disagree between the client
+ * and host. */
+function compareFeedCandidates(a: FeedCandidate, b: FeedCandidate): number {
+  const createdAtDelta = b.createdAt - a.createdAt;
+  if (createdAtDelta !== 0) return createdAtDelta;
+  return compareFeedIdAscending(a.feedId, b.feedId);
 }
 
 export function mergedUnreadCount(input: {
@@ -131,33 +162,111 @@ export function mergedUnreadCount(input: {
   return input.hostUnread + input.appLocalUnread + input.globalUnread;
 }
 
-export function useMergedNotificationIds(): ReadonlyArray<string> {
+/** Every merged row, newest-first across all three sources - the shared base
+ * the id/Attention/Recent projections all derive from without recomputing
+ * their own source subscriptions. */
+function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
   const hostIds = useHostNotificationIds();
   const appLocalIds = useAppLocalNotificationIds();
   const globalIds = useNotificationEntryIds();
+  const globalEntries = useNotificationEntries();
   const hostById = useHostNotificationsStore((state) => state.byId);
   const appLocalById = useAppLocalNotificationsStore((state) => state.byId);
   return useMemo(() => {
-    const hostEntries = hostIds.map((id) => hostById[id]);
-    const globalEntries = useNotificationsStore.getState().entries;
     const globalEntriesById = new Map(
       globalEntries.map((entry) => [entry.id, entry]),
     );
     const orderedGlobalEntries = globalIds
       .map((id) => globalEntriesById.get(id))
       .filter((entry): entry is NotificationEntry => entry !== undefined);
-    const appLocalEntries = appLocalIds
-      .map((id) => appLocalById[id])
-      .map((entry) => ({
-        feedId: appLocalFeedId(entry.id),
-        createdAt: entry.updatedAt,
-      }));
-    return mergeNotificationFeedIds(
-      hostEntries,
-      appLocalEntries,
-      orderedGlobalEntries,
+    const rows: MergedNotificationRow[] = [
+      ...hostIds.map((id) => rowFromHostEntry(hostById[id])),
+      ...appLocalIds.map((id) => rowFromAppLocalEntry(appLocalById[id])),
+      ...orderedGlobalEntries.map((entry) => rowFromGlobalEntry(entry)),
+    ];
+    rows.sort(compareFeedCandidates);
+    return rows;
+  }, [hostIds, hostById, appLocalIds, appLocalById, globalIds, globalEntries]);
+}
+
+export function useMergedNotificationIds(): ReadonlyArray<string> {
+  const rows = useMergedNotificationRows();
+  return useMemo(() => rows.map((row) => row.feedId), [rows]);
+}
+
+export interface MergedNotificationOccurrenceEntry {
+  readonly feedId: string;
+  readonly occurrenceKey: string;
+}
+
+/** Full, unfiltered, newest-first occurrence order across every source and
+ * section - the identity source live-arrival detection anchors against, so a
+ * Recent filter that currently hides a row can never blind the arrival set to
+ * it. Recurrence (same `feedId`, new `createdAt`) mints a new key; a
+ * content-only retitle at the same `createdAt` keeps the same key. */
+export function useMergedNotificationOccurrenceEntries(): ReadonlyArray<MergedNotificationOccurrenceEntry> {
+  const rows = useMergedNotificationRows();
+  return useMemo(
+    () =>
+      rows.map((row) => ({
+        feedId: row.feedId,
+        occurrenceKey: occurrenceKeyForNotification(row),
+      })),
+    [rows],
+  );
+}
+
+interface AttentionOrderEntry {
+  readonly row: MergedNotificationRow;
+  readonly tier: NotificationAttentionTier;
+}
+
+/** Attention, blocking-first then failures, newest first within each tier.
+ * Never filtered - Attention is complete and filter-invariant by design. */
+export function useAttentionNotificationIds(): ReadonlyArray<string> {
+  const rows = useMergedNotificationRows();
+  return useMemo(() => {
+    const attentionRows: AttentionOrderEntry[] = rows
+      .map((row) => ({
+        row,
+        classification: classifyNotificationLifecycle(row),
+      }))
+      .filter(
+        (
+          entry,
+        ): entry is {
+          row: MergedNotificationRow;
+          classification: {
+            section: "attention";
+            tier: NotificationAttentionTier;
+          };
+        } => entry.classification.section === "attention",
+      )
+      .map(({ row, classification }) => ({ row, tier: classification.tier }));
+    attentionRows.sort((a, b) =>
+      compareAttentionOrder(
+        { tier: a.tier, createdAt: a.row.createdAt, feedId: a.row.feedId },
+        { tier: b.tier, createdAt: b.row.createdAt, feedId: b.row.feedId },
+      ),
     );
-  }, [hostIds, hostById, appLocalIds, appLocalById, globalIds]);
+    return attentionRows.map((entry) => entry.row.feedId);
+  }, [rows]);
+}
+
+/** Every non-attention row, chronological, filtered by the open-session
+ * Unread-only/category selections. Attention rows are always excluded
+ * regardless of filter state. */
+export function useRecentNotificationIds(): ReadonlyArray<string> {
+  const rows = useMergedNotificationRows();
+  const unreadOnly = useNotificationsPopoverStore((state) => state.unreadOnly);
+  const categories = useNotificationsPopoverStore((state) => state.categories);
+  return useMemo(() => {
+    return rows
+      .filter((row) => classifyNotificationLifecycle(row).section === "recent")
+      .filter((row) => categories.has(row.category))
+      .filter((row) => !unreadOnly || row.readAt === null)
+      .map((row) => row.feedId);
+  }, [rows, unreadOnly, categories]);
 }
 
 export function useMergedNotificationRow(
@@ -194,6 +303,76 @@ export function useMergedNotificationUnreadCount(): number {
   });
 }
 
+export type NotificationBellState =
+  | { readonly kind: "unknown" }
+  | { readonly kind: "clear" }
+  | { readonly kind: "quietDot" }
+  | { readonly kind: "attention"; readonly count: number };
+
+/**
+ * The bell's exact/quiet-dot/clear/unknown state. `unknown` wins outright
+ * whenever the host summary is null - a partial-but-exact
+ * collaboration/system contribution never gets promoted into a composite
+ * number, per the "never present a stale/understated count as exact"
+ * invariant.
+ */
+export function useNotificationBellState(): NotificationBellState {
+  const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
+  // App-local rows are always severity "failure" (`rowFromAppLocalEntry`
+  // hardcodes it), so the app-local unread count already IS its
+  // unread-failure count - no extra filter needed to fold it into attention.
+  const appLocalUnread = useAppLocalNotificationUnreadCount();
+  const globalUnread = useNotificationUnreadCount();
+  if (hostSummary === null) return { kind: "unknown" };
+  const attention = hostSummary.attentionCount + appLocalUnread;
+  if (attention > 0) return { kind: "attention", count: attention };
+  const unread = mergedUnreadCount({
+    hostUnread: hostSummary.unreadCount,
+    appLocalUnread,
+    globalUnread,
+  });
+  return unread > 0 ? { kind: "quietDot" } : { kind: "clear" };
+}
+
+/** Screen-reader label matching the visual bell state exactly - never a bare
+ * count with no state context. */
+export function notificationBellAccessibleLabel(
+  state: NotificationBellState,
+): string {
+  switch (state.kind) {
+    case "unknown":
+      return "Notifications, task notification status unavailable";
+    case "clear":
+      return "Notifications";
+    case "quietDot":
+      return "Notifications, unread activity";
+    case "attention": {
+      const noun =
+        state.count === 1 ? "notification needs" : "notifications need";
+      return `Notifications, ${state.count} ${noun} attention`;
+    }
+  }
+}
+
+export interface NotificationCenterHostState {
+  readonly hostLabel: string | null;
+  /** True when task activity cannot be shown as complete right now - either
+   * there is no active host or its exact summary hasn't landed yet.
+   * Collaboration/system rows remain valid and visible either way. */
+  readonly isPartial: boolean;
+}
+
+/** Active-host subtitle/partial-state selector for the center header. */
+export function useNotificationCenterHostState(): NotificationCenterHostState {
+  const activeHostId = useReactiveActiveHostId();
+  const hostEntry = useHostDirectoryEntry(activeHostId ?? "");
+  const summary = useHostNotificationsStore(selectHostNotificationSummary);
+  return {
+    hostLabel: hostEntry?.label ?? null,
+    isPartial: activeHostId === null || summary === null,
+  };
+}
+
 export function useMergedNotificationsActions(): MergedNotificationsActions {
   const binding = useHostBinding();
   const client = binding?.hostClient ?? null;
@@ -201,18 +380,32 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   const globalMarkAllAsRead = useNotificationsStore(
     (state) => state.markAllAsRead,
   );
-  const globalClearAll = useNotificationsStore((state) => state.clearAll);
   const appLocalMarkAsRead = useAppLocalNotificationsStore(
     (state) => state.markAsRead,
   );
   const appLocalMarkAllAsRead = useAppLocalNotificationsStore(
     (state) => state.markAllAsRead,
   );
-  const appLocalClearAll = useAppLocalNotificationsStore(
-    (state) => state.clearAll,
-  );
   const hostNextCursor = useHostNotificationsStore(
-    selectHostNotificationNextCursor,
+    selectHostNotificationRecentCursor,
+  );
+  const hostAttentionCursor = useHostNotificationsStore(
+    selectHostNotificationAttentionCursor,
+  );
+  const hostUnreadRecentCursor = useHostNotificationsStore(
+    selectHostNotificationUnreadRecentCursor,
+  );
+  const unreadRecentHasLoadedOnce = useHostNotificationsStore(
+    selectHostNotificationUnreadRecentHasLoadedOnce,
+  );
+  const hasHostLoadError = useHostNotificationsStore(
+    (state) => state.recentStatus === "error",
+  );
+  const hasAttentionLoadError = useHostNotificationsStore(
+    (state) => state.attentionStatus === "error",
+  );
+  const hasUnreadRecentLoadError = useHostNotificationsStore(
+    (state) => state.unreadRecentStatus === "error",
   );
 
   const markHostRead = useHostMutation<
@@ -234,16 +427,89 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         if (!isCurrentHostNotificationMutation(client, context)) return;
         useHostNotificationsStore
           .getState()
-          .applyReadState(
+          .markReadLocally(
             [variables.sourceId],
             Date.now(),
-            undefined,
             context.snapshotEpoch,
           );
       },
       onError: (error, _variables, context) => {
         if (!isCurrentHostNotificationMutation(client, context)) return;
         toastFromHostError(error, "Couldn't mark the notification as read.");
+      },
+    },
+  });
+
+  const resolveHost = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.resolve",
+    HostNotificationMutationContext,
+    {
+      readonly feedId: string;
+      readonly sourceId: string;
+      readonly updatedAt: number;
+      readonly sourceRef: string | null;
+    }
+  >({
+    client,
+    method: "host.notifications.resolve",
+    // Immutable occurrence token `(id, updatedAt, sourceRef)` - the host
+    // resolves only if this exact occurrence is still the unresolved row, so a
+    // newer prompt that reopened the same reusable id is never clobbered, even
+    // when it reopened within the same millisecond (equal `updatedAt`, new
+    // `sourceRef`).
+    mapVariables: (variables) => ({
+      occurrences: [
+        {
+          id: variables.sourceId,
+          updatedAt: variables.updatedAt,
+          sourceRef: variables.sourceRef,
+        },
+      ],
+    }),
+    options: {
+      mutationKey: notificationsMutationKeys.resolve(),
+      onMutate: () => captureHostNotificationMutationContext(client),
+      // No optimistic local write. The host stamps one authoritative
+      // `resolvedAt`/`readAt` and emits it as a non-suppressed
+      // `readStateChanged` frame, which is the single source that removes the
+      // row from Attention (and a fresh snapshot reconciles it on reconnect). A
+      // client-side write would either diverge from that timestamp or resolve a
+      // NEWER occurrence that reopened the same id between capture and success;
+      // if the occurrence has moved on, the host no-ops and emits nothing, so
+      // the row correctly stays in Attention.
+      onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        toastFromHostError(error, "Couldn't dismiss the notification.");
+      },
+    },
+  });
+
+  const resolveHostAll = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.resolve",
+    HostNotificationMutationContext,
+    HostNotificationsResolveRequest
+  >({
+    client,
+    method: "host.notifications.resolve",
+    // Batch dismiss for the "Mark all read" double-tick: the SAME token-guarded
+    // `host.notifications.resolve` path the row-level Dismiss uses, called with
+    // the currently-loaded Attention occurrence tokens. Zero new wire surface -
+    // the request already batches (depth-safe-chunked host-side).
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: notificationsMutationKeys.resolveAll(),
+      onMutate: () => captureHostNotificationMutationContext(client),
+      // No optimistic write (same as the row-level resolve): the rows leave
+      // Attention via the host's authoritative `readStateChanged` frame.
+      onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationMutation(client, context)) return;
+        // On an older host the resolve method is `E_HOST_UNSUPPORTED`: the
+        // shared mapper surfaces upgrade guidance and creates no failure row,
+        // and its per-code dedupe collapses this with markAllRead's toast if
+        // that also degraded - so the partial degrade never double-toasts.
+        toastFromHostError(error, "Couldn't dismiss the notifications.");
       },
     },
   });
@@ -288,49 +554,140 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     client,
     method: "host.notifications.list",
     mapVariables: (variables) => ({
-      filter: "all",
+      filter: "recent",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor,
     }),
     options: {
       mutationKey: notificationsMutationKeys.loadMore(),
-      onMutate: () => captureHostNotificationMutationContext(client),
-      onSuccess: (data, _variables, context) => {
+      onMutate: () => beginHostNotificationMutation(client, "recent"),
+      onSuccess: (data, variables, context) => {
         if (!isCurrentHostNotificationMutation(client, context)) return;
+        // Track only when the revision guard the merge itself applies would
+        // also accept this response - a live lifecycle frame crossing this
+        // request must not report success for a page the store discards.
+        if (isCurrentHostNotificationPageMutation(client, context)) {
+          trackNotificationPageLoadedSuccess(
+            "recent",
+            data.entries.length,
+            data.nextCursor !== null,
+          );
+        }
         useHostNotificationsStore
           .getState()
-          .mergePage(data.entries, data.nextCursor, context.snapshotEpoch);
+          .mergeRecentPage(data.entries, asRecentCursor(data.nextCursor), {
+            snapshotEpoch: context.snapshotEpoch,
+            liveLifecycleRevision: context.liveLifecycleRevision,
+            cursor: variables.cursor,
+          });
       },
       onError: (error, _variables, context) => {
-        if (!isCurrentHostNotificationMutation(client, context)) return;
+        if (!isCurrentHostNotificationPageMutation(client, context)) return;
+        useHostNotificationsStore.getState().setPageStatus("recent", "error");
+        trackNotificationPageLoadedFailure("recent");
         toastFromHostError(error, "Couldn't load older notifications.");
       },
     },
   });
 
-  const clearHostAll = useHostMutation<
+  const loadMoreAttention = useHostMutation<
     HostRpcRegistry,
-    "host.notifications.clearAll",
+    "host.notifications.list",
     HostNotificationMutationContext,
-    { readonly beforeUpdatedAt: number }
+    { readonly cursor: NonNullable<typeof hostAttentionCursor> }
   >({
     client,
-    method: "host.notifications.clearAll",
+    method: "host.notifications.list",
     mapVariables: (variables) => ({
-      beforeUpdatedAt: variables.beforeUpdatedAt,
+      filter: "attention",
+      limit: HOST_PAGE_LIMIT,
+      cursor: variables.cursor,
     }),
     options: {
-      mutationKey: notificationsMutationKeys.clearAll(),
-      onMutate: () => captureHostNotificationMutationContext(client),
-      onSuccess: (_data, variables, context) => {
+      mutationKey: notificationsMutationKeys.loadMoreAttention(),
+      onMutate: () => beginHostNotificationMutation(client, "attention"),
+      onSuccess: (data, variables, context) => {
         if (!isCurrentHostNotificationMutation(client, context)) return;
+        // Track only when the revision guard the merge itself applies would
+        // also accept this response - a live lifecycle frame crossing this
+        // request must not report success for a page the store discards.
+        if (isCurrentHostNotificationPageMutation(client, context)) {
+          trackNotificationPageLoadedSuccess(
+            "attention",
+            data.entries.length,
+            data.nextCursor !== null,
+          );
+        }
         useHostNotificationsStore
           .getState()
-          .clearBeforeLocally(variables.beforeUpdatedAt, context.snapshotEpoch);
+          .mergeAttentionPage(
+            data.entries,
+            asAttentionCursor(data.nextCursor),
+            {
+              snapshotEpoch: context.snapshotEpoch,
+              liveLifecycleRevision: context.liveLifecycleRevision,
+              cursor: variables.cursor,
+            },
+          );
       },
       onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationPageMutation(client, context)) return;
+        useHostNotificationsStore
+          .getState()
+          .setPageStatus("attention", "error");
+        trackNotificationPageLoadedFailure("attention");
+        toastFromHostError(error, "Couldn't load more attention items.");
+      },
+    },
+  });
+
+  const loadMoreUnreadRecent = useHostMutation<
+    HostRpcRegistry,
+    "host.notifications.list",
+    HostNotificationMutationContext,
+    { readonly cursor: HostNotificationsChronologicalCursor | null }
+  >({
+    client,
+    method: "host.notifications.list",
+    mapVariables: (variables) => ({
+      filter: "unreadRecent",
+      limit: HOST_PAGE_LIMIT,
+      cursor: variables.cursor ?? undefined,
+    }),
+    options: {
+      mutationKey: notificationsMutationKeys.loadMoreUnreadRecent(),
+      onMutate: () => beginHostNotificationMutation(client, "unreadRecent"),
+      onSuccess: (data, variables, context) => {
         if (!isCurrentHostNotificationMutation(client, context)) return;
-        toastFromHostError(error, "Couldn't clear notifications.");
+        // Track only when the revision guard the merge itself applies would
+        // also accept this response - a live lifecycle frame crossing this
+        // request must not report success for a page the store discards.
+        if (isCurrentHostNotificationPageMutation(client, context)) {
+          trackNotificationPageLoadedSuccess(
+            "recent",
+            data.entries.length,
+            data.nextCursor !== null,
+          );
+        }
+        useHostNotificationsStore
+          .getState()
+          .mergeUnreadRecentPage(
+            data.entries,
+            asRecentCursor(data.nextCursor),
+            {
+              snapshotEpoch: context.snapshotEpoch,
+              liveLifecycleRevision: context.liveLifecycleRevision,
+              cursor: variables.cursor,
+            },
+          );
+      },
+      onError: (error, _variables, context) => {
+        if (!isCurrentHostNotificationPageMutation(client, context)) return;
+        useHostNotificationsStore
+          .getState()
+          .setPageStatus("unreadRecent", "error");
+        trackNotificationPageLoadedFailure("recent");
+        toastFromHostError(error, "Couldn't load more unread notifications.");
       },
     },
   });
@@ -354,24 +711,62 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         }
         appLocalMarkAsRead(parsed.sourceId, Date.now());
       },
+      resolve: (row) => {
+        // Only host `needs_action` rows are dismiss-eligible (app-local rows
+        // are `failure`, global rows are `info` - neither reaches the blocking
+        // tier), so this is host-only by construction. `row.createdAt` is the
+        // host entry's `updatedAt` - the occurrence token the host guards on.
+        if (row.source !== "host") return;
+        // A retained-but-disconnected host keeps `client !== null` while its
+        // active host id drops to null; firing resolve then only yields an
+        // unbound-rejection toast while the row cannot change. Gate on the same
+        // authoritative active-host signal `markAllAsRead`'s dismiss-all half
+        // uses, NOT `client !== null`.
+        if (client === null || client.getActiveHostId() === null) return;
+        resolveHost.mutate({
+          feedId: row.feedId,
+          sourceId: row.sourceId,
+          updatedAt: row.createdAt,
+          sourceRef: row.sourceRef,
+        });
+      },
       markAllAsRead: () => {
         globalMarkAllAsRead();
         appLocalMarkAllAsRead(Date.now());
-        if (client !== null) {
+        // Both host halves - mark-all-read AND dismiss-all - apply only against
+        // an ACTIVE host. A disconnect keeps the runtime binding
+        // (`client !== null`) and the retained host replica, but drops the
+        // active host id to null and degrades the exact summary to unknown;
+        // firing host mutations then only yields unbound-rejection error toasts
+        // while the rendered rows cannot change. Gate BOTH on the same
+        // authoritative active-host signal (read fresh at click time, the same
+        // value `useReactiveActiveHostId` projects), NOT `client !== null`. The
+        // local global/app-local mark-all above always run.
+        if (client !== null && client.getActiveHostId() !== null) {
+          // Fire mark-all-read and dismiss-all CONCURRENTLY. mark-all-read is
+          // unchanged (released `markAllRead` semantics - a released client's
+          // plain mark-all must never start resolving prompts host-side). The
+          // dismiss-all portion is pure client-side composition: it resolves
+          // the currently-loaded blocking-tier Attention rows (host
+          // `needs_action`, still unresolved) through the same occurrence-token
+          // guarded `resolve` path the row-level Dismiss uses.
+          //
+          // Only LOADED rows are dismissed. `needs_action` rows beyond the
+          // Attention pagination boundary are intentionally NOT dismissed
+          // ("you can't dismiss what you haven't seen") - a host-side
+          // resolve-all would violate the token discipline by dismissing
+          // prompts the user never saw, including ones arriving this instant.
+          //
+          // If the host predates `resolve` the dismiss degrades with an upgrade
+          // toast (no failure row) while mark-all-read still applies; the
+          // loaded needs_action rows simply stay in Attention.
           markHostAllRead.mutate({ beforeUpdatedAt: Date.now() });
-        }
-      },
-      clearAll: () => {
-        globalClearAll();
-        appLocalClearAll();
-        const hostState = useHostNotificationsStore.getState();
-        const newestHostId = hostState.orderedIds.at(0);
-        const newestHostEntry =
-          newestHostId === undefined ? undefined : hostState.byId[newestHostId];
-        if (client !== null) {
-          clearHostAll.mutate({
-            beforeUpdatedAt: newestHostEntry?.updatedAt ?? Date.now(),
-          });
+          const occurrences = loadedBlockingAttentionOccurrences();
+          // The protocol requires >= 1 occurrence, so skip the RPC entirely
+          // when no blocking Attention rows are loaded.
+          if (occurrences.length > 0) {
+            resolveHostAll.mutate({ occurrences });
+          }
         }
       },
       loadMoreHost: () => {
@@ -380,28 +775,108 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       },
       canLoadMoreHost: hostNextCursor !== null && client !== null,
       isLoadingMoreHost: loadMoreHost.isPending,
+      hasHostLoadError,
+      loadMoreAttention: () => {
+        if (hostAttentionCursor === null || client === null) return;
+        loadMoreAttention.mutate({ cursor: hostAttentionCursor });
+      },
+      canLoadMoreAttention: hostAttentionCursor !== null && client !== null,
+      isLoadingMoreAttention: loadMoreAttention.isPending,
+      hasAttentionLoadError,
+      // Unlike the other two tracks, a `null` cursor here is ambiguous on its
+      // own between "never loaded" (Unread only just enabled) and
+      // "exhausted" - the RPC's `cursor` is optional and starts a fresh first
+      // page when omitted either way. `unreadRecentHasLoadedOnce` disambiguates
+      // it: only once a page has actually loaded does a `null` cursor mean
+      // genuine exhaustion.
+      loadMoreUnreadRecent: () => {
+        if (client === null) return;
+        loadMoreUnreadRecent.mutate({ cursor: hostUnreadRecentCursor });
+      },
+      canLoadMoreUnreadRecent:
+        client !== null &&
+        (hostUnreadRecentCursor !== null || !unreadRecentHasLoadedOnce),
+      isLoadingMoreUnreadRecent: loadMoreUnreadRecent.isPending,
+      hasUnreadRecentLoadError,
     }),
     [
       globalMarkAsRead,
       globalMarkAllAsRead,
-      globalClearAll,
       appLocalMarkAsRead,
       appLocalMarkAllAsRead,
-      appLocalClearAll,
       markHostRead,
+      resolveHost,
+      resolveHostAll,
       markHostAllRead,
       loadMoreHost,
-      clearHostAll,
       hostNextCursor,
+      hasHostLoadError,
+      loadMoreAttention,
+      hostAttentionCursor,
+      hasAttentionLoadError,
+      loadMoreUnreadRecent,
+      hostUnreadRecentCursor,
+      unreadRecentHasLoadedOnce,
+      hasUnreadRecentLoadError,
       client,
     ],
   );
 }
 
+/** `host.notifications.list` always returns `nextCursor` in the requested
+ * filter's cursor kind; the `recent` filter used for "load older" always
+ * yields `chronological` (or `null`), never `attention`. */
+function asRecentCursor(
+  cursor:
+    | HostNotificationsChronologicalCursor
+    | HostNotificationsAttentionCursor
+    | null,
+): HostNotificationsChronologicalCursor | null {
+  return cursor !== null && cursor.kind === "chronological" ? cursor : null;
+}
+
+/** Mirror of `asRecentCursor` for the `attention` filter, which always
+ * yields an `attention` cursor (or `null`), never `chronological`. */
+function asAttentionCursor(
+  cursor:
+    | HostNotificationsChronologicalCursor
+    | HostNotificationsAttentionCursor
+    | null,
+): HostNotificationsAttentionCursor | null {
+  return cursor !== null && cursor.kind === "attention" ? cursor : null;
+}
+
+/** `unreadRecent` pagination is a filtered view of Recent, not its own
+ * analytics section - both collapse to `"recent"` so the section enum stays
+ * the two values the tech plan names. */
+function trackNotificationPageLoadedSuccess(
+  section: "attention" | "recent",
+  entryCount: number,
+  hasMore: boolean,
+): void {
+  Analytics.getInstance().track(AnalyticsEvent.NotificationPageLoaded, {
+    section,
+    outcome: "success",
+    result_count_bucket: analyticsCountBucket(entryCount),
+    has_more: hasMore,
+  });
+}
+
+function trackNotificationPageLoadedFailure(
+  section: "attention" | "recent",
+): void {
+  Analytics.getInstance().track(AnalyticsEvent.NotificationPageLoaded, {
+    section,
+    outcome: "failure",
+    result_count_bucket: null,
+    has_more: null,
+  });
+}
+
 export function rowFromHostEntry(
   entry: HostNotificationFeedEntry,
 ): MergedNotificationRow {
-  const presentation = hostNotificationPresentation(entry);
+  const presentation = formatHostNotificationPresentation(entry);
   return {
     feedId: hostFeedId(entry.id),
     source: "host",
@@ -416,6 +891,9 @@ export function rowFromHostEntry(
     globalEntry: null,
     severity: entry.severity,
     outcome: entry.outcome,
+    resolvedAt: "resolvedAt" in entry ? entry.resolvedAt : null,
+    sourceRef: entry.sourceRef,
+    category: categoryForNotificationSource("host"),
   };
 }
 
@@ -436,6 +914,9 @@ export function rowFromAppLocalEntry(
     globalEntry: null,
     severity: "failure",
     outcome: null,
+    resolvedAt: null,
+    sourceRef: null,
+    category: categoryForNotificationSource("app-local"),
   };
 }
 
@@ -456,6 +937,9 @@ export function rowFromGlobalEntry(
     globalEntry: entry,
     severity: "info",
     outcome: null,
+    resolvedAt: null,
+    sourceRef: null,
+    category: categoryForNotificationSource("global"),
   };
 }
 
@@ -471,13 +955,48 @@ function parseFeedId(feedId: string): ParsedFeedId | null {
   return null;
 }
 
+/** The occurrence tokens of the currently-loaded blocking-tier Attention rows -
+ * host `needs_action` rows that are still unresolved, i.e. exactly the set the
+ * row-level Dismiss resolves, gathered for the "Mark all read" double-tick's
+ * dismiss-all composition. Reads the loaded replica only; unloaded rows past the
+ * Attention pagination boundary are intentionally excluded (see the note in
+ * `markAllAsRead` - occurrence-token discipline forbids resolving unseen
+ * prompts). */
+function loadedBlockingAttentionOccurrences(): HostNotificationsResolveRequest["occurrences"] {
+  return Object.values(useHostNotificationsStore.getState().byId)
+    .filter(
+      (entry) =>
+        entry.severity === "needs_action" &&
+        "resolvedAt" in entry &&
+        entry.resolvedAt === null,
+    )
+    .map((entry) => ({
+      id: entry.id,
+      updatedAt: entry.updatedAt,
+      sourceRef: entry.sourceRef,
+    }));
+}
+
 function captureHostNotificationMutationContext(
   client: HostClient<HostRpcRegistry> | null,
 ): HostNotificationMutationContext {
+  const state = useHostNotificationsStore.getState();
   return {
     hostId: client?.getActiveHostId() ?? null,
-    snapshotEpoch: useHostNotificationsStore.getState().snapshotEpoch,
+    snapshotEpoch: state.snapshotEpoch,
+    liveLifecycleRevision: state.liveLifecycleRevision,
   };
+}
+
+/** Marks the track "loading" for the recoverable inline error/retry surface,
+ * then captures the same stale-rejection context every merge/error path
+ * already gates on. */
+function beginHostNotificationMutation(
+  client: HostClient<HostRpcRegistry> | null,
+  track: "attention" | "recent" | "unreadRecent",
+): HostNotificationMutationContext {
+  useHostNotificationsStore.getState().setPageStatus(track, "loading");
+  return captureHostNotificationMutationContext(client);
 }
 
 function isCurrentHostNotificationMutation(
@@ -491,6 +1010,25 @@ function isCurrentHostNotificationMutation(
     return false;
   }
   return (client?.getActiveHostId() ?? null) === context.hostId;
+}
+
+/** Page-load error eligibility, scoped to the three `attention`/`recent`/
+ * `unreadRecent` load-more tracks only - NOT used by markRead/markAllRead,
+ * whose acknowledgment semantics don't depend on `liveLifecycleRevision`
+ * staying put. Their matching success path (`mergeXPage`) already rejects a
+ * crossed `liveLifecycleRevision` before merging; without this, an error
+ * whose request started before an intervening live frame could still set the
+ * page status to "error" even though the equivalent success would have been
+ * discarded as stale. */
+function isCurrentHostNotificationPageMutation(
+  client: HostClient<HostRpcRegistry> | null,
+  context: HostNotificationMutationContext | undefined,
+): context is HostNotificationMutationContext {
+  if (!isCurrentHostNotificationMutation(client, context)) return false;
+  return (
+    useHostNotificationsStore.getState().liveLifecycleRevision ===
+    context.liveLifecycleRevision
+  );
 }
 
 function payloadFromHostEntry(
@@ -542,234 +1080,6 @@ function navigationPayloadFromKnown(
         interviewBlockId: known.interviewBlockId,
       };
   }
-}
-
-interface NotificationPresentation {
-  readonly title: string;
-  readonly body: string;
-}
-
-function hostNotificationPresentation(
-  entry: HostNotificationFeedEntry,
-): NotificationPresentation {
-  // Known payloads present from typed, schema-linked fields; anything else
-  // (a payload from a newer host, a malformed row, or a payload contradicting
-  // its row kind) degrades to generic copy - never a crash, never a dropped
-  // row.
-  const known = parseKnownHostNotificationPayloadForKind(
-    entry.kind,
-    entry.payload,
-  );
-  const { agentName, title, chatContext, isTerminalAgent } =
-    knownPresentationContext(known);
-  switch (entry.kind) {
-    case "agent.stopped": {
-      const context = notificationContext(agentName, title, isTerminalAgent);
-      const reason = known === null ? null : knownStoppedReason(known);
-      const providerId = known === null ? null : knownProviderId(known);
-      return {
-        title,
-        body: `${context} • ${agentStoppedStatus(entry.outcome, reason, providerId)}`,
-      };
-    }
-    case "agent.stalled":
-      return {
-        title,
-        body: `${notificationContext(agentName, title, isTerminalAgent)} • ${agentStalledStatus(known)}`,
-      };
-    case "workspace.operation.failed":
-      return {
-        title,
-        body: `${chatContext} • ${workspaceOperationFailedStatus(known)}`,
-      };
-    case "approval.requested":
-      return { title, body: `${chatContext} • Approval requested` };
-    case "interview.requested":
-      return { title, body: `${chatContext} • Question waiting` };
-  }
-}
-
-function knownPresentationContext(known: HostNotificationKnownPayload | null) {
-  const agentName =
-    known === null ? null : nonEmptyTitle(knownAgentName(known));
-  const chatTitle =
-    known === null ? null : nonEmptyTitle(knownChatTitle(known));
-  const taskTitle = known === null ? null : nonEmptyTitle(known.taskTitle);
-  const title = taskTitle ?? chatTitle ?? agentName ?? "Task";
-  return {
-    agentName,
-    title,
-    chatContext: chatTitle !== null && chatTitle !== title ? chatTitle : "Chat",
-    isTerminalAgent: known?.kind === "epic",
-  };
-}
-
-function knownAgentName(payload: HostNotificationKnownPayload): string | null {
-  switch (payload.kind) {
-    case "chat":
-    case "epic":
-    case "agent_stalled":
-      return payload.agentName;
-    case "approval":
-    case "interview":
-    case "workspace_operation_failed":
-      return null;
-  }
-}
-
-function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
-  switch (payload.kind) {
-    case "approval":
-    case "interview":
-    case "workspace_operation_failed":
-      return payload.chatTitle;
-    case "chat":
-    case "epic":
-    case "agent_stalled":
-      return null;
-  }
-}
-
-function knownStoppedReason(
-  payload: HostNotificationKnownPayload,
-): string | null {
-  switch (payload.kind) {
-    case "chat":
-    case "epic":
-      return (
-        payload.reason ??
-        deriveHostNotificationStoppedReason(payload.code ?? null)
-      );
-    case "agent_stalled":
-    case "approval":
-    case "interview":
-    case "workspace_operation_failed":
-      return null;
-  }
-}
-
-function knownProviderId(
-  payload: HostNotificationKnownPayload,
-): ProviderId | null {
-  switch (payload.kind) {
-    case "chat":
-    case "epic": {
-      const parsed = providerIdSchema.safeParse(payload.providerId);
-      return parsed.success ? parsed.data : null;
-    }
-    case "agent_stalled":
-    case "approval":
-    case "interview":
-    case "workspace_operation_failed":
-      return null;
-  }
-}
-
-function agentStoppedStatus(
-  outcome: HostNotificationOutcome,
-  reason: string | null,
-  providerId: ProviderId | null,
-): string {
-  if (outcome === "errored") {
-    return agentStoppedFailureStatus(reason, providerId);
-  }
-  if (outcome === "stopped") return "Stopped";
-  return "Done";
-}
-
-function agentStoppedFailureStatus(
-  reason: string | null,
-  providerId: ProviderId | null,
-): string {
-  switch (reason) {
-    case "auth":
-      return providerId === null
-        ? "Provider is signed out. Reconnect to continue."
-        : providerSignedOutMessage(providerId);
-    case "rate_limit":
-      return providerSpecificFailureStatus(
-        providerId,
-        "Rate limit reached",
-        (providerName) => `${providerName} rate limit reached`,
-      );
-    case "billing":
-      return providerSpecificFailureStatus(
-        providerId,
-        "Provider billing issue",
-        (providerName) => `${providerName} billing issue`,
-      );
-    case "model_unavailable":
-      return "Model unavailable";
-    case "provider_unavailable":
-      return providerSpecificFailureStatus(
-        providerId,
-        "Provider is temporarily unavailable",
-        (providerName) => `${providerName} is temporarily unavailable`,
-      );
-    case "provider_connection_failed":
-      return providerSpecificFailureStatus(
-        providerId,
-        "Provider connection failed",
-        (providerName) => `Connection to ${providerName} failed`,
-      );
-    case "turn_start_timeout":
-      return "Provider did not start in time";
-    case "missing_terminal_event":
-      return "Provider stopped responding";
-    case "background_work_failed":
-      return "Background work stopped";
-    case null:
-    default:
-      return "Failed";
-  }
-}
-
-function providerSpecificFailureStatus(
-  providerId: ProviderId | null,
-  genericStatus: string,
-  providerStatus: (providerName: string) => string,
-): string {
-  return providerId === null
-    ? genericStatus
-    : providerStatus(PROVIDER_DISPLAY_NAMES[providerId]);
-}
-
-function agentStalledStatus(
-  payload: HostNotificationKnownPayload | null,
-): string {
-  if (payload?.kind !== "agent_stalled") return "Stalled";
-  switch (payload.reason) {
-    case "provider_buffering":
-      return "Provider is taking longer than expected";
-    case "provider_reroute":
-      return "Provider is rerouting";
-    default:
-      return "Stalled";
-  }
-}
-
-function workspaceOperationFailedStatus(
-  payload: HostNotificationKnownPayload | null,
-): string {
-  if (payload?.kind !== "workspace_operation_failed") {
-    return "Workspace operation failed";
-  }
-  if (payload.operation === "provision") return "Worktree creation failed";
-  if (payload.operation === "setup") return "Workspace setup failed";
-  return "Workspace operation failed";
-}
-
-function notificationContext(
-  agentName: string | null,
-  title: string,
-  isTerminalAgent: boolean,
-): string {
-  if (agentName !== null && agentName !== title) return agentName;
-  return isTerminalAgent ? "Terminal agent" : "Chat";
-}
-
-function nonEmptyTitle(value: string | null): string | null {
-  return value !== null && value.length > 0 ? value : null;
 }
 
 const HOST_PAGE_LIMIT = 50;

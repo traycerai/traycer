@@ -1,26 +1,38 @@
 import { log } from "../app/logger";
-import type { HostAutoUpdateOutcome } from "../host/host-auto-update";
 
 // First-pass `before-quit` sequencing for a quit driven by `quitAndInstall`
 // (the user chose "Restart" to install a downloaded update). Extracted from
 // the inline handler so the ordering contract is unit-testable:
 //
-//   host reconcile -> renderer projection drain -> shell flush + quit
+//   host mutation drain -> renderer projection drain -> shell flush + quit
 //
 // Every step is fail-open: nothing here may block the install. The renderer
 // drain exists because the update path skips the regular quit interception
 // (prompting would swallow the install), and without it the state store is
 // flushed with only the last ambient debounced writes - tabs/drafts touched
-// while the host reconcile ran (up to two minutes) would be lost on the
-// post-install relaunch.
+// while the drain waited (up to its bound) would be lost on the post-install
+// relaunch.
+
+// Fixup B4: quit is instant everywhere else - this bound is the tech plan's
+// one deliberate, bounded exception ("quit keeps a <=10s best-effort drain of
+// an in-flight mutation"), never a download. It used to sit at 2 minutes
+// (`awaitMutationLaneIdle`'s call site in `desktop-startup.ts`), matching the
+// CLI runner's own generous per-call timeout headroom rather than the tech
+// plan's quit-time bound - a wedged mutation could hold the app open for two
+// minutes after the user asked to restart-and-install. Exported (and moved
+// here, not left as a private constant in the Electron-heavy startup module)
+// so its value is directly assertable in a unit test, since actually waiting
+// out a multi-second drain isn't practical for a unit suite.
+export const QUIT_HOST_MUTATION_DRAIN_TIMEOUT_MS = 10_000;
 
 export interface UpdateInstallQuitDeps {
-  // Best-effort idle-gated host update (`reconcileHostAutoUpdate`, which
-  // reports failure as an outcome rather than throwing); a throw is still
-  // contained here so it can never block the install.
-  readonly reconcileHostUpdate: () => Promise<HostAutoUpdateOutcome>;
+  // Bounded wait for whatever `HostController` mutation is CURRENTLY in
+  // flight to settle (`HostController.awaitMutationLaneIdle`) - never
+  // starts a new one. `HostController` itself never rejects, but a throw is
+  // still contained here so it can never block the install.
+  readonly drainHostMutation: () => Promise<boolean>;
   // True while the downloaded update is still pending install. Flips false
-  // when `quitAndInstall` failed while the reconcile ran - in that case the
+  // when `quitAndInstall` failed while the drain ran - in that case the
   // failure was surfaced to the user and the app must stay open.
   readonly isInstallPending: () => boolean;
   // Bounded renderer projection drain: the fresh-unsynced-snapshot request,
@@ -39,10 +51,12 @@ export async function runUpdateInstallQuitSequence(
   deps: UpdateInstallQuitDeps,
 ): Promise<void> {
   try {
-    const outcome = await deps.reconcileHostUpdate();
-    log.info("[host-auto-update] quit reconcile complete", { outcome });
+    const drained = await deps.drainHostMutation();
+    log.info("[host-controller] quit-time mutation drain complete", {
+      drained,
+    });
   } catch (err) {
-    log.warn("[host-auto-update] quit reconcile threw", err);
+    log.warn("[host-controller] quit-time mutation drain threw", err);
   }
 
   // If `quitAndInstall` failed in the meantime (e.g. read-only volume), the
