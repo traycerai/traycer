@@ -16,11 +16,14 @@ import {
 // `desktop-startup.ts` is the Electron main-process boot sequence: importing
 // it pulls in ~40 sibling modules (tray, updater, host lifecycle, IPC,
 // crash reporting, ...) that are only ever called from inside
-// `runDesktopStartup`/`runOnReady`/`runWindowPhase`/`runDeferred`, none of
-// which this suite invokes. Every one of those sibling imports is stubbed
-// below so the module loads without touching real Electron APIs, real
-// filesystem state, or third-party SDKs (e.g. `@sentry/electron`, pulled in
-// transitively by `../app/diagnostics`) - only `electron` itself and
+// `runDesktopStartup`/`runOnReady`/`runWindowPhase`/`runDeferred`/`runPreReady`,
+// none of which this suite invokes end-to-end (the "runPreReady - scheme/
+// crash-reporter ordering" suite below calls the real `runPreReady()`
+// directly, but only to assert call order on two already-stubbed sibling
+// mocks). Every one of those sibling imports is stubbed below so the module
+// loads without touching real Electron APIs, real filesystem state, or
+// third-party SDKs (e.g. `@sentry/electron`, pulled in transitively by
+// `../app/diagnostics`) - only `electron` itself and
 // `../windows/window-registry` need to behave like the real thing, and
 // `window-registry` is left completely real.
 
