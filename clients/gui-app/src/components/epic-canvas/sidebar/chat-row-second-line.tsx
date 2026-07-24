@@ -1,37 +1,36 @@
 import type { ReactNode } from "react";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
+import { WorktreePrStateIcons } from "@/components/worktree/worktree-pr-state-icons";
+import { useChatRowWorktreeMetadata } from "@/components/epic-canvas/sidebar/chat-row-worktree-metadata-context";
 
 /**
- * Row-2 (workspace line) slot for a chat / terminal-agent sidebar row.
+ * Row-2 (workspace line) slot for a chat / terminal-agent sidebar row: the
+ * primary branch (or folder name for a non-git / local binding), a `+N` badge
+ * for the owner's extra directories and owned submodules, and one icon per
+ * detected PR.
  *
- * **T1 is scaffold-only: this renders `null`.** It is the reserved, isolated
- * seam that T2 fills, so the two-line row layout ships now while the data that
- * populates the second line lands later without touching the row scaffold.
+ * **It reads, it never fetches.** Every value here comes from the epic-wide,
+ * per-host batch that `EpicChatWorktreeMetadataProvider` mounts once for the
+ * whole tree (`useEpicChatWorktreeMetadataForHost`). That is load-bearing, not
+ * incidental: the PR facts behind these icons come from the host's `gh` probe,
+ * so a per-row query would multiply the expensive leg by the row count. A row
+ * with no batch entry - no binding, an unreachable host, a host still loading -
+ * renders `null`, and because a React `null` produces no DOM node the row's
+ * flex column is left with a single child and collapses back to one line. That
+ * is the whole "no row-2 content → single-row collapse" mechanism; it needs no
+ * cooperation from the row scaffold.
  *
- * Why a self-collapsing child (returns `null`) rather than a value the row
- * inspects: the flex-column row body simply lists row 1 then this component. A
- * React `null` renders no DOM node, so the column has a single child and the
- * row stays one line - "no row-2 content → single-row collapse" falls out for
- * free, and the scaffold needs zero knowledge of the row-2 data shape.
+ * **Phrasing content only.** This slot mounts in THREE row variants - the
+ * display `<button>`, the selection-mode `<label>`, and the rename row - so it
+ * is `<span>`-rooted throughout (`<button>` accepts phrasing content only).
+ * The PR icons are non-interactive elements with click handlers rather than
+ * anchors for the same reason; see `worktree-pr-state-icons.tsx` for why that
+ * is the accessible choice here rather than a compromise.
  *
- * Why no data in T1 (deliberate, per the T1/T2 boundary): the sidebar reads the
- * epic-store `ChatProjection`, which carries no `worktreeBinding` - a chat's
- * binding lives only in its per-open-chat session snapshot, and branch /
- * `ownedSubmodules` / PR facts come from the host `worktree.listAllForHost`
- * batch. That batch is T2. T2 will populate this slot uniformly for BOTH chat
- * and terminal-agent rows (owners carry `ownerKind`) with: the primary entry's
- * branch (or folder name via `workspaceFolderName()` for a non-git / local
- * entry), a `+N` badge counting extra entries + owned submodules, and the PR
- * icons. `epicId` / `nodeId` / `artifactType` are threaded now so T2 fills in
- * only this component body, not every call site.
- *
- * T2 note: this slot mounts in THREE row variants - the display `<button>`, the
- * selection-mode `<label>`, and the rename row - so it must render **phrasing
- * content** (a `<span>`-rooted `inline-flex` line, not a `<div>`) to stay valid
- * HTML in the strictest of them (`<button>` accepts phrasing content only; the
- * `<label>` wraps the checkbox, so a nested interactive element there would also
- * hijack its activation). PR-icon click handlers will need `stopPropagation()`
- * so opening a PR doesn't also trigger the row's select/open.
+ * `epicId` / `artifactType` stay on the props: the batch is keyed by owner id
+ * alone (a uuid, unique across chats and terminal-agents), so this component
+ * needs only `nodeId`, but the call sites in the row scaffold pass all three
+ * and dropping them would churn code T6 is about to touch.
  */
 export interface ChatRowSecondLineProps {
   readonly epicId: string;
@@ -39,8 +38,32 @@ export interface ChatRowSecondLineProps {
   readonly artifactType: EpicNodeKind;
 }
 
-export function ChatRowSecondLine(_props: ChatRowSecondLineProps): ReactNode {
-  // T1 renders nothing, so the row collapses to a single line. The props are
-  // the reserved T2 seam - see the file docs for what T2 renders here.
-  return null;
+export function ChatRowSecondLine(props: ChatRowSecondLineProps): ReactNode {
+  const metadata = useChatRowWorktreeMetadata(props.nodeId);
+  if (metadata === null) return null;
+  return (
+    <span
+      className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
+      data-testid={`epic-sidebar-row-workspace-${props.nodeId}`}
+    >
+      <span className="truncate" data-testid="chat-row-workspace-label">
+        {metadata.label}
+      </span>
+      {metadata.extraCount === 0 ? null : (
+        <span
+          className="shrink-0 rounded-full bg-muted px-1.5 text-muted-foreground"
+          data-testid="chat-row-workspace-extra-count"
+          title={`${metadata.extraCount} more ${
+            metadata.extraCount === 1 ? "workspace" : "workspaces"
+          }`}
+        >
+          +{metadata.extraCount}
+        </span>
+      )}
+      <WorktreePrStateIcons
+        references={metadata.prReferences}
+        testId="chat-row-pr-icons"
+      />
+    </span>
+  );
 }

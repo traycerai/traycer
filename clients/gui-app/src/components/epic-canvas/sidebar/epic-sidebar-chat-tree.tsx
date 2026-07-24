@@ -7,9 +7,14 @@ import { v4 as uuidv4 } from "uuid";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import {
+  useEpicArchiveChat,
   useEpicDeleteChat,
   useEpicRenameChat,
 } from "@/hooks/epic/use-epic-chat-mutations";
+import {
+  useChatArchiveSupported,
+  useChatArchiveSupportState,
+} from "@/hooks/epic/use-chat-archive-support";
 import {
   useEpicDeleteTuiAgent,
   useEpicRenameTuiAgent,
@@ -65,6 +70,7 @@ import {
   isChatFilterActive,
   useAcknowledgedRootCreatePending,
   useChatFilter,
+  useChatShowArchived,
   useChatSort,
   useLocalRootCreatePending,
   type RootCreatePanelId,
@@ -93,8 +99,10 @@ import {
   useAncestorIds,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
+  useEpicArchivedNodeIds,
   useEpicArtifactRecords,
   useEpicConnectionStatus,
+  useEpicNodeArchived,
   useEpicNodeHostId,
   useEpicNodeOwnerKind,
   useEpicPermissionRole,
@@ -104,6 +112,8 @@ import {
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
+  Archive,
+  ArchiveRestore,
   Check,
   MessageSquareLock,
   MessagesSquare,
@@ -121,6 +131,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -164,6 +175,7 @@ import {
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 import { ChatRowSecondLine } from "@/components/epic-canvas/sidebar/chat-row-second-line";
+import { EpicChatWorktreeMetadataProvider } from "@/components/epic-canvas/sidebar/epic-chat-worktree-metadata-provider";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
@@ -191,6 +203,16 @@ const CHATS_TREE_FILTER: TreeFilterFn = (type) =>
  * chat session access overrides it when that chat is open.
  */
 const SidebarViewerContext = createContext<boolean>(false);
+
+/**
+ * Whether the epic's host advertises `epic.setChatArchived`. Resolved ONCE in
+ * `ChatTreePanelBody` and read by the rows, for the same reason
+ * {@link SidebarViewerContext} exists: it is a per-host fact, identical for
+ * every row, and re-subscribing each row to the manifest registry would buy
+ * nothing. `false` is the fail-closed default - every archive affordance stays
+ * hidden until a handshake proves the method present.
+ */
+const SidebarArchiveSupportedContext = createContext<boolean>(false);
 
 const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set<string>();
 const noopToggleSelection = (_id: string): void => undefined;
@@ -428,6 +450,98 @@ function usePanelRootIds(
   }, [panelId, tree, comparator]);
 }
 
+const EMPTY_ARCHIVE_HIDDEN_IDS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Every node hidden by archiving: the archived nodes themselves plus their
+ * whole subtrees, i.e. exactly "some ancestor-or-self carries `archivedAt`".
+ *
+ * Descends from the archive roots through `childrenByParent` rather than
+ * walking each node's parent chain upward - the archived set is normally tiny
+ * and the walk then costs O(hidden subtree) instead of O(nodes x depth).
+ *
+ * This is what makes the SINGLE-FLAG model work without cascade writes:
+ * archiving stamps only the target, and unarchiving clears only the target, so
+ * the subtree reappears in one step - except for descendants that were archived
+ * in their own right, which stay in `archivedIds` and keep hiding their own
+ * subtrees. `hidden` doubles as the cycle guard.
+ */
+function collectArchiveHiddenIds(
+  archivedIds: ReadonlyArray<string>,
+  tree: TreeSlice,
+): ReadonlySet<string> {
+  if (archivedIds.length === 0) return EMPTY_ARCHIVE_HIDDEN_IDS;
+  const hidden = new Set<string>();
+  const stack = [...archivedIds];
+  while (stack.length > 0) {
+    const id = stack.pop();
+    if (id === undefined || hidden.has(id)) continue;
+    hidden.add(id);
+    if (Object.hasOwn(tree.childrenByParent, id)) {
+      for (const childId of tree.childrenByParent[id]) stack.push(childId);
+    }
+  }
+  return hidden;
+}
+
+/**
+ * The archive-hidden set for this epic, or empty when nothing should be hidden.
+ *
+ * Nothing is hidden in two cases, and the second is load-bearing:
+ *
+ * 1. "Show archived" is on - archived rows render dimmed instead.
+ * 2. The host is KNOWN to lack `epic.setChatArchived`. Every way back to an
+ *    archived row is capability-gated (the "Show archived" toggle, the
+ *    Unarchive entry, the empty-state hint), so continuing to hide on such a
+ *    host would leave rows invisible with nothing left to recover them - a real
+ *    path, since a host can be rolled back under a live session or the default
+ *    host can simply be an older machine. Archived records must never become
+ *    unreachable, so a known-absent host stops hiding entirely.
+ *
+ * The support state is deliberately the TRI-STATE, not the fail-closed boolean:
+ * `null` (no handshake yet) keeps hiding, because revealing on unknown would
+ * flash archived rows on every cold start and hide them again a moment later.
+ * Only a positive `false` reveals.
+ */
+function useArchiveHiddenIds(epicId: string): ReadonlySet<string> {
+  const showArchived = useChatShowArchived(epicId);
+  const archiveSupport = useChatArchiveSupportState();
+  const archivedIds = useEpicArchivedNodeIds();
+  const tree = useEpicTreeIndex();
+  return useMemo(() => {
+    if (showArchived || archiveSupport === false) {
+      return EMPTY_ARCHIVE_HIDDEN_IDS;
+    }
+    return collectArchiveHiddenIds(archivedIds, tree);
+  }, [showArchived, archiveSupport, archivedIds, tree]);
+}
+
+/**
+ * Intersects the origin filter's visible-id set with archive hiding, for the
+ * consumers that walk tree DATA rather than the rendered tree (the collapsed
+ * parent's status rollup, the bulk-selection id sweep). Those must not surface
+ * a row the user cannot reach by expanding.
+ *
+ * Deliberately NOT fed to `mergeForcedExpanded`: that force-expands every id in
+ * a non-null set, so publishing an archive-derived set there would expand the
+ * entire tree the moment anything was archived. Forced expansion stays keyed
+ * off the origin filter alone.
+ */
+function combineVisibleIds(
+  originVisibleIds: ReadonlySet<string> | null,
+  archiveHiddenIds: ReadonlySet<string>,
+  tree: TreeSlice,
+): ReadonlySet<string> | null {
+  if (archiveHiddenIds.size === 0) return originVisibleIds;
+  const source =
+    originVisibleIds === null ? Object.keys(tree.nodeById) : originVisibleIds;
+  const combined = new Set<string>();
+  for (const id of source) {
+    if (!archiveHiddenIds.has(id)) combined.add(id);
+  }
+  return combined;
+}
+
 /**
  * Visible-id set for an active chat origin filter (GUI chats vs TUI terminal
  * agents), expanded to include ancestors so filtered nodes stay reachable.
@@ -459,12 +573,30 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     [sort],
   );
   const allRootIds = usePanelRootIds(panelId, comparator);
-  const visibleIds = useChatVisibleIds(epicId);
-  const rootIds = useMemo(
-    () => applyVisibleFilter(allRootIds, visibleIds),
-    [allRootIds, visibleIds],
-  );
+  const originVisibleIds = useChatVisibleIds(epicId);
   const tree = useEpicTreeIndex();
+  const archiveHiddenIds = useArchiveHiddenIds(epicId);
+  const canArchive = useChatArchiveSupported();
+  // Two independent narrowings, kept separate on purpose. `originRootIds` is
+  // the origin filter's result and feeds the "no matches" empty state and
+  // forced expansion; `rootIds` additionally drops archived roots and is what
+  // actually renders. Collapsing them would make an all-archived tree claim
+  // "No agents use this interface", which is false.
+  const originRootIds = useMemo(
+    () => applyVisibleFilter(allRootIds, originVisibleIds),
+    [allRootIds, originVisibleIds],
+  );
+  const rootIds = useMemo(
+    () =>
+      archiveHiddenIds.size === 0
+        ? originRootIds
+        : originRootIds.filter((id) => !archiveHiddenIds.has(id)),
+    [originRootIds, archiveHiddenIds],
+  );
+  const visibleIds = useMemo(
+    () => combineVisibleIds(originVisibleIds, archiveHiddenIds, tree),
+    [originVisibleIds, archiveHiddenIds, tree],
+  );
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -493,9 +625,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   );
 
   const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
+  // Origin-only: see `combineVisibleIds`. Archive hiding must never reach here.
   const forcedExpandedIds = useMemo(
-    () => mergeForcedExpanded(ancestorIdsOfActive, visibleIds),
-    [ancestorIdsOfActive, visibleIds],
+    () => mergeForcedExpanded(ancestorIdsOfActive, originVisibleIds),
+    [ancestorIdsOfActive, originVisibleIds],
   );
   const expandedIds = useEpicSidebarEffectiveExpanded(
     tabId,
@@ -577,15 +710,20 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     preAckRootCreates.length > 0 ||
     visiblePendingRootCreates.length > 0;
   const filteredTreeEmpty = isFilteredTreeEmpty({
-    visibleIds,
-    rootIds,
+    visibleIds: originVisibleIds,
+    rootIds: originRootIds,
     localRootPending,
     acknowledgedRootPending,
     preAckRootCreates,
     visiblePendingRootCreates,
   });
   const showEmptyState =
-    visibleIds === null && allRootIds.length === 0 && !hasPendingRootRows;
+    originVisibleIds === null && allRootIds.length === 0 && !hasPendingRootRows;
+  // Rows exist and survive the origin filter, yet archiving hid every one of
+  // them. Distinct from both other arms: the tree is neither empty nor filtered
+  // down to nothing, and the user needs to be told where the rows went.
+  const archiveHidEverything =
+    !hasPendingRootRows && rootIds.length === 0 && originRootIds.length > 0;
 
   let panelContent: ReactNode;
   if (showEmptyState) {
@@ -607,6 +745,19 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         title="No agents use this interface."
         description={null}
         testId="epic-chat-sidebar-filter-empty"
+      />
+    );
+  } else if (archiveHidEverything) {
+    panelContent = (
+      <SidebarPanelEmptyState
+        icon={Archive}
+        title="Every agent here is archived."
+        description={
+          canArchive
+            ? 'Turn on "Show archived" in the filter menu to see them.'
+            : null
+        }
+        testId="epic-chat-sidebar-archived-empty"
       />
     );
   } else {
@@ -649,19 +800,25 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
 
   return (
     <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
-      <SidebarViewerContext.Provider value={isViewer}>
-        <SidebarSortContext.Provider value={comparator}>
-          <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-            <SidebarContent className="gap-0">
-              <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-                <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
-                  {panelContent}
-                </SidebarGroupContent>
-              </SidebarGroup>
-            </SidebarContent>
-          </SidebarFilterVisibilityContext.Provider>
-        </SidebarSortContext.Provider>
-      </SidebarViewerContext.Provider>
+      {/* One batch for the whole tree, per distinct host among its rows - row 2
+          reads it from context and never queries per row. */}
+      <EpicChatWorktreeMetadataProvider epicId={epicId}>
+        <SidebarArchiveSupportedContext.Provider value={canArchive}>
+          <SidebarViewerContext.Provider value={isViewer}>
+            <SidebarSortContext.Provider value={comparator}>
+              <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+                <SidebarContent className="gap-0">
+                  <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+                    <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
+                      {panelContent}
+                    </SidebarGroupContent>
+                  </SidebarGroup>
+                </SidebarContent>
+              </SidebarFilterVisibilityContext.Provider>
+            </SidebarSortContext.Provider>
+          </SidebarViewerContext.Provider>
+        </SidebarArchiveSupportedContext.Provider>
+      </EpicChatWorktreeMetadataProvider>
     </NotificationIndicatorsProvider>
   );
 }
@@ -779,6 +936,24 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
     deleteChat.isPending,
     deleteTerminalAgent.isPending,
   ]);
+
+  const archiveSupported = useContext(SidebarArchiveSupportedContext);
+  const isArchived = useEpicNodeArchived(nodeId);
+  const archiveChat = useEpicArchiveChat();
+  const toggleArchive = useCallback(() => {
+    if (!canMutate || !archiveSupported) return;
+    archiveChat.mutate({ epicId, chatId: nodeId, archived: !isArchived });
+  }, [archiveChat, archiveSupported, canMutate, epicId, isArchived, nodeId]);
+  const archivePending = archiveChat.isPending;
+  const archiveRow = useMemo<ChatRowArchiveInputs>(
+    () => ({
+      supported: archiveSupported,
+      isArchived,
+      pending: archivePending,
+      onToggle: toggleArchive,
+    }),
+    [archiveSupported, isArchived, archivePending, toggleArchive],
+  );
 
   const activeHostId = useReactiveActiveHostId() ?? "unknown-host";
 
@@ -1009,6 +1184,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       cascadeSummary={cascadeSummary}
       deletePending={deletePending}
       onConfirmDelete={confirmDelete}
+      archive={archiveRow}
       selectionMode={selectionMode}
       isSelected={selectedIds.has(nodeId)}
       selectedIds={selectedIds}
@@ -1052,6 +1228,7 @@ interface ChatNodeShellProps {
   readonly cascadeSummary: string | null;
   readonly deletePending: boolean;
   readonly onConfirmDelete: () => void;
+  readonly archive: ChatRowArchiveInputs;
   readonly treeFilter: TreeFilterFn;
   readonly selectionMode: boolean;
   readonly isSelected: boolean;
@@ -1059,7 +1236,63 @@ interface ChatNodeShellProps {
   readonly onToggleSelection: (id: string) => void;
 }
 
+/**
+ * Archive state for a row whose host does not support the method. A frozen
+ * module constant so the non-archivable branch allocates nothing per row.
+ */
+const CHAT_ROW_ARCHIVE_ABSENT: ChatRowArchiveDecision = Object.freeze({
+  entry: null,
+  showButton: false,
+});
+
+/**
+ * Hookless dispatcher. Its only job is to keep `useChatRowOwnStatusKind` -
+ * which costs an indicator read, an awareness read, a session-handle lookup and
+ * two store subscriptions PER ROW - off every row whose host cannot archive
+ * anyway. Hooks cannot be called conditionally, so the condition has to be a
+ * component boundary.
+ *
+ * This matters most exactly when the feature is newest: until the host RPC
+ * ships, NO host advertises the method, so without this split every row in
+ * every sidebar would pay for a status resolution that is then discarded. It
+ * also preserves T1's constraint that the open-chat session read is "paid by
+ * those few rows rather than by every row".
+ */
 function ChatNodeShell(props: ChatNodeShellProps) {
+  if (props.archive.supported) return <ChatNodeShellArchivable {...props} />;
+  return <ChatNodeShellBody {...props} decision={CHAT_ROW_ARCHIVE_ABSENT} />;
+}
+
+/** The archive-capable arm: resolves the row's status kind, then renders. */
+function ChatNodeShellArchivable(props: ChatNodeShellProps) {
+  // Resolved once per row and used by both archive affordances, so the hover
+  // button and the menu entry can never disagree about whether this row is
+  // busy. Same lattice the trailing chip renders from.
+  const statusKind = useChatRowOwnStatusKind({
+    epicId: props.epicId,
+    nodeId: props.nodeId,
+    artifactType: props.artifactType,
+  });
+  return (
+    <ChatNodeShellBody
+      {...props}
+      decision={chatRowArchiveState({
+        canMutate: props.canMutate,
+        isArchived: props.archive.isArchived,
+        archivePending: props.archive.pending,
+        statusKind,
+        selectionMode: props.selectionMode,
+        isRenaming: props.isRenaming,
+        hasChildren: props.hasChildren,
+        expanded: props.expanded,
+      })}
+    />
+  );
+}
+
+function ChatNodeShellBody(
+  props: ChatNodeShellProps & { readonly decision: ChatRowArchiveDecision },
+) {
   const {
     epicId,
     tabId,
@@ -1094,6 +1327,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
     cascadeSummary,
     deletePending,
     onConfirmDelete,
+    archive: archiveRow,
     treeFilter,
     selectionMode,
     isSelected,
@@ -1118,11 +1352,14 @@ function ChatNodeShell(props: ChatNodeShellProps) {
       parentId: nodeId,
     });
   }, [canMutate, epicId, nodeId, openNewConversationModal, tabId]);
+  const { decision } = props;
   const rowMenuEntries = chatRowMenuEntries({
     nodeId,
     canMutate,
+    archiveEntry: decision.entry,
     onNewChildAgent: handleNewChildAgent,
     onStartRename,
+    onToggleArchive: archiveRow.onToggle,
     onPerformDelete,
   });
 
@@ -1159,6 +1396,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
             renamePending={renamePending}
             nodeName={nodeName}
             nodeId={nodeId}
+            isArchived={archiveRow.isArchived}
           />
         ) : (
           <ChatRowButton
@@ -1179,8 +1417,20 @@ function ChatNodeShell(props: ChatNodeShellProps) {
             selectionMode={selectionMode}
             isSelected={isSelected}
             onToggleSelection={onToggleSelection}
+            isArchived={archiveRow.isArchived}
+            reserveArchiveSlot={decision.showButton}
           />
         )}
+
+        {decision.showButton ? (
+          <ChatRowArchiveButton
+            nodeId={nodeId}
+            nodeName={nodeName}
+            isArchived={archiveRow.isArchived}
+            pending={archiveRow.pending}
+            onToggle={archiveRow.onToggle}
+          />
+        ) : null}
 
         {canEdit && !isRenaming && !selectionMode ? (
           <ChatMoreMenu
@@ -1322,6 +1572,7 @@ interface ChatRenameRowProps {
   readonly renamePending: boolean;
   readonly nodeName: string;
   readonly nodeId: string;
+  readonly isArchived: boolean;
 }
 
 function ChatRenameRow(props: ChatRenameRowProps) {
@@ -1344,7 +1595,10 @@ function ChatRenameRow(props: ChatRenameRowProps) {
   // row height doesn't jump between viewing and renaming a two-line row.
   return (
     <div
-      className="flex min-h-7 min-w-0 flex-1 flex-col justify-center gap-0.5 rounded-md px-2 py-1"
+      className={cn(
+        "flex min-h-7 min-w-0 flex-1 flex-col justify-center gap-0.5 rounded-md px-2 py-1",
+        props.isArchived && ARCHIVED_ROW_CLASS,
+      )}
       style={{
         paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
       }}
@@ -1408,7 +1662,20 @@ interface ChatRowButtonProps {
   readonly selectionMode: boolean;
   readonly isSelected: boolean;
   readonly onToggleSelection: (id: string) => void;
+  readonly isArchived: boolean;
+  /**
+   * Whether the row must reserve hover pad-right for a SECOND trailing control
+   * (the archive button) beside the "..." trigger, so the title truncates
+   * clear of both instead of running underneath.
+   */
+  readonly reserveArchiveSlot: boolean;
 }
+
+/**
+ * Dimming for a revealed archived row. Only reachable with "Show archived" on -
+ * otherwise the row is not rendered at all.
+ */
+const ARCHIVED_ROW_CLASS = "opacity-55";
 
 // Only chats and terminal-agents own a resource-tracked process tree; other
 // node kinds (specs, tickets, …) never carry a resource snapshot.
@@ -1439,6 +1706,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
     selectionMode,
     isSelected,
     onToggleSelection,
+    isArchived,
+    reserveArchiveSlot,
   } = props;
   const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
   const dragData = useMemo<EpicCanvasSidebarNodeDragData>(
@@ -1483,8 +1752,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
     "flex min-h-7 min-w-0 flex-1 flex-col justify-center gap-0.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
     "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
     isDragging && "cursor-grabbing opacity-60",
-    nodePadRightClass(showRowControls, false),
+    nodePadRightClass(showRowControls, reserveArchiveSlot),
     selectionMode && "cursor-pointer",
+    isArchived && ARCHIVED_ROW_CLASS,
     isActive
       ? "bg-accent text-accent-foreground"
       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
@@ -1519,7 +1789,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
           {/* Selection mode is exactly when users act on rows in bulk, so the
               status signal (and a collapsed parent's rollup) has to survive
-              here - the pre-refactor icon slot rendered in this variant too. */}
+              here - the pre-refactor icon slot rendered in this variant too.
+              The archive hover button is a sibling of the row and is simply
+              not rendered in this variant. */}
           <ChatRowStatusSlot
             epicId={epicId}
             nodeId={nodeId}
@@ -1544,6 +1816,12 @@ function ChatRowButton(props: ChatRowButtonProps) {
       {...attributes}
       {...listeners}
       type="button"
+      // Explicit, so the row's accessible name is its TITLE rather than a
+      // concatenation of everything inside it. Row 2 now carries branch text,
+      // a "+N" badge and one PR icon per detected pull request, each with its
+      // own accessible name - without this the row announced as
+      // "T04 shell… traycer/notif-shell +2 Open PR #512 Open #512, …".
+      aria-label={nodeName}
       data-testid={`epic-sidebar-item-${nodeId}`}
       data-artifact-type={artifactType}
       className={rowClassName}
@@ -1568,14 +1846,32 @@ function ChatRowButton(props: ChatRowButtonProps) {
             className={undefined}
           />
         )}
-        <ChatRowStatusSlot
-          epicId={epicId}
-          nodeId={nodeId}
-          artifactType={artifactType}
-          hasChildren={hasChildren}
-          expanded={expanded}
-          updatedAt={updatedAt}
-        />
+        {/* Completes the hover SWAP the design calls for: while the archive
+            button is mounted, hovering the row hides the idle time so the
+            button takes its place rather than sitting alongside it.
+            `invisible` (not `hidden`) so the slot keeps its width and row 1
+            does not reflow under the pointer.
+
+            This blanks the WHOLE slot, so it is safe only while the slot is
+            showing the idle time. `chatRowArchiveState` guarantees that: it
+            withholds the button (and therefore this class) whenever the slot
+            could instead be rendering a collapsed parent's descendant rollup,
+            which must stay readable on hover. */}
+        <span
+          className={cn(
+            "flex-none",
+            reserveArchiveSlot && "group-hover/tree-item:invisible",
+          )}
+        >
+          <ChatRowStatusSlot
+            epicId={epicId}
+            nodeId={nodeId}
+            artifactType={artifactType}
+            hasChildren={hasChildren}
+            expanded={expanded}
+            updatedAt={updatedAt}
+          />
+        </span>
       </span>
       <ChatRowSecondLine
         epicId={epicId}
@@ -2090,12 +2386,127 @@ function ChatOwnStatusGlyph(props: {
   return <Icon aria-hidden className="size-3.5" />;
 }
 
+/**
+ * The row's archive menu state, or `null` on a host that lacks
+ * `epic.setChatArchived` - in which case the entry is absent from both menus
+ * rather than present-but-disabled.
+ */
+interface ChatRowArchiveEntry {
+  readonly isArchived: boolean;
+  readonly disabled: boolean;
+}
+
+/**
+ * A row's archive INPUTS, grouped because they are one concept and always
+ * travel together: whether the host can archive at all, whether this row
+ * already is, whether a toggle is in flight, and how to toggle it. Passing
+ * them as four loose props made the row's prop list four booleans wider for
+ * one feature.
+ *
+ * Distinct from {@link ChatRowArchiveDecision}, which is what the row renders
+ * from once those inputs plus the resolved status kind have been folded.
+ */
+interface ChatRowArchiveInputs {
+  readonly supported: boolean;
+  readonly isArchived: boolean;
+  readonly pending: boolean;
+  readonly onToggle: () => void;
+}
+
+interface ChatRowArchiveDecision {
+  readonly entry: ChatRowArchiveEntry | null;
+  readonly showButton: boolean;
+}
+
+/**
+ * Both archive affordances for a row, decided together so the menu entry and
+ * the hover button can never disagree. Only called for rows whose host
+ * supports the method.
+ *
+ * They are deliberately gated differently. The MENU entry is the complete,
+ * keyboard-reachable surface: present on every row, merely disabled while the
+ * row is busy. The hover BUTTON is a pointer shortcut that TAKES OVER the
+ * trailing status slot, so it may only appear when that slot is showing the
+ * idle time and nothing else.
+ *
+ * That last condition is stricter than "my own status is idle", which is why
+ * `hasChildren`/`expanded` are inputs. A COLLAPSED PARENT's slot renders
+ * `ChatRowStatusWithNestedRollup`, which may show a muted rollup glyph standing
+ * in for a hidden descendant that needs attention - the only signal those
+ * descendants have. Showing the button there would blank that glyph on hover
+ * and offer to archive the whole subtree, failure included. The shell cannot
+ * tell which way the rollup resolved without duplicating its subscription, so
+ * every collapsed parent is excluded; the menu entry stays the archive path for
+ * those rows.
+ */
+function chatRowArchiveState(args: {
+  readonly canMutate: boolean;
+  readonly isArchived: boolean;
+  readonly archivePending: boolean;
+  readonly statusKind: ChatOwnStatusKind;
+  readonly selectionMode: boolean;
+  readonly isRenaming: boolean;
+  readonly hasChildren: boolean;
+  readonly expanded: boolean;
+}): ChatRowArchiveDecision {
+  const isBusy =
+    args.statusKind === "working" || args.statusKind === "background";
+  const slotMayShowRollup = args.hasChildren && !args.expanded;
+  return {
+    entry: {
+      isArchived: args.isArchived,
+      disabled: isBusy || args.archivePending,
+    },
+    showButton:
+      args.canMutate &&
+      args.statusKind === "idle" &&
+      !slotMayShowRollup &&
+      !args.selectionMode &&
+      !args.isRenaming,
+  };
+}
+
 interface ChatRowMenuEntriesProps {
   readonly nodeId: string;
   readonly canMutate: boolean;
+  readonly archiveEntry: ChatRowArchiveEntry | null;
   readonly onNewChildAgent: () => void;
   readonly onStartRename: () => void;
+  readonly onToggleArchive: () => void;
   readonly onPerformDelete: () => void;
+}
+
+/**
+ * The Archive / Unarchive entry, or nothing at all. Kept as a spreadable list
+ * so `chatRowMenuEntries` stays one flat literal - the ⋯ and right-click menus
+ * both render from it, so a single definition covers both surfaces.
+ *
+ * The label is the ACTION, not the state: an archived row offers "Unarchive".
+ */
+function archiveMenuEntries(
+  props: ChatRowMenuEntriesProps,
+): ReadonlyArray<SidebarRowMenuEntry> {
+  const { archiveEntry } = props;
+  if (archiveEntry === null) return [];
+  return [
+    {
+      kind: "item",
+      id: "archive",
+      label: archiveEntry.isArchived ? "Unarchive" : "Archive",
+      icon: archiveEntry.isArchived ? (
+        <ArchiveRestore className="size-3.5" />
+      ) : (
+        <Archive className="size-3.5" />
+      ),
+      disabled: !props.canMutate || archiveEntry.disabled,
+      variant: "default",
+      testIds: {
+        dropdown: `epic-sidebar-archive-item-${props.nodeId}`,
+        context: `epic-sidebar-context-archive-${props.nodeId}`,
+      },
+      onSelect: props.onToggleArchive,
+    },
+  ];
 }
 
 function chatRowMenuEntries(
@@ -2128,6 +2539,7 @@ function chatRowMenuEntries(
       },
       onSelect: props.onStartRename,
     },
+    ...archiveMenuEntries(props),
     { kind: "separator", id: "before-delete" },
     {
       kind: "item",
@@ -2143,6 +2555,117 @@ function chatRowMenuEntries(
       onSelect: props.onPerformDelete,
     },
   ];
+}
+
+/**
+ * The row's resolved own status kind, for consumers OUTSIDE the trailing chip -
+ * today the archive affordances, which must appear only on an idle row and stay
+ * disabled while one is working.
+ *
+ * Resolves through the same `chatOwnStatusKind` lattice the chip renders from,
+ * so the two can never disagree, but reads an open chat's session through
+ * `useSyncExternalStore` rather than the chip's parent/child component split.
+ * A hook cannot use that split - `useStore` can't be called conditionally on a
+ * nullable handle - and the snapshots here are deliberately PRIMITIVES, so this
+ * re-renders its caller only when the kind actually flips rather than on every
+ * queue or background-item tick of an open chat.
+ *
+ * Same authority order as the chip: an open chat's session tri-state wins,
+ * epic awareness backfills the subscription-gap window and covers unopened
+ * rows, and a session's own access snapshot overrides the epic-level viewer
+ * role.
+ */
+function useChatRowOwnStatusKind(args: {
+  readonly epicId: string;
+  readonly nodeId: string;
+  readonly artifactType: EpicNodeKind;
+}): ChatOwnStatusKind {
+  const { epicId, nodeId, artifactType } = args;
+  const indicatorState = useSurfaceNotificationIndicatorState({
+    epicId,
+    chatId: nodeId,
+  });
+  const awarenessTier = useEpicAgentActivityTiers().get(nodeId);
+  const isViewer = useContext(SidebarViewerContext);
+  // Terminal-agent rows have no chat session and never carried a read-only
+  // lock (their PTY runs host-side), so the viewer arm is chat-only.
+  const isChat = artifactType === "chat";
+  const sessionHandle = useExistingChatSessionHandle(epicId, nodeId);
+  const subscribeSession = useMemo(
+    () => (onChange: () => void) => {
+      if (sessionHandle === null) return () => undefined;
+      return sessionHandle.store.subscribe(onChange);
+    },
+    [sessionHandle],
+  );
+  const sessionActivity = useSyncExternalStore(subscribeSession, () =>
+    sessionHandle === null
+      ? null
+      : chatActivityIndicator(sessionHandle.store.getState()),
+  );
+  const sessionRole = useSyncExternalStore(subscribeSession, () =>
+    sessionHandle === null
+      ? null
+      : (sessionHandle.store.getState().access?.role ?? null),
+  );
+  if (sessionHandle === null || !isChat) {
+    return chatOwnStatusKind(
+      indicatorState,
+      awarenessTier ?? false,
+      isChat && isViewer,
+    );
+  }
+  return chatOwnStatusKind(
+    indicatorState,
+    sessionActivity ?? awarenessTier ?? false,
+    // Stay neutral while the access snapshot is unknown so an owner never sees
+    // a read-only row flash before it arrives.
+    sessionRole !== null && sessionRole !== "owner",
+  );
+}
+
+/**
+ * Hover-revealed Archive / Unarchive control, a SIBLING of the row rather than
+ * a child of it: the row is itself a `<button>`, so a nested `<button>` would
+ * be invalid HTML and unreachable by keyboard. It sits beside the "..." trigger
+ * in the same absolutely-positioned control strip, which is why the row
+ * reserves pad-right for two controls while this is mounted.
+ *
+ * Rendered only for idle rows, so it never covers a status the user needs. No
+ * confirm dialog, unlike delete - archiving is reversible.
+ */
+function ChatRowArchiveButton(props: {
+  readonly nodeId: string;
+  readonly nodeName: string;
+  readonly isArchived: boolean;
+  readonly pending: boolean;
+  readonly onToggle: () => void;
+}) {
+  const label = props.isArchived
+    ? `Unarchive ${props.nodeName}`
+    : `Archive ${props.nodeName}`;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-xs"
+      aria-label={label}
+      title={label}
+      disabled={props.pending}
+      data-testid={`epic-sidebar-archive-${props.nodeId}`}
+      className="absolute right-7 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100"
+      onClick={(event) => {
+        event.stopPropagation();
+        props.onToggle();
+      }}
+    >
+      {props.isArchived ? (
+        <ArchiveRestore className="size-3" />
+      ) : (
+        <Archive className="size-3" />
+      )}
+    </Button>
+  );
 }
 
 function ChatMoreMenu(props: {

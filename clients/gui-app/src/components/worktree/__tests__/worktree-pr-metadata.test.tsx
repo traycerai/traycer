@@ -128,6 +128,37 @@ describe("worktree PR metadata", () => {
     ]);
   });
 
+  it("emits one reference per PR when two of an owner's directories report the same one", () => {
+    // Two distinct running directories of the same repo, both sitting on the
+    // same PR. The reference key is built from the PR number and URL, not the
+    // directory, so before dedup both rows carried an identical `key` - a
+    // duplicate React key wherever they render as a list, and a repeated icon
+    // for a single pull request.
+    const references = worktreePrReferences([
+      worktree({ worktreePath: "/worktrees/app/feature-login" }),
+      worktree({ worktreePath: "/worktrees/app/feature-login-copy" }),
+    ]);
+
+    expect(references).toHaveLength(1);
+    expect(references[0].url).toBe("https://github.com/acme/app/pull/42");
+    expect(new Set(references.map((reference) => reference.key)).size).toBe(
+      references.length,
+    );
+  });
+
+  it("keeps genuinely distinct PRs apart", () => {
+    const references = worktreePrReferences([
+      worktree({ worktreePath: "/worktrees/app/a" }),
+      worktree({
+        worktreePath: "/worktrees/app/b",
+        prNumber: 43,
+        prUrl: "https://github.com/acme/app/pull/43",
+      }),
+    ]);
+
+    expect(references.map((reference) => reference.prNumber)).toEqual([42, 43]);
+  });
+
   it("merges the binding with enriched worktree truth for navigator hover", () => {
     const items = ownerWorkspaceMetadataItems(BINDING, [
       worktree({ branch: "feature/login-renamed" }),

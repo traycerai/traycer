@@ -467,6 +467,34 @@ export function useEpicChatRecords(): ReadonlyArray<ChatProjection> {
   );
 }
 
+/**
+ * Ids of the chats + terminal-agents whose record carries `archivedAt !== null`
+ * - the archive roots the sidebar hides subtrees from. Chats and TUI agents are
+ * merged into one list because a single `epic.setChatArchived` RPC keyed by id
+ * covers both record kinds, so the tree treats them identically.
+ *
+ * Returned as a SORTED array rather than a `Set` so `useShallow` can bail the
+ * subscriber's re-render: archiving is rare while chat projections churn
+ * constantly (titles, `updatedAt`, streaming settings), and an unsorted or
+ * freshly-allocated `Set` would re-render the whole tree on every one of those.
+ */
+export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<string> => {
+      const archived = [
+        ...s.chats.allIds.filter((id) => s.chats.byId[id].archivedAt !== null),
+        ...s.tuiAgents.allIds.filter(
+          (id) => s.tuiAgents.byId[id].archivedAt !== null,
+        ),
+      ];
+      if (archived.length === 0) return EMPTY_TREE_ID_ARRAY;
+      return archived.sort();
+    }),
+  );
+}
+
 export function useEpicTerminalAgentRecords(): ReadonlyArray<TuiAgentProjection> {
   const handle = useOpenEpicHandle();
   return useStore(
@@ -1230,6 +1258,24 @@ export function useEpicNodeHostId(nodeId: string): string | null {
       return s.tuiAgents.byId[nodeId].hostId;
     }
     return null;
+  });
+}
+
+/**
+ * Whether this node's record is archived, as a primitive so unrelated
+ * projection churn cannot re-render the row. Covers both record kinds - one
+ * `epic.setChatArchived` RPC keyed by id serves chats and terminal-agents
+ * alike. Ids that resolve to neither map read as not archived.
+ */
+export function useEpicNodeArchived(nodeId: string): boolean {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return s.chats.byId[nodeId].archivedAt !== null;
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+      return s.tuiAgents.byId[nodeId].archivedAt !== null;
+    }
+    return false;
   });
 }
 

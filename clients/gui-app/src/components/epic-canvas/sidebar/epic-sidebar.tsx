@@ -136,6 +136,7 @@ import {
 } from "@/lib/disabled-presentation";
 import { displayTitle } from "@/lib/display-title";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
 import {
   useEpicCreateArtifact,
   useEpicDeleteArtifact,
@@ -1863,10 +1864,15 @@ function TreePanelActions(props: TreePanelActionsProps) {
 
 function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
   const selection = useSidebarBulkSelection();
+  const canArchive = useChatArchiveSupported();
   if (selection.selectionMode) return <SidebarBulkSelectionActions />;
   return (
     <div className="flex items-center gap-0.5">
-      <ChatFilterMenu epicId={props.epicId} disabled={props.collapsed} />
+      <ChatFilterMenu
+        epicId={props.epicId}
+        disabled={props.collapsed}
+        canArchive={canArchive}
+      />
       <SidebarStartSelectionButton
         label="Select agents"
         disabled={props.collapsed}

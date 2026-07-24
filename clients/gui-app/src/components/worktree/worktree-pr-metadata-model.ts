@@ -11,6 +11,11 @@ export interface WorktreePrReference {
   readonly label: string;
   readonly ariaLabel: string;
   readonly state: WorktreeDisplayedPrState;
+  // The bare PR number, alongside the composed `label`. The sidebar's
+  // icon-only variant renders `#<number>` next to a state glyph and has no
+  // room for the label's repo prefix / state word, so it needs the raw value
+  // rather than parsing it back out of `label`.
+  readonly prNumber: number;
   readonly url: string;
   readonly branch: string | null;
   readonly worktreePath: string;
@@ -30,7 +35,29 @@ const PR_STATE_LABEL: Record<WorktreeDisplayedPrState, string> = {
   merged: "Merged",
 };
 
+/**
+ * One reference per DETECTED PR across an owner's entries and their submodules.
+ *
+ * Deduped by `url`, which identifies a pull request uniquely. Two of an owner's
+ * running directories can legitimately report the same PR - two worktrees of one
+ * repo on the same branch, or two superprojects owning a submodule that is on a
+ * PR - and without this they emitted two references carrying the SAME `key`,
+ * since the key is built from `prNumber` + `prUrl` and not the directory. That
+ * is a duplicate React key wherever these are rendered as a list, and a
+ * repeated icon for a single PR either way.
+ */
 export function worktreePrReferences(
+  worktrees: readonly WorktreeHostEntryV12[],
+): readonly WorktreePrReference[] {
+  const seenUrls = new Set<string>();
+  return allWorktreePrReferences(worktrees).filter((reference) => {
+    if (seenUrls.has(reference.url)) return false;
+    seenUrls.add(reference.url);
+    return true;
+  });
+}
+
+function allWorktreePrReferences(
   worktrees: readonly WorktreeHostEntryV12[],
 ): readonly WorktreePrReference[] {
   return worktrees.flatMap((entry) => {
@@ -77,6 +104,7 @@ function prReference(args: {
       label: `${prefix}#${args.prNumber} ${PR_STATE_LABEL[state]}`,
       ariaLabel: `Open ${prefix}PR #${args.prNumber} ${PR_STATE_LABEL[state]}`,
       state,
+      prNumber: args.prNumber,
       url: args.prUrl,
       branch: args.branch,
       worktreePath: args.worktreePath,

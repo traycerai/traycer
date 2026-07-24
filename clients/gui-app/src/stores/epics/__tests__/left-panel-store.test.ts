@@ -238,6 +238,7 @@ describe("useLeftPanelStore", () => {
         panelSectionCollapsedByPanelId: {},
         panelSectionWeightsByPanelId: {},
         chatFilterByEpicId: {},
+        chatShowArchivedByEpicId: {},
         artifactFilterByEpicId: {},
         chatSortByEpicId: {},
         artifactSortByEpicId: {},
