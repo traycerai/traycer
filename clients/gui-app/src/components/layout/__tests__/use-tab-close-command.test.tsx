@@ -42,7 +42,9 @@ describe("useTabCloseCommand", () => {
   });
 
   it("dispatches a draft close through the draft descriptor", () => {
-    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraft(null, undefined);
     expect(
       useLandingDraftStore.getState().drafts.some((d) => d.id === draftId),
     ).toBe(true);
