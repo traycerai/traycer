@@ -15,6 +15,10 @@ import {
 } from "../host/bootstrap-log";
 import { rotateHostLogIfOversized } from "../host/host-log-rotation";
 import {
+  findLiveIncumbentHost,
+  type IncumbentHost,
+} from "../host/incumbent-check";
+import {
   readHostInstallRecord,
   type HostInstallRecord,
 } from "../manifest/host-install";
@@ -148,6 +152,11 @@ export type SpawnImpl = (
 
 export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly spawn: SpawnImpl;
+  // Injected so tests can drive the "another host already owns this data
+  // dir" branch without a real pid.json or a live loopback listener.
+  readonly findIncumbentHost: (
+    environment: Environment | undefined,
+  ) => Promise<IncumbentHost | null>;
   readonly openLogFd: (environment: Environment) => Promise<number>;
   readonly rotateLog: (
     environment: Environment,
@@ -167,6 +176,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
 const defaultRunDeps: RunHostStartDeps = {
   ...defaultDeps,
   spawn: (cmd, args, options) => nodeSpawn(cmd, args.slice(), options),
+  findIncumbentHost: findLiveIncumbentHost,
   openLogFd: openBootstrapLogFd,
   rotateLog: rotateHostLogIfOversized,
   readEnvOverrides: async () => ({ ...(await listEnvOverrides()) }),
@@ -253,6 +263,44 @@ export async function runHostStart(
     argCount: target.args.length,
     hasCwdOverride: opts.cwd !== null,
   });
+
+  // One host per data dir. launchd runs at most one instance of a LABEL, but
+  // the CLI label (`ai.traycer.host`) and Desktop's SMAppService agent label
+  // (`ai.traycer.host.agent`) are distinct labels that both invoke this
+  // supervisor against the same data dir - and both carry `RunAtLoad`. On a
+  // machine that ended up with both registered, every login spawned two
+  // hosts racing the same pid.json and stores, with the loser invisible to
+  // new clients.
+  //
+  // Declining is the whole policy here: never evict the incumbent.
+  // Intentional version replacement belongs to the install lifecycle
+  // (`beforeSwap` stops the running host before the swap), which knows it is
+  // an upgrade; this supervisor cannot tell an upgrade from an accidental
+  // second job. Evicting from here would also deadlock against KeepAlive -
+  // the victim's `Crashed = true` restarts it, it evicts us back, and the
+  // two labels flap forever.
+  //
+  // Exit 0 specifically: the macOS plists set `KeepAlive.SuccessfulExit =
+  // false`, so a clean exit leaves this job down until the next login
+  // instead of relaunching it in a loop. No bootstrap marker is written -
+  // declining is not a spawn attempt, and the existing phases all describe
+  // one.
+  const incumbent = await deps.findIncumbentHost(opts.environment);
+  if (incumbent !== null) {
+    logger.warn(
+      "Host supervisor declined to start - another host already owns this data dir",
+      {
+        environment: opts.environment,
+        incumbentPid: incumbent.pid,
+        incumbentVersion: incumbent.version,
+        incumbentWebsocketUrl: incumbent.websocketUrl,
+        resolvedVersion: target.record.version,
+        attemptId,
+        supervisorPid,
+      },
+    );
+    return deps.exit(0);
+  }
 
   const envOverrides = await deps.readEnvOverrides();
   logger.debug("Host supervisor loaded env overrides", {
