@@ -423,6 +423,78 @@ describe("useWorkspaceEntries", () => {
       "workspace.mentionFiles",
     );
   });
+
+  it("does not fall back for a previous root_unavailable reply after the request slot changes", async () => {
+    let resolveSecond: (() => void) | null = null;
+    messenger.setHandlers({
+      "workspace.searchPaths": (params) => {
+        if ("root" in params.reference && params.reference.root === "/repo-a") {
+          return {
+            epicId: params.epicId,
+            root: "/repo-a",
+            outcome: "root_unavailable" as const,
+            results: [],
+            truncated: false,
+          };
+        }
+        return new Promise<void>((resolve) => {
+          resolveSecond = resolve;
+        }).then(() => ({
+          epicId: params.epicId,
+          root: "/repo-b",
+          outcome: "ready" as const,
+          results: [],
+          truncated: false,
+        }));
+      },
+      "workspace.mentionFiles": () => ({ entries: [legacyFileSuggestion()] }),
+    });
+
+    const { result, rerender } = renderHook(
+      ({ request }) =>
+        useWorkspaceEntries({ client: hostClient, requests: [request] }),
+      {
+        initialProps: {
+          request: scopedFileSearchRequest("/repo-a", "epic-a"),
+        },
+        wrapper,
+      },
+    );
+
+    await waitFor(() =>
+      expect(messenger.calls.map((call) => call.method)).toContain(
+        "workspace.mentionFiles",
+      ),
+    );
+    const legacyCallCount = messenger.calls.filter(
+      (call) => call.method === "workspace.mentionFiles",
+    ).length;
+
+    rerender({ request: scopedFileSearchRequest("/repo-b", "epic-b") });
+
+    await waitFor(() =>
+      expect(
+        messenger.calls.some((call) => isScopedSearchForEpic(call, "epic-b")),
+      ).toBe(true),
+    );
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "workspace.mentionFiles",
+      ),
+    ).toHaveLength(legacyCallCount);
+    expect(result.current.data).toHaveLength(0);
+
+    act(() => {
+      resolveSecond?.();
+    });
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.data).toHaveLength(0);
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "workspace.mentionFiles",
+      ),
+    ).toHaveLength(legacyCallCount);
+  });
 });
 
 function legacyFileSuggestion() {

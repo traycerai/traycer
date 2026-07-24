@@ -86,8 +86,17 @@ export function useWorkspaceEntries(
     () =>
       searchRequests.flatMap((request, index) => {
         const query = searchQueries[index];
-        const unavailable =
-          query.isError || query.data?.outcome === "root_unavailable";
+        const data = query.data;
+        // `keepPreviousData` can retain a root_unavailable reply while this
+        // slot has already switched to another Epic/root. Only that reply's
+        // echoed identity may request the legacy fallback; query errors have
+        // no response identity and still always recover through legacy.
+        const currentRootUnavailable =
+          data?.outcome === "root_unavailable" &&
+          "root" in data &&
+          data.epicId === request.params.epicId &&
+          data.root === request.root;
+        const unavailable = query.isError || currentRootUnavailable;
         return unavailable ? [fallbackLegacyRequest(request)] : [];
       }),
     [searchRequests, searchQueries],
