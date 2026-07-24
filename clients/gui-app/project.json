@@ -1,12 +1,10 @@
 {
   "name": "traycer-clients-gui-app",
+  "implicitDependencies": ["@traycer-clients/shared", "@traycer/protocol"],
   "namedInputs": {
     "default": ["{projectRoot}/**/*"]
   },
   "targets": {
-    "test": {
-      "inputs": ["{projectRoot}/**/*", "sharedGlobals"]
-    },
     "build": {
       "inputs": ["{projectRoot}/**/*", "sharedGlobals"]
     },

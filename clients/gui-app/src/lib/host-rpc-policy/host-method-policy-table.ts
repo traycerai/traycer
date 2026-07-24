@@ -237,6 +237,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Dismissing an attention row resolves it (persists the acknowledgement).
+  "host.notifications.resolve": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Marking all notifications read persists acknowledgements.
   "host.notifications.markAllRead": {
     mode: "fifo",

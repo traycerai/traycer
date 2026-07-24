@@ -99,7 +99,6 @@ import {
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicArtifactRecords,
-  useEpicChatHarnessId,
   useEpicConnectionStatus,
   useEpicNodeHostId,
   useEpicNodeOwnerKind,
@@ -1749,8 +1748,21 @@ interface ChatSidebarNodeIconProps {
 
 function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
   if (props.artifactType === "chat") {
+    // No idle-slot override: `ChatProgressIcon` falls back to the plain chat
+    // glyph (per-type icon color included) and stays authoritative for
+    // read-only, activity, approval, failure, and completion states. Chat rows
+    // deliberately do NOT wear the harness brand - a column of multi-colored
+    // provider marks reads as noise; the harness is surfaced in the row's
+    // tooltip, header, and composer instead.
     return (
-      <GuiChatSidebarNodeIcon epicId={props.epicId} nodeId={props.nodeId} />
+      <ChatProgressIcon
+        epicId={props.epicId}
+        chatId={props.nodeId}
+        className={undefined}
+        mutedClassName="text-muted-foreground/70"
+        testId="chat-sidebar-spinner"
+        defaultIcon={undefined}
+      />
     );
   }
   if (props.artifactType === "terminal-agent") {
@@ -1768,36 +1780,6 @@ function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
       Icon={props.Icon}
       artifactIconColorMode={props.artifactIconColorMode}
       iconStyle={props.iconStyle}
-    />
-  );
-}
-
-/**
- * GUI chat sidebar icon. The persisted harness brand occupies the idle slot;
- * `ChatProgressIcon` remains authoritative for read-only, activity, approval,
- * failure, and completion states.
- */
-function GuiChatSidebarNodeIcon(props: {
-  readonly epicId: string;
-  readonly nodeId: string;
-}) {
-  const harnessId = useEpicChatHarnessId(props.nodeId);
-  return (
-    <ChatProgressIcon
-      epicId={props.epicId}
-      chatId={props.nodeId}
-      className={undefined}
-      mutedClassName="text-muted-foreground/70"
-      testId="chat-sidebar-spinner"
-      defaultIcon={
-        harnessId === null ? undefined : (
-          <SidebarAgentHarnessIcon
-            nodeId={props.nodeId}
-            harnessId={harnessId}
-            surface="gui"
-          />
-        )
-      }
     />
   );
 }
@@ -1824,11 +1806,7 @@ function TerminalAgentProgressIcon(props: {
     // generic bot glyph is the fallback for unresolved/legacy records.
     if (harnessId !== null) {
       return (
-        <SidebarAgentHarnessIcon
-          nodeId={props.nodeId}
-          harnessId={harnessId}
-          surface="tui"
-        />
+        <SidebarAgentHarnessIcon nodeId={props.nodeId} harnessId={harnessId} />
       );
     }
     return (
@@ -1858,35 +1836,31 @@ function TerminalAgentProgressIcon(props: {
 }
 
 /**
- * Harness identity with a terminal-only surface mark. GUI chats use the brand
- * unchanged; TUI agents add a bare terminal glyph without a background so the
- * harness mark stays visible beneath it.
+ * TUI-agent harness identity with a terminal surface mark. The brand mark is a
+ * TUI-only affordance - GUI chat rows keep the plain chat glyph - so the bare
+ * terminal glyph rides along without a background, keeping the harness mark
+ * visible beneath it.
  */
 function SidebarAgentHarnessIcon(props: {
   readonly nodeId: string;
   readonly harnessId: ProviderId;
-  readonly surface: "gui" | "tui";
 }) {
   const TerminalIcon = EPIC_NODE_ICONS.terminal;
-  const surfaceTitle =
-    props.surface === "gui" ? "GUI chat" : "TUI terminal agent";
   return (
     <span
       data-testid={`sidebar-agent-harness-${props.nodeId}`}
-      data-agent-surface={props.surface}
+      data-agent-surface="tui"
       className="relative inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
-      title={surfaceTitle}
+      title="TUI terminal agent"
     >
       <HarnessIcon harnessId={props.harnessId} className="size-3.5" />
-      {props.surface === "tui" ? (
-        <TerminalIcon
-          aria-hidden="true"
-          data-testid={`sidebar-agent-surface-${props.nodeId}`}
-          data-agent-surface="tui"
-          className="pointer-events-none absolute -right-1 -bottom-1.5 size-2 text-muted-foreground"
-          strokeWidth={3}
-        />
-      ) : null}
+      <TerminalIcon
+        aria-hidden="true"
+        data-testid={`sidebar-agent-surface-${props.nodeId}`}
+        data-agent-surface="tui"
+        className="pointer-events-none absolute -right-1 -bottom-1.5 size-2 text-muted-foreground"
+        strokeWidth={3}
+      />
     </span>
   );
 }

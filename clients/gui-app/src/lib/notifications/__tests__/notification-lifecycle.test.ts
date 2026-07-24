@@ -114,6 +114,30 @@ describe("classifyNotificationLifecycle", () => {
     ).toEqual({ section: "attention", tier: "blocking" });
   });
 
+  it("classifies the dismiss transition: read needs_action leaves Attention only once resolvedAt is set", () => {
+    // Navigation can stamp readAt without clearing the blocking tier. Dismiss
+    // is the resolvedAt write that actually moves the row into Recent.
+    const beforeDismiss = input({
+      source: "host",
+      severity: "needs_action",
+      resolvedAt: null,
+      readAt: 10,
+    });
+    const afterDismiss = input({
+      source: "host",
+      severity: "needs_action",
+      resolvedAt: 20,
+      readAt: 10,
+    });
+    expect(classifyNotificationLifecycle(beforeDismiss)).toEqual({
+      section: "attention",
+      tier: "blocking",
+    });
+    expect(classifyNotificationLifecycle(afterDismiss)).toEqual({
+      section: "recent",
+    });
+  });
+
   it("ignores resolvedAt for failure rows (readAt is the gate)", () => {
     expect(
       classifyNotificationLifecycle(
