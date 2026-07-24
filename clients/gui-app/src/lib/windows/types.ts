@@ -116,6 +116,11 @@ export interface DesktopMenuCommandPayload {
   readonly windowId: string;
 }
 
+export type DesktopRuntimePlatform = "darwin" | "win32" | "linux";
+
+export type DesktopTopLevelMenuId =
+  "file" | "edit" | "view" | "window" | "help";
+
 export interface DesktopZoomBridge {
   readonly ladder: readonly number[];
   get(): Promise<number>;
@@ -185,6 +190,15 @@ export interface DesktopMenuBridge {
   onCommand(handler: (payload: DesktopMenuCommandPayload) => void): {
     dispose(): void;
   };
+}
+
+export interface DesktopMenuPopupBridge {
+  readonly platform: DesktopRuntimePlatform;
+  openTopLevel(
+    menuId: DesktopTopLevelMenuId,
+    anchorX: number,
+    anchorY: number,
+  ): Promise<void>;
 }
 
 export type DesktopAppUpdateStatus =
