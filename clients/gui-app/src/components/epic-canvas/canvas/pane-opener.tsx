@@ -24,6 +24,7 @@ import { Command, CommandInput, CommandList } from "@/components/ui/command";
 import { InputGroupButton } from "@/components/ui/input-group";
 import { useCommandPaletteRouter } from "@/components/command-palette/command-palette-context";
 import {
+  OpenerDeepView,
   OpenerRootView,
   SubpageView,
 } from "@/components/command-palette/palette-cmdk";
@@ -109,8 +110,12 @@ export function PaneOpener(props: PaneOpenerProps) {
       data-group-id={groupId}
       className="flex h-full min-h-0 w-full flex-col"
     >
+      {/* `label` is what actually names the search box: cmdk points the input's
+          `aria-labelledby` at its own hidden label element, so without this the
+          input's `aria-label` is overridden by an empty name. */}
       <Command
         filter={paletteFilter}
+        label="Open into pane"
         onKeyDown={handleKeyDown}
         className="h-full min-h-0 bg-transparent"
       >
@@ -145,7 +150,19 @@ export function PaneOpener(props: PaneOpenerProps) {
                 onSelect={runItem}
               />
             ) : (
-              <OpenerRootView items={openerItems} onSelect={runItem} />
+              <>
+                <OpenerRootView items={openerItems} onSelect={runItem} />
+                {/* Deep search: while typing at the root, every sub-page leaf
+                    (n levels down) is also searchable, labelled with its full
+                    path ("Agents → New agent (Chat)"). */}
+                {query.trim() !== "" ? (
+                  <OpenerDeepView
+                    items={openerItems}
+                    ctx={ctx}
+                    onSelect={runItem}
+                  />
+                ) : null}
+              </>
             )}
           </CommandList>
         </PaletteQueryProvider>
