@@ -482,6 +482,7 @@ describe("mention provider registry", () => {
     for (const request of scoped) {
       expect(request.root).toBe("/attached");
       expect(request.params.epicId).toBe("epic-1");
+      expect(request.params.limit).toBe(25);
       expect("root" in request.params.reference).toBe(true);
       if ("root" in request.params.reference) {
         expect(request.params.reference.root).toBe("/attached");

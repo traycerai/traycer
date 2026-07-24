@@ -1,13 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
+  SEARCH_ARTIFACT_SNIPPET_MAX_BYTES,
+  searchArtifactSnippetSchema,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  WORKSPACE_SEARCH_TEXT_PREVIEW_MAX_BYTES,
   workspaceSearchPathsRequestSchema,
   workspaceSearchPathsResponseSchema,
   workspaceSearchTextRequestSchema,
+  workspaceSearchTextPreviewSchema,
   workspaceSearchTextResponseSchema,
 } from "../unary-schemas";
 
 describe("workspace shared search sources", () => {
+  it("shares the text preview byte limit and range validation with artifact search", () => {
+    const outOfBoundsRange = { startByte: 0, endByte: 513 };
+
+    expect(WORKSPACE_SEARCH_TEXT_PREVIEW_MAX_BYTES).toBe(
+      SEARCH_ARTIFACT_SNIPPET_MAX_BYTES,
+    );
+    expect(
+      workspaceSearchTextPreviewSchema.safeParse({
+        text: "needle",
+        ranges: [outOfBoundsRange],
+      }).success,
+    ).toBe(false);
+    expect(
+      searchArtifactSnippetSchema.safeParse({
+        lineNumber: 1,
+        text: "needle",
+        ranges: [outOfBoundsRange],
+      }).success,
+    ).toBe(false);
+  });
+
   it("preserves attached-root request and response wire shapes", () => {
     const request = {
       epicId: "epic-1",

@@ -7,6 +7,10 @@
  */
 import { z } from "zod";
 import { taskRepoIdentifierSchema } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  SEARCH_TEXT_PREVIEW_MAX_BYTES,
+  searchTextPreviewRangeSchema,
+} from "@traycer/protocol/host/search-text-preview-schema";
 
 export const workspaceMentionGitTypeSchema = z.enum([
   "against_uncommitted_changes",
@@ -558,7 +562,8 @@ export type WorkspaceSearchTextRequest = z.infer<
  * every returned range still addresses the returned text. Bounds response weight
  * against a pathological single-line file.
  */
-export const WORKSPACE_SEARCH_TEXT_PREVIEW_MAX_BYTES = 512;
+export const WORKSPACE_SEARCH_TEXT_PREVIEW_MAX_BYTES =
+  SEARCH_TEXT_PREVIEW_MAX_BYTES;
 
 /**
  * One preview line for a match. `text` is bounded to
@@ -569,16 +574,7 @@ export const WORKSPACE_SEARCH_TEXT_PREVIEW_MAX_BYTES = 512;
  */
 export const workspaceSearchTextPreviewSchema = z.object({
   text: z.string(),
-  ranges: z.array(
-    z
-      .object({
-        startByte: z.number().int().nonnegative(),
-        endByte: z.number().int().nonnegative(),
-      })
-      .refine((range) => range.endByte >= range.startByte, {
-        message: "endByte must not precede startByte",
-      }),
-  ),
+  ranges: z.array(searchTextPreviewRangeSchema),
 });
 export type WorkspaceSearchTextPreview = z.infer<
   typeof workspaceSearchTextPreviewSchema

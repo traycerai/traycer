@@ -104,8 +104,6 @@ type WorkspaceSearchPathsRequestParams = RequestOfMethod<
   "workspace.searchPaths"
 >;
 
-const WORKSPACE_SEARCH_PATHS_MENTION_LIMIT = 50;
-
 type WorkspaceGitMentionRequestParams = RequestOfMethod<
   HostRpcRegistry,
   "workspace.mentionGitRoot"
@@ -984,7 +982,7 @@ function searchPathsMentionRequest(
       epicId,
       reference: { root },
       query: context.query.trim(),
-      limit: WORKSPACE_SEARCH_PATHS_MENTION_LIMIT,
+      limit: context.limit,
       // Request exactly the kind this provider renders so the host spends the
       // whole limit on it (a folder mention is never starved by files).
       kinds: suggestionKind === "folder" ? "folders" : "files",

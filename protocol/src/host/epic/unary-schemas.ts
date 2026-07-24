@@ -28,6 +28,10 @@ import {
   worktreeIntentSchema,
 } from "@traycer/protocol/host/worktree-schemas";
 import {
+  SEARCH_TEXT_PREVIEW_MAX_BYTES,
+  searchTextPreviewRangeSchema,
+} from "@traycer/protocol/host/search-text-preview-schema";
+import {
   chatRunSettingsSchema,
   chatRunSettingsStrictSchema,
   userMessageSenderSchema,
@@ -1451,7 +1455,7 @@ export type SearchArtifactMatchSource = z.infer<
  * clamping/dropping highlight ranges so every returned range still addresses the
  * returned text. Bounds response weight against a pathological single-line body.
  */
-export const SEARCH_ARTIFACT_SNIPPET_MAX_BYTES = 512;
+export const SEARCH_ARTIFACT_SNIPPET_MAX_BYTES = SEARCH_TEXT_PREVIEW_MAX_BYTES;
 
 /**
  * One body-match line. `ranges` are BYTE offsets into the UTF-8 encoding of
@@ -1463,16 +1467,7 @@ export const SEARCH_ARTIFACT_SNIPPET_MAX_BYTES = 512;
 export const searchArtifactSnippetSchema = z.object({
   lineNumber: z.number().int().positive(),
   text: z.string(),
-  ranges: z.array(
-    z
-      .object({
-        startByte: z.number().int().nonnegative(),
-        endByte: z.number().int().nonnegative(),
-      })
-      .refine((range) => range.endByte >= range.startByte, {
-        message: "endByte must not precede startByte",
-      }),
-  ),
+  ranges: z.array(searchTextPreviewRangeSchema),
 });
 export type SearchArtifactSnippet = z.infer<typeof searchArtifactSnippetSchema>;
 
