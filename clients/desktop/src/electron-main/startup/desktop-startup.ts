@@ -330,10 +330,20 @@ function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
   applyHardwareAccelerationPreference();
-  registerAppScheme();
   suppressWslKernelCoreDumps();
+  // `initCrashReporter()` must run before `registerAppScheme()`. When a
+  // Sentry DSN is configured, `SentryElectron.init()` makes its own raw
+  // `protocol.registerSchemesAsPrivileged([sentry-ipc])` call and only
+  // afterwards replaces that method with a Proxy that merges every later
+  // registration into its own. Electron keeps only the last RAW call, so
+  // registering `app` first (before Sentry) gets silently discarded -
+  // `app://renderer` loses its secure/cors/fetch privileges and becomes a
+  // non-secure context, disabling `navigator.clipboard`/`crypto.subtle` in
+  // the renderer. Registering `app` after Sentry lets its Proxy fold it in
+  // alongside `sentry-ipc`. Do not reorder these two calls.
   initCrashReporter();
   installGlobalErrorHandlers();
+  registerAppScheme();
   installProcessGoneListeners();
 
   registerDeepLinkHandling(() => deliverAuthReturnSignal(state));
