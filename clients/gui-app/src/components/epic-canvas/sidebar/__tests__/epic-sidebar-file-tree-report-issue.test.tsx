@@ -8,6 +8,7 @@ import {
   screen,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
@@ -277,6 +278,7 @@ vi.mock("@/stores/epics/artifact-read-state-store", () => ({
 vi.mock("@/stores/settings/settings-store", () => ({
   useSettingsStore: (selector: (state: unknown) => unknown) =>
     selector({
+      diffViewerPreferences: { ignoreWhitespace: false },
       artifactIconColorMode: "none",
       artifactIconColors: {
         chat: undefined,
@@ -351,9 +353,11 @@ describe("epic sidebar file-tree load failure report action", () => {
 
   it("hides the report action when the support capability is unavailable", () => {
     render(
-      <TooltipProvider>
-        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
-      </TooltipProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+        </TooltipProvider>
+      </QueryClientProvider>,
     );
 
     screen.getByText("Unable to load files.");
@@ -362,9 +366,11 @@ describe("epic sidebar file-tree load failure report action", () => {
 
   it("reports only fixed generic context, never the raw file-tree host error", () => {
     render(
-      <TooltipProvider>
-        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
-      </TooltipProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+        </TooltipProvider>
+      </QueryClientProvider>,
     );
 
     act(() => {

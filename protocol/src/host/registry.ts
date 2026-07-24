@@ -185,6 +185,7 @@ import {
   workspaceReadFileV10,
   workspaceResolvePathsByRepoIdentifiersV10,
 } from "@traycer/protocol/host/workspace/contracts";
+import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/subscribe";
 import {
   terminalCreateDowngradeV20ToV10,
   terminalCreateV10,
@@ -4452,6 +4453,19 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         // explicit in the host resolver because streams have no bridges.
         2: {
           contract: gitSubscribeStatusV12,
+        },
+      },
+    },
+  },
+  // Additive stream, deliberately absent from every released host: a client
+  // whose open is rejected as an unknown method falls back to the unary
+  // `workspace.listFileTree` snapshot (see the contract's degrade note).
+  "workspace.subscribeFileList": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceSubscribeFileListV10,
         },
       },
     },

@@ -82,7 +82,7 @@ function useFilesStepItems(
   ctx: CommandContext,
   row: WorktreeBindingSelectorRow,
 ): ReadonlyArray<CommandItem> {
-  const tree = useWorkspaceListFileTree(row.runningDir);
+  const tree = useWorkspaceListFileTree(row.runningDir, true);
   const query = usePaletteLiveQuery();
   const data = tree.data;
   return useMemo<ReadonlyArray<CommandItem>>(() => {
@@ -121,7 +121,7 @@ export function useFilesOpenerItems(
   // called unconditionally (null = disabled) to keep the hook order stable.
   const singleRow = workspaceRoots.length === 1 ? workspaceRoots[0] : null;
   const singlePath = singleRow === null ? null : singleRow.runningDir;
-  const singleTree = useWorkspaceListFileTree(singlePath);
+  const singleTree = useWorkspaceListFileTree(singlePath, true);
   const query = usePaletteLiveQuery();
   const singleData = singleTree.data;
   return useMemo<ReadonlyArray<CommandItem>>(() => {
