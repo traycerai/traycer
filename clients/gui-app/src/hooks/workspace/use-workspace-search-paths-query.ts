@@ -51,31 +51,18 @@ export function useWorkspaceSearchPaths(
   HostRpcError
 > {
   const trimmedQuery = args.query.trim();
-  const params = useMemo(
-    () => ({
-      epicId: args.epicId,
-      reference: { root: args.root ?? "" },
-      query: trimmedQuery,
-      limit: WORKSPACE_SEARCH_PATHS_LIMIT,
-      kinds: args.kinds,
-    }),
-    [args.epicId, args.root, trimmedQuery, args.kinds],
-  );
-
-  return useHostQuery<HostRpcRegistry, "workspace.searchPaths">({
-    cacheKeyIdentity: undefined,
+  const reference = useMemo(() => ({ root: args.root ?? "" }), [args.root]);
+  return useWorkspaceSearchPathsCore({
     client: args.client,
-    method: "workspace.searchPaths",
-    params,
-    options: {
-      enabled:
-        args.enabled &&
-        args.root !== null &&
-        args.root.length > 0 &&
-        trimmedQuery.length > 0,
-      staleTime: 5_000,
-      placeholderData: keepPreviousData,
-    },
+    epicId: args.epicId,
+    reference,
+    query: trimmedQuery,
+    kinds: args.kinds,
+    enabled:
+      args.enabled &&
+      args.root !== null &&
+      args.root.length > 0 &&
+      trimmedQuery.length > 0,
   });
 }
 
@@ -109,17 +96,39 @@ export function useWorkspaceSearchPathsForSource(
   ResponseOfMethod<HostRpcRegistry, "workspace.searchPaths">,
   HostRpcError
 > {
-  const trimmedQuery = args.query.trim();
   const source = args.source;
+  const fallbackSource = useMemo(() => ({ root: "" }), []);
+  return useWorkspaceSearchPathsCore({
+    client: args.client,
+    epicId: args.epicId,
+    reference: source ?? fallbackSource,
+    query: args.query,
+    kinds: args.kinds,
+    enabled: args.enabled && source !== null && isSearchableSource(source),
+  });
+}
+
+function useWorkspaceSearchPathsCore(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly epicId: string;
+  readonly reference: WorkspaceSearchSource;
+  readonly query: string;
+  readonly kinds: WorkspaceSearchPathsKindFilter;
+  readonly enabled: boolean;
+}): UseQueryResult<
+  ResponseOfMethod<HostRpcRegistry, "workspace.searchPaths">,
+  HostRpcError
+> {
+  const trimmedQuery = args.query.trim();
   const params = useMemo(
     () => ({
       epicId: args.epicId,
-      reference: source ?? { root: "" },
+      reference: args.reference,
       query: trimmedQuery,
       limit: WORKSPACE_SEARCH_PATHS_LIMIT,
       kinds: args.kinds,
     }),
-    [args.epicId, source, trimmedQuery, args.kinds],
+    [args.epicId, args.reference, trimmedQuery, args.kinds],
   );
 
   return useHostQuery<HostRpcRegistry, "workspace.searchPaths">({
@@ -128,7 +137,7 @@ export function useWorkspaceSearchPathsForSource(
     method: "workspace.searchPaths",
     params,
     options: {
-      enabled: args.enabled && source !== null && isSearchableSource(source),
+      enabled: args.enabled,
       staleTime: 5_000,
       placeholderData: keepPreviousData,
     },

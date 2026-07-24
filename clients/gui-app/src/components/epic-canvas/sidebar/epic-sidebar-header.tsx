@@ -11,7 +11,7 @@ import {
 import { type LeftPanelDefinition } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { Button } from "@/components/ui/button";
 import { ChevronRight } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import {
   useEpicLeftPanelStore,
@@ -37,9 +37,13 @@ interface PanelGroupSectionHeaderProps {
 function PanelHeaderSearchRow(props: { readonly panel: LeftPanelDefinition }) {
   const setSearchSlot = usePanelHeaderSearchStore((s) => s.setSearchSlot);
   const panelId = props.panel.id;
+  const setSlotRef = useCallback(
+    (element: HTMLDivElement | null) => setSearchSlot(panelId, element),
+    [panelId, setSearchSlot],
+  );
   return (
     <div
-      ref={(element) => setSearchSlot(panelId, element)}
+      ref={setSlotRef}
       className="flex h-9 shrink-0 items-center px-2"
       data-testid={`epic-sidebar-header-search-slot-${panelId}`}
     />

@@ -153,6 +153,13 @@ export function ArtifactPanelSearchShell(props: ArtifactPanelSearchShellProps) {
     if (region === null) return;
     if (!searchAvailable || searchOpen) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("input, textarea, [contenteditable='true']") !==
+          null
+      ) {
+        return;
+      }
       if (!isTypeToFilterKey(event)) return;
       event.preventDefault();
       openSearch(ARTIFACTS_PANEL_ID, event.key);
