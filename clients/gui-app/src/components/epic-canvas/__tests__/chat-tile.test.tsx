@@ -1667,6 +1667,13 @@ describe("<ChatTile />", () => {
   });
 
   it("toolbar changes inside an epic update that epic bucket immediately", async () => {
+    // This tile starts fresh (globalLastRunSettings stays null), so the composer
+    // seeds agentMode from the settings default. Pin it to the fixture's mode so
+    // the assertion doesn't ride on whatever the app-wide default happens to be.
+    useSettingsStore.setState({
+      defaultAgentMode: UPDATED_QUEUE_SETTINGS.agentMode,
+    });
+
     renderChatTile();
 
     await waitForChatTileLoaded();
