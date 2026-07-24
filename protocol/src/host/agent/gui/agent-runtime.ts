@@ -1036,9 +1036,12 @@ export type ErrorEvent = z.infer<typeof errorEventSchema>;
  * Stable `ErrorEvent.code` flagging a *recoverable* provider auth failure (an
  * invalid/expired/missing credential the user can fix by reconnecting). Part of
  * the wire contract: host harnesses emit it and the renderer keys on it,
- * provider-agnostic, to suppress the transcript row, mount the composer re-auth
- * banner, and restore the doomed prompt for re-send. Lives here (next to
- * `errorEventSchema`) so both sides import the one definition.
+ * provider-agnostic, to mount the composer re-auth banner and restore the
+ * doomed prompt for re-send. The error row itself renders in the transcript
+ * like any other error - it is the failure's durable record (a headless
+ * A2A-triggered turn may fail with no live subscriber, so the persisted row is
+ * the only trace). Lives here (next to `errorEventSchema`) so both sides
+ * import the one definition.
  */
 export const AUTH_ERROR_CODE = "auth";
 

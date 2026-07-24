@@ -250,8 +250,8 @@ export function titleCaseFromToken(value: string): string {
 /**
  * A provider's plan/tier label, where one is fetched - the header popover
  * shows this as a chip next to the provider name (Core Flows: "where the
- * provider reports one"). Only Codex (`planType`) and Claude Code
- * (`subscriptionType`) currently report a plan/tier; OpenRouter and Kilo Code
+ * provider reports one"). Codex (`planType`), Claude Code (`subscriptionType`),
+ * and Grok (`subscriptionTier`) report a plan/tier; OpenRouter and Kilo Code
  * have no analogous field, so they always resolve to `null` and render no chip.
  */
 export function resolveProviderPlanLabel(
@@ -264,6 +264,12 @@ export function resolveProviderPlanLabel(
       return data.subscriptionType !== null
         ? titleCaseFromToken(data.subscriptionType)
         : null;
+    // Grok reports a branded, display-ready tier token ("SuperGrok",
+    // "SuperGrok Heavy"), not a SNAKE_CASE enum - so it's shown verbatim
+    // rather than through `titleCaseFromToken`, which would lower-case the
+    // intra-word capital ("Supergrok").
+    case "grok":
+      return data.subscriptionTier;
     case "openrouter":
     case "kilocode":
       return null;

@@ -2,13 +2,20 @@ import { Bot } from "lucide-react";
 import { useCallback } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   useEpicArtifactRecords,
+  useEpicChatHarnessId,
+  useMaybeEpicTuiAgentHarnessId,
   useOpenEpicId,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
+
+type AgentTreeRecord = EpicTreeRecord & {
+  readonly type: "chat" | "terminal-agent";
+};
 
 export function AgentReferenceChip(props: {
   readonly agentId: string;
@@ -17,7 +24,7 @@ export function AgentReferenceChip(props: {
   const records = useEpicArtifactRecords();
   const epicId = useOpenEpicId();
   const agent = records.find(
-    (record) =>
+    (record): record is AgentTreeRecord =>
       record.id === props.agentId &&
       (record.type === "chat" || record.type === "terminal-agent"),
   );
@@ -39,10 +46,13 @@ export function AgentReferenceChip(props: {
 }
 
 function AgentReferenceButton(props: {
-  readonly agent: EpicTreeRecord;
+  readonly agent: AgentTreeRecord;
   readonly epicId: string;
 }) {
   const tileNavigation = useEpicTileNavigation();
+  const chatHarnessId = useEpicChatHarnessId(props.agent.id);
+  const tuiHarnessId = useMaybeEpicTuiAgentHarnessId(props.agent.id);
+  const harnessId = chatHarnessId ?? tuiHarnessId;
   const openAgent = useCallback(() => {
     tileNavigation.openTileInEpic(props.epicId, {
       id: props.agent.id,
@@ -66,7 +76,11 @@ function AgentReferenceButton(props: {
       // prose, so a drag across it must not append its label as quoted text.
       data-quote-exclude=""
     >
-      <Bot className="size-3 shrink-0" aria-hidden />
+      {harnessId === null ? (
+        <Bot className="size-3 shrink-0" aria-hidden />
+      ) : (
+        <HarnessIcon harnessId={harnessId} className="size-3 shrink-0" />
+      )}
       <span className="truncate">{props.agent.name}</span>
     </button>
   );

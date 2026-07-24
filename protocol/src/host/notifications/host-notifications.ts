@@ -270,6 +270,46 @@ export type HostNotificationsMarkReadResponse = z.infer<
   typeof hostNotificationsMarkReadResponseSchema
 >;
 
+/**
+ * Explicit dismiss of unresolved `needs_action` rows (the blocking Attention
+ * tier - approvals/interviews). Unlike `markRead`, this stamps `resolvedAt`,
+ * which is the only thing that removes a `needs_action` row from Attention
+ * (its membership is keyed on `resolvedAt`, not `readAt`). The underlying
+ * interview/approval question is left open on the agent side; the host only
+ * clears the row from the user's Attention view. Rows already resolved (or
+ * that were never `needs_action`) are a no-op.
+ *
+ * Each target is an immutable OCCURRENCE token `(id, updatedAt, sourceRef)`,
+ * not a bare id. Approval/interview row ids are stable per chat
+ * (`approval.requested:<chatId>`), so a bare id would let an in-flight dismiss
+ * of an old prompt resolve a NEWER prompt that reopened the same row. The host
+ * guards the write on all three fields and no-ops when the occurrence has moved
+ * on. `sourceRef` (the approval/interview id) is required alongside `updatedAt`
+ * because prompt timestamps are millisecond `Date.now()` and a later occurrence
+ * can reopen the row with an EQUAL `updatedAt` but a different `sourceRef`;
+ * `updatedAt` alone would still match. `sourceRef` is nullable and matched
+ * NULL-safely (a null token only matches a null-sourceRef row).
+ */
+export const hostNotificationsResolveRequestSchema = z.object({
+  occurrences: z
+    .array(
+      z.object({
+        id: z.string(),
+        updatedAt: z.number().int().nonnegative(),
+        sourceRef: z.string().nullable(),
+      }),
+    )
+    .min(1),
+});
+export type HostNotificationsResolveRequest = z.infer<
+  typeof hostNotificationsResolveRequestSchema
+>;
+
+export const hostNotificationsResolveResponseSchema = z.object({});
+export type HostNotificationsResolveResponse = z.infer<
+  typeof hostNotificationsResolveResponseSchema
+>;
+
 export const hostNotificationsMarkAllReadRequestSchema = z.object({
   beforeUpdatedAt: z.number().int().nonnegative(),
 });
@@ -648,6 +688,13 @@ export const hostNotificationsMarkRead = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: hostNotificationsMarkReadRequestSchema,
   responseSchema: hostNotificationsMarkReadResponseSchema,
+});
+
+export const hostNotificationsResolve = defineRpcContract({
+  method: "host.notifications.resolve",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostNotificationsResolveRequestSchema,
+  responseSchema: hostNotificationsResolveResponseSchema,
 });
 
 export const hostNotificationsMarkAllRead = defineRpcContract({

@@ -245,18 +245,22 @@ describe("useEpicArchiveChat", () => {
     expect(toast.error).toHaveBeenCalledTimes(1);
   });
 
-  it("toasts for E_HOST_UNSUPPORTED like any other failure", () => {
+  it("surfaces E_HOST_UNSUPPORTED with the host-upgrade toast", () => {
     renderHook(() => useEpicArchiveChat());
     const opts = getCapturedMutation("epic.setChatArchived").options as {
       onError: (e: HostRpcError) => void;
     };
     opts.onError(makeError("E_HOST_UNSUPPORTED"));
     // Archive is user-initiated, so it follows the FOREGROUND convention:
-    // `toastFromHostError` reports every failure, and only the background
-    // helper swallows capability gaps (there is nobody to inform for work
-    // nobody asked for). Silence here would read as a broken button. The
-    // capability gate keeps this path cold - reaching it means the host
-    // changed under a live session, which is worth surfacing.
-    expect(toast.error).toHaveBeenCalledWith("Couldn't archive agent.");
+    // `toastFromHostError` reports the failure rather than swallowing it (only
+    // the background helper swallows capability gaps, since nobody asked for
+    // that work). Silence here would read as a broken button. The capability
+    // gate keeps this path cold - reaching it means the host changed under a
+    // live session. `toastFromHostError` maps E_HOST_UNSUPPORTED to a specific
+    // host-upgrade message (a version gap, not a failed archive), which is the
+    // right actionable copy for this exact case, so the fallback never shows.
+    expect(toast.error).toHaveBeenCalledWith(
+      "This needs a newer Traycer host. Update the host to continue.",
+    );
   });
 });

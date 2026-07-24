@@ -1356,6 +1356,52 @@ describe("<RateLimitPopover /> rail", () => {
     expect(document.querySelectorAll('[class*="bg-border/70"]').length).toBe(1);
   });
 
+  it("wraps an ambient (profile-less) provider's block in the same card codex/claude profiles use, in both tabs", () => {
+    // Design-language fix: grok/openrouter/kilocode render via the
+    // profile-less block, which used to float flat while codex/claude's
+    // per-profile rows sat in a `rounded-lg border ... bg-background/40 p-2`
+    // card. The ambient block now reuses that exact card container so every
+    // provider's usage sits inside a card - in Overview and the detail tab.
+    mocks.configured = [
+      { providerId: "grok", lane: "ephemeralProcess", profiles: undefined },
+    ];
+    mocks.results = {
+      grok: readyResult({
+        provider: "grok",
+        available: true,
+        subscriptionTier: "SuperGrok",
+        periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+        periodStart: NOW,
+        periodEnd: NOW + 7 * 24 * 60 * 60 * 1000,
+        period: {
+          usedPercent: 12,
+          resetsAt: NOW + 7 * 24 * 60 * 60 * 1000,
+          durationMinutes: 10_080,
+        },
+        monthlyLimit: null,
+        onDemandCap: null,
+        onDemandUsed: null,
+        prepaidBalance: 25,
+      }),
+    };
+    renderPopover();
+    // Overview: the block's own name+body sits inside the shared card.
+    const overviewCard = screen
+      .getByText("Grok")
+      .closest('[class*="bg-background/40"]');
+    expect(overviewCard).toBeTruthy();
+    expect(overviewCard?.className).toContain("rounded-lg");
+    expect(overviewCard?.className).toContain("border-border/60");
+    // Detail tab: same card container.
+    fireEvent.click(screen.getByRole("tab", { name: "Grok" }));
+    const detailCard = screen
+      .getByText("Grok")
+      .closest('[class*="bg-background/40"]');
+    expect(detailCard).toBeTruthy();
+    expect(detailCard?.className).toContain("rounded-lg");
+    expect(detailCard?.className).toContain("border-border/60");
+  });
+
   it("switches to a single provider detail (with plan label) on tab click", () => {
     mocks.configured = [
       { providerId: "codex", lane: "ephemeralProcess", profiles: undefined },

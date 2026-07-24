@@ -5,7 +5,7 @@ import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/sta
 import { log } from "../app/logger";
 import { prereleaseUpdatesEnabled } from "../app/update-preferences";
 import {
-  hasPendingLoginItemRevision,
+  hasUnappliedPendingLoginItemRevision,
   hostManagesHostLoginItem,
   readHostLoginItemStatus,
   registerHostLoginItem,
@@ -795,11 +795,26 @@ export class HostController {
 
   private setMutationProgress(progress: MutationProgress): void {
     if (this.mutationStatus === null) return;
-    this.mutationStatus = { ...this.mutationStatus, progress };
+    // Mi-1: carry the last concrete percent/bytes/totalBytes forward so a bare
+    // heartbeat (an event that omits them) holds the bar instead of blanking
+    // it; stage/message still track the incoming event so a genuine stage
+    // transition is honored. A later event with real numbers overrides.
+    const prior = this.mutationStatus.progress;
+    const merged: MutationProgress =
+      prior === null
+        ? progress
+        : {
+            stage: progress.stage,
+            percent: progress.percent ?? prior.percent,
+            bytes: progress.bytes ?? prior.bytes,
+            totalBytes: progress.totalBytes ?? prior.totalBytes,
+            message: progress.message,
+          };
+    this.mutationStatus = { ...this.mutationStatus, progress: merged };
     this.publishMutationStatus();
     for (const listener of this.progressListeners) {
       try {
-        listener(progress);
+        listener(merged);
       } catch (err) {
         log.warn("[host-controller] mutation progress listener threw", {
           err: describeError(err),
@@ -1114,6 +1129,24 @@ export class HostController {
         }
         const prePid =
           (await readRunningHostIdentity(this.layout))?.pid ?? null;
+        // Mo-A (finding): a live host + `requires-approval` makes this cycle
+        // both futile and destructive - `registerHostLoginItem` leads with an
+        // unconditional bootout that kills the healthy host, then cannot
+        // re-enable the agent (only the user can approve it in System
+        // Settings). Fail fast BEFORE the bootout and leave the running host
+        // untouched. Mirrors the pending-revision preflight; scoped to
+        // `prePid !== null` so a cycle with nothing running still proceeds
+        // (its bootout is a harmless no-op and the post-register status
+        // handling below reports the approval requirement).
+        if (
+          prePid !== null &&
+          readHostLoginItemStatus() === "requires-approval"
+        ) {
+          return {
+            phase: "terminal",
+            outcome: { kind: "failed", message: approvalRequiredMessage() },
+          };
+        }
         const expectedGeneration =
           record.runtimeVersion === null
             ? attestedInstallGenerationFromDisk(record)
@@ -1301,7 +1334,8 @@ export class HostController {
     );
     if (currentVersion === null) return null;
     if (this.pendingRevisionRefreshQuarantined) return null;
-    if (!(await hasPendingLoginItemRevision(this.environment))) return null;
+    if (!(await hasUnappliedPendingLoginItemRevision(this.environment)))
+      return null;
     if ((await probeHostBusyVerdict(this.layout)) !== "idle") {
       log.debug(
         "[host-controller] pending LaunchAgent revision deferred - host busy",
@@ -1372,7 +1406,7 @@ export class HostController {
         // the install record above. Catches the marker resolving through
         // any OTHER path between the pre-lock check and acquisition, not
         // just the specific race the coalescing gate closes.
-        if (!(await hasPendingLoginItemRevision(this.environment))) {
+        if (!(await hasUnappliedPendingLoginItemRevision(this.environment))) {
           return {
             status: "no-longer-pending" as const,
             prePid,
@@ -1918,12 +1952,21 @@ export class HostController {
           onEvent: (event) => {
             if (event.type !== "progress" || this.downloadStatus === null)
               return;
+            // Mi-1: the download watchdog (finding H) emits bare heartbeats -
+            // progress events with all-null percent/bytes during a network
+            // stall - purely to prove liveness. Projecting those verbatim
+            // blanks an already-shown progress bar (e.g. 60% -> nothing -> 60%);
+            // carry the last concrete value forward so a heartbeat holds the
+            // bar and only a real number moves it.
+            const priorDownloadProgress = this.downloadStatus.progress;
             this.downloadStatus = {
               ...this.downloadStatus,
               progress: {
-                percent: event.percent,
-                bytes: event.bytes,
-                totalBytes: event.totalBytes,
+                percent:
+                  event.percent ?? priorDownloadProgress?.percent ?? null,
+                bytes: event.bytes ?? priorDownloadProgress?.bytes ?? null,
+                totalBytes:
+                  event.totalBytes ?? priorDownloadProgress?.totalBytes ?? null,
               },
             };
           },

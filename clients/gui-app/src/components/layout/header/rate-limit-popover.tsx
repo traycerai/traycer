@@ -1285,7 +1285,13 @@ function SingleProfileRateLimitProviderBlock({
       : null;
 
   return (
-    <div className="flex flex-col gap-2">
+    // Ambient (profile-less) providers - grok, openrouter, kilocode - reuse the
+    // exact per-profile card container `RateLimitProviderProfileRow` gives
+    // codex/claude, so every provider's usage sits inside the same card in both
+    // popover tabs (the header+body flat block otherwise floated loose against
+    // the sibling cards - the design-language gap the user flagged). Overview
+    // keeps its between-provider dividers; this cards each block's own content.
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           {/* Overview stacks every provider's block in one scrollable list with

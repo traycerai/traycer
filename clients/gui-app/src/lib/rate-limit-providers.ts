@@ -84,6 +84,11 @@ export function rateLimitFetchLane(
       return "httpFetch";
     case "codex":
     case "claude-code":
+    case "grok":
+      // Grok reads usage over the vendored CLI's own `_x.ai/billing` ACP
+      // extension (a subprocess RPC, so Traycer never touches the grok OAuth
+      // token) - an ephemeral spawn like codex/claude-code, despite grok's
+      // credit-shaped payload resembling the httpFetch providers'.
       return "ephemeralProcess";
   }
 }

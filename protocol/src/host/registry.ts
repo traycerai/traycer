@@ -116,11 +116,15 @@ import {
   hostGetRateLimitUsageV12,
   hostGetRateLimitUsageV20,
   hostGetRateLimitUsageV21,
+  hostGetRateLimitUsageV30,
   hostGetRateLimitUsageUpgradeV10ToV11,
   hostGetRateLimitUsageUpgradeV11ToV12,
   hostGetRateLimitUsageUpgradeV12ToV20,
   hostGetRateLimitUsageUpgradeV20ToV21,
+  hostGetRateLimitUsageUpgradeV21ToV30,
   hostGetRateLimitUsageDowngradeV2ToV1,
+  hostGetRateLimitUsageDowngradeV3ToV2,
+  hostGetRateLimitUsageDowngradeV3ToV1,
   providersConsumeRateLimitResetCreditV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
@@ -214,6 +218,7 @@ import {
   hostNotificationsListV20,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
+  hostNotificationsResolve,
   hostNotificationsSetConfig,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsSubscribeV10,
@@ -2187,6 +2192,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: { 1: hostGetRateLimitUsageDowngradeV2ToV1 },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostGetRateLimitUsageV30,
+          upgradeFromPreviousVersion: hostGetRateLimitUsageUpgradeV21ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        2: hostGetRateLimitUsageDowngradeV3ToV2,
+        1: hostGetRateLimitUsageDowngradeV3ToV1,
+      },
+    },
   },
   "providers.consumeRateLimitResetCredit": {
     degrade: { kind: "unsupported" },
@@ -2298,6 +2316,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: hostNotificationsMarkRead,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.resolve": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsResolve,
           upgradeFromPreviousVersion: null,
         },
       },

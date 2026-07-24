@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -167,6 +168,7 @@ const {
   readHostLoginItemStatus,
   runLaunchctlBootout,
   hasPendingLoginItemRevision,
+  hasUnappliedPendingLoginItemRevision,
 } = await import("../host-login-item");
 
 // `registerHostLoginItem` clears the pending-login-item-revision marker via
@@ -551,5 +553,65 @@ describe("hasPendingLoginItemRevision", () => {
     writePendingRevisionMarker();
 
     await expect(hasPendingLoginItemRevision("production")).resolves.toBe(true);
+  });
+});
+
+// M-B: `hasUnappliedPendingLoginItemRevision` is the re-cycle gate the
+// HostController actually consults. It differs from the raw existence check
+// above only when a successful apply could not delete its marker (best-effort
+// unlink failed): that lingering marker must read as "already applied" so the
+// controller does not re-run the disruptive SMAppService cycle forever, while a
+// genuinely newer revision (rewritten marker -> newer mtime) still re-arms.
+describe("hasUnappliedPendingLoginItemRevision (M-B)", () => {
+  it("is false when no marker exists", async () => {
+    await expect(
+      hasUnappliedPendingLoginItemRevision("production"),
+    ).resolves.toBe(false);
+  });
+
+  it("is true for a freshly written marker this process has not applied", async () => {
+    writePendingRevisionMarker();
+    await expect(
+      hasUnappliedPendingLoginItemRevision("production"),
+    ).resolves.toBe(true);
+  });
+
+  it("is false again after a successful register cycle deletes the marker", async () => {
+    writePendingRevisionMarker();
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
+    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
+
+    await registerHostLoginItem(undefined);
+
+    await expect(
+      hasUnappliedPendingLoginItemRevision("production"),
+    ).resolves.toBe(false);
+  });
+
+  it("treats a marker whose clear FAILED as already-applied, but re-arms for a newer revision", async () => {
+    writePendingRevisionMarker();
+    const markerDir = join(workHome, ".traycer", "host");
+    // A read-only parent dir makes the marker's `rm` (and only that) fail, so
+    // the register cycle applies the revision but leaves the marker on disk -
+    // the exact best-effort-clear-failed condition M-B guards.
+    chmodSync(markerDir, 0o555);
+    getLoginItemSettings.mockReturnValueOnce({ status: "not-registered" });
+    getLoginItemSettings.mockReturnValueOnce({ status: "enabled" });
+    await registerHostLoginItem(undefined);
+    chmodSync(markerDir, 0o755);
+
+    // The marker is still on disk, but it was applied by the cycle above -
+    // suppressed, so no redundant disruptive re-cycle.
+    await expect(
+      hasUnappliedPendingLoginItemRevision("production"),
+    ).resolves.toBe(false);
+
+    // A genuinely newer revision (installer rewrites the marker -> newer mtime)
+    // re-arms and applies normally.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    writePendingRevisionMarker();
+    await expect(
+      hasUnappliedPendingLoginItemRevision("production"),
+    ).resolves.toBe(true);
   });
 });

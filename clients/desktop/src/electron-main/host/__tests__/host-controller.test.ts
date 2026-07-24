@@ -71,7 +71,7 @@ vi.mock("../../app/host-login-item", () => ({
   hostManagesHostLoginItem: vi.fn(async () => false),
   registerHostLoginItem: vi.fn(async () => "enabled"),
   unregisterHostLoginItem: vi.fn(async () => undefined),
-  hasPendingLoginItemRevision: vi.fn(async () => false),
+  hasUnappliedPendingLoginItemRevision: vi.fn(async () => false),
   readHostLoginItemStatus: vi.fn(() => "enabled"),
 }));
 
@@ -109,7 +109,7 @@ import {
 } from "../../cli/traycer-cli";
 import { prereleaseUpdatesEnabled } from "../../app/update-preferences";
 import {
-  hasPendingLoginItemRevision,
+  hasUnappliedPendingLoginItemRevision,
   hostManagesHostLoginItem,
   readHostLoginItemStatus,
   registerHostLoginItem,
@@ -171,7 +171,7 @@ beforeEach(() => {
     startedAt: "2026-01-01T00:00:00.000Z",
     reason: "ready",
   });
-  vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(false);
+  vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
   vi.mocked(readHostLoginItemStatus).mockReturnValue("enabled");
   vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
   vi.mocked(unregisterHostLoginItem).mockResolvedValue(undefined);
@@ -663,6 +663,108 @@ describe("mutation lane: wait-never-reject", () => {
     ]);
     expect(progresses).toEqual([
       expect.objectContaining({ stage: "apply", percent: 50 }),
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v1.1.7 update-flow review findings re-derived onto the HostController:
+//   Mo-A - a live host + `requires-approval` must not be booted out for a
+//          futile register cycle (only the user can approve the login item).
+//   Mi-1 - a bare progress heartbeat must hold the last concrete numbers
+//          instead of blanking the progress bar to null.
+// ---------------------------------------------------------------------------
+describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-forward", () => {
+  it("Mo-A: a running host + requires-approval fails fast with the approval message and never boots the healthy host out", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind === "failed") {
+      expect(outcome.message).toContain("disabled by macOS");
+    }
+    // The preflight fires before `registerHostLoginItem`'s leading bootout, so
+    // the healthy host is left running rather than killed by a cycle that
+    // could never re-enable it.
+    expect(registerHostLoginItem).not.toHaveBeenCalled();
+  });
+
+  it("Mi-1: a bare progress heartbeat holds the last concrete percent/bytes instead of blanking the bar", async () => {
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    const progresses: MutationProgress[] = [];
+    const unsubscribeProgress = controller.onMutationProgress((p) => {
+      progresses.push(p);
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      opts.onEvent({
+        type: "progress",
+        stage: "apply",
+        percent: 50,
+        bytes: 50,
+        totalBytes: 100,
+        message: "applying",
+      });
+      // A watchdog heartbeat: liveness only, every numeric field null.
+      opts.onEvent({
+        type: "progress",
+        stage: "apply",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: null,
+      });
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: null,
+        },
+      };
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+    unsubscribeProgress();
+
+    expect(outcome.kind).toBe("ok");
+    // The heartbeat carried the prior 50%/50/100 forward rather than nulling it.
+    expect(progresses).toEqual([
+      expect.objectContaining({
+        stage: "apply",
+        percent: 50,
+        bytes: 50,
+        totalBytes: 100,
+      }),
+      expect.objectContaining({
+        stage: "apply",
+        percent: 50,
+        bytes: 50,
+        totalBytes: 100,
+      }),
     ]);
   });
 });
@@ -3639,7 +3741,7 @@ describe("Windows bundled-host --from fallback", () => {
 // Fixup C3: the comment this replaces claimed the deleted
 // `pending-login-item-revision-monitor.test.ts`'s "mutual exclusion with a
 // concurrent renderer-triggered ensure" coverage was folded in here - it was
-// not. Every collaborator below (`hasPendingLoginItemRevision`,
+// not. Every collaborator below (`hasUnappliedPendingLoginItemRevision`,
 // `registerHostLoginItem`, `readHostLoginItemStatus`, `waitForHostReady`) is
 // mocked, and every test drives exactly one caller. The old suite proved
 // TWO concurrent callers (the monitor's tick + a renderer-triggered
@@ -3658,14 +3760,14 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     const controller = newController("production");
     removePidMetadata("production");
     expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
-    expect(hasPendingLoginItemRevision).not.toHaveBeenCalled();
+    expect(hasUnappliedPendingLoginItemRevision).not.toHaveBeenCalled();
   });
 
   it("returns null when there is no pending revision marker", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(false);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(false);
     expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
   });
@@ -3678,7 +3780,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       pid: process.pid,
       websocketUrl: "ws://127.0.0.1:55555/rpc",
     });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
     expect(await controller.applyPendingLoginItemRevisionIfIdle()).toBeNull();
     expect(registerHostLoginItem).not.toHaveBeenCalled();
@@ -3688,7 +3790,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
 
     const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
@@ -3717,7 +3819,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("requires-approval");
 
     const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
@@ -3742,7 +3844,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-registered");
 
     const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
@@ -3779,7 +3881,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
     vi.mocked(waitForHostReady).mockResolvedValueOnce({
       ready: false,
@@ -3829,7 +3931,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
@@ -3868,7 +3970,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValueOnce("deferred-busy");
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
@@ -3898,7 +4000,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
@@ -3924,7 +4026,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("removed-by-user");
 
     const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
@@ -3957,7 +4059,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       archiveSha256: "a".repeat(64),
       version: "1.7.0",
     });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     // Simulate a terminal bytes-only install (B) completing WHILE this
     // cycle is mid-registerHostLoginItem (called from inside the desktop
     // lock) - the on-disk install record changes out from under this cycle
@@ -4009,7 +4111,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
@@ -4039,7 +4141,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     // out from under it (a concurrent terminal uninstall) is exactly the
     // race this fixup closes.
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
 
     const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
 
@@ -4060,7 +4162,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     const registerGate = deferred<"enabled">();
     let registerCalled = false;
     vi.mocked(registerHostLoginItem).mockImplementation(async () => {
@@ -4133,7 +4235,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("enabled");
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
@@ -4158,7 +4260,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
 
     // The slot clears once settled - a later, independent call can still
     // run its own cycle rather than being stuck joined forever.
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     const third = await controller.applyPendingLoginItemRevisionIfIdle();
     expect(third).toEqual(expected);
     expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
@@ -4175,7 +4277,7 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     const registerGate = deferred<"requires-approval">();
     let registerCalled = false;
     vi.mocked(registerHostLoginItem).mockImplementation(async () => {
@@ -4241,12 +4343,14 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     let hasPendingCallCount = 0;
-    vi.mocked(hasPendingLoginItemRevision).mockImplementation(async () => {
-      hasPendingCallCount += 1;
-      // First call: the pre-lock check (still pending). Second call: the
-      // defense-in-depth reread inside the locked closure (resolved).
-      return hasPendingCallCount === 1;
-    });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockImplementation(
+      async () => {
+        hasPendingCallCount += 1;
+        // First call: the pre-lock check (still pending). Second call: the
+        // defense-in-depth reread inside the locked closure (resolved).
+        return hasPendingCallCount === 1;
+      },
+    );
 
     const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
 
@@ -4495,7 +4599,7 @@ describe("hostLifecycle wiring on success (fixup C2)", () => {
       runtimeVersion: "1.7.0",
     });
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
-    vi.mocked(hasPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(waitForHostReady).mockResolvedValue({
       ready: true,
       version: "1.7.0",

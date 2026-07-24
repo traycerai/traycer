@@ -237,6 +237,17 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
                 bytes: downloadedBytes,
                 totalBytes,
               }),
+            onHeartbeat: (heartbeat) =>
+              ctx.progress({
+                stage: `registry-cli-${heartbeat.phase}`,
+                message:
+                  heartbeat.phase === "watchdog"
+                    ? "CLI download stalled; retrying"
+                    : `CLI download ${heartbeat.phase} ${heartbeat.attempt}/${heartbeat.maxAttempts}`,
+                percent: null,
+                bytes: heartbeat.attempt,
+                totalBytes: heartbeat.maxAttempts,
+              }),
             signal: null,
           });
         } catch (cause) {

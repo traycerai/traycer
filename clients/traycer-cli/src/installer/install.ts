@@ -681,7 +681,10 @@ interface StageRegistryOptions {
 
 async function stageRegistry(opts: StageRegistryOptions): Promise<StageResult> {
   const logger = createCliLogger(opts.environment);
-  const client = await createDefaultRegistryClient(opts.environment);
+  const client = await createDefaultRegistryClient(
+    opts.environment,
+    opts.onProgress,
+  );
   const platformKey = currentHostPlatformKey();
   logger.info("Host install resolving registry asset", {
     environment: opts.environment,

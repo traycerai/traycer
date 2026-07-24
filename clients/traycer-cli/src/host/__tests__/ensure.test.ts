@@ -94,6 +94,7 @@ const {
 import { ensureHost, type EnsureHostOptions } from "../ensure";
 import { config } from "../../config";
 import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
+import type { ServiceController } from "../../service";
 
 function makeRuntime(): RuntimeContext {
   return {
@@ -121,7 +122,9 @@ function makeOpts(overrides: Partial<EnsureHostOptions>): EnsureHostOptions {
   };
 }
 
-function makeController(state: "running" | "stopped" | "not-installed") {
+function makeController(
+  state: "running" | "stopped" | "not-installed",
+): ServiceController {
   let current = state;
   return {
     status: vi.fn(async () => ({
@@ -263,6 +266,123 @@ describe("ensureHost", () => {
       postSwapAction: "start",
       postSwapError: null,
     });
+  });
+
+  it("escalate-once: install's own recovery run is accepted without a duplicate IgnoreNew start", async () => {
+    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+    const controller = makeController("stopped");
+    let startCalls = 0;
+    let recovered = false;
+    controller.start = vi.fn(async () => {
+      startCalls += 1;
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "schtasks /Run accepted but no spawn evidence",
+        details: { lastRunResult: "0x1" },
+        exitCode: 1,
+      });
+    });
+    // Windows install recreates the task and issues its own verified `/Run`.
+    // A second `/Run` would be suppressed by IgnoreNew and incorrectly fail.
+    controller.install = vi.fn(async () => {
+      recovered = true;
+    });
+    // Fast-path + locked recheck both need registered+stopped; only the
+    // post-recovery status probe reports running.
+    controller.status = vi.fn(async () => {
+      if (!recovered) {
+        return {
+          state: "stopped" as const,
+          version: null,
+          listenUrl: null,
+          pid: null,
+        };
+      }
+      return {
+        state: "running" as const,
+        version: "1.5.0",
+        listenUrl: "ws://127.0.0.1:7100/rpc",
+        pid: 4242,
+      };
+    });
+    createServiceControllerMock.mockReturnValue(controller);
+
+    const result = await ensureHost(makeOpts({}));
+
+    expect(result.action).toBe("started");
+    expect(result.running).toBe(true);
+    expect(controller.start).toHaveBeenCalledTimes(1);
+    expect(controller.install).toHaveBeenCalledTimes(1);
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("escalate-once: failed install launch gets one verified retry, then reports its honest retry error", async () => {
+    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+    const controller = makeController("stopped");
+    const startError = cliError({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: "still no spawn evidence after rewrite",
+      details: { lastRunResult: "0x41301" },
+      exitCode: 1,
+    });
+    controller.start = vi.fn(async () => {
+      throw startError;
+    });
+    controller.install = vi.fn(async () => {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "recreated task but initial /Run was rejected",
+        details: null,
+        exitCode: 1,
+      });
+    });
+    controller.status = vi.fn(async () => ({
+      state: "stopped" as const,
+      version: null,
+      listenUrl: null,
+      pid: null,
+    }));
+    createServiceControllerMock.mockReturnValue(controller);
+
+    await expect(ensureHost(makeOpts({}))).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: "still no spawn evidence after rewrite",
+    });
+    expect(controller.start).toHaveBeenCalledTimes(2);
+    expect(controller.install).toHaveBeenCalledTimes(1);
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failed task-definition rewrite instead of retrying the stale task", async () => {
+    readHostInstallRecordMock.mockResolvedValue({ version: "1.5.0" });
+    const controller = makeController("stopped");
+    controller.start = vi.fn(async () => {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "old task never published spawn evidence",
+        details: null,
+        exitCode: 1,
+      });
+    });
+    controller.install = vi.fn(async () => {
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: "schtasks /Create /F rejected the rewritten definition",
+        details: null,
+        exitCode: 1,
+      });
+    });
+    createServiceControllerMock.mockReturnValue(controller);
+
+    await expect(ensureHost(makeOpts({}))).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: "schtasks /Create /F rejected the rewritten definition",
+    });
+    // Starting again here could succeed only because the stale task remains
+    // registered, falsely reporting a repair that never rewrote anything.
+    expect(controller.start).toHaveBeenCalledTimes(1);
+    expect(controller.install).toHaveBeenCalledTimes(1);
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
   });
 
   it("registers the service when installed but not registered (no download), and attests the current record's generation", async () => {

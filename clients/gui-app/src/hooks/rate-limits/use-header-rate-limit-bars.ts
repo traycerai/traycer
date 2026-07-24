@@ -76,10 +76,12 @@ function fiveHourWindow(
       return rateLimits.primary;
     case "claude-code":
       return rateLimits.fiveHour;
-    // OpenRouter/Kilo Code are never queried for a glyph slot; kept for
-    // exhaustiveness over the union.
+    // OpenRouter/Kilo Code/Grok are never queried for a glyph slot (grok stays
+    // out of `GLYPH_PROVIDER_IDS` - its billing period isn't a short rolling
+    // window); kept for exhaustiveness over the union.
     case "openrouter":
     case "kilocode":
+    case "grok":
       return null;
   }
 }
@@ -96,6 +98,7 @@ function weeklyWindow(
       return rateLimits.sevenDay;
     case "openrouter":
     case "kilocode":
+    case "grok":
       return null;
   }
 }

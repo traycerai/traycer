@@ -67,6 +67,8 @@ declare module "@tiptap/core" {
       insertImageAttachment: (attrs: ImageAttachmentAttrs) => ReturnType;
       // eslint-disable-next-line no-restricted-syntax
       removeImageAttachmentById: (id: string) => ReturnType;
+      // eslint-disable-next-line no-restricted-syntax
+      rewriteImageAttachmentHashById: (id: string, hash: string) => ReturnType;
     };
   }
 }
@@ -156,6 +158,34 @@ export const ImageAttachmentNode = TiptapNode.create({
           } else {
             tr.delete(match.pos, match.pos + match.size);
           }
+          if (dispatch) dispatch(tr);
+          return true;
+        },
+      rewriteImageAttachmentHashById:
+        (id, hash) =>
+        ({ tr, state, dispatch }) => {
+          const matches: Array<{
+            readonly pos: number;
+            readonly attrs: Record<string, unknown>;
+          }> = [];
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== "imageAttachment") return true;
+            if (node.attrs.id !== id) return false;
+            matches.push({ pos, attrs: node.attrs });
+            return false;
+          });
+          if (matches.length === 0) return false;
+          const match = matches[0];
+          // Flip a pending b64 image node to its stored content hash IN PLACE:
+          // `setNodeMarkup` rewrites the attrs while preserving the node's exact
+          // position (no re-insert, no mapping, caret untouched). This is what
+          // lets the paste insert full content in document order and convert each
+          // image's payload once its background hash+store job resolves.
+          tr.setNodeMarkup(match.pos, undefined, {
+            ...match.attrs,
+            hash,
+            b64content: null,
+          });
           if (dispatch) dispatch(tr);
           return true;
         },

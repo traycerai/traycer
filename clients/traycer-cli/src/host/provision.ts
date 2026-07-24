@@ -24,6 +24,12 @@ import {
   createServiceInstallLifecycle,
 } from "../service/install-lifecycle";
 import { withCliLock } from "../store/cli-lock";
+import {
+  createRegistryYankLookup,
+  type RegistryYankLookup,
+} from "../registry/client";
+import { compareHostVersions } from "@traycer-clients/shared/host-version/compare-host-versions";
+import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { assertHostNotBusy } from "./busy-check";
 
 // The single host-provisioning core shared by `host ensure` (the
@@ -34,7 +40,8 @@ import { assertHostNotBusy } from "./busy-check";
 //
 // Source resolution and idempotency policy differ per caller, so both are
 // injected: `resolveInstallSource` is only invoked on the install branch,
-// and `targetVersion` (null = presence-based) controls the fast no-op.
+// and `satisfaction` (presence / exact / implicit-registry-minimum, finding
+// D) controls the fast no-op.
 
 export type HostProvisionAction =
   "noop" | "installed" | "service-registered" | "started";
@@ -82,20 +89,30 @@ export interface HostProvisionResult {
   readonly installGeneration: string | null;
 }
 
+// The installed-version predicate for a provisioning run (RCA finding D).
+// Local files and an explicit `--release` request demand an exact match;
+// the build-stamped registry default accepts an installed version NEWER
+// than the target (a host updated out-of-band must not be downgraded back
+// to the stamped build), yank-checked against the manifest and fail-open.
+export type HostSatisfactionPolicy =
+  | { readonly kind: "presence" }
+  | { readonly kind: "exact"; readonly version: string }
+  | { readonly kind: "implicit-registry-minimum"; readonly version: string };
+
 export interface ProvisionHostOptions {
   readonly runtime: RuntimeContext;
   // Invoked only when an install is actually required.
   readonly resolveInstallSource: () => Promise<InstallSourceArg>;
-  // The idempotency key. A concrete value re-installs whenever the install
-  // record's version differs; `null` falls back to presence-only. The
-  // bundled-host callers pass this build's `config.version` so a rebuilt
-  // (same-channel) host is detected and replaced even though there is no
-  // semver bump. A registry `--release <semver>` passes that semver.
-  readonly targetVersion: string | null;
+  // The idempotency predicate. `exact`/`presence` behave like the old
+  // `targetVersion` concrete/`null`; the bundled-host callers pass this
+  // build's `config.version` as `exact` so a rebuilt (same-channel) host is
+  // detected and replaced even without a semver bump. The registry default
+  // uses `implicit-registry-minimum` so a newer non-yanked install is kept.
+  readonly satisfaction: HostSatisfactionPolicy;
   // Recorded as the install version for a local-file install (the
   // bundled-host callers pass `config.version` so the recorded version
-  // equals `targetVersion` and the next launch is a no-op until the build
-  // changes). `null` keeps the installer's derived default.
+  // matches the exact satisfaction policy and the next launch is a no-op
+  // until the build changes). `null` keeps the installer's derived default.
   readonly recordVersionOverride: string | null;
   readonly enableLinger: boolean;
   readonly allowSelfInvocation: boolean;
@@ -126,11 +143,20 @@ export async function provisionHost(
   const progress = opts.onProgress ?? noopProgress;
   const controller = createServiceController();
   const label = serviceLabelFor(opts.runtime.environment);
+  // The manifest fetch is shareable across state snapshots within this run
+  // (finding D). Created once and threaded through the locked re-reads so a
+  // lock-race loser re-evaluates the winner's install record without a
+  // second network probe.
+  const yankLookup = createRegistryYankLookup(opts.runtime.environment);
   opts.runtime.logger.info("Host provisioning started", {
     environment: opts.runtime.environment,
     registerService: opts.registerService,
     force: opts.force,
-    targetVersion: opts.targetVersion ?? "presence-only",
+    satisfactionKind: opts.satisfaction.kind,
+    satisfactionVersion:
+      opts.satisfaction.kind === "presence"
+        ? "presence-only"
+        : opts.satisfaction.version,
     recordVersionOverride: opts.recordVersionOverride !== null,
     lockReason: opts.lockReason,
   });
@@ -150,7 +176,12 @@ export async function provisionHost(
   // no-op fast path.
   if (
     !opts.force &&
-    isSatisfied(fast, opts.targetVersion, opts.registerService)
+    (await isSatisfied(
+      fast,
+      opts.satisfaction,
+      opts.registerService,
+      yankLookup,
+    ))
   ) {
     opts.runtime.logger.debug("Host provisioning fast-path satisfied", {
       environment: opts.runtime.environment,
@@ -170,12 +201,19 @@ export async function provisionHost(
   const predictedInstall =
     opts.force ||
     !fast.installed ||
-    !versionSatisfied(fast, opts.targetVersion);
+    !(await versionSatisfied(fast, opts.satisfaction, yankLookup));
   const preStaged = predictedInstall
     ? await prepareInstallStage(opts, progress)
     : null;
 
-  return provisionUnderLock(opts, controller, label, progress, preStaged);
+  return provisionUnderLock(
+    opts,
+    controller,
+    label,
+    progress,
+    preStaged,
+    yankLookup,
+  );
 }
 
 // A lost prediction ("no install needed" at the fast read, but the locked
@@ -199,6 +237,7 @@ async function provisionUnderLock(
   label: ServiceLabel,
   progress: (info: ProgressInfo) => void,
   preStaged: StagedHostInstallSource | null,
+  yankLookup: RegistryYankLookup,
 ): Promise<HostProvisionResult> {
   let stagedConsumed = false;
   opts.runtime.logger.debug("Host provisioning entering CLI lock", {
@@ -229,7 +268,12 @@ async function provisionUnderLock(
         });
         if (
           !opts.force &&
-          isSatisfied(state, opts.targetVersion, opts.registerService)
+          (await isSatisfied(
+            state,
+            opts.satisfaction,
+            opts.registerService,
+            yankLookup,
+          ))
         ) {
           opts.runtime.logger.debug(
             "Host provisioning satisfied after lock recheck",
@@ -247,7 +291,7 @@ async function provisionUnderLock(
         if (
           !opts.force &&
           state.installed &&
-          versionSatisfied(state, opts.targetVersion) &&
+          (await versionSatisfied(state, opts.satisfaction, yankLookup)) &&
           !opts.registerService
         ) {
           opts.runtime.logger.debug(
@@ -287,11 +331,15 @@ async function provisionUnderLock(
         }
         // Reinstall when the bytes are absent/stale, OR when forced (D5: Force =
         // reinstall + restart onto this build even if the install record matches).
-        if (
-          opts.force ||
-          !state.installed ||
-          !versionSatisfied(state, opts.targetVersion)
-        ) {
+        // Evaluate the (async, yank-checked) predicate once and reuse it for
+        // both the branch decision and the log so the manifest lookup runs at
+        // most once here.
+        const reinstallVersionSatisfied = await versionSatisfied(
+          state,
+          opts.satisfaction,
+          yankLookup,
+        );
+        if (opts.force || !state.installed || !reinstallVersionSatisfied) {
           if (preStaged === null) {
             opts.runtime.logger.debug(
               "Host provisioning lost the fast-path prediction; releasing the lock to stage outside it",
@@ -305,7 +353,7 @@ async function provisionUnderLock(
               environment: opts.runtime.environment,
               force: opts.force,
               installed: state.installed,
-              versionSatisfied: versionSatisfied(state, opts.targetVersion),
+              versionSatisfied: reinstallVersionSatisfied,
             },
           );
           stagedConsumed = true;
@@ -352,7 +400,14 @@ async function provisionUnderLock(
     // cli-lock), then reacquire and retry - `preStaged` is non-null on this
     // retry, so the callback above cannot select `"need-stage"` again.
     const staged = await prepareInstallStage(opts, progress);
-    return provisionUnderLock(opts, controller, label, progress, staged);
+    return provisionUnderLock(
+      opts,
+      controller,
+      label,
+      progress,
+      staged,
+      yankLookup,
+    );
   } finally {
     // Anything staged in anticipation of the install branch that the lock
     // callback never consumed (raced to noop/register/start, or an earlier
@@ -540,7 +595,101 @@ async function runStart(
     bytes: null,
     totalBytes: null,
   });
-  await controller.start(label);
+  // First attempt: plain start (on win32 this already polls for post-baseline
+  // spawn evidence and surfaces Last Run Result on failure - finding F).
+  try {
+    await controller.start(label);
+  } catch (firstError) {
+    // Escalate once: full task/launcher rewrite (the install-branch
+    // registration - the field-proven manual recovery "we had to manually
+    // `service install`") -> retry start -> then an honest error. Exactly one
+    // rewrite; a second failure does not loop.
+    opts.runtime.logger.warn(
+      "Host provisioning start failed; escalating once with full service re-register",
+      {
+        environment: opts.runtime.environment,
+        errorName: errorFromUnknown(firstError).name,
+        errorMessage: errorFromUnknown(firstError).message,
+      },
+    );
+    progress({
+      stage: "host-provision",
+      message: "repairing host service definition and retrying start",
+      percent: null,
+      bytes: null,
+      totalBytes: null,
+    });
+    const cli = await resolveServiceCliInvocation({
+      environment: opts.runtime.environment,
+      override: null,
+      allowSelfInvocation: opts.allowSelfInvocation,
+    });
+    let rewriteError: unknown = null;
+    try {
+      await controller.install({
+        label,
+        cli,
+        enableLinger: opts.enableLinger,
+      });
+    } catch (cause) {
+      // A retry is valid only after the rewritten task was successfully
+      // registered and its own `/Run`/verification failed. Retrying after a
+      // failed definition write would start the stale task and mask the repair
+      // failure as success.
+      if (
+        !(cause instanceof CliError) ||
+        cause.code !== CLI_ERROR_CODES.SERVICE_CONTROL_FAILED
+      ) {
+        opts.runtime.logger.error(
+          "Host provisioning service definition rewrite failed after start failure",
+          {
+            environment: opts.runtime.environment,
+            firstErrorName: errorFromUnknown(firstError).name,
+            firstErrorMessage: errorFromUnknown(firstError).message,
+          },
+          errorFromUnknown(cause),
+        );
+        throw cause;
+      }
+      rewriteError = cause;
+      opts.runtime.logger.error(
+        "Host provisioning service rewrite launch failed after start failure; retrying the rewritten service once",
+        {
+          environment: opts.runtime.environment,
+          firstErrorName: errorFromUnknown(firstError).name,
+          firstErrorMessage: errorFromUnknown(firstError).message,
+        },
+        errorFromUnknown(cause),
+      );
+    }
+    // Service installation is itself the recovery launch: Windows verifies
+    // the `/Run` issued while recreating its task, and the other controllers
+    // start as part of registration. A second Windows `/Run` would baseline
+    // after that evidence; IgnoreNew then suppresses it and reports a healthy
+    // repaired host as failed. Only retry when install's own launch failed.
+    if (rewriteError !== null) {
+      try {
+        await controller.start(label);
+      } catch (retryError) {
+        opts.runtime.logger.error(
+          "Host provisioning start still failed after service rewrite",
+          {
+            environment: opts.runtime.environment,
+            firstErrorName: errorFromUnknown(firstError).name,
+            firstErrorMessage: errorFromUnknown(firstError).message,
+          },
+          errorFromUnknown(retryError),
+        );
+        throw retryError;
+      }
+    }
+    opts.runtime.logger.info(
+      "Host provisioning start recovered via one-shot service rewrite",
+      {
+        environment: opts.runtime.environment,
+      },
+    );
+  }
   const post = await readProvisionState(controller, label, opts.runtime);
   const installGeneration = await attestedGenerationFromCurrentRecord(
     opts.runtime.environment,
@@ -638,25 +787,41 @@ async function readProvisionState(
   };
 }
 
-// "latest", `--from`, and the packaged archive carry synthetic local
-// versions that can't be string-compared, so presence is the only
-// idempotency signal for them (targetVersion === null). A concrete semver
-// can be matched against the install record without a registry probe.
-function versionSatisfied(
+// The installed-version predicate (RCA finding D). "latest"/`--from`/the
+// packaged archive carry synthetic local versions and use `presence`; an
+// explicit `--release` or the bundled build use `exact`; the registry
+// default uses `implicit-registry-minimum`, which accepts an installed
+// version NEWER than the target (an out-of-band host update must not be
+// downgraded) unless the manifest has explicitly yanked it - an absent
+// entry or a failed/expired lookup deliberately fails open.
+async function versionSatisfied(
   state: ProvisionState,
-  targetVersion: string | null,
-): boolean {
+  satisfaction: HostSatisfactionPolicy,
+  yankLookup: RegistryYankLookup,
+): Promise<boolean> {
   if (!state.installed) return false;
-  if (targetVersion === null) return true;
-  return state.version === targetVersion;
+  if (satisfaction.kind === "presence") return true;
+  if (satisfaction.kind === "exact") {
+    return state.version === satisfaction.version;
+  }
+  if (state.version === null) return false;
+  const comparison = compareHostVersions(state.version, satisfaction.version);
+  // `comparable: false` = a malformed version on either side; never let an
+  // install record we can't reason about look current.
+  if (!comparison.comparable) return false;
+  if (comparison.ordering === "less") return false;
+  if (comparison.ordering === "equal") return true;
+  // A newer install is normally accepted; only an explicit yank rejects it.
+  return !(await yankLookup.isVersionYanked(state.version));
 }
 
-function isSatisfied(
+async function isSatisfied(
   state: ProvisionState,
-  targetVersion: string | null,
+  satisfaction: HostSatisfactionPolicy,
   registerService: boolean,
-): boolean {
-  if (!versionSatisfied(state, targetVersion)) {
+  yankLookup: RegistryYankLookup,
+): Promise<boolean> {
+  if (!(await versionSatisfied(state, satisfaction, yankLookup))) {
     return false;
   }
   // Host-owned registration: only the bytes are the CLI's concern.

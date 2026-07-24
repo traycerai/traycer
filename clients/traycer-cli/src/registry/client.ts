@@ -2,9 +2,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Environment } from "../runner/environment";
+import type { ProgressInfo } from "../runner/output";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import { downloadToFile, fetchText } from "./fetch-resource";
+import {
+  downloadToFile,
+  fetchText,
+  type NetworkHeartbeat,
+  type NetworkHeartbeatListener,
+} from "./fetch-resource";
 import { parseHostVersionsManifestWithWarnings } from "./manifest-schema";
 import { resolveManifestUrl } from "./manifest-url";
 import { verifyMinisignArchive } from "./minisign";
@@ -16,6 +22,14 @@ import type {
   HostVersionsManifest,
   RegistryClient,
 } from "./types";
+
+const YANK_LOOKUP_TIMEOUT_MS = 10_000;
+
+export interface RegistryYankLookup {
+  // Returns false for an entry missing from the manifest and for every
+  // registry failure. Those conditions must preserve a newer installed host.
+  isVersionYanked(version: string): Promise<boolean>;
+}
 
 // Real registry client. Replaces the NP-2 stub now that NP-4 ships the
 // hosted versions.json fetcher, asset resolver, and minisign + sha256
@@ -42,10 +56,11 @@ export interface CreateRegistryClientOptions {
   // fails loudly at construction; tests pass `false` because the fake
   // transport substitutes the verify chain wholesale.
   readonly requireTrustedKeys: boolean;
+  readonly onProgress: ((info: ProgressInfo) => void) | null;
 }
 
 export interface RegistryTransport {
-  fetchText(url: string): Promise<string>;
+  fetchText(opts: RegistryFetchTextOptions): Promise<string>;
   downloadToFile(opts: {
     readonly url: string;
     readonly destPath: string;
@@ -55,11 +70,18 @@ export interface RegistryTransport {
       readonly downloadedBytes: number;
       readonly totalBytes: number;
     }) => void;
+    readonly onHeartbeat: NetworkHeartbeatListener | null;
   }): Promise<{ readonly downloadedBytes: number; readonly sha256: string }>;
 }
 
+export interface RegistryFetchTextOptions {
+  readonly url: string;
+  readonly onHeartbeat: NetworkHeartbeatListener | null;
+}
+
 const DEFAULT_TRANSPORT: RegistryTransport = {
-  fetchText: (url) => fetchText(url, { signal: null }),
+  fetchText: ({ url, onHeartbeat }) =>
+    fetchText(url, { signal: null, onHeartbeat }),
   downloadToFile: (opts) =>
     downloadToFile({
       ...opts,
@@ -127,7 +149,11 @@ export async function createRegistryClient(
         environment: opts.environment,
         manifestUrl: manifestUrlInfo.url,
       });
-      const body = await transport.fetchText(manifestUrlInfo.url);
+      const body = await transport.fetchText({
+        url: manifestUrlInfo.url,
+        onHeartbeat: (heartbeat) =>
+          emitRegistryHeartbeat(opts.onProgress, "manifest", heartbeat),
+      });
       let parsedJson: unknown;
       try {
         parsedJson = JSON.parse(body);
@@ -302,8 +328,14 @@ export async function createRegistryClient(
           expectedSizeBytes: asset.sizeBytes,
           expectedSha256: asset.sha256,
           onProgress: (info) => onProgress(info),
+          onHeartbeat: (heartbeat) =>
+            emitRegistryHeartbeat(opts.onProgress, "archive", heartbeat),
         });
-        const signatureText = await transport.fetchText(asset.signatureUrl);
+        const signatureText = await transport.fetchText({
+          url: asset.signatureUrl,
+          onHeartbeat: (heartbeat) =>
+            emitRegistryHeartbeat(opts.onProgress, "signature", heartbeat),
+        });
         const verifyResult = await verifyMinisignArchive({
           archivePath,
           signatureText,
@@ -380,12 +412,94 @@ export async function createRegistryClient(
 // dereferenced.
 export async function createDefaultRegistryClient(
   environment: Environment,
+  onProgress: ((info: ProgressInfo) => void) | null,
 ): Promise<RegistryClient> {
   return createRegistryClient({
     environment,
     transport: null,
     requireTrustedKeys: true,
+    onProgress,
   });
+}
+
+// Create one lookup per provisioning run. It shares only a manifest promise
+// and its result; every state snapshot still asks whether its installed
+// version is yanked. This read is advisory, unlike installer manifest fetches:
+// offline, malformed, and timed-out responses all intentionally fail open.
+export function createRegistryYankLookup(
+  environment: Environment,
+): RegistryYankLookup {
+  const logger = createCliLogger(environment);
+  const manifestUrl = resolveManifestUrl().url;
+  let manifestPromise: Promise<HostVersionsManifest | null> | null = null;
+
+  const fetchManifest = async (): Promise<HostVersionsManifest | null> => {
+    const controller = new AbortController();
+    let watchdogExpired = false;
+    const watchdog = setTimeout(() => {
+      watchdogExpired = true;
+      controller.abort();
+    }, YANK_LOOKUP_TIMEOUT_MS);
+    try {
+      const body = await fetchText(manifestUrl, {
+        signal: controller.signal,
+        onHeartbeat: null,
+      });
+      const parsed: unknown = JSON.parse(body);
+      return parseHostVersionsManifestWithWarnings(parsed, manifestUrl)
+        .manifest;
+    } catch (err) {
+      logger.warn("Registry yank lookup failed open", {
+        environment,
+        manifestUrl,
+        watchdogExpired,
+        errorName: errorFromUnknown(err).name,
+      });
+      return null;
+    } finally {
+      clearTimeout(watchdog);
+    }
+  };
+
+  return {
+    async isVersionYanked(version: string): Promise<boolean> {
+      manifestPromise ??= fetchManifest();
+      const manifest = await manifestPromise;
+      return (
+        manifest?.versions.find((entry) => entry.version === version)
+          ?.yanked === true
+      );
+    },
+  };
+}
+
+function emitRegistryHeartbeat(
+  onProgress: ((info: ProgressInfo) => void) | null,
+  resource: "manifest" | "archive" | "signature",
+  heartbeat: NetworkHeartbeat,
+): void {
+  if (onProgress === null) return;
+  const resourceLabel = resource === "archive" ? "host archive" : resource;
+  onProgress({
+    stage: `registry-${resource}-${heartbeat.phase}`,
+    message: registryHeartbeatMessage(resourceLabel, heartbeat),
+    percent: null,
+    bytes: heartbeat.attempt,
+    totalBytes: heartbeat.maxAttempts,
+  });
+}
+
+function registryHeartbeatMessage(
+  resourceLabel: string,
+  heartbeat: NetworkHeartbeat,
+): string {
+  if (heartbeat.phase === "attempt") {
+    return `fetching ${resourceLabel} (attempt ${heartbeat.attempt}/${heartbeat.maxAttempts})`;
+  }
+  if (heartbeat.phase === "watchdog") {
+    return `fetching ${resourceLabel} stalled; retrying`;
+  }
+  return `retrying ${resourceLabel} shortly`;
 }
 
 function archiveBasenameFromUrl(url: string): string {

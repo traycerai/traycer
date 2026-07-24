@@ -4887,7 +4887,7 @@ describe("useRenderedMessages head/tail partition", () => {
     ]);
   });
 
-  it("suppresses code:auth error segments while keeping surrounding content", () => {
+  it("renders code:auth error segments alongside other errors (no suppression)", () => {
     const assistant = {
       ...assistantMessage("turn-1", 2000),
       blocks: [
@@ -4906,14 +4906,17 @@ describe("useRenderedMessages head/tail partition", () => {
 
     const row = result.current.find((r) => r.id === "assistant:turn-1");
     expect(row?.segments.some((s) => s.kind === "text")).toBe(true);
-    // The auth error is gone; the non-auth error survives.
+    // Auth errors render like any other error: suppressing them made headless
+    // (A2A-triggered) auth failures invisible once the transient re-auth
+    // banner cleared.
     const errorSegments = row?.segments.filter((s) => s.kind === "error") ?? [];
-    expect(errorSegments).toHaveLength(1);
-    const onlyError = errorSegments[0];
-    expect(onlyError.code).toBe("RUNTIME_THROWN");
+    expect(errorSegments.map((segment) => segment.code)).toEqual([
+      "auth",
+      "RUNTIME_THROWN",
+    ]);
   });
 
-  it("collapses an auth-only turn to zero segments", () => {
+  it("keeps an auth-only turn's error segment as its durable record", () => {
     const assistant = {
       ...assistantMessage("turn-1", 2000),
       blocks: [turnErrorBlock("block-1", 2000, "auth")],
@@ -4927,7 +4930,9 @@ describe("useRenderedMessages head/tail partition", () => {
     );
 
     const row = result.current.find((r) => r.id === "assistant:turn-1");
-    expect(row?.segments ?? []).toHaveLength(0);
+    const segments = row?.segments ?? [];
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.kind).toBe("error");
   });
 });
 

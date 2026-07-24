@@ -45,6 +45,12 @@ describe("rateLimitFetchLane", () => {
     expect(rateLimitFetchLane("claude-code")).toBe("ephemeralProcess");
   });
 
+  it("maps grok to the ephemeralProcess (subprocess) lane", () => {
+    // Grok usage is read over the vendored CLI's `_x.ai/billing` ACP extension
+    // (a real subprocess spawn), not a cheap credential GET.
+    expect(rateLimitFetchLane("grok")).toBe("ephemeralProcess");
+  });
+
   it("maps openrouter and kilocode to the httpFetch (cheap GET) lane", () => {
     expect(rateLimitFetchLane("openrouter")).toBe("httpFetch");
     expect(rateLimitFetchLane("kilocode")).toBe("httpFetch");
