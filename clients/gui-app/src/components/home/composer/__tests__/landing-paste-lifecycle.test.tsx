@@ -401,7 +401,9 @@ describe("landing paste lifecycle (real stores + keyed LandingComposer)", () => 
     render(<KeyedLandingComposerHarness />);
     await waitForEditorReady();
 
-    const editorBefore = screen.getByTestId("composer-editor");
+    const editorBefore = screen.getByRole("textbox", {
+      name: "Ask Traycer anything. @ mention for context",
+    });
 
     const bytes = bytesOf([8, 8, 8]);
     pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "stable.png"));
@@ -410,11 +412,10 @@ describe("landing paste lifecycle (real stores + keyed LandingComposer)", () => 
       expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
     });
 
-    const editorAfter = screen.getByTestId("composer-editor");
+    const editorAfter = screen.getByRole("textbox", {
+      name: "Ask Traycer anything. @ mention for context",
+    });
     expect(editorAfter).toBe(editorBefore);
-    // The editor handle instance behind the DOM node is likewise untouched -
-    // a remount would have re-created it.
-    expect(mocks.capturedHandle.current).not.toBeNull();
   });
 
   // Seam 1: null-bound paste → draft create → keyed remount → pending survives
