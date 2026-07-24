@@ -2,10 +2,11 @@
  * Round-5 landing paste lifecycle seams.
  *
  * Drives the REAL LandingComposer + REAL landing-composer-store + REAL
- * landing-draft-store through the HomePage keyed remount boundary
- * (`key={activeDraftId}`). Fakes only idb-keyval timing (putImage durable
- * write). Does NOT re-implement ingest on a bare Editor — that is exactly
- * why round 4 missed the store/remount defect.
+ * landing-draft-store through the HomePage mount-key boundary (pre-minted
+ * id while `activeDraftId` is null; key switches only when changing between
+ * existing drafts). Fakes only idb-keyval timing (putImage durable write).
+ * Does NOT re-implement ingest on a bare Editor — that is exactly why round
+ * 4 missed the store/remount defect.
  */
 import "../../../../../__tests__/test-browser-apis";
 import {
@@ -18,7 +19,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "zustand/vanilla";
-import type { ComponentProps, ReactElement } from "react";
+import { useState, type ComponentProps, type ReactElement } from "react";
+import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
 import {
@@ -372,16 +374,19 @@ afterEach(() => {
 });
 
 /**
- * HomePage keying: `<LandingComposer key={draftId} draftId={draftId}>`.
- * Subscribes to the REAL store's activeDraftId so createDraft flipping the
- * active id genuinely remounts the composer (and re-runs mount-time re-entry).
+ * Pre-mint only — covers the null→id seam for real Tiptap (draft created under
+ * the mount key so the editor is not remounted). Bound→null rotation is pinned
+ * against production HomePage in home-page.test.tsx (not duplicated here).
  */
 function KeyedLandingComposerHarness(): ReactElement {
   const draftId = useLandingDraftStore((state) => state.activeDraftId);
+  const [pendingCreateId] = useState(() => uuidv4());
+  const mountId = draftId ?? pendingCreateId;
   return (
     <LandingComposer
-      key={draftId}
+      key={mountId}
       draftId={draftId}
+      pendingCreateId={draftId === null ? pendingCreateId : null}
       initialSettings={null}
       workspaceControls={null}
     />
@@ -389,6 +394,30 @@ function KeyedLandingComposerHarness(): ReactElement {
 }
 
 describe("landing paste lifecycle (real stores + keyed LandingComposer)", () => {
+  // Pre-mint mount identity: the null→id activeDraftId flip must not remount
+  // the editor. Assert DOM node identity survives the first image-atom
+  // snapshot that creates the draft (the exact seam the pre-mint fix targets).
+  it("preserves the editor DOM node across the null→id activeDraftId flip", async () => {
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    const editorBefore = screen.getByRole("textbox", {
+      name: "Ask Traycer anything. @ mention for context",
+    });
+
+    const bytes = bytesOf([8, 8, 8]);
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "stable.png"));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+
+    const editorAfter = screen.getByRole("textbox", {
+      name: "Ask Traycer anything. @ mention for context",
+    });
+    expect(editorAfter).toBe(editorBefore);
+  });
+
   // Seam 1: null-bound paste → draft create → keyed remount → pending survives
   // → resolve write → hash-only in editor, draft store, and both serializers.
   it("null-bound mixed paste survives keyed remount and converges to hash-only everywhere", async () => {
@@ -652,6 +681,7 @@ describe("landing paste lifecycle (real stores + keyed LandingComposer)", () => 
       <LandingComposer
         key={draftId}
         draftId={draftId}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={null}
       />,

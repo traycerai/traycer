@@ -234,6 +234,7 @@ describe("LandingComposer direct submit gate", () => {
     const view = render(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={null}
       />,
@@ -249,6 +250,7 @@ describe("LandingComposer direct submit gate", () => {
     view.rerender(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={null}
       />,
@@ -264,6 +266,7 @@ describe("LandingComposer direct submit gate", () => {
     const view = render(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={null}
       />,
@@ -284,6 +287,7 @@ describe("LandingComposer direct submit gate", () => {
     view.rerender(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={null}
       />,
@@ -301,6 +305,7 @@ describe("LandingComposer direct submit gate", () => {
     view.rerender(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={null}
       />,
@@ -315,6 +320,7 @@ describe("LandingComposer direct submit gate", () => {
     const view = render(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={null}
       />,
@@ -330,6 +336,7 @@ describe("LandingComposer direct submit gate", () => {
     view.rerender(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={null}
       />,
