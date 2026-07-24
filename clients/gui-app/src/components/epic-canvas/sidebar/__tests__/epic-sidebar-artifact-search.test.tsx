@@ -745,6 +745,15 @@ describe("ArtifactPanelSearchShell", () => {
     expect(searchOpenInStore()).toBe(false);
   });
 
+  it("does not steal typed input from an editable tree descendant", () => {
+    renderShell({ searchOpen: false });
+    const region = screen.getByTestId("epic-artifact-tree-region");
+    const input = document.createElement("input");
+    region.append(input);
+    fireEvent.keyDown(input, { key: "a" });
+    expect(searchOpenInStore()).toBe(false);
+  });
+
   it("keeps the tree viewport as the hidden-scrollbar single scroll surface", () => {
     renderShell({ searchOpen: false });
     const region = screen.getByTestId("epic-artifact-tree-region");

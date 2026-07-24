@@ -110,12 +110,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   const epicAttachedRoots = useMemo<ReadonlySet<string>>(() => {
     const rows = bindingsQuery.data?.rows ?? [];
     if (rows.length === 0) return EMPTY_ATTACHED_ROOTS;
-    const roots = new Set<string>();
-    for (const row of rows) {
-      roots.add(row.runningDir);
-      roots.add(row.workspacePath);
-    }
-    return roots;
+    return new Set(rows.flatMap((row) => [row.runningDir, row.workspacePath]));
   }, [bindingsQuery.data?.rows]);
 
   // The @-mention Agent list is the ONLY consumer of the open-epic chat and

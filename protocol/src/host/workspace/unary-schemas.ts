@@ -279,9 +279,7 @@ export const workspaceFileTreeNodeSchema = z.object({
   path: z.string().min(1),
   name: z.string().min(1),
 });
-export type WorkspaceFileTreeNode = z.infer<
-  typeof workspaceFileTreeNodeSchema
->;
+export type WorkspaceFileTreeNode = z.infer<typeof workspaceFileTreeNodeSchema>;
 
 export const workspaceListFileTreeResponseSchema = z.object({
   workspacePath: z.string(),
@@ -572,10 +570,14 @@ export const WORKSPACE_SEARCH_TEXT_PREVIEW_MAX_BYTES = 512;
 export const workspaceSearchTextPreviewSchema = z.object({
   text: z.string(),
   ranges: z.array(
-    z.object({
-      startByte: z.number().int().nonnegative(),
-      endByte: z.number().int().nonnegative(),
-    }),
+    z
+      .object({
+        startByte: z.number().int().nonnegative(),
+        endByte: z.number().int().nonnegative(),
+      })
+      .refine((range) => range.endByte >= range.startByte, {
+        message: "endByte must not precede startByte",
+      }),
   ),
 });
 export type WorkspaceSearchTextPreview = z.infer<

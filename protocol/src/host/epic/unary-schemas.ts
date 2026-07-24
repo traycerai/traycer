@@ -1415,14 +1415,18 @@ export const searchArtifactsRequestSchema = z.object({
   query: z.string(),
   fields: searchArtifactsFieldsSchema,
   filters: searchArtifactsFiltersSchema,
-  limit: z.number().int().positive(),
+  limit: z.number().int().min(1).max(1_000),
 });
 export type SearchArtifactsRequest = z.infer<
   typeof searchArtifactsRequestSchema
 >;
 
 /** Which surface produced a hit. A hit may carry more than one source. */
-export const searchArtifactMatchSourceSchema = z.enum(["title", "path", "body"]);
+export const searchArtifactMatchSourceSchema = z.enum([
+  "title",
+  "path",
+  "body",
+]);
 export type SearchArtifactMatchSource = z.infer<
   typeof searchArtifactMatchSourceSchema
 >;
@@ -1447,10 +1451,14 @@ export const searchArtifactSnippetSchema = z.object({
   lineNumber: z.number().int().nonnegative(),
   text: z.string(),
   ranges: z.array(
-    z.object({
-      startByte: z.number().int().nonnegative(),
-      endByte: z.number().int().nonnegative(),
-    }),
+    z
+      .object({
+        startByte: z.number().int().nonnegative(),
+        endByte: z.number().int().nonnegative(),
+      })
+      .refine((range) => range.endByte >= range.startByte, {
+        message: "endByte must not precede startByte",
+      }),
   ),
 });
 export type SearchArtifactSnippet = z.infer<typeof searchArtifactSnippetSchema>;
