@@ -20,6 +20,7 @@ import {
   useEpicRenameTuiAgent,
 } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import {
+  EPIC_NODE_ICONS,
   EPIC_NODE_SENTENCE_NOUNS,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
@@ -31,6 +32,7 @@ import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
+import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   NotificationIndicatorsContext,
@@ -51,6 +53,8 @@ import {
 } from "@/stores/notifications/notification-indicator-state";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { TreeSlice } from "@/stores/epics/open-epic/types";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import type { ProviderId } from "@/components/home/data/landing-options";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -97,6 +101,7 @@ import {
 } from "@/stores/epics/epic-sidebar-expansion-store";
 import {
   useAncestorIds,
+  useEpicActiveAgentIds,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicArchivedNodeIds,
@@ -108,6 +113,7 @@ import {
   useEpicPermissionRole,
   useEpicTreeIndex,
   useEpicTreeNode,
+  useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -199,8 +205,13 @@ const CHATS_TREE_FILTER: TreeFilterFn = (type) =>
  * Epic-level viewer (read-only) role for the chat panel. Resolved once in
  * `ChatTreePanelBody` and read directly by the leaf status chip, rather than
  * drilled through four row layers or re-subscribed per row via
- * `useEpicPermissionRole()` the way the removed leading icon did. A row's OWN
- * chat session access overrides it when that chat is open.
+ * `useEpicPermissionRole()`. A row's OWN chat session access overrides it when
+ * that chat is open.
+ *
+ * This saves the per-row subscription for the TRAILING chip only. The leading
+ * `ChatProgressIcon` is deliberately status-aware, and it re-subscribes per row
+ * through its own `useEpicPermissionRole()` call - a known, accepted cost of
+ * keeping that icon, not an oversight this context still eliminates.
  */
 const SidebarViewerContext = createContext<boolean>(false);
 
@@ -605,8 +616,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const canMutate = canEdit && !isDisconnected;
   // Read-only (viewer) indication is epic-level, so it is resolved ONCE here
   // and threaded down as a boolean rather than re-subscribing every row to
-  // `useEpicPermissionRole()` the way the removed leading icon did. `viewer`
-  // specifically - a null (not-yet-known) role must not flash the lock.
+  // `useEpicPermissionRole()`. `viewer` specifically - a null (not-yet-known)
+  // role must not flash the lock. The status-aware leading `ChatProgressIcon`
+  // still makes that per-row subscription itself; see `SidebarViewerContext`.
   const isViewer = permissionRole === "viewer";
   const localRootPending = useLocalRootCreatePending(epicId, panelId);
   const acknowledgedRootPending = useAcknowledgedRootCreatePending(
@@ -1559,6 +1571,167 @@ function SidebarRowCheckbox(props: {
   );
 }
 
+/**
+ * Fixed-size slot the leading icon renders into, so every row's text column
+ * starts at the same x regardless of which variant (chat glyph, harness brand
+ * + terminal subscript, spinner, bot) fills it. Sized to the widest variant -
+ * `SidebarAgentHarnessIcon`, whose subscript overhangs the 14px brand mark.
+ *
+ * The slot is only a WIDTH reservation: it carries no vertical alignment of
+ * its own. Centering across the two-line card is the outer row's job
+ * (`items-center`), which is why the slot must not grow to the card's height.
+ */
+function ChatRowLeadingIconSlot(props: { readonly children: ReactNode }) {
+  return (
+    // Decorative for assistive tech. The leading icon is status-aware by
+    // design (`ChatProgressIcon` carries the spinner / read-only lock), so
+    // without this a read-only row announced "Read-only agent" TWICE - once
+    // here and once from the trailing `ChatOwnStatusChip` - and likewise for
+    // running and approval states. Hiding the slot leaves the TRAILING chip as
+    // the single announced status while the icon stays visually identical.
+    // Nothing is lost: the row's identity is already carried by its explicit
+    // `aria-label` (the title). Scoped to this slot only - the trailing chip
+    // and the whole text column stay in the a11y tree. Safe to hide because
+    // nothing inside is focusable or interactive.
+    <span
+      aria-hidden
+      className="inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
+    >
+      {props.children}
+    </span>
+  );
+}
+
+/**
+ * Per-type icon color customization, read here rather than threaded from the
+ * tree root so the leading icon stays a leaf concern. `ChatProgressIcon`
+ * already subscribes to exactly these two settings internally for chat rows;
+ * mirroring it here keeps a terminal-agent's bot glyph from staying muted
+ * while chat glyphs pick up "color by type" in the same column.
+ */
+function useNodeIconDisplay(artifactType: EpicNodeKind): {
+  readonly className: string;
+  readonly style: { color: string | undefined } | undefined;
+} {
+  const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
+  const color = useSettingsStore((s) => s.artifactIconColors[artifactType]);
+  return {
+    className: cn(
+      "size-3.5 shrink-0",
+      colorMode === "none" && "text-muted-foreground/70",
+    ),
+    style: colorMode === "byType" ? { color } : undefined,
+  };
+}
+
+/**
+ * Leading identity icon for a sidebar row, vertically centered on the two-line
+ * card by the row scaffold. Chat rows get the status-aware chat glyph, TUI
+ * rows the harness brand, and any other node kind its static registry glyph.
+ */
+function ChatRowLeadingIcon(props: {
+  readonly epicId: string;
+  readonly nodeId: string;
+  readonly artifactType: EpicNodeKind;
+}) {
+  if (props.artifactType === "chat") {
+    // No idle-slot override: `ChatProgressIcon` falls back to the plain chat
+    // glyph (per-type icon color included) and stays authoritative for
+    // read-only, activity, approval, failure, and completion states. Chat rows
+    // deliberately do NOT wear the harness brand - a column of multi-colored
+    // provider marks reads as noise; the harness is surfaced in the row's
+    // tooltip, header, and composer instead.
+    return (
+      <ChatProgressIcon
+        epicId={props.epicId}
+        chatId={props.nodeId}
+        className={undefined}
+        mutedClassName="text-muted-foreground/70"
+        testId="chat-sidebar-spinner"
+        defaultIcon={undefined}
+      />
+    );
+  }
+  if (props.artifactType === "terminal-agent") {
+    return <TerminalAgentProgressIcon nodeId={props.nodeId} />;
+  }
+  return <StaticSidebarNodeIcon artifactType={props.artifactType} />;
+}
+
+/**
+ * Terminal-agent (TUI) sidebar icon. Swaps the static icon for the running
+ * spinner while the agent is working, mirroring `ChatProgressIcon` for GUI
+ * chats. Epic-wide active-agent awareness is the sole authority here - a TUI
+ * agent's PTY runs host-side, so there is no renderer run-status to smooth
+ * against and no waiting-for-approval state to style.
+ */
+function TerminalAgentProgressIcon(props: { readonly nodeId: string }) {
+  const isActive = useEpicActiveAgentIds().has(props.nodeId);
+  const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
+  const icon = useNodeIconDisplay("terminal-agent");
+  if (!isActive) {
+    // The underlying harness's brand mark (Claude, Codex, …) so the row reads
+    // as the tool driving the agent. Brand marks keep their own colors and
+    // intentionally don't follow the per-type icon-color customization; the
+    // generic bot glyph is the fallback for unresolved/legacy records.
+    if (harnessId !== null) {
+      return (
+        <SidebarAgentHarnessIcon nodeId={props.nodeId} harnessId={harnessId} />
+      );
+    }
+    return <StaticSidebarNodeIcon artifactType="terminal-agent" />;
+  }
+  return (
+    <span
+      className={cn("inline-flex items-center justify-center", icon.className)}
+      style={icon.style}
+      title="Agent in progress"
+    >
+      <AgentSpinningDots
+        className="text-current"
+        testId="terminal-agent-sidebar-spinner"
+        variant={undefined}
+      />
+    </span>
+  );
+}
+
+/**
+ * TUI-agent harness identity with a terminal surface mark. The brand mark is a
+ * TUI-only affordance - GUI chat rows keep the plain chat glyph - so the bare
+ * terminal glyph rides along without a background, keeping the harness mark
+ * visible beneath it.
+ */
+function SidebarAgentHarnessIcon(props: {
+  readonly nodeId: string;
+  readonly harnessId: ProviderId;
+}) {
+  const TerminalIcon = EPIC_NODE_ICONS.terminal;
+  return (
+    <span
+      data-testid={`sidebar-agent-harness-${props.nodeId}`}
+      data-agent-surface="tui"
+      className="relative inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
+      title="TUI terminal agent"
+    >
+      <HarnessIcon harnessId={props.harnessId} className="size-3.5" />
+      <TerminalIcon
+        aria-hidden="true"
+        data-testid={`sidebar-agent-surface-${props.nodeId}`}
+        data-agent-surface="tui"
+        className="pointer-events-none absolute -right-1 -bottom-1.5 size-2 text-muted-foreground"
+        strokeWidth={3}
+      />
+    </span>
+  );
+}
+
+function StaticSidebarNodeIcon(props: { readonly artifactType: EpicNodeKind }) {
+  const icon = useNodeIconDisplay(props.artifactType);
+  const Icon = EPIC_NODE_ICONS[props.artifactType];
+  return <Icon aria-hidden className={icon.className} style={icon.style} />;
+}
+
 interface ChatRenameRowProps {
   readonly epicId: string;
   readonly depth: number;
@@ -1590,56 +1763,67 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     nodeName,
     nodeId,
   } = props;
-  // Two-line scaffold parity with the display row: the rename input owns row 1
-  // (no leading icon), and the same self-collapsing row-2 slot follows so the
-  // row height doesn't jump between viewing and renaming a two-line row.
+  // Two-line scaffold parity with the display row: the same chevron spacer and
+  // leading icon sit centered beside a column whose row 1 is the rename input,
+  // and the same self-collapsing row-2 slot follows, so nothing shifts
+  // horizontally or vertically between viewing and renaming a two-line row.
   return (
     <div
       className={cn(
-        "flex min-h-7 min-w-0 flex-1 flex-col justify-center gap-0.5 rounded-md px-2 py-1",
+        "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1",
         props.isArchived && ARCHIVED_ROW_CLASS,
       )}
       style={{
         paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
       }}
     >
-      <div className="flex min-w-0 items-center gap-1.5">
-        <TreeChevronSpacer />
-        <input
-          ref={renameInputRef}
-          value={renameValue}
-          onChange={(e) => {
-            onRenameValueChange(e.target.value);
-          }}
-          onBlur={onBlur}
-          onKeyDown={onKeyDown}
-          disabled={renamePending}
-          className="min-w-0 flex-1 border-0 bg-transparent text-ui-sm text-foreground outline-none focus:ring-1 focus:ring-ring rounded px-1"
-          aria-label={`Rename ${nodeName}`}
-          data-testid={`epic-sidebar-rename-input-${nodeId}`}
-        />
-        {renamePending ? (
-          <AgentSpinningDots
-            className="shrink-0 text-muted-foreground"
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-        {/* The pre-refactor rename row rendered the (status-bearing) icon slot
-            via `ChatSidebarNodeIcon`, which was NOT the rollup-aware variant -
-            so renaming keeps showing this row's OWN status, not a nested one. */}
-        <ChatOwnStatusChip
+      <TreeChevronSpacer />
+      <ChatRowLeadingIconSlot>
+        <ChatRowLeadingIcon
           epicId={epicId}
           nodeId={nodeId}
           artifactType={artifactType}
-          updatedAt={updatedAt}
+        />
+      </ChatRowLeadingIconSlot>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <input
+            ref={renameInputRef}
+            value={renameValue}
+            onChange={(e) => {
+              onRenameValueChange(e.target.value);
+            }}
+            onBlur={onBlur}
+            onKeyDown={onKeyDown}
+            disabled={renamePending}
+            className="min-w-0 flex-1 border-0 bg-transparent text-ui-sm text-foreground outline-none focus:ring-1 focus:ring-ring rounded px-1"
+            aria-label={`Rename ${nodeName}`}
+            data-testid={`epic-sidebar-rename-input-${nodeId}`}
+          />
+          {renamePending ? (
+            <AgentSpinningDots
+              className="shrink-0 text-muted-foreground"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          {/* The pre-refactor rename row rendered the (status-bearing) icon
+              slot via `ChatSidebarNodeIcon`, which was NOT the rollup-aware
+              variant - so renaming keeps showing this row's OWN status, not a
+              nested one. */}
+          <ChatOwnStatusChip
+            epicId={epicId}
+            nodeId={nodeId}
+            artifactType={artifactType}
+            updatedAt={updatedAt}
+          />
+        </div>
+        <ChatRowSecondLine
+          epicId={epicId}
+          nodeId={nodeId}
+          artifactType={artifactType}
         />
       </div>
-      <ChatRowSecondLine
-        epicId={epicId}
-        nodeId={nodeId}
-        artifactType={artifactType}
-      />
     </div>
   );
 }
@@ -1747,9 +1931,13 @@ function ChatRowButton(props: ChatRowButtonProps) {
   // claimed whenever the row is editable and not bulk-selecting.
   const showRowControls = selectionMode ? false : canEdit;
   // Two-line rows: `min-h-7` keeps a single-line row at the old height while a
-  // fed row-2 slot grows the row; `flex-col` stacks row 1 over the row-2 slot.
+  // fed row-2 slot grows the row. The row itself is a horizontal flex -
+  // chevron, leading icon, then the two-line text column - and `items-center`
+  // is what centers the chevron and the leading icon across BOTH lines. No
+  // fixed height is involved: the column is the tallest child, so the short
+  // ones center against whatever height it happens to take.
   const rowClassName = cn(
-    "flex min-h-7 min-w-0 flex-1 flex-col justify-center gap-0.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
+    "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
     "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
     isDragging && "cursor-grabbing opacity-60",
     nodePadRightClass(showRowControls, reserveArchiveSlot),
@@ -1773,39 +1961,48 @@ function ChatRowButton(props: ChatRowButtonProps) {
           paddingLeft: `${depth * INDENT_PX + BASE_PAD_LEFT}px`,
         }}
       >
-        <span className="flex min-w-0 items-center gap-1.5">
-          <NodeChevron
-            hasChildren={hasChildren}
-            expanded={expanded}
-            onToggle={selectionChevronToggle}
-          />
-          <SidebarRowCheckbox
-            inputId={selectionInputId}
-            nodeId={nodeId}
-            nodeName={nodeName}
-            isSelected={isSelected}
-            onToggleSelection={onToggleSelection}
-          />
-          <span className="min-w-0 flex-1 truncate">{nodeName}</span>
-          {/* Selection mode is exactly when users act on rows in bulk, so the
-              status signal (and a collapsed parent's rollup) has to survive
-              here - the pre-refactor icon slot rendered in this variant too.
-              The archive hover button is a sibling of the row and is simply
-              not rendered in this variant. */}
-          <ChatRowStatusSlot
+        <NodeChevron
+          hasChildren={hasChildren}
+          expanded={expanded}
+          onToggle={selectionChevronToggle}
+        />
+        <SidebarRowCheckbox
+          inputId={selectionInputId}
+          nodeId={nodeId}
+          nodeName={nodeName}
+          isSelected={isSelected}
+          onToggleSelection={onToggleSelection}
+        />
+        <ChatRowLeadingIconSlot>
+          <ChatRowLeadingIcon
             epicId={epicId}
             nodeId={nodeId}
             artifactType={artifactType}
-            hasChildren={hasChildren}
-            expanded={expanded}
-            updatedAt={updatedAt}
+          />
+        </ChatRowLeadingIconSlot>
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+            {/* Selection mode is exactly when users act on rows in bulk, so the
+                status signal (and a collapsed parent's rollup) has to survive
+                here - the pre-refactor icon slot rendered in this variant too.
+                The archive hover button is a sibling of the row and is simply
+                not rendered in this variant. */}
+            <ChatRowStatusSlot
+              epicId={epicId}
+              nodeId={nodeId}
+              artifactType={artifactType}
+              hasChildren={hasChildren}
+              expanded={expanded}
+              updatedAt={updatedAt}
+            />
+          </span>
+          <ChatRowSecondLine
+            epicId={epicId}
+            nodeId={nodeId}
+            artifactType={artifactType}
           />
         </span>
-        <ChatRowSecondLine
-          epicId={epicId}
-          nodeId={nodeId}
-          artifactType={artifactType}
-        />
       </label>
     );
   }
@@ -1831,53 +2028,65 @@ function ChatRowButton(props: ChatRowButtonProps) {
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <span className="flex min-w-0 items-center gap-1.5">
-        <NodeChevron
-          hasChildren={hasChildren}
-          expanded={expanded}
-          onToggle={onToggle}
-        />
-        <span className="min-w-0 flex-1 truncate">{nodeName}</span>
-        {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
-          <OwnerResourceChip
-            epicId={epicId}
-            kind={resourceOwnerKind}
-            ownerId={nodeId}
-            className={undefined}
-          />
-        )}
-        {/* Completes the hover SWAP the design calls for: while the archive
-            button is mounted, hovering the row hides the idle time so the
-            button takes its place rather than sitting alongside it.
-            `invisible` (not `hidden`) so the slot keeps its width and row 1
-            does not reflow under the pointer.
-
-            This blanks the WHOLE slot, so it is safe only while the slot is
-            showing the idle time. `chatRowArchiveState` guarantees that: it
-            withholds the button (and therefore this class) whenever the slot
-            could instead be rendering a collapsed parent's descendant rollup,
-            which must stay readable on hover. */}
-        <span
-          className={cn(
-            "flex-none",
-            reserveArchiveSlot && "group-hover/tree-item:invisible",
-          )}
-        >
-          <ChatRowStatusSlot
-            epicId={epicId}
-            nodeId={nodeId}
-            artifactType={artifactType}
-            hasChildren={hasChildren}
-            expanded={expanded}
-            updatedAt={updatedAt}
-          />
-        </span>
-      </span>
-      <ChatRowSecondLine
-        epicId={epicId}
-        nodeId={nodeId}
-        artifactType={artifactType}
+      <NodeChevron
+        hasChildren={hasChildren}
+        expanded={expanded}
+        onToggle={onToggle}
       />
+      <ChatRowLeadingIconSlot>
+        <ChatRowLeadingIcon
+          epicId={epicId}
+          nodeId={nodeId}
+          artifactType={artifactType}
+        />
+      </ChatRowLeadingIconSlot>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+          {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
+            <OwnerResourceChip
+              epicId={epicId}
+              kind={resourceOwnerKind}
+              ownerId={nodeId}
+              className={undefined}
+            />
+          )}
+          {/* Completes the hover SWAP the design calls for: while the archive
+              button is mounted, hovering the row hides the idle time so the
+              button takes its place rather than sitting alongside it.
+              `invisible` (not `hidden`) so the slot keeps its width and row 1
+              does not reflow under the pointer.
+
+              This blanks the WHOLE slot, so it is safe only while the slot is
+              showing the idle time. `chatRowArchiveState` guarantees that: it
+              withholds the button (and therefore this class) whenever the slot
+              could instead be rendering a collapsed parent's descendant
+              rollup, which must stay readable on hover.
+
+              Scoped to the TRAILING slot only - the leading icon is outside
+              this span, so the swap never blanks a row's identity glyph. */}
+          <span
+            className={cn(
+              "flex-none",
+              reserveArchiveSlot && "group-hover/tree-item:invisible",
+            )}
+          >
+            <ChatRowStatusSlot
+              epicId={epicId}
+              nodeId={nodeId}
+              artifactType={artifactType}
+              hasChildren={hasChildren}
+              expanded={expanded}
+              updatedAt={updatedAt}
+            />
+          </span>
+        </span>
+        <ChatRowSecondLine
+          epicId={epicId}
+          nodeId={nodeId}
+          artifactType={artifactType}
+        />
+      </span>
     </button>
   );
   if (ownerHostId === null || ownerKind === null) return button;
@@ -2186,8 +2395,10 @@ const CHAT_OWN_STATUS_PRESENTATION: Record<
  *
  * The session read is deliberately narrow: `useExistingChatSessionHandle` only
  * resolves a handle for chats that are actually open, so the extra store
- * subscriptions are paid by those few rows rather than by every row the way the
- * removed leading icon did.
+ * subscriptions are paid by those few rows rather than by every row. Note the
+ * narrowing bounds THIS chip's cost, not the row's total: the status-aware
+ * leading `ChatProgressIcon` makes the same session read on every chat row by
+ * design - an accepted cost of keeping that icon.
  */
 function ChatOwnStatusChip(props: ChatRowStatusProps): ReactNode {
   const indicatorState = useSurfaceNotificationIndicatorState({

@@ -239,7 +239,9 @@ vi.mock("@/components/epic-canvas/sidebar/chat-row-second-line", () => ({
     readonly artifactType: string;
   }) =>
     secondLineContent.value === null ? null : (
-      <span data-testid={`row2-slot-${props.nodeId}`}>
+      // Match production testid so scaffold structure tests can assert the
+      // leading icon is a sibling of the text column that holds row-2.
+      <span data-testid={`epic-sidebar-row-workspace-${props.nodeId}`}>
         {props.artifactType}:{props.epicId}:{secondLineContent.value}
       </span>
     ),
@@ -833,7 +835,7 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
   });
 
-  it("renders no leading icon or harness brand on chat/terminal-agent rows, even when harness ids are fed", () => {
+  it("renders chat glyph (never harness brand) on chat rows and harness brand on idle TUI rows", () => {
     seedChatTree();
     testState.chatHarnessIds = {
       "chat-root": "codex",
@@ -843,14 +845,20 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    // The redesign removes the leading icon slot entirely - harness identity
-    // moved to the hover card (a different ticket's surface), so none of the
-    // former row-level harness testids should exist even when harness ids are
-    // available for both a chat and a terminal-agent row.
+    // Chat rows deliberately keep the plain chat glyph even when a harness id
+    // is known - brand marks are a TUI-only leading-icon affordance.
+    const chatRow = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(chatRow.querySelector(".lucide-message-square")).not.toBeNull();
     expect(screen.queryByTestId("sidebar-agent-harness-chat-root")).toBeNull();
     expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
-    expect(screen.queryByTestId("sidebar-agent-harness-agent-root")).toBeNull();
-    expect(screen.queryByTestId("sidebar-agent-surface-agent-root")).toBeNull();
+
+    // Idle TUI rows wear the harness brand + terminal surface subscript.
+    expect(
+      screen.getByTestId("sidebar-agent-harness-agent-root"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("sidebar-agent-surface-agent-root"),
+    ).not.toBeNull();
   });
 
   it("consolidates row actions into one menu with 'New child agent' first, reachable from both the ⋯ dropdown and right-click", async () => {
@@ -2106,9 +2114,14 @@ describe("chat own-status chip session authority (open session vs awareness)", (
     expect(
       screen.getByTestId("chat-row-status-read-only-chat-child"),
     ).toBeTruthy();
+    // Exactly ONE announced read-only status. The leading ChatProgressIcon
+    // renders its own read-only lock too, but `ChatRowLeadingIconSlot` is
+    // `aria-hidden`, so the trailing ChatOwnStatusChip is the single status a
+    // screen reader hears. Role queries skip aria-hidden subtrees; the leading
+    // lock is still rendered and still findable by testid.
     expect(
-      screen.getByRole("status", { name: "Read-only agent" }),
-    ).toBeTruthy();
+      screen.getAllByRole("status", { name: "Read-only agent" }),
+    ).toHaveLength(1);
   });
 });
 
@@ -2207,7 +2220,7 @@ describe("chat row second-line slot", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     const row = screen.getByTestId("epic-sidebar-item-chat-root");
-    const slot = screen.getByTestId("row2-slot-chat-root");
+    const slot = screen.getByTestId("epic-sidebar-row-workspace-chat-root");
     expect(row.contains(slot)).toBe(true);
     // Props are threaded through to the slot untouched.
     expect(slot.textContent).toBe(`chat:${EPIC_ID}:marker`);
@@ -2220,7 +2233,247 @@ describe("chat row second-line slot", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    expect(screen.queryByTestId("row2-slot-chat-root")).toBeNull();
+    expect(
+      screen.queryByTestId("epic-sidebar-row-workspace-chat-root"),
+    ).toBeNull();
+  });
+});
+
+/**
+ * Leading identity icon on chat / terminal-agent sidebar rows.
+ *
+ * The row is a horizontal flex (`items-center`): chevron → leading icon slot →
+ * two-line text column. Chat rows always wear the chat glyph (never a harness
+ * brand); idle TUI rows wear the harness brand + surface subscript (or bot
+ * fallback / spinner when active). The trailing status chip is additive.
+ */
+describe("sidebar leading identity icon", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.chatHarnessIds = {};
+    testState.tuiHarnessIds = {};
+    testState.permissionRole = "owner";
+    secondLineContent.value = null;
+  });
+
+  function expectChatGlyphWithoutHarness(nodeId: string): void {
+    // Display / selection rows expose epic-sidebar-item-*. Rename replaces that
+    // surface, so resolve the rename row from the input's known ancestry -
+    // input → row-1 flex → text column → the row itself, which is where the
+    // leading slot sits as the column's sibling.
+    //
+    // Resolved by walking a FIXED number of parents rather than searching
+    // upward for the glyph: an unbounded search escapes this row and would be
+    // satisfied by a sibling row's chat glyph. Assertions use `toBeTruthy` so
+    // an `undefined` from a broken ancestry chain fails instead of sliding
+    // past `not.toBeNull()`.
+    const item = screen.queryByTestId(`epic-sidebar-item-${nodeId}`);
+    if (item !== null) {
+      expect(item.querySelector(".lucide-message-square")).toBeTruthy();
+    } else {
+      const input = screen.getByTestId(`epic-sidebar-rename-input-${nodeId}`);
+      const renameRow = input.parentElement?.parentElement?.parentElement;
+      expect(renameRow).toBeTruthy();
+      expect(renameRow?.querySelector(".lucide-message-square")).toBeTruthy();
+    }
+    expect(screen.queryByTestId(`sidebar-agent-harness-${nodeId}`)).toBeNull();
+    expect(screen.queryByTestId(`sidebar-agent-surface-${nodeId}`)).toBeNull();
+  }
+
+  function expectTuiHarness(nodeId: string): void {
+    expect(
+      screen.getByTestId(`sidebar-agent-harness-${nodeId}`),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId(`sidebar-agent-surface-${nodeId}`),
+    ).not.toBeNull();
+  }
+
+  it("renders the chat glyph (never harness brand) in display, selection, and rename variants", () => {
+    seedChatTree();
+    testState.chatHarnessIds = {
+      "chat-root": "codex",
+      "chat-child": "claude",
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expectChatGlyphWithoutHarness("chat-root");
+
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    expectChatGlyphWithoutHarness("chat-root");
+
+    cleanup();
+    seedChatTree();
+    testState.chatHarnessIds = {
+      "chat-root": "codex",
+      "chat-child": "claude",
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-rename-chat-root"));
+    expect(
+      screen.getByTestId("epic-sidebar-rename-input-chat-root"),
+    ).toBeTruthy();
+    expectChatGlyphWithoutHarness("chat-root");
+  });
+
+  it("renders TUI harness brand + surface subscript in display, selection, and rename variants", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expectTuiHarness("agent-root");
+
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+    expectTuiHarness("agent-root");
+
+    cleanup();
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-rename-agent-root"));
+    expect(
+      screen.getByTestId("epic-sidebar-rename-input-agent-root"),
+    ).toBeTruthy();
+    expectTuiHarness("agent-root");
+  });
+
+  it("falls back to the bot glyph when a TUI row has no harness id", () => {
+    seedChatTree();
+    // tuiHarnessIds stays empty → useMaybeEpicTuiAgentHarnessId returns null.
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const tuiRow = screen.getByTestId("epic-sidebar-item-agent-root");
+    expect(tuiRow.querySelector(".lucide-bot")).not.toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-harness-agent-root")).toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-surface-agent-root")).toBeNull();
+  });
+
+  it("swaps an active TUI row to the terminal spinner and hides the harness brand", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+    testState.activeAgentIds = new Set(["agent-root"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.getByTestId("terminal-agent-sidebar-spinner")).not.toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-harness-agent-root")).toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-surface-agent-root")).toBeNull();
+  });
+
+  it("centers the leading icon on the card via horizontal items-center siblings (no fixed row height)", () => {
+    seedChatTree();
+    secondLineContent.value = "branch-main";
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    // Regression guard for "leading icon centered on the two-line card".
+    // jsdom has no layout, so assert the structural contract: the row is a
+    // horizontal flex with items-center; chevron + leading icon slot are
+    // direct children of the row (siblings of the text column); the leading
+    // icon is NOT nested inside the column that holds row-2; no fixed height
+    // pins the card (min-h is fine).
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(row.className).toContain("items-center");
+    // Fixed height would be `h-N` / `h-[…]`; min-h is the allowed floor.
+    expect(row.className).not.toMatch(/(?:^|\s)h-(?:\d|\[)/);
+
+    const workspace = screen.getByTestId(
+      "epic-sidebar-row-workspace-chat-root",
+    );
+    const textColumn = workspace.parentElement;
+    expect(textColumn).not.toBeNull();
+    expect(textColumn?.parentElement).toBe(row);
+
+    const chatGlyph = row.querySelector(".lucide-message-square");
+    expect(chatGlyph).not.toBeNull();
+    // Leading icon must not live inside the text column that owns row-2.
+    expect(textColumn?.contains(chatGlyph)).toBe(false);
+
+    // Walk up from the glyph to the row's direct-child slot.
+    let leadingSlot: Element | null = chatGlyph;
+    while (
+      leadingSlot !== null &&
+      leadingSlot.parentElement !== null &&
+      leadingSlot.parentElement !== row
+    ) {
+      leadingSlot = leadingSlot.parentElement;
+    }
+    expect(leadingSlot?.parentElement).toBe(row);
+    // Slot is a sibling of the text column, not nested under it.
+    expect(leadingSlot).not.toBe(textColumn);
+    expect(Array.from(row.children)).toContain(leadingSlot);
+    expect(Array.from(row.children)).toContain(textColumn);
+
+    // Chevron is also a direct child of the row (before the leading slot).
+    const chevronOrSpacer = row.children[0];
+    expect(chevronOrSpacer).toBeDefined();
+    expect(chevronOrSpacer).not.toBe(leadingSlot);
+    expect(chevronOrSpacer).not.toBe(textColumn);
+  });
+
+  it("shows the leading icon and trailing status chip simultaneously (additive, not replacing)", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+    testState.activeAgentIds = new Set(["chat-child"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    // Idle chat: leading chat glyph + trailing idle chip.
+    const chatRoot = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(chatRoot.querySelector(".lucide-message-square")).not.toBeNull();
+    expect(screen.getByTestId("chat-row-status-idle-chat-root")).toBeTruthy();
+
+    // Working chat: leading activity spinner + trailing working chip.
+    const chatChild = screen.getByTestId("epic-sidebar-item-chat-child");
+    expect(
+      chatChild.querySelector(
+        '[data-testid="chat-sidebar-spinner-activity-chat-child"]',
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("chat-row-status-working-chat-child"),
+    ).toBeTruthy();
+
+    // Idle TUI: leading harness brand + trailing idle chip.
+    expectTuiHarness("agent-root");
+    expect(screen.getByTestId("chat-row-status-idle-agent-root")).toBeTruthy();
+  });
+
+  it("keeps the leading icon decorative so only the trailing chip announces status", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    // Still rendered: the icon is visually unchanged and findable by testid /
+    // glyph class. Only its a11y-tree exposure is removed.
+    const chatGlyph = screen
+      .getByTestId("epic-sidebar-item-chat-root")
+      .querySelector(".lucide-message-square");
+    expect(chatGlyph).toBeTruthy();
+    const harnessSlot = screen.getByTestId("sidebar-agent-harness-agent-root");
+
+    // Both leading icons sit inside an aria-hidden slot, so a status-aware
+    // leading glyph can never double-announce alongside the trailing chip.
+    expect(chatGlyph?.closest("[aria-hidden]")).toBeTruthy();
+    expect(harnessSlot.closest("[aria-hidden]")).toBeTruthy();
+
+    // The trailing chip must stay in the a11y tree - it is the single
+    // announced status.
+    expect(
+      screen
+        .getByTestId("chat-row-status-idle-chat-root")
+        .closest("[aria-hidden]"),
+    ).toBeNull();
   });
 });
 
