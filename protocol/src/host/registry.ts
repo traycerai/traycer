@@ -6,6 +6,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import {
   defineVersionedStreamRpcRegistry,
+  type UncheckedStreamMethodVersionRegistry,
   type VersionedStreamRpcRegistry,
 } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
@@ -4643,38 +4644,22 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 // above), which still validates every entry against this literal's precise
 // type at the `defineVersionedStreamRpcRegistry` call site below - only the
 // EXPORTED const's declared type is widened (see the comment there).
-const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
+//
+// `chat.subscribe` is deliberately declared apart from every other method
+// here, then merged back in via spread into `HOST_STREAM_RPC_REGISTRY_DEFINITION`
+// below: its 6-minor discriminated-union snapshot schema is large enough that
+// referencing `typeof` on a merged const that includes it - from ANY exported
+// type position - hits TS7056 during `.d.ts` emission, even when that
+// position only picks OTHER methods out of the merge. Keeping this const free
+// of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
+// never has to expand it (see `HostStreamRpcMethodMap` below).
+const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   "epic.subscribe": {
     1: {
       latestMinor: 0,
       versions: {
         0: {
           contract: epicSubscribeV10,
-        },
-      },
-    },
-  },
-  "chat.subscribe": {
-    1: {
-      latestMinor: 5,
-      versions: {
-        0: {
-          contract: chatSubscribeV10,
-        },
-        1: {
-          contract: chatSubscribeV11,
-        },
-        2: {
-          contract: chatSubscribeV12,
-        },
-        3: {
-          contract: chatSubscribeV13,
-        },
-        4: {
-          contract: chatSubscribeV14,
-        },
-        5: {
-          contract: chatSubscribeV15,
         },
       },
     },
@@ -4825,18 +4810,64 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   },
 } as const;
 
-// Deliberately widened to the bare (unparameterized) `VersionedStreamRpcRegistry`
-// rather than `VersionedStreamRpcRegistry<typeof HOST_STREAM_RPC_REGISTRY_DEFINITION>`:
-// the call below still runs full structural + schema-compatibility validation
-// against the precise literal (nothing here weakens that), but printing the
-// PRECISE per-method/per-minor type into this package's `.d.ts` is what hits
-// TS7056 once `chat.subscribe` alone carries this many minors - a `typeof`
-// reference doesn't avoid it, since the referenced const isn't exported and
-// still has to be inlined. No in-repo consumer narrows through this registry's
-// own type for a specific method/version (each imports the versioned contract
-// it needs directly, e.g. `chatSubscribeV15`, for that); confirmed by a full
-// workspace compile+build with this annotation in place.
-export const hostStreamRpcRegistry: VersionedStreamRpcRegistry =
-  defineVersionedStreamRpcRegistry(HOST_STREAM_RPC_REGISTRY_DEFINITION);
+const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
+  ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
+  "chat.subscribe": {
+    1: {
+      latestMinor: 5,
+      versions: {
+        0: {
+          contract: chatSubscribeV10,
+        },
+        1: {
+          contract: chatSubscribeV11,
+        },
+        2: {
+          contract: chatSubscribeV12,
+        },
+        3: {
+          contract: chatSubscribeV13,
+        },
+        4: {
+          contract: chatSubscribeV14,
+        },
+        5: {
+          contract: chatSubscribeV15,
+        },
+      },
+    },
+  },
+} as const;
 
-export type HostStreamRpcRegistry = typeof hostStreamRpcRegistry;
+// `chat.subscribe`'s value slot is widened to the generic
+// `UncheckedStreamMethodVersionRegistry` shape here rather than reusing
+// `typeof HOST_STREAM_RPC_REGISTRY_DEFINITION` (which includes it): every
+// OTHER streaming method is built from `typeof
+// HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`, a const that never contains
+// `chat.subscribe`'s 6-minor discriminated-union schema, so `.d.ts` emission
+// never has to print it - `keyof HostStreamRpcRegistry` and `ParamsOf<...>`
+// stay precise for every method except `chat.subscribe`. Its callers (e.g.
+// `ChatStreamClient`) lose compile-time verification of their open-request
+// shape against this registry alone; they still get it from the
+// directly-imported contract const (`chatSubscribeV15`), so this is a
+// narrow, intentional trade-off - confirmed by a full workspace
+// compile+build with this annotation in place.
+type HostStreamRpcMethodMap = typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
+  readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
+};
+
+export type HostStreamRpcRegistry =
+  VersionedStreamRpcRegistry<HostStreamRpcMethodMap>;
+
+// Annotated with `HostStreamRpcRegistry` itself (not `typeof
+// HOST_STREAM_RPC_REGISTRY_DEFINITION`, which is more precise but exceeds
+// TS7056's declaration-emit ceiling once `chat.subscribe` alone carries this
+// many minors): `defineVersionedStreamRpcRegistry` still validates the full
+// precise literal at this call site (nothing here weakens that check), and
+// its precise return type remains assignable to this narrower annotation
+// (the only difference is `chat.subscribe`'s widened value slot, and a
+// branded, more precise value is always assignable into an unbranded,
+// less precise hole) - confirmed by a full workspace compile+build with
+// this annotation in place.
+export const hostStreamRpcRegistry: HostStreamRpcRegistry =
+  defineVersionedStreamRpcRegistry(HOST_STREAM_RPC_REGISTRY_DEFINITION);
