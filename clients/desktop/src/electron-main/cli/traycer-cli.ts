@@ -467,11 +467,11 @@ export interface StreamTraycerCliOptions {
   readonly onEvent: (event: NdjsonEvent) => void;
   readonly env: Readonly<Record<string, string>> | null;
   readonly timeoutMs: number;
-  // Fixup C4: killed the moment this fires (SIGKILL, same as the timeout/
-  // stdout-overflow paths below) instead of only flipping `.aborted` on a
-  // controller nothing downstream ever consulted. `null` for callers with
-  // no cancellation surface (every mutation-lane call via `streamBundled` -
-  // only the download lane's `AbortController` ever aborts).
+  // Fixup C4: killed the moment this fires (SIGKILL, same as the timeout
+  // path below) instead of only flipping `.aborted` on a controller nothing
+  // downstream ever consulted. `null` for callers with no cancellation
+  // surface (every mutation-lane call via `streamBundled` - only the
+  // download lane's `AbortController` ever aborts).
   readonly signal: AbortSignal | null;
 }
 
@@ -663,7 +663,12 @@ async function streamTraycerCliJsonWithInvocation<T>(
       );
     });
 
-    child.on("close", (exitCode) => {
+    // `close` reports `(code, signal)`, and a signal-killed child always has
+    // a null code. Ignoring `signal` collapsed every external kill into the
+    // "emitted no terminal result" branch below, which reads as "the CLI ran
+    // fine but stayed silent" - the opposite of what happened, and the reason
+    // flaky `host install` failures were undiagnosable from the message alone.
+    child.on("close", (exitCode, signal) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -683,6 +688,24 @@ async function streamTraycerCliJsonWithInvocation<T>(
               message: terminalError.message,
               code: terminalError.code,
               details: terminalError.details,
+              exitCode,
+              stderrTail,
+            },
+            null,
+          ),
+        );
+        return;
+      }
+      // Checked after the abort/timeout paths above: those kill the child
+      // themselves and already carry a more specific cause, so only a kill
+      // this process did not ask for reaches here.
+      if (signal !== null) {
+        reject(
+          new TraycerCliError(
+            {
+              message: `traycer-cli was killed by ${signal}: ${augmentedArgs.join(" ")}`,
+              code: null,
+              details: null,
               exitCode,
               stderrTail,
             },
