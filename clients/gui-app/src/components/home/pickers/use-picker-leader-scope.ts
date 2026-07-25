@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 import type { ProviderId } from "@/components/home/data/landing-options";
-import type { RailEntry } from "@/components/home/pickers/harness-rail-providers";
+import {
+  harnessAvailabilityUnsettled,
+  type RailEntry,
+} from "@/components/home/pickers/harness-rail-providers";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import {
   LEADER_SCOPE_MODEL_PICKER,
@@ -100,11 +103,13 @@ export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
             const index = digit === 0 ? 9 : digit - 1;
             if (index < 0 || index >= list.length) return false;
             const target = list[index];
-            // Mirror the rail button's disabled state: a still-probing (pending)
-            // provider can't be selected by click, so the ⌘-digit shortcut must
-            // not select it either. Its digit badge is hidden while pending, so
-            // dispatching here would be a silent no-op the picker resolves away.
-            if (target.harness.availabilityPending) return false;
+            // Mirror the rail button's disabled state: a provider with no
+            // settled availability verdict yet can't be selected by click, so
+            // the ⌘-digit shortcut must not select it either. Its digit badge is
+            // hidden in that state, so dispatching here would be a silent no-op
+            // the picker resolves away. A provider merely revalidating a known
+            // verdict stays selectable, like its rail button.
+            if (harnessAvailabilityUnsettled(target.harness)) return false;
             stateRef.current.onEntryChange(target.harness.id);
             return true;
           },
