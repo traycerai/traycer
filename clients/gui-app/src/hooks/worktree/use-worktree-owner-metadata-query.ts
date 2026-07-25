@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
+  RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
@@ -90,6 +91,26 @@ function bindingRunPaths(binding: WorktreeBinding | null): {
         ),
       ),
     ),
+  };
+}
+
+/**
+ * The one place `worktree.listAllForHost`'s request shape is written. Shared
+ * between the background query (render-scoped `worktreePaths`) and a forced
+ * refresh's cache-write key (the `worktreePaths` CAPTURED at mutate time), so
+ * the two cannot drift into hand-copied literals that quietly fork.
+ */
+function worktreeListAllForHostParams(
+  worktreePaths: ReadonlyArray<string>,
+): RequestOfMethod<HostRpcRegistry, "worktree.listAllForHost"> {
+  return {
+    includeActivity: true,
+    activityPaths: [...worktreePaths],
+    cursor: null,
+    limit: null,
+    // A background read: serve the host's TTL-cached view. Only an explicit
+    // Refresh forces a disk recompute (see the mutation's own `mapVariables`).
+    forceRefresh: false,
   };
 }
 
@@ -199,20 +220,8 @@ export function useWorktreeOwnerMetadata(args: {
     args.client,
     { workspacePaths, enabled: args.enabled },
   );
-  // The background read's params, held in ONE place because the forced refresh
-  // below has to write its response into this query's cache entry - and a key
-  // rebuilt from a second, hand-copied literal silently forks the moment either
-  // side changes.
   const listParams = useMemo(
-    () => ({
-      includeActivity: true,
-      activityPaths: worktreePaths,
-      cursor: null,
-      limit: null,
-      // A background read: serve the host's TTL-cached view. Only an explicit
-      // Refresh (below, and the Settings toolbar's) forces a disk recompute.
-      forceRefresh: false,
-    }),
+    () => worktreeListAllForHostParams(worktreePaths),
     [worktreePaths],
   );
   const worktreesQuery = useHostQuery<
@@ -228,12 +237,13 @@ export function useWorktreeOwnerMetadata(args: {
   const refreshMutation = useHostMutation<
     HostRpcRegistry,
     "worktree.listAllForHost",
-    // Captured at the moment the mutation actually fires, not read from this
-    // render's closed-over `readiness.hostId`: a client rebind while a forced
-    // read is in flight would otherwise land the OLD host's response in the
-    // NEW host's cache entry, since `onSuccess` runs on whatever render last
-    // recomputed the key rather than the one that started the request.
-    { readonly hostId: string | null },
+    // Both fields captured at the moment the mutation actually fires, not read
+    // from this render's closures: a client rebind, or a binding edit that
+    // changes which paths are in scope, while a forced read is in flight would
+    // otherwise land the response under the WRONG host or the wrong path set,
+    // since `onSuccess` runs whenever it runs - not necessarily against the
+    // render that started the request.
+    { readonly hostId: string | null; readonly worktreePaths: string[] },
     // Mutable `string[]`, matching the request schema's own `activityPaths`
     // rather than copying a readonly view into it on every call.
     { readonly worktreePaths: string[] }
@@ -253,7 +263,10 @@ export function useWorktreeOwnerMetadata(args: {
     }),
     options: {
       mutationKey: worktreeMutationKeys.refreshOwnerMetadata(args.ownerId),
-      onMutate: () => ({ hostId: args.client?.getActiveHostId() ?? null }),
+      onMutate: (variables) => ({
+        hostId: args.client?.getActiveHostId() ?? null,
+        worktreePaths: variables.worktreePaths,
+      }),
       // The card can be gone by the time this lands (the pointer left), so the
       // toast is the only place a failure can surface.
       onError: (error) =>
@@ -261,13 +274,14 @@ export function useWorktreeOwnerMetadata(args: {
       // Lands in the SAME cache entry the card renders from. Reissuing the
       // query with `forceRefresh: true` in its params instead would fork a
       // second key that no observer reads, so the fresh facts would never
-      // reach the screen.
+      // reach the screen. Built from the captured context, not the render's
+      // `listParams`, so it lands in the entry THIS request actually read.
       onSuccess: (response, _variables, context) => {
         queryClient.setQueryData<WorktreeListAllForHostResponse>(
           queryKeys.hostMethod<HostRpcRegistry, "worktree.listAllForHost">(
             context.hostId,
             "worktree.listAllForHost",
-            listParams,
+            worktreeListAllForHostParams(context.worktreePaths),
           ),
           response,
         );
@@ -280,7 +294,7 @@ export function useWorktreeOwnerMetadata(args: {
   const refreshWorkspacesMutation = useHostMutation<
     HostRpcRegistry,
     "worktree.listByWorkspacePaths",
-    { readonly hostId: string | null },
+    { readonly hostId: string | null; readonly workspacePaths: string[] },
     { readonly workspacePaths: string[] }
   >({
     client: args.client,
@@ -292,7 +306,10 @@ export function useWorktreeOwnerMetadata(args: {
     }),
     options: {
       mutationKey: worktreeMutationKeys.refreshOwnerWorkspaces(args.ownerId),
-      onMutate: () => ({ hostId: args.client?.getActiveHostId() ?? null }),
+      onMutate: (variables) => ({
+        hostId: args.client?.getActiveHostId() ?? null,
+        workspacePaths: variables.workspacePaths,
+      }),
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh workspace details."),
       onSuccess: (response, _variables, context) => {
@@ -303,7 +320,7 @@ export function useWorktreeOwnerMetadata(args: {
           >(
             context.hostId,
             "worktree.listByWorkspacePaths",
-            worktreeListByWorkspacePathsParams(workspacePaths),
+            worktreeListByWorkspacePathsParams(context.workspacePaths),
           ),
           response,
         );
@@ -316,25 +333,29 @@ export function useWorktreeOwnerMetadata(args: {
   const suppliedBinding = args.binding;
   const refresh = useCallback(async () => {
     // The binding decides WHICH folders the card lists, the listing decides
-    // what it says about them; a refresh that skipped the binding would keep
-    // showing a folder the owner no longer runs in.
+    // what it says about them - so refetch the binding FIRST and force the
+    // reads against ITS paths, not this render's. Forcing on the render's
+    // stale path set would refresh the WRONG folders whenever the binding
+    // changed (a worktree added/removed) since this callback was created,
+    // leaving the newly (dis)appeared folder stale until a second Refresh.
+    const currentBinding =
+      suppliedBinding === undefined
+        ? ((await refetchBinding()).data?.binding ?? null)
+        : suppliedBinding;
+    const paths = bindingRunPaths(currentBinding);
     await Promise.all([
-      suppliedBinding === undefined ? refetchBinding() : null,
-      worktreePaths.length === 0
+      paths.worktreePaths.length === 0
         ? null
-        : refreshWorktrees({ worktreePaths }).then(() => undefined),
-      workspacePaths.length === 0
+        : refreshWorktrees({ worktreePaths: paths.worktreePaths }).then(
+            () => undefined,
+          ),
+      paths.workspacePaths.length === 0
         ? null
-        : refreshWorkspaces({ workspacePaths }).then(() => undefined),
+        : refreshWorkspaces({ workspacePaths: paths.workspacePaths }).then(
+            () => undefined,
+          ),
     ]);
-  }, [
-    refetchBinding,
-    refreshWorkspaces,
-    refreshWorktrees,
-    suppliedBinding,
-    workspacePaths,
-    worktreePaths,
-  ]);
+  }, [refetchBinding, refreshWorkspaces, refreshWorktrees, suppliedBinding]);
 
   const worktrees = worktreesQuery.data?.worktrees ?? EMPTY_WORKTREES;
   const workspaces = workspacesQuery.data?.workspaces ?? EMPTY_WORKSPACES;
