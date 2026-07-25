@@ -18,12 +18,10 @@
 
 const { openSync, fstatSync, readSync, closeSync } = require("node:fs");
 const { resolve } = require("node:path");
+const { PNG_SIGNATURE } = require("../assets/png-codec.cjs");
 
 const bundleDir = resolve(__dirname, "..", "..", "resources", "bundle");
 
-const PNG_SIGNATURE = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-]);
 const ICNS_SIGNATURE = Buffer.from("icns", "ascii");
 const REQUIRED_ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
 // Kept in sync with `ICON_SIZES` in `scripts/assets/generate-linux-icons.cjs`.
