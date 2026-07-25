@@ -16,11 +16,12 @@ const handleCopyError = (): void => {
 };
 
 /**
- * Copy affordance for an A2A send/received message body, styled like
- * `OpenFullDiffControl`'s corner control but rendered as a static sibling in
- * a dedicated, non-scrolling gutter next to the scrollable message box
- * (never overlaid on top of it), so it never intercepts clicks or drags meant
- * for that box's native scrollbar.
+ * Floating copy affordance pinned to the top-right corner of an A2A
+ * send/received message body, mirroring `OpenFullDiffControl`'s always-visible
+ * corner placement over the artifact diff viewer. Absolutely positioned over
+ * the scrollable message box (which carries `pr-10` so text clears it); the
+ * box keeps its own border and native scrollbar, so the scrollbar stays flush
+ * against that border rather than being pushed inward by a reserved gutter.
  */
 export function AgentMessageCopyButton(props: {
   readonly value: string;
@@ -40,7 +41,7 @@ export function AgentMessageCopyButton(props: {
       aria-label={copied ? "Copied" : "Copy message"}
       title={copied ? "Copied" : "Copy message"}
       className={cn(
-        "flex size-7 shrink-0 items-center justify-center",
+        "absolute top-2 right-2 z-10 flex size-7 items-center justify-center",
         "cursor-pointer rounded-md border border-border bg-muted text-muted-foreground shadow-md",
         "transition-colors hover:bg-accent hover:text-foreground",
         "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",

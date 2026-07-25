@@ -118,6 +118,19 @@ const testState = vi.hoisted<TestState>(() => ({
   activeHostClient: { getActiveHostId: () => "host-1" },
 }));
 
+// The artifact panel now hosts a search box; keep its host query inert so these
+// tree-focused tests need no QueryClient. An empty query renders no results.
+vi.mock("@/hooks/epic/use-epic-search-artifacts-query", () => ({
+  useEpicSearchArtifacts: () => ({
+    isSuccess: false,
+    isError: false,
+    isFetching: false,
+    data: undefined,
+    error: null,
+    refetch: () => undefined,
+  }),
+}));
+
 vi.mock("@/components/epic-canvas/dnd/epic-canvas-dnd-context-value", () => ({
   useEpicCanvasDnd: () => ({
     activeSource: null,
@@ -668,6 +681,58 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByRole("button", { name: "Select all" })).not.toBeNull();
   });
 
+  it("gives selection controls the full header row without changing its height", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const section = screen.getByTestId("epic-left-panel-section-chats");
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
+
+    const selectionHeader = section.querySelector(
+      '[data-panel-header-mode="selection"]',
+    );
+    expect(selectionHeader).not.toBeNull();
+    expect(selectionHeader?.className).toContain("h-9");
+    expect(
+      screen.getByRole("button", { name: "Cancel selection" }),
+    ).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel selection" }));
+    expect(
+      section.querySelector('[data-panel-header-mode="selection"]'),
+    ).toBeNull();
+    expect(screen.getByText("Agents")).not.toBeNull();
+  });
+
+  it("uses container-aware overflow before header actions can squeeze the artifact title", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const section = screen.getByTestId("epic-left-panel-section-artifacts");
+    expect(section.firstElementChild?.className).toContain("@container");
+    expect(
+      screen.getByRole("button", { name: "Select artifacts" }).className,
+    ).toContain("@max-[21rem]:hidden");
+    expect(
+      screen.getByTestId("epic-sidebar-collapse-all-artifacts").className,
+    ).toContain("@max-[21rem]:hidden");
+    expect(
+      screen.getByTestId("epic-sidebar-mark-all-artifacts-read").className,
+    ).toContain("@max-[21rem]:hidden");
+
+    const more = screen.getByTestId("epic-sidebar-more-artifacts");
+    expect(more.className).toContain("hidden");
+    expect(more.className).toContain("@max-[21rem]:inline-flex");
+
+    fireEvent.click(screen.getByRole("button", { name: "Select artifacts" }));
+    expect(
+      section.querySelector('[data-panel-header-mode="selection"]'),
+    ).not.toBeNull();
+  });
+
   it("renders loading chat and artifact panels before the epic session handle exists", () => {
     testState.sessionReady = false;
 
@@ -750,7 +815,7 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
   });
 
-  it("subscripts only TUI harness brands", () => {
+  it("brands only TUI agent rows", () => {
     seedChatTree();
     testState.chatHarnessIds = {
       "chat-root": "codex",
@@ -760,11 +825,9 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    expect(
-      screen
-        .getByTestId("sidebar-agent-harness-chat-root")
-        .getAttribute("data-agent-surface"),
-    ).toBe("gui");
+    // A persisted chat harness must NOT reach the row: chat rows keep the plain
+    // chat glyph so the panel isn't a column of multi-colored provider marks.
+    expect(screen.queryByTestId("sidebar-agent-harness-chat-root")).toBeNull();
     expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
     expect(
       screen
@@ -778,7 +841,7 @@ describe("epic sidebar selection mode", () => {
     ).toBe("tui");
   });
 
-  it("does not subscript harness brands in a GUI-only task", () => {
+  it("renders no harness brand in a GUI-only task", () => {
     seedGuiChatTree();
     testState.chatHarnessIds = {
       "chat-root": "codex",
@@ -787,6 +850,8 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
+    expect(screen.queryByTestId("sidebar-agent-harness-chat-root")).toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-harness-chat-child")).toBeNull();
     expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
     expect(screen.queryByTestId("sidebar-agent-surface-chat-child")).toBeNull();
   });

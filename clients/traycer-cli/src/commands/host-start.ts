@@ -15,6 +15,10 @@ import {
 } from "../host/bootstrap-log";
 import { rotateHostLogIfOversized } from "../host/host-log-rotation";
 import {
+  findLiveIncumbentHost,
+  type IncumbentHost,
+} from "../host/incumbent-check";
+import {
   readHostInstallRecord,
   type HostInstallRecord,
 } from "../manifest/host-install";
@@ -148,6 +152,11 @@ export type SpawnImpl = (
 
 export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
   readonly spawn: SpawnImpl;
+  // Injected so tests can drive the "another host already owns this data
+  // dir" branch without a real pid.json or a live loopback listener.
+  readonly findIncumbentHost: (
+    environment: Environment | undefined,
+  ) => Promise<IncumbentHost | null>;
   readonly openLogFd: (environment: Environment) => Promise<number>;
   readonly rotateLog: (
     environment: Environment,
@@ -167,6 +176,7 @@ export interface RunHostStartDeps extends ResolveHostStartTargetDeps {
 const defaultRunDeps: RunHostStartDeps = {
   ...defaultDeps,
   spawn: (cmd, args, options) => nodeSpawn(cmd, args.slice(), options),
+  findIncumbentHost: findLiveIncumbentHost,
   openLogFd: openBootstrapLogFd,
   rotateLog: rotateHostLogIfOversized,
   readEnvOverrides: async () => ({ ...(await listEnvOverrides()) }),
@@ -206,6 +216,74 @@ export async function runHostStart(
     attemptId,
     supervisorPid,
   });
+
+  // Best-effort backstop against stacking a second host on a live one.
+  // BE PRECISE ABOUT WHAT THIS DOES AND DOES NOT COVER.
+  //
+  // Runs BEFORE `resolveHostStartTarget` on purpose. Another host already
+  // owning this data dir settles what this invocation should do regardless
+  // of whether THIS label can resolve its own install target, and the two
+  // exit codes disagree: a resolution failure exits 69 / 1, which
+  // `KeepAlive.SuccessfulExit = false` treats as restartable, so launchd
+  // relaunches this job into a throttled crash loop while a perfectly
+  // healthy host is serving. Probing first turns that into a quiet exit 0.
+  // The record can be missing or invalid while a host is live - an
+  // uninstall, a failed install, or the window where `host install` has
+  // swapped `install/` aside - so this is reachable, not theoretical. With
+  // no incumbent the resolution error still surfaces exactly as before.
+  //
+  // Covered (deterministic): any STAGGERED start where a host is already
+  // publishing - a raw `traycer host start` against a running host, one
+  // launchd label starting while the other's host is up, a crash-restart of
+  // one label mid-session. That is the shape of the field bug: an install
+  // bootstrapping the CLI label beside Desktop's already-running agent.
+  //
+  // NOT covered: two supervisors starting SIMULTANEOUSLY, which is what a
+  // cold login does when a machine carries both the CLI label
+  // (`ai.traycer.host`) and Desktop's SMAppService label
+  // (`ai.traycer.host.agent`), since both set `RunAtLoad`. pid.json does not
+  // exist yet - the host unlinks it on graceful shutdown and publishes only
+  // after `listen()` succeeds - so both callers observe no incumbent and
+  // both spawn. This check is a read-only observation with no reservation
+  // behind it; it cannot serialise that. The host binds an ephemeral port
+  // (`listenPort: 0`), so there is no OS-level collision to fall back on
+  // either.
+  //
+  // That residual is contained elsewhere, not here: `installService`'s
+  // ownership refusals stop a dual registration from being CREATED at all,
+  // and Desktop's `retireLegacyLabelRegistrations` deletes the legacy plist
+  // and boots out the stale label - killing a duplicate mid-session, not
+  // only at next login. Real mutual exclusion belongs in the host process
+  // as a single-instance lock held for its lifetime, which is tracked
+  // separately.
+  //
+  // Declining is the whole policy: never evict the incumbent. Intentional
+  // version replacement belongs to the install lifecycle (`beforeSwap`
+  // stops the running host before the swap), which knows it is an upgrade;
+  // this supervisor cannot tell an upgrade from an accidental second job.
+  // Evicting would also flap against KeepAlive - a signal-killed supervisor
+  // exits 128+N, which `SuccessfulExit: false` treats as restartable, so
+  // the victim comes back and evicts us in turn.
+  //
+  // Exit 0 specifically: `KeepAlive.SuccessfulExit = false` leaves a
+  // cleanly-exited job down until the next login instead of relaunching it
+  // in a loop. No bootstrap marker is written - declining is not a spawn
+  // attempt, and the existing phases all describe one.
+  const incumbent = await deps.findIncumbentHost(opts.environment);
+  if (incumbent !== null) {
+    logger.warn(
+      "Host supervisor declined to start - another host already owns this data dir",
+      {
+        environment: opts.environment,
+        incumbentPid: incumbent.pid,
+        incumbentVersion: incumbent.version,
+        incumbentWebsocketUrl: incumbent.websocketUrl,
+        attemptId,
+        supervisorPid,
+      },
+    );
+    return deps.exit(0);
+  }
 
   let target: HostStartTarget;
   try {

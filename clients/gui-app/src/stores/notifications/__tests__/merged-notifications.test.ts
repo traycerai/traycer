@@ -448,6 +448,7 @@ describe("merged notifications feed", () => {
       severity: "failure",
       outcome: null,
       resolvedAt: null,
+      sourceRef: null,
       category: "system",
     });
   });

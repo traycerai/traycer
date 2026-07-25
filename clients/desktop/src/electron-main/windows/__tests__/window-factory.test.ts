@@ -330,14 +330,14 @@ describe("loadMainWindow", () => {
     ]);
   });
 
-  it("keeps the Window Controls Overlay configuration on Windows", () => {
+  it("scales the Window Controls Overlay configuration with initial zoom on Windows", () => {
     setProcessPlatform("win32");
 
     createMainWindowForTest({
       preloadPath: "/preload.js",
       windowId: "window-a",
       initialRoute: "/",
-      zoomFactor: 1,
+      zoomFactor: 1.5,
       placement: createFirstLaunchWindowPlacement(),
     });
 
@@ -347,7 +347,7 @@ describe("loadMainWindow", () => {
         titleBarOverlay: {
           color: "#0b0b0d",
           symbolColor: "#e5e5e5",
-          height: 36,
+          height: 54,
         },
       }),
     ]);

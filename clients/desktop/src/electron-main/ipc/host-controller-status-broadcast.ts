@@ -85,8 +85,8 @@ export function registerHostControllerStatusBroadcast(
   const hostController = bridge.options.hostController;
   let activeTimer: NodeJS.Timeout | null = null;
   let disposed = false;
-  let nextPublicationGeneration = 0;
-  let lastPublishedGeneration = 0;
+  let broadcastInFlight = false;
+  let broadcastRequested = false;
 
   const stopActivePolling = (): void => {
     if (activeTimer === null) return;
@@ -101,36 +101,75 @@ export function registerHostControllerStatusBroadcast(
     }, ACTIVE_DOWNLOAD_POLL_MS);
   };
 
+  const publish = async (): Promise<void> => {
+    const status = await hostController.getStatus();
+    if (disposed) return;
+    try {
+      bridge.fanOut(RunnerHostEvent.hostControllerStatusChange, status);
+    } catch (err) {
+      // Isolated like the listener loop below so a dispatch failure (e.g. a
+      // window destroyed mid-send) is never mistaken for an unhealthy
+      // controller - the status read succeeded and polling cadence decisions
+      // below still deserve to run on it.
+      log.warn("[host-controller-status-broadcast] fanOut threw", { err });
+    }
+    for (const listener of extraListeners.get(bridge) ?? []) {
+      try {
+        listener(status);
+      } catch (err) {
+        log.warn("[host-controller-status-broadcast] listener threw", {
+          err,
+        });
+      }
+    }
+    if (status.download !== null && status.download.lastError === null) {
+      ensureActivePolling();
+    } else {
+      stopActivePolling();
+    }
+  };
+
+  // One `broadcast` fires per mutation-progress event, and a host install
+  // streams thousands of them while it downloads. `getStatus()` is not cheap
+  // (three JSON reads plus a TCP reachability probe), so letting those calls
+  // overlap buried libuv's four-thread pool under thousands of concurrent fs
+  // operations and starved the main process event loop - the "Traycer is not
+  // responding" dialogs seen while installing.
+  //
+  // Serializing collapses a burst into the only status the renderer actually
+  // needs: whatever holds once the burst settles. The trailing re-run keeps
+  // the last event from being the one dropped. Ordering is structural now,
+  // so the publication-generation counters this used to carry are gone -
+  // nothing can arrive out of order when only one read is ever in flight.
+  //
+  // A failed read costs only its own publication: the drain loop keeps going,
+  // so a tick queued behind the failure (which may carry the mutation's
+  // terminal status) still gets its re-read instead of waiting out the idle
+  // interval with the renderer stuck on a stale "active" status.
   const broadcast = async (): Promise<void> => {
     if (disposed) return;
-    const publicationGeneration = ++nextPublicationGeneration;
+    if (broadcastInFlight) {
+      broadcastRequested = true;
+      return;
+    }
+    broadcastInFlight = true;
     try {
-      const status = await hostController.getStatus();
-      if (disposed || publicationGeneration < lastPublishedGeneration) return;
-      lastPublishedGeneration = publicationGeneration;
-      bridge.fanOut(RunnerHostEvent.hostControllerStatusChange, status);
-      for (const listener of extraListeners.get(bridge) ?? []) {
+      do {
+        broadcastRequested = false;
         try {
-          listener(status);
+          await publish();
         } catch (err) {
-          log.warn("[host-controller-status-broadcast] listener threw", {
+          log.warn("[host-controller-status-broadcast] getStatus failed", {
             err,
           });
+          // Degrade to the idle floor while the controller is unhealthy - a
+          // repeatedly-throwing getStatus must not keep the tight download
+          // cadence (and its per-tick warn) alive indefinitely.
+          stopActivePolling();
         }
-      }
-      if (status.download !== null && status.download.lastError === null) {
-        ensureActivePolling();
-      } else {
-        stopActivePolling();
-      }
-    } catch (err) {
-      log.warn("[host-controller-status-broadcast] getStatus failed", {
-        err,
-      });
-      // Degrade to the idle floor while the controller is unhealthy - a
-      // repeatedly-throwing getStatus must not keep the tight download
-      // cadence (and its per-tick warn) alive indefinitely.
-      stopActivePolling();
+      } while (broadcastRequested && !disposed);
+    } finally {
+      broadcastInFlight = false;
     }
   };
 
