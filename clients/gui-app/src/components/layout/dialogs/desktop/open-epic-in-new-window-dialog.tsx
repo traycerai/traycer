@@ -265,7 +265,7 @@ function buildOpenEpicRows(
       {
         epicId: light.id,
         // Keep the RAW title. `row.title` feeds `resolveTargetTabForEpic` and
-        // `requestOpenInNewWindow` (action/window data), so the "Untitled epic"
+        // `requestOpenInNewWindow` (action/window data), so the "Untitled task"
         // fallback must be applied only at the render site below.
         title: light.title,
         initialUserPrompt: light.initialUserPrompt,
