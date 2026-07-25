@@ -333,7 +333,7 @@ describe("dispatchAction", () => {
       .openEpicTab("epic-route-guard", "Route Guard");
     useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
     useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-b"));
-    useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().createDraft(null, undefined);
     const before = canvasTabIds(tabId);
 
     const { router } = buildRouter(`/epics/epic-route-guard/${tabId}`);
@@ -349,7 +349,7 @@ describe("dispatchAction", () => {
       .openEpicTab("epic-route-active", "Route Active");
     useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
     useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-b"));
-    useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().createDraft(null, undefined);
     tabActivate(
       existingEpicTabIntent({
         epicId: "epic-route-active",

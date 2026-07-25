@@ -45,6 +45,30 @@ export async function probeHostActivityBusy(
   }
 }
 
+/**
+ * Returns `true` when SOMETHING is serving HTTP on the host's loopback
+ * endpoint - any status code counts, including a pre-feature host's 404.
+ * Connect errors, malformed URLs, and timeouts return `false`.
+ *
+ * Deliberately NOT `probeHostActivityBusy`: that one folds "unreachable"
+ * into "busy" so an indeterminate answer can never green-light a teardown.
+ * Reachability needs the opposite bias - callers use it to decide whether an
+ * incumbent host is really there, and treating an unreachable host as
+ * present would strand the machine with no host at all.
+ */
+export async function probeHostReachable(
+  websocketUrl: string,
+): Promise<boolean> {
+  try {
+    await fetch(toActivityUrl(websocketUrl), {
+      signal: AbortSignal.timeout(ACTIVITY_PROBE_TIMEOUT_MS),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // `ws://127.0.0.1:<port>/rpc` -> `http://127.0.0.1:<port>/activity`. The host
 // binds loopback HTTP (not TLS). A malformed URL throws and is caught above as
 // the busy fail-safe.

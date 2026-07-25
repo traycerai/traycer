@@ -50,6 +50,34 @@ const FETCH_TEXT_ATTEMPT_CAP_MS = 20_000;
 const MAX_NETWORK_ATTEMPTS = 4;
 const NETWORK_RETRY_BACKOFF_MS = 750;
 
+// Archive downloads get their own budget, separate from `fetchText`'s
+// small-payload one (traycer#585/#588). On a throttled link the connection
+// is reset every few MB, so a flat 4-attempt cap gives up after ~20MB of a
+// 700MB archive even though every attempt made real progress.
+//
+// What terminates a download is therefore the CONSECUTIVE-STALL count, not
+// the attempt count: an attempt that appended bytes to the partial file
+// resets it, so a reset-prone-but-advancing link keeps going while a
+// genuinely dead endpoint still fails within seconds. `MAX_DOWNLOAD_
+// ATTEMPTS` is only a runaway guard for a peer that dribbles a byte per
+// attempt - it is not the budget that is expected to bind.
+const MAX_DOWNLOAD_ATTEMPTS = 200;
+const MAX_DOWNLOAD_STALL_ATTEMPTS = 6;
+// A restart discards every byte on disk, so it is the one event the stall
+// budget cannot police - it resets the yardstick progress is measured
+// against. Bounded separately: a healthy origin restarts a resume at most
+// once or twice (one edge in a CDN ignoring `Range`), while an origin whose
+// entity simply does not match the manifest restarts on every single
+// attempt and must not be allowed to re-transfer the archive indefinitely.
+const MAX_DOWNLOAD_RESTARTS = 3;
+// Backoff grows only while the download is STALLED (750ms, 1.5s, 3s, 6s,
+// 12s, capped) - an ISP that resets connections once a data threshold is
+// crossed needs a pause to recover, and hammering it every 750ms just
+// re-enters the same throttling window. An attempt that transferred bytes
+// resets the exponent with it, so an occasional reset on an otherwise
+// healthy link never pays more than the base delay.
+const DOWNLOAD_RETRY_BACKOFF_CAP_MS = 15_000;
+
 interface DrainableWriter {
   readonly destroyed: boolean;
   readonly writableEnded: boolean;
@@ -69,7 +97,15 @@ export interface FetchOptions {
 export interface NetworkHeartbeat {
   readonly phase: "attempt" | "watchdog" | "backoff";
   readonly attempt: number;
-  readonly maxAttempts: number;
+  // The ceiling this attempt counter is actually judged against, or `null`
+  // when the counter has no meaningful ceiling to show. `fetchText` reports
+  // a real budget (4 attempts and the payload is abandoned). An archive
+  // download does not: what terminates it is the consecutive-stall count,
+  // while `MAX_DOWNLOAD_ATTEMPTS` is only a runaway guard set far above any
+  // real transfer. Rendering "attempt 41/200" there describes a countdown
+  // that does not exist - the download would survive 200 more resets as
+  // long as each one moved bytes.
+  readonly maxAttempts: number | null;
 }
 
 export type NetworkHeartbeatListener = (heartbeat: NetworkHeartbeat) => void;
@@ -93,16 +129,27 @@ export async function fetchText(
   }
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= MAX_NETWORK_ATTEMPTS; attempt += 1) {
-    emitHeartbeat(opts.onHeartbeat, "attempt", attempt);
+    emitHeartbeat(opts.onHeartbeat, "attempt", attempt, MAX_NETWORK_ATTEMPTS);
     const controller = new AbortController();
     const linkedSignal = linkAbortSignals(controller, opts.signal);
     const watchdog = createWatchdog({
       controller,
       timeoutMs: FETCH_TEXT_WATCHDOG_MS,
-      onTimeout: () => emitHeartbeat(opts.onHeartbeat, "watchdog", attempt),
+      onTimeout: () =>
+        emitHeartbeat(
+          opts.onHeartbeat,
+          "watchdog",
+          attempt,
+          MAX_NETWORK_ATTEMPTS,
+        ),
     });
     const attemptCap = setTimeout(() => {
-      emitHeartbeat(opts.onHeartbeat, "watchdog", attempt);
+      emitHeartbeat(
+        opts.onHeartbeat,
+        "watchdog",
+        attempt,
+        MAX_NETWORK_ATTEMPTS,
+      );
       controller.abort();
     }, FETCH_TEXT_ATTEMPT_CAP_MS);
     try {
@@ -150,11 +197,11 @@ export async function fetchText(
       clearTimeout(attemptCap);
     }
     if (attempt < MAX_NETWORK_ATTEMPTS) {
-      emitHeartbeat(opts.onHeartbeat, "backoff", attempt);
-      await waitForRetry();
+      emitHeartbeat(opts.onHeartbeat, "backoff", attempt, MAX_NETWORK_ATTEMPTS);
+      await waitForRetry(NETWORK_RETRY_BACKOFF_MS);
     }
   }
-  throw exhaustedNetworkError(url, lastError);
+  throw exhaustedNetworkError(url, lastError, MAX_NETWORK_ATTEMPTS);
 }
 
 export interface DownloadToFileOptions extends FetchOptions {
@@ -211,16 +258,52 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
     sawFirstSuccessfulResponse: false,
   };
   let lastError: unknown = null;
-  for (let attempt = 1; attempt <= MAX_NETWORK_ATTEMPTS; attempt += 1) {
-    let offset = await partialSize(opts.destPath);
-    if (offset > 0 && state.entityValidator === null) {
-      await restartFromZero(opts.destPath, state);
-      offset = 0;
-    }
-    emitHeartbeat(opts.onHeartbeat, "attempt", attempt);
+  let stalledAttempts = 0;
+  let attempt = 1;
+  // The most bytes on disk since the last restart. Progress is judged
+  // against this high-water mark rather than against the attempt's own
+  // starting offset, so re-reading ground the download has already covered
+  // is correctly not progress: without that, an origin whose entity is
+  // shorter than the manifest declares oscillates forever - transfer the
+  // short body (looks like progress), Range past the end, 416, restart,
+  // transfer it again - resetting the stall counter every other attempt and
+  // running the full runaway guard on ~100 complete re-transfers.
+  //
+  // It is reset by a restart, and must be: a restart deletes the partial, so
+  // the mark would otherwise describe bytes that no longer exist and every
+  // subsequent attempt would be measured against a total it cannot reach.
+  // A 700MB resume that meets one Range-ignoring proxy would then give up
+  // inside six attempts while genuinely transferring on every one of them.
+  // `MAX_DOWNLOAD_RESTARTS` is what bounds the oscillation instead.
+  let bytesHighWaterMark = await partialSize(opts.destPath);
+  let restarts = 0;
+  for (; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    // No pre-flight restart: a partial file left by a PREVIOUS process is
+    // exactly what we want to resume, and this process has no validator for
+    // it yet. `downloadAttempt` puts the offset on the wire as a Range and
+    // handles every answer the server can give (206 resume, 416 already
+    // complete, 200 range-ignored -> restart), which is what makes the
+    // validator-less resume safe.
+    const offset = await partialSize(opts.destPath);
+    emitHeartbeat(opts.onHeartbeat, "attempt", attempt, null);
+    // Publish the starting point BEFORE the request goes out. A resumed
+    // process otherwise reports nothing until the first byte of the new
+    // attempt lands, so Desktop - whose carry-forward has no prior value in
+    // a fresh process - renders no progress bar at all while a 400MB partial
+    // sits on disk. On a stalling link that silence lasts a watchdog period
+    // per attempt, which is exactly the "it starts over every time" the
+    // resume work is meant to disprove. Emitted on every attempt, not just
+    // resumes, so a `restartFromZero` reports its rewind immediately instead
+    // of holding a stale percentage until the next chunk arrives.
+    opts.onProgress({
+      downloadedBytes: offset,
+      totalBytes: opts.expectedSizeBytes,
+    });
+    let restarted = false;
     try {
       const result = await downloadAttempt({ opts, state, offset, attempt });
       if (result.kind === "complete") return;
+      restarted = true;
       lastError = new Error(result.reason);
     } catch (err) {
       if (isCliError(err)) {
@@ -229,13 +312,44 @@ async function downloadWithRetries(opts: DownloadToFileOptions): Promise<void> {
       }
       lastError = err;
     }
-    if (attempt < MAX_NETWORK_ATTEMPTS) {
-      emitHeartbeat(opts.onHeartbeat, "backoff", attempt);
-      await waitForRetry();
+    if (restarted) {
+      restarts += 1;
+      if (restarts > MAX_DOWNLOAD_RESTARTS) break;
+      // The partial is gone, so the mark it described is meaningless now.
+      bytesHighWaterMark = 0;
     }
+    // Forward progress buys another round: only an attempt that pushed the
+    // partial file past its high-water mark counts as progress.
+    const landedBytes = await partialSize(opts.destPath);
+    if (landedBytes > bytesHighWaterMark) {
+      bytesHighWaterMark = landedBytes;
+      stalledAttempts = 0;
+    } else {
+      stalledAttempts += 1;
+    }
+    if (stalledAttempts >= MAX_DOWNLOAD_STALL_ATTEMPTS) break;
+    emitHeartbeat(opts.onHeartbeat, "backoff", attempt, null);
+    await waitForRetry(downloadRetryBackoffMs(stalledAttempts));
   }
-  await discardPartial(opts.destPath);
-  throw exhaustedNetworkError(opts.url, lastError);
+  // The partial file deliberately SURVIVES an exhausted budget: the next
+  // invocation resumes it from `destPath` (registry/download-cache.ts keeps
+  // that path stable across processes). Only positively-bad bytes get
+  // discarded - a size-cap abort above, or the sha256 mismatch in
+  // `downloadToFile`.
+  throw exhaustedNetworkError(
+    opts.url,
+    lastError,
+    Math.min(attempt, MAX_DOWNLOAD_ATTEMPTS),
+  );
+}
+
+function downloadRetryBackoffMs(stalledAttempts: number): number {
+  // Zero stalls (the attempt transferred bytes) and the first stall both
+  // pay only the base delay; the exponent starts climbing from the second
+  // consecutive stall.
+  const exponential =
+    NETWORK_RETRY_BACKOFF_MS * 2 ** Math.max(0, stalledAttempts - 1);
+  return Math.min(exponential, DOWNLOAD_RETRY_BACKOFF_CAP_MS);
 }
 
 interface DownloadAttemptOptions {
@@ -251,16 +365,24 @@ async function downloadAttempt(
   const { opts, state, offset, attempt } = options;
   const controller = new AbortController();
   const linkedSignal = linkAbortSignals(controller, opts.signal);
-  const resuming = offset > 0 && state.entityValidator !== null;
+  const resuming = offset > 0;
   const headers = new Headers();
-  if (resuming && state.entityValidator !== null) {
+  if (resuming) {
     headers.set("Range", `bytes=${offset}-`);
-    headers.set("If-Range", state.entityValidator);
+    // `If-Range` only when this process has seen the entity itself. Without
+    // it the server may answer a Range against a DIFFERENT entity than the
+    // partial bytes came from - so the 206 branch below refuses any
+    // Content-Range whose total is not the manifest's declared size, and
+    // the sha256 check in `downloadToFile` is the final backstop for a
+    // replacement entity of identical length.
+    if (state.entityValidator !== null) {
+      headers.set("If-Range", state.entityValidator);
+    }
   }
   const watchdog = createWatchdog({
     controller,
     timeoutMs: DOWNLOAD_WATCHDOG_MS,
-    onTimeout: () => emitHeartbeat(opts.onHeartbeat, "watchdog", attempt),
+    onTimeout: () => emitHeartbeat(opts.onHeartbeat, "watchdog", attempt, null),
   });
   try {
     const response = await fetch(opts.url, { signal: linkedSignal, headers });
@@ -351,6 +473,24 @@ async function downloadAttempt(
         });
       }
       await finishWriter(writer);
+      if (downloadedBytes < opts.expectedSizeBytes) {
+        // The body ended early. Most runtimes raise a stream error for a
+        // truncated response, but not all of them do for every truncation
+        // shape - bun's fetch reports some mid-body connection drops as a
+        // clean end-of-stream, and a response without a usable length can
+        // end short on any runtime. Treating "the reader said done" as
+        // proof of a finished transfer is what turned a resumable network
+        // failure into a terminal `HOST_VERIFY_FAILED` on the size check,
+        // burning the partial with it (traycer#585's "downloaded 231 MB of
+        // 721 MB before failure").
+        //
+        // Failing here instead keeps this a plain transfer error: the bytes
+        // that did land stay on disk and the next attempt resumes from
+        // them.
+        throw new Error(
+          `host registry: ${opts.url} ended after ${downloadedBytes} of ${opts.expectedSizeBytes} bytes`,
+        );
+      }
       return { kind: "complete" };
     } catch (err) {
       controller.abort();
@@ -407,9 +547,10 @@ function emitHeartbeat(
   listener: NetworkHeartbeatListener | null,
   phase: NetworkHeartbeat["phase"],
   attempt: number,
+  maxAttempts: number | null,
 ): void {
   if (listener === null) return;
-  listener({ phase, attempt, maxAttempts: MAX_NETWORK_ATTEMPTS });
+  listener({ phase, attempt, maxAttempts });
 }
 
 function createWatchdog(opts: {
@@ -435,9 +576,9 @@ function createWatchdog(opts: {
   };
 }
 
-async function waitForRetry(): Promise<void> {
+async function waitForRetry(delayMs: number): Promise<void> {
   await new Promise<void>((resolve) => {
-    setTimeout(resolve, NETWORK_RETRY_BACKOFF_MS);
+    setTimeout(resolve, delayMs);
   });
 }
 
@@ -447,13 +588,17 @@ function httpStatusError(url: string, response: Response): Error {
   );
 }
 
-function exhaustedNetworkError(url: string, lastError: unknown): Error {
+function exhaustedNetworkError(
+  url: string,
+  lastError: unknown,
+  attempts: number,
+): Error {
   return cliError({
     code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
-    message: `host registry: GET ${url} failed after ${MAX_NETWORK_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    message: `host registry: GET ${url} failed after ${attempts} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
     details: {
       url,
-      attempts: MAX_NETWORK_ATTEMPTS,
+      attempts,
       lastError:
         lastError instanceof Error ? lastError.message : String(lastError),
     },

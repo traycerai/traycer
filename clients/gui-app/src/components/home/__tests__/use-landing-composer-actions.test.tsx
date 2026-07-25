@@ -1048,7 +1048,7 @@ describe("useLandingComposerActions", () => {
         },
       },
     });
-    useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().createDraft(null, undefined);
     useWorkspaceFoldersStore.setState({
       folders: [GLOBAL_WORKSPACE_PATH],
       folderInfoByPath: {

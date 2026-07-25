@@ -3,6 +3,7 @@ import type {
   ComposerMentionProviderContext,
   MentionFlowStep,
   MentionMenuEntry,
+  MentionSearchPathsRequest,
 } from "../providers";
 import { mentionProviderRegistry, ROOT_MENTION_STEP } from "../providers";
 import type {
@@ -22,6 +23,7 @@ function context(
     epicEntries: [],
     currentEpicId: null,
     agentEntries: [],
+    epicAttachedRoots: new Set(),
     ...overrides,
   };
 }
@@ -106,9 +108,7 @@ describe("mention provider registry", () => {
       "Worktrees",
       "Git",
       "Task",
-      "Spec",
-      "Ticket",
-      "Story",
+      "Artifacts",
       "Review",
     ]);
   });
@@ -143,9 +143,7 @@ describe("mention provider registry", () => {
       "Git",
       "Task",
       "Agents",
-      "Spec",
-      "Ticket",
-      "Story",
+      "Artifacts",
       "Review",
     ]);
 
@@ -459,6 +457,201 @@ describe("mention provider registry", () => {
       "epic.mentionStories",
       "epic.mentionReviews",
     ]);
+
+    const artifactStep: MentionFlowStep = {
+      kind: "provider",
+      providerId: "artifacts",
+      stepId: "root",
+      workspacePath: null,
+    };
+    expect(
+      mentionProviderRegistry
+        .epicRequests(artifactStep, context({ query: "login" }))
+        .map((request) => request.method),
+    ).toEqual([
+      "epic.mentionSpecs",
+      "epic.mentionTickets",
+      "epic.mentionStories",
+    ]);
+  });
+
+  it("lists specs, tickets, and stories together while preserving mention types", () => {
+    const artifactStep: MentionFlowStep = {
+      kind: "provider",
+      providerId: "artifacts",
+      stepId: "root",
+      workspacePath: null,
+    };
+    const entries = mentionProviderRegistry.entries(
+      artifactStep,
+      context({
+        epicEntries: [
+          {
+            kind: "epic-artifact",
+            id: "spec:epic-1:spec-1",
+            token: "spec:epic-1/spec-1",
+            epicId: "epic-1",
+            epicTitle: "Auth epic",
+            artifactId: "spec-1",
+            artifactType: "spec",
+            label: "Auth spec",
+            description: "Auth epic",
+            status: null,
+            updatedAt: 30,
+          },
+          {
+            kind: "epic-artifact",
+            id: "ticket:epic-1:ticket-1",
+            token: "ticket:epic-1/ticket-1",
+            epicId: "epic-1",
+            epicTitle: "Auth epic",
+            artifactId: "ticket-1",
+            artifactType: "ticket",
+            label: "Auth ticket",
+            description: "Auth epic",
+            status: 1,
+            updatedAt: 20,
+          },
+          {
+            kind: "epic-artifact",
+            id: "story:epic-1:story-1",
+            token: "story:epic-1/story-1",
+            epicId: "epic-1",
+            epicTitle: "Auth epic",
+            artifactId: "story-1",
+            artifactType: "story",
+            label: "Auth story",
+            description: "Auth epic",
+            status: 0,
+            updatedAt: 10,
+          },
+          {
+            kind: "epic-artifact",
+            id: "review:epic-1:review-1",
+            token: "review:epic-1/review-1",
+            epicId: "epic-1",
+            epicTitle: "Auth epic",
+            artifactId: "review-1",
+            artifactType: "review",
+            label: "Auth review",
+            description: "Auth epic",
+            status: null,
+            updatedAt: 5,
+          },
+        ],
+      }),
+    );
+
+    expect(labels(entries)).toEqual([
+      "Back",
+      "Auth spec",
+      "Auth ticket",
+      "Auth story",
+    ]);
+    expect(completeEntry(entries[1]).contextType).toBe("spec");
+    expect(completeEntry(entries[2]).contextType).toBe("ticket");
+    expect(completeEntry(entries[3]).contextType).toBe("story");
+    expect(mentionProviderRegistry.menuCopy(artifactStep)).toEqual({
+      header: "Artifacts",
+      empty: "No artifacts available",
+    });
+  });
+
+  it("scopes an Epic-attached root to searchPaths and keeps unattached roots legacy", () => {
+    const requests = mentionProviderRegistry.workspaceRequests(
+      ROOT_MENTION_STEP,
+      context({
+        query: "index",
+        roots: ["/attached", "/global"],
+        currentEpicId: "epic-1",
+        epicAttachedRoots: new Set(["/attached"]),
+      }),
+    );
+    const scoped = requests.filter(
+      (request): request is MentionSearchPathsRequest =>
+        request.method === "workspace.searchPaths",
+    );
+    // The attached root produces one scoped request per file/folder provider.
+    expect(scoped).toHaveLength(2);
+    for (const request of scoped) {
+      expect(request.root).toBe("/attached");
+      expect(request.params.epicId).toBe("epic-1");
+      expect(request.params.limit).toBe(25);
+      expect("root" in request.params.reference).toBe(true);
+      if ("root" in request.params.reference) {
+        expect(request.params.reference.root).toBe("/attached");
+      }
+    }
+    expect(scoped.map((request) => request.method)).toEqual([
+      "workspace.searchPaths",
+      "workspace.searchPaths",
+    ]);
+    // Each provider requests exactly its own kind so folders are never starved
+    // by files sharing the limit.
+    expect(
+      scoped.map((request) => ({
+        kind: request.suggestionKind,
+        kinds: request.params.kinds,
+      })),
+    ).toEqual([
+      { kind: "file", kinds: "files" },
+      { kind: "folder", kinds: "folders" },
+    ]);
+
+    // The unattached root keeps the legacy raw-root RPCs (files + folders).
+    const legacyFileRoots = requests.flatMap((request) =>
+      request.method === "workspace.mentionFiles" ? [request.params.roots] : [],
+    );
+    expect(legacyFileRoots).toEqual([["/global"]]);
+    const legacyFolderRoots = requests.flatMap((request) =>
+      request.method === "workspace.mentionFolders"
+        ? [request.params.roots]
+        : [],
+    );
+    expect(legacyFolderRoots).toEqual([["/global"]]);
+  });
+
+  it("emits no legacy file/folder request when every root is Epic-attached", () => {
+    const requests = mentionProviderRegistry.workspaceRequests(
+      ROOT_MENTION_STEP,
+      context({
+        query: "index",
+        roots: ["/a", "/b"],
+        currentEpicId: "epic-1",
+        epicAttachedRoots: new Set(["/a", "/b"]),
+      }),
+    );
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "workspace.mentionFiles" ||
+          request.method === "workspace.mentionFolders",
+      ),
+    ).toBe(false);
+    // Two roots x two providers (files + folders) = four scoped requests.
+    expect(
+      requests.filter((request) => request.method === "workspace.searchPaths"),
+    ).toHaveLength(4);
+  });
+
+  it("uses only legacy RPCs when there is no current Epic, even with attached roots", () => {
+    const requests = mentionProviderRegistry.workspaceRequests(
+      ROOT_MENTION_STEP,
+      context({
+        query: "index",
+        roots: ["/a"],
+        currentEpicId: null,
+        epicAttachedRoots: new Set(["/a"]),
+      }),
+    );
+    expect(
+      requests.some((request) => request.method === "workspace.searchPaths"),
+    ).toBe(false);
+    expect(requests.map((request) => request.method)).toEqual([
+      "workspace.mentionFiles",
+      "workspace.mentionFolders",
+      "workspace.mentionWorktrees",
+    ]);
   });
 
   it("keeps task and epic provider aliases backward-compatible for task requests", () => {
@@ -621,7 +814,7 @@ describe("mention preview payloads", () => {
   it("previews an artifact entry with its full title and parent epic title", () => {
     const step: MentionFlowStep = {
       kind: "provider",
-      providerId: "spec",
+      providerId: "artifacts",
       stepId: "root",
       workspacePath: null,
     };
