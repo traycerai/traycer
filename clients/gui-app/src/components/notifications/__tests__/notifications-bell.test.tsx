@@ -165,9 +165,9 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     throw new Error("MockWsStreamClient.subscribe is not used in these tests");
   }
 
-  override getMethodSupport<Method extends keyof HostStreamRpcRegistry & string>(
-    method: Method,
-  ): StreamMethodSupport {
+  override getMethodSupport<
+    Method extends keyof HostStreamRpcRegistry & string,
+  >(method: Method): StreamMethodSupport {
     return this.methodSupportByName.get(method) ?? "unknown";
   }
 }
