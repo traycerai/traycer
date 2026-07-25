@@ -74,9 +74,11 @@ export function steerHintIsActive(conditions: {
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
   readonly steerCapable: boolean;
   readonly steerEnabled: boolean;
+  readonly steerProtocolSupported: boolean;
 }): boolean {
   return (
     conditions.steerEnabled &&
+    conditions.steerProtocolSupported &&
     conditions.activeTurnStatus === "running" &&
     conditions.steerCapable
   );

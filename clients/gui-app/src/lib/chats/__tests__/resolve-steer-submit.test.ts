@@ -161,20 +161,26 @@ describe("resolveSubmitDeliveryPolicy", () => {
 });
 
 describe("steerHintIsActive", () => {
-  it("is true only when a steer-capable turn is running and the opt-out is on", () => {
+  it("is true only when the protocol and harness support an enabled running turn", () => {
     for (const activeTurnStatus of ACTIVE_TURN_STATUSES) {
       for (const steerCapable of BOOLS) {
         for (const steerEnabled of BOOLS) {
-          const expected =
-            steerEnabled && activeTurnStatus === "running" && steerCapable;
-          expect(
-            steerHintIsActive({
-              activeTurnStatus,
-              steerCapable,
-              steerEnabled,
-            }),
-            `status=${String(activeTurnStatus)} capable=${String(steerCapable)} enabled=${String(steerEnabled)}`,
-          ).toBe(expected);
+          for (const steerProtocolSupported of BOOLS) {
+            const expected =
+              steerEnabled &&
+              steerProtocolSupported &&
+              activeTurnStatus === "running" &&
+              steerCapable;
+            expect(
+              steerHintIsActive({
+                activeTurnStatus,
+                steerCapable,
+                steerEnabled,
+                steerProtocolSupported,
+              }),
+              `status=${String(activeTurnStatus)} capable=${String(steerCapable)} enabled=${String(steerEnabled)} protocol=${String(steerProtocolSupported)}`,
+            ).toBe(expected);
+          }
         }
       }
     }
@@ -186,6 +192,7 @@ describe("steerHintIsActive", () => {
         activeTurnStatus: "running",
         steerCapable: true,
         steerEnabled: true,
+        steerProtocolSupported: true,
       }),
     ).toBe(true);
     expect(
@@ -193,6 +200,7 @@ describe("steerHintIsActive", () => {
         activeTurnStatus: "running",
         steerCapable: false,
         steerEnabled: true,
+        steerProtocolSupported: true,
       }),
     ).toBe(false);
     expect(
@@ -200,6 +208,7 @@ describe("steerHintIsActive", () => {
         activeTurnStatus: null,
         steerCapable: true,
         steerEnabled: true,
+        steerProtocolSupported: true,
       }),
     ).toBe(false);
   });

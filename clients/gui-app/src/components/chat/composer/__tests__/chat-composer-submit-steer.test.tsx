@@ -116,7 +116,6 @@ describe("useChatComposerSubmit steer drift gate", () => {
   it("opens the conflict dialog and keeps composer text on model drift (does not send)", () => {
     const onSubmitMessage = vi.fn(acceptSubmit);
     const editorRef = createRef<ComposerPromptEditorHandle | null>();
-    editorRef.current = editorHandle(DIRTY);
     const clear = vi.fn();
     editorRef.current = {
       ...editorHandle(DIRTY),

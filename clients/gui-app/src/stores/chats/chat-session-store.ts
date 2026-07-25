@@ -1639,6 +1639,7 @@ export function createChatSessionStore(
         clearBufferedDeltas();
         set({
           connectionStatus: "connecting",
+          steerProtocolSupported: false,
           fatalClose: null,
           snapshotLoaded: false,
         });

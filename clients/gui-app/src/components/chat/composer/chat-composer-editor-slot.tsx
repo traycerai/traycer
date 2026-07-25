@@ -3,7 +3,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
 import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
-import { isMac } from "@/lib/keybindings/platform";
+import { isMac, modLabel } from "@/lib/keybindings/platform";
 import { useIsComposerNarrow } from "@/components/home/composer/composer-narrow-hooks";
 
 import {
@@ -24,6 +24,7 @@ const NARROW_PLACEHOLDER = "Ask anything…";
 const STEER_HINT_PLACEHOLDER = isMac()
   ? "Enter to queue · ⌘Enter to steer this turn"
   : "Enter to queue · Ctrl+Enter to steer this turn";
+const NARROW_STEER_HINT_PLACEHOLDER = `${modLabel()}+Enter to steer`;
 const NOOP = (): void => undefined;
 
 interface ChatComposerEditorSlotProps {
@@ -77,9 +78,12 @@ export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
   } = props;
   const isNarrow = useIsComposerNarrow();
   const basePlaceholder = isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER;
-  const placeholder = steerHintActive
-    ? STEER_HINT_PLACEHOLDER
-    : basePlaceholder;
+  let placeholder = basePlaceholder;
+  if (steerHintActive) {
+    placeholder = isNarrow
+      ? NARROW_STEER_HINT_PLACEHOLDER
+      : STEER_HINT_PLACEHOLDER;
+  }
   return (
     <ComposerPromptEditor
       ref={ref}

@@ -386,6 +386,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     activeTurnStatus,
     steerCapable,
     steerEnabled,
+    steerProtocolSupported,
   });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const topBannerKind = resolveComposerTopBannerKind({

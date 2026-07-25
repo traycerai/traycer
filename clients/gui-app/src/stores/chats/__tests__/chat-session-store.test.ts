@@ -650,8 +650,11 @@ describe("createChatSessionStore", () => {
       return lastCallbacks;
     };
     const staleCallbacks = callbacks();
+    staleCallbacks.onConnectionStatus("open", null);
+    expect(handle.store.getState().steerProtocolSupported).toBe(true);
 
     handle.store.getState().retry();
+    expect(handle.store.getState().steerProtocolSupported).toBe(false);
 
     staleCallbacks.onConnectionStatus("open", null);
     expect(handle.store.getState().connectionStatus).toBe("connecting");
