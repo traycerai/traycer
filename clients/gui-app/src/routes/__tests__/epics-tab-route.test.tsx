@@ -20,6 +20,14 @@ vi.mock("@/components/layout/app-shell", () => ({
   ),
 }));
 
+// The standalone sign-in / onboarding surfaces now float the Windows menu
+// strip, which routes its popup through a TanStack mutation. This routing test
+// wraps RootComponent in only a router queryClient (no QueryClientProvider), so
+// stub the strip like AppShell above.
+vi.mock("@/components/layout/header/windows-menu-bar", () => ({
+  WindowsMenuBar: () => null,
+}));
+
 vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({
   DesktopDialogHost: () => null,
 }));

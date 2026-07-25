@@ -7,9 +7,9 @@ import {
   useState,
 } from "react";
 import { isWindows } from "@/lib/keybindings/platform";
-import { appLogger } from "@/lib/logger";
 import { resolveDesktopMenuPopupBridge } from "@/lib/windows/desktop-capabilities";
 import type { DesktopTopLevelMenuId } from "@/lib/windows/types";
+import { useOpenTopLevelMenuMutation } from "@/hooks/runner/use-open-top-level-menu-mutation";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
@@ -45,19 +45,13 @@ export function WindowsMenuBar(): ReactNode {
     new Map(),
   );
   const [mnemonicsVisible, setMnemonicsVisible] = useState(false);
+  const { mutate: openTopLevelMenu } = useOpenTopLevelMenuMutation();
 
   const openMenu = useCallback(
     (menuId: DesktopTopLevelMenuId, anchorX: number, anchorY: number): void => {
-      if (menu === null) return;
-      void menu.openTopLevel(menuId, anchorX, anchorY).catch((error) => {
-        appLogger.error(
-          "Failed to open Windows application menu",
-          { menuId },
-          error,
-        );
-      });
+      openTopLevelMenu({ menuId, anchorX, anchorY });
     },
-    [menu],
+    [openTopLevelMenu],
   );
 
   useEffect(() => {
@@ -120,6 +114,12 @@ export function WindowsMenuBar(): ReactNode {
           }}
           aria-keyshortcuts={`Alt+${item.mnemonic}`}
           className="h-full rounded-none px-2 text-ui-xs text-canvas-foreground outline-none select-none hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          // Keep the editor/input focused so the native Edit menu's roles
+          // (Cut/Copy/Paste/Undo/Select All) act on the real target: a click
+          // would otherwise move focus to this button before the popup opens,
+          // leaving those commands with nothing to act on. The Alt access-key
+          // path never moves focus, so it stays correct without this.
+          onMouseDown={(event) => event.preventDefault()}
           onClick={(event) => {
             const anchor = event.currentTarget.getBoundingClientRect();
             openMenu(item.id, anchor.left, anchor.bottom);

@@ -3,6 +3,7 @@ import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-c
 import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
 import { HostReadyGate } from "@/components/layout/host-ready-gate";
 import { AppShell } from "@/components/layout/app-shell";
+import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
@@ -69,12 +70,34 @@ function RootSurface(props: {
   readonly showOnboarding: boolean;
   readonly isStandalone: boolean;
 }) {
-  if (props.showOnboarding) return <OnboardingPage replay={false} />;
-  if (props.isStandalone) return <Outlet />;
+  if (!props.isStandalone) {
+    return (
+      <AppShell>
+        <Outlet />
+      </AppShell>
+    );
+  }
+  // Sign-in and the onboarding tour render without AppShell, so they lose the
+  // frameless Windows menu bar the app header carries. Float the same
+  // self-gating strip into the title-bar band - it renders nothing off a
+  // Windows desktop shell - so those surfaces still expose
+  // File/Edit/View/Window/Help.
   return (
-    <AppShell>
-      <Outlet />
-    </AppShell>
+    <>
+      <StandaloneWindowsMenuBar />
+      {props.showOnboarding ? <OnboardingPage replay={false} /> : <Outlet />}
+    </>
+  );
+}
+
+// A canvas-backed chip sized to the menu itself: invisible until the menu
+// renders (Windows desktop shell only), so it never paints a bar on
+// macOS/Linux/web nor overlays the standalone content beyond the menu's width.
+function StandaloneWindowsMenuBar() {
+  return (
+    <div className="fixed left-0 top-0 z-50 flex h-10 items-center bg-canvas">
+      <WindowsMenuBar />
+    </div>
   );
 }
 

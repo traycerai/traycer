@@ -6,8 +6,10 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
 import type {
   DesktopMenuCommandPayload,
@@ -51,6 +53,18 @@ function buildHost(
   });
 }
 
+// The popup goes through a TanStack mutation, so the bar needs a QueryClient
+// ancestor - present app-wide in production, supplied here per render.
+function renderMenuBar(host: IRunnerHost) {
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <RunnerHostProvider runnerHost={host}>
+        <WindowsMenuBar />
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  );
+}
+
 beforeEach(() => {
   isWindowsMock.mockReturnValue(true);
 });
@@ -64,11 +78,7 @@ describe("WindowsMenuBar", () => {
   it("shows every application menu and anchors native popup requests below the clicked label", async () => {
     const openTopLevel = vi.fn(() => Promise.resolve());
     const host = buildHost(openTopLevel);
-    render(
-      <RunnerHostProvider runnerHost={host}>
-        <WindowsMenuBar />
-      </RunnerHostProvider>,
-    );
+    renderMenuBar(host);
 
     expect(
       screen.getAllByRole("button").map((item) => item.textContent),
@@ -88,11 +98,7 @@ describe("WindowsMenuBar", () => {
   it("opens the matching menu when its Alt access key is pressed", async () => {
     const openTopLevel = vi.fn(() => Promise.resolve());
     const host = buildHost(openTopLevel);
-    render(
-      <RunnerHostProvider runnerHost={host}>
-        <WindowsMenuBar />
-      </RunnerHostProvider>,
-    );
+    renderMenuBar(host);
     const view = screen.getByRole("button", { name: "View" });
     vi.spyOn(view, "getBoundingClientRect").mockReturnValue(
       new DOMRect(60, 4, 40, 32),
@@ -107,11 +113,7 @@ describe("WindowsMenuBar", () => {
 
   it("underlines each access key while Alt is held", () => {
     const host = buildHost(() => Promise.resolve());
-    render(
-      <RunnerHostProvider runnerHost={host}>
-        <WindowsMenuBar />
-      </RunnerHostProvider>,
-    );
+    renderMenuBar(host);
     const file = screen.getByRole("button", { name: "File" });
     expect(file.querySelector("span.underline")).toBeNull();
 
@@ -125,11 +127,7 @@ describe("WindowsMenuBar", () => {
   it("stays absent outside the Windows desktop shell", () => {
     isWindowsMock.mockReturnValue(false);
     const host = buildHost(() => Promise.resolve());
-    render(
-      <RunnerHostProvider runnerHost={host}>
-        <WindowsMenuBar />
-      </RunnerHostProvider>,
-    );
+    renderMenuBar(host);
 
     expect(
       screen.queryByRole("navigation", { name: "Application menu" }),
@@ -146,11 +144,7 @@ describe("WindowsMenuBar", () => {
       hasLocalHost: undefined,
       traycerCli: undefined,
     });
-    render(
-      <RunnerHostProvider runnerHost={host}>
-        <WindowsMenuBar />
-      </RunnerHostProvider>,
-    );
+    renderMenuBar(host);
 
     expect(
       screen.queryByRole("navigation", { name: "Application menu" }),
