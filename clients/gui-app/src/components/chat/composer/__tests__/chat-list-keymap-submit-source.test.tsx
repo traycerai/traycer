@@ -480,6 +480,7 @@ function makeEditor(input: {
       },
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,
+      getIngestPastedComposerImages: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });

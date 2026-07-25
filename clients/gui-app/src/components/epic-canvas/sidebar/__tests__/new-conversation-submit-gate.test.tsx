@@ -60,6 +60,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
 });
 
 vi.mock("@/lib/epic-selectors", () => ({
+  useEpicAgentRoleClaims: () => [],
   useEpicPermissionRole: () => "owner",
   useEpicConnectionStatus: () => "open",
   useEpicNodeOwnerKind: () => "chat",
@@ -316,6 +317,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     setContent: () => undefined,
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
+    rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

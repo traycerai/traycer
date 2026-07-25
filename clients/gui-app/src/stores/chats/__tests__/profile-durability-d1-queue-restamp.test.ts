@@ -113,6 +113,7 @@ function emitSnapshot(harness: Harness): void {
         claudePendingWakes: [],
         messages: [],
         events: [],
+        archivedAt: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },

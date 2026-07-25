@@ -38,6 +38,10 @@ export function createLinuxController(
     stop: (label) => stopService(label),
     start: (label) => startService(label),
     restart: (label) => restartService(label),
+    // SMAppService is macOS-only, so there is no second registration path
+    // that could compete with systemd's user unit here.
+    retireCompetingRegistration: () =>
+      Promise.resolve({ kind: "not-applicable" }),
   };
 }
 

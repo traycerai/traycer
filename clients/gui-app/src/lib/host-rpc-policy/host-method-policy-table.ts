@@ -237,6 +237,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Dismissing an attention row resolves it (persists the acknowledgement).
+  "host.notifications.resolve": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Marking all notifications read persists acknowledgements.
   "host.notifications.markAllRead": {
     mode: "fifo",
@@ -362,6 +368,19 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "agent.getTranscript": { ...LATEST_SCHEDULING, poll: null },
   "agent.inbox.read": { ...LATEST_SCHEDULING, poll: null },
+  // Claiming a role persists responsibility and broadcasts awareness.
+  "agent.roles.claim": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agent.roles.list": { ...LATEST_SCHEDULING, poll: null },
+  // Relinquishing a role removes persisted responsibility and broadcasts awareness.
+  "agent.roles.relinquish": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Stopping an agent terminates its active execution.
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Migrating a phase changes the epic's persisted workflow state.
@@ -393,6 +412,8 @@ export const HOST_METHOD_POLL_TABLE = {
   "workspace.mentionGitRoot": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionGitBranches": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionGitCommits": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.searchPaths": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.searchText": { ...LATEST_SCHEDULING, poll: null },
   "workspace.resolvePathsByRepoIdentifiers": {
     ...LATEST_SCHEDULING,
     poll: null,
@@ -458,6 +479,13 @@ export const HOST_METHOD_POLL_TABLE = {
   "epic.deleteChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Reparenting a chat changes document hierarchy.
   "epic.reparentChat": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Archiving a chat or terminal-agent record persists its archived flag
+  // (optional host capability).
+  "epic.setChatArchived": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -530,6 +558,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
+  "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
   // Opening paths changes state in the user's editor.
   "editor.openPaths": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "git.listChangedFiles": {

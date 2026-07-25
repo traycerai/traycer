@@ -456,6 +456,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
         </ChatComposerBannerPortal>
       ) : null}
       <div
+        data-chat-composer=""
         className={cn(
           "bg-canvas px-4 pb-4",
           topSpacing === "normal" ? "pt-4" : "pt-0",
@@ -509,6 +510,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   initialSelection={initialSelection}
                   slashProviderId={harnessId}
                   hasPastedImageBytes={hasPastedImageBytes}
+                  ingestPastedComposerImages={null}
                   isActive={isActive}
                   onSnapshot={handleSnapshot}
                   onSubmit={handleSubmitDraft}

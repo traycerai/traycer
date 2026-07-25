@@ -794,6 +794,7 @@ function makeEditorWithPastedImagePresenceGetter(
       onSubmit: { current: onSubmit },
       slashProviderId: "claude",
       getHasPastedImageBytes,
+      getIngestPastedComposerImages: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });

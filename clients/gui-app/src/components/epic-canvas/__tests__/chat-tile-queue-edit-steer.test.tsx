@@ -272,6 +272,7 @@ function emitChatSnapshot(
         title: CHAT_ARTIFACT.name,
         createdAt: 0,
         updatedAt: 0,
+        archivedAt: null,
         isTitleEditedByUser: false,
         settings: QUEUED_SETTINGS,
         activeSessionChain: null,

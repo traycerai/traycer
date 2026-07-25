@@ -21,6 +21,7 @@ import {
   chatRunSettingsSchema,
   chatSchema,
   chatSchemaPreInReplyTo,
+  chatSchemaV14,
   userMessagePayloadSchema,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
@@ -1501,14 +1502,28 @@ export const chatSubscribeV13 = defineStreamRpcContract({
 
 // ─── Frozen `chat.subscribe@1.4` shape (`inReplyTo` + `mcp` items) ──────────
 //
-// `1.4` carries `inReplyTo` on every agent sender and the `mcp` background-item
-// kind, but PRE-`sameTurnSteeringSupported`. Pinned here so `1.5` (which adds the
-// steering-capability field to `activeTurn`) can no longer mutate this released
-// line: the frozen `activeTurn` (in both the snapshot and the turnStateChanged
-// frame) strips the field for a `1.4` peer. Everything else is byte-identical to
-// the live shape, so the shared frames are reused directly.
-const chatSnapshotSchemaV14 = chatSnapshotSchema.extend({
+// `1.4` shipped `inReplyTo` on every agent sender (user-message, assistant,
+// queue item, event `actor`, steer) and the `mcp` background-item kind (CLI
+// auto-backgrounded MCP tool calls) - but PRE-`archivedAt` and
+// PRE-`sameTurnSteeringSupported`. Pinned here so `1.5` can no longer mutate
+// this released line: the frozen snapshot has no `archivedAt` key on `chat`,
+// and `activeTurn` strips the steering-capability field in both the snapshot
+// and `turnStateChanged` frames. The shared frames and client frame are
+// otherwise unchanged.
+const chatSnapshotSchemaV14 = z.object({
+  chat: chatSchemaV14,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
   activeTurn: chatActiveTurnSchemaPreV15.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  turnInProgress: z.boolean().optional(),
 });
 
 const chatSubscribeSnapshotServerFrameSchemaV14 = z.object({
@@ -1542,14 +1557,14 @@ export const chatSubscribeV14 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
 
-// ─── Live `chat.subscribe@1.5` contract (`sameTurnSteeringSupported`) ───────
+// ─── Live `chat.subscribe@1.5` contract ────────────────────────────────────
 //
-// The live serverFrame's `activeTurn` gains `sameTurnSteeringSupported`, the
-// host's same-turn steering capability for the running turn's harness. The
-// renderer reads it to gate the Cmd+Enter steer behavior and discovery hints
-// without duplicating the capability table. Older peers negotiate ≤1.4 and the
-// host strips the field for them (see `chat-frame-projection.ts`). The client
-// frame is unchanged from `1.4`.
+// The live snapshot now carries `chat.archivedAt`, and `activeTurn` gains
+// `sameTurnSteeringSupported` so the renderer can gate Cmd+Enter steering
+// without duplicating the harness capability table. Older peers negotiate
+// ≤1.4 and receive the frozen frames above, which strip both additions (see
+// `chat-frame-projection.ts` for the active-turn projection). The client frame
+// is unchanged from `1.4`.
 
 export const chatSubscribeV15 = defineStreamRpcContract({
   method: "chat.subscribe",

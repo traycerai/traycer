@@ -15,12 +15,14 @@ vi.mock("@/components/chat/composer/composer-prompt-editor", () => ({
     readonly onPaste: ClipboardEventHandler<HTMLElement>;
     readonly onDragOver: DragEventHandler<HTMLElement>;
     readonly onDrop: DragEventHandler<HTMLElement>;
+    readonly stabilizeImageAttachmentCaret: boolean;
   }) => (
     <textarea
       aria-label="Prompt editor"
       onPaste={props.onPaste}
       onDragOver={props.onDragOver}
       onDrop={props.onDrop}
+      data-stabilize-caret={String(props.stabilizeImageAttachmentCaret)}
     />
   ),
 }));
@@ -71,6 +73,7 @@ function makePaste(): UseComposerPasteResult {
     onDragEnter: vi.fn(),
     onDragLeave: vi.fn(),
     attachImageFiles: vi.fn(),
+    runPendingImageJob: vi.fn(),
     isDraggingFiles: true,
     dragOverlayVariant: "paths",
     isIngestingImages: false,
@@ -119,6 +122,8 @@ function renderComposerBody(
       dictationPreparing={null}
       paste={paste}
       hasPastedImageBytes={null}
+      ingestPastedComposerImages={null}
+      onEditorReady={null}
       onSubmit={vi.fn()}
       onStartTerminal={vi.fn()}
       onSnapshot={vi.fn()}
@@ -165,6 +170,15 @@ describe("ComposerBody file-transfer routing", () => {
     expect(paste.onDrop).toHaveBeenCalledOnce();
     expect(paste.onPaste).toHaveBeenCalledOnce();
     expect(shell.getAttribute("data-overlay")).toBe("paths");
+  });
+});
+
+describe("ComposerBody image-attachment caret stabilization", () => {
+  it("enables caret stabilization on the underlying prompt editor", () => {
+    renderComposerBody("chat", makePaste(), null, null);
+
+    const editor = screen.getByRole("textbox", { name: "Prompt editor" });
+    expect(editor.getAttribute("data-stabilize-caret")).toBe("true");
   });
 });
 

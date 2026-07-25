@@ -29,6 +29,7 @@ function makeFixture(content: JsonContent): {
       },
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,
+      getIngestPastedComposerImages: () => null,
     }),
     content,
   });

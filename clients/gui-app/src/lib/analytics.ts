@@ -81,6 +81,7 @@ export type AnalyticsHarness =
   | "kilocode"
   | "kimi"
   | "kiro"
+  | "omp"
   | "opencode"
   | "openrouter"
   | "pi"
@@ -164,6 +165,7 @@ export type AnalyticsProvider =
   | "kilocode"
   | "kimi"
   | "kiro"
+  | "omp"
   | "opencode"
   | "openrouter"
   | "pi"
@@ -840,6 +842,7 @@ const ANALYTICS_HARNESSES = new Set<string>([
   "kilocode",
   "kimi",
   "kiro",
+  "omp",
   "opencode",
   "openrouter",
   "pi",
@@ -860,6 +863,7 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "kilocode",
   "kimi",
   "kiro",
+  "omp",
   "opencode",
   "openrouter",
   "pi",

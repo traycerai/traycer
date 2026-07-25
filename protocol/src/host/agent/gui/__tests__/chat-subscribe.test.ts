@@ -52,6 +52,7 @@ const chat: Chat = {
   claudePendingWakes: [],
   messages: [userMessage],
   events: [],
+  archivedAt: null,
 };
 
 const event: ChatEvent = {

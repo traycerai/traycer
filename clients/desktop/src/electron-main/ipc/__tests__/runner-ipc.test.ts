@@ -707,6 +707,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.certTrustSystemDialog,
         RunnerHostInvoke.windowSetOverlayIcon,
         RunnerHostInvoke.windowSetTitleBarOverlay,
+        // Windows frameless menu strip → native submenu popup.
+        RunnerHostInvoke.menuOpenTopLevel,
         RunnerHostInvoke.displayList,
         RunnerHostInvoke.fileDropWriteTemporary,
         RunnerHostInvoke.fileDropCopyTemporary,
@@ -1955,8 +1957,12 @@ describe("RunnerIpcBridge", () => {
     expect(windowA.sentMessages).toEqual([]);
     expect(windowB.sentMessages).toEqual([]);
 
-    // clear by sender: removes window-a's snapshot, emits an empty snapshot to
-    // window-a only, and leaves window-b untouched.
+    // clear by sender: removes window-a's snapshot but does NOT forward the empty
+    // snapshot to any renderer. A `clear` is a window-teardown wipe; pushing its
+    // empty snapshot could clobber a still-alive window that transiently dropped
+    // from the registry (reload / re-registration), and the "Clear local app
+    // state" path reloads the window rather than relying on the echo. Window-b is
+    // likewise untouched.
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
     const empty = {
@@ -1968,12 +1974,7 @@ describe("RunnerIpcBridge", () => {
     };
     await clearHandler(sender(101));
     expect(await getHandler(sender(101))).toEqual(empty);
-    expect(windowA.sentMessages).toEqual([
-      {
-        channel: RunnerHostEvent.perWindowStateChange,
-        payload: empty,
-      },
-    ]);
+    expect(windowA.sentMessages).toEqual([]);
     expect(windowB.sentMessages).toEqual([]);
     bridge.dispose();
   });
@@ -2734,6 +2735,7 @@ describe("RunnerIpcBridge", () => {
           downloadProgress: null,
           installBlockedReason: null,
           installGuidance: null,
+          installInFlight: false,
           errorMessage: null,
           lastCheckedAt: null,
           lastCheckIntent: null,

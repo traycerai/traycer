@@ -152,6 +152,7 @@ const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
   devin: "Devin",
   pi: "Pi",
   hermes: "Hermes Agent",
+  omp: "Oh My Pi",
 };
 
 export function agentProviderLabel(provider: GuiHarnessId): string {

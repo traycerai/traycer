@@ -51,6 +51,8 @@ import {
   removeEpicRepoResponseSchema,
   resolveArtifactByPathRequestSchema,
   resolveArtifactByPathResponseSchema,
+  searchArtifactsRequestSchema,
+  searchArtifactsResponseSchema,
   renameArtifactRequestSchema,
   renameArtifactResponseSchema,
   renameChatRequestSchema,
@@ -65,6 +67,8 @@ import {
   replyToCommentThreadResponseSchema,
   revokeEpicCollaboratorRequestSchema,
   revokeEpicCollaboratorResponseSchema,
+  setChatArchivedRequestSchema,
+  setChatArchivedResponseSchema,
   setCommentThreadResolvedRequestSchema,
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
@@ -319,6 +323,18 @@ export const epicReparentChatV10 = defineRpcContract({
   responseSchema: reparentChatResponseSchema,
 });
 
+// Optional (non-floor) capability: durable host-backed archive toggle for a
+// chat or terminal-agent record. Registered with a `degrade: unsupported`
+// strategy (see registry.ts) so an old host that lacks it fails only this
+// call - it must never enter the released floor, which would be
+// handshake-fatal for existing peers. See the schema doc in `unary-schemas.ts`.
+export const epicSetChatArchivedV10 = defineRpcContract({
+  method: "epic.setChatArchived",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: setChatArchivedRequestSchema,
+  responseSchema: setChatArchivedResponseSchema,
+});
+
 export const epicCreateTuiAgentV10 = defineRpcContract({
   method: "epic.createTuiAgent",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -433,6 +449,17 @@ export const epicResolveArtifactByPathV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: resolveArtifactByPathRequestSchema,
   responseSchema: resolveArtifactByPathResponseSchema,
+});
+
+// `epic.searchArtifacts@1.0` - Epic-scoped artifact title/path/body search over
+// the epic's on-disk Markdown mirror + authoritative Y.Doc metadata. Optional
+// (non-floor): an old host lacks it in its optional manifest and returns
+// E_HOST_UNSUPPORTED for this call only, so the sidebar degrades to no search.
+export const epicSearchArtifactsV10 = defineRpcContract({
+  method: "epic.searchArtifacts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: searchArtifactsRequestSchema,
+  responseSchema: searchArtifactsResponseSchema,
 });
 
 export { epicSubscribeV10 };

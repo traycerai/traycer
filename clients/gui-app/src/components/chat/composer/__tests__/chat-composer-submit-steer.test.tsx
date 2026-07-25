@@ -701,6 +701,7 @@ function editorHandle(content: JsonContent): ComposerPromptEditorHandle {
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
     removeImageAttachmentById: () => undefined,
+    rewriteImageAttachmentHashById: () => false,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,
   };

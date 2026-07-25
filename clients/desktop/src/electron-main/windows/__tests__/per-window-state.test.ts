@@ -159,6 +159,42 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
     expect(reloaded.getWindowSnapshots()).toEqual({});
   });
 
+  it("tags update changes as origin:update and clear changes as origin:clear", async () => {
+    const filePath = join(tempDir, "desktop-windows-origin.json");
+    const store = new DesktopStateStore({ filePath, logger });
+    await store.load();
+    const deleteSpy = vi.spyOn(store, "deleteWindowSnapshot");
+    const perWindowState = new PerWindowState(store);
+
+    const origins: Array<"update" | "clear"> = [];
+    perWindowState.on("change", (change) => {
+      origins.push(change.origin);
+    });
+
+    perWindowState.update("window-a", {
+      epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
+      activeTabId: "tab-a",
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    });
+    expect(origins).toEqual(["update"]);
+
+    perWindowState.clear("window-a");
+    expect(origins).toEqual(["update", "clear"]);
+    // Durable delete still happens on clear (IPC only suppresses the push).
+    expect(deleteSpy).toHaveBeenCalledWith("window-a");
+    expect(perWindowState.get("window-a")).toEqual({
+      epicTabs: [],
+      activeTabId: null,
+      canvasByTabId: {},
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    });
+    // `update`/`clear` enqueue async disk writes; await them before `afterEach`
+    // removes the temp dir, or the in-flight write races teardown (ENOTEMPTY).
+    await store.flush();
+  });
+
   it("refuses duplicate Epic claims and supports transfer/release", () => {
     const ownership = new EpicWindowOwnership(null);
 
