@@ -2,10 +2,27 @@ import { keepPreviousData, type UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
+  RequestOfMethod,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+
+/**
+ * The one place this request's shape is written. Exported so a forced-refresh
+ * cache write elsewhere (the owner hover card) can build the SAME params this
+ * query uses instead of hand-copying the literal - a hand-copy hashes equal
+ * today but silently forks the moment either side changes.
+ */
+export function worktreeListByWorkspacePathsParams(
+  workspacePaths: ReadonlyArray<string>,
+): RequestOfMethod<HostRpcRegistry, "worktree.listByWorkspacePaths"> {
+  return {
+    workspacePaths: [...workspacePaths],
+    scriptRefs: [],
+    forceRefresh: false,
+  };
+}
 
 export function useWorktreeListByWorkspacePathsForClient(
   client: HostClient<HostRpcRegistry> | null,
@@ -25,11 +42,7 @@ export function useWorktreeListByWorkspacePathsForClient(
     // separate point-read (see worktree-scripts-dialog). v1.1 requires the field.
     // `forceRefresh: false` (v1.2): a background read serves the host's
     // TTL-cached view; only an explicit user refresh forces a disk recompute.
-    params: {
-      workspacePaths: [...args.workspacePaths],
-      scriptRefs: [],
-      forceRefresh: false,
-    },
+    params: worktreeListByWorkspacePathsParams(args.workspacePaths),
     options: {
       enabled: args.enabled && args.workspacePaths.length > 0,
       // The path set is part of the query key, so adding/removing a folder
