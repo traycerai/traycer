@@ -121,6 +121,15 @@ const EMPTY_SEARCH_PATH_RESULTS: ReadonlyArray<WorkspaceSearchPathResult> =
  *   refused, response still in flight, or the panel is on the unary snapshot
  *   and already holds every path): the tree adapter's own `hide-non-matches`
  *   filter runs over the loaded rows, exactly as before.
+ *
+ * A live tree whose host CANNOT search (the unsupported latch, not a reply
+ * merely in flight) has a fourth wrinkle: its loaded rows are just the
+ * expanded directories, so a local filter over them silently matches nothing
+ * (the adapter shows the full tree when zero rows match). For that case the
+ * panel borrows the deprecated whole-workspace snapshot for exactly the
+ * lifetime of the query - `local-filter` then runs over every path, matching
+ * the filter's whole-workspace mental model - and returns to the live stream
+ * when the query clears. Stream coverage stays subscribed throughout.
  */
 type FileTreeMode = "browse" | "host-search" | "local-filter";
 
@@ -175,8 +184,30 @@ function useFileTreeSource(args: {
     workspacePath: args.workspacePath,
     enabled: !useUnaryFallback,
   });
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- the ONE sanctioned caller: the old-host fallback the deprecation notice itself names
-  const unary = useWorkspaceListFileTree(args.workspacePath, useUnaryFallback);
+  const search = useHostPathSearch({
+    epicId: args.epicId,
+    hostId: args.hostId,
+    workspacePath: args.workspacePath,
+    query: args.searchQuery,
+    // Host search only earns its keep against the LIVE tree, where the loaded
+    // rows are just the expanded directories. The unary snapshot already holds
+    // every path, so filtering it locally is both complete and free.
+    enabled: !useUnaryFallback,
+  });
+  const localFilterQuery =
+    args.searchQuery.trim().length > 0 ? args.searchQuery : null;
+  // A live tree whose host cannot search: the local filter would only see the
+  // expanded rows (and the adapter shows everything when zero rows match), so
+  // the query borrows the whole-workspace snapshot for its lifetime instead.
+  const filterViaSnapshot =
+    !useUnaryFallback &&
+    localFilterQuery !== null &&
+    search.hostSearchUnavailable;
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- the sanctioned legacy call site: the old-host fallback plus the filter's whole-workspace degrade while host search is unavailable
+  const unary = useWorkspaceListFileTree(
+    args.workspacePath,
+    useUnaryFallback || filterViaSnapshot,
+  );
 
   const unaryFiles = unary.data?.files;
   const unaryPaths = useMemo(
@@ -204,21 +235,7 @@ function useFileTreeSource(args: {
     ];
   }, [changedFiles, streamIgnoredPaths]);
 
-  const search = useHostPathSearch({
-    epicId: args.epicId,
-    hostId: args.hostId,
-    workspacePath: args.workspacePath,
-    query: args.searchQuery,
-    // Host search only earns its keep against the LIVE tree, where the loaded
-    // rows are just the expanded directories. The unary snapshot already holds
-    // every path, so filtering it locally is both complete and free.
-    enabled: !useUnaryFallback,
-  });
-
-  const localFilterQuery =
-    args.searchQuery.trim().length > 0 ? args.searchQuery : null;
-
-  if (useUnaryFallback) {
+  if (useUnaryFallback || filterViaSnapshot) {
     return unaryFileTreeSource({
       unary,
       paths: unaryPaths,
@@ -226,8 +243,8 @@ function useFileTreeSource(args: {
       localFilterQuery,
     });
   }
-  if (search !== null) {
-    return hostSearchFileTreeSource(search, liveGitStatus);
+  if (search.result !== null) {
+    return hostSearchFileTreeSource(search.result, liveGitStatus);
   }
   return liveFileTreeSource(stream, liveGitStatus, localFilterQuery);
 }
@@ -338,13 +355,24 @@ function isHostCannotServeError(error: HostRpcError): boolean {
   );
 }
 
+interface HostPathSearch {
+  /** Ranked matches ready to become the tree, or `null` when there are none usable. */
+  readonly result: HostPathSearchResult | null;
+  /**
+   * The latched verdict that this (host, workspace) cannot serve
+   * `workspace.searchPaths` at all - as opposed to a reply merely in flight.
+   * The panel uses it to back the filter with the whole-workspace snapshot.
+   */
+  readonly hostSearchUnavailable: boolean;
+}
+
 function useHostPathSearch(args: {
   readonly epicId: string;
   readonly hostId: string | null;
   readonly workspacePath: string;
   readonly query: string;
   readonly enabled: boolean;
-}): HostPathSearchResult | null {
+}): HostPathSearch {
   const hostClient = useHostClient();
   const scopeKey = `${args.hostId ?? ""}|${args.workspacePath}`;
   const [unsupportedScopeKey, setUnsupportedScopeKey] = useState<string | null>(
@@ -388,10 +416,13 @@ function useHostPathSearch(args: {
     () => projectWorkspaceSearchPaths(results),
     [results],
   );
-  if (!args.enabled || unsupported) return null;
-  if (args.query.trim().length === 0) return null;
-  if (view === null || view.outcome !== "ready") return null;
-  return { projection, truncated: view.truncated };
+  const result = ((): HostPathSearchResult | null => {
+    if (!args.enabled || unsupported) return null;
+    if (args.query.trim().length === 0) return null;
+    if (view === null || view.outcome !== "ready") return null;
+    return { projection, truncated: view.truncated };
+  })();
+  return { result, hostSearchUnavailable: unsupported };
 }
 
 export function FileTreePanelBodyForWorkspace(props: {

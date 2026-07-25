@@ -533,13 +533,29 @@ describe("sidebar file tree filter source", () => {
     });
     expect(searchCalls).toHaveLength(1);
 
+    // The latched verdict backs the filter with the whole-workspace snapshot:
+    // a live tree's loaded rows are only the expanded directories, so a local
+    // filter over them would silently match nothing.
+    await waitFor(() => {
+      expect(resetPathsCalls.at(-1)?.paths).toEqual(["unary.md"]);
+    });
+    expect(listFileTreeCalls.at(-1)?.enabled).toBe(true);
+
     // The verdict is latched per (host, workspace): a further keystroke filters
-    // locally without re-asking a host that already said no.
+    // the snapshot without re-asking a host that already said no.
     typeFilter("main.ts");
     await waitFor(() => {
       expect(setSearchCalls.at(-1)).toBe("main.ts");
     });
     expect(searchCalls).toHaveLength(1);
+
+    // Clearing the query returns to the live stream tree and releases the
+    // snapshot query.
+    typeFilter("");
+    await waitFor(() => {
+      expect(resetPathsCalls.at(-1)?.paths).toEqual(["src/", "live.md"]);
+    });
+    expect(listFileTreeCalls.at(-1)?.enabled).toBe(false);
   });
 
   it("latches onto local filtering when the host advertises the method but has no resolver", async () => {
@@ -564,6 +580,10 @@ describe("sidebar file tree filter source", () => {
       expect(setSearchCalls.at(-1)).toBe("main");
     });
     expect(searchCalls).toHaveLength(1);
+    // Same latch, same degrade: the snapshot backs the filter.
+    await waitFor(() => {
+      expect(resetPathsCalls.at(-1)?.paths).toEqual(["unary.md"]);
+    });
 
     typeFilter("main.ts");
     await waitFor(() => {
