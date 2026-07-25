@@ -3,7 +3,10 @@ import {
   type BaseWindow,
   type MenuItemConstructorOptions,
 } from "electron";
-import type { MenuCommandId } from "../../ipc-contracts/window-types";
+import {
+  desktopTopLevelMenuItemId,
+  type MenuCommandId,
+} from "../../ipc-contracts/window-types";
 import {
   TRAYCER_DOCUMENTATION_URL,
   TRAYCER_RELEASE_NOTES_URL,
@@ -81,6 +84,7 @@ function buildFileMenu(
           { type: "separator" } satisfies MenuItemConstructorOptions,
         ];
   return {
+    id: desktopTopLevelMenuItemId("file"),
     label: "File",
     submenu: [
       {
@@ -113,6 +117,7 @@ function buildFileMenu(
 
 function buildEditMenu(actions: MenuBuildActions): MenuItemConstructorOptions {
   return {
+    id: desktopTopLevelMenuItemId("edit"),
     label: "Edit",
     submenu: [
       { role: "undo" },
@@ -180,6 +185,7 @@ function buildViewMenu(
     ...fullscreenSection,
   ];
   return {
+    id: desktopTopLevelMenuItemId("view"),
     label: "View",
     submenu,
   };
@@ -196,6 +202,7 @@ function buildWindowMenu(
     click: () => actions.focusWindow(entry.windowId),
   }));
   return {
+    id: desktopTopLevelMenuItemId("window"),
     label: "Window",
     submenu: [
       {
@@ -235,6 +242,7 @@ function buildHelpMenu(
   actions: MenuBuildActions,
 ): MenuItemConstructorOptions {
   return {
+    id: desktopTopLevelMenuItemId("help"),
     label: "Help",
     role: "help",
     submenu: [
