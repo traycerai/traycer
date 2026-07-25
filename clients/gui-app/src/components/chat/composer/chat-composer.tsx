@@ -402,6 +402,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
         </ChatComposerBannerPortal>
       ) : null}
       <div
+        data-chat-composer=""
         className={cn(
           "bg-canvas px-4 pb-4",
           topSpacing === "normal" ? "pt-4" : "pt-0",

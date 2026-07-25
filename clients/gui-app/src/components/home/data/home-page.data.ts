@@ -15,7 +15,12 @@ export type HistoryMatchMode = "any" | "all";
 export type HistoryOwnershipScope = TaskOwnershipScope;
 export type HistoryWorkspaceRef = TaskWorkspaceIdentifier;
 export type HistorySortOption =
-  "recent" | "oldest" | "title-asc" | "title-desc" | "relevance";
+  | "recent"
+  | "last-viewed"
+  | "oldest"
+  | "title-asc"
+  | "title-desc"
+  | "relevance";
 
 export const DEFAULT_SORT: HistorySortOption = "recent";
 
@@ -291,6 +296,11 @@ export function sortHistoryItems(
             BUCKET_ORDER[left.updatedBucket] -
               BUCKET_ORDER[right.updatedBucket],
         );
+    case "last-viewed":
+      // The central list endpoint already returns the complete eligible set in
+      // last-viewed order. Preserve that order while still projecting an
+      // optimistic pin bit into its pinned-first partition.
+      return prioritizePinnedHistoryItems(items);
     case "oldest":
       return items
         .slice()

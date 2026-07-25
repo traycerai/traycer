@@ -266,7 +266,7 @@ function sortProjectedHistoryItems(
   sort: HistorySortOption,
   query: string,
 ): ReadonlyArray<HistoryItem> {
-  if (sort === "relevance" && query.length > 0) {
+  if ((sort === "relevance" && query.length > 0) || sort === "last-viewed") {
     return prioritizePinnedHistoryItems(items);
   }
   return sortHistoryItems(items, sort);

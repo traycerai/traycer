@@ -1,4 +1,5 @@
 import type { InstallHostLifecycle } from "../installer";
+import { createCliLogger } from "../logger";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
 import {
   createServiceController,
@@ -112,13 +113,47 @@ export function createServiceInstallLifecycle(
     },
     afterSwap: async () => {
       if (state.priorState === "externally-managed") {
-        // Traycer Desktop's SMAppService owns this label. Any launchctl
-        // bootstrap/bootout (or manifest rewrite) from the CLI would
-        // corrupt the BTM registration it manages - `installService`
-        // refuses exactly that. Leave the service alone: the swapped
-        // bytes go live at Desktop's next SMAppService register cycle
-        // (ensure fast path / pending-revision monitor / relaunch).
+        // Traycer Desktop's SMAppService owns registration here. Any
+        // launchctl bootstrap/bootout (or manifest rewrite) against ITS
+        // label would corrupt the BTM registration it manages -
+        // `installService` refuses exactly that. Leave the service alone:
+        // the swapped bytes go live at Desktop's next SMAppService register
+        // cycle (ensure fast path / pending-revision monitor / relaunch).
         state.postSwapAction = "none";
+        // ...but a COMPETING CLI-label registration is a different object
+        // from the one Desktop owns, and leaving it alone is what produced
+        // the dual-host bug. Retire it here rather than merely declining to
+        // add another: this is the one routine flow that both reaches a
+        // poisoned machine (`host install` / `host update` on a
+        // desktop-owned host) and is already an explicit host-lifecycle
+        // operation the user asked for. `retireCompetingRegistration`
+        // re-probes ownership itself and no-ops unless Desktop's agent is
+        // the registered owner and the CLI label is genuinely a competitor
+        // - `externally-managed` alone cannot distinguish that from a
+        // pre-split machine whose CLI label IS Desktop's registration.
+        // Contractually non-throwing - but caught anyway rather than trusted:
+        // the install's bytes are already swapped in at this point, so an
+        // opportunistic cleanup must not be able to abort the lifecycle no
+        // matter how a future platform implementation behaves.
+        //
+        // Its outcome is deliberately NOT recorded on `state`: nothing builds
+        // a `serviceLifecycle` payload from it (every caller assembles that
+        // field-by-field), so a field here would be dead state. The repair
+        // reports itself through the CLI logger, which is where a field
+        // diagnosis for "my host went away after an install" starts.
+        await controller
+          .retireCompetingRegistration(label)
+          .catch((cause: unknown) => {
+            // Logged HERE rather than swallowed: every failure the repair
+            // anticipates is already reported at its own seam, so the only
+            // way to land in this catch is an unforeseen throw - precisely
+            // the case that escaped that logging. A silent swallow would
+            // make it invisible everywhere.
+            createCliLogger(options.environment).warn(
+              "Competing-registration repair threw unexpectedly; the host install itself was unaffected.",
+              { cause: cause instanceof Error ? cause.message : String(cause) },
+            );
+          });
         return;
       }
       if (state.priorState === "not-installed") {

@@ -11,26 +11,48 @@ import { z } from "zod";
 import {
   listAgentsResponseSchemaV10,
   listAgentsResponseSchemaV20,
+  listAgentsResponseSchemaV30,
+  listAgentsResponseSchemaV40,
+  listAgentsResponseSchemaV50,
 } from "../../src/host/agent/shared";
 import {
   listGuiHarnessesResponseSchemaV10,
   listGuiHarnessesResponseSchemaV20,
+  listGuiHarnessesResponseSchemaV21,
+  listGuiHarnessesResponseSchemaV30,
+  listGuiHarnessesResponseSchemaV40,
+  listGuiHarnessesResponseSchemaV50,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
+  providersListResponseSchemaV40,
+  providersListResponseSchemaV50,
 } from "../../src/host/provider-schemas";
 
 function dump(schema: z.ZodType): unknown {
   return z.toJSONSchema(schema, { unrepresentable: "any" });
 }
 
+// Every released line of the three id-carrying catalog methods. The v5.0 row
+// of each is why this list is now exhaustive: those lines pointed at the LIVE
+// canonical schema until `cli-v1.1.8`/`host-v1.1.8` shipped them, so `omp`
+// silently rode a released contract and only the tag-based gate caught it.
+// Pinning every frozen line makes that same class of drift fail in plain
+// `bun run test`, with no tags to resolve.
 const FIXTURES = {
   "agent.gui.listHarnesses@1.0": dump(listGuiHarnessesResponseSchemaV10),
   "agent.gui.listHarnesses@2.0": dump(listGuiHarnessesResponseSchemaV20),
+  "agent.gui.listHarnesses@2.1": dump(listGuiHarnessesResponseSchemaV21),
+  "agent.gui.listHarnesses@3.0": dump(listGuiHarnessesResponseSchemaV30),
+  "agent.gui.listHarnesses@4.0": dump(listGuiHarnessesResponseSchemaV40),
+  "agent.gui.listHarnesses@5.0": dump(listGuiHarnessesResponseSchemaV50),
   "agent.list@1.0": dump(listAgentsResponseSchemaV10),
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
+  "agent.list@3.0": dump(listAgentsResponseSchemaV30),
+  "agent.list@4.0": dump(listAgentsResponseSchemaV40),
+  "agent.list@5.0": dump(listAgentsResponseSchemaV50),
   "providers.list@1.0": dump(providersListResponseSchemaV10),
   "providers.list@2.0": dump(providersListResponseSchemaV20),
   // Frozen with Amp, before `profiles` (the v4.0 cut) - pinned now that this
@@ -38,6 +60,8 @@ const FIXTURES = {
   // back into this frozen export goes red locally (see the providers.list
   // #258 incident this whole gate exists to catch).
   "providers.list@3.0": dump(providersListResponseSchemaV30),
+  "providers.list@4.0": dump(providersListResponseSchemaV40),
+  "providers.list@5.0": dump(providersListResponseSchemaV50),
 };
 
 const HEADER =

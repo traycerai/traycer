@@ -71,8 +71,15 @@ export interface LandingDraftWorkspaceSnapshot {
 interface LandingDraftStoreState {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly activeDraftId: string | null;
-  /** Always creates a fresh draft, sets it as active, returns its id. */
-  createDraft: (settings: ChatRunSettings | null) => string;
+  /**
+   * Always creates a fresh draft, sets it as active, returns its id.
+   * Pass `id` to create with a pre-minted identity (landing null-draft mount
+   * key stability); pass `undefined` to allocate a new uuid.
+   */
+  createDraft: (
+    settings: ChatRunSettings | null,
+    id: string | undefined,
+  ) => string;
   /** Remove a draft by id. If it was the active draft, clears `activeDraftId`;
    *  strip-neighbor navigation in the close-flow handles where the user lands. */
   closeDraft: (id: string) => void;
@@ -322,9 +329,9 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       drafts: [],
       activeDraftId: null,
 
-      createDraft: (settings) => {
+      createDraft: (settings, id) => {
         const next: LandingDraftTab = {
-          id: uuidv4(),
+          id: id ?? uuidv4(),
           content: EMPTY_LANDING_DRAFT_CONTENT,
           selection: null,
           lastTouchedAt: Date.now(),

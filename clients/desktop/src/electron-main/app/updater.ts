@@ -142,6 +142,7 @@ let currentSnapshot: DesktopAppUpdateSnapshot = {
   downloadProgress: null,
   installBlockedReason: null,
   installGuidance: null,
+  installInFlight: false,
   errorMessage: null,
   lastCheckedAt: null,
   lastCheckIntent: null,
@@ -809,8 +810,35 @@ export function installDownloadedUpdate(): DesktopAppUpdateSnapshot {
     });
     return currentSnapshot;
   }
+  // Re-entrancy guard. The quit this triggers is bounded but not instant, and
+  // the restart affordances live in every window, so a second request can
+  // arrive mid-quit. `status` is still "ready" at that point (the artifact is
+  // staged until the process ends), so the check above can't catch it - handing
+  // a second `quitAndInstall` to electron-updater mid-install is not something
+  // we rely on it to tolerate.
+  if (installingUpdate) {
+    log.info("[updater] install already in flight - ignoring repeat request");
+    return currentSnapshot;
+  }
   installingUpdate = true;
-  autoUpdater.quitAndInstall(false, true);
+  // Publish before handing off: this is the only signal the renderer gets that
+  // an install started (a successful install emits nothing further - it ends
+  // the process), and it's what disarms the restart affordances in every window.
+  emitSnapshot({});
+  try {
+    autoUpdater.quitAndInstall(false, true);
+  } catch (err) {
+    // Some installed updater implementations throw *synchronously* here rather
+    // than rejecting (same hazard the download path guards against). Without
+    // this, `handleUpdaterError` never runs: no error snapshot is emitted, so
+    // `installInFlight` stays raised and every restart affordance is left
+    // permanently disabled with no way back. Route it through the same handler
+    // as an async failure - its `installingUpdate` branch lowers the flag and
+    // emits the error. Call it BEFORE clearing the flag; that branch is
+    // selected by it.
+    log.warn("[updater] install handoff threw", err);
+    handleUpdaterError(err);
+  }
   return currentSnapshot;
 }
 
@@ -1211,6 +1239,10 @@ function emitSnapshot(patch: AppUpdateSnapshotPatch): DesktopAppUpdateSnapshot {
     allowPrerelease: patch.allowPrerelease ?? currentSnapshot.allowPrerelease,
     installBlockedReason: currentInstallBlockedReason(),
     installGuidance: linuxInstallGuidance,
+    // Derived, like the two above: `installingUpdate` is the single source of
+    // truth, so every emit republishes the live value rather than relying on
+    // each call site to thread it through the patch.
+    installInFlight: installingUpdate,
     latestVersion:
       patch.latestVersion === undefined
         ? currentSnapshot.latestVersion

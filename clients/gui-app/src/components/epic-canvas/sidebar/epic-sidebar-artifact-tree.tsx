@@ -32,6 +32,7 @@ import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import { cn } from "@/lib/utils";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import { ArtifactPanelSearchShell } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-search";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -41,11 +42,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ContextMenuContent } from "@/components/ui/context-menu";
-import {
-  SidebarContent,
-  SidebarGroup,
-  SidebarGroupContent,
-} from "@/components/ui/sidebar";
+import { SidebarGroup, SidebarGroupContent } from "@/components/ui/sidebar";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   Tooltip,
@@ -601,13 +598,13 @@ export function ArtifactTreePanelBody(props: ArtifactTreePanelBodyProps) {
   return (
     <SidebarSortContext.Provider value={comparator}>
       <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-        <SidebarContent className="gap-0">
+        <ArtifactPanelSearchShell epicId={epicId} tabId={tabId}>
           <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
             <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
               {panelContent}
             </SidebarGroupContent>
           </SidebarGroup>
-        </SidebarContent>
+        </ArtifactPanelSearchShell>
       </SidebarFilterVisibilityContext.Provider>
     </SidebarSortContext.Provider>
   );

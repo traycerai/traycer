@@ -539,7 +539,7 @@ describe("<WindowsBridgeProvider />", () => {
     act(() => {
       tabId = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
       useEpicCanvasStore.getState().renameTab(tabId, "A Prime");
-      draftId = useLandingDraftStore.getState().createDraft(null);
+      draftId = useLandingDraftStore.getState().createDraft(null, undefined);
       useLandingDraftStore
         .getState()
         .setDraftContent(draftId, landingTextContent("first prompt"), null);
@@ -583,7 +583,7 @@ describe("<WindowsBridgeProvider />", () => {
     act(() => {
       tabA = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
       tabB = useEpicCanvasStore.getState().openEpicTab("epic-b", "B");
-      draftId = useLandingDraftStore.getState().createDraft(null);
+      draftId = useLandingDraftStore.getState().createDraft(null, undefined);
       useLandingDraftStore
         .getState()
         .setDraftContent(draftId, landingTextContent("old prompt"), null);
@@ -644,7 +644,7 @@ describe("<WindowsBridgeProvider />", () => {
     act(() => {
       tabA = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
       tabB = useEpicCanvasStore.getState().openEpicTab("epic-b", "B");
-      draftId = useLandingDraftStore.getState().createDraft(null);
+      draftId = useLandingDraftStore.getState().createDraft(null, undefined);
       useLandingDraftStore
         .getState()
         .setDraftContent(draftId, landingTextContent("final prompt"), null);

@@ -4,6 +4,7 @@ import {
   WorkingVerbContext,
   pickWorkingVerb,
 } from "@/components/chat/working-verb";
+import { isFastModeEnabled } from "@/components/home/data/landing-options";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type {
@@ -570,14 +571,6 @@ function AssistantMetaRow({ label, value }: { label: string; value: string }) {
       <span className="font-medium">{value}</span>
     </div>
   );
-}
-
-/**
- * Fast mode is on whenever the turn carried a non-default service tier (e.g.
- * Codex `"priority"`); an empty/null tier means the harness default.
- */
-function isFastModeEnabled(serviceTier: string | null): boolean {
-  return serviceTier !== null && serviceTier.trim().length > 0;
 }
 
 /**

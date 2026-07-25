@@ -1456,7 +1456,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         }
         // Caller-supplied name comes from the row the user clicked on
         // (history list, command palette, deep link). Falls back to
-        // "Untitled epic" only when the caller has no title in hand.
+        // "Untitled task" only when the caller has no title in hand.
         return state.openEpicTab(epicId, name ?? UNTITLED_EPIC_TITLE);
       },
 
@@ -2115,7 +2115,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       createEpicFromPrompt: (prompt) => {
         const epicId = uuidv4();
         // `createEpicName` yields "" for an empty/whitespace prompt; this create
-        // path bakes a non-empty stored tab name, so apply the "Untitled epic"
+        // path bakes a non-empty stored tab name, so apply the "Untitled task"
         // fallback here.
         const name = createEpicName(prompt) || UNTITLED_EPIC_TITLE;
         const tabId = uuidv4();

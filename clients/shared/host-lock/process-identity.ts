@@ -273,6 +273,28 @@ export function verifyProcessIdentity(
   );
 }
 
+// Same verdict as `verifyProcessIdentity`, without blocking the event loop.
+// The synchronous form shells out via `execFileSync` (a 3s timeout and up to
+// three retries on POSIX), which is fine for a lock acquisition that is
+// about to block anyway but not for a caller that judges MANY tokens in a
+// row before doing any work - `registry/download-cache.ts` sweeps every
+// entry in the download cache before a download is allowed to start, and a
+// cache holding a handful of distinct stale owners could otherwise burn tens
+// of seconds of wall clock with the process wedged and emitting nothing.
+export async function verifyProcessIdentityAsync(
+  token: ProcessIdentityToken,
+): Promise<ProcessIdentityVerdict> {
+  if (token.pid === process.pid) return verifyOwnProcessIdentity(token);
+  const liveness = await asyncProcessLivenessReader(token.pid);
+  const currentStartedAtMs =
+    liveness === "dead" ? null : await asyncProcessStartTimeReader(token.pid);
+  return computeProcessIdentityVerdict(
+    liveness,
+    token.startedAtMs,
+    currentStartedAtMs,
+  );
+}
+
 // Mutable indirection for the start-time probe `verifyProcessIdentity`
 // consults, defaulting to the real `readProcessStartTimeMs` below. Exists
 // solely so tests can force a probe failure for a specific pid at the

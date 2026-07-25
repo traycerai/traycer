@@ -1,4 +1,5 @@
 import {
+  Files,
   Folder,
   FolderGit2,
   GitBranch,
@@ -226,6 +227,10 @@ export function epicIcon(): ReactElement {
 
 export function artifactIcon(kind: EpicArtifactKind): ReactElement {
   return epicNodeIcon(kind);
+}
+
+export function artifactsIcon(): ReactElement {
+  return <Files className={MENU_ICON_CLASS} aria-hidden />;
 }
 
 export function epicNodeIcon(

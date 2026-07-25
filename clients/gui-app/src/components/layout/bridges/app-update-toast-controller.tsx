@@ -14,6 +14,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   settleUpdateDownloadOutcome,
   trackUpdateDownloadStarted,
+  trackUpdateRestartRequested,
 } from "@/lib/app-update-analytics";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
@@ -27,9 +28,6 @@ const APP_UPDATE_REPORT_CONTEXT = createReportIssueContext({
 
 export function AppUpdateToastController(): null {
   const { bridge, snapshot } = useDesktopAppUpdates();
-  const openConfirmRestartUpdate = useDesktopDialogStore(
-    (state) => state.openConfirmRestartUpdate,
-  );
   const openInstallGuidance = useDesktopDialogStore(
     (state) => state.openInstallGuidance,
   );
@@ -87,7 +85,12 @@ export function AppUpdateToastController(): null {
         trackUpdateDownloadStarted("direct_ui");
         void bridge.downloadUpdate();
       },
-      onRestart: openConfirmRestartUpdate,
+      // "Restart" installs straight away - the click is the confirmation, and
+      // the host keeps running agents across the app restart.
+      onRestart: () => {
+        trackUpdateRestartRequested("direct_ui");
+        void bridge.installUpdate();
+      },
       onViewInstructions: () => {
         Analytics.getInstance().track(
           AnalyticsEvent.UpdateInstallGuidanceOpened,
@@ -102,7 +105,6 @@ export function AppUpdateToastController(): null {
   }, [
     bridge,
     snapshot,
-    openConfirmRestartUpdate,
     openInstallGuidance,
     openReportIssueWithContext,
     reportIssueAvailable,
@@ -176,6 +178,20 @@ function showAppUpdateToast(
       });
       return;
     case "ready":
+      // The restart was already requested (here, from the header tick, or from
+      // another window) and the quit is draining. Replacing the action toast
+      // with progress is what tells the user the click landed - the install
+      // emits nothing further on success, it just ends the process - and it
+      // retires the second "Restart" button before it can fire a duplicate.
+      if (snapshot.installInFlight) {
+        progressToast("Restarting to install update…", {
+          id: APP_UPDATE_TOAST_ID,
+          description: "Traycer will reopen once the update is applied.",
+          duration: Infinity,
+          cancel: null,
+        });
+        return;
+      }
       // Linux deb/rpm where silent install can't/didn't work: the download
       // succeeded, but "Restart" would trigger the same doomed install
       // attempt. Point at the step-by-step dialog instead.

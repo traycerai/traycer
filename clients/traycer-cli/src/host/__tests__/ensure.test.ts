@@ -148,6 +148,11 @@ function makeController(
     restart: vi.fn(async () => {
       current = "running";
     }),
+    // `host ensure` never reaches the externally-managed repair path (its
+    // stub states are all CLI-managed), so a plain no-op is faithful here.
+    retireCompetingRegistration: vi.fn(async () => ({
+      kind: "not-applicable" as const,
+    })),
   };
 }
 
