@@ -22,6 +22,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
   readonly epicId: string;
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
+  readonly supplementalContent: ReactNode | null;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const client = useHostClientForHostId(props.hostId);
@@ -77,7 +78,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
   return (
     <HoverPreviewCard
       content={
-        <span
+        <div
           className="block w-[min(92vw,24rem)]"
           data-testid={`chat-navigator-worktree-hover-${props.ownerId}`}
         >
@@ -93,13 +94,18 @@ export function WorktreeOwnerMetadataTooltip(props: {
             pending={metadata.isPending}
             error={metadata.error !== null}
           />
+          {props.supplementalContent === null ? null : (
+            <div className="border-t border-border px-3 py-2">
+              {props.supplementalContent}
+            </div>
+          )}
           <OwnerMetadataRefreshFooter
             checkedAt={metadata.checkedAt}
             refreshing={refresh.refreshing}
             canRefresh={canRefresh}
             onRefresh={trigger}
           />
-        </span>
+        </div>
       }
       side="right"
       sideOffset={4}

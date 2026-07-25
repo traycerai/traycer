@@ -3,6 +3,7 @@
  * with expansion, rename, delete, and drag-drop behaviors.
  */
 import { useDraggable } from "@dnd-kit/core";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { v4 as uuidv4 } from "uuid";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -104,6 +105,7 @@ import {
 import {
   useAncestorIds,
   useEpicActiveAgentIds,
+  useEpicAgentRoleClaims,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicArchivedNodeIds,
@@ -118,6 +120,7 @@ import {
   useEpicTreeNode,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
+import { AgentRoleBadges, AgentRoleHoverContent } from "./agent-role-badges";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -176,6 +179,7 @@ import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -1953,6 +1957,22 @@ function resourceOwnerKindForNode(
   return null;
 }
 
+function roleHoverContentForAgent(
+  agentName: string,
+  roleClaims: readonly RoleClaim[],
+) {
+  if (roleClaims.length === 0) return null;
+  return <AgentRoleHoverContent agentName={agentName} claims={roleClaims} />;
+}
+
+function AgentRoleBadgesForOwner(props: {
+  readonly ownerKind: ResourceOwnerKindWire | null;
+  readonly claims: readonly RoleClaim[];
+}) {
+  if (props.ownerKind === null) return null;
+  return <AgentRoleBadges claims={props.claims} />;
+}
+
 function ChatRowButton(props: ChatRowButtonProps) {
   const {
     epicId,
@@ -1976,6 +1996,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     reserveArchiveSlot,
   } = props;
   const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
+  const roleClaims = useEpicAgentRoleClaims(nodeId);
   const dragData = useMemo<EpicCanvasSidebarNodeDragData>(
     () => ({
       kind: SIDEBAR_NODE_DND_TYPE,
@@ -2007,6 +2028,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   const ownerHostId = useEpicNodeHostId(nodeId);
   const ownerKind = useEpicNodeOwnerKind(nodeId);
+  const roleHoverContent = roleHoverContentForAgent(nodeName, roleClaims);
 
   // Only the "⋯" more menu now reveals on hover (the standalone "+" moved into
   // that menu as "New child agent"), so the single-control pad-right reserve is
@@ -2029,9 +2051,8 @@ function ChatRowButton(props: ChatRowButtonProps) {
       : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
   );
   const selectionInputId = `epic-sidebar-select-input-${nodeId}`;
-
   if (selectionMode) {
-    return (
+    const selectionRow = (
       <label
         htmlFor={selectionInputId}
         ref={dragRef}
@@ -2066,10 +2087,25 @@ function ChatRowButton(props: ChatRowButtonProps) {
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+            <AgentRoleBadgesForOwner
+              ownerKind={resourceOwnerKind}
+              claims={roleClaims}
+            />
             {isArchived ? <ArchivedBadge /> : null}
           </span>
         </span>
       </label>
+    );
+    if (roleHoverContent === null) return selectionRow;
+    return (
+      <TooltipWrapper
+        label={roleHoverContent}
+        side="right"
+        sideOffset={6}
+        align="start"
+      >
+        {selectionRow}
+      </TooltipWrapper>
     );
   }
 
@@ -2111,6 +2147,10 @@ function ChatRowButton(props: ChatRowButtonProps) {
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+          <AgentRoleBadgesForOwner
+            ownerKind={resourceOwnerKind}
+            claims={roleClaims}
+          />
           {isArchived ? <ArchivedBadge /> : null}
           {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
             <OwnerResourceChip
@@ -2138,15 +2178,28 @@ function ChatRowButton(props: ChatRowButtonProps) {
       </span>
     </button>
   );
-  if (ownerHostId === null || ownerKind === null) return button;
+  if (ownerHostId !== null && ownerKind !== null) {
+    return (
+      <WorktreeOwnerMetadataTooltip
+        trigger={button}
+        hostId={ownerHostId}
+        epicId={epicId}
+        ownerId={nodeId}
+        ownerKind={ownerKind}
+        supplementalContent={roleHoverContent}
+      />
+    );
+  }
+  if (roleHoverContent === null) return button;
   return (
-    <WorktreeOwnerMetadataTooltip
-      trigger={button}
-      hostId={ownerHostId}
-      epicId={epicId}
-      ownerId={nodeId}
-      ownerKind={ownerKind}
-    />
+    <TooltipWrapper
+      label={roleHoverContent}
+      side="right"
+      sideOffset={6}
+      align="start"
+    >
+      {button}
+    </TooltipWrapper>
   );
 }
 
