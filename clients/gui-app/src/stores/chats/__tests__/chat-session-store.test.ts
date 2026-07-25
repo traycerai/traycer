@@ -211,6 +211,7 @@ function emitSnapshotFrame(input: SnapshotFrameInput): void {
         claudePendingWakes: [...(input.claudePendingWakes ?? [])],
         messages: [...input.messages],
         events: [],
+        archivedAt: null,
       },
       access: {
         role: input.access,
@@ -259,6 +260,7 @@ function emitSnapshotWithWorktree(
         claudePendingWakes: [],
         messages: [],
         events: [...events],
+        archivedAt: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
@@ -3150,6 +3152,7 @@ describe("createChatSessionStore", () => {
             },
           ],
           events: [],
+          archivedAt: null,
         },
         access: {
           role: "owner",
@@ -3311,6 +3314,7 @@ describe("createChatSessionStore", () => {
             },
           ],
           events: [],
+          archivedAt: null,
         },
         access: {
           role: "owner",

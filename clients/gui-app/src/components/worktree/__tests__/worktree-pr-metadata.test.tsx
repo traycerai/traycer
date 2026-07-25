@@ -7,8 +7,10 @@ import {
   within,
 } from "@testing-library/react";
 import type {
+  DiskWorktreeEntry,
   WorktreeBinding,
   WorktreeHostEntryV12,
+  WorktreeWorkspaceSummaryV13,
 } from "@traycer/protocol/host/worktree-schemas";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -21,6 +23,7 @@ import {
   OwnerWorkspaceMetadataContent,
   WorktreePrPills,
 } from "@/components/worktree/worktree-pr-metadata";
+import { WorktreePrStateIcons } from "@/components/worktree/worktree-pr-state-icons";
 import {
   ownerWorkspaceMetadataItems,
   worktreePrReferences,
@@ -78,6 +81,50 @@ const BINDING: WorktreeBinding = {
   ],
 };
 
+/** An owner running directly in a folder - no managed worktree behind it. */
+const PLAIN_FOLDER_BINDING: WorktreeBinding = {
+  entries: [
+    {
+      workspacePath: "/repos/infra",
+      mode: "local",
+      repoIdentifier: { owner: "acme", repo: "infra" },
+      worktreePath: null,
+      branch: null,
+      isPrimary: true,
+      isImported: false,
+      setupState: "succeeded",
+      setupTerminalSessionId: null,
+      setupExitCode: 0,
+      setupFailedAt: null,
+      createdAt: 1,
+      ownedSubmodules: [],
+    },
+  ],
+};
+
+function diskEntry(
+  worktreePath: string,
+  isMain: boolean,
+  branch: string,
+): DiskWorktreeEntry {
+  return { worktreePath, branch, head: null, isMain, isLocked: false };
+}
+
+function workspaceSummary(
+  workspacePath: string,
+  worktrees: readonly DiskWorktreeEntry[],
+): WorktreeWorkspaceSummaryV13 {
+  return {
+    workspacePath,
+    isGitRepo: true,
+    repoIdentifier: { owner: "acme", repo: "infra" },
+    mainBranch: "main",
+    worktrees: [...worktrees],
+    scripts: null,
+    resolvedAt: 1_000,
+  };
+}
+
 function renderWithProviders(node: React.ReactNode): void {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -114,24 +161,62 @@ describe("worktree PR metadata", () => {
       }),
     ]);
 
+    // The visible label carries no state word - the glyph encodes it. The ARIA
+    // label still spells it out, because the glyph is `aria-hidden` and is
+    // therefore the one thing a screen reader cannot read.
     expect(references).toMatchObject([
       {
-        label: "#42 Open",
+        label: "#42",
+        ariaLabel: "Open PR #42 Open",
         branch: "feature/login",
         worktreePath: "/worktrees/app/feature-login",
       },
       {
-        label: "shared #7 Merged",
+        label: "shared #7",
+        ariaLabel: "Open shared PR #7 Merged",
         branch: "feature/shared-login",
         worktreePath: "/worktrees/app/feature-login",
       },
     ]);
   });
 
-  it("merges the binding with enriched worktree truth for navigator hover", () => {
-    const items = ownerWorkspaceMetadataItems(BINDING, [
-      worktree({ branch: "feature/login-renamed" }),
+  it("emits one reference per PR when two of an owner's directories report the same one", () => {
+    // Two distinct running directories of the same repo, both sitting on the
+    // same PR. The reference key is built from the PR number and URL, not the
+    // directory, so before dedup both rows carried an identical `key` - a
+    // duplicate React key wherever they render as a list, and a repeated icon
+    // for a single pull request.
+    const references = worktreePrReferences([
+      worktree({ worktreePath: "/worktrees/app/feature-login" }),
+      worktree({ worktreePath: "/worktrees/app/feature-login-copy" }),
     ]);
+
+    expect(references).toHaveLength(1);
+    expect(references[0].url).toBe("https://github.com/acme/app/pull/42");
+    expect(new Set(references.map((reference) => reference.key)).size).toBe(
+      references.length,
+    );
+  });
+
+  it("keeps genuinely distinct PRs apart", () => {
+    const references = worktreePrReferences([
+      worktree({ worktreePath: "/worktrees/app/a" }),
+      worktree({
+        worktreePath: "/worktrees/app/b",
+        prNumber: 43,
+        prUrl: "https://github.com/acme/app/pull/43",
+      }),
+    ]);
+
+    expect(references.map((reference) => reference.prNumber)).toEqual([42, 43]);
+  });
+
+  it("merges the binding with enriched worktree truth for navigator hover", () => {
+    const items = ownerWorkspaceMetadataItems(
+      BINDING,
+      [worktree({ branch: "feature/login-renamed" })],
+      [],
+    );
 
     expect(items).toMatchObject([
       {
@@ -140,6 +225,52 @@ describe("worktree PR metadata", () => {
         runPath: "/worktrees/app/feature-login",
       },
     ]);
+  });
+
+  it("reads a plain folder's branch off its workspace summary, not the worktree walk", () => {
+    // `worktree.listAllForHost` walks MANAGED WORKTREES, so a folder the owner
+    // runs in directly is never in it, and a workspace entry's own `branch` is
+    // null (that field records the branch a WORKTREE binding was created on).
+    // With only those two sources the row read "No branch" however many times
+    // it was refreshed - no amount of re-deriving turns a null into a branch.
+    const items = ownerWorkspaceMetadataItems(
+      PLAIN_FOLDER_BINDING,
+      [],
+      [
+        workspaceSummary("/repos/infra", [
+          diskEntry("/repos/infra", true, "main"),
+        ]),
+      ],
+    );
+
+    expect(items).toMatchObject([
+      { name: "infra", branch: "main", runPath: "/repos/infra" },
+    ]);
+  });
+
+  it("prefers the folder's own disk row over the repo's main one", () => {
+    // When the folder the owner runs in is ITSELF a worktree of some other
+    // checkout, the `isMain` row names a different directory on a different
+    // branch. Falling back to it would confidently report the wrong branch,
+    // which is worse than the "No branch" it replaced.
+    const items = ownerWorkspaceMetadataItems(
+      PLAIN_FOLDER_BINDING,
+      [],
+      [
+        workspaceSummary("/repos/infra", [
+          diskEntry("/repos/checkout", true, "main"),
+          diskEntry("/repos/infra", false, "feature/split"),
+        ]),
+      ],
+    );
+
+    expect(items[0].branch).toBe("feature/split");
+  });
+
+  it("leaves a plain folder branchless when no summary covers it", () => {
+    const items = ownerWorkspaceMetadataItems(PLAIN_FOLDER_BINDING, [], []);
+
+    expect(items[0].branch).toBeNull();
   });
 
   it("renders linked PR pills and the owner hover's branch and run path", () => {
@@ -156,6 +287,7 @@ describe("worktree PR metadata", () => {
         <OwnerWorkspaceMetadataContent
           binding={BINDING}
           worktrees={[entry]}
+          workspaces={[]}
           pending={false}
           error={false}
         />
@@ -171,7 +303,13 @@ describe("worktree PR metadata", () => {
         "https://github.com/acme/app/pull/42",
       );
       expect(link.className).toContain("inline-flex");
-      expect(link.querySelectorAll("svg")).toHaveLength(1);
+      // Two glyphs: the leading state icon (the pill's only state signal) and
+      // the trailing external-link affordance, which is mounted at all times
+      // and revealed by opacity so hovering a row of pills cannot reflow it.
+      expect(link.querySelectorAll("svg")).toHaveLength(2);
+      const external = link.querySelector(".lucide-external-link");
+      expect(external).not.toBeNull();
+      expect(external?.getAttribute("class")).toContain("opacity-0");
     }
     expect(screen.getByText("feature/login")).toBeDefined();
     expect(screen.getByText("/worktrees/app/feature-login")).toBeDefined();
@@ -241,6 +379,7 @@ describe("worktree PR metadata", () => {
       <OwnerWorkspaceMetadataContent
         binding={BINDING}
         worktrees={[entry]}
+        workspaces={[]}
         pending={false}
         error={false}
       />,
@@ -256,7 +395,7 @@ describe("worktree PR metadata", () => {
       "https://github.com/acme/app/pull/42",
     );
     expect(link.getAttribute("data-pr-state")).toBe("open");
-    expect(within(ownerContent).getByText("#42 Open")).toBeTruthy();
+    expect(within(ownerContent).getByText("#42")).toBeTruthy();
     // jsdom can't reproduce Chromium making an overflowing scroll container an
     // implicit tab stop - assert the explicit opt-out is present instead
     // (verified against real Chromium separately; see the ticket notes).
@@ -278,6 +417,7 @@ describe("worktree PR metadata", () => {
           <OwnerWorkspaceMetadataContent
             binding={BINDING}
             worktrees={[entry]}
+            workspaces={[]}
             pending={false}
             error={false}
           />
@@ -295,50 +435,47 @@ describe("worktree PR metadata", () => {
     {
       state: "open" as const,
       tint: "#22c55e" /* green-500 */,
-      lightText: "#166534" /* green-800 */,
-      darkText: "#86efac" /* green-300 */,
-      borderClass: "border-green-600/30",
+      lightGlyph: "#166534" /* green-800 */,
+      darkGlyph: "#86efac" /* green-300 */,
       bgClass: "bg-green-500/10",
-      lightTextClass: "text-green-800",
-      darkTextClass: "dark:text-green-300",
+      lightGlyphClass: "text-green-800",
+      darkGlyphClass: "dark:text-green-300",
     },
     {
       state: "closed" as const,
       tint: "#ef4444" /* red-500 */,
-      lightText: "#991b1b" /* red-800 */,
-      darkText: "#fca5a5" /* red-300 */,
-      borderClass: "border-red-600/25",
+      lightGlyph: "#991b1b" /* red-800 */,
+      darkGlyph: "#fca5a5" /* red-300 */,
       bgClass: "bg-red-500/10",
-      lightTextClass: "text-red-800",
-      darkTextClass: "dark:text-red-300",
+      lightGlyphClass: "text-red-800",
+      darkGlyphClass: "dark:text-red-300",
     },
     {
       state: "merged" as const,
       tint: "#a855f7" /* purple-500 */,
-      lightText: "#6b21a8" /* purple-800 */,
-      darkText: "#d8b4fe" /* purple-300 */,
-      borderClass: "border-purple-600/30",
+      lightGlyph: "#6b21a8" /* purple-800 */,
+      darkGlyph: "#d8b4fe" /* purple-300 */,
       bgClass: "bg-purple-500/10",
-      lightTextClass: "text-purple-800",
-      darkTextClass: "dark:text-purple-300",
+      lightGlyphClass: "text-purple-800",
+      darkGlyphClass: "dark:text-purple-300",
     },
   ])(
-    "renders the owner-preview $state pill on the theme-aware normal-surface palette, >=4.5:1 against every preset's hover-preview card",
+    "keeps the owner-preview $state pill's state glyph legible over its own tint on every preset's hover-preview card",
     ({
       state,
       tint,
-      lightText,
-      darkText,
-      borderClass,
+      lightGlyph,
+      darkGlyph,
       bgClass,
-      lightTextClass,
-      darkTextClass,
+      lightGlyphClass,
+      darkGlyphClass,
     }) => {
       const entry = worktree({ prState: state });
       renderWithProviders(
         <OwnerWorkspaceMetadataContent
           binding={BINDING}
           worktrees={[entry]}
+          workspaces={[]}
           pending={false}
           error={false}
         />,
@@ -346,34 +483,89 @@ describe("worktree PR metadata", () => {
       // The owner preview is a hover-preview card on the normal `bg-popover`
       // surface (see hover-preview-surface.ts), not the inverted tooltip chip,
       // so there is exactly one pill palette - no inverse variant to drift.
-      const tokens = screen
-        .getByTestId("worktree-context-pr-pill")
-        .className.split(/\s+/);
-      expect(tokens).toContain(lightTextClass);
-      expect(tokens).toContain(darkTextClass);
-      expect(tokens).toContain(borderClass);
-      expect(tokens).toContain(bgClass);
+      const pill = screen.getByTestId("worktree-context-pr-pill");
+      const pillTokens = pill.className.split(/\s+/);
+      expect(pillTokens).toContain(bgClass);
+      // The LABEL is plain body text. It carries no state - the word "Open" is
+      // gone from it - so it needs no per-state ramp, and `text-foreground` is
+      // already contrast-checked against every preset by the theme itself.
+      expect(pillTokens).toContain("text-foreground");
+      expect(
+        pillTokens.filter((token) => /^text-(green|red|purple)-/.test(token)),
+      ).toEqual([]);
 
-      // Resolve the real ratio per preset: the pill text sits on its own 10%
+      // The GLYPH is where the state went, which makes it a graphical object
+      // required to understand the content: WCAG 1.4.11's 3:1 floor, not the
+      // 4.5:1 body-text one the coloured label used to be held to. It carries
+      // the same `-800`/`-300` tokens the sidebar's icon variant does, from the
+      // shared palette - the ramp did not become moot when the label lost its
+      // colour, it moved.
+      const glyphTokens = (
+        within(pill)
+          .getByTestId("worktree-pr-pill-state-glyph")
+          .getAttribute("class") ?? ""
+      ).split(/\s+/);
+      expect(glyphTokens).toContain(lightGlyphClass);
+      expect(glyphTokens).toContain(darkGlyphClass);
+
+      // Resolve the real ratio per preset: the glyph sits on the pill's own 10%
       // state tint composited over the card's `--popover`, which several
       // presets tint away from the default white/near-black (Catppuccin,
       // Gruvbox, Tokyo Night, Everforest, …).
       const failures: string[] = [];
       for (const [preset, surfaces] of Object.entries(LIGHT_THEME_SURFACES)) {
         const ratio = contrastRatio(
-          lightText,
+          lightGlyph,
           compositeOverBackground(tint, 0.1, surfaces.popover),
         );
-        if (ratio < 4.5) failures.push(`${preset} light: ${ratio.toFixed(2)}`);
+        if (ratio < 3) failures.push(`${preset} light: ${ratio.toFixed(2)}`);
       }
       for (const [preset, surfaces] of Object.entries(DARK_THEME_SURFACES)) {
         const ratio = contrastRatio(
-          darkText,
+          darkGlyph,
           compositeOverBackground(tint, 0.1, surfaces.popover),
         );
-        if (ratio < 4.5) failures.push(`${preset} dark: ${ratio.toFixed(2)}`);
+        if (ratio < 3) failures.push(`${preset} dark: ${ratio.toFixed(2)}`);
       }
       expect(failures).toEqual([]);
     },
   );
+
+  it("holds both PR-state surfaces to one palette so neither can drift", () => {
+    // The two variants are separate components (the hover card's tinted pill
+    // and the sidebar row's icon-only span) that had already diverged once: the
+    // icon variant documented itself as carrying "the same validated tokens as
+    // the pill" while the pill had since moved to an unchecked `-600`/`-400`.
+    // They now read the same map, and this fails if either stops.
+    for (const state of ["open", "closed", "merged"] as const) {
+      const reference = worktreePrReferences([worktree({ prState: state })])[0];
+      renderWithProviders(
+        <>
+          <WorktreePrPills
+            worktrees={[worktree({ prState: state })]}
+            detailOnHover={false}
+            maximumVisible={null}
+            className={undefined}
+            testId="history-prs"
+          />
+          <WorktreePrStateIcons references={[reference]} testId="row-prs" />
+        </>,
+      );
+      const glyphTokens = (
+        screen
+          .getByTestId("worktree-pr-pill-state-glyph")
+          .getAttribute("class") ?? ""
+      ).split(/\s+/);
+      const iconTokens = screen
+        .getByTestId("worktree-pr-state-icon")
+        .className.split(/\s+/);
+      const stateTokens = (tokens: readonly string[]): readonly string[] =>
+        tokens.filter((token) =>
+          /^(dark:)?text-(green|red|purple)-/.test(token),
+        );
+      expect(stateTokens(glyphTokens)).toEqual(stateTokens(iconTokens));
+      expect(stateTokens(glyphTokens)).toHaveLength(2);
+      cleanup();
+    }
+  });
 });
