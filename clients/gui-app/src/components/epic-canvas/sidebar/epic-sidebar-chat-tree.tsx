@@ -3,6 +3,7 @@
  * with expansion, rename, delete, and drag-drop behaviors.
  */
 import { useDraggable } from "@dnd-kit/core";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { v4 as uuidv4 } from "uuid";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
@@ -109,7 +110,7 @@ import {
   useEpicTreeNode,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
-import { AgentRoleBadges } from "./agent-role-badges";
+import { AgentRoleBadges, AgentRoleHoverContent } from "./agent-role-badges";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -166,6 +167,7 @@ import { NewConversationModalAction } from "@/components/epic-canvas/sidebar/new
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -1425,6 +1427,58 @@ function resourceOwnerKindForNode(
   return null;
 }
 
+function roleHoverContentForAgent(
+  agentName: string,
+  roleClaims: readonly RoleClaim[],
+) {
+  if (roleClaims.length === 0) return null;
+  return <AgentRoleHoverContent agentName={agentName} claims={roleClaims} />;
+}
+
+function chatRowNodeIcon(props: {
+  readonly epicId: string;
+  readonly nodeId: string;
+  readonly artifactType: EpicNodeKind;
+  readonly hasChildren: boolean;
+  readonly expanded: boolean;
+  readonly Icon: LucideIcon;
+  readonly artifactIconColorMode: "byType" | "none";
+  readonly iconStyle: { color: string | undefined } | undefined;
+}) {
+  const {
+    epicId,
+    nodeId,
+    artifactType,
+    hasChildren,
+    expanded,
+    Icon,
+    artifactIconColorMode,
+    iconStyle,
+  } = props;
+  if (hasChildren && !expanded) {
+    return (
+      <ChatSidebarNodeIconWithNestedStatus
+        epicId={epicId}
+        nodeId={nodeId}
+        artifactType={artifactType}
+        Icon={Icon}
+        artifactIconColorMode={artifactIconColorMode}
+        iconStyle={iconStyle}
+      />
+    );
+  }
+  return (
+    <ChatSidebarNodeIcon
+      epicId={epicId}
+      nodeId={nodeId}
+      artifactType={artifactType}
+      Icon={Icon}
+      artifactIconColorMode={artifactIconColorMode}
+      iconStyle={iconStyle}
+    />
+  );
+}
+
 function ChatRowButton(props: ChatRowButtonProps) {
   const {
     epicId,
@@ -1481,6 +1535,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
   );
   const ownerHostId = useEpicNodeHostId(nodeId);
   const ownerKind = useEpicNodeOwnerKind(nodeId);
+  const roleHoverContent = roleHoverContentForAgent(nodeName, roleClaims);
 
   // A chat row's "+" (add child) and "⋯" (more menu) are both gated by canEdit
   // and hidden in selection mode, so both pad-right zones share one flag. The
@@ -1500,29 +1555,19 @@ function ChatRowButton(props: ChatRowButtonProps) {
   const selectionInputId = `epic-sidebar-select-input-${nodeId}`;
   // Collapsed parents merge their hidden descendants' status into the icon
   // slot; every other row renders its own status only.
-  const nodeIcon =
-    hasChildren && !expanded ? (
-      <ChatSidebarNodeIconWithNestedStatus
-        epicId={epicId}
-        nodeId={nodeId}
-        artifactType={artifactType}
-        Icon={Icon}
-        artifactIconColorMode={artifactIconColorMode}
-        iconStyle={iconStyle}
-      />
-    ) : (
-      <ChatSidebarNodeIcon
-        epicId={epicId}
-        nodeId={nodeId}
-        artifactType={artifactType}
-        Icon={Icon}
-        artifactIconColorMode={artifactIconColorMode}
-        iconStyle={iconStyle}
-      />
-    );
+  const nodeIcon = chatRowNodeIcon({
+    epicId,
+    nodeId,
+    artifactType,
+    hasChildren,
+    expanded,
+    Icon,
+    artifactIconColorMode,
+    iconStyle,
+  });
 
   if (selectionMode) {
-    return (
+    const selectionRow = (
       <label
         htmlFor={selectionInputId}
         ref={dragRef}
@@ -1553,6 +1598,17 @@ function ChatRowButton(props: ChatRowButtonProps) {
           )}
         </span>
       </label>
+    );
+    if (roleHoverContent === null) return selectionRow;
+    return (
+      <TooltipWrapper
+        label={roleHoverContent}
+        side="right"
+        sideOffset={6}
+        align="start"
+      >
+        {selectionRow}
+      </TooltipWrapper>
     );
   }
 
@@ -1593,15 +1649,28 @@ function ChatRowButton(props: ChatRowButtonProps) {
       </span>
     </button>
   );
-  if (ownerHostId === null || ownerKind === null) return button;
+  if (ownerHostId !== null && ownerKind !== null) {
+    return (
+      <WorktreeOwnerMetadataTooltip
+        trigger={button}
+        hostId={ownerHostId}
+        epicId={epicId}
+        ownerId={nodeId}
+        ownerKind={ownerKind}
+        supplementalContent={roleHoverContent}
+      />
+    );
+  }
+  if (roleHoverContent === null) return button;
   return (
-    <WorktreeOwnerMetadataTooltip
-      trigger={button}
-      hostId={ownerHostId}
-      epicId={epicId}
-      ownerId={nodeId}
-      ownerKind={ownerKind}
-    />
+    <TooltipWrapper
+      label={roleHoverContent}
+      side="right"
+      sideOffset={6}
+      align="start"
+    >
+      {button}
+    </TooltipWrapper>
   );
 }
 

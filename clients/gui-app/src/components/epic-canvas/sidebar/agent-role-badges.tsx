@@ -1,45 +1,64 @@
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import { Tag } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-
-const MAX_VISIBLE_ROLE_BADGES = 2;
 
 interface AgentRoleBadgesProps {
   readonly claims: readonly RoleClaim[];
 }
 
+export function AgentRoleHoverContent(props: {
+  readonly agentName: string;
+  readonly claims: readonly RoleClaim[];
+}) {
+  return (
+    <div
+      className="flex max-w-[min(80vw,20rem)] flex-col gap-1.5"
+      data-testid="agent-role-hover-content"
+    >
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-ui-xs font-medium">Agent roles</span>
+        <span className="break-words text-ui-xs text-muted-foreground">
+          {props.agentName}
+        </span>
+      </div>
+      <div className="flex flex-col gap-1">
+        {props.claims.map((claim) => (
+          <div key={claim.claimId} className="flex min-w-0 flex-col gap-0.5">
+            <span className="break-words text-ui-xs font-medium">
+              {claim.role}
+            </span>
+            <span className="break-words text-ui-xs text-muted-foreground">
+              Scope · {claim.scope}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function AgentRoleBadges(props: AgentRoleBadgesProps) {
   const { claims } = props;
   if (claims.length === 0) return null;
-  const visibleClaims = claims.slice(0, MAX_VISIBLE_ROLE_BADGES);
-  const overflowClaims = claims.slice(MAX_VISIBLE_ROLE_BADGES);
+  const singleRole = claims.length === 1 ? claims[0] : null;
+  const roleCountLabel =
+    singleRole === null
+      ? `${claims.length} roles`
+      : `Role ${singleRole.role}, scope ${singleRole.scope}`;
   return (
-    <span
-      className="flex max-w-[45%] shrink-0 items-center gap-1"
+    <Badge
+      variant="outline"
+      className="h-4 shrink-0 gap-0.5 rounded-sm border-current/30 bg-background/60 px-1 text-foreground"
       data-testid="agent-role-badges"
+      aria-label={roleCountLabel}
+      title={roleCountLabel}
     >
-      {visibleClaims.map((claim) => (
-        <Badge
-          key={claim.claimId}
-          variant="secondary"
-          className="h-4 min-w-0 rounded-sm px-1 text-overline"
-          title={`${claim.role} — ${claim.scope}`}
-          aria-label={`Role ${claim.role}, scope ${claim.scope}`}
-        >
-          <span className="truncate">{claim.role}</span>
-        </Badge>
-      ))}
-      {overflowClaims.length === 0 ? null : (
-        <Badge
-          variant="outline"
-          className="h-4 rounded-sm px-1 text-overline"
-          title={overflowClaims
-            .map((claim) => `${claim.role} — ${claim.scope}`)
-            .join("\n")}
-          aria-label={`${overflowClaims.length} more roles`}
-        >
-          +{overflowClaims.length}
-        </Badge>
+      <Tag className="size-2.5" aria-hidden />
+      {singleRole === null ? (
+        <span>{claims.length}</span>
+      ) : (
+        <span className="max-w-[10ch] truncate">{singleRole.role}</span>
       )}
-    </span>
+    </Badge>
   );
 }
