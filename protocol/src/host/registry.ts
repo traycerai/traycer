@@ -29,15 +29,22 @@ import {
   agentListDowngradeV5ToV2,
   agentListDowngradeV5ToV3,
   agentListDowngradeV5ToV4,
+  agentListDowngradeV6ToV1,
+  agentListDowngradeV6ToV2,
+  agentListDowngradeV6ToV3,
+  agentListDowngradeV6ToV4,
+  agentListDowngradeV6ToV5,
   agentListUpgradeV1ToV2,
   agentListUpgradeV2ToV3,
   agentListUpgradeV3ToV4,
   agentListUpgradeV4ToV5,
+  agentListUpgradeV5ToV6,
   agentListV10,
   agentListV20,
   agentListV30,
   agentListV40,
   agentListV50,
+  agentListV60,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -48,17 +55,29 @@ import {
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentConfigureDowngradeV20ToV10,
+  agentConfigureDowngradeV30ToV10,
+  agentConfigureDowngradeV30ToV20,
   agentConfigureV10,
   agentConfigureV20,
+  agentConfigureV30,
   agentConfigureUpgradeV10ToV20,
+  agentConfigureUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV30ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV30ToV20,
   agentGetProviderProfileRateLimitsV10,
   agentGetProviderProfileRateLimitsV20,
+  agentGetProviderProfileRateLimitsV30,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
+  agentGetProviderProfileRateLimitsUpgradeV20ToV30,
   agentListProviderProfilesDowngradeV20ToV10,
+  agentListProviderProfilesDowngradeV30ToV10,
+  agentListProviderProfilesDowngradeV30ToV20,
   agentListProviderProfilesV10,
   agentListProviderProfilesV20,
+  agentListProviderProfilesV30,
   agentListProviderProfilesUpgradeV10ToV20,
+  agentListProviderProfilesUpgradeV20ToV30,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxReadV10,
@@ -77,17 +96,24 @@ import {
   agentGuiListHarnessesDowngradeV5ToV2,
   agentGuiListHarnessesDowngradeV5ToV3,
   agentGuiListHarnessesDowngradeV5ToV4,
+  agentGuiListHarnessesDowngradeV6ToV1,
+  agentGuiListHarnessesDowngradeV6ToV2,
+  agentGuiListHarnessesDowngradeV6ToV3,
+  agentGuiListHarnessesDowngradeV6ToV4,
+  agentGuiListHarnessesDowngradeV6ToV5,
   agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
   agentGuiListHarnessesUpgradeV3ToV4,
   agentGuiListHarnessesUpgradeV4ToV5,
+  agentGuiListHarnessesUpgradeV5ToV6,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
   agentGuiListHarnessesV30,
   agentGuiListHarnessesV40,
   agentGuiListHarnessesV50,
+  agentGuiListHarnessesV60,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -2602,6 +2628,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         4: agentGuiListHarnessesDowngradeV5ToV4,
       },
     },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV60,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV5ToV6,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV6ToV1,
+        2: agentGuiListHarnessesDowngradeV6ToV2,
+        3: agentGuiListHarnessesDowngradeV6ToV3,
+        4: agentGuiListHarnessesDowngradeV6ToV4,
+        5: agentGuiListHarnessesDowngradeV6ToV5,
+      },
+    },
   },
   "agent.gui.listModels": {
     1: {
@@ -2883,6 +2925,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         2: agentListDowngradeV5ToV2,
         3: agentListDowngradeV5ToV3,
         4: agentListDowngradeV5ToV4,
+      },
+    },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV60,
+          upgradeFromPreviousVersion: agentListUpgradeV5ToV6,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV6ToV1,
+        2: agentListDowngradeV6ToV2,
+        3: agentListDowngradeV6ToV3,
+        4: agentListDowngradeV6ToV4,
+        5: agentListDowngradeV6ToV5,
       },
     },
   },
@@ -4433,6 +4491,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: agentListProviderProfilesDowngradeV20ToV10,
       },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV30,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListProviderProfilesDowngradeV30ToV10,
+        2: agentListProviderProfilesDowngradeV30ToV20,
+      },
+    },
   },
   "agent.getProviderProfileRateLimits": {
     degrade: { kind: "unsupported" },
@@ -4459,6 +4530,20 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: agentGetProviderProfileRateLimitsDowngradeV20ToV10,
       },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV30,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV30ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV30ToV20,
+      },
+    },
   },
   "agent.configure": {
     degrade: { kind: "unsupported" },
@@ -4481,6 +4566,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: { 1: agentConfigureDowngradeV20ToV10 },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV30,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentConfigureDowngradeV30ToV10,
+        2: agentConfigureDowngradeV30ToV20,
+      },
     },
   },
 } as const;

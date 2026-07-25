@@ -727,6 +727,22 @@ export const listAgentsResponseSchemaV40 = listAgentsResponseSchema.extend({
 });
 export type ListAgentsResponseV40 = z.infer<typeof listAgentsResponseSchemaV40>;
 
+// ── Frozen protocol-v5.0 agent.list response (with Hermes, before omp) ──────
+// `agent.list` enumerates every agent in the epic - including omp GUI harness
+// chats a newer client created - so an already-shipped v5.0 client would hit a
+// strict enum on those rows. This line IS released (`cli-v1.1.8` /
+// `host-v1.1.8`, both tagged 2026-07-25), so it is frozen here as actually
+// shipped; the v6.0 line carries omp rows and v6→v5 … v6→v1 bridges drop them
+// for older callers. Do not add new harnesses here - use the existing v6
+// bridge.
+export const agentSummarySchemaV50 = agentSummarySchema.extend({
+  harnessId: guiHarnessIdSchemaV50.nullable(),
+});
+export const listAgentsResponseSchemaV50 = listAgentsResponseSchema.extend({
+  agents: z.array(agentSummarySchemaV50),
+});
+export type ListAgentsResponseV50 = z.infer<typeof listAgentsResponseSchemaV50>;
+
 /**
  * `agent.sendMessage@1.0` - fire-and-forget enqueue from one agent to
  * another. Distinct from `chat.subscribe`'s `send` action: that surface

@@ -6,6 +6,7 @@ import {
 import {
   providerIdSchema,
   providerIdSchemaV40,
+  providerIdSchemaV50,
 } from "@traycer/protocol/host/provider-schemas";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
@@ -441,6 +442,42 @@ export const providerRateLimitsSchemaV40 = z.union([
   unavailableProviderRateLimitsSchemaV40,
 ]);
 export type ProviderRateLimitsV40 = z.infer<typeof providerRateLimitsSchemaV40>;
+
+// Frozen pre-omp unavailable arm: same v2 reason enum, but `provider` is
+// pinned to `providerIdSchemaV50` (the provider id set as shipped in
+// cli-v1.1.8 / host-v1.1.8, with Hermes and before omp) so an already-shipped
+// `agent.getProviderProfileRateLimits@2.0` caller's strict decode never sees
+// `"omp"` in the `available: false` arm.
+const unavailableProviderRateLimitsSchemaV50 = z.object({
+  provider: providerIdSchemaV50,
+  available: z.literal(false),
+  reason: rateLimitUnavailableReasonSchemaV2,
+});
+
+/**
+ * Frozen pre-omp provider union - identical to the latest
+ * `providerRateLimitsSchema` except the `available: false` arm's `provider` is
+ * pinned to `providerIdSchemaV50`. Unlike the v4.0 union above this one KEEPS
+ * the grok available arm: grok rate limits shipped before the v1.1.8 tags, so
+ * the released v2.0 line really does carry that arm and dropping it here would
+ * narrow an already-shipped contract.
+ *
+ * Feeds only `agent.getProviderProfileRateLimits@2.0`'s frozen response (see
+ * `host/agent/profiles.ts`) so that released line never receives `omp`; the
+ * v3.0 line carries it via the live `providerRateLimitsSchema` above, with a
+ * v3->v2 downgrade bridge that fails closed for such a rate-limit read instead
+ * of silently mis-decoding it. Do NOT widen this schema - extend the latest
+ * schema and use that v3 bridge instead.
+ */
+export const providerRateLimitsSchemaV50 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  grokRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV50,
+]);
+export type ProviderRateLimitsV50 = z.infer<typeof providerRateLimitsSchemaV50>;
 
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see
