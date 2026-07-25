@@ -203,11 +203,11 @@ describe("home-page history helpers", () => {
       "epic-a",
       "epic-b",
     ]);
-    // Submodule branch.
-    expect(historyWorktreeSearchEpicIds("submodule-0", worktrees)).toEqual([
-      "epic-a",
-      "epic-b",
-    ]);
+    // Owned-submodule branches are NOT matched on this path: callers feed it
+    // the cheap host index, whose `submodules` is contractually `[]`, so a
+    // fixture that populates them (as this one does) cannot occur in
+    // production. Those branches reach search via `worktreeBranches` instead.
+    expect(historyWorktreeSearchEpicIds("submodule-0", worktrees)).toEqual([]);
     // Worktree leaf directory name ("/worktrees/none" -> "none").
     expect(historyWorktreeSearchEpicIds("none", worktrees)).toEqual([
       "epic-a",

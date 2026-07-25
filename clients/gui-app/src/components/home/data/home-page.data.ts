@@ -204,15 +204,18 @@ function historyWorktreeBranches(
 }
 
 /**
- * Epic ids of tasks whose local worktrees match the query as a branch name or
- * worktree-directory string. Those strings live only in local worktree
- * metadata, never in the cloud task index, so matching tasks are fetched by id
- * (`epic.getTaskContexts`) and unioned into the search results - a cloud text
- * search for them would return nothing. Matching is deliberately narrow
- * (branch names, the worktree's leaf directory name, and - for path-shaped
- * queries - the full path): matching anywhere in the full path would trip on
- * common ancestors like the user's home directory and union unrelated tasks
- * into ordinary title searches.
+ * Epic ids of tasks whose local worktrees match the query as a superproject
+ * branch name or worktree-directory string. Those strings live only in local
+ * worktree metadata, never in the cloud task index, so matching tasks are
+ * fetched by id (`epic.getTaskContexts`) and unioned into the search results -
+ * a cloud text search for them would return nothing. Matching is deliberately
+ * narrow (the branch name, the worktree's leaf directory name, and - for
+ * path-shaped queries - the full path): matching anywhere in the full path
+ * would trip on common ancestors like the user's home directory and union
+ * unrelated tasks into ordinary title searches.
+ *
+ * Expects entries from the cheap (non-activity) host index; see the filter
+ * body for why owned-submodule branches are deliberately not matched here.
  */
 export function historyWorktreeSearchEpicIds(
   query: string,
@@ -222,13 +225,19 @@ export function historyWorktreeSearchEpicIds(
   if (normalized.length < 2) return [];
   return ownerEpicIds(
     worktrees.filter((worktree) => {
-      const branchMatch = [
-        worktree.branch,
-        ...worktree.submodules.map((submodule) => submodule.branch),
-      ]
-        .filter((branch): branch is string => branch !== null)
-        .some((branch) => branch.toLowerCase().includes(normalized));
-      if (branchMatch) return true;
+      // Superproject branch only. Callers feed this the CHEAP host index,
+      // whose `submodules` is contractually `[]` (populated only under
+      // `includeActivity`), so reading submodule branches here would match
+      // nothing in production however the fixtures are written. Enriching
+      // this path instead would fire host-wide `gh` probes on every
+      // keystroke; owned-submodule branches still reach search through
+      // `worktreeBranches` on rows whose enriched metadata is loaded.
+      if (
+        worktree.branch !== null &&
+        worktree.branch.toLowerCase().includes(normalized)
+      ) {
+        return true;
+      }
       const path = worktree.worktreePath.toLowerCase();
       if (normalized.includes("/")) return path.includes(normalized);
       return worktreePathBasename(path).includes(normalized);

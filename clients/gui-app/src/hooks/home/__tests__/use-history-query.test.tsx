@@ -28,6 +28,7 @@ const testState = vi.hoisted(() => {
     hasNextPage: false,
     worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
     worktreeIndex: [] as readonly WorktreeHostEntryV12[],
+    worktreeIndexError: null as Error | null,
     activityWorktrees: [] as readonly WorktreeHostEntryV12[],
     activityError: null as Error | null,
     taskContexts: new Map<string, ListTaskLight>(),
@@ -81,12 +82,15 @@ vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
   useWorktreeHostIndex: () => ({
     worktrees: testState.worktreeIndex,
     isFetching: false,
-    error: null,
+    error: testState.worktreeIndexError,
   }),
+  // Mirrors the real hook: when disabled, both underlying queries are off, so
+  // it reports no worktrees AND no error. Leaking an error through the
+  // disabled path would let an error-handling regression pass unnoticed.
   useWorktreeHostActivityIndex: (enabled: boolean) => ({
     worktrees: enabled ? testState.activityWorktrees : [],
     isFetching: false,
-    error: testState.activityError,
+    error: enabled ? testState.activityError : null,
   }),
 }));
 
@@ -118,6 +122,7 @@ describe("useHistoryQuery", () => {
     testState.hasNextPage = false;
     testState.worktreesByEpicId = new Map();
     testState.worktreeIndex = [];
+    testState.worktreeIndexError = null;
     testState.activityWorktrees = [];
     testState.activityError = null;
     testState.taskContexts = new Map();
@@ -443,6 +448,26 @@ describe("useHistoryQuery", () => {
     expect(screen.getByTestId("error").textContent).toBe(
       "Worktree activity probe failed",
     );
+  });
+
+  it("degrades quietly when the worktree host index fails", () => {
+    // The base index is enabled for EVERY query, so surfacing its failure
+    // would put a worktree error on ordinary title searches. Branch matching
+    // is an additive bonus: losing it must cost the cloud results nothing.
+    testState.worktreeIndexError = new Error("Worktree index failed");
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          query: "beta",
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("error").textContent).toBe("");
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
   });
 
   it("surfaces a task-context fetch failure", () => {
