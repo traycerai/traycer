@@ -14,6 +14,7 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import {
   createDefaultRegistryClient,
   currentHostPlatformKey,
+  releaseDownloadSlot,
   type HostVersionsManifest,
   type RegistryClient,
 } from "../registry";
@@ -33,6 +34,7 @@ import {
   readExtractedRuntimeVersion,
 } from "./install";
 import { extractHostSource, resolveHostExecutable } from "./extract";
+import { createExtractHeartbeat } from "./extract-heartbeat";
 import { invalidateAsideDir } from "./aside-dirs";
 import { renameWithRetry } from "./rename-retry";
 import { purgeHostStage, reconcileHostStage } from "./stage-reconcile";
@@ -356,6 +358,12 @@ export async function downloadAndStageHost(
     await extractHostSource({
       source: verified.archivePath,
       targetDir: tempPath,
+      onEntry: createExtractHeartbeat({
+        environment: opts.environment,
+        archivePath: verified.archivePath,
+        version: entry.version,
+        onProgress: opts.onProgress,
+      }),
     });
     const executablePath = await resolveHostExecutable(tempPath, osPlatform());
     const runtimeVersion = await readExtractedRuntimeVersion(
@@ -479,15 +487,14 @@ export async function downloadAndStageHost(
         () => undefined,
       );
     }
-    // The registry client's own temp archive dir is not auto-cleaned on
-    // success (by contract - see registry/client.ts's `downloadAndVerify`)
-    // - the caller owns removing it. Remove the WHOLE directory
-    // (`dirname(archivePath)`), not just the archive file: the directory
-    // itself (an `mkdtemp`-created `traycer-host-dl-*` dir under the OS
-    // tmpdir) is otherwise leaked on every successful download.
-    await rm(dirname(verified.archivePath), {
-      recursive: true,
-      force: true,
-    }).catch(() => undefined);
+    // The verified archive is not auto-cleaned on success (by contract -
+    // see registry/client.ts's `downloadAndVerify`): the caller owns
+    // releasing it once it has extracted what it needs. This drops the
+    // archive AND the download-cache claim on it; it must never be a plain
+    // `rm(dirname(...))`, because that directory is now the SHARED
+    // download cache, not a private per-invocation temp.
+    await releaseDownloadSlot(opts.environment, verified.archivePath).catch(
+      () => undefined,
+    );
   }
 }

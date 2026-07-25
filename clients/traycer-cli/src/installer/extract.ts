@@ -26,6 +26,14 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 export interface ExtractOptions {
   readonly source: string;
   readonly targetDir: string;
+  // Called as entries are written. Extraction of a ~800MB archive can run
+  // for minutes with nothing else to show for it, and two separate
+  // mechanisms treat that silence as death: Desktop's inactivity timer
+  // SIGKILLs a CLI that emits no NDJSON, and the download cache's idle rule
+  // lets another process take over a slot whose archive has stopped being
+  // touched (extraction only READS it, so its mtime stops advancing).
+  // Callers throttle - this fires per entry.
+  readonly onEntry: () => void;
 }
 
 export async function extractHostSource(opts: ExtractOptions): Promise<void> {
@@ -44,11 +52,11 @@ export async function extractHostSource(opts: ExtractOptions): Promise<void> {
     lower.endsWith(".tar.gz") ||
     lower.endsWith(".tar.xz")
   ) {
-    await extractTarArchive(opts.source, opts.targetDir);
+    await extractTarArchive(opts.source, opts.targetDir, opts.onEntry);
     return;
   }
   if (ext === ".zip") {
-    await extractZipArchive(opts.source, opts.targetDir);
+    await extractZipArchive(opts.source, opts.targetDir, opts.onEntry);
     return;
   }
   // Bare executable. Copy into the target dir keeping the basename so
@@ -73,6 +81,7 @@ async function copyDirectoryShallow(
 async function extractTarArchive(
   source: string,
   targetDir: string,
+  onEntry: () => void,
 ): Promise<void> {
   let rejected: { entry: string; reason: string } | null = null;
   await tarExtract({
@@ -102,6 +111,7 @@ async function extractTarArchive(
         if (rejected === null) rejected = { entry: path, reason };
         return false;
       }
+      onEntry();
       return true;
     },
   });
@@ -119,8 +129,10 @@ async function extractTarArchive(
 async function extractZipArchive(
   source: string,
   targetDir: string,
+  onEntry: () => void,
 ): Promise<void> {
   const zip = new StreamZip.async({ file: source });
+  zip.on("extract", () => onEntry());
   try {
     const entries = await zip.entries();
     for (const entry of Object.values(entries)) {

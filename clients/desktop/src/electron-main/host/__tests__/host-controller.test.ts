@@ -767,6 +767,83 @@ describe("update-flow findings: Mo-A approval preflight, Mi-1 heartbeat carry-fo
       }),
     ]);
   });
+
+  it("a registry liveness tick keeps the running stage, but a real stage transition still lands", async () => {
+    // `registry-*` ticks are emitted from inside whatever stage is already
+    // running, so letting one overwrite `stage` flipped the renderer's
+    // heading away from "Downloading Traycer Host…" and back on every
+    // retry - constant flicker on the throttled links the retry budget
+    // exists for. The tick's message must still come through.
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writeStagedRecord("production", "1.8.0", "1.8.0");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.8.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    const progresses: MutationProgress[] = [];
+    const unsubscribeProgress = controller.onMutationProgress((p) => {
+      progresses.push(p);
+    });
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.8.0", ["1.8.0"]),
+    );
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args.includes("download")) return { data: {} };
+      opts.onEvent({
+        type: "progress",
+        stage: "download",
+        percent: 45,
+        bytes: 45,
+        totalBytes: 100,
+        message: "downloading host 1.8.0",
+      });
+      opts.onEvent({
+        type: "progress",
+        stage: "registry-archive-backoff",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: "retrying host archive shortly",
+      });
+      opts.onEvent({
+        type: "progress",
+        stage: "extract",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        message: "extracting host 1.8.0",
+      });
+      return {
+        data: {
+          outcome: "applied",
+          record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+          runningActivated: true,
+          installGeneration: null,
+        },
+      };
+    });
+
+    const outcome = await controller.applyStaged("manual", false);
+    unsubscribeProgress();
+
+    expect(outcome.kind).toBe("ok");
+    expect(progresses).toEqual([
+      expect.objectContaining({ stage: "download", percent: 45 }),
+      expect.objectContaining({
+        stage: "download",
+        percent: 45,
+        message: "retrying host archive shortly",
+      }),
+      expect.objectContaining({ stage: "extract", percent: 45 }),
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------

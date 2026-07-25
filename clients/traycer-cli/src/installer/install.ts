@@ -15,6 +15,7 @@ import {
 import {
   createDefaultRegistryClient,
   currentHostPlatformKey,
+  releaseDownloadSlot,
 } from "../registry";
 import type { ProgressInfo } from "../runner/output";
 import type { Environment } from "../runner/environment";
@@ -23,6 +24,7 @@ import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { createOwnedTempDir } from "../store/owned-temp";
 import { hostHomeDir, hostInstallDir, ensureHostHomeDir } from "../store/paths";
 import { extractHostSource, resolveHostExecutable } from "./extract";
+import { createExtractHeartbeat } from "./extract-heartbeat";
 import { hashFileSha256 } from "./sha256";
 import {
   invalidateAsideDir,
@@ -212,6 +214,12 @@ export async function stageHostInstallSource(
     await extractHostSource({
       source: staging.archivePath,
       targetDir: staging.stagingDir,
+      onEntry: createExtractHeartbeat({
+        environment: opts.environment,
+        archivePath: staging.archivePath,
+        version: staging.version,
+        onProgress: opts.onProgress,
+      }),
     });
     logger.info("Host install archive extracted", {
       environment: opts.environment,
@@ -394,13 +402,18 @@ async function cleanupStagingArtifacts(
   logger: ILogger,
 ): Promise<void> {
   if (opts.archiveIsTemporary) {
-    await rm(opts.archivePath, { force: true }).catch((err) => {
-      logger.warn("Host install failed to remove temporary archive", {
-        environment: opts.environment,
-        errorName: errorFromUnknown(err).name,
-        errorMessage: errorFromUnknown(err).message,
-      });
-    });
+    // `releaseDownloadSlot`, not a bare `rm`: a registry-downloaded
+    // archive lives in the shared download cache and carries an ownership
+    // claim that has to come off with it (registry/download-cache.ts).
+    await releaseDownloadSlot(opts.environment, opts.archivePath).catch(
+      (err) => {
+        logger.warn("Host install failed to remove temporary archive", {
+          environment: opts.environment,
+          errorName: errorFromUnknown(err).name,
+          errorMessage: errorFromUnknown(err).message,
+        });
+      },
+    );
   }
   if (!opts.swapped) {
     await rm(opts.stagingDir, { recursive: true, force: true }).catch((err) => {

@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -8,7 +9,7 @@ import {
 } from "node:fs";
 import { platform as osPlatform } from "node:os";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Environment = "dev" | "production";
@@ -97,6 +98,9 @@ import { downloadAndStageHost } from "../download-stage";
 
 const ENV: Environment = "production";
 let archiveTmpDir = "";
+// Path the fake registry client handed back on its most recent download,
+// so a test can assert the caller released that exact slot.
+let lastFakeArchivePath = "";
 
 function executableBasename(): string {
   return osPlatform() === "win32" ? "traycer-host.exe" : "traycer-host";
@@ -204,6 +208,16 @@ function fakeRegistryClient(opts: FakeClientOptions): RegistryClient {
       const callDir = mkdtempSync(join(archiveTmpDir, "arc-"));
       const archivePath = join(callDir, executableBasename());
       writeFileSync(archivePath, "fake host binary");
+      // The real client stages into the shared download cache and stamps
+      // the archive with an ownership marker holding ITS OWN process identity
+      // (registry/download-cache.ts). Mirror that sibling faithfully - the
+      // release path is a compare-and-delete, so a marker recording someone
+      // else's pid is deliberately left alone.
+      writeFileSync(
+        `${archivePath}.owner`,
+        JSON.stringify({ pid: process.pid, startedAtMs: null }),
+      );
+      lastFakeArchivePath = archivePath;
       return {
         archivePath,
         archiveSha256: "fake-sha256",
@@ -533,7 +547,7 @@ describe("downloadAndStageHost", () => {
     expect(staged?.source).toEqual({ kind: "registry", value: "1.5.0" });
   });
 
-  it("removes the whole download temp directory, not just the archive file, on a successful promote", async () => {
+  it("releases the download slot - archive and ownership marker - on a successful promote, without touching the cache dir", async () => {
     await writeInstall("1.0.0", {});
     const client = fakeRegistryClient({
       latest: "1.5.0",
@@ -551,12 +565,14 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
     });
-    // The fake client's `downloadAndVerify` creates its archive inside a
-    // fresh `arc-*` subdirectory of `archiveTmpDir` (mirroring the real
-    // registry client's `mkdtemp(tmpdir(), "traycer-host-dl-")` shape) -
-    // removing only the archive FILE would leave that directory behind
-    // on every successful download.
-    expect(readdirSync(archiveTmpDir)).toEqual([]);
+    // The archive now lives in the SHARED download cache keyed by
+    // version+sha (registry/download-cache.ts), so the consumer must drop
+    // its own archive plus the ownership marker and nothing else. The old
+    // `rm(dirname(archivePath))` would take the whole cache with it -
+    // including another process's in-flight partial.
+    expect(existsSync(lastFakeArchivePath)).toBe(false);
+    expect(existsSync(`${lastFakeArchivePath}.owner`)).toBe(false);
+    expect(existsSync(dirname(lastFakeArchivePath))).toBe(true);
   });
 
   it("yank-heal: discards a now-yanked stage with no download when the target resolves back to installed", async () => {

@@ -97,7 +97,11 @@ describe("extractHostSource (tar)", () => {
     const archive = join(scratchRoot, "benign.tar");
     await tarCreate({ file: archive, cwd: sourceDir }, ["ok.txt"]);
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
-    await extractHostSource({ source: archive, targetDir });
+    await extractHostSource({
+      source: archive,
+      targetDir,
+      onEntry: () => undefined,
+    });
     const contents = await readFile(join(targetDir, "ok.txt"), "utf8");
     expect(contents).toBe("ok\n");
   });
@@ -124,7 +128,11 @@ describe("extractHostSource (tar)", () => {
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
     let caught: unknown = null;
     try {
-      await extractHostSource({ source: archive, targetDir });
+      await extractHostSource({
+        source: archive,
+        targetDir,
+        onEntry: () => undefined,
+      });
     } catch (err) {
       caught = err;
     }
@@ -144,7 +152,11 @@ describe("extractHostSource (tar)", () => {
     const archive = join(scratchRoot, "dotfile.tar");
     await tarCreate({ file: archive, cwd: sourceDir }, [".marker"]);
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
-    await extractHostSource({ source: archive, targetDir });
+    await extractHostSource({
+      source: archive,
+      targetDir,
+      onEntry: () => undefined,
+    });
     const markerStat = await stat(join(targetDir, ".marker"));
     expect(markerStat.isFile()).toBe(true);
   });
@@ -161,7 +173,11 @@ describe("extractHostSource (tar)", () => {
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
     let caught: unknown = null;
     try {
-      await extractHostSource({ source: archive, targetDir });
+      await extractHostSource({
+        source: archive,
+        targetDir,
+        onEntry: () => undefined,
+      });
     } catch (err) {
       caught = err;
     }
@@ -193,7 +209,11 @@ describe("extractHostSource (tar)", () => {
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
     let caught: unknown = null;
     try {
-      await extractHostSource({ source: archive, targetDir });
+      await extractHostSource({
+        source: archive,
+        targetDir,
+        onEntry: () => undefined,
+      });
     } catch (err) {
       caught = err;
     }
@@ -216,7 +236,11 @@ describe("extractHostSource (tar)", () => {
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
     let caught: unknown = null;
     try {
-      await extractHostSource({ source: archive, targetDir });
+      await extractHostSource({
+        source: archive,
+        targetDir,
+        onEntry: () => undefined,
+      });
     } catch (err) {
       caught = err;
     }

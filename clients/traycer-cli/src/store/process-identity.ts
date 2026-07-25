@@ -16,6 +16,7 @@ export {
   readLiveProcessStartTimeMs,
   readProcessStartTimeMs,
   verifyProcessIdentity,
+  verifyProcessIdentityAsync,
   type ProcessIdentityToken,
   type ProcessIdentityVerdict,
   type ProcessLivenessVerdict,
