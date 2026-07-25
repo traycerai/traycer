@@ -585,7 +585,7 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
           onChange={(event) => {
             props.onChange(event.target.value);
           }}
-          placeholder="Search by title, repo, or PR"
+          placeholder="Search by title, repo, branch, or PR"
           aria-label="Search tasks"
         />
         {props.value.length > 0 ? (

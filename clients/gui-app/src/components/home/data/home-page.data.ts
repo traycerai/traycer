@@ -39,6 +39,8 @@ export interface HistoryItem {
   linkedRepos: ReadonlyArray<string>;
   linkedWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
   pullRequestNumbers: ReadonlyArray<string>;
+  worktreeBranches: ReadonlyArray<string>;
+  worktreePaths: ReadonlyArray<string>;
   ownership: HistoryOwnershipScope;
   permissionRole: PermissionRole | null;
   isPinned: boolean;
@@ -150,6 +152,8 @@ function buildHistoryItem(args: {
     linkedRepos: readTaskRepos(task),
     linkedWorkspaces: readTaskWorkspaces(task),
     pullRequestNumbers: [],
+    worktreeBranches: [],
+    worktreePaths: [],
     ownership,
     permissionRole: historyPermissionRole(ownership, role),
     isPinned,
@@ -157,20 +161,119 @@ function buildHistoryItem(args: {
 }
 
 /**
- * Adds the PR numbers discovered from the task's local worktrees to history
- * items. Worktree activity is deliberately fetched separately from cloud task
- * history, so this stays a pure projection that can update as probes finish.
+ * Adds the PR numbers, branch names, and worktree paths discovered from the
+ * task's local worktrees to history items. Worktree activity is deliberately
+ * fetched separately from cloud task history, so this stays a pure projection
+ * that can update as probes finish.
  */
-export function withHistoryItemPullRequestNumbers(
+export function withHistoryItemWorktreeMetadata(
   items: ReadonlyArray<HistoryItem>,
   worktreesByEpicId: ReadonlyMap<string, readonly WorktreeHostEntryV12[]>,
 ): ReadonlyArray<HistoryItem> {
-  return items.map((item) => ({
-    ...item,
-    pullRequestNumbers: historyPullRequestNumbers(
-      worktreesByEpicId.get(item.epicId) ?? [],
+  return items.map((item) => {
+    const worktrees = worktreesByEpicId.get(item.epicId) ?? [];
+    return {
+      ...item,
+      pullRequestNumbers: historyPullRequestNumbers(worktrees),
+      worktreeBranches: historyWorktreeBranches(worktrees),
+      worktreePaths: Array.from(
+        new Set(worktrees.map((worktree) => worktree.worktreePath)),
+      ),
+    };
+  });
+}
+
+function historyWorktreeBranches(
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  return Array.from(
+    new Set(
+      worktrees
+        .flatMap((worktree) => [
+          worktree.branch,
+          ...worktree.submodules.map((submodule) => submodule.branch),
+        ])
+        .filter((branch): branch is string => branch !== null),
     ),
-  }));
+  );
+}
+
+/**
+ * Epic ids of tasks whose local worktrees match the query as a branch name or
+ * worktree-directory string. Those strings live only in local worktree
+ * metadata, never in the cloud task index, so matching tasks are fetched by id
+ * (`epic.getTaskContexts`) and unioned into the search results - a cloud text
+ * search for them would return nothing. Matching is deliberately narrow
+ * (branch names, the worktree's leaf directory name, and - for path-shaped
+ * queries - the full path): matching anywhere in the full path would trip on
+ * common ancestors like the user's home directory and union unrelated tasks
+ * into ordinary title searches.
+ */
+export function historyWorktreeSearchEpicIds(
+  query: string,
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  const normalized = query.trim().toLowerCase();
+  if (normalized.length < 2) return [];
+  return ownerEpicIds(
+    worktrees.filter((worktree) => {
+      const branchMatch = [
+        worktree.branch,
+        ...worktree.submodules.map((submodule) => submodule.branch),
+      ]
+        .filter((branch): branch is string => branch !== null)
+        .some((branch) => branch.toLowerCase().includes(normalized));
+      if (branchMatch) return true;
+      const path = worktree.worktreePath.toLowerCase();
+      if (normalized.includes("/")) return path.includes(normalized);
+      return worktreePathBasename(path).includes(normalized);
+    }),
+  );
+}
+
+/** The PR number of a PR-shaped query (`84`, `#84`, `PR #84`), else null. */
+export function historyPullRequestQueryNumber(query: string): number | null {
+  const match = /^(?:pr\s*)?#?(\d+)$/i.exec(query.trim());
+  if (match === null) return null;
+  const prNumber = Number.parseInt(match[1], 10);
+  return Number.isNaN(prNumber) ? null : prNumber;
+}
+
+/**
+ * Epic ids of tasks whose local worktrees (superproject or an owned
+ * submodule) carry the PR number. Requires activity-enriched worktree entries
+ * - `prNumber`/`submodules` are null/empty on the cheap base index.
+ */
+export function historyPullRequestSearchEpicIds(
+  prNumber: number,
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  return ownerEpicIds(
+    worktrees.filter(
+      (worktree) =>
+        worktree.prNumber === prNumber ||
+        worktree.submodules.some(
+          (submodule) => submodule.prNumber === prNumber,
+        ),
+    ),
+  );
+}
+
+function ownerEpicIds(
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  return Array.from(
+    new Set(
+      worktrees.flatMap((worktree) =>
+        worktree.owners.map((owner) => owner.epicId),
+      ),
+    ),
+  );
+}
+
+function worktreePathBasename(path: string): string {
+  const segments = path.split(/[\\/]/).filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] ?? "";
 }
 
 function historyPullRequestNumbers(
