@@ -17,10 +17,12 @@ export function ProviderRateLimitForProvider({
   providerId,
   profileId,
   usageUpdatedAt,
+  fetchEligible,
 }: {
   readonly providerId: ProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
+  readonly fetchEligible: boolean;
 }): ReactNode {
   if (!isRateLimitCapableProvider(providerId)) return null;
   return (
@@ -28,6 +30,7 @@ export function ProviderRateLimitForProvider({
       providerId={providerId}
       profileId={profileId}
       usageUpdatedAt={usageUpdatedAt}
+      fetchEligible={fetchEligible}
     />
   );
 }
@@ -37,10 +40,12 @@ export function EmbeddedProviderRateLimitForProvider({
   providerId,
   profileId,
   usageUpdatedAt,
+  fetchEligible,
 }: {
   readonly providerId: ProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
+  readonly fetchEligible: boolean;
 }): ReactNode {
   if (!isRateLimitCapableProvider(providerId)) return null;
   return (
@@ -48,6 +53,7 @@ export function EmbeddedProviderRateLimitForProvider({
       providerId={providerId}
       profileId={profileId}
       usageUpdatedAt={usageUpdatedAt}
+      fetchEligible={fetchEligible}
     />
   );
 }
@@ -58,12 +64,14 @@ export function ProviderProfilesRefreshButton({
   providerId,
   profileId,
   usageUpdatedAt,
+  fetchEligible,
 }: {
   readonly providerId: ProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
+  readonly fetchEligible: boolean;
 }): ReactNode {
-  if (!isRateLimitCapableProvider(providerId)) {
+  if (!isRateLimitCapableProvider(providerId) || !fetchEligible) {
     return <ProfilesOnlyRefreshButton />;
   }
   return (
@@ -71,6 +79,7 @@ export function ProviderProfilesRefreshButton({
       providerId={providerId}
       profileId={profileId}
       usageUpdatedAt={usageUpdatedAt}
+      fetchEligible={fetchEligible}
     />
   );
 }
@@ -89,17 +98,24 @@ function ProfilesAndUsageRefreshButton({
   providerId,
   profileId,
   usageUpdatedAt,
+  fetchEligible,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
+  readonly fetchEligible: boolean;
 }): ReactNode {
   const refreshProviders = useRefreshProviders();
-  const query = useHostProviderRateLimitsQuery(providerId, profileId);
+  const query = useHostProviderRateLimitsQuery(
+    providerId,
+    profileId,
+    fetchEligible,
+  );
   const { refresh: refreshUsage, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
     profileId,
     usageUpdatedAt,
+    fetchEligible,
     isFetching: query.isFetching,
     refetch: query.refetch,
   });
@@ -120,14 +136,25 @@ function EmbeddedProviderRateLimitSettingsCard({
   providerId,
   profileId,
   usageUpdatedAt,
+  fetchEligible,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
+  readonly fetchEligible: boolean;
 }): ReactNode {
-  const query = useHostProviderRateLimitsQuery(providerId, profileId);
-  useRefreshProviderRateLimitsOnMount(providerId, profileId, usageUpdatedAt);
-  useRefreshProviderRateLimitsOnTurn(providerId, profileId);
+  const query = useHostProviderRateLimitsQuery(
+    providerId,
+    profileId,
+    fetchEligible,
+  );
+  useRefreshProviderRateLimitsOnMount(
+    providerId,
+    profileId,
+    usageUpdatedAt,
+    fetchEligible,
+  );
+  useRefreshProviderRateLimitsOnTurn(providerId, profileId, fetchEligible);
 
   return (
     <div className="flex flex-col gap-3 border-t border-border/60 pt-3">
@@ -151,20 +178,27 @@ function ProviderRateLimitSettingsCard({
   providerId,
   profileId,
   usageUpdatedAt,
+  fetchEligible,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profileId: string | null;
   readonly usageUpdatedAt: number | null;
+  readonly fetchEligible: boolean;
 }): ReactNode {
-  const query = useHostProviderRateLimitsQuery(providerId, profileId);
+  const query = useHostProviderRateLimitsQuery(
+    providerId,
+    profileId,
+    fetchEligible,
+  );
   const { refresh, isRefreshing } = useProviderRateLimitRefresh({
     providerId,
     profileId,
     usageUpdatedAt,
+    fetchEligible,
     isFetching: query.isFetching,
     refetch: query.refetch,
   });
-  useRefreshProviderRateLimitsOnTurn(providerId, profileId);
+  useRefreshProviderRateLimitsOnTurn(providerId, profileId, fetchEligible);
 
   return (
     <div className="mb-3 flex flex-col gap-3 rounded-lg border border-border/60 p-3">
@@ -172,11 +206,13 @@ function ProviderRateLimitSettingsCard({
         <div className="text-ui-sm font-medium text-foreground">
           Usage limits
         </div>
-        <RefreshIconButton
-          onRefresh={refresh}
-          label="Refresh usage limits"
-          refreshing={isRefreshing}
-        />
+        {fetchEligible ? (
+          <RefreshIconButton
+            onRefresh={refresh}
+            label="Refresh usage limits"
+            refreshing={isRefreshing}
+          />
+        ) : null}
       </div>
       <ProviderRateLimitBody
         isPending={query.isPending}

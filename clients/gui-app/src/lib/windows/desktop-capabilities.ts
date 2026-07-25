@@ -1,8 +1,10 @@
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   DesktopAppUpdatesBridge,
+  DesktopGlobalShortcutsBridge,
   DesktopHostControllerStatusBridge,
   DesktopMenuBridge,
+  DesktopMenuPopupBridge,
   DesktopPowerBridge,
   DesktopSupportBridge,
   DesktopZoomBridge,
@@ -13,6 +15,13 @@ export function resolveDesktopMenuBridge(
 ): DesktopMenuBridge | null {
   const value: unknown = Reflect.get(runnerHost, "menu");
   return isDesktopMenuBridge(value) ? value : null;
+}
+
+export function resolveDesktopMenuPopupBridge(
+  runnerHost: IRunnerHost,
+): DesktopMenuPopupBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "menu");
+  return isDesktopMenuPopupBridge(value) ? value : null;
 }
 
 export function resolveDesktopSupportBridge(
@@ -50,8 +59,21 @@ export function resolveDesktopHostControllerStatusBridge(
   return isDesktopHostControllerStatusBridge(value) ? value : null;
 }
 
+export function resolveDesktopGlobalShortcutsBridge(
+  runnerHost: IRunnerHost,
+): DesktopGlobalShortcutsBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "globalShortcuts");
+  return isDesktopGlobalShortcutsBridge(value) ? value : null;
+}
+
 function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
   return isRecord(value) && typeof value.onCommand === "function";
+}
+
+function isDesktopMenuPopupBridge(
+  value: unknown,
+): value is DesktopMenuPopupBridge {
+  return isRecord(value) && typeof value.openTopLevel === "function";
 }
 
 function isDesktopSupportBridge(value: unknown): value is DesktopSupportBridge {
@@ -90,6 +112,17 @@ function isDesktopZoomBridge(value: unknown): value is DesktopZoomBridge {
     typeof value.stepIn === "function" &&
     typeof value.stepOut === "function" &&
     typeof value.reset === "function" &&
+    typeof value.onChange === "function"
+  );
+}
+
+function isDesktopGlobalShortcutsBridge(
+  value: unknown,
+): value is DesktopGlobalShortcutsBridge {
+  return (
+    isRecord(value) &&
+    typeof value.getSnapshot === "function" &&
+    typeof value.set === "function" &&
     typeof value.onChange === "function"
   );
 }

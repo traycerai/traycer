@@ -17,6 +17,17 @@ regexes = [
 ]
 
 [[allowlists]]
+description = "Minisign PUBLIC verification key fixture in the desktop download-resilience tests (v1.1.7 update-flow work). Decodes to exactly 42 bytes: 'Ed' algorithm tag + key id 847ef539119a1961 (matching the adjacent HOST_SIGNING_KEY_ID constant) + 32-byte public key. A verification key is public by design, never a credential. Scoped to the exact string and source path."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/desktop/src/electron-main/cli/__tests__/cross-layer-download-resilience\.test\.ts$''',
+]
+regexes = [
+  '''^RWSEfvU5EZoZYQTQUOVHeQFv3poThl1VM7FZLkNQr0Zu0FyL2x\+u2O2l$''',
+]
+
+[[allowlists]]
 description = "RFC 6455's public sample client nonce in the historic loopback handshake probe. Require both the exact nonce and its source path so unrelated findings remain reportable."
 condition = "AND"
 regexTarget = "secret"

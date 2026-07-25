@@ -1,3 +1,14 @@
+import type {
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+
+export type {
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
 import type { HostControllerStatus } from "@traycer-clients/shared/platform/runner-host";
 
 export type DesktopJsonPrimitive = string | number | boolean | null;
@@ -105,6 +116,9 @@ export interface DesktopMenuCommandPayload {
   readonly windowId: string;
 }
 
+export type DesktopTopLevelMenuId =
+  "file" | "edit" | "view" | "window" | "help";
+
 export interface DesktopZoomBridge {
   readonly ladder: readonly number[];
   get(): Promise<number>;
@@ -176,6 +190,14 @@ export interface DesktopMenuBridge {
   };
 }
 
+export interface DesktopMenuPopupBridge {
+  openTopLevel(
+    menuId: DesktopTopLevelMenuId,
+    anchorX: number,
+    anchorY: number,
+  ): Promise<void>;
+}
+
 export type DesktopAppUpdateStatus =
   | "idle"
   | "checking"
@@ -237,6 +259,28 @@ export interface DesktopAppUpdatesBridge {
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
+    dispose(): void;
+  };
+}
+
+/**
+ * Wire snapshot pushed on `globalShortcutsChange` and returned by
+ * `getSnapshot`. `sequence` guards against an out-of-order frame overwriting
+ * a newer one in the renderer's store, the same monotonic pattern
+ * `DesktopAppUpdateSnapshot` uses.
+ */
+export interface DesktopGlobalShortcutsSnapshot {
+  readonly sequence: number;
+  readonly statuses: Readonly<Record<GlobalShortcutId, GlobalShortcutStatus>>;
+}
+
+export interface DesktopGlobalShortcutsBridge {
+  getSnapshot(): Promise<DesktopGlobalShortcutsSnapshot>;
+  set(
+    id: GlobalShortcutId,
+    intent: GlobalShortcutIntent,
+  ): Promise<GlobalShortcutStatus>;
+  onChange(handler: (snapshot: DesktopGlobalShortcutsSnapshot) => void): {
     dispose(): void;
   };
 }

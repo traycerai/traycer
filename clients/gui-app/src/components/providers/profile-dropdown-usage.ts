@@ -11,6 +11,7 @@ import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-env
 export interface ProfileDropdownUsageEntry {
   readonly profileId: string | null;
   readonly projection: ProfileUsageProjection;
+  readonly fetchEligible: boolean;
   readonly refreshStatus: ProfileUsageRefreshStatus;
   readonly refresh: () => Promise<void>;
   /** Non-forced automatic check - see `ProfileUsageComparisonEntry`. */
@@ -102,6 +103,7 @@ export function projectComparisonEntry(
       now,
       staleAfterMs: PROVIDER_RATE_LIMITS_STALE_TIME_MS,
     }),
+    fetchEligible: entry.fetchEligible,
     refreshStatus: entry.refreshStatus,
     refresh: entry.refresh,
     ensureFresh: entry.ensureFresh,

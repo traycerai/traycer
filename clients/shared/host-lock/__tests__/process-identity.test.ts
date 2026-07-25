@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  __processStartTimeMsFromElapsedSecondsForTest,
   __setAsyncProcessLivenessReaderForTest,
   __setAsyncProcessStartTimeReaderForTest,
   getPublishedProcessIdentityVerdict,
@@ -7,6 +8,35 @@ import {
 
 const PUBLISHED_AT = "2026-01-01T00:00:00.000Z";
 const PUBLISHED_AT_MS = Date.parse(PUBLISHED_AT);
+const NOW_MS = Date.parse("2026-07-22T00:00:00.000Z");
+
+describe("POSIX elapsed-time validation", () => {
+  it("converts a plausible elapsed time into an epoch start time", () => {
+    expect(
+      __processStartTimeMsFromElapsedSecondsForTest(30, NOW_MS, 3_600),
+    ).toBe(NOW_MS - 30_000);
+  });
+
+  it("allows one-second ps resolution slack but rejects the next second", () => {
+    expect(
+      __processStartTimeMsFromElapsedSecondsForTest(3_601, NOW_MS, 3_600),
+    ).toBe(NOW_MS - 3_601_000);
+    expect(
+      __processStartTimeMsFromElapsedSecondsForTest(3_602, NOW_MS, 3_600),
+    ).toBeNull();
+  });
+
+  it("rejects the absurd elapsed value observed on loaded GitHub runners", () => {
+    const observedDriftMs = 38_109_073_018_720_000;
+    expect(
+      __processStartTimeMsFromElapsedSecondsForTest(
+        observedDriftMs / 1_000,
+        NOW_MS,
+        3_600,
+      ),
+    ).toBeNull();
+  });
+});
 
 afterEach(() => {
   __setAsyncProcessLivenessReaderForTest(null);

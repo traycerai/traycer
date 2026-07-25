@@ -237,6 +237,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Dismissing an attention row resolves it (persists the acknowledgement).
+  "host.notifications.resolve": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Marking all notifications read persists acknowledgements.
   "host.notifications.markAllRead": {
     mode: "fifo",
@@ -406,6 +412,8 @@ export const HOST_METHOD_POLL_TABLE = {
   "workspace.mentionGitRoot": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionGitBranches": { ...LATEST_SCHEDULING, poll: null },
   "workspace.mentionGitCommits": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.searchPaths": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.searchText": { ...LATEST_SCHEDULING, poll: null },
   "workspace.resolvePathsByRepoIdentifiers": {
     ...LATEST_SCHEDULING,
     poll: null,
@@ -543,6 +551,7 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "epic.listCommentThreads": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
+  "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
   // Opening paths changes state in the user's editor.
   "editor.openPaths": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "git.listChangedFiles": {

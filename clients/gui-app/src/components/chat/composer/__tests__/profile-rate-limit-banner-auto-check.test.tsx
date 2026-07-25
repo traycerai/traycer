@@ -1,5 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileDropdownUsageEntry } from "@/components/providers/profile-dropdown-usage";
@@ -61,9 +61,11 @@ function destination(
 function usageEntry(
   profileId: string | null,
   ensureFresh: () => Promise<void>,
+  fetchEligible: boolean,
 ): ProfileDropdownUsageEntry {
   return {
     profileId,
+    fetchEligible,
     refreshStatus: "idle",
     refresh: () => Promise.resolve(),
     ensureFresh,
@@ -117,7 +119,10 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
 
   it("spends exactly one ensureFresh on the probe target, surviving rerenders", () => {
     const ensureFresh = vi.fn(() => Promise.resolve());
-    usage.entries.set("unknown-uuid", usageEntry("unknown-uuid", ensureFresh));
+    usage.entries.set(
+      "unknown-uuid",
+      usageEntry("unknown-uuid", ensureFresh, true),
+    );
     const unknownDestination = destination(UNKNOWN, false);
 
     const { rerender } = renderBanner({
@@ -152,10 +157,13 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
 
   it("makes no automatic check when a known primary target already exists", () => {
     const ensureFresh = vi.fn(() => Promise.resolve());
-    usage.entries.set("unknown-uuid", usageEntry("unknown-uuid", ensureFresh));
+    usage.entries.set(
+      "unknown-uuid",
+      usageEntry("unknown-uuid", ensureFresh, true),
+    );
     usage.entries.set(
       "healthy-uuid",
-      usageEntry("healthy-uuid", () => Promise.resolve()),
+      usageEntry("healthy-uuid", () => Promise.resolve(), true),
     );
     const healthyDestination = destination(HEALTHY, true);
 
@@ -171,7 +179,10 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
 
   it("does not retry or cascade after a failed check", () => {
     const ensureFresh = vi.fn(() => Promise.reject(new Error("429")));
-    usage.entries.set("unknown-uuid", usageEntry("unknown-uuid", ensureFresh));
+    usage.entries.set(
+      "unknown-uuid",
+      usageEntry("unknown-uuid", ensureFresh, true),
+    );
     const unknownDestination = destination(UNKNOWN, false);
 
     const { rerender } = renderBanner({
@@ -206,7 +217,10 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
 
   it("waits for the host to be ready instead of spending the check into the void", () => {
     const ensureFresh = vi.fn(() => Promise.resolve());
-    usage.entries.set("unknown-uuid", usageEntry("unknown-uuid", ensureFresh));
+    usage.entries.set(
+      "unknown-uuid",
+      usageEntry("unknown-uuid", ensureFresh, true),
+    );
     usage.isHostReady = false;
     const unknownDestination = destination(UNKNOWN, false);
 
@@ -216,5 +230,70 @@ describe("ProfileRateLimitSwitchBanner automatic unknown-destination check", () 
       probeTarget: unknownDestination,
     });
     expect(ensureFresh).not.toHaveBeenCalled();
+  });
+
+  it("defers the one automatic check until the probe target becomes fetch-eligible", () => {
+    const ensureFresh = vi.fn(() => Promise.resolve());
+    const unknownDestination = destination(UNKNOWN, false);
+    usage.entries.set(
+      "unknown-uuid",
+      usageEntry("unknown-uuid", ensureFresh, false),
+    );
+
+    const { rerender } = renderBanner({
+      destinations: [unknownDestination],
+      primaryTarget: null,
+      probeTarget: unknownDestination,
+    });
+    expect(ensureFresh).not.toHaveBeenCalled();
+
+    usage.entries.set(
+      "unknown-uuid",
+      usageEntry("unknown-uuid", ensureFresh, true),
+    );
+    rerender(
+      <TooltipProvider delayDuration={0}>
+        <ProfileRateLimitSwitchBanner
+          harnessId="claude"
+          providerId="claude-code"
+          severity="hard_limit"
+          limitedFamilies={[]}
+          current={CURRENT}
+          profiles={[CURRENT, UNKNOWN]}
+          destinations={[unknownDestination]}
+          primaryTarget={null}
+          probeTarget={unknownDestination}
+          runTargetHostId={null}
+          onSwitchProfile={() => undefined}
+          affectedChatCount={1}
+          onSwitchProfileForTask={() => undefined}
+          onDismiss={() => undefined}
+        />
+      </TooltipProvider>,
+    );
+    expect(ensureFresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not advertise the refresh shortcut for an ineligible usage row", () => {
+    const ensureFresh = vi.fn(() => Promise.resolve());
+    const unknownDestination = destination(UNKNOWN, false);
+    usage.entries.set(
+      "unknown-uuid",
+      usageEntry("unknown-uuid", ensureFresh, false),
+    );
+
+    renderBanner({
+      destinations: [unknownDestination],
+      primaryTarget: null,
+      probeTarget: unknownDestination,
+    });
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "View profile limits" }),
+    );
+    expect(
+      screen
+        .getByRole("menuitem", { name: /Unknown/ })
+        .getAttribute("aria-keyshortcuts"),
+    ).toBeNull();
   });
 });

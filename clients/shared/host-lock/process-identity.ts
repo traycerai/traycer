@@ -1,4 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
+import { uptime } from "node:os";
 
 // Cross-platform process liveness + identity probing. Shared by the CLI's
 // `cli-lock` hardening (holder identity - Host Update Layer Redesign Tech
@@ -165,6 +166,8 @@ export function currentProcessIdentityToken(): ProcessIdentityToken {
 // real pid-reuse collision landing inside a 5s window of the original
 // process's start is not a realistic adversary for this mechanism.
 const START_TIME_MATCH_TOLERANCE_MS = 5000;
+const POSIX_ELAPSED_UPTIME_SLACK_SECONDS = 1;
+const POSIX_PROCESS_START_TIME_MAX_RETRIES = 3;
 
 export type ProcessIdentityVerdict =
   // The token's pid is provably not running any more.
@@ -270,6 +273,28 @@ export function verifyProcessIdentity(
   );
 }
 
+// Same verdict as `verifyProcessIdentity`, without blocking the event loop.
+// The synchronous form shells out via `execFileSync` (a 3s timeout and up to
+// three retries on POSIX), which is fine for a lock acquisition that is
+// about to block anyway but not for a caller that judges MANY tokens in a
+// row before doing any work - `registry/download-cache.ts` sweeps every
+// entry in the download cache before a download is allowed to start, and a
+// cache holding a handful of distinct stale owners could otherwise burn tens
+// of seconds of wall clock with the process wedged and emitting nothing.
+export async function verifyProcessIdentityAsync(
+  token: ProcessIdentityToken,
+): Promise<ProcessIdentityVerdict> {
+  if (token.pid === process.pid) return verifyOwnProcessIdentity(token);
+  const liveness = await asyncProcessLivenessReader(token.pid);
+  const currentStartedAtMs =
+    liveness === "dead" ? null : await asyncProcessStartTimeReader(token.pid);
+  return computeProcessIdentityVerdict(
+    liveness,
+    token.startedAtMs,
+    currentStartedAtMs,
+  );
+}
+
 // Mutable indirection for the start-time probe `verifyProcessIdentity`
 // consults, defaulting to the real `readProcessStartTimeMs` below. Exists
 // solely so tests can force a probe failure for a specific pid at the
@@ -326,18 +351,53 @@ function readProcessStartTimeMsImpl(pid: number): number | null {
 }
 
 function readPosixProcessStartTimeMs(pid: number): number | null {
-  let stdout: string;
-  try {
-    stdout = execFileSync("ps", ["-p", String(pid), "-o", "etime="], {
-      encoding: "utf8",
-      timeout: 3000,
-    });
-  } catch {
+  for (
+    let retry = 0;
+    retry <= POSIX_PROCESS_START_TIME_MAX_RETRIES;
+    retry += 1
+  ) {
+    let stdout: string;
+    try {
+      stdout = execFileSync("ps", ["-p", String(pid), "-o", "etime="], {
+        encoding: "utf8",
+        timeout: 3000,
+      });
+    } catch {
+      return null;
+    }
+    const elapsedSeconds = parseElapsedSeconds(stdout.trim());
+    if (elapsedSeconds === null) return null;
+    const startedAtMs = processStartTimeMsFromElapsedSeconds(
+      elapsedSeconds,
+      Date.now(),
+      uptime(),
+    );
+    if (startedAtMs !== null) return startedAtMs;
+  }
+  return null;
+}
+
+function processStartTimeMsFromElapsedSeconds(
+  elapsedSeconds: number,
+  nowMs: number,
+  uptimeSeconds: number,
+): number | null {
+  if (
+    !Number.isFinite(elapsedSeconds) ||
+    elapsedSeconds < 0 ||
+    !Number.isFinite(nowMs) ||
+    !Number.isFinite(uptimeSeconds) ||
+    uptimeSeconds < 0 ||
+    elapsedSeconds > uptimeSeconds + POSIX_ELAPSED_UPTIME_SLACK_SECONDS
+  ) {
     return null;
   }
-  const elapsedSeconds = parseElapsedSeconds(stdout.trim());
-  if (elapsedSeconds === null) return null;
-  return Date.now() - elapsedSeconds * 1000;
+  const startedAtMs = nowMs - elapsedSeconds * 1000;
+  return Number.isFinite(startedAtMs) &&
+    startedAtMs >= 0 &&
+    startedAtMs <= nowMs
+    ? startedAtMs
+    : null;
 }
 
 // Parses `ps -o etime=` output: `[[dd-]hh:]mm:ss`. Elapsed time (not a
@@ -441,16 +501,31 @@ async function readProcessStartTimeMsAsyncImpl(
     const parsed = Date.parse(stdout.trim());
     return Number.isFinite(parsed) ? parsed : null;
   }
-  const stdout = await execFileOutput(
-    "ps",
-    ["-p", String(pid), "-o", "etime="],
-    3_000,
-  );
-  if (stdout === null) return null;
-  const elapsedSeconds = parseElapsedSeconds(stdout.trim());
-  return elapsedSeconds === null ? null : Date.now() - elapsedSeconds * 1000;
+  for (
+    let retry = 0;
+    retry <= POSIX_PROCESS_START_TIME_MAX_RETRIES;
+    retry += 1
+  ) {
+    const stdout = await execFileOutput(
+      "ps",
+      ["-p", String(pid), "-o", "etime="],
+      3_000,
+    );
+    if (stdout === null) return null;
+    const elapsedSeconds = parseElapsedSeconds(stdout.trim());
+    if (elapsedSeconds === null) return null;
+    const startedAtMs = processStartTimeMsFromElapsedSeconds(
+      elapsedSeconds,
+      Date.now(),
+      uptime(),
+    );
+    if (startedAtMs !== null) return startedAtMs;
+  }
+  return null;
 }
 
 // Exported for tests so the fixed-format parser can be exercised directly
 // without shelling out to `ps`.
 export const __parseElapsedSecondsForTest = parseElapsedSeconds;
+export const __processStartTimeMsFromElapsedSecondsForTest =
+  processStartTimeMsFromElapsedSeconds;

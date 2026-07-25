@@ -181,6 +181,71 @@ describe("composer image attachment flow", () => {
 
     expect(imageIds(editor)).toEqual(["img-1", "img-3"]);
   });
+
+  // Round-4 in-place paste: rewrite b64 → hash by id, position preserved.
+  it("rewriteImageAttachmentHashById flips a b64 node to hash in place", () => {
+    const editor = makeEditor();
+    editor.commands.setContent({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "A" },
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "pending-1",
+                fileName: "shot.png",
+                b64content: "abc123",
+                mimeType: "image/png",
+                size: 6,
+              },
+            },
+            { type: "text", text: "B" },
+          ],
+        },
+      ],
+    });
+    const posBefore = imagePositions(editor);
+    expect(posBefore).toEqual([{ id: "pending-1", pos: 2 }]);
+
+    const rewritten = editor.commands.rewriteImageAttachmentHashById(
+      "pending-1",
+      "deadbeef".repeat(8),
+    );
+    expect(rewritten).toBe(true);
+
+    expect(paragraphInlineSequence(editor)).toEqual([
+      "text:A",
+      "image:pending-1",
+      "text:B",
+    ]);
+    expect(imagePositions(editor)).toEqual(posBefore);
+    const node = firstImageNode(editor, "pending-1");
+    expect(node).not.toBeNull();
+    if (node === null) return;
+    expect(node.attrs.hash).toBe("deadbeef".repeat(8));
+    expect(node.attrs.b64content).toBeNull();
+  });
+
+  it("rewriteImageAttachmentHashById is a no-op for an unknown id", () => {
+    const editor = makeEditor();
+    insertImageAttachmentsCommand(editor, [imageAttrs("img-1")], false);
+    const before = editor.getJSON();
+
+    const rewritten = editor.commands.rewriteImageAttachmentHashById(
+      "missing-id",
+      "cafebabe".repeat(8),
+    );
+
+    expect(rewritten).toBe(false);
+    expect(editor.getJSON()).toEqual(before);
+    expect(imageIds(editor)).toEqual(["img-1"]);
+    const node = firstImageNode(editor, "img-1");
+    expect(node?.attrs.b64content).toBe("img-1");
+    expect(node?.attrs.hash).toBeNull();
+  });
 });
 
 function makeEditor(): Editor {
@@ -195,6 +260,7 @@ function makeEditor(): Editor {
       onSubmit: { current: () => undefined },
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,
+      getIngestPastedComposerImages: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });
@@ -260,6 +326,34 @@ function imageIds(editor: Editor): string[] {
     return false;
   });
   return ids;
+}
+
+function imagePositions(
+  editor: Editor,
+): Array<{ readonly id: string; readonly pos: number }> {
+  const positions: Array<{ readonly id: string; readonly pos: number }> = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name !== "imageAttachment") return true;
+    if (typeof node.attrs.id === "string") {
+      positions.push({ id: node.attrs.id, pos });
+    }
+    return false;
+  });
+  return positions;
+}
+
+function firstImageNode(
+  editor: Editor,
+  id: string,
+): { readonly attrs: Record<string, unknown> } | null {
+  let found: { readonly attrs: Record<string, unknown> } | null = null;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name !== "imageAttachment") return true;
+    if (node.attrs.id !== id) return false;
+    found = { attrs: node.attrs };
+    return false;
+  });
+  return found;
 }
 
 function firstNodePosition(

@@ -1,4 +1,4 @@
-import { app, nativeImage, type BrowserWindow } from "electron";
+import { app, nativeImage } from "electron";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { initLogger, log } from "../app/logger";
@@ -27,6 +27,8 @@ import {
   HostController,
 } from "../host/host-controller";
 import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
+import { readPublishedHostProcessLiveness } from "../host/host-process-liveness";
+import { createHostRecoveryGovernor } from "../host/host-recovery-governor";
 import {
   refreshRegistryUpdateState,
   setActiveEnvironment,
@@ -56,7 +58,10 @@ import {
   maybePromptRelocateToApplications,
   UPDATE_BLOCKED_LOCATION_REASON,
 } from "../app/relocate-to-applications";
-import { WindowRegistry } from "../windows/window-registry";
+import {
+  WindowRegistry,
+  type RegistryManagedWindow,
+} from "../windows/window-registry";
 import {
   DesktopStateStore,
   resolveDesktopStateFilePath,
@@ -79,6 +84,7 @@ import {
 import { EpicWindowOwnership } from "../windows/epic-window-ownership";
 import { PerWindowState } from "../windows/per-window-state";
 import { DesktopAuthSession } from "../auth/desktop-auth-session";
+import { FileTokenStore } from "../auth/file-token-store";
 import { DesktopSupportService } from "../app/support";
 import { MenuController } from "../menu/menu-controller";
 import { initialRouteForWindowSnapshot } from "./window-initial-route";
@@ -120,7 +126,14 @@ import {
   readDisplayTopology,
 } from "../app/screen-monitor";
 import { hardenDefaultSession } from "../app/security";
-import { registerGlobalShortcuts } from "../app/shortcuts";
+import {
+  getRegisteredAccelerator,
+  initGlobalShortcutsRegistry,
+  onGlobalShortcutsChange,
+  reconcileGlobalShortcuts,
+  type ShortcutTargetWindow,
+} from "../app/shortcuts";
+import { hydrateGlobalShortcutIntents } from "../app/global-shortcuts-preferences";
 import { enableSpellCheck } from "../app/spell-check";
 import { installWindowsJumplistTasks } from "../app/recent-documents";
 import {
@@ -139,7 +152,10 @@ import {
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
-import { hostManagesHostLoginItem } from "../app/host-login-item";
+import {
+  hostManagesHostLoginItem,
+  retireCompetingCliRegistrationAtLaunch,
+} from "../app/host-login-item";
 import { DESKTOP_APP_NAME } from "../../config";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
@@ -315,14 +331,24 @@ async function timed(
 // (two documented sync-filesystem exceptions: the GPU preference read in
 // app/gpu-acceleration.ts and the memory-backed /proc write in
 // app/core-dump-guard.ts, which must land before Chromium spawns children).
-function runPreReady(state: BootState): void {
+export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
   applyHardwareAccelerationPreference();
-  registerAppScheme();
   suppressWslKernelCoreDumps();
+  // `initCrashReporter()` must run before `registerAppScheme()`. When a
+  // Sentry DSN is configured, `SentryElectron.init()` makes its own raw
+  // `protocol.registerSchemesAsPrivileged([sentry-ipc])` call and only
+  // afterwards replaces that method with a Proxy that merges every later
+  // registration into its own. Electron keeps only the last RAW call, so
+  // registering `app` first (before Sentry) gets silently discarded -
+  // `app://renderer` loses its secure/cors/fetch privileges and becomes a
+  // non-secure context, disabling `navigator.clipboard`/`crypto.subtle` in
+  // the renderer. Registering `app` after Sentry lets its Proxy fold it in
+  // alongside `sentry-ipc`. Do not reorder these two calls.
   initCrashReporter();
   installGlobalErrorHandlers();
+  registerAppScheme();
   installProcessGoneListeners();
 
   registerDeepLinkHandling(() => deliverAuthReturnSignal(state));
@@ -357,6 +383,9 @@ async function runOnReady(state: BootState): Promise<void> {
     timed("on-ready", "preconnect", () => preconnectTraycerHosts()),
     timed("on-ready", "gpu-info", () => logGpuInfo()),
     timed("on-ready", "crash-dump-prune", () => pruneStaleCrashDumps()),
+    timed("on-ready", "global-shortcuts-preferences", () =>
+      hydrateGlobalShortcutIntents().then(() => undefined),
+    ),
   ]);
 }
 
@@ -461,6 +490,12 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   const ownership = new EpicWindowOwnership(desktopStateStore);
   const perWindowState = new PerWindowState(desktopStateStore);
   const authSession = new DesktopAuthSession();
+  // Owner of the single machine-local credentials file (tech plan §3). ENV-scoped
+  // (shared across dev slots + the CLI), never slot-scoped. The bridge disposes it.
+  const authTokenStore = new FileTokenStore({
+    environment: config.environment,
+    authnBaseUrl: config.authnBaseUrl,
+  });
 
   const hostLabel = labelForEnvironment(config.environment);
   const hostLayout = getHostFsLayout(config.environment);
@@ -505,6 +540,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     host,
     hostController,
     authnBaseUrl: config.authnBaseUrl,
+    authTokenStore,
     // Device flow is the only login - there is no loopback redirect_uri to
     // snapshot - so the renderer always falls back to the custom-scheme
     // sign-in URL composition.
@@ -673,12 +709,23 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
   // disk still names an unreachable host. Started after bootstrap so the
   // initial 60s readiness wait can't register as an outage.
   void hostReady.then(() => {
+    // One authority for automatic restarts, holding both the liveness gate and
+    // the attempt budget. It re-reads pid.json itself inside `requestRespawn`
+    // so the "never kill a live host" rule can't be bypassed by adding another
+    // caller later.
+    const recoveryGovernor = createHostRecoveryGovernor({
+      now: undefined,
+      readLiveness: () =>
+        readPublishedHostProcessLiveness(services.host.pidMetadataFile),
+    });
     const healthMonitor = startHostHealthMonitor({
       host: services.host,
       intervalMs: undefined,
       probe: undefined,
       readMetadata: undefined,
       respawn: () => respawnIfDown(services.hostController),
+      governor: recoveryGovernor,
+      readLiveness: undefined,
     });
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
@@ -701,6 +748,22 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
         intervalMs: undefined,
       });
       state.bridge?.disposeFns.push(() => revisionMonitor.dispose());
+    });
+  }
+
+  // macOS-only dual-registration repair, on EVERY launch. A machine that
+  // acquired a competing `~/Library/LaunchAgents/<cli-label>.plist` during
+  // the v1.1.7 window starts two hosts against one data dir at every login,
+  // and nothing else clears it: the register cycle that would
+  // (`retireLegacyLabelRegistrations`) only runs when registration is
+  // actually re-done, which the routine healthy-host launch never does.
+  // Deliberately not gated on `hostReady` - the repair is about what starts
+  // at the NEXT login and must still run on a launch whose host never
+  // becomes ready. All of its own gates live inside; see its doc comment.
+  if (process.platform === "darwin") {
+    void timed("deferred", "competing-registration-repair", async () => {
+      const outcome = await retireCompetingCliRegistrationAtLaunch();
+      log.debug("[host-login-item] launch repair outcome", { outcome });
     });
   }
 
@@ -759,13 +822,28 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     maybePromptRelocateToApplications(),
   );
 
-  void timed("deferred", "global-shortcuts", () =>
-    registerGlobalShortcuts(() => {
-      const records = services.windowRegistry.records();
-      if (records.length === 0) return null;
-      return records[0].window;
-    }),
-  );
+  void timed("deferred", "global-shortcuts", async () => {
+    const shortcutTargetWindow = createMruWindowProxy(services.windowRegistry);
+    initGlobalShortcutsRegistry(() => shortcutTargetWindow);
+    const applyTrayAccelerator = (): void => {
+      state.bridge?.options.tray?.setSummonAccelerator(
+        getRegisteredAccelerator("summon"),
+      );
+    };
+    // The tray's accelerator display and the IPC fan-out (`global-shortcuts-ipc.ts`)
+    // are independent subscribers to the same reconcile() output - decoupled the
+    // same way host-registry updates reach both the menu/tray and the renderer.
+    state.bridge?.disposeFns.push(
+      onGlobalShortcutsChange(applyTrayAccelerator),
+    );
+    const snapshot = await reconcileGlobalShortcuts({});
+    applyTrayAccelerator();
+    if (snapshot.statuses.summon.status === "rejected") {
+      log.warn("[global-shortcuts] summon shortcut refused at launch", {
+        effectiveChord: snapshot.statuses.summon.effectiveChord,
+      });
+    }
+  });
 
   void timed("deferred", "power-monitor", () =>
     // Bridge the OS wake pulse to every renderer so it force-reconnects its
@@ -1051,21 +1129,42 @@ async function createTraySafe(
   }
 }
 
-function createMruWindowProxy(registry: WindowRegistry): TrayManagedWindow {
-  const current = (): BrowserWindow | null =>
-    registry.getMruRecord()?.window ?? null;
+// Shared by the tray (`TrayManagedWindow`) and the global-shortcuts registry
+// (`ShortcutTargetWindow`, decision 10 in the tech plan: the summon action
+// resolves via `focusMru()` rather than the registry's first-inserted
+// record) - both just need "the window the user last used", so one proxy
+// backs both call sites. Exported so tests can exercise this exact proxy
+// against a real `WindowRegistry` instead of a hand-rolled copy. Generic over
+// `TWindow` (rather than hardcoding the default `BrowserWindow`) so a test's
+// `WindowRegistry<FakeRegistryWindow>` can be passed directly - the bound is
+// exactly the surface this function actually calls, nothing Electron-specific.
+export function createMruWindowProxy<
+  TWindow extends RegistryManagedWindow & {
+    isMinimized(): boolean;
+    restore(): void;
+  },
+>(registry: WindowRegistry<TWindow>): TrayManagedWindow & ShortcutTargetWindow {
+  const current = (): TWindow | null => registry.getMruRecord()?.window ?? null;
   return {
     isDestroyed: () => {
       const window = current();
       return window === null || window.isDestroyed();
     },
     isVisible: () => current()?.isVisible() ?? false,
+    isMinimized: () => current()?.isMinimized() ?? false,
     show: () => {
       const window = current();
       if (window === null || window.isDestroyed()) {
         return;
       }
       window.show();
+    },
+    restore: () => {
+      const window = current();
+      if (window === null || window.isDestroyed()) {
+        return;
+      }
+      window.restore();
     },
     focus: () => {
       registry.focusMru();

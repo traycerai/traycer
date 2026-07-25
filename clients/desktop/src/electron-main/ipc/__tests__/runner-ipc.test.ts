@@ -569,6 +569,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -579,12 +580,17 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.hostPickerRequestClose,
         RunnerHostInvoke.hostPickerRequestOpen,
         RunnerHostInvoke.workspaceFoldersPick,
-        RunnerHostInvoke.validateAuthToken,
         RunnerHostInvoke.validateAuthTokenIdentity,
         RunnerHostInvoke.deviceFlowStart,
         RunnerHostInvoke.deviceFlowPollNow,
         RunnerHostInvoke.deviceFlowCancel,
-        RunnerHostInvoke.refreshAuthToken,
+        // §3 FileTokenStore IPC seam (get/signIn/rotate/delete); §6 adds the
+        // one-time legacy→file migration channel.
+        RunnerHostInvoke.authTokenStoreGet,
+        RunnerHostInvoke.authTokenStoreSignIn,
+        RunnerHostInvoke.authTokenStoreRotate,
+        RunnerHostInvoke.authTokenStoreDelete,
+        RunnerHostInvoke.authTokenStoreMigrateLegacy,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,
         RunnerHostInvoke.getRegisteredUrlSchemes,
@@ -602,6 +608,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.appUpdateDownload,
         RunnerHostInvoke.appUpdateGetSnapshot,
         RunnerHostInvoke.appUpdateInstall,
+        RunnerHostInvoke.globalShortcutsGetSnapshot,
+        RunnerHostInvoke.globalShortcutsSet,
         RunnerHostInvoke.windowsList,
         RunnerHostInvoke.windowsRequestNew,
         RunnerHostInvoke.windowsRequestFocus,
@@ -637,8 +645,6 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerConfigEnvList,
         RunnerHostInvoke.traycerConfigEnvSet,
         RunnerHostInvoke.traycerConfigEnvDelete,
-        RunnerHostInvoke.traycerCliLogin,
-        RunnerHostInvoke.traycerCliLogout,
         RunnerHostInvoke.migrationAnnounceRunning,
         RunnerHostInvoke.migrationGetRunningSnapshot,
         // Native-packaging host-management bridge (Flow 4 / Flow 6).
@@ -701,6 +707,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.certTrustSystemDialog,
         RunnerHostInvoke.windowSetOverlayIcon,
         RunnerHostInvoke.windowSetTitleBarOverlay,
+        // Windows frameless menu strip → native submenu popup.
+        RunnerHostInvoke.menuOpenTopLevel,
         RunnerHostInvoke.displayList,
         RunnerHostInvoke.fileDropWriteTemporary,
         RunnerHostInvoke.fileDropCopyTemporary,
@@ -731,6 +739,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -776,6 +785,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -815,6 +825,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -852,6 +863,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -886,6 +898,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState: new PerWindowState(null),
@@ -971,6 +984,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -1043,6 +1057,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -1099,6 +1114,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -1151,6 +1167,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -1214,6 +1231,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -1275,6 +1293,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState: new PerWindowState(null),
@@ -1312,6 +1331,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -1345,6 +1365,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1390,6 +1411,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState: new PerWindowState(null),
@@ -1460,6 +1482,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1562,6 +1585,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1610,6 +1634,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1680,6 +1705,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1718,6 +1744,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: windowA,
     });
     const bridgeB = new mod.RunnerIpcBridge({
@@ -1727,6 +1754,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: windowB,
     });
     bridgeA.install();
@@ -1820,6 +1848,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -1855,6 +1884,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1927,8 +1957,12 @@ describe("RunnerIpcBridge", () => {
     expect(windowA.sentMessages).toEqual([]);
     expect(windowB.sentMessages).toEqual([]);
 
-    // clear by sender: removes window-a's snapshot, emits an empty snapshot to
-    // window-a only, and leaves window-b untouched.
+    // clear by sender: removes window-a's snapshot but does NOT forward the empty
+    // snapshot to any renderer. A `clear` is a window-teardown wipe; pushing its
+    // empty snapshot could clobber a still-alive window that transiently dropped
+    // from the registry (reload / re-registration), and the "Clear local app
+    // state" path reloads the window rather than relying on the echo. Window-b is
+    // likewise untouched.
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
     const empty = {
@@ -1940,12 +1974,7 @@ describe("RunnerIpcBridge", () => {
     };
     await clearHandler(sender(101));
     expect(await getHandler(sender(101))).toEqual(empty);
-    expect(windowA.sentMessages).toEqual([
-      {
-        channel: RunnerHostEvent.perWindowStateChange,
-        payload: empty,
-      },
-    ]);
+    expect(windowA.sentMessages).toEqual([]);
     expect(windowB.sentMessages).toEqual([]);
     bridge.dispose();
   });
@@ -1972,6 +2001,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState,
@@ -2028,6 +2058,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -2079,6 +2110,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2136,6 +2168,7 @@ describe("RunnerIpcBridge", () => {
         authRedirectUri: null,
         tray: null,
         zoomController: undefined,
+        authTokenStore: undefined,
         window: buildDestroyedWindow(),
       });
       bridge.install();
@@ -2177,6 +2210,7 @@ describe("RunnerIpcBridge", () => {
         authRedirectUri: null,
         tray: null,
         zoomController: undefined,
+        authTokenStore: undefined,
         window: buildWindow(),
       });
       bridge.install();
@@ -2225,6 +2259,7 @@ describe("RunnerIpcBridge", () => {
         authRedirectUri: null,
         tray: null,
         zoomController: undefined,
+        authTokenStore: undefined,
         window: buildWindow(),
       });
       bridge.install();
@@ -2297,6 +2332,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2370,6 +2406,7 @@ describe("RunnerIpcBridge", () => {
         authRedirectUri: null,
         tray: null,
         zoomController: undefined,
+        authTokenStore: undefined,
         window: buildWindow(),
       });
       bridge.install();
@@ -2407,6 +2444,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2450,6 +2488,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2481,61 +2520,6 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("validates auth tokens through the main-process HTTP helper", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              user: {
-                name: "Desktop User",
-                providerHandle: "desktop-user",
-                email: "desktop@example.com",
-              },
-            }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            },
-          ),
-        ),
-      ),
-    );
-
-    const mod = await import("../register-runner-ipc");
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      window: buildWindow(),
-    });
-    bridge.install();
-
-    const validateHandler = ipcMainState.handlers.get(
-      RunnerHostInvoke.validateAuthToken,
-    );
-    if (validateHandler === undefined) {
-      throw new Error("validateAuthToken handler missing");
-    }
-
-    await expect(
-      validateHandler(bareEvent(), "jwt-abc", "jwt-abc-refresh"),
-    ).resolves.toEqual({
-      kind: "valid",
-      profile: {
-        userId: "",
-        userName: "Desktop User",
-        email: "desktop@example.com",
-      },
-    });
-
-    bridge.dispose();
-  });
-
   it("validates full auth identities through the main-process HTTP helper", async () => {
     const user = createAuthenticatedUserFixture(undefined);
     vi.stubGlobal(
@@ -2558,6 +2542,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2594,6 +2579,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2624,6 +2610,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2649,6 +2636,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2688,6 +2676,7 @@ describe("RunnerIpcBridge", () => {
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState,

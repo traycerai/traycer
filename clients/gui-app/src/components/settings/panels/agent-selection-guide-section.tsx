@@ -327,7 +327,7 @@ function AgentsGuideEditor(props: {
           dispatch({ type: "confirm-open-changed", open })
         }
         title="Revert to default instructions?"
-        description="This replaces your global agent selection instructions with defaults based on the providers currently available on this device. Your custom instructions will be lost. Workspace-level files are not affected."
+        description="This replaces your agent selection instructions with defaults based on the providers currently available on this device. Your custom instructions will be lost."
         cascadeSummary={null}
         actionLabel="Revert to default"
         isPending={state.resetInFlight}

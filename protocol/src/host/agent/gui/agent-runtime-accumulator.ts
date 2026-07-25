@@ -304,6 +304,17 @@ function makeSubAgentBlock(fields: {
   return { type: "subagent", ...fields };
 }
 
+function isNewSubagentRun(
+  incomingSpawnToolCallId: string | undefined,
+  existingSpawnToolCallId: string | null,
+): boolean {
+  return (
+    incomingSpawnToolCallId !== undefined &&
+    existingSpawnToolCallId !== null &&
+    incomingSpawnToolCallId !== existingSpawnToolCallId
+  );
+}
+
 // Appends a new workflow activity entry, skipping a consecutive duplicate
 // (the same aggregate `task_progress` line can re-arrive on repeated polls
 // with no new milestone) so the persisted timeline reads as distinct steps.
@@ -313,7 +324,11 @@ function appendWorkflowActivity(
 ): WorkflowActivityEntry[] {
   if (entry === null) return activity;
   const last = activity[activity.length - 1];
-  if (last !== undefined && last.kind === entry.kind && last.text === entry.text) {
+  if (
+    last !== undefined &&
+    last.kind === entry.kind &&
+    last.text === entry.text
+  ) {
     return activity;
   }
   return [...activity, entry];
@@ -1486,6 +1501,20 @@ export function accumulateEvent(
       // name/task in place rather than appending a duplicate card.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
+        if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
+          return replaceBlock(blocks, event.blockId, {
+            ...existing,
+            status: "streaming",
+            timestamp: event.timestamp,
+            startedAt: event.timestamp,
+            task: nullableString(event.task),
+            progressUpdates: [],
+            result: null,
+            spawnToolCallId: event.spawnToolCallId ?? null,
+            stopped: false,
+            workflowMeta: null,
+          });
+        }
         return replaceBlock(blocks, event.blockId, {
           ...existing,
           name: event.name,
@@ -1610,6 +1639,23 @@ export function accumulateEvent(
       // open a fresh dual-written subagent block.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
+        if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
+          return replaceBlock(blocks, event.blockId, {
+            ...existing,
+            status: "streaming",
+            timestamp: event.timestamp,
+            startedAt: event.timestamp,
+            task: event.intent,
+            progressUpdates: [],
+            result: null,
+            spawnToolCallId: event.spawnToolCallId ?? null,
+            stopped: false,
+            workflowMeta: {
+              ...emptyWorkflowMeta(existing.name),
+              intent: event.intent,
+            },
+          });
+        }
         const meta = existing.workflowMeta ?? emptyWorkflowMeta(event.name);
         // A re-emit's `intent` is a required key but not necessarily a
         // meaningful one - only a genuine non-null value overwrites, mirroring
@@ -1658,8 +1704,7 @@ export function accumulateEvent(
 
     case "workflow.progress": {
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
-      const progressLine =
-        event.activity !== null ? event.activity.text : null;
+      const progressLine = event.activity !== null ? event.activity.text : null;
       if (existing) {
         const meta = existing.workflowMeta ?? emptyWorkflowMeta(existing.name);
         const updated = {

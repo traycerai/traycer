@@ -142,6 +142,11 @@ import {
   useWorktreesSettingsViewStore,
   type WorktreeSortMode,
 } from "@/stores/settings/worktrees-settings-view-store";
+import {
+  EMPTY_SELECTED_WORKTREE_PATHS,
+  useWorktreesSettingsSelectionStore,
+  type SelectedWorktreePathsUpdate,
+} from "@/stores/settings/worktrees-settings-selection-store";
 
 type WorktreeRowDeleteStatus = "deleting";
 // Per-row activity-enrichment state, driving ONLY the tier pill's presentation:
@@ -1058,8 +1063,18 @@ export function WorktreesList(props: {
     close,
     dismissTerminalBackgrounded,
   } = useWorktreeDeleteRun(hostId, openStreamTransport, invalidate);
-  const [selectedPaths, setSelectedPaths] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  const selectedPaths = useWorktreesSettingsSelectionStore(
+    (state) =>
+      state.selectedPathsByHost.get(hostId) ?? EMPTY_SELECTED_WORKTREE_PATHS,
+  );
+  const setSelectedPathsForHost = useWorktreesSettingsSelectionStore(
+    (state) => state.setSelectedPaths,
+  );
+  const setSelectedPaths = useCallback(
+    (update: SelectedWorktreePathsUpdate): void => {
+      setSelectedPathsForHost(hostId, update);
+    },
+    [hostId, setSelectedPathsForHost],
   );
   const [pendingDeleteTargets, setPendingDeleteTargets] =
     useState<ReadonlyArray<WorktreeHostEntryV14> | null>(null);
@@ -1272,10 +1287,10 @@ export function WorktreesList(props: {
       }
       return next;
     });
-  }, [allVisibleSelected, selectableWorktreePaths]);
+  }, [allVisibleSelected, selectableWorktreePaths, setSelectedPaths]);
   const clearSelection = useCallback(() => {
     setSelectedPaths(new Set());
-  }, []);
+  }, [setSelectedPaths]);
   const toggleRepoCollapsed = useCallback(
     (group: WorktreeRepoGroup, collapsed: boolean) => {
       if (collapsed) {
@@ -1285,7 +1300,7 @@ export function WorktreesList(props: {
         setSelectedPaths((prev) => removeSelectedWorktrees(prev, group.items));
       }
     },
-    [],
+    [setSelectedPaths],
   );
   const toggleAllReposCollapsed = useCallback(() => {
     if (allReposCollapsed) {
@@ -1294,7 +1309,7 @@ export function WorktreesList(props: {
     }
     dispatchCollapsedRepoKeys({ type: "collapse-all", keys: repoKeys });
     setSelectedPaths(new Set());
-  }, [allReposCollapsed, repoKeys]);
+  }, [allReposCollapsed, repoKeys, setSelectedPaths]);
   const requestDeleteTargets = useCallback(
     (targets: ReadonlyArray<WorktreeHostEntryV14>) => {
       // A `Checking` row's tier isn't known yet, so it never opens a delete

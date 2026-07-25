@@ -38,7 +38,8 @@ export interface ProviderRateLimitQueryOptions {
  * (e.g. tab-scoped) can reuse the same shape without duplicating it.
  *
  * Branches on the fetch lane for background polling:
- * - `httpFetch` (openrouter, kilocode): opts in to the table's fixed cadence.
+ * - `httpFetch` (openrouter, kilocode): when credentials are fetch-eligible,
+ *   opts in to the table's fixed cadence.
  *   The builder fixes its background setting to false, so persistent app-shell
  *   subscriptions do not poll while the window is hidden. `refetchOnMount`
  *   stays at TanStack's own default (`true`): a plain GET has no subprocess to
@@ -59,8 +60,10 @@ export interface ProviderRateLimitQueryOptions {
 export function providerRateLimitQueryOptions(
   providerId: RateLimitProviderId,
   profileId: string | null,
+  fetchEligible: boolean,
 ): ProviderRateLimitQueryOptions {
-  const isHttpFetch = rateLimitFetchLane(providerId) === "httpFetch";
+  const isHttpFetch =
+    rateLimitFetchLane(providerId) === "httpFetch" && fetchEligible;
   return {
     method: "host.getRateLimitUsage",
     params: { accountContext: DEFAULT_ACCOUNT_CONTEXT, providerId, profileId },

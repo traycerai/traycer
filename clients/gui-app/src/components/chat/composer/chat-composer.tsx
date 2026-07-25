@@ -455,6 +455,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   initialSelection={initialSelection}
                   slashProviderId={harnessId}
                   hasPastedImageBytes={hasPastedImageBytes}
+                  ingestPastedComposerImages={null}
                   isActive={isActive}
                   onSnapshot={handleSnapshot}
                   onSubmit={handleSubmitDraft}

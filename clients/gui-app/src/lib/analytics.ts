@@ -77,9 +77,11 @@ export type AnalyticsHarness =
   | "devin"
   | "droid"
   | "grok"
+  | "hermes"
   | "kilocode"
   | "kimi"
   | "kiro"
+  | "omp"
   | "opencode"
   | "openrouter"
   | "pi"
@@ -159,9 +161,11 @@ export type AnalyticsProvider =
   | "devin"
   | "droid"
   | "grok"
+  | "hermes"
   | "kilocode"
   | "kimi"
   | "kiro"
+  | "omp"
   | "opencode"
   | "openrouter"
   | "pi"
@@ -190,6 +194,8 @@ export type AnalyticsSetting =
   | "quoteReplyEnabled"
   | "showGlobalResourceMonitor"
   | "showNavigatorResourceStats"
+  | "summonHotkeyChord"
+  | "summonHotkeyEnabled"
   | "terminalCursorBlink"
   | "terminalCursorStyle"
   | "terminalFontFamily"
@@ -831,9 +837,11 @@ const ANALYTICS_HARNESSES = new Set<string>([
   "devin",
   "droid",
   "grok",
+  "hermes",
   "kilocode",
   "kimi",
   "kiro",
+  "omp",
   "opencode",
   "openrouter",
   "pi",
@@ -850,9 +858,11 @@ const ANALYTICS_PROVIDERS = new Set<string>([
   "devin",
   "droid",
   "grok",
+  "hermes",
   "kilocode",
   "kimi",
   "kiro",
+  "omp",
   "opencode",
   "openrouter",
   "pi",

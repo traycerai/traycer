@@ -29,6 +29,7 @@ describe("released floor production module", () => {
     expect(split.optionalManifest).toMatchObject({
       "host.notifications.list": { major: 2, minor: 0 },
       "host.notifications.markRead": { major: 1, minor: 0 },
+      "host.notifications.resolve": { major: 1, minor: 0 },
       "host.notifications.markAllRead": { major: 1, minor: 0 },
       "host.notifications.clearAll": { major: 1, minor: 0 },
       "host.notifications.getConfig": { major: 1, minor: 0 },

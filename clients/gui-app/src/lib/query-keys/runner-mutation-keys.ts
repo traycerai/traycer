@@ -1,3 +1,5 @@
+import type { GlobalShortcutId } from "@traycer-clients/shared/keybindings/global-shortcuts";
+
 export const runnerMutationKeys = {
   requestHostRespawn: () => ["runner.requestHostRespawn"] as const,
   serviceInstall: () => ["runner.serviceInstall"] as const,
@@ -14,7 +16,6 @@ export const runnerMutationKeys = {
   traycerShellRevertArgs: () => ["runner.traycer.shellRevertArgs"] as const,
   traycerEnvOverrideSet: () => ["runner.traycer.envOverrideSet"] as const,
   traycerEnvOverrideDelete: () => ["runner.traycer.envOverrideDelete"] as const,
-  traycerCliLogin: () => ["runner.traycer.cliLogin"] as const,
   // Host-management mutations consumed by the host gate, update banner,
   // Settings → Host, and the Doctor failure card.
   hostInstallVersion: () => ["runner.host.installVersion"] as const,
@@ -45,6 +46,8 @@ export const runnerMutationKeys = {
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
   mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
   openExternalLink: () => ["runner.openExternalLink"] as const,
+  // Windows frameless title-bar menu strip: pop up a top-level native submenu.
+  openTopLevelMenu: () => ["runner.menu.openTopLevel"] as const,
   zoomSet: (scope: string | null) => ["runner.zoom.set", scope] as const,
   zoomStepIn: (scope: string | null) => ["runner.zoom.stepIn", scope] as const,
   zoomStepOut: (scope: string | null) =>
@@ -55,6 +58,8 @@ export const runnerMutationKeys = {
   logLevelsSet: () => ["runner.logLevels.set"] as const,
   setAllowPrereleaseUpdates: () =>
     ["runner.appUpdates.setAllowPrerelease"] as const,
+  globalShortcutsSet: (id: GlobalShortcutId) =>
+    ["runner.globalShortcuts.set", id] as const,
 };
 
 export const runnerQueryKeys = {

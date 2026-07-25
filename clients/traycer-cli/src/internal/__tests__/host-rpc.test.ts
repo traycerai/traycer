@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callHostRpc, toAgentCliError } from "../host-rpc";
-import { cliBearerStore, resolveHostAuth } from "../host-auth";
+import { resolveHostAuth } from "../host-auth";
 import { readHostPidMetadata } from "../../host/pid-metadata";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
-import { refreshAuthTokenViaHttp } from "../../../../shared/auth/auth-validation";
+import { createCliCredentialsStore } from "../../store/credentials-store";
+import type { CredentialsMutationStore } from "@traycer/protocol/config/credentials-mutation";
 import { CLI_ERROR_CODES } from "../../runner/errors";
 
-// Mock the WS transport + the network refresh; exercise the real shared
-// auth-aware wrapper + bearer revalidator so this verifies the CLI wiring
-// (auth resolution, refresh-on-401 → rotate → retry) end-to-end without a
-// socket. Protocol-level coverage lives in the shared transport tests.
+// Mock the WS transport + the credentials-store FACTORY; exercise the real
+// store-backed revalidator + withCommitRetry + shared auth-aware wrapper so this
+// verifies the CLI wiring (auth resolution, on-401 → locked `rotate` → lease
+// rotate → retry) end-to-end without a socket. The rotate spend itself (the
+// locked WAL commit) is covered in the protocol `credentials-mutation` tests.
 //
 // `requestMock` is declared via `vi.hoisted` so it exists when the hoisted
 // `vi.mock` factory below captures it. `WsRpcClient` is mocked as a class so
@@ -44,14 +46,18 @@ vi.mock("../../../../shared/host-transport/ws-rpc-client", () => ({
   },
 }));
 
-vi.mock("../../../../shared/auth/auth-validation", () => ({
-  refreshAuthTokenViaHttp: vi.fn(),
-}));
-
 vi.mock("../host-auth", () => ({
   resolveHostAuth: vi.fn(),
-  cliBearerStore: { read: vi.fn(), write: vi.fn(), clear: vi.fn() },
 }));
+
+// Mock only the store FACTORY; the real store-backed revalidator + withCommitRetry
+// run, so `rotate`'s outcome (driven per-test) flows through the actual on-401
+// mapping and lease rotation.
+vi.mock("../../store/credentials-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../store/credentials-store")>();
+  return { ...actual, createCliCredentialsStore: vi.fn() };
+});
 
 vi.mock("../../host/pid-metadata", async (importOriginal) => {
   const actual =
@@ -63,10 +69,23 @@ vi.mock("../../host/pid-metadata", async (importOriginal) => {
 });
 
 const resolveAuthMock = vi.mocked(resolveHostAuth);
-const refreshMock = vi.mocked(refreshAuthTokenViaHttp);
 const pidMock = vi.mocked(readHostPidMetadata);
-const storeRead = vi.mocked(cliBearerStore.read);
-const storeWrite = vi.mocked(cliBearerStore.write);
+const createStoreMock = vi.mocked(createCliCredentialsStore);
+
+// The on-401 revalidator drives `store.rotate`; the rest of the store surface is
+// unused by host-rpc, so stub it and steer `rotate` per-test.
+const rotateMock = vi.fn();
+const fakeStore: CredentialsMutationStore = {
+  read: vi.fn(),
+  rotate: rotateMock,
+  signIn: vi.fn(),
+  signOut: vi.fn(),
+  updateProfile: vi.fn(),
+  guardedSignIn: vi.fn(),
+  migrateFirstWrite: vi.fn(),
+  hasPendingContinuation: vi.fn(() => false),
+  dispose: vi.fn(),
+};
 
 const METHOD = "agent.list";
 
@@ -84,13 +103,7 @@ beforeEach(() => {
     websocketUrl: "ws://127.0.0.1:9/rpc",
     startedAt: "2026-01-01T00:00:00.000Z",
   });
-  // store.read returns the current token by default → revalidator refreshes
-  // (rather than adopting a sibling token).
-  storeRead.mockResolvedValue({
-    token: "tok-1",
-    refreshToken: "tok-1-refresh",
-    userId: "u1",
-  });
+  createStoreMock.mockReturnValue(fakeStore);
 });
 
 afterEach(() => {
@@ -134,7 +147,10 @@ describe("callHostRpc", () => {
         abortSignal: expect.any(AbortSignal),
       }),
     );
-    expect(refreshMock).not.toHaveBeenCalled();
+    expect(rotateMock).not.toHaveBeenCalled();
+    // The per-run store is always disposed on the success path (finally), so a
+    // `commit-failed` continuation timer can't outlive the command.
+    expect(fakeStore.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("rejects invalid host metadata endpoints before constructing the WS client", async () => {
@@ -159,7 +175,7 @@ describe("callHostRpc", () => {
     expect(requestMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes the bearer and retries once on UNAUTHORIZED", async () => {
+  it("rotates the bearer and retries once on UNAUTHORIZED", async () => {
     requestMock
       .mockRejectedValueOnce(
         new HostRpcError({
@@ -171,10 +187,17 @@ describe("callHostRpc", () => {
         }),
       )
       .mockResolvedValueOnce({ agents: [] });
-    refreshMock.mockResolvedValue({
-      kind: "refreshed",
-      token: "tok-2",
-      refreshToken: "tok-2-refresh",
+    // The locked rotate mints a fresh pair; the real revalidator rotates the
+    // lease to it, and the auth-aware wrapper retries once against the new bearer.
+    rotateMock.mockResolvedValue({
+      outcome: "applied",
+      credentials: {
+        token: "tok-2",
+        refreshToken: "tok-2-refresh",
+        authnBaseUrl: "https://authn.test",
+        savedAt: "2026-01-01T00:00:00.000Z",
+        user: { id: "u1", email: "a@b.c", name: "A" },
+      },
     });
 
     const result = await callHostRpc(METHOD, {
@@ -184,15 +207,14 @@ describe("callHostRpc", () => {
     });
 
     expect(result).toEqual({ agents: [] });
-    expect(refreshMock).toHaveBeenCalledTimes(1);
-    expect(storeWrite).toHaveBeenCalledWith({
-      token: "tok-2",
-      refreshToken: "tok-2-refresh",
-    });
+    expect(rotateMock).toHaveBeenCalledTimes(1);
+    expect(rotateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedUserId: "u1", expectedToken: "tok-1" }),
+    );
     expect(requestMock).toHaveBeenCalledTimes(2);
   });
 
-  it("surfaces UNAUTHORIZED without retrying when the refresh is rejected", async () => {
+  it("surfaces UNAUTHORIZED without retrying when the rotate refresh is rejected", async () => {
     requestMock.mockRejectedValue(
       new HostRpcError({
         code: "UNAUTHORIZED",
@@ -202,7 +224,12 @@ describe("callHostRpc", () => {
         fatalDetails: null,
       }),
     );
-    refreshMock.mockResolvedValue({ kind: "rejected" });
+    // A dead refresh token leaves the lease untouched, so the wrapper does not
+    // retry and the UNAUTHORIZED surfaces.
+    rotateMock.mockResolvedValue({
+      outcome: "refresh-rejected",
+      credentials: null,
+    });
 
     await expect(
       callHostRpc(METHOD, {
@@ -211,11 +238,11 @@ describe("callHostRpc", () => {
         scope: "user",
       }),
     ).rejects.toBeInstanceOf(HostRpcError);
-    expect(refreshMock).toHaveBeenCalledTimes(1);
+    expect(rotateMock).toHaveBeenCalledTimes(1);
     expect(requestMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not refresh on a non-UNAUTHORIZED error", async () => {
+  it("does not rotate on a non-UNAUTHORIZED error", async () => {
     requestMock.mockRejectedValue(
       new HostRpcError({
         code: "FORBIDDEN",
@@ -232,8 +259,10 @@ describe("callHostRpc", () => {
         scope: "user",
       }),
     ).rejects.toBeInstanceOf(HostRpcError);
-    expect(refreshMock).not.toHaveBeenCalled();
+    expect(rotateMock).not.toHaveBeenCalled();
     expect(requestMock).toHaveBeenCalledTimes(1);
+    // The store is disposed on the throw path too (finally), not just success.
+    expect(fakeStore.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("maps per-feature host unsupported errors distinctly from incompatibility", async () => {

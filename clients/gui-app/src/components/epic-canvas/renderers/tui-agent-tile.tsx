@@ -1228,6 +1228,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
           onContainerResize={handleContainerResize}
           onWriterReady={handleWriterReady}
           shouldFocusOnActivePane={props.isActive}
+          registerImperativeFocus
           findTargetId={
             props.isActive
               ? `terminal-agent:${props.viewTabId}:${props.tileId}:${handle.sessionId}`

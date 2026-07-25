@@ -147,10 +147,8 @@ function createBaseRunnerHost(): IRunnerHost {
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
     hasLocalHost: true,
-    validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
-    refreshAuthToken: () => Promise.resolve({ kind: "network-error" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
@@ -190,8 +188,13 @@ function createBaseRunnerHost(): IRunnerHost {
     },
     tokenStore: {
       get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
+      signIn: () => Promise.resolve(),
+      rotate: () =>
+        Promise.resolve({ outcome: "deleted" as const, pair: null }),
       delete: () => Promise.resolve(),
+      subscribe: () => ({ dispose: () => undefined }),
+      migrateLegacyCredentials: () =>
+        Promise.resolve("identity-unknown" as const),
     },
     onLocalHostChange: (handler) => {
       handler(null);
@@ -536,7 +539,7 @@ describe("<WindowsBridgeProvider />", () => {
     act(() => {
       tabId = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
       useEpicCanvasStore.getState().renameTab(tabId, "A Prime");
-      draftId = useLandingDraftStore.getState().createDraft(null);
+      draftId = useLandingDraftStore.getState().createDraft(null, undefined);
       useLandingDraftStore
         .getState()
         .setDraftContent(draftId, landingTextContent("first prompt"), null);
@@ -580,7 +583,7 @@ describe("<WindowsBridgeProvider />", () => {
     act(() => {
       tabA = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
       tabB = useEpicCanvasStore.getState().openEpicTab("epic-b", "B");
-      draftId = useLandingDraftStore.getState().createDraft(null);
+      draftId = useLandingDraftStore.getState().createDraft(null, undefined);
       useLandingDraftStore
         .getState()
         .setDraftContent(draftId, landingTextContent("old prompt"), null);
@@ -641,7 +644,7 @@ describe("<WindowsBridgeProvider />", () => {
     act(() => {
       tabA = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
       tabB = useEpicCanvasStore.getState().openEpicTab("epic-b", "B");
-      draftId = useLandingDraftStore.getState().createDraft(null);
+      draftId = useLandingDraftStore.getState().createDraft(null, undefined);
       useLandingDraftStore
         .getState()
         .setDraftContent(draftId, landingTextContent("final prompt"), null);
