@@ -238,6 +238,52 @@ describe("registerHostControllerStatusBroadcast", () => {
     ]);
   });
 
+  // The tick queued behind a failed read may carry the mutation's terminal
+  // status. Dropping it would leave the renderer showing the operation as
+  // active (controls disabled) until the idle interval fires, so the drain
+  // loop must survive a failed read and still run the trailing re-read.
+  it("services the queued re-read after a failed in-flight read", async () => {
+    const progressListeners = new Set<() => void>();
+    const reads: Array<{
+      resolve: (status: HostControllerStatus) => void;
+      reject: (err: Error) => void;
+    }> = [];
+    const hostController = {
+      getStatus: () =>
+        new Promise<HostControllerStatus>((resolve, reject) => {
+          reads.push({ resolve, reject });
+        }),
+      onMutationProgress(listener: () => void): () => void {
+        progressListeners.add(listener);
+        return () => progressListeners.delete(listener);
+      },
+      emitProgress(): void {
+        for (const listener of progressListeners) listener();
+      },
+    } as IpcHostController & { emitProgress(): void };
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toHaveLength(1);
+
+    // A second tick lands while the first read is in flight, then that read
+    // fails.
+    hostController.emitProgress();
+    reads[0]!.reject(new Error("transient getStatus failure"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toHaveLength(2);
+
+    const terminal = { ...fakeStatus(null), stagedVersion: "2.0.0" };
+    reads[1]!.resolve(terminal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bridge.fanOutCalls.at(-1)).toEqual([
+      "runnerHost:event:host:controllerStatusChange",
+      terminal,
+    ]);
+  });
+
   it("registers without throwing when the controller does not expose onMutationStatus", () => {
     const hostController = fakeHostController(false);
     const bridge = fakeBridge(hostController);

@@ -104,7 +104,15 @@ export function registerHostControllerStatusBroadcast(
   const publish = async (): Promise<void> => {
     const status = await hostController.getStatus();
     if (disposed) return;
-    bridge.fanOut(RunnerHostEvent.hostControllerStatusChange, status);
+    try {
+      bridge.fanOut(RunnerHostEvent.hostControllerStatusChange, status);
+    } catch (err) {
+      // Isolated like the listener loop below so a dispatch failure (e.g. a
+      // window destroyed mid-send) is never mistaken for an unhealthy
+      // controller - the status read succeeded and polling cadence decisions
+      // below still deserve to run on it.
+      log.warn("[host-controller-status-broadcast] fanOut threw", { err });
+    }
     for (const listener of extraListeners.get(bridge) ?? []) {
       try {
         listener(status);
@@ -133,6 +141,11 @@ export function registerHostControllerStatusBroadcast(
   // the last event from being the one dropped. Ordering is structural now,
   // so the publication-generation counters this used to carry are gone -
   // nothing can arrive out of order when only one read is ever in flight.
+  //
+  // A failed read costs only its own publication: the drain loop keeps going,
+  // so a tick queued behind the failure (which may carry the mutation's
+  // terminal status) still gets its re-read instead of waiting out the idle
+  // interval with the renderer stuck on a stale "active" status.
   const broadcast = async (): Promise<void> => {
     if (disposed) return;
     if (broadcastInFlight) {
@@ -143,16 +156,18 @@ export function registerHostControllerStatusBroadcast(
     try {
       do {
         broadcastRequested = false;
-        await publish();
+        try {
+          await publish();
+        } catch (err) {
+          log.warn("[host-controller-status-broadcast] getStatus failed", {
+            err,
+          });
+          // Degrade to the idle floor while the controller is unhealthy - a
+          // repeatedly-throwing getStatus must not keep the tight download
+          // cadence (and its per-tick warn) alive indefinitely.
+          stopActivePolling();
+        }
       } while (broadcastRequested && !disposed);
-    } catch (err) {
-      log.warn("[host-controller-status-broadcast] getStatus failed", {
-        err,
-      });
-      // Degrade to the idle floor while the controller is unhealthy - a
-      // repeatedly-throwing getStatus must not keep the tight download
-      // cadence (and its per-tick warn) alive indefinitely.
-      stopActivePolling();
     } finally {
       broadcastInFlight = false;
     }
