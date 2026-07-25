@@ -98,7 +98,7 @@ const TUI_AGENT_NODE: EpicArtifactRef = {
   hostId: "host-1",
 };
 
-const TUI_ACTIVITY_TEST_ID = `terminal-tab-activity-${TUI_AGENT_NODE.id}`;
+const SPINNER_LABEL = "Agent in progress";
 
 describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
   afterEach(() => {
@@ -114,7 +114,7 @@ describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
 
     renderTuiAgentTabIcon();
 
-    expect(screen.queryByTestId(TUI_ACTIVITY_TEST_ID)).toBeNull();
+    expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
 
     act(() => {
       handle.awareness.setLocalState({
@@ -122,10 +122,7 @@ describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
       });
     });
 
-    expect(screen.getByTestId(TUI_ACTIVITY_TEST_ID)).toBeTruthy();
-    expect(
-      screen.getByRole("status", { name: "Agent in progress" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("status", { name: SPINNER_LABEL })).toBeTruthy();
 
     act(() => {
       handle.awareness.setLocalState({
@@ -133,7 +130,7 @@ describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
       });
     });
 
-    expect(screen.queryByTestId(TUI_ACTIVITY_TEST_ID)).toBeNull();
+    expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
   });
 
   // The shared icon renders outside an open-epic session too (drag previews,
@@ -141,7 +138,7 @@ describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
   it("renders the idle icon with no registered Epic session", () => {
     renderTuiAgentTabIcon();
 
-    expect(screen.queryByTestId(TUI_ACTIVITY_TEST_ID)).toBeNull();
+    expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
   });
 });
 
