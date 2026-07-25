@@ -330,6 +330,10 @@ describe("downloadAndStageHost", () => {
     archiveTmpDir = mkdtempSync(
       join(tmpdir(), "traycer-download-stage-archives-"),
     );
+    // Cleared per test so an absence assertion cannot pass against a stale
+    // path from an earlier test whose files are already gone - that would
+    // make a "the slot was released" check succeed without a release.
+    lastFakeArchivePath = "";
   });
 
   afterEach(() => {
@@ -604,6 +608,9 @@ describe("downloadAndStageHost", () => {
     // its own archive plus the ownership marker and nothing else. The old
     // `rm(dirname(archivePath))` would take the whole cache with it -
     // including another process's in-flight partial.
+    // The download actually ran, so the absence checks below are about this
+    // test's own archive rather than an empty path.
+    expect(lastFakeArchivePath).not.toBe("");
     expect(existsSync(lastFakeArchivePath)).toBe(false);
     expect(existsSync(`${lastFakeArchivePath}.owner`)).toBe(false);
     expect(existsSync(dirname(lastFakeArchivePath))).toBe(true);

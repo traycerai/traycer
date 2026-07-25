@@ -315,6 +315,28 @@ describe("acquireDownloadSlot", () => {
     expect(basename(slot.archivePath)).not.toMatch(/[/\\]/);
     expect(basename(slot.archivePath)).not.toContain("..");
   });
+
+  it("keeps a publisher basename out of the reserved bookkeeping suffixes", async () => {
+    // `sanitizeSegment` preserves `.` and `-`, so a published asset named
+    // `…owner` / `…break` would otherwise produce a slot file the sweep
+    // mistakes for its own bookkeeping: `readMarkerRaw` would read a
+    // multi-hundred-MB partial into a string, a `.break` name would never be
+    // reclaimed, and the marker for a neighbouring slot would resolve onto
+    // the archive itself.
+    for (const hostile of ["host.owner", "host.break"]) {
+      const slot = await acquireDownloadSlot({
+        ...SLOT,
+        version: `1.0.0-${hostile}`,
+        urlBasename: hostile,
+      });
+      const name = basename(slot.archivePath);
+      expect(name.endsWith(".owner")).toBe(false);
+      expect(name.endsWith(".break")).toBe(false);
+      // Still recognizable - the fold swaps the separator, it does not
+      // discard the publisher's name.
+      expect(name).toContain(hostile.replace(".", "-"));
+    }
+  });
 });
 
 describe("releaseDownloadSlot", () => {

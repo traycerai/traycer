@@ -46,6 +46,10 @@ import {
 const OWNER_SUFFIX = ".owner";
 const PRIVATE_DIR_PREFIX = "private-";
 const BREAK_SUFFIX = ".break";
+// Every suffix that means something to `sweepDownloadCache`. A slot file name
+// must not end in one - see `foldReservedSuffixes`. Add to this list, not
+// just to the sweep, when introducing a new bookkeeping suffix.
+const RESERVED_SLOT_SUFFIXES: readonly string[] = [OWNER_SUFFIX, BREAK_SUFFIX];
 // A break sub-lock's critical section is a read plus an unlink, so one older
 // than this belongs to a breaker that died mid-section.
 const BREAK_MARKER_GRACE_MS = 30_000;
@@ -272,9 +276,43 @@ function sanitizeBasename(value: string): string {
     // stays boring and greppable.
     .replace(/\.{2,}/g, ".")
     .replace(/^[.]+/, "");
-  return cleaned.length === 0
-    ? "host-archive"
-    : cleaned.slice(0, MAX_SLOT_SEGMENT_LENGTH);
+  const bounded =
+    cleaned.length === 0
+      ? "host-archive"
+      : cleaned.slice(0, MAX_SLOT_SEGMENT_LENGTH);
+  // AFTER the length cap, so a truncation cannot re-expose a suffix the fold
+  // already removed.
+  return foldReservedSuffixes(bounded);
+}
+
+// This module distinguishes an archive from its own bookkeeping purely by
+// suffix, so a slot file must never END in one the sweep would act on.
+// Nothing upstream prevents it: the basename is the manifest URL's last path
+// segment, and `sanitizeSegment` deliberately preserves `.` and `-`, so a
+// published asset named `…owner` or `…break` would land as `<version>-<digest>
+// -x.owner`. Three things break at once if it does:
+//
+//   - `sweepDownloadCache` classifies it as an orphaned marker and hands it
+//     to `readMarkerRaw`, which reads the whole file as UTF-8 - a several
+//     hundred MB partial archive loaded into a string.
+//   - A `.break` name is skipped by the sweep unconditionally, so its
+//     partial is never reclaimed and pins the disk for good.
+//   - `ownerPathFor` of a DIFFERENT slot named `x` resolves to `x.owner`,
+//     which is that archive itself - the marker and the payload collide.
+//
+// Replacing the separating dot keeps the name recognizable while taking it
+// out of the reserved namespace.
+function foldReservedSuffixes(name: string): string {
+  let folded = name;
+  for (;;) {
+    const reserved = RESERVED_SLOT_SUFFIXES.find((suffix) =>
+      folded.endsWith(suffix),
+    );
+    // Terminates: every replacement ends in `-<suffix>`, which no reserved
+    // suffix (each of which starts with `.`) can match.
+    if (reserved === undefined) return folded;
+    folded = `${folded.slice(0, -reserved.length)}-${reserved.slice(1)}`;
+  }
 }
 
 function sanitizeSegment(value: string): string {
