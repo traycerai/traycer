@@ -62,7 +62,9 @@ describe("useHomeWorkspaceSource primaryWorkspacePath - the pinned folder wins",
   });
 
   it("resolves the pinned folder for the active landing draft", () => {
-    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraft(null, undefined);
     const stagingKey: WorktreeStagingKey = { surface: "landing", draftId };
     const { result } = renderHook(() =>
       useHomeWorkspaceSource(stagingKey, null),

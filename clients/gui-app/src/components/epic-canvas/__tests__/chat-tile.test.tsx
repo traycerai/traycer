@@ -136,6 +136,7 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { DEFAULT_AGENT_MODE } from "@/components/home/data/landing-options";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __getChatSessionRegistryForTests,
@@ -804,6 +805,9 @@ describe("<ChatTile />", () => {
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
     useSettingsStore.setState({
+      // Reset the mode alongside the model so a test that pins defaultAgentMode
+      // (see the epic-bucket toolbar test) can't leak into later tests.
+      defaultAgentMode: DEFAULT_AGENT_MODE,
       defaultSelection: {
         harnessId: "codex",
         modelSlug: "gpt-5-codex",
@@ -1667,6 +1671,13 @@ describe("<ChatTile />", () => {
   });
 
   it("toolbar changes inside an epic update that epic bucket immediately", async () => {
+    // This tile starts fresh (globalLastRunSettings stays null), so the composer
+    // seeds agentMode from the settings default. Pin it to the fixture's mode so
+    // the assertion doesn't ride on whatever the app-wide default happens to be.
+    useSettingsStore.setState({
+      defaultAgentMode: UPDATED_QUEUE_SETTINGS.agentMode,
+    });
+
     renderChatTile();
 
     await waitForChatTileLoaded();

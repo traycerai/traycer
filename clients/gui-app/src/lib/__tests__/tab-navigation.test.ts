@@ -144,7 +144,9 @@ describe("tab navigation single-path contract", () => {
   });
 
   it("activating an epic tab clears the active landing draft marker", () => {
-    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraft(null, undefined);
     const tabId = useEpicCanvasStore.getState().openEpicTab("epic-1", "Alpha");
     const navigateMock = makeNavigate();
 
@@ -182,7 +184,9 @@ describe("tab navigation single-path contract", () => {
   });
 
   it("keybinding switch to a draft tab also funnels through router.navigateToTabIntent", () => {
-    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraft(null, undefined);
     useTabsStore.setState({
       stripOrder: [{ kind: "draft", id: draftId }],
       systemTabs: { history: null, settings: null },

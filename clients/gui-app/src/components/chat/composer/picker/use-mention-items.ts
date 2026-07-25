@@ -5,6 +5,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 
 import { useEpicMentionEntries } from "@/hooks/composer/use-epic-mention-entries";
 import { useWorkspaceEntries } from "@/hooks/composer/use-workspace-entries";
+import { useWorktreeListBindingsForEpicForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
@@ -103,6 +104,22 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // Radix chrome. Reading live via `getState` at query time keeps the recency
   // sort accurate without subscribing the composer to that churn.
   // `handle === null` is the landing composer (no open epic).
+  // The Epic's attached roots (binding running dirs + workspace paths on this
+  // host) drive which mention roots are eligible for the scoped
+  // `workspace.searchPaths`; anything not in this set (global folders, or every
+  // root when there is no open Epic) keeps the legacy raw-root RPC. Gated on the
+  // picker being open with a current Epic so a closed composer holds no
+  // bindings subscription.
+  const bindingsQuery = useWorktreeListBindingsForEpicForClient({
+    client: hostClient,
+    epicId: currentEpicId ?? "",
+    enabled: active && currentEpicId !== null,
+  });
+  const epicAttachedRoots = useMemo<ReadonlySet<string>>(() => {
+    const rows = bindingsQuery.data?.rows ?? [];
+    if (rows.length === 0) return EMPTY_ATTACHED_ROOTS;
+    return new Set(rows.flatMap((row) => [row.runningDir, row.workspacePath]));
+  }, [bindingsQuery.data?.rows]);
   const handle = useMaybeOpenEpicHandle();
   const epicAgentEntries = useMemo<ReadonlyArray<EpicAgentMentionEntry>>(() => {
     if (!active || handle === null || currentEpicId === null) {
@@ -175,8 +192,9 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
       agentEntries: EMPTY_AGENT_ENTRIES,
+      epicAttachedRoots,
     }),
-    [currentEpicId, mentionRoots, query],
+    [currentEpicId, epicAttachedRoots, mentionRoots, query],
   );
 
   const debouncedRequestContext = useMemo<ComposerMentionProviderContext>(
@@ -188,8 +206,9 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicEntries: EMPTY_EPIC_ENTRIES,
       currentEpicId,
       agentEntries: EMPTY_AGENT_ENTRIES,
+      epicAttachedRoots,
     }),
-    [currentEpicId, debouncedQuery, mentionRoots],
+    [currentEpicId, debouncedQuery, epicAttachedRoots, mentionRoots],
   );
 
   const workspaceRequests = useMemo<ReadonlyArray<MentionWorkspaceRequest>>(
@@ -283,10 +302,12 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       epicEntries: epicRequests.length > 0 ? epicEntries : EMPTY_EPIC_ENTRIES,
       currentEpicId,
       agentEntries: epicAgentEntries,
+      epicAttachedRoots,
     }),
     [
       currentEpicId,
       epicAgentEntries,
+      epicAttachedRoots,
       epicEntries,
       epicRequests.length,
       mentionRoots,
@@ -348,6 +369,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
 }
 
 const EMPTY_AGENT_ENTRIES: ReadonlyArray<EpicAgentMentionEntry> = [];
+const EMPTY_ATTACHED_ROOTS: ReadonlySet<string> = new Set();
 const EMPTY_ARTIFACT_ENTRIES: ReadonlyArray<EpicMentionArtifactSuggestion> = [];
 const EMPTY_TITLE_MAP: ReadonlyMap<string, string> = new Map();
 

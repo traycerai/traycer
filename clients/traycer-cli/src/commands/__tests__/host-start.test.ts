@@ -211,6 +211,11 @@ function makeRunStubs(
     // `undefined` as nullish just like a missing key, so it must be
     // supplied explicitly here, not left to the `Partial` default.
     logger: noopLogger,
+    // Same hazard as `logger` above: left unset, the `Partial` default falls
+    // through to the REAL `findLiveIncumbentHost`, which reads the developer's
+    // actual `~/.traycer/host/pid.json` and probes whatever host is live on
+    // this machine. Every test below would then decline instead of spawning.
+    findIncumbentHost: async () => null,
     readInstallRecord: async () => installRecord,
     pathExists: async (p: string) =>
       (existsOverride ?? ((q: string) => q === installRecord?.executablePath))(
@@ -289,6 +294,91 @@ async function runUntilExit(
   }
   expect(recorded.exited).not.toBeNull();
 }
+
+/**
+ * One host per data dir.
+ *
+ * launchd runs at most one instance of a LABEL, but the CLI label
+ * (`ai.traycer.host`) and Desktop's SMAppService agent label
+ * (`ai.traycer.host.agent`) are distinct labels that both invoke this
+ * supervisor against the same data dir, both with `RunAtLoad`. A machine
+ * carrying both registrations spawned two hosts at every login, racing the
+ * same pid.json and stores.
+ */
+describe("runHostStart - incumbent host guard", () => {
+  it("declines with exit 0 and never spawns when a live host owns the data dir", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const guarded: Partial<RunHostStartDeps> = {
+      ...deps,
+      findIncumbentHost: async () => ({
+        pid: 40769,
+        version: "1.1.8",
+        websocketUrl: "ws://127.0.0.1:58036/rpc",
+      }),
+    };
+
+    await runHostStart({ environment: "production", cwd: null }, guarded);
+
+    expect(recorded.spawnCalls).toHaveLength(0);
+    // Exit 0 is load-bearing: the macOS plists set
+    // `KeepAlive.SuccessfulExit = false`, so a clean exit leaves the job
+    // down. Any non-zero code would have launchd relaunch this supervisor
+    // immediately and flap against the incumbent forever.
+    expect(recorded.exited).toBe(0);
+    // Declining is not a spawn attempt - it must not look like one in the
+    // bootstrap markers doctor/host-status read.
+    expect(recorded.markers).toHaveLength(0);
+  });
+
+  it("spawns normally when no live host owns the data dir", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+
+    const invoke = () =>
+      runHostStart({ environment: "production", cwd: null }, deps);
+    setTimeout(() => child.emit("exit", 0, null));
+    await runUntilExit(invoke, recorded);
+
+    expect(recorded.spawnCalls).toHaveLength(1);
+  });
+
+  // A live incumbent settles what this invocation should do regardless of
+  // whether THIS label can resolve its own install target. Resolving first
+  // exited 69, which `KeepAlive.SuccessfulExit = false` treats as
+  // restartable, so launchd relaunched the job into a throttled crash loop
+  // while a healthy host was serving. Reachable whenever the record breaks
+  // after the incumbent came up: uninstall, failed install, or the window
+  // where `host install` has swapped `install/` aside.
+  it("declines with exit 0 when a host owns the data dir even if the install record is broken", async () => {
+    const { recorded, deps } = makeRunStubs(null, null);
+    const guarded: Partial<RunHostStartDeps> = {
+      ...deps,
+      findIncumbentHost: async () => ({
+        pid: 40769,
+        version: "1.1.8",
+        websocketUrl: "ws://127.0.0.1:58036/rpc",
+      }),
+    };
+
+    await runHostStart({ environment: "production", cwd: null }, guarded);
+
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(0);
+    // Not a spawn attempt, so no failed-to-spawn marker either.
+    expect(recorded.markers).toHaveLength(0);
+  });
+
+  it("still surfaces the install-record error when no host owns the data dir", async () => {
+    const { recorded, deps } = makeRunStubs(null, null);
+
+    await runHostStart({ environment: "production", cwd: null }, deps);
+
+    expect(recorded.exited).toBe(69);
+    expect(recorded.spawnCalls).toHaveLength(0);
+    expect(recorded.markers.map((m) => m.phase)).toContain("failed-to-spawn");
+  });
+});
 
 describe("runHostStart - installed-record launch path", () => {
   it("spawns record.executablePath directly with no shell wrapping and the environment env exported", async () => {

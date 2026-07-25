@@ -86,7 +86,9 @@ describe("useNewConversationModalStore setPrimaryFolder", () => {
         [WORKSPACE_B.path]: WORKSPACE_B,
       },
     };
-    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraft(null, undefined);
 
     useNewConversationModalStore
       .getState()
