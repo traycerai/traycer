@@ -19,6 +19,10 @@ import {
   workspaceReadFileResponseSchema,
   workspaceResolvePathsByRepoIdentifiersRequestSchema,
   workspaceResolvePathsByRepoIdentifiersResponseSchema,
+  workspaceSearchPathsRequestSchema,
+  workspaceSearchPathsResponseSchema,
+  workspaceSearchTextRequestSchema,
+  workspaceSearchTextResponseSchema,
   workspaceWorktreeMentionSuggestionsResponseSchema,
 } from "@traycer/protocol/host/workspace/unary-schemas";
 
@@ -97,4 +101,18 @@ export const workspaceReadFileV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: workspaceReadFileRequestSchema,
   responseSchema: workspaceReadFileResponseSchema,
+});
+
+export const workspaceSearchPathsV10 = defineRpcContract({
+  method: "workspace.searchPaths",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: workspaceSearchPathsRequestSchema,
+  responseSchema: workspaceSearchPathsResponseSchema,
+});
+
+export const workspaceSearchTextV10 = defineRpcContract({
+  method: "workspace.searchText",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: workspaceSearchTextRequestSchema,
+  responseSchema: workspaceSearchTextResponseSchema,
 });

@@ -219,7 +219,9 @@ describe("app route tab-strip navigation", () => {
       name: "History",
       lastPath: "/epics",
     });
-    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraft(null, undefined);
     const router = renderAppAt(`/epics/epic-current/${epicTabId}`);
     await screen.findByTestId("epic-route-session-body");
 

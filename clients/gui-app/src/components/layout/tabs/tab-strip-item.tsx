@@ -153,7 +153,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   );
   const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
-  // back to "Untitled epic". Other kinds render their name verbatim.
+  // back to "Untitled task". Other kinds render their name verbatim.
   const resolvedTabName = liveEpicTitle ?? tab.name;
   const displayName =
     tab.kind === "epic"
@@ -235,7 +235,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   );
   const rename = useInlineRename({
     // Bind to the RAW title, not `displayName` - editing must never seed the
-    // "Untitled epic" fallback into the input and persist it as a real title.
+    // "Untitled task" fallback into the input and persist it as a real title.
     value: resolvedTabName,
     canEdit: canEditTitle,
     onCommit: commitEpicTitle,

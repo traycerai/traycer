@@ -6,6 +6,11 @@ import {
   readPidMetadataState,
 } from "./host-lifecycle";
 import { isPublishedHostEndpointReachable } from "./host-endpoint-reachability";
+import { readPublishedHostProcessLiveness } from "./host-process-liveness";
+import type {
+  HostProcessLiveness,
+  HostRecoveryGovernor,
+} from "./host-recovery-governor";
 import type { IpcHostLifecycle } from "../ipc/runner-ipc-bridge";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 
@@ -40,16 +45,63 @@ import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
  * While the snapshot is null (host known-down, respawn/provision flows in
  * progress) the monitor idles - recovery ownership stays with those flows
  * and the lifecycle's own reachability retry ladder.
+ *
+ * ### Unreachable is not dead
+ *
+ * The endpoint probe answers "is the main thread serving?", which a host that
+ * is merely BUSY also fails - opening a large epic blocks it for tens of
+ * seconds in one un-yieldable `Y.applyUpdate`. Treating that as death is how
+ * v1.1.8-rc.2 killed healthy hosts in a loop. So before this monitor concludes
+ * anything from a failed probe it asks whether the process still EXISTS, and
+ * an existing process ends the tick: no demote, no respawn, no escalation. The
+ * renderer's own WebSocket retry rides the stall out.
+ *
+ * That check happens BEFORE `reloadSnapshotFromDisk()` on purpose. The reload
+ * demotes the snapshot when the endpoint is unreachable, which flips the
+ * renderer to its unavailable card and hands recovery ownership to other
+ * flows - so checking afterwards would prevent the SIGTERM while still
+ * inflicting the outage it exists to avoid.
+ *
+ * A host that stays unreachable for a very long time is eventually surfaced
+ * anyway (`UNREACHABLE_DEMOTE_MS`) so the user has a Retry button, but it is
+ * still never auto-killed: deciding to restart a process that is running is
+ * the user's call, not this watchdog's.
  */
 
 const HEALTH_POLL_INTERVAL_MS = 15_000;
 // Two consecutive failed probes before acting, so one transiently refused
 // connect (host mid-GC, socket backlog blip) doesn't trigger a restart.
 const CONFIRMED_DOWN_AFTER_FAILURES = 2;
-// A crash-looping host gets a bounded number of automatic restarts; after
-// that the renderer's unavailable card (manual Retry) is the escape hatch.
-// Any successful probe resets the budget.
-const MAX_AUTO_RESPAWNS_WITHOUT_RECOVERY = 3;
+/**
+ * How long the endpoint may stay continuously unreachable - with the process
+ * demonstrably alive - before the renderer is shown the unavailable card so
+ * manual Retry becomes reachable.
+ *
+ * This escalates the UI only. It deliberately does NOT authorize a kill:
+ * "unreachable for a long time" is not "dead", and every automatic restart
+ * still has to get past the governor's liveness gate. A genuinely deadlocked
+ * host is recovered by the user pressing Retry - an explicit decision, rather
+ * than a guess this watchdog makes on their behalf.
+ */
+const UNREACHABLE_DEMOTE_MS = 600_000;
+
+/**
+ * How long to wait before asking again about a host that was already demoted
+ * and is demonstrably ALIVE.
+ *
+ * That state is terminal until something outside this monitor changes it: the
+ * process exits, or the user presses Retry. Asking at tick cadence cannot make
+ * either happen sooner, and each ask is not free - the liveness probe spawns a
+ * child process (`ps` on POSIX, `tasklist` plus `powershell` on Windows), so a
+ * wedge lasting an afternoon would spawn thousands of them for an answer that
+ * cannot change. Only the `alive` denial waits: a lock-deferred or failed
+ * respawn still retries on the very next tick, because those outcomes CAN
+ * change on their own.
+ *
+ * The cost of the wait is bounded and small - a host that dies while wedged is
+ * picked up within this window rather than within one tick.
+ */
+const ALIVE_RECHECK_INTERVAL_MS = 120_000;
 
 export interface HostHealthMonitorDeps {
   readonly host: IpcHostLifecycle;
@@ -66,6 +118,19 @@ export interface HostHealthMonitorDeps {
    * can stand up itself.
    */
   readonly respawn: () => Promise<void>;
+  /**
+   * The single authority for automatic respawns: owns the busy gate and the
+   * attempt budget. This monitor asks; it does not decide.
+   */
+  readonly governor: HostRecoveryGovernor;
+  /**
+   * Does the published host process still exist? Test seam; production callers
+   * pass undefined. Used here only to decide what the USER should see (busy vs
+   * unavailable) - the kill decision is the governor's, which checks again
+   * itself.
+   */
+  readonly readLiveness:
+    ((pidMetadataFile: string) => Promise<HostProcessLiveness>) | undefined;
 }
 
 export interface HostHealthMonitor {
@@ -108,11 +173,23 @@ export function startHostHealthMonitor(
       : null;
   };
   const respawn = deps.respawn;
+  const governor = deps.governor;
+  const readLiveness = deps.readLiveness ?? readPublishedHostProcessLiveness;
   let consecutiveFailures = 0;
-  let respawnsSinceRecovery = 0;
   let recoveryPending = false;
   let ticking = false;
   let disposed = false;
+  // Rate-limits the "busy" log to once per stall rather than once per tick, so
+  // a long epic open leaves one line instead of dozens.
+  let busyLogged = false;
+  // When the endpoint first became unreachable in the CURRENT outage. Reset by
+  // any reachable observation, so only a continuously unreachable host reaches
+  // the demote window.
+  let unreachableSince: number | null = null;
+  // Earliest tick that may ask the governor again after an `alive` denial. See
+  // ALIVE_RECHECK_INTERVAL_MS: this throttles the ONE path that would otherwise
+  // re-probe a demoted-but-living host forever.
+  let nextRecoveryAttemptAt = 0;
 
   const isDisposed = (): boolean => disposed || deps.host.isDisposed;
 
@@ -124,7 +201,6 @@ export function startHostHealthMonitor(
       return false;
     }
     recoveryPending = false;
-    respawnsSinceRecovery = 0;
     log.info(
       "[host-health] recovery converged onto a reachable host snapshot",
       { pid: surfaced.pid },
@@ -135,25 +211,89 @@ export function startHostHealthMonitor(
   const attemptRecovery = async (
     metadata: DesktopLocalHostSnapshot,
   ): Promise<void> => {
-    if (respawnsSinceRecovery >= MAX_AUTO_RESPAWNS_WITHOUT_RECOVERY) {
+    // The governor owns both the liveness gate and the budget; it re-reads
+    // pid.json itself so this is a real decision point, not a formality.
+    const decision = await governor.requestRespawn("health-monitor");
+    if (isDisposed()) return;
+    if (decision.kind === "denied") {
+      if (decision.reason === "alive") {
+        log.info(
+          "[host-health] endpoint unresponsive but the host process exists - not respawning",
+          { pid: metadata.pid },
+        );
+        // Stay in recovery ownership: the stall will end, and a later tick's
+        // reload converges the snapshot back onto the live host. Nothing this
+        // monitor does can shorten the wait, so stop asking at tick cadence -
+        // the answer is the user's to change.
+        recoveryPending = true;
+        nextRecoveryAttemptAt = Date.now() + ALIVE_RECHECK_INTERVAL_MS;
+        return;
+      }
+      if (decision.reason === "backoff") {
+        log.info("[host-health] respawn deferred by backoff", {
+          pid: metadata.pid,
+          retryInMs: decision.retryInMs,
+        });
+        recoveryPending = true;
+        return;
+      }
       log.warn(
         "[host-health] endpoint down but auto-respawn budget exhausted - leaving recovery to the renderer",
         { pid: metadata.pid },
       );
       return;
     }
-    respawnsSinceRecovery += 1;
     // The prior reload demoted the lifecycle snapshot. Retain ownership
     // through this attempt (including a generic failure) until a subsequent
     // reload proves that a host is actually published again.
     recoveryPending = true;
     log.warn(
       "[host-health] endpoint down with live pid metadata - auto-respawning",
-      { pid: metadata.pid, attempt: respawnsSinceRecovery },
+      { pid: metadata.pid },
     );
     await respawn();
     if (isDisposed()) return;
     await reloadRecoverySnapshot();
+  };
+
+  /**
+   * Decides what an unreachable endpoint MEANS, before anything is demoted or
+   * restarted. Returns true when the tick should stop here because the host
+   * process is alive and merely unresponsive.
+   */
+  const isBusyRatherThanDown = async (
+    snapshot: DesktopLocalHostSnapshot,
+    now: number,
+  ): Promise<boolean> => {
+    const liveness = await readLiveness(deps.host.pidMetadataFile);
+    if (isDisposed()) return false;
+    if (liveness === "dead") {
+      // The process is gone - or its pid was recycled onto something else -
+      // so fall through to the existing dead-host handling.
+      busyLogged = false;
+      return false;
+    }
+    const unreachableForMs =
+      unreachableSince === null ? 0 : now - unreachableSince;
+    if (unreachableForMs >= UNREACHABLE_DEMOTE_MS) {
+      // Alive, but nothing has answered for a very long time. Let the demote
+      // proceed so the renderer offers Retry - and still refuse to kill it
+      // here: restarting a running process is the user's call.
+      log.warn(
+        "[host-health] host process alive but unreachable for a long time - surfacing manual recovery",
+        { pid: snapshot.pid, unreachableForMs },
+      );
+      busyLogged = false;
+      return false;
+    }
+    if (!busyLogged) {
+      busyLogged = true;
+      log.info(
+        "[host-health] endpoint unresponsive but the host process exists - busy, holding the snapshot",
+        { pid: snapshot.pid },
+      );
+    }
+    return true;
   };
 
   const tick = async (): Promise<void> => {
@@ -170,8 +310,13 @@ export function startHostHealthMonitor(
         // is never retried.
         if (!recoveryPending) {
           consecutiveFailures = 0;
+          unreachableSince = null;
           return;
         }
+        // Throttled only after an `alive` denial (see
+        // ALIVE_RECHECK_INTERVAL_MS). Lock-deferred and failed respawns leave
+        // this at 0 and so still retry on the next tick.
+        if (Date.now() < nextRecoveryAttemptAt) return;
         const metadata = await readMetadata(deps.host.pidMetadataFile);
         if (isDisposed()) return;
         if (metadata === null) {
@@ -193,16 +338,43 @@ export function startHostHealthMonitor(
         ))
       ) {
         consecutiveFailures = 0;
-        respawnsSinceRecovery = 0;
+        busyLogged = false;
+        unreachableSince = null;
+        // A reachable host is new information, so the next outage is judged
+        // immediately rather than serving out a throttle earned by the last one.
+        nextRecoveryAttemptAt = 0;
+        governor.noteHealthy();
         return;
       }
       // Re-check after every await: dispose() landing during a slow probe
       // or metadata read (app quit) must not let this in-flight tick spawn
       // a host the app is tearing down.
       if (isDisposed()) return;
+      governor.noteUnhealthy();
+      const now = Date.now();
+      if (unreachableSince === null) unreachableSince = now;
       consecutiveFailures += 1;
       if (consecutiveFailures < CONFIRMED_DOWN_AFTER_FAILURES) return;
       consecutiveFailures = 0;
+
+      // Is it dead, or just blocked? Asked BEFORE the reload below, because
+      // that reload demotes the snapshot and a busy host must not cost the
+      // user their session for the duration of an epic open.
+      //
+      // Only when pid.json still names THIS host. The liveness answer is about
+      // whatever pid.json currently holds, so when disk names a DIFFERENT host
+      // - a supervisor respawned it on a new port and the watcher edge was
+      // coalesced away, the case the reload below exists for - "alive" is about
+      // the replacement, not about the snapshot's process. Treating that as
+      // busy would pin the renderer to a dead endpoint for the whole
+      // unreachable-demote window instead of converging on the next tick.
+      const publishedIsThisHost =
+        published !== null &&
+        isCurrentPublishedSnapshot(snapshot, published.snapshot);
+      if (publishedIsThisHost && (await isBusyRatherThanDown(snapshot, now))) {
+        return;
+      }
+      if (isDisposed()) return;
 
       // Reload FIRST, then decide. The advertised endpoint is dead, but the
       // disk may already name a healthy replacement (launchd/systemd respawned
@@ -215,7 +387,12 @@ export function startHostHealthMonitor(
           "[host-health] stale snapshot converged onto a reachable host - no respawn needed",
           { pid: surfaced.pid },
         );
-        respawnsSinceRecovery = 0;
+        unreachableSince = null;
+        // One reachable observation starts the sustained-health clock; it does
+        // not by itself forgive the attempt budget. A freshly spawned host
+        // answers exactly one probe before stalling again, and treating that as
+        // recovery is what let the original loop re-arm itself forever.
+        governor.noteHealthy();
         return;
       }
 
@@ -235,7 +412,10 @@ export function startHostHealthMonitor(
       await attemptRecovery(metadata);
     } catch (err) {
       if (err instanceof HostRecoveryDeferredError) {
-        respawnsSinceRecovery = Math.max(0, respawnsSinceRecovery - 1);
+        // Another Traycer process held the lock, so the host was never
+        // touched: hand the grant back rather than spending budget on a
+        // restart that did not happen.
+        governor.releaseGrant();
         recoveryPending = true;
         return;
       }
