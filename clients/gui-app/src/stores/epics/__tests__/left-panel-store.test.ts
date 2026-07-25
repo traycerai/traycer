@@ -75,6 +75,7 @@ function resetStore(): void {
     localRootCreatePendingByEpicPanel: {},
     acknowledgedRootCreatePendingByEpicPanel: {},
     chatFilterByEpicId: {},
+    chatShowArchivedByEpicId: {},
     artifactFilterByEpicId: {},
   });
 }
