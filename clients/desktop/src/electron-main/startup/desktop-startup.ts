@@ -152,7 +152,10 @@ import {
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
-import { hostManagesHostLoginItem } from "../app/host-login-item";
+import {
+  hostManagesHostLoginItem,
+  retireCompetingCliRegistrationAtLaunch,
+} from "../app/host-login-item";
 import { DESKTOP_APP_NAME } from "../../config";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
@@ -745,6 +748,22 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
         intervalMs: undefined,
       });
       state.bridge?.disposeFns.push(() => revisionMonitor.dispose());
+    });
+  }
+
+  // macOS-only dual-registration repair, on EVERY launch. A machine that
+  // acquired a competing `~/Library/LaunchAgents/<cli-label>.plist` during
+  // the v1.1.7 window starts two hosts against one data dir at every login,
+  // and nothing else clears it: the register cycle that would
+  // (`retireLegacyLabelRegistrations`) only runs when registration is
+  // actually re-done, which the routine healthy-host launch never does.
+  // Deliberately not gated on `hostReady` - the repair is about what starts
+  // at the NEXT login and must still run on a launch whose host never
+  // becomes ready. All of its own gates live inside; see its doc comment.
+  if (process.platform === "darwin") {
+    void timed("deferred", "competing-registration-repair", async () => {
+      const outcome = await retireCompetingCliRegistrationAtLaunch();
+      log.debug("[host-login-item] launch repair outcome", { outcome });
     });
   }
 
