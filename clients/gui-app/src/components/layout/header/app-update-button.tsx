@@ -1,20 +1,27 @@
 import { Check, Download, Terminal } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { cn } from "@/lib/utils";
-import type { DesktopAppUpdateGuidance } from "@/lib/windows/types";
+import type {
+  DesktopAppUpdateGuidance,
+  DesktopAppUpdatesBridge,
+} from "@/lib/windows/types";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { trackUpdateDownloadStarted } from "@/lib/app-update-analytics";
+import {
+  trackUpdateDownloadStarted,
+  trackUpdateRestartRequested,
+} from "@/lib/app-update-analytics";
 
 /**
  * Compact circular update control in the header's right-side cluster. It cycles
  * through three states in the same footprint (no layout shift): download the
- * available update, show a filling progress ring, then a tick that opens the
- * restart-confirmation modal. It's a persistent fallback to the in-app update
- * toast - nothing renders until the updater reports an actionable state, so the
- * header stays clean when there is no update.
+ * available update, show a filling progress ring, then a tick that restarts to
+ * install. It's a persistent fallback to the in-app update toast - nothing
+ * renders until the updater reports an actionable state, so the header stays
+ * clean when there is no update.
  */
 export function AppUpdateHeaderButton() {
   const { bridge, snapshot } = useDesktopAppUpdates();
@@ -92,35 +99,42 @@ export function AppUpdateHeaderButton() {
 
   return (
     <AppUpdateReadyButton
+      bridge={bridge}
       latestVersion={snapshot.latestVersion}
       installBlockedReason={snapshot.installBlockedReason}
       installGuidance={snapshot.installGuidance}
+      installInFlight={snapshot.installInFlight}
     />
   );
 }
 
 /**
  * The "ready" state splits into three cases sharing one round tick:
- * automated restart (emerald, opens the restart-confirm modal), a manual step
- * still needed (sky, opens the guidance dialog - Linux deb/rpm where silent
- * install can't/didn't work), or blocked with no path forward (disabled +
- * tooltip - macOS outside /Applications). `installBlockedReason` and
- * `installGuidance` shouldn't co-occur in practice (the download is gated
- * before a blocked location ever reaches "ready"), but the blocked reason
- * wins defensively if they ever do.
+ * automated restart (emerald, restarts to install straight away - the click
+ * IS the confirmation, and the host keeps running agents across the app
+ * restart), a manual step still needed (sky, opens the guidance dialog - Linux
+ * deb/rpm where silent install can't/didn't work), or blocked with no path
+ * forward (disabled + tooltip - macOS outside /Applications).
+ * `installBlockedReason` and `installGuidance` shouldn't co-occur in practice
+ * (the download is gated before a blocked location ever reaches "ready"), but
+ * the blocked reason wins defensively if they ever do.
  */
 function AppUpdateReadyButton(props: {
+  readonly bridge: DesktopAppUpdatesBridge;
   readonly latestVersion: string | null;
   readonly installBlockedReason: string | null;
   readonly installGuidance: DesktopAppUpdateGuidance | null;
+  readonly installInFlight: boolean;
 }) {
-  const openConfirmRestartUpdate = useDesktopDialogStore(
-    (state) => state.openConfirmRestartUpdate,
-  );
   const openInstallGuidance = useDesktopDialogStore(
     (state) => state.openInstallGuidance,
   );
-  const { installBlockedReason } = props;
+  // Pending state is read from the snapshot, not latched locally: the quit that
+  // installs drains in-flight work first, so this button (and the ready toast,
+  // and both of them in every other window) stays on screen through it. Main
+  // owns the fact, so all of them disarm together and a remount can't re-arm
+  // this one.
+  const { installBlockedReason, installInFlight } = props;
   const needsManualInstall =
     installBlockedReason === null && props.installGuidance !== null;
   const restartLabel =
@@ -140,7 +154,7 @@ function AppUpdateReadyButton(props: {
           type="button"
           variant="ghost"
           size="icon-sm"
-          disabled={installBlockedReason !== null}
+          disabled={installBlockedReason !== null || installInFlight}
           aria-label={label}
           data-testid="app-update-header-button"
           className={cn(
@@ -149,6 +163,7 @@ function AppUpdateReadyButton(props: {
               ? "bg-sky-500 hover:bg-sky-600 hover:text-white"
               : "bg-emerald-500 hover:bg-emerald-600 hover:text-white",
             installBlockedReason !== null && "disabled:opacity-60",
+            installInFlight && "disabled:opacity-100",
           )}
           onClick={() => {
             if (needsManualInstall) {
@@ -161,18 +176,42 @@ function AppUpdateReadyButton(props: {
               openInstallGuidance();
               return;
             }
-            openConfirmRestartUpdate();
+            trackUpdateRestartRequested("direct_ui");
+            void props.bridge.installUpdate();
           }}
         >
-          {needsManualInstall ? (
-            <Terminal className="size-4" aria-hidden />
-          ) : (
-            <Check className="size-4" aria-hidden />
-          )}
+          <AppUpdateReadyIcon
+            installInFlight={installInFlight}
+            needsManualInstall={needsManualInstall}
+          />
         </Button>
       </span>
     </TooltipWrapper>
   );
+}
+
+function AppUpdateReadyIcon(props: {
+  readonly installInFlight: boolean;
+  readonly needsManualInstall: boolean;
+}) {
+  if (props.installInFlight) {
+    // The button only goes `disabled` here - nothing announces the state
+    // change on its own, so the spinner carries a live region (the icons it
+    // replaces are decorative and the accessible name stays the same).
+    return (
+      <span role="status" aria-label="Restarting to install the update">
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      </span>
+    );
+  }
+  if (props.needsManualInstall) {
+    return <Terminal className="size-4" aria-hidden />;
+  }
+  return <Check className="size-4" aria-hidden />;
 }
 
 // Mic-button-style determinate ring (mirrors `MicProgressRing`): the arc fills
