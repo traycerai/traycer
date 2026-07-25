@@ -420,6 +420,7 @@ function routeEpicChatNotification(
   receivedAt: number,
 ): void {
   if (routeLegacyTerminalNotification(navigate, payload, receivedAt)) return;
+  if (routeOpenChatNotification(navigate, payload, receivedAt)) return;
   navigateToTabIntent(
     navigate,
     openOrFocusEpicIntent({
@@ -432,6 +433,87 @@ function routeEpicChatNotification(
       },
     }),
   );
+}
+
+function routeOpenChatNotification(
+  navigate: NavigateFn,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+): boolean {
+  const chatId = payload.chatId;
+  if (chatId === undefined) return false;
+  const state = useEpicCanvasStore.getState();
+  const preferredTabId = state.resolveTabIdForEpic(payload.epicId);
+  const candidateTabIds = [
+    ...(preferredTabId === null ? [] : [preferredTabId]),
+    ...state.openTabOrder,
+    ...Object.keys(state.tabsById),
+  ].filter((tabId, index, tabIds) => tabIds.indexOf(tabId) === index);
+  const match = candidateTabIds
+    .flatMap((tabId) => {
+      const tab = state.tabsById[tabId];
+      if (tab?.epicId !== payload.epicId) return [];
+      const found = findOpenArtifactInTab(tabId, chatId);
+      if (found === null) return [];
+      const tile =
+        state.canvasByTabId[tabId]?.tilesByInstanceId[found.instanceId];
+      if (tile?.type !== "chat" && tile?.type !== "terminal-agent") return [];
+      return [{ tabId, ...found }];
+    })
+    .at(0);
+  if (match === undefined) {
+    const closedMatchTabId = candidateTabIds.find((tabId) => {
+      const tab = state.tabsById[tabId];
+      if (tab?.epicId !== payload.epicId) return false;
+      return Object.values(state.closedTilePayloadsByTabId[tabId] ?? {}).some(
+        (closed) => {
+          const node = closed?.node;
+          if (node === undefined) return false;
+          return (
+            node.id === chatId &&
+            (node.type === "chat" || node.type === "terminal-agent")
+          );
+        },
+      );
+    });
+    if (closedMatchTabId === undefined) return false;
+    navigateToTabIntent(
+      navigate,
+      existingEpicTabIntentWithNestedFocus({
+        epicId: payload.epicId,
+        tabId: closedMatchTabId,
+        focus: {
+          focusedAt: receivedAt,
+          focusArtifactId: chatId,
+          focusThreadId: undefined,
+          migrationSource: undefined,
+        },
+        nestedFocus: null,
+      }),
+    );
+    return true;
+  }
+
+  const nestedFocus = state.prepareSetActiveTileTabFocusTarget(
+    match.tabId,
+    match.paneId,
+    match.instanceId,
+  );
+  navigateToTabIntent(
+    navigate,
+    existingEpicTabIntentWithNestedFocus({
+      epicId: payload.epicId,
+      tabId: match.tabId,
+      focus: {
+        focusedAt: receivedAt,
+        focusArtifactId: chatId,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+      },
+      nestedFocus,
+    }),
+  );
+  return true;
 }
 
 function routeLegacyTerminalNotification(
