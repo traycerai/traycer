@@ -249,6 +249,7 @@ function expectToastAction(
 }
 
 const ACTIVE_TURN: ChatActiveTurn = {
+  sameTurnSteeringSupported: false,
   turnId: "turn-1",
   status: "running",
   harnessId: "codex",

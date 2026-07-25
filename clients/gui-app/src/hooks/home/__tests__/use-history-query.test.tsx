@@ -138,9 +138,9 @@ describe("useHistoryQuery", () => {
 
     expect(screen.getByTestId("pending").textContent).toBe("false");
     expect(screen.getByTestId("fetching").textContent).toBe("false");
-    expect(screen.getByTestId("titles").textContent).toBe(
-      "Alpha workbench|Beta search flow",
-    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Alpha workbench|Beta search flow");
 
     rerender(
       <HistoryQueryHarness
@@ -152,7 +152,30 @@ describe("useHistoryQuery", () => {
 
     expect(screen.getByTestId("pending").textContent).toBe("false");
     expect(screen.getByTestId("fetching").textContent).toBe("true");
-    expect(screen.getByTestId("titles").textContent).toBe("Beta search flow");
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
+  });
+
+  it("preserves the central last-viewed row order", () => {
+    testState.tasks = [
+      taskLight("epic-beta", "Beta search flow", "traycer/server"),
+      taskLight("epic-alpha", "Alpha workbench", "traycer/gui-app"),
+    ];
+    testState.response = { tasks: testState.tasks, hasMore: false };
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          sort: "last-viewed",
+          sortExplicit: true,
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow|Alpha workbench");
   });
 
   it("does not expose stale facet counts while projecting placeholder rows", () => {
@@ -216,7 +239,9 @@ describe("useHistoryQuery", () => {
         />,
       );
 
-      expect(screen.getByTestId("titles").textContent).toBe("Beta search flow");
+      expect(
+        screen.getByRole("status", { name: "History titles" }).textContent,
+      ).toBe("Beta search flow");
     },
   );
 
@@ -363,9 +388,9 @@ describe("useHistoryQuery", () => {
 
     render(<HistoryQueryHarness search={DEFAULT_HISTORY_SEARCH} />);
 
-    expect(screen.getByTestId("titles").textContent).toBe(
-      "Beta search flow|Alpha workbench",
-    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow|Alpha workbench");
   });
 
   it("floats pinned rows above a higher-relevance unpinned match under relevance sort", () => {
@@ -393,9 +418,9 @@ describe("useHistoryQuery", () => {
       />,
     );
 
-    expect(screen.getByTestId("titles").textContent).toBe(
-      "Beta search flow|search",
-    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow|search");
   });
 
   it("surfaces a worktree activity failure for a PR-number search", () => {
@@ -442,7 +467,7 @@ function HistoryQueryHarness(props: {
       <div data-testid="fetching">{String(result.isFetching)}</div>
       <div data-testid="error">{result.error?.message ?? ""}</div>
       <div data-testid="has-next-page">{String(result.hasNextPage)}</div>
-      <div data-testid="titles">
+      <div role="status" aria-label="History titles">
         {result.data?.items.map((item) => item.title).join("|") ?? ""}
       </div>
       <div data-testid="repo-facets">

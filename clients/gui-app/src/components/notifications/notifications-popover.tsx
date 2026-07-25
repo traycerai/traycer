@@ -6,6 +6,7 @@ import {
   type RefObject,
 } from "react";
 import { BellOff, CheckCheck, Settings } from "lucide-react";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -16,6 +17,7 @@ import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-i
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationCenterArrivals } from "@/hooks/notifications/use-notification-center-arrivals";
 import { useNotificationCenterScrollAnchor } from "@/hooks/notifications/use-notification-center-scroll-anchor";
+import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
 import {
   Analytics,
   AnalyticsEvent,
@@ -97,6 +99,25 @@ function isMarkAllReadDisabled(input: {
   return input.unreadCount === 0 && actionableHostAttention === 0;
 }
 
+/** Header subtitle text. A partial host state is either transient (still
+ * connecting - the exact wording carries no permanence claim) or confirmed
+ * permanent for this session (the stream's mirror-compat check has already
+ * resolved `host.notifications.feed.subscribe` as `"unsupported"` on an old
+ * host) - only the confirmed case gets version-specific wording. */
+function notificationsSubtitle(input: {
+  readonly isPartial: boolean;
+  readonly hostLabel: string | null;
+  readonly notificationsSupport: StreamMethodSupport | null;
+}): string {
+  if (!input.isPartial) {
+    return `Task activity from ${input.hostLabel ?? "this device"}`;
+  }
+  if (input.notificationsSupport === "unsupported") {
+    return "Task activity isn't available on this host version";
+  }
+  return "Task activity is unavailable right now";
+}
+
 /**
  * Notification center surface content: header (title, active-device/partial
  * subtitle, Filter, Mark all read, overflow Settings), a single scrolling
@@ -121,6 +142,14 @@ export function NotificationsPopover(
   const unreadCount = useMergedNotificationUnreadCount();
   const actions = useMergedNotificationsActions();
   const hostState = useNotificationCenterHostState();
+  // Distinguishes a permanent condition (this host's stream mirror-compat
+  // check has already confirmed it will never support the notifications
+  // feed) from a merely transient one (still connecting) - both leave
+  // `hostState.isPartial` true, but only the confirmed case should be worded
+  // as permanent in the subtitle below.
+  const notificationsSupport = useStreamMethodSupport(
+    "host.notifications.feed.subscribe",
+  );
   // Authoritative active-host signal for the "Mark all read" enablement gate -
   // `null` during a disconnect even though the runtime binding is retained.
   const activeHostId = useReactiveActiveHostId();
@@ -394,9 +423,11 @@ export function NotificationsPopover(
             data-testid="notifications-subtitle"
             className="truncate text-ui-xs text-muted-foreground"
           >
-            {hostState.isPartial
-              ? "Task activity is unavailable right now"
-              : `Task activity from ${hostState.hostLabel ?? "this device"}`}
+            {notificationsSubtitle({
+              isPartial: hostState.isPartial,
+              hostLabel: hostState.hostLabel,
+              notificationsSupport,
+            })}
           </p>
         </header>
 

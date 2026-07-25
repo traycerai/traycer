@@ -700,10 +700,8 @@ describe("useNotificationBellState", () => {
       readonly state: NotificationBellState;
       readonly expected: string;
     }> = [
-      {
-        state: { kind: "unknown" },
-        expected: "Notifications, task notification status unavailable",
-      },
+      // unknown shares clear's label — both render a plain bell with no indicator.
+      { state: { kind: "unknown" }, expected: "Notifications" },
       { state: { kind: "clear" }, expected: "Notifications" },
       {
         state: { kind: "quietDot" },

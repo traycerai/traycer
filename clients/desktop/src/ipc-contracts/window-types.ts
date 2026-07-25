@@ -107,6 +107,35 @@ export type MenuCommandId =
   | "view.findNext"
   | "view.findPrevious";
 
+/**
+ * Top-level application menus rendered by the Windows frameless title bar.
+ * The native Electron menu remains the command/state authority; the renderer
+ * sends one of these ids only to ask main to open the matching submenu.
+ */
+export const DESKTOP_TOP_LEVEL_MENU_IDS = [
+  "file",
+  "edit",
+  "view",
+  "window",
+  "help",
+] as const;
+
+export type DesktopTopLevelMenuId = (typeof DESKTOP_TOP_LEVEL_MENU_IDS)[number];
+
+export type DesktopRuntimePlatform = "darwin" | "win32" | "linux";
+
+export function desktopTopLevelMenuItemId(
+  menuId: DesktopTopLevelMenuId,
+): string {
+  return `traycer.top-level-menu.${menuId}`;
+}
+
+export function isDesktopTopLevelMenuId(
+  value: unknown,
+): value is DesktopTopLevelMenuId {
+  return DESKTOP_TOP_LEVEL_MENU_IDS.some((menuId) => menuId === value);
+}
+
 export interface MenuCommandPayload {
   readonly command: MenuCommandId;
   readonly windowId: string;

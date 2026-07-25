@@ -131,11 +131,17 @@ const TURN_IDLE: ChatLowerTurnState = {
   activeTurnStatus: null,
   stopDisabled: true,
   onStopTurn: () => null,
+  steerCapable: false,
+  steerProtocolSupported: true,
+  getActiveTurnForSteer: () => null,
 };
 const TURN_RUNNING: ChatLowerTurnState = {
   activeTurnStatus: "running",
   stopDisabled: false,
   onStopTurn: () => null,
+  steerCapable: false,
+  steerProtocolSupported: true,
+  getActiveTurnForSteer: () => null,
 };
 const INTERVIEW: ChatLowerInterviewState = {
   pending: null,

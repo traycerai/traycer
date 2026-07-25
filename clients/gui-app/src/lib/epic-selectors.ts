@@ -29,6 +29,7 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type {
   GuiHarnessId,
   TuiHarnessId,
@@ -119,6 +120,7 @@ const EMPTY_NODES_AS_ARTIFACTS: ReadonlyArray<ArtifactProjection> =
   Object.freeze([]);
 const EMPTY_TREE_ID_ARRAY: readonly string[] = EMPTY_ARRAY;
 const EMPTY_TREE_ID_SET: ReadonlySet<string> = new Set<string>();
+const EMPTY_ROLE_CLAIMS: readonly RoleClaim[] = Object.freeze([]);
 
 export { EMPTY_TREE_ID_ARRAY, EMPTY_TREE_ID_SET };
 
@@ -463,6 +465,34 @@ export function useEpicChatRecords(): ReadonlyArray<ChatProjection> {
     useShallow((s): ReadonlyArray<ChatProjection> => {
       if (s.chats.allIds.length === 0) return EMPTY_CHAT_PROJECTIONS;
       return s.chats.allIds.map((id) => s.chats.byId[id]);
+    }),
+  );
+}
+
+/**
+ * Ids of the chats + terminal-agents whose record carries `archivedAt !== null`
+ * - the archive roots the sidebar hides subtrees from. Chats and TUI agents are
+ * merged into one list because a single `epic.setChatArchived` RPC keyed by id
+ * covers both record kinds, so the tree treats them identically.
+ *
+ * Returned as a SORTED array rather than a `Set` so `useShallow` can bail the
+ * subscriber's re-render: archiving is rare while chat projections churn
+ * constantly (titles, `updatedAt`, streaming settings), and an unsorted or
+ * freshly-allocated `Set` would re-render the whole tree on every one of those.
+ */
+export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<string> => {
+      const archived = [
+        ...s.chats.allIds.filter((id) => s.chats.byId[id].archivedAt !== null),
+        ...s.tuiAgents.allIds.filter(
+          (id) => s.tuiAgents.byId[id].archivedAt !== null,
+        ),
+      ];
+      if (archived.length === 0) return EMPTY_TREE_ID_ARRAY;
+      return archived.sort();
     }),
   );
 }
@@ -1018,6 +1048,20 @@ export function useEpicTreeNode(id: string): TreeNode | null {
   });
 }
 
+export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
+  return useEpicStore((s) =>
+    Object.hasOwn(s.agentRoles.byAgentId, agentId)
+      ? s.agentRoles.byAgentId[agentId]
+      : EMPTY_ROLE_CLAIMS,
+  );
+}
+
+export function useEpicAgentRoleClaimsByAgentId(): Readonly<
+  Record<string, readonly RoleClaim[]>
+> {
+  return useEpicStore((s) => s.agentRoles.byAgentId);
+}
+
 /**
  * Just this artifact's `status` scalar. Sidebar nodes need it for the status
  * dot on every render; selecting the scalar (instead of `find`-ing it out of
@@ -1230,6 +1274,53 @@ export function useEpicNodeHostId(nodeId: string): string | null {
       return s.tuiAgents.byId[nodeId].hostId;
     }
     return null;
+  });
+}
+
+/**
+ * Whether this node's record is archived, as a primitive so unrelated
+ * projection churn cannot re-render the row. Covers both record kinds - one
+ * `epic.setChatArchived` RPC keyed by id serves chats and terminal-agents
+ * alike. Ids that resolve to neither map read as not archived.
+ */
+export function useEpicNodeArchived(nodeId: string): boolean {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return s.chats.byId[nodeId].archivedAt !== null;
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+      return s.tuiAgents.byId[nodeId].archivedAt !== null;
+    }
+    return false;
+  });
+}
+
+/**
+ * A row's last-activity time, read from the CHAT / TERMINAL-AGENT PROJECTION
+ * rather than from its `TreeNode`.
+ *
+ * The tree node carries an `updatedAt` too, and it is tempting to use since the
+ * row already holds the node - but it is a lagging copy. `CHAT_TREE_KEYS` in
+ * `epic-projector.ts` deliberately omits `updatedAt`, so touching a chat never
+ * sets `structuralTreeDirty` and never rebuilds the tree; the node keeps
+ * whatever `updatedAt` it had at the last STRUCTURAL change (rename, reparent,
+ * create). Reading it made the sidebar row disagree with the hover card, which
+ * self-sources the projection. Adding `updatedAt` to `CHAT_TREE_KEYS` would fix
+ * the disagreement the wrong way round - it would rebuild the whole tree on
+ * every message, which is precisely what that omission prevents.
+ *
+ * Selected as a primitive `number`, so `Object.is` still skips the render for
+ * every unrelated projection change.
+ */
+export function useEpicNodeUpdatedAt(nodeId: string): number {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return s.chats.byId[nodeId].updatedAt;
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+      return s.tuiAgents.byId[nodeId].updatedAt;
+    }
+    return 0;
   });
 }
 

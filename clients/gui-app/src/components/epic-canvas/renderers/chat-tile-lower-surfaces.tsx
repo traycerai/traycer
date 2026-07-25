@@ -82,6 +82,16 @@ function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
 
 export interface ChatLowerTurnState {
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
+  /** Host-projected same-turn steering capability of the running turn's harness. */
+  readonly steerCapable: boolean;
+  /**
+   * Whether the tab's negotiated `chat.subscribe` version understands
+   * `after_safe_point` (host handshake minor >= 5). Gates whether `Mod-Enter`
+   * can steer at all, keeping a new renderer from steering a <=1.4 host.
+   */
+  readonly steerProtocolSupported: boolean;
+  /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
+  readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly stopDisabled: boolean;
   readonly onStopTurn: () => string | null;
 }
@@ -175,6 +185,9 @@ export function ChatLowerInteractionSurfaces(
   const turnOnStopTurn = props.turn.onStopTurn;
   const turnActiveTurnStatus = props.turn.activeTurnStatus;
   const turnStopDisabled = props.turn.stopDisabled;
+  const turnSteerCapable = props.turn.steerCapable;
+  const turnSteerProtocolSupported = props.turn.steerProtocolSupported;
+  const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
 
   // Intercept the composer Stop button: when this chat has active
   // sub-agents, raise the cascade prompt instead of stopping only its turn.
@@ -190,10 +203,20 @@ export function ChatLowerInteractionSurfaces(
   const turnWithCascade = useMemo(
     () => ({
       activeTurnStatus: turnActiveTurnStatus,
+      steerCapable: turnSteerCapable,
+      steerProtocolSupported: turnSteerProtocolSupported,
+      getActiveTurnForSteer: turnGetActiveTurnForSteer,
       stopDisabled: turnStopDisabled,
       onStopTurn: requestStopTurn,
     }),
-    [turnActiveTurnStatus, turnStopDisabled, requestStopTurn],
+    [
+      turnActiveTurnStatus,
+      turnSteerCapable,
+      turnSteerProtocolSupported,
+      turnGetActiveTurnForSteer,
+      turnStopDisabled,
+      requestStopTurn,
+    ],
   );
 
   // Memoize on the underlying approvals array: `visibleComposerApprovals`
@@ -468,6 +491,9 @@ function LiveChatComposer(props: {
       onSubmitMessage={model.composer.onSubmitMessage}
       onSettingsChange={model.composer.onSettingsChange}
       activeTurnStatus={model.turn.activeTurnStatus}
+      steerCapable={model.turn.steerCapable}
+      steerProtocolSupported={model.turn.steerProtocolSupported}
+      getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}
       hasPendingApprovals={props.hasPendingApprovals}

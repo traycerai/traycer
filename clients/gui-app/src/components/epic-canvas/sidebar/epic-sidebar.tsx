@@ -143,6 +143,7 @@ import {
 } from "@/lib/disabled-presentation";
 import { displayTitle } from "@/lib/display-title";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
 import {
   useEpicCreateArtifact,
   useEpicDeleteArtifact,
@@ -167,6 +168,7 @@ import {
   Download,
   FolderOpen,
   ListChecks,
+  MoreHorizontal,
   Plus,
   Search,
   Trash2,
@@ -183,6 +185,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -219,6 +222,7 @@ const EMPTY_FILE_TREE_FILES: ReadonlyArray<WorkspaceFileTreeNode> =
 const EMPTY_GIT_STATUS: ReadonlyArray<GitStatusEntry> = Object.freeze([]);
 const EMPTY_SEARCH_PATH_RESULTS: ReadonlyArray<WorkspaceSearchPathResult> =
   Object.freeze([]);
+const COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS = "@max-[21rem]:hidden";
 
 interface ArtifactReadTarget {
   readonly id: string;
@@ -1699,6 +1703,25 @@ class ProjectedOpenCancelRegistry {
   }
 }
 
+function useCollapseAllPanelAction(
+  tabId: string,
+  panelId: RootCreatePanelId,
+): () => void {
+  const rootIds = usePanelRootIds(panelId);
+  const activeArtifactId = useActiveEpicArtifactId(tabId);
+  const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
+  const expandedIds = useEpicSidebarEffectiveExpanded(
+    tabId,
+    panelId,
+    rootIds,
+    ancestorIdsOfActive,
+  );
+  const collapseAll = useEpicSidebarExpansionStore((s) => s.collapseAll);
+  return useCallback(() => {
+    collapseAll(tabId, panelId, expandedIds);
+  }, [collapseAll, expandedIds, panelId, tabId]);
+}
+
 function TreePanelActions(props: TreePanelActionsProps) {
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -1778,19 +1801,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
     props.epicId,
     props.panelId,
   );
-  const rootIds = usePanelRootIds(props.panelId);
-  const activeArtifactId = useActiveEpicArtifactId(props.tabId);
-  const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
-  const expandedIds = useEpicSidebarEffectiveExpanded(
-    props.tabId,
-    props.panelId,
-    rootIds,
-    ancestorIdsOfActive,
-  );
-  const collapseAllAction = useEpicSidebarExpansionStore((s) => s.collapseAll);
-  const collapseAll = useCallback(() => {
-    collapseAllAction(props.tabId, props.panelId, expandedIds);
-  }, [props.tabId, props.panelId, expandedIds, collapseAllAction]);
+  const collapseAll = useCollapseAllPanelAction(props.tabId, props.panelId);
   const addIsPending =
     localRootPending !== null ||
     acknowledgedRootPending !== null ||
@@ -1866,6 +1877,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
         className={cn(
           "text-muted-foreground hover:text-foreground",
           PANEL_HEADER_ACTION_REVEAL_CLASS,
+          COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
         )}
       >
         <CopyMinus className="size-4" />
@@ -1940,13 +1952,24 @@ function TreePanelActions(props: TreePanelActionsProps) {
 
 function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
   const selection = useSidebarBulkSelection();
+  const canArchive = useChatArchiveSupported();
   if (selection.selectionMode) return <SidebarBulkSelectionActions />;
   return (
     <div className="flex items-center gap-0.5">
-      <ChatFilterMenu epicId={props.epicId} disabled={props.collapsed} />
+      <ChatFilterMenu
+        epicId={props.epicId}
+        disabled={props.collapsed}
+        canArchive={canArchive}
+      />
       <SidebarStartSelectionButton
         label="Select agents"
         disabled={props.collapsed}
+      />
+      <CompactPanelHeaderMoreMenu
+        epicId={props.epicId}
+        tabId={props.tabId}
+        panelId="chats"
+        collapsed={props.collapsed}
       />
       <TreePanelActions
         epicId={props.epicId}
@@ -1994,6 +2017,159 @@ function useUnreadArtifactReadTargets(
   );
 }
 
+/**
+ * Compact-width home for secondary panel operations. Direct icon buttons stay
+ * in the DOM for wide sidebars, while container queries trade them for this
+ * single trigger before they can consume the title's space. The menu repeats
+ * search because the direct search icon also yields at the 200 px width floor.
+ */
+function CompactPanelHeaderMoreMenu(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly panelId: SidebarBulkSelectionPanelId;
+  readonly collapsed: boolean;
+}) {
+  if (props.panelId === "artifacts") {
+    return (
+      <CompactArtifactHeaderMoreMenu
+        epicId={props.epicId}
+        tabId={props.tabId}
+        collapsed={props.collapsed}
+      />
+    );
+  }
+  return (
+    <CompactChatHeaderMoreMenu
+      tabId={props.tabId}
+      collapsed={props.collapsed}
+    />
+  );
+}
+
+function CompactMoreMenuTrigger(props: {
+  readonly label: string;
+  readonly testId: string;
+  readonly collapsed: boolean;
+}) {
+  return (
+    <DropdownMenuTrigger asChild>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={props.label}
+        title={props.label}
+        disabled={props.collapsed}
+        className={cn(
+          "hidden text-muted-foreground hover:text-foreground aria-expanded:opacity-100 @max-[21rem]:inline-flex",
+          PANEL_HEADER_ACTION_REVEAL_CLASS,
+        )}
+        data-testid={props.testId}
+      >
+        <MoreHorizontal className="size-4" />
+      </Button>
+    </DropdownMenuTrigger>
+  );
+}
+
+function CompactChatHeaderMoreMenu(props: {
+  readonly tabId: string;
+  readonly collapsed: boolean;
+}) {
+  const selection = useSidebarBulkSelection();
+  const permissionRole = useEpicPermissionRole();
+  const connectionStatus = useEpicConnectionStatus();
+  const collapseAll = useCollapseAllPanelAction(props.tabId, "chats");
+  const selectionEnabled =
+    !props.collapsed && selection.canSelect && connectionStatus !== "closed";
+
+  return (
+    <DropdownMenu>
+      <CompactMoreMenuTrigger
+        label="More agent actions"
+        testId="epic-sidebar-more-chats"
+        collapsed={props.collapsed}
+      />
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={collapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
+        {isEditableRole(permissionRole) ? (
+          <DropdownMenuItem
+            disabled={!selectionEnabled}
+            onSelect={selection.enterSelectionMode}
+          >
+            <ListChecks className="size-4" />
+            Start agent selection
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function CompactArtifactHeaderMoreMenu(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly collapsed: boolean;
+}) {
+  const selection = useSidebarBulkSelection();
+  const unreadArtifacts = useUnreadArtifactReadTargets(props.epicId);
+  const markRead = useArtifactReadStateStore((s) => s.markRead);
+  const collapseAll = useCollapseAllPanelAction(props.tabId, "artifacts");
+  const searchAvailable = useArtifactSearchAvailable();
+  const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
+  const selectionEnabled = !props.collapsed && selection.canSelect;
+  const handleMarkAllRead = useCallback(() => {
+    unreadArtifacts.forEach((artifact) => {
+      markRead(props.epicId, artifact.id, artifact.updatedAt);
+    });
+  }, [markRead, props.epicId, unreadArtifacts]);
+
+  return (
+    <DropdownMenu>
+      <CompactMoreMenuTrigger
+        label="More artifact actions"
+        testId="epic-sidebar-more-artifacts"
+        collapsed={props.collapsed}
+      />
+      <DropdownMenuContent align="end">
+        {searchAvailable ? (
+          <>
+            <DropdownMenuItem
+              onSelect={() => openSearch("artifacts", "")}
+              data-testid="epic-sidebar-more-search-artifacts"
+            >
+              <Search className="size-4" />
+              Search artifacts
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
+        <DropdownMenuItem onSelect={collapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={unreadArtifacts.length === 0}
+          onSelect={handleMarkAllRead}
+        >
+          <CheckCheck className="size-4" />
+          Mark all as read
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!selectionEnabled}
+          onSelect={selection.enterSelectionMode}
+        >
+          <ListChecks className="size-4" />
+          Start artifact selection
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function MarkAllArtifactsReadButton(props: {
   readonly epicId: string;
   readonly collapsed: boolean;
@@ -2019,6 +2195,7 @@ function MarkAllArtifactsReadButton(props: {
       className={cn(
         "text-muted-foreground hover:text-foreground",
         PANEL_HEADER_ACTION_REVEAL_CLASS,
+        COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
       )}
     >
       <CheckCheck className="size-4" />
@@ -2046,7 +2223,7 @@ function ArtifactSearchButton(props: { readonly collapsed: boolean }) {
       data-testid="epic-sidebar-search-artifacts"
       disabled={props.collapsed}
       className={cn(
-        "text-muted-foreground hover:text-foreground",
+        "text-muted-foreground hover:text-foreground @max-[14rem]:hidden",
         PANEL_HEADER_ACTION_REVEAL_CLASS,
       )}
     >
@@ -2069,6 +2246,12 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
       <SidebarStartSelectionButton
         label="Select artifacts"
         disabled={props.collapsed}
+      />
+      <CompactPanelHeaderMoreMenu
+        epicId={props.epicId}
+        tabId={props.tabId}
+        panelId="artifacts"
+        collapsed={props.collapsed}
       />
       <TreePanelActions
         epicId={props.epicId}
@@ -2107,6 +2290,7 @@ function SidebarStartSelectionButton(props: {
       className={cn(
         "text-muted-foreground hover:text-foreground",
         PANEL_HEADER_ACTION_REVEAL_CLASS,
+        COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
       )}
     >
       <ListChecks className="size-4" />
@@ -2159,12 +2343,13 @@ function SidebarBulkSelectionActions() {
       <Button
         type="button"
         variant="ghost"
-        size="xs"
+        size="icon-sm"
+        aria-label="Cancel selection"
+        title="Cancel selection"
         disabled={selection.deletePending}
         onClick={selection.cancelSelection}
       >
         <X className="size-3.5" />
-        Cancel
       </Button>
       {selection.panelId === "artifacts" ? (
         <DropdownMenu>

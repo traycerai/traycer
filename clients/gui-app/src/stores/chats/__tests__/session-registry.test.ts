@@ -28,6 +28,7 @@ function createHandle(epicId: string, chatId: string) {
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: () => ({
         sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => {
           closeCount += 1;
         },
@@ -433,6 +434,7 @@ function markRunning(handle: ChatSessionStoreHandle): void {
   handle.store.setState({
     runStatus: "running",
     activeTurn: {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "codex",
