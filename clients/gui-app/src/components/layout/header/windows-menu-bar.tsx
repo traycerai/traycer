@@ -10,7 +10,7 @@ import { isWindows } from "@/lib/keybindings/platform";
 import { appLogger } from "@/lib/logger";
 import { resolveDesktopMenuPopupBridge } from "@/lib/windows/desktop-capabilities";
 import type { DesktopTopLevelMenuId } from "@/lib/windows/types";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
@@ -37,7 +37,9 @@ const WINDOWS_MENU_ITEMS: ReadonlyArray<{
  * key, reproducing the native Windows menu bar this frameless window replaces.
  */
 export function WindowsMenuBar(): ReactNode {
-  const menu = resolveDesktopMenuPopupBridge(useRunnerHost());
+  const runnerHost = useRunnerHostOrNull();
+  const menu =
+    runnerHost === null ? null : resolveDesktopMenuPopupBridge(runnerHost);
   const active = menu !== null && isWindows();
   const buttonsRef = useRef<Map<DesktopTopLevelMenuId, HTMLButtonElement>>(
     new Map(),
