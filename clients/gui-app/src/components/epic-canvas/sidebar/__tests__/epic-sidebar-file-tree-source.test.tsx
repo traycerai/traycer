@@ -540,6 +540,11 @@ describe("sidebar file tree filter source", () => {
       expect(resetPathsCalls.at(-1)?.paths).toEqual(["unary.md"]);
     });
     expect(listFileTreeCalls.at(-1)?.enabled).toBe(true);
+    // Pierre keeps the search VALUE across resetPaths but not its match set,
+    // and setSearch no-ops on an unchanged value - the component must force a
+    // recomputation with a null->value cycle or the snapshot renders
+    // unfiltered (observed live).
+    expect(setSearchCalls.slice(-2)).toEqual([null, "main"]);
 
     // The verdict is latched per (host, workspace): a further keystroke filters
     // the snapshot without re-asking a host that already said no.

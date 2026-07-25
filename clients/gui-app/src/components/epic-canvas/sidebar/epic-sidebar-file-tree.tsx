@@ -551,6 +551,7 @@ export function FileTreePanelBodyForWorkspace(props: {
     enabled: source.isLive,
     mode: source.mode,
     searchExpandedPaths: source.searchExpandedPaths,
+    localFilterQuery: source.localFilterQuery,
   });
 
   // Git status arrives from its own subscription; push it into Pierre's
@@ -662,6 +663,25 @@ export function FileTreePanelBodyForWorkspace(props: {
  * ancestors of the ranked results) rather than by the user, so syncing pauses
  * and the stream's coverage stays exactly where browsing left it.
  */
+/**
+ * Pierre's `resetPaths` swaps the store but keeps the current search VALUE
+ * while never recomputing its match set, and `setSearch` no-ops on an
+ * unchanged value - so a filter that is active across a paths reset silently
+ * stops filtering: the projection rebuilds against the stale match set from
+ * the OLD store (often empty, which Pierre renders as "show everything").
+ * Observed live when the whole-workspace snapshot replaced the live listings
+ * mid-query. The null->value cycle forces a recomputation against the new
+ * store, which also re-expands the ancestors of every hit.
+ */
+function reassertFilterAfterReset(
+  model: PierreFileTreeModel,
+  localFilterQuery: string | null,
+): void {
+  if (localFilterQuery === null) return;
+  model.setSearch(null);
+  model.setSearch(localFilterQuery);
+}
+
 function useWorkspaceFileTreeExpansion(args: {
   readonly model: PierreFileTreeModel;
   readonly epicId: string;
@@ -671,6 +691,8 @@ function useWorkspaceFileTreeExpansion(args: {
   readonly enabled: boolean;
   readonly mode: FileTreeMode;
   readonly searchExpandedPaths: ReadonlyArray<string> | null;
+  /** Active adapter filter, re-asserted after every reset (see below). */
+  readonly localFilterQuery: string | null;
 }): void {
   const {
     model,
@@ -681,6 +703,7 @@ function useWorkspaceFileTreeExpansion(args: {
     enabled,
     mode,
     searchExpandedPaths,
+    localFilterQuery,
   } = args;
   const setExpandedPaths = useFileTreeStore((s) => s.setExpandedPaths);
   const expandedPaths = useFileTreeExpandedPaths(epicId, hostId, workspacePath);
@@ -698,6 +721,7 @@ function useWorkspaceFileTreeExpansion(args: {
     appliedPathsRef.current = treePaths;
     if (!enabled) {
       model.resetPaths(treePaths);
+      reassertFilterAfterReset(model, localFilterQuery);
       return;
     }
     // Host results are a flat ranked list, so nothing is visible until their
@@ -707,7 +731,15 @@ function useWorkspaceFileTreeExpansion(args: {
     model.resetPaths(treePaths, {
       initialExpandedPaths: [...(searchExpandedPaths ?? expandedPaths)],
     });
-  }, [enabled, expandedPaths, model, searchExpandedPaths, treePaths]);
+    reassertFilterAfterReset(model, localFilterQuery);
+  }, [
+    enabled,
+    expandedPaths,
+    localFilterQuery,
+    model,
+    searchExpandedPaths,
+    treePaths,
+  ]);
 
   useEffect(() => {
     if (!enabled || hostId === null) return;
