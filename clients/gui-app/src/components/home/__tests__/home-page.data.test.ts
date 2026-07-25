@@ -87,9 +87,32 @@ describe("home-page history helpers", () => {
       makeItem({ id: "c", title: "Charlie", isPinned: false }),
     ];
 
-    expect(sortHistoryItems(items, "title-asc").map((item) => item.id)).toEqual(
-      ["b", "z", "a", "c"],
-    );
+    expect(
+      sortHistoryItems(items, "title-asc", {}).map((item) => item.id),
+    ).toEqual(["b", "z", "a", "c"]);
+  });
+
+  it("sorts viewed tasks by view recency while keeping pins first", () => {
+    const items = [
+      makeItem({ id: "unseen-new", title: "Unseen new", updatedAtMs: 40 }),
+      makeItem({ id: "viewed-old", title: "Viewed old", updatedAtMs: 30 }),
+      makeItem({ id: "pinned", title: "Pinned", isPinned: true }),
+      makeItem({ id: "viewed-new", title: "Viewed new", updatedAtMs: 10 }),
+      makeItem({ id: "unseen-old", title: "Unseen old", updatedAtMs: 20 }),
+    ];
+
+    expect(
+      sortHistoryItems(items, "last-viewed", {
+        "viewed-old": 100,
+        "viewed-new": 200,
+      }).map((item) => item.id),
+    ).toEqual([
+      "pinned",
+      "viewed-new",
+      "viewed-old",
+      "unseen-new",
+      "unseen-old",
+    ]);
   });
 
   it("stably promotes pinned items in relevance-ranked results", () => {

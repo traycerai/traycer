@@ -105,6 +105,23 @@ import {
 } from "@/stores/epics/canvas/canvas-title-timers";
 export { parseEpicNodeRef as parseArtifactRef } from "@/stores/epics/canvas/tile-schema/artifact-tile";
 
+const TASK_VIEW_HISTORY_CAP = 500;
+
+function withEpicViewRecorded(
+  current: Readonly<Record<string, number | undefined>>,
+  epicId: string,
+  viewedAtMs: number,
+) {
+  const next = { ...current, [epicId]: viewedAtMs };
+  if (Object.keys(next).length <= TASK_VIEW_HISTORY_CAP) return next;
+  return Object.fromEntries(
+    Object.entries(next)
+      .filter((entry): entry is [string, number] => entry[1] !== undefined)
+      .sort(([, left], [, right]) => right - left)
+      .slice(0, TASK_VIEW_HISTORY_CAP),
+  );
+}
+
 function trackOpenedCanvasTile(
   node: EpicCanvasTileRef,
   source: AnalyticsSource,
@@ -233,6 +250,12 @@ export interface EpicCanvasStore {
   readonly mostRecentTabIdByEpicId: Readonly<
     Record<string, string | undefined>
   >;
+  /**
+   * Renderer-local task view recency, recorded when an epic route becomes
+   * active. Task History consumes this separately from cloud `updatedAt` so
+   * its "Last viewed" sort reflects navigation rather than task edits.
+   */
+  readonly lastViewedAtByEpicId: Readonly<Record<string, number | undefined>>;
   readonly artifactTreeByEpicId: Readonly<
     Record<string, ReadonlyArray<EpicNodeRecord> | undefined>
   >;
@@ -297,6 +320,7 @@ export interface EpicCanvasStore {
    * reinsert it into `openTabOrder` so it becomes visible again.
    */
   setActiveTab: (tabId: string) => void;
+  recordEpicViewed: (epicId: string, viewedAtMs: number) => void;
   renameTab: (tabId: string, name: string) => void;
   /**
    * Permanently delete a tab record and its canvas state. This is for true
@@ -1085,6 +1109,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
+      lastViewedAtByEpicId: {},
       artifactTreeByEpicId: EMPTY_TREES,
       selfDeletedArtifactIds: new Set<string>(),
       pendingCreateArtifactIds: new Set<string>(),
@@ -1398,6 +1423,17 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
             },
           };
         });
+      },
+
+      recordEpicViewed: (epicId, viewedAtMs) => {
+        if (epicId.length === 0 || !Number.isFinite(viewedAtMs)) return;
+        set((state) => ({
+          lastViewedAtByEpicId: withEpicViewRecorded(
+            state.lastViewedAtByEpicId,
+            epicId,
+            viewedAtMs,
+          ),
+        }));
       },
 
       renameTab: (tabId, name) => {
@@ -2365,6 +2401,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         openTabOrder: state.openTabOrder,
         activeTabId: state.activeTabId,
         mostRecentTabIdByEpicId: state.mostRecentTabIdByEpicId,
+        lastViewedAtByEpicId: state.lastViewedAtByEpicId,
         artifactTreeByEpicId: state.artifactTreeByEpicId,
       }),
       merge: (persistedState, currentState) => ({

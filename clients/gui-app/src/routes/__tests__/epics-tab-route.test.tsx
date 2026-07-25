@@ -177,6 +177,7 @@ describe("/epics/$epicId/$tabId route", () => {
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([TAB_ID]);
     expect(Object.keys(state.tabsById)).toEqual([TAB_ID]);
+    expect(state.lastViewedAtByEpicId[EPIC_ID]).toEqual(expect.any(Number));
   });
 
   it("repairs a stale tab route to a sibling tab without carrying nested focus params", async () => {

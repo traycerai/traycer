@@ -3,6 +3,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type {
   ListTasksRequest,
   ListTasksResponse,
+  ListTasksSort,
   TaskRepoIdentifier,
 } from "@traycer/protocol/host/epic/unary-schemas";
 import {
@@ -107,8 +108,15 @@ export function listCloudTasksRequestForHistorySearch(
   return {
     ...LIST_CLOUD_TASKS_REQUEST,
     filters: Object.keys(filters).length > 0 ? filters : null,
-    sort: search.sort,
+    // Last-viewed recency is renderer-local. Ask the cloud for the ordinary
+    // recent page, then project that page against the persisted local view
+    // timestamps in `useHistoryQuery`.
+    sort: serverHistorySort(search.sort),
   };
+}
+
+function serverHistorySort(sort: HistorySearchState["sort"]): ListTasksSort {
+  return sort === "last-viewed" ? "recent" : sort;
 }
 
 function buildListTasksRequest(

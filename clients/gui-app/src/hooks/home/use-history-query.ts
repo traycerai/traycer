@@ -24,6 +24,7 @@ import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schema
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import type { HistorySearchState } from "@/lib/history-search";
 import { patchHistorySearch } from "@/lib/history-search";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useCallback, useMemo, useState } from "react";
 
@@ -60,6 +61,9 @@ export interface UseHistoryQueryResult {
 export function useHistoryQuery(
   params: UseHistoryQueryParams,
 ): UseHistoryQueryResult {
+  const lastViewedAtByEpicId = useEpicCanvasStore(
+    (state) => state.lastViewedAtByEpicId,
+  );
   const trimmedQuery = params.search.query.trim();
   const debouncedQuery = useDebouncedValue(trimmedQuery, SEARCH_DEBOUNCE_MS);
   const [fallbackNowMs] = useState(() => Date.now());
@@ -91,6 +95,7 @@ export function useHistoryQuery(
   const shouldProjectLocally =
     isQueryDebouncing ||
     isPullRequestNumberQuery ||
+    params.search.sort === "last-viewed" ||
     tasksQuery.isFetching ||
     tasksQuery.isPlaceholderData;
   const baseItems = useMemo(
@@ -117,7 +122,7 @@ export function useHistoryQuery(
     // partition lifts it into (or drops it out of) the pinned block
     // instantly, and is an order-preserving no-op on untouched server data.
     const items = shouldProjectLocally
-      ? projectHistoryItems(serverItems, params.search)
+      ? projectHistoryItems(serverItems, params.search, lastViewedAtByEpicId)
       : prioritizePinnedHistoryItems(serverItems);
     const canUseServerFacets =
       !isQueryDebouncing && !tasksQuery.isPlaceholderData;
@@ -141,6 +146,7 @@ export function useHistoryQuery(
     };
   }, [
     isQueryDebouncing,
+    lastViewedAtByEpicId,
     params.search,
     serverItems,
     shouldProjectLocally,
@@ -230,6 +236,7 @@ function mapHistoryFacets(
 function projectHistoryItems(
   items: ReadonlyArray<HistoryItem>,
   search: HistorySearchState,
+  lastViewedAtByEpicId: Readonly<Record<string, number | undefined>>,
 ): ReadonlyArray<HistoryItem> {
   const filtered = filterHistoryItemsLocally(items, search);
   const query = search.query.trim();
@@ -239,7 +246,12 @@ function projectHistoryItems(
       : new Fuse(filtered, LOCAL_FUSE_OPTIONS)
           .search(query)
           .map((result) => result.item);
-  return sortProjectedHistoryItems(searched, search.sort, query);
+  return sortProjectedHistoryItems(
+    searched,
+    search.sort,
+    query,
+    lastViewedAtByEpicId,
+  );
 }
 
 function filterHistoryItemsLocally(
@@ -265,11 +277,12 @@ function sortProjectedHistoryItems(
   items: ReadonlyArray<HistoryItem>,
   sort: HistorySortOption,
   query: string,
+  lastViewedAtByEpicId: Readonly<Record<string, number | undefined>>,
 ): ReadonlyArray<HistoryItem> {
   if (sort === "relevance" && query.length > 0) {
     return prioritizePinnedHistoryItems(items);
   }
-  return sortHistoryItems(items, sort);
+  return sortHistoryItems(items, sort, lastViewedAtByEpicId);
 }
 
 function isHistoryPullRequestNumberQuery(query: string): boolean {

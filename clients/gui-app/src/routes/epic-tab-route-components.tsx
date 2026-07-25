@@ -47,12 +47,17 @@ function EpicRouteTabSync(props: {
     (s) => s.resolveTargetTabForEpic,
   );
   const setActiveTab = useEpicCanvasStore((s) => s.setActiveTab);
+  const recordEpicViewed = useEpicCanvasStore((s) => s.recordEpicViewed);
   const { tasks } = useCloudEpicTasksQuery(undefined, { enabled: true });
   const taskTitle = findCachedTaskTitle(tasks, epicId);
   // Guards the resolve-and-redirect path so a churning dependency (e.g. cloud
   // tasks resolving) can't create twice for the same missing route id
   // before the replace-navigate lands.
   const resolvedForRouteRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    recordEpicViewed(epicId, Date.now());
+  }, [epicId, recordEpicViewed]);
 
   useEffect(() => {
     const tab = useEpicCanvasStore.getState().tabsById[tabId];

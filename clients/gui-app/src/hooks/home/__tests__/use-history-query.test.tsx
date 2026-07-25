@@ -12,6 +12,7 @@ import {
 } from "@/lib/history-search";
 import type { HistorySearchState } from "@/lib/history-search";
 import { useHistoryQuery } from "@/hooks/home/use-history-query";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 const testState = vi.hoisted(() => {
   const tasks: ListTaskLight[] = [];
@@ -76,11 +77,13 @@ describe("useHistoryQuery", () => {
     testState.worktreeMetadataError = null;
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   });
 
   it("locally narrows existing rows while a new search query is debouncing", () => {
@@ -105,6 +108,28 @@ describe("useHistoryQuery", () => {
     expect(screen.getByTestId("pending").textContent).toBe("false");
     expect(screen.getByTestId("fetching").textContent).toBe("true");
     expect(screen.getByTestId("titles").textContent).toBe("Beta search flow");
+  });
+
+  it("sorts settled cloud rows by locally recorded view recency", () => {
+    useEpicCanvasStore.setState({
+      lastViewedAtByEpicId: {
+        "epic-alpha": 100,
+        "epic-beta": 200,
+      },
+    });
+
+    render(
+      <HistoryQueryHarness
+        search={patchHistorySearch(DEFAULT_HISTORY_SEARCH, {
+          sort: "last-viewed",
+          sortExplicit: true,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("titles").textContent).toBe(
+      "Beta search flow|Alpha workbench",
+    );
   });
 
   it("does not expose stale facet counts while projecting placeholder rows", () => {

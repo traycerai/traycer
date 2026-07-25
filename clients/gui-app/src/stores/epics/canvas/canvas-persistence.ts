@@ -29,6 +29,7 @@ export interface PersistedCanvasStatePatch {
   readonly mostRecentTabIdByEpicId: Readonly<
     Record<string, string | undefined>
   >;
+  readonly lastViewedAtByEpicId: Readonly<Record<string, number | undefined>>;
   readonly artifactTreeByEpicId: Readonly<
     Record<string, ReadonlyArray<EpicNodeRecord> | undefined>
   >;
@@ -52,6 +53,9 @@ export function sanitizePersistedCanvasState(
       value.mostRecentTabIdByEpicId,
       tabsById,
     ),
+    lastViewedAtByEpicId: readPersistedLastViewedAtByEpicId(
+      value.lastViewedAtByEpicId,
+    ),
     artifactTreeByEpicId: readPersistedArtifactTreeByEpicId(
       value.artifactTreeByEpicId,
     ),
@@ -65,6 +69,7 @@ function emptyPersistedCanvasStatePatch(): PersistedCanvasStatePatch {
     openTabOrder: [],
     activeTabId: null,
     mostRecentTabIdByEpicId: {},
+    lastViewedAtByEpicId: {},
     artifactTreeByEpicId: EMPTY_TREES,
   };
 }
@@ -164,6 +169,21 @@ function readPersistedMostRecentTabIdByEpicId(
     out[epicId] = tabId;
   }
   return out;
+}
+
+function readPersistedLastViewedAtByEpicId(
+  value: unknown,
+): Readonly<Record<string, number>> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, number] =>
+        entry[0].length > 0 &&
+        typeof entry[1] === "number" &&
+        Number.isFinite(entry[1]) &&
+        entry[1] >= 0,
+    ),
+  );
 }
 
 function readPersistedArtifactTreeByEpicId(
