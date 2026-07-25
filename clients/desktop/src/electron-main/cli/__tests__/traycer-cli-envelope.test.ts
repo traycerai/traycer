@@ -95,7 +95,9 @@ class FakeChild extends EventEmitter {
       if (opts.stderr.length > 0) {
         this.stderr.emit("data", opts.stderr);
       }
-      this.emit("close", opts.exitCode);
+      // Node always passes both `(code, signal)` on `close`; a child that
+      // exited on its own reports a null signal.
+      this.emit("close", opts.exitCode, null);
     });
   }
   kill(signal: NodeJS.Signals): void {
@@ -103,8 +105,8 @@ class FakeChild extends EventEmitter {
     this.killSignal = signal;
   }
 
-  close(exitCode: number | null): void {
-    this.emit("close", exitCode);
+  close(exitCode: number | null, signal: NodeJS.Signals | null): void {
+    this.emit("close", exitCode, signal);
   }
 }
 
@@ -130,8 +132,8 @@ class HangingFakeChild extends EventEmitter {
     this.killSignal = signal;
   }
 
-  close(exitCode: number | null): void {
-    this.emit("close", exitCode);
+  close(exitCode: number | null, signal: NodeJS.Signals | null): void {
+    this.emit("close", exitCode, signal);
   }
 }
 
@@ -581,7 +583,7 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    child.close(null);
+    child.close(null, "SIGKILL");
     await expect(promise).rejects.toThrow();
   });
 
@@ -604,8 +606,38 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
     });
     expect(child.killed).toBe(true);
     expect(child.killSignal).toBe("SIGKILL");
-    child.close(null);
+    child.close(null, "SIGKILL");
     await expect(promise).rejects.toThrow();
+  });
+});
+
+// A kill this process never asked for - systemd stopping the unit, the OOM
+// killer, an operator's `kill` - leaves `code` null on `close`. That used to
+// fall through to the "emitted no terminal result" branch, which reads as a
+// CLI that ran fine and stayed silent, and is why flaky `host install`
+// failures could not be told apart from a genuinely silent CLI.
+describe("streamTraycerCliJson reports an external kill by its signal", () => {
+  it("names the signal instead of reporting a missing terminal result", async () => {
+    const child = new HangingFakeChild();
+    spawnImpl = () => child;
+    const { streamTraycerCliJson } = await import("../traycer-cli");
+
+    const promise = streamTraycerCliJson<unknown>({
+      args: ["host", "install", "--release", "1.1.8-rc.2"],
+      onEvent: () => undefined,
+      env: null,
+      timeoutMs: 5_000,
+      signal: null,
+    });
+    await vi.waitFor(() => {
+      expect(child.stdout.listenerCount("data")).toBeGreaterThan(0);
+    });
+
+    // Nothing in this process killed it: no abort, no timeout.
+    expect(child.killed).toBe(false);
+    child.close(null, "SIGTERM");
+
+    await expect(promise).rejects.toThrow("killed by SIGTERM");
   });
 });
 
@@ -641,7 +673,7 @@ describe("streamTraycerCliJson timeout waits for the child close", () => {
       await Promise.resolve();
       expect(settled).toBe(false);
 
-      child.close(null);
+      child.close(null, "SIGKILL");
       await expect(promise).rejects.toThrow("timed out");
     } finally {
       vi.useRealTimers();
