@@ -21,6 +21,7 @@ import {
   chatRunSettingsSchema,
   chatSchema,
   chatSchemaPreInReplyTo,
+  chatSchemaV14,
   userMessagePayloadSchema,
   userMessageSchema,
   userMessageSchemaPreInReplyTo,
@@ -1486,21 +1487,64 @@ export const chatSubscribeV13 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchemaBeforeV14,
 });
 
-// ─── Live `chat.subscribe@1.4` contract (`inReplyTo` + `mcp` items) ─────────
+// ─── Frozen `chat.subscribe@1.4` shape (`inReplyTo` + `mcp` items) ──────────
 //
-// The live serverFrame carries `inReplyTo` on every agent sender (user-message,
-// assistant, queue item, event `actor`, steer) and the `mcp` background-item
-// kind (CLI auto-backgrounded MCP tool calls). Older peers negotiate ≤1.3 and
-// receive the frozen frames above, which strip the key and never carry `mcp`
-// items (the host degrades them to `command`). The client frame adds
-// `activeProfileUpdate` (the narrow in-flight profile switch); a ≤1.3 host
-// never receives it - the host drops unknown kinds with a MALFORMED_FRAME
-// ack, and the switch still lands durably via `epic.updateChatProfile` /
-// the next send's full tuple.
+// `1.4` shipped `inReplyTo` on every agent sender (user-message, assistant,
+// queue item, event `actor`, steer) and the `mcp` background-item kind (CLI
+// auto-backgrounded MCP tool calls) - but PRE-`archivedAt`. Pinned here so
+// `1.5` (which adds `archivedAt` to the snapshot's embedded chat) can no
+// longer mutate this released line: the frozen snapshot below has no
+// `archivedAt` key on `chat` at all. Everything else about `1.4` is
+// unaffected by archiving, so `turnStateChanged`, the shared frames, and the
+// client frame all keep reusing the live schemas.
+const chatSnapshotSchemaV14 = z.object({
+  chat: chatSchemaV14,
+  access: chatAccessSchema,
+  queue: chatQueueStateSchema,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchema.nullable(),
+  pendingApprovals: z.array(chatApprovalStateSchema),
+  pendingInterviews: z.array(chatPendingInterviewStateSchema),
+  worktreeBinding: worktreeBindingSchema.nullable(),
+  missingWorktreePaths: z.array(z.string()),
+  pendingFileEditApprovals: z.array(chatFileEditApprovalStateSchema),
+  accumulatedFileChanges: z.array(chatAccumulatedFileChangeSchema),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
+const chatSubscribeSnapshotServerFrameSchemaV14 = z.object({
+  kind: z.literal("snapshot"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  snapshot: chatSnapshotSchemaV14,
+});
+
+const chatSubscribeServerFrameSchemaV14 = z.discriminatedUnion("kind", [
+  chatSubscribeSnapshotServerFrameSchemaV14,
+  chatSubscribeTurnStateChangedServerFrameSchema,
+  ...chatSubscribeSharedServerFrameSchemas,
+]);
 
 export const chatSubscribeV14 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 4 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeServerFrameSchemaV14,
+  clientFrameSchema: chatSubscribeClientFrameSchema,
+});
+
+// ─── Live `chat.subscribe@1.5` contract (adds `archivedAt`) ─────────────────
+//
+// The live serverFrame's snapshot now carries the chat's `archivedAt` (see
+// `chatSchema.archivedAt`); nothing else changes from `1.4`. Older peers
+// negotiate ≤1.4 and receive the frozen frame above, whose `chat` has no
+// `archivedAt` key - `epic.setChatArchived` (unary) still applies the flag
+// host-side for them, they just cannot see it on this stream.
+
+export const chatSubscribeV15 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeServerFrameSchema,
   clientFrameSchema: chatSubscribeClientFrameSchema,

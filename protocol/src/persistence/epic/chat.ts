@@ -91,3 +91,24 @@ export const chatSchemaPreInReplyTo = z.object({
   messages: z.array(messageSchemaPreInReplyTo),
   events: z.array(chatEventSchemaPreInReplyTo).default([]),
 });
+
+// Wire-freeze copy without `archivedAt`, bound to `chat.subscribe@1.4`'s
+// snapshot serverFrame so that released line stays verbatim - archiving rides
+// a `1.5` minor instead (see `archivedAt` above and `chatSnapshotSchemaV14`).
+// Hand-frozen (every other field reuses the live sub-schemas); NOT derived
+// from the live shape.
+export const chatSchemaV14 = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchema.nullable().default(null),
+  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  messages: z.array(messageSchema),
+  events: z.array(chatEventSchema).default([]),
+});

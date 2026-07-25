@@ -4,7 +4,10 @@ import {
   defineUpgradePath,
   type DowngradeResult,
 } from "@traycer/protocol/framework/index";
-import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  defineVersionedStreamRpcRegistry,
+  type VersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   agentCreateV10,
   agentCreateV20,
@@ -120,6 +123,7 @@ import {
   chatSubscribeV12,
   chatSubscribeV13,
   chatSubscribeV14,
+  chatSubscribeV15,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -4635,7 +4639,11 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *    background-items controls as an additive minor instead of a major, to
  *    stay compatible with host-v1.0.0).
  */
-export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
+// Named ahead of `hostStreamRpcRegistry` (mirrors `HOST_RPC_REGISTRY_DEFINITION`
+// above), which still validates every entry against this literal's precise
+// type at the `defineVersionedStreamRpcRegistry` call site below - only the
+// EXPORTED const's declared type is widened (see the comment there).
+const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   "epic.subscribe": {
     1: {
       latestMinor: 0,
@@ -4648,7 +4656,7 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "chat.subscribe": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -4664,6 +4672,9 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
         },
         4: {
           contract: chatSubscribeV14,
+        },
+        5: {
+          contract: chatSubscribeV15,
         },
       },
     },
@@ -4812,6 +4823,20 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       },
     },
   },
-});
+} as const;
+
+// Deliberately widened to the bare (unparameterized) `VersionedStreamRpcRegistry`
+// rather than `VersionedStreamRpcRegistry<typeof HOST_STREAM_RPC_REGISTRY_DEFINITION>`:
+// the call below still runs full structural + schema-compatibility validation
+// against the precise literal (nothing here weakens that), but printing the
+// PRECISE per-method/per-minor type into this package's `.d.ts` is what hits
+// TS7056 once `chat.subscribe` alone carries this many minors - a `typeof`
+// reference doesn't avoid it, since the referenced const isn't exported and
+// still has to be inlined. No in-repo consumer narrows through this registry's
+// own type for a specific method/version (each imports the versioned contract
+// it needs directly, e.g. `chatSubscribeV15`, for that); confirmed by a full
+// workspace compile+build with this annotation in place.
+export const hostStreamRpcRegistry: VersionedStreamRpcRegistry =
+  defineVersionedStreamRpcRegistry(HOST_STREAM_RPC_REGISTRY_DEFINITION);
 
 export type HostStreamRpcRegistry = typeof hostStreamRpcRegistry;
