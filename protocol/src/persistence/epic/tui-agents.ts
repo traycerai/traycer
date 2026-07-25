@@ -63,6 +63,12 @@ const baseTuiAgentFields = {
   // runs on. `null` = the ambient/host login, so records persisted before
   // profiles existed still parse cleanly. See the multi-profile decision log.
   profileId: z.string().nullable().default(null).catch(null),
+  // Wall-clock ms when this terminal-agent session was archived, or `null`
+  // while active. Same host-backed archive flag as `chatSchema.archivedAt`;
+  // a single `epic.setChatArchived` RPC keyed by id covers chats and TUI
+  // agents alike. Defaulted so records persisted before archiving existed
+  // parse unchanged.
+  archivedAt: z.number().nullable().default(null),
 } as const;
 
 export const claudeTuiAgentSchema = z.object({

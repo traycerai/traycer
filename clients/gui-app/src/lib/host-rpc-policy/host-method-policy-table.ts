@@ -483,6 +483,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Archiving a chat or terminal-agent record persists its archived flag
+  // (optional host capability).
+  "epic.setChatArchived": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Creating a TUI agent persists its terminal-agent record.
   "epic.createTuiAgent": {
     mode: "fifo",

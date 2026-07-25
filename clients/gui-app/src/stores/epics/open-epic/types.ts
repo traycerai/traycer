@@ -97,6 +97,13 @@ export interface ChatProjection {
   readonly isTitleEditedByUser: boolean;
   /** Persisted run settings (harness/model/permission). `null` until set. */
   readonly settings: ChatRunSettings | null;
+  /**
+   * Host-backed archive flag (`epic.setChatArchived`). `null` = active. The
+   * sidebar hides a node whose ancestor-or-self carries a timestamp unless
+   * "Show archived" is on. Records written before the field existed project as
+   * `null`, so pre-archive chats read as active.
+   */
+  readonly archivedAt: number | null;
 }
 
 export interface ChatsSlice {
@@ -123,6 +130,12 @@ export interface TuiAgentProjection {
   readonly model: string | null;
   readonly reasoningEffort: string | null;
   readonly agentMode: AgentMode;
+  /**
+   * Host-backed archive flag, the terminal-agent twin of
+   * {@link ChatProjection.archivedAt} - one `epic.setChatArchived` RPC keyed by
+   * id covers both record kinds, so the sidebar treats them identically.
+   */
+  readonly archivedAt: number | null;
   /**
    * Which of the harness's logged-in profiles (subscriptions) this agent runs
    * on. `null` = the ambient/host login, so agents persisted before profiles

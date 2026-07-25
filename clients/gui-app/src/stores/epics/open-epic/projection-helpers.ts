@@ -155,6 +155,20 @@ export function readMaybeNullableString(
   return typeof value === "string" ? value : null;
 }
 
+/**
+ * Nullable-number reader for fields whose ABSENCE is meaningful (`archivedAt`),
+ * unlike {@link readMaybeNumber}, which floors a missing value to `0`. A record
+ * persisted before the field existed must project as `null` ("not archived"),
+ * and `0` would read as an epoch-zero archive timestamp instead.
+ */
+export function readMaybeNullableNumber(
+  map: Y.Map<unknown>,
+  key: string,
+): number | null {
+  const value = map.get(key);
+  return typeof value === "number" ? value : null;
+}
+
 export function readArtifactKind(map: Y.Map<unknown>): EpicArtifactKind | null {
   const value = map.get("kind");
   if (
@@ -274,6 +288,7 @@ export function projectChat(id: string, entry: Y.Map<unknown>): ChatProjection {
     hostId: readMaybeNullableString(entry, "hostId"),
     isTitleEditedByUser: readMaybeBoolean(entry, "isTitleEditedByUser"),
     settings: coerceChatRunSettings(entry.get("settings")),
+    archivedAt: readMaybeNullableNumber(entry, "archivedAt"),
   };
 }
 
@@ -335,6 +350,7 @@ export function projectTerminalAgent(
     reasoningEffort:
       typeof reasoningEffort === "string" ? reasoningEffort : null,
     agentMode,
+    archivedAt: readMaybeNullableNumber(entry, "archivedAt"),
     profileId: typeof profileId === "string" ? profileId : null,
     harnessSessionId:
       typeof harnessSessionId === "string" ? harnessSessionId : null,
@@ -405,6 +421,7 @@ export function chatProjectionsEq(
     a.userId === b.userId &&
     a.hostId === b.hostId &&
     a.isTitleEditedByUser === b.isTitleEditedByUser &&
+    a.archivedAt === b.archivedAt &&
     chatRunSettingsEq(a.settings, b.settings)
   );
 }
@@ -451,6 +468,7 @@ export function terminalAgentProjectionsEq(
     a.model === b.model,
     a.reasoningEffort === b.reasoningEffort,
     a.agentMode === b.agentMode,
+    a.archivedAt === b.archivedAt,
   ].every((fieldEqual) => fieldEqual);
 
   return (
