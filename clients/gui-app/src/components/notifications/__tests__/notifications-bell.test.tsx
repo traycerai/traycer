@@ -14,6 +14,7 @@ import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/moc
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
   __resetAppLocalNotificationsStoreForTests,
@@ -30,6 +31,16 @@ import {
 } from "@/stores/notifications/notifications-store";
 import { useTitleBarDragStore } from "@/stores/layout/title-bar-drag-store";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
+import type { IStreamSession } from "@traycer-clients/shared/host-transport/i-stream-session";
+import {
+  type ParamsOf,
+  type StreamMethodSupport,
+  WsStreamClient,
+} from "@traycer-clients/shared/host-transport/ws-stream-client";
+import {
+  hostStreamRpcRegistry,
+  type HostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
 import {
   type NotificationEntry,
   NOTIFICATION_EVENT_TYPES,
@@ -123,15 +134,71 @@ function createTestQueryClient(): QueryClient {
   });
 }
 
-function mountBell(runnerHost: MockRunnerHost): void {
-  render(
+/** Minimal stream client whose method-support map is fully test-controlled. */
+class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
+  methodSupportByName = new Map<string, StreamMethodSupport>();
+
+  constructor() {
+    super({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => null,
+      bearer: () => null,
+      auth: null,
+      webSocketFactory: {
+        create: () => {
+          throw new Error("MockWsStreamClient should not open a websocket");
+        },
+      },
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+  }
+
+  override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
+    _method: Method,
+    _params: ParamsOf<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    throw new Error("MockWsStreamClient.subscribe is not used in these tests");
+  }
+
+  override getMethodSupport<Method extends keyof HostStreamRpcRegistry & string>(
+    method: Method,
+  ): StreamMethodSupport {
+    return this.methodSupportByName.get(method) ?? "unknown";
+  }
+}
+
+function mountBell(
+  runnerHost: MockRunnerHost,
+  options: {
+    readonly wsStreamClient?: WsStreamClient<HostStreamRpcRegistry>;
+  } = {},
+): void {
+  const bell = (
     <QueryClientProvider client={createTestQueryClient()}>
       <RunnerHostProvider runnerHost={runnerHost}>
         <TooltipProvider>
           <NotificationsBell />
         </TooltipProvider>
       </RunnerHostProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+  );
+
+  if (options.wsStreamClient === undefined) {
+    render(bell);
+    return;
+  }
+
+  render(
+    <StreamRuntimeContext.Provider
+      value={{ wsStreamClient: options.wsStreamClient }}
+    >
+      {bell}
+    </StreamRuntimeContext.Provider>,
   );
 }
 
@@ -145,6 +212,12 @@ function createRunnerHost(): MockRunnerHost {
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
+}
+
+function expectNoBellIndicators(): void {
+  expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+  expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
+  expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
 }
 
 describe("NotificationsBell", () => {
@@ -294,13 +367,13 @@ describe("NotificationsBell", () => {
     ).toBe("Notifications, 150 notifications need attention");
   });
 
-  it("renders the quiet-dot and unknown indicators for their bell states", () => {
+  it("renders the quiet-dot for quietDot state and no indicator for unknown/clear", () => {
     const runnerHost = createRunnerHost();
     const { factory, handle } = fakeFactory();
     openNotificationsStream(factory, null);
     mountBell(runnerHost);
 
-    // Host summary null → unknown, even with global unreads.
+    // Host summary null → unknown kind, but renders like clear (no dot).
     act(() => {
       handle().callbacks.onSnapshot(
         { schemaVersion: "2" },
@@ -308,13 +381,10 @@ describe("NotificationsBell", () => {
       );
     });
 
-    expect(
-      screen.getByTestId("notifications-unknown-indicator"),
-    ).not.toBeNull();
-    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
+    expectNoBellIndicators();
     expect(
       screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications, task notification status unavailable");
+    ).toBe("Notifications");
 
     act(() => {
       useHostNotificationsStore.getState().applySnapshot({
@@ -340,19 +410,51 @@ describe("NotificationsBell", () => {
       });
     });
 
-    expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
-    expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
-    expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
+    expectNoBellIndicators();
     expect(
       screen.getByTestId("notifications-bell").getAttribute("aria-label"),
     ).toBe("Notifications");
   });
 
   it("shows the partial host subtitle when the host summary has not landed", async () => {
+    // No StreamRuntimeContext → useStreamMethodSupport is null (still connecting).
     activeHostIdRef.value = null;
     directoryRef.value = { findById: () => null };
     const runnerHost = createRunnerHost();
     mountBell(runnerHost);
+
+    fireEvent.click(screen.getByTestId("notifications-bell"));
+    expect(
+      (await screen.findByTestId("notifications-subtitle")).textContent,
+    ).toBe("Task activity is unavailable right now");
+  });
+
+  it("shows the old-host subtitle when notifications feed support is unsupported", async () => {
+    // Partial host summary + confirmed mirror-compat failure for the feed RPC.
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    const streamClient = new MockWsStreamClient();
+    streamClient.methodSupportByName.set(
+      "host.notifications.feed.subscribe",
+      "unsupported",
+    );
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, { wsStreamClient: streamClient });
+
+    fireEvent.click(screen.getByTestId("notifications-bell"));
+    expect(
+      (await screen.findByTestId("notifications-subtitle")).textContent,
+    ).toBe("Task activity isn't available on this host version");
+  });
+
+  it("keeps the transient partial subtitle when stream support is still unknown", async () => {
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    const streamClient = new MockWsStreamClient();
+    streamClient.methodSupportByName.set(
+      "host.notifications.feed.subscribe",
+      "unknown",
+    );
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, { wsStreamClient: streamClient });
 
     fireEvent.click(screen.getByTestId("notifications-bell"));
     expect(
@@ -455,8 +557,14 @@ describe("NotificationsBell", () => {
       const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
       const runnerHost = createRunnerHost();
       // No host summary applied → isPartial / unknown bell state.
+      // Unknown still buckets as "unknown" for analytics, but renders no dot.
       activeHostIdRef.value = mockLocalHostEntry.hostId;
       mountBell(runnerHost);
+
+      expectNoBellIndicators();
+      expect(
+        screen.getByTestId("notifications-bell").getAttribute("aria-label"),
+      ).toBe("Notifications");
 
       act(() => {
         useNotificationsPopoverStore.getState().setOpen(true);
