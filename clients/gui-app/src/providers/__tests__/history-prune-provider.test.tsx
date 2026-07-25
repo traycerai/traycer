@@ -150,8 +150,8 @@ describe("HistoryPruneProvider", () => {
 
   it("prunes a deleted active draft's forward entry without a load (delete active draft)", () => {
     const draftStore = useLandingDraftStore.getState();
-    const currentDraftId = draftStore.createDraft(null);
-    const forwardDraftId = draftStore.createDraft(null);
+    const currentDraftId = draftStore.createDraft(null, undefined);
+    const forwardDraftId = draftStore.createDraft(null, undefined);
 
     const history = seedPersistentHistory(
       [`/draft/${currentDraftId}`, `/draft/${forwardDraftId}`],

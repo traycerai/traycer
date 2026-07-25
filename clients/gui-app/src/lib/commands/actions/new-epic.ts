@@ -23,7 +23,10 @@ import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 export function openNewEpicDraft(): string {
   return useLandingDraftStore
     .getState()
-    .createDraft(useComposerRunSettingsStore.getState().globalLastRunSettings);
+    .createDraft(
+      useComposerRunSettingsStore.getState().globalLastRunSettings,
+      undefined,
+    );
 }
 
 export function openNewEpic(router: KeybindingRouter): void {
