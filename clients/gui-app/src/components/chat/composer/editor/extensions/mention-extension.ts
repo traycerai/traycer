@@ -74,7 +74,7 @@ export function createMentionExtension(deps: MentionExtensionDeps) {
     suggestion: {
       pluginKey: mentionSuggestionPluginKey,
       char: "@",
-      allowSpaces: false,
+      allowSpaces: true,
       allowedPrefixes: null,
       decorationTag: "span",
       decorationClass: "",
