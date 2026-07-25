@@ -92,6 +92,26 @@ describe("home-page history helpers", () => {
     );
   });
 
+  it("preserves server last-viewed order while keeping pins first", () => {
+    const items = [
+      makeItem({ id: "unseen-new", title: "Unseen new", updatedAtMs: 40 }),
+      makeItem({ id: "viewed-old", title: "Viewed old", updatedAtMs: 30 }),
+      makeItem({ id: "pinned", title: "Pinned", isPinned: true }),
+      makeItem({ id: "viewed-new", title: "Viewed new", updatedAtMs: 10 }),
+      makeItem({ id: "unseen-old", title: "Unseen old", updatedAtMs: 20 }),
+    ];
+
+    expect(
+      sortHistoryItems(items, "last-viewed").map((item) => item.id),
+    ).toEqual([
+      "pinned",
+      "unseen-new",
+      "viewed-old",
+      "viewed-new",
+      "unseen-old",
+    ]);
+  });
+
   it("stably promotes pinned items in relevance-ranked results", () => {
     const items = [
       makeItem({ id: "best", title: "Best match", isPinned: false }),

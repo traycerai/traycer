@@ -232,6 +232,20 @@ export function cloudEpicTasksQueryKeyMatchesScope(
   );
 }
 
+export function cloudEpicTasksLastViewedQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  if (!cloudEpicTasksQueryKeyMatchesScope(queryKey, scope)) return false;
+  const request = queryKey[3];
+  return (
+    request !== null &&
+    typeof request === "object" &&
+    "sort" in request &&
+    request.sort === "last-viewed"
+  );
+}
+
 /**
  * Scope match for `epic.getTaskContexts` keys:
  * `["host", hostId, "epic.getTaskContexts", { taskIds }, userId]`.

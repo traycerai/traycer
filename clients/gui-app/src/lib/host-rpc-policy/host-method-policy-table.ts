@@ -390,6 +390,12 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "epic.listTasks": { ...LATEST_SCHEDULING, poll: null },
+  // Recording a view updates the user's central task ordering preference.
+  "epic.recordViewed": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Pinning changes a task's persisted ordering preference.
   "epic.setPinned": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "epic.getTaskContexts": { ...LATEST_SCHEDULING, poll: null },
