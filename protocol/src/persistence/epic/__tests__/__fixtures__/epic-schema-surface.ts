@@ -85,6 +85,7 @@ export const epicSchemaSurfaceBaseline = {
                         "devin",
                         "pi",
                         "hermes",
+                        "omp",
                       ],
                     },
                     model: {
@@ -171,6 +172,7 @@ export const epicSchemaSurfaceBaseline = {
                         "devin",
                         "pi",
                         "hermes",
+                        "omp",
                       ],
                     },
                     sessionId: {
@@ -317,6 +319,7 @@ export const epicSchemaSurfaceBaseline = {
                                   "devin",
                                   "pi",
                                   "hermes",
+                                  "omp",
                                 ],
                               },
                               agentId: {
@@ -2270,6 +2273,109 @@ export const epicSchemaSurfaceBaseline = {
                                   "createdAt",
                                 ],
                               },
+                              {
+                                type: "object",
+                                properties: {
+                                  harnessId: {
+                                    type: "string",
+                                    const: "omp",
+                                  },
+                                  hostId: {
+                                    type: "string",
+                                  },
+                                  sessionId: {
+                                    type: "string",
+                                  },
+                                  sessionWorkspaceSnapshot: {
+                                    type: "object",
+                                    properties: {
+                                      workspaceKind: {
+                                        type: "string",
+                                        const: "session-snapshot",
+                                      },
+                                      primaryWorkspace: {
+                                        type: "string",
+                                      },
+                                      secondaryWorkspaces: {
+                                        default: [],
+                                        type: "array",
+                                        items: {
+                                          type: "string",
+                                        },
+                                      },
+                                    },
+                                    required: [
+                                      "workspaceKind",
+                                      "primaryWorkspace",
+                                    ],
+                                  },
+                                  createdAt: {
+                                    type: "number",
+                                  },
+                                  coveredUntilMessageId: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  profileId: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  labelSnapshot: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  accountUuid: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  accentColor: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                },
+                                required: [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt",
+                                ],
+                              },
                             ],
                           },
                           {
@@ -2325,6 +2431,7 @@ export const epicSchemaSurfaceBaseline = {
                               "devin",
                               "pi",
                               "hermes",
+                              "omp",
                             ],
                           },
                           agentId: {
@@ -2449,6 +2556,7 @@ export const epicSchemaSurfaceBaseline = {
                                             "devin",
                                             "pi",
                                             "hermes",
+                                            "omp",
                                           ],
                                         },
                                         noticeKind: {
@@ -3675,6 +3783,7 @@ export const epicSchemaSurfaceBaseline = {
                                     "devin",
                                     "pi",
                                     "hermes",
+                                    "omp",
                                   ],
                                 },
                                 source: {
@@ -3700,6 +3809,7 @@ export const epicSchemaSurfaceBaseline = {
                                         "devin",
                                         "pi",
                                         "hermes",
+                                        "omp",
                                       ],
                                     },
                                     sessionId: {
@@ -4319,6 +4429,7 @@ export const epicSchemaSurfaceBaseline = {
                                                 "devin",
                                                 "pi",
                                                 "hermes",
+                                                "omp",
                                               ],
                                             },
                                             agentId: {
@@ -4929,6 +5040,7 @@ export const epicSchemaSurfaceBaseline = {
                                   "devin",
                                   "pi",
                                   "hermes",
+                                  "omp",
                                 ],
                               },
                               agentId: {
@@ -6319,6 +6431,7 @@ export const epicSchemaSurfaceBaseline = {
                         "devin",
                         "pi",
                         "hermes",
+                        "omp",
                       ],
                     },
                     model: {
@@ -6408,6 +6521,7 @@ export const epicSchemaSurfaceBaseline = {
                         "devin",
                         "pi",
                         "hermes",
+                        "omp",
                       ],
                     },
                     sessionId: {
@@ -6564,6 +6678,7 @@ export const epicSchemaSurfaceBaseline = {
                                   "devin",
                                   "pi",
                                   "hermes",
+                                  "omp",
                                 ],
                               },
                               agentId: {
@@ -8662,6 +8777,117 @@ export const epicSchemaSurfaceBaseline = {
                                 ],
                                 additionalProperties: false,
                               },
+                              {
+                                type: "object",
+                                properties: {
+                                  harnessId: {
+                                    type: "string",
+                                    const: "omp",
+                                  },
+                                  hostId: {
+                                    type: "string",
+                                  },
+                                  sessionId: {
+                                    type: "string",
+                                  },
+                                  sessionWorkspaceSnapshot: {
+                                    type: "object",
+                                    properties: {
+                                      workspaceKind: {
+                                        type: "string",
+                                        const: "session-snapshot",
+                                      },
+                                      primaryWorkspace: {
+                                        type: "string",
+                                      },
+                                      secondaryWorkspaces: {
+                                        default: [],
+                                        type: "array",
+                                        items: {
+                                          type: "string",
+                                        },
+                                      },
+                                    },
+                                    required: [
+                                      "workspaceKind",
+                                      "primaryWorkspace",
+                                      "secondaryWorkspaces",
+                                    ],
+                                    additionalProperties: false,
+                                  },
+                                  createdAt: {
+                                    type: "number",
+                                  },
+                                  coveredUntilMessageId: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  profileId: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  labelSnapshot: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  accountUuid: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                  accentColor: {
+                                    default: null,
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "null",
+                                      },
+                                    ],
+                                  },
+                                },
+                                required: [
+                                  "harnessId",
+                                  "hostId",
+                                  "sessionId",
+                                  "sessionWorkspaceSnapshot",
+                                  "createdAt",
+                                  "coveredUntilMessageId",
+                                  "profileId",
+                                  "labelSnapshot",
+                                  "accountUuid",
+                                  "accentColor",
+                                ],
+                                additionalProperties: false,
+                              },
                             ],
                           },
                           {
@@ -8718,6 +8944,7 @@ export const epicSchemaSurfaceBaseline = {
                               "devin",
                               "pi",
                               "hermes",
+                              "omp",
                             ],
                           },
                           agentId: {
@@ -8847,6 +9074,7 @@ export const epicSchemaSurfaceBaseline = {
                                             "devin",
                                             "pi",
                                             "hermes",
+                                            "omp",
                                           ],
                                         },
                                         noticeKind: {
@@ -10122,6 +10350,7 @@ export const epicSchemaSurfaceBaseline = {
                                     "devin",
                                     "pi",
                                     "hermes",
+                                    "omp",
                                   ],
                                 },
                                 source: {
@@ -10147,6 +10376,7 @@ export const epicSchemaSurfaceBaseline = {
                                         "devin",
                                         "pi",
                                         "hermes",
+                                        "omp",
                                       ],
                                     },
                                     sessionId: {
@@ -10749,6 +10979,7 @@ export const epicSchemaSurfaceBaseline = {
                                                 "devin",
                                                 "pi",
                                                 "hermes",
+                                                "omp",
                                               ],
                                             },
                                             agentId: {
@@ -11381,6 +11612,7 @@ export const epicSchemaSurfaceBaseline = {
                                   "devin",
                                   "pi",
                                   "hermes",
+                                  "omp",
                                 ],
                               },
                               agentId: {

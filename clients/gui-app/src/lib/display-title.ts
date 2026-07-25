@@ -58,7 +58,7 @@ export type DisplayTitleKind = EpicNodeKind | "epic" | "phase" | "agent";
  * fallback baked into data apart from a title a user chose.
  */
 const UNTITLED_LABELS: Readonly<Record<DisplayTitleKind, string>> = {
-  epic: "Untitled epic",
+  epic: "Untitled task",
   phase: "Untitled phase",
   agent: "Untitled agent",
   chat: "Untitled chat",
@@ -70,7 +70,7 @@ const UNTITLED_LABELS: Readonly<Record<DisplayTitleKind, string>> = {
   review: "Untitled review",
 };
 
-/** Host-aligned literal for an empty epic title. Single-sourced from the map. */
+/** User-facing literal for an empty epic title. Single-sourced from the map. */
 export const UNTITLED_EPIC_TITLE = UNTITLED_LABELS.epic;
 
 /** The "Untitled <kind>" fallback label for a given kind. */
@@ -91,7 +91,7 @@ export function displayTitle(title: string, kind: DisplayTitleKind): string {
 /**
  * Source-aware epic title: the raw title when non-empty, else a slice of the
  * epic's `initialUserPrompt` (via `createEpicName`) when that yields a
- * non-empty result, else "Untitled epic".
+ * non-empty result, else "Untitled task".
  */
 export function epicDisplayTitle(epic: {
   readonly title: string;

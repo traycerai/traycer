@@ -137,7 +137,7 @@ export function ComposerBody({
                 disabled={false}
                 placeholder={COMPOSER_PLACEHOLDER}
                 editorClassName={editorClassName}
-                stabilizeImageAttachmentCaret={false}
+                stabilizeImageAttachmentCaret
                 onSnapshot={onSnapshot}
                 onSubmit={onSubmit}
                 onPaste={chatPasteActive ? paste.onPaste : NOOP}

@@ -1,6 +1,7 @@
 {
   "name": "@traycer-clients/desktop",
   "productName": "Traycer",
+  "desktopName": "traycer-desktop.desktop",
   "version": "0.0.0",
   "description": "Traycer standalone desktop shell (Electron) hosting the gui-app renderer; host lifecycle is delegated to the Traycer CLI.",
   "homepage": "https://traycer.ai",
@@ -197,6 +198,8 @@
     "linux": {
       "artifactName": "traycer-desktop-linux-${arch}.${ext}",
       "executableName": "traycer-desktop",
+      "icon": "icons",
+      "syncDesktopName": true,
       "maintainer": "Traycer AI <support@traycer.ai>",
       "target": [
         {
