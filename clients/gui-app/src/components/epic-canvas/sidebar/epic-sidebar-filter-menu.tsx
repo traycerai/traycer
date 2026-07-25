@@ -9,6 +9,7 @@
  * silent. Multi-select items keep the menu open on toggle.
  */
 import {
+  Archive,
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   ListFilter,
@@ -51,6 +52,7 @@ import {
   useArtifactFilter,
   useArtifactSort,
   useChatFilter,
+  useChatShowArchived,
   useChatSort,
   useLeftPanelStore,
   type ArtifactReadFilter,
@@ -176,15 +178,28 @@ function SortMenuSection(props: {
 export function ChatFilterMenu(props: {
   readonly epicId: string;
   readonly disabled: boolean;
+  /**
+   * Whether the host backing this epic advertises `epic.setChatArchived`. The
+   * "Show archived" item is omitted entirely on a host without it: there is no
+   * way to archive anything there, so the toggle could only ever reveal
+   * nothing.
+   */
+  readonly canArchive: boolean;
 }) {
   const { epicId } = props;
   const filter = useChatFilter(epicId);
   const sort = useChatSort(epicId);
+  const showArchived = useChatShowArchived(epicId);
   const setChatOrigin = useLeftPanelStore((s) => s.setChatOrigin);
+  const toggleChatShowArchived = useLeftPanelStore(
+    (s) => s.toggleChatShowArchived,
+  );
   const setChatSortField = useLeftPanelStore((s) => s.setChatSortField);
   const toggleChatSortDirection = useLeftPanelStore(
     (s) => s.toggleChatSortDirection,
   );
+  // Origin only. "Show archived" reveals rows instead of hiding them, so it
+  // must not light the dot that warns "a filter is hiding nodes".
   const active = isChatFilterActive(filter);
 
   return (
@@ -218,6 +233,20 @@ export function ChatFilterMenu(props: {
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+        {props.canArchive ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={showArchived}
+              onCheckedChange={() => toggleChatShowArchived(epicId)}
+              onSelect={(event) => event.preventDefault()}
+              data-testid="epic-sidebar-show-archived"
+            >
+              <Archive className="size-4" />
+              Show archived
+            </DropdownMenuCheckboxItem>
+          </>
+        ) : null}
         <SortMenuSection
           fields={CHAT_SORT_FIELDS}
           sort={sort}
