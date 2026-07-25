@@ -59,6 +59,15 @@ export const chatSchema = z.object({
   claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
   messages: z.array(messageSchema),
   events: z.array(chatEventSchema).default([]),
+  /**
+   * Wall-clock ms when this chat was archived, or `null` while active.
+   * Archiving is a durable, host-backed flag (see the "Archive Mechanism"
+   * in the chat-sidebar redesign plan): the sidebar hides an archived chat's
+   * whole subtree behind the "Show archived" filter. Set/cleared via the
+   * optional `epic.setChatArchived` RPC. Defaulted so records persisted
+   * before archiving existed parse unchanged.
+   */
+  archivedAt: z.number().nullable().default(null),
 });
 export type Chat = z.infer<typeof chatSchema>;
 
@@ -81,4 +90,25 @@ export const chatSchemaPreInReplyTo = z.object({
   claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
   messages: z.array(messageSchemaPreInReplyTo),
   events: z.array(chatEventSchemaPreInReplyTo).default([]),
+});
+
+// Wire-freeze copy without `archivedAt`, bound to `chat.subscribe@1.4`'s
+// snapshot serverFrame so that released line stays verbatim - archiving rides
+// a `1.5` minor instead (see `archivedAt` above and `chatSnapshotSchemaV14`).
+// Hand-frozen (every other field reuses the live sub-schemas); NOT derived
+// from the live shape.
+export const chatSchemaV14 = z.object({
+  parentId: z.string().nullable(),
+  id: z.string(),
+  userId: z.string(),
+  hostId: z.string(),
+  title: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  isTitleEditedByUser: z.boolean(),
+  settings: chatRunSettingsSchema.nullable().default(null),
+  activeSessionChain: activeSessionChainSchema.nullable().default(null),
+  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
+  messages: z.array(messageSchema),
+  events: z.array(chatEventSchema).default([]),
 });

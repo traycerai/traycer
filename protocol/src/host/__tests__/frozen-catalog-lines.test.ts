@@ -3,15 +3,24 @@ import { z } from "zod";
 import {
   listAgentsResponseSchemaV10,
   listAgentsResponseSchemaV20,
+  listAgentsResponseSchemaV30,
+  listAgentsResponseSchemaV40,
+  listAgentsResponseSchemaV50,
 } from "@traycer/protocol/host/agent/shared";
 import {
   listGuiHarnessesResponseSchemaV10,
   listGuiHarnessesResponseSchemaV20,
+  listGuiHarnessesResponseSchemaV21,
+  listGuiHarnessesResponseSchemaV30,
+  listGuiHarnessesResponseSchemaV40,
+  listGuiHarnessesResponseSchemaV50,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
+  providersListResponseSchemaV40,
+  providersListResponseSchemaV50,
 } from "@traycer/protocol/host/provider-schemas";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -34,11 +43,20 @@ function dump(schema: z.ZodType): unknown {
 const LIVE_FROZEN_EXPORTS = {
   "agent.gui.listHarnesses@1.0": listGuiHarnessesResponseSchemaV10,
   "agent.gui.listHarnesses@2.0": listGuiHarnessesResponseSchemaV20,
+  "agent.gui.listHarnesses@2.1": listGuiHarnessesResponseSchemaV21,
+  "agent.gui.listHarnesses@3.0": listGuiHarnessesResponseSchemaV30,
+  "agent.gui.listHarnesses@4.0": listGuiHarnessesResponseSchemaV40,
+  "agent.gui.listHarnesses@5.0": listGuiHarnessesResponseSchemaV50,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
+  "agent.list@3.0": listAgentsResponseSchemaV30,
+  "agent.list@4.0": listAgentsResponseSchemaV40,
+  "agent.list@5.0": listAgentsResponseSchemaV50,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,
+  "providers.list@4.0": providersListResponseSchemaV40,
+  "providers.list@5.0": providersListResponseSchemaV50,
 } as const;
 
 describe("frozen catalog line snapshots", () => {
