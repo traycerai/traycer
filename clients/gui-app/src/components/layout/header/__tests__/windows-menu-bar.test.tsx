@@ -6,18 +6,26 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
 import type {
   DesktopMenuCommandPayload,
-  DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
 } from "@/lib/windows/types";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
+const { isWindowsMock } = vi.hoisted(() => ({
+  isWindowsMock: vi.fn((): boolean => true),
+}));
+
+vi.mock("@/lib/keybindings/platform", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/keybindings/platform")>();
+  return { ...actual, isWindows: isWindowsMock };
+});
+
 function buildHost(
-  platform: DesktopRuntimePlatform,
   openTopLevel: (
     menuId: DesktopTopLevelMenuId,
     anchorX: number,
@@ -35,7 +43,6 @@ function buildHost(
   });
   return Object.assign(host, {
     menu: {
-      platform,
       onCommand: (_handler: (payload: DesktopMenuCommandPayload) => void) => ({
         dispose: () => undefined,
       }),
@@ -43,6 +50,10 @@ function buildHost(
     },
   });
 }
+
+beforeEach(() => {
+  isWindowsMock.mockReturnValue(true);
+});
 
 afterEach(() => {
   cleanup();
@@ -52,7 +63,7 @@ afterEach(() => {
 describe("WindowsMenuBar", () => {
   it("shows every application menu and anchors native popup requests below the clicked label", async () => {
     const openTopLevel = vi.fn(() => Promise.resolve());
-    const host = buildHost("win32", openTopLevel);
+    const host = buildHost(openTopLevel);
     render(
       <RunnerHostProvider runnerHost={host}>
         <WindowsMenuBar />
@@ -74,8 +85,67 @@ describe("WindowsMenuBar", () => {
     });
   });
 
+  it("opens the matching menu when its Alt access key is pressed", async () => {
+    const openTopLevel = vi.fn(() => Promise.resolve());
+    const host = buildHost(openTopLevel);
+    render(
+      <RunnerHostProvider runnerHost={host}>
+        <WindowsMenuBar />
+      </RunnerHostProvider>,
+    );
+    const view = screen.getByRole("button", { name: "View" });
+    vi.spyOn(view, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(60, 4, 40, 32),
+    );
+
+    fireEvent.keyDown(document.body, { key: "v", altKey: true });
+
+    await waitFor(() => {
+      expect(openTopLevel).toHaveBeenCalledWith("view", 60, 36);
+    });
+  });
+
+  it("underlines each access key while Alt is held", () => {
+    const host = buildHost(() => Promise.resolve());
+    render(
+      <RunnerHostProvider runnerHost={host}>
+        <WindowsMenuBar />
+      </RunnerHostProvider>,
+    );
+    const file = screen.getByRole("button", { name: "File" });
+    expect(file.querySelector("span.underline")).toBeNull();
+
+    fireEvent.keyDown(document.body, { key: "Alt", altKey: true });
+    expect(file.querySelector("span.underline")?.textContent).toBe("F");
+
+    fireEvent.keyUp(document.body, { key: "Alt" });
+    expect(file.querySelector("span.underline")).toBeNull();
+  });
+
   it("stays absent outside the Windows desktop shell", () => {
-    const host = buildHost("darwin", () => Promise.resolve());
+    isWindowsMock.mockReturnValue(false);
+    const host = buildHost(() => Promise.resolve());
+    render(
+      <RunnerHostProvider runnerHost={host}>
+        <WindowsMenuBar />
+      </RunnerHostProvider>,
+    );
+
+    expect(
+      screen.queryByRole("navigation", { name: "Application menu" }),
+    ).toBeNull();
+  });
+
+  it("stays absent when no desktop menu bridge is present", () => {
+    const host = new MockRunnerHost({
+      signInUrl: "https://auth.traycer.invalid/sign-in",
+      authnBaseUrl: "http://localhost:5005",
+      localHost: null,
+      hosts: [],
+      workspaceFolderPickerPaths: undefined,
+      hasLocalHost: undefined,
+      traycerCli: undefined,
+    });
     render(
       <RunnerHostProvider runnerHost={host}>
         <WindowsMenuBar />

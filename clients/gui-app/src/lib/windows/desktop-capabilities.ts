@@ -73,13 +73,7 @@ function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
 function isDesktopMenuPopupBridge(
   value: unknown,
 ): value is DesktopMenuPopupBridge {
-  return (
-    isRecord(value) &&
-    (value.platform === "darwin" ||
-      value.platform === "win32" ||
-      value.platform === "linux") &&
-    typeof value.openTopLevel === "function"
-  );
+  return isRecord(value) && typeof value.openTopLevel === "function";
 }
 
 function isDesktopSupportBridge(value: unknown): value is DesktopSupportBridge {
