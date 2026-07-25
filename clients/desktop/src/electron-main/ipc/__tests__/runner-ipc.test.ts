@@ -707,6 +707,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.certTrustSystemDialog,
         RunnerHostInvoke.windowSetOverlayIcon,
         RunnerHostInvoke.windowSetTitleBarOverlay,
+        // Windows frameless menu strip → native submenu popup.
+        RunnerHostInvoke.menuOpenTopLevel,
         RunnerHostInvoke.displayList,
         RunnerHostInvoke.fileDropWriteTemporary,
         RunnerHostInvoke.fileDropCopyTemporary,
@@ -2733,6 +2735,7 @@ describe("RunnerIpcBridge", () => {
           downloadProgress: null,
           installBlockedReason: null,
           installGuidance: null,
+          installInFlight: false,
           errorMessage: null,
           lastCheckedAt: null,
           lastCheckIntent: null,

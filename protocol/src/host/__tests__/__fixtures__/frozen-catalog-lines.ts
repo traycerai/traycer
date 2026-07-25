@@ -183,6 +183,418 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
       ],
       "additionalProperties": false
     },
+    "agent.gui.listHarnesses@2.1": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "modes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "gui",
+                    "tui"
+                  ]
+                }
+              },
+              "requiresApiKey": {
+                "type": "boolean"
+              },
+              "supportedPermissionModes": {
+                "default": [
+                  "supervised",
+                  "auto_accept_edits",
+                  "full_access"
+                ],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "supervised",
+                    "auto_accept_edits",
+                    "full_access"
+                  ]
+                }
+              },
+              "availabilityPending": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "enabled",
+              "available",
+              "error",
+              "modes",
+              "requiresApiKey",
+              "supportedPermissionModes",
+              "availabilityPending"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnesses"
+      ],
+      "additionalProperties": false
+    },
+    "agent.gui.listHarnesses@3.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "modes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "gui",
+                    "tui"
+                  ]
+                }
+              },
+              "requiresApiKey": {
+                "type": "boolean"
+              },
+              "supportedPermissionModes": {
+                "default": [
+                  "supervised",
+                  "auto_accept_edits",
+                  "full_access"
+                ],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "supervised",
+                    "auto_accept_edits",
+                    "full_access"
+                  ]
+                }
+              },
+              "availabilityPending": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "enabled",
+              "available",
+              "error",
+              "modes",
+              "requiresApiKey",
+              "supportedPermissionModes",
+              "availabilityPending"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnesses"
+      ],
+      "additionalProperties": false
+    },
+    "agent.gui.listHarnesses@4.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "modes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "gui",
+                    "tui"
+                  ]
+                }
+              },
+              "requiresApiKey": {
+                "type": "boolean"
+              },
+              "supportedPermissionModes": {
+                "default": [
+                  "supervised",
+                  "auto_accept_edits",
+                  "full_access"
+                ],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "supervised",
+                    "auto_accept_edits",
+                    "full_access"
+                  ]
+                }
+              },
+              "availabilityPending": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "enabled",
+              "available",
+              "error",
+              "modes",
+              "requiresApiKey",
+              "supportedPermissionModes",
+              "availabilityPending"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnesses"
+      ],
+      "additionalProperties": false
+    },
+    "agent.gui.listHarnesses@5.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi",
+                  "hermes"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "modes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "gui",
+                    "tui"
+                  ]
+                }
+              },
+              "requiresApiKey": {
+                "type": "boolean"
+              },
+              "supportedPermissionModes": {
+                "default": [
+                  "supervised",
+                  "auto_accept_edits",
+                  "full_access"
+                ],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "supervised",
+                    "auto_accept_edits",
+                    "full_access"
+                  ]
+                }
+              },
+              "availabilityPending": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "enabled",
+              "available",
+              "error",
+              "modes",
+              "requiresApiKey",
+              "supportedPermissionModes",
+              "availabilityPending"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnesses"
+      ],
+      "additionalProperties": false
+    },
     "agent.list@1.0": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -401,6 +813,464 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                       "copilot",
                       "kilocode",
                       "openrouter"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "isSelf": {
+                "type": "boolean"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "readTranscript": {
+                    "type": "boolean"
+                  },
+                  "sendMessage": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "readTranscript",
+                  "sendMessage"
+                ],
+                "additionalProperties": false
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "folderPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "isWorktree": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "parentId",
+              "hostId",
+              "isLocal",
+              "surface",
+              "harnessId",
+              "isSelf",
+              "title",
+              "capabilities",
+              "active",
+              "folderPaths",
+              "isWorktree"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "caller",
+        "scope",
+        "agents"
+      ],
+      "additionalProperties": false
+    },
+    "agent.list@3.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "caller": {
+          "type": "object",
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "canSendMessages": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "agentId",
+            "canSendMessages"
+          ],
+          "additionalProperties": false
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "user",
+            "all"
+          ]
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "parentId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hostId": {
+                "type": "string"
+              },
+              "isLocal": {
+                "type": "boolean"
+              },
+              "surface": {
+                "type": "string",
+                "enum": [
+                  "gui",
+                  "tui"
+                ]
+              },
+              "harnessId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "claude",
+                      "codex",
+                      "opencode",
+                      "traycer",
+                      "cursor",
+                      "grok",
+                      "qwen",
+                      "kiro",
+                      "droid",
+                      "kimi",
+                      "copilot",
+                      "kilocode",
+                      "openrouter",
+                      "amp"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "isSelf": {
+                "type": "boolean"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "readTranscript": {
+                    "type": "boolean"
+                  },
+                  "sendMessage": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "readTranscript",
+                  "sendMessage"
+                ],
+                "additionalProperties": false
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "folderPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "isWorktree": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "parentId",
+              "hostId",
+              "isLocal",
+              "surface",
+              "harnessId",
+              "isSelf",
+              "title",
+              "capabilities",
+              "active",
+              "folderPaths",
+              "isWorktree"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "caller",
+        "scope",
+        "agents"
+      ],
+      "additionalProperties": false
+    },
+    "agent.list@4.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "caller": {
+          "type": "object",
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "canSendMessages": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "agentId",
+            "canSendMessages"
+          ],
+          "additionalProperties": false
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "user",
+            "all"
+          ]
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "parentId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hostId": {
+                "type": "string"
+              },
+              "isLocal": {
+                "type": "boolean"
+              },
+              "surface": {
+                "type": "string",
+                "enum": [
+                  "gui",
+                  "tui"
+                ]
+              },
+              "harnessId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "claude",
+                      "codex",
+                      "opencode",
+                      "traycer",
+                      "cursor",
+                      "grok",
+                      "qwen",
+                      "kiro",
+                      "droid",
+                      "kimi",
+                      "copilot",
+                      "kilocode",
+                      "openrouter",
+                      "amp",
+                      "devin",
+                      "pi"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "isSelf": {
+                "type": "boolean"
+              },
+              "title": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "readTranscript": {
+                    "type": "boolean"
+                  },
+                  "sendMessage": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "readTranscript",
+                  "sendMessage"
+                ],
+                "additionalProperties": false
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "folderPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "isWorktree": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "parentId",
+              "hostId",
+              "isLocal",
+              "surface",
+              "harnessId",
+              "isSelf",
+              "title",
+              "capabilities",
+              "active",
+              "folderPaths",
+              "isWorktree"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "caller",
+        "scope",
+        "agents"
+      ],
+      "additionalProperties": false
+    },
+    "agent.list@5.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "caller": {
+          "type": "object",
+          "properties": {
+            "agentId": {
+              "type": "string"
+            },
+            "canSendMessages": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "agentId",
+            "canSendMessages"
+          ],
+          "additionalProperties": false
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "user",
+            "all"
+          ]
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "parentId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hostId": {
+                "type": "string"
+              },
+              "isLocal": {
+                "type": "boolean"
+              },
+              "surface": {
+                "type": "string",
+                "enum": [
+                  "gui",
+                  "tui"
+                ]
+              },
+              "harnessId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "claude",
+                      "codex",
+                      "opencode",
+                      "traycer",
+                      "cursor",
+                      "grok",
+                      "qwen",
+                      "kiro",
+                      "droid",
+                      "kimi",
+                      "copilot",
+                      "kilocode",
+                      "openrouter",
+                      "amp",
+                      "devin",
+                      "pi",
+                      "hermes"
                     ]
                   },
                   {
@@ -1539,6 +2409,1395 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
               "envOverrides",
               "loginCapability",
               "availabilityPending",
+              "auth"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "additionalProperties": false
+    },
+    "providers.list@4.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "providerId": {
+                "type": "string",
+                "enum": [
+                  "claude-code",
+                  "codex",
+                  "opencode",
+                  "cursor",
+                  "traycer",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi"
+                ]
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "disabledBy": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "handle": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "at": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "handle",
+                      "at"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "selected": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "bundled"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "path"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "custom"
+                      },
+                      "path": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "bundled",
+                        "path",
+                        "custom"
+                      ]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "versionPending": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "path",
+                    "version",
+                    "available",
+                    "versionPending"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "authPending": {
+                "type": "boolean"
+              },
+              "checkedAt": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "apiKey": {
+                "type": "object",
+                "properties": {
+                  "supported": {
+                    "type": "boolean"
+                  },
+                  "configured": {
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "stored",
+                          "env"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "supported",
+                  "configured",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "terminalAgentArgs": {
+                "default": "",
+                "type": "string"
+              },
+              "envOverrides": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "loginCapability": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "oauthArgs": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "token": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "vars": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "vars"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "codePaste": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "oauthArgs",
+                      "token",
+                      "codePaste"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "availabilityPending": {
+                "default": false,
+                "type": "boolean"
+              },
+              "profiles": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "profileId": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "ambient",
+                        "managed"
+                      ]
+                    },
+                    "authType": {
+                      "type": "string",
+                      "enum": [
+                        "oauth"
+                      ]
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "auth": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "authenticated",
+                            "unauthenticated",
+                            "configured",
+                            "unavailable",
+                            "unknown"
+                          ]
+                        },
+                        "badgeText": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "label": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "detail": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "badgeText",
+                        "label",
+                        "detail"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "identity": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "email": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "tier": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "email",
+                            "tier",
+                            "accountUuid"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "usageUpdatedAt": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rateLimitStatus": {
+                      "default": "unknown",
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "near_limit",
+                        "hard_limit",
+                        "unknown"
+                      ]
+                    },
+                    "rateLimitLimitedScopes": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "family": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "severity": {
+                                "type": "string",
+                                "enum": [
+                                  "near_limit",
+                                  "hard_limit"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "family",
+                              "severity"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "duplicateOfProfileId": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ambientDriftNotice": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "previousEmail": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "changedAt": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "previousEmail",
+                            "changedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "accentColor": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "#ef4444",
+                            "#f97316",
+                            "#f59e0b",
+                            "#84cc16",
+                            "#10b981",
+                            "#14b8a6",
+                            "#06b6d4",
+                            "#3b82f6",
+                            "#8b5cf6",
+                            "#a855f7",
+                            "#d946ef",
+                            "#ec4899"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reusedTombstone": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string"
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "#ef4444",
+                                    "#f97316",
+                                    "#f59e0b",
+                                    "#84cc16",
+                                    "#10b981",
+                                    "#14b8a6",
+                                    "#06b6d4",
+                                    "#3b82f6",
+                                    "#8b5cf6",
+                                    "#a855f7",
+                                    "#d946ef",
+                                    "#ec4899"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "accentColor"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "profileId",
+                    "kind",
+                    "authType",
+                    "label",
+                    "auth",
+                    "identity",
+                    "usageUpdatedAt",
+                    "rateLimitStatus",
+                    "rateLimitLimitedScopes",
+                    "duplicateOfProfileId",
+                    "ambientDriftNotice",
+                    "accentColor"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "auth": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "authenticated",
+                      "unauthenticated",
+                      "configured",
+                      "unavailable",
+                      "unknown"
+                    ]
+                  },
+                  "badgeText": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "status",
+                  "badgeText",
+                  "label",
+                  "detail"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "providerId",
+              "enabled",
+              "disabledBy",
+              "selected",
+              "candidates",
+              "authPending",
+              "checkedAt",
+              "apiKey",
+              "terminalAgentArgs",
+              "envOverrides",
+              "loginCapability",
+              "availabilityPending",
+              "profiles",
+              "auth"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "additionalProperties": false
+    },
+    "providers.list@5.0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "providerId": {
+                "type": "string",
+                "enum": [
+                  "claude-code",
+                  "codex",
+                  "opencode",
+                  "cursor",
+                  "traycer",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi",
+                  "hermes"
+                ]
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "disabledBy": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "userId": {
+                        "type": "string"
+                      },
+                      "handle": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "at": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "userId",
+                      "handle",
+                      "at"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "selected": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "bundled"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "path"
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "const": "custom"
+                      },
+                      "path": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "candidates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "bundled",
+                        "path",
+                        "custom"
+                      ]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "versionPending": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "path",
+                    "version",
+                    "available",
+                    "versionPending"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "authPending": {
+                "type": "boolean"
+              },
+              "checkedAt": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "apiKey": {
+                "type": "object",
+                "properties": {
+                  "supported": {
+                    "type": "boolean"
+                  },
+                  "configured": {
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "stored",
+                          "env"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "supported",
+                  "configured",
+                  "source"
+                ],
+                "additionalProperties": false
+              },
+              "terminalAgentArgs": {
+                "default": "",
+                "type": "string"
+              },
+              "envOverrides": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "value"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "loginCapability": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "oauthArgs": {
+                        "anyOf": [
+                          {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "token": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "vars": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "vars"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "codePaste": {
+                        "default": null,
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "oauthArgs",
+                      "token",
+                      "codePaste"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "availabilityPending": {
+                "default": false,
+                "type": "boolean"
+              },
+              "profiles": {
+                "default": [],
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "profileId": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "ambient",
+                        "managed"
+                      ]
+                    },
+                    "authType": {
+                      "type": "string",
+                      "enum": [
+                        "oauth"
+                      ]
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "auth": {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "authenticated",
+                            "unauthenticated",
+                            "configured",
+                            "unavailable",
+                            "unknown"
+                          ]
+                        },
+                        "badgeText": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "label": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "detail": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "badgeText",
+                        "label",
+                        "detail"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "identity": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "email": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "tier": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountUuid": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "email",
+                            "tier",
+                            "accountUuid"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "usageUpdatedAt": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rateLimitStatus": {
+                      "default": "unknown",
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "near_limit",
+                        "hard_limit",
+                        "unknown"
+                      ]
+                    },
+                    "rateLimitLimitedScopes": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "family": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "severity": {
+                                "type": "string",
+                                "enum": [
+                                  "near_limit",
+                                  "hard_limit"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "family",
+                              "severity"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "duplicateOfProfileId": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ambientDriftNotice": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "previousEmail": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "changedAt": {
+                              "type": "number"
+                            }
+                          },
+                          "required": [
+                            "previousEmail",
+                            "changedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "accentColor": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "enum": [
+                            "#ef4444",
+                            "#f97316",
+                            "#f59e0b",
+                            "#84cc16",
+                            "#10b981",
+                            "#14b8a6",
+                            "#06b6d4",
+                            "#3b82f6",
+                            "#8b5cf6",
+                            "#a855f7",
+                            "#d946ef",
+                            "#ec4899"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reusedTombstone": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "label": {
+                              "type": "string"
+                            },
+                            "accentColor": {
+                              "default": null,
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "enum": [
+                                    "#ef4444",
+                                    "#f97316",
+                                    "#f59e0b",
+                                    "#84cc16",
+                                    "#10b981",
+                                    "#14b8a6",
+                                    "#06b6d4",
+                                    "#3b82f6",
+                                    "#8b5cf6",
+                                    "#a855f7",
+                                    "#d946ef",
+                                    "#ec4899"
+                                  ]
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "label",
+                            "accentColor"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "profileId",
+                    "kind",
+                    "authType",
+                    "label",
+                    "auth",
+                    "identity",
+                    "usageUpdatedAt",
+                    "rateLimitStatus",
+                    "rateLimitLimitedScopes",
+                    "duplicateOfProfileId",
+                    "ambientDriftNotice",
+                    "accentColor"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "auth": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "authenticated",
+                      "unauthenticated",
+                      "configured",
+                      "unavailable",
+                      "unknown"
+                    ]
+                  },
+                  "badgeText": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "label": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "status",
+                  "badgeText",
+                  "label",
+                  "detail"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "providerId",
+              "enabled",
+              "disabledBy",
+              "selected",
+              "candidates",
+              "authPending",
+              "checkedAt",
+              "apiKey",
+              "terminalAgentArgs",
+              "envOverrides",
+              "loginCapability",
+              "availabilityPending",
+              "profiles",
               "auth"
             ],
             "additionalProperties": false

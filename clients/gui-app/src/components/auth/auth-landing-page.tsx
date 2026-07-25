@@ -20,7 +20,9 @@ function resolveAppVersionLabel(): string {
 
 export function AuthLandingPage() {
   return (
-    <main className="relative isolate flex min-h-svh flex-1 overflow-hidden bg-zinc-950 text-white">
+    // min-h-full, not min-h-svh: the standalone shell owns the viewport
+    // height and reserves the Windows title-bar band above this page.
+    <main className="relative isolate flex min-h-full flex-1 overflow-hidden bg-zinc-950 text-white">
       <PhotoBloom />
 
       <section className="relative z-10 mx-auto flex w-full flex-col items-center justify-center px-[clamp(1.5rem,5vw,4.5rem)] pb-[clamp(5rem,12vh,8rem)] pt-[clamp(4rem,12vh,8rem)] text-center font-heading">
