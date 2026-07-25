@@ -30,6 +30,7 @@ installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 const pinTestState = vi.hoisted(() => ({
   mutate: vi.fn(),
 }));
+const recordViewed = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({
   DesktopDialogHost: () => null,
@@ -72,6 +73,10 @@ vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
 vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
   useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
   usePendingSetPinnedEpicIds: () => new Set(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewed }),
 }));
 
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
@@ -196,6 +201,7 @@ describe("app route tab-strip navigation", () => {
   beforeEach(() => {
     window.localStorage.clear();
     pinTestState.mutate.mockClear();
+    recordViewed.mockClear();
     resetStores();
   });
 
