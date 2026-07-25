@@ -30,6 +30,7 @@ import {
   readResolutionTestWindowConfig,
   shouldUseBuiltRendererForResolutionTest,
 } from "./resolution-test-env";
+import { windowsTitleBarOverlayHeight } from "./windows-title-bar-overlay";
 
 const STRUCTURED_RENDERER_LOG_PREFIX = "[traycer-gui]";
 
@@ -92,7 +93,11 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     // env vars. Mac ignores the color/height options but the truthy value
     // is what flips WCO emission on.
     titleBarOverlay: isWindows
-      ? { color: "#0b0b0d", symbolColor: "#e5e5e5", height: 36 }
+      ? {
+          color: "#0b0b0d",
+          symbolColor: "#e5e5e5",
+          height: windowsTitleBarOverlayHeight(options.zoomFactor),
+        }
       : isMac
         ? true
         : undefined,

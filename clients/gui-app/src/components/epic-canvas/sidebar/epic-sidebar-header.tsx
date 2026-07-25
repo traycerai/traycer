@@ -11,17 +11,44 @@ import {
 import { type LeftPanelDefinition } from "@/components/epic-canvas/sidebar/epic-sidebar";
 import { Button } from "@/components/ui/button";
 import { ChevronRight } from "lucide-react";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import {
   useEpicLeftPanelStore,
   useLeftPanelSectionCollapsed,
 } from "@/stores/epics/left-panel-store";
+import { useMaybeSidebarBulkSelection } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
+import {
+  usePanelHeaderSearchOpen,
+  usePanelHeaderSearchStore,
+} from "@/stores/epics/panel-header-search-store";
 
 interface PanelGroupSectionHeaderProps {
   readonly epicId: string;
   readonly tabId: string;
   readonly panel: LeftPanelDefinition;
+}
+
+/**
+ * Portal target for an opted-in panel's search input. Rendered INSTEAD of the
+ * standard header row (same `h-9`, so the body below never shifts), and left
+ * empty here: the owning panel portals its own input in, keeping that input's
+ * state, refs, and combobox ARIA wiring in a single component.
+ */
+function PanelHeaderSearchRow(props: { readonly panel: LeftPanelDefinition }) {
+  const setSearchSlot = usePanelHeaderSearchStore((s) => s.setSearchSlot);
+  const panelId = props.panel.id;
+  const setSlotRef = useCallback(
+    (element: HTMLDivElement | null) => setSearchSlot(panelId, element),
+    [panelId, setSearchSlot],
+  );
+  return (
+    <div
+      ref={setSlotRef}
+      className="flex h-9 shrink-0 items-center px-2"
+      data-testid={`epic-sidebar-header-search-slot-${panelId}`}
+    />
+  );
 }
 
 export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
@@ -48,11 +75,39 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
     id: getLeftPanelSectionDragId(props.panel.id),
     data: dragData,
   });
+  const searchOpen = usePanelHeaderSearchOpen(props.panel.id);
+  const bulkSelection = useMaybeSidebarBulkSelection();
+  // Selection is a panel-wide mode, so its controls own the row instead of
+  // competing horizontally with a title that no longer describes the mode.
+  if (bulkSelection?.selectionMode === true && Actions !== null) {
+    return (
+      <div
+        className="@container flex h-9 shrink-0 items-center justify-end px-2"
+        data-panel-header-mode="selection"
+      >
+        <Actions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          collapsed={collapsed}
+        />
+      </div>
+    );
+  }
+  // Search mode takes the whole row rather than adding one below it, so the
+  // list keeps its vertical position and the panel spends no resting space on
+  // a mode that is off most of the time.
+  //
+  // Never while collapsed: the body - and with it the component that portals
+  // the input in - is unmounted, so swapping would leave an empty row with no
+  // input, no chevron, and no way back out.
+  if (props.panel.supportsHeaderSearch && searchOpen && !collapsed) {
+    return <PanelHeaderSearchRow panel={props.panel} />;
+  }
   return (
     <div
       ref={dragRef}
       className={cn(
-        "flex h-9 shrink-0 items-center justify-between gap-2 px-3",
+        "@container flex h-9 shrink-0 items-center justify-between gap-2 px-3",
         isDragging && "opacity-60",
       )}
     >
@@ -86,7 +141,7 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
           toggleCollapsed(props.panel.id);
         }}
       >
-        <Icon className="size-4 shrink-0 text-muted-foreground/80" />
+        <Icon className="size-4 shrink-0 text-muted-foreground/80 @max-[14rem]:hidden" />
         <div className="min-w-0">
           <p className="truncate text-ui-xs font-normal uppercase tracking-wide text-muted-foreground">
             {props.panel.title}

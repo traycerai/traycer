@@ -281,6 +281,7 @@ function renderLandingComposer(): RenderResult {
   return render(
     <LandingComposer
       draftId={null}
+      pendingCreateId={null}
       initialSettings={null}
       workspaceControls={null}
     />,

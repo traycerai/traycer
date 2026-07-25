@@ -90,6 +90,8 @@ import type {
 } from "../ipc-contracts/global-shortcuts-types";
 import type {
   DesktopAuthSessionSnapshot,
+  DesktopRuntimePlatform,
+  DesktopTopLevelMenuId,
   MenuCommandPayload,
   OpenEpicInNewWindowResult,
   OwnershipClaimResult,
@@ -343,6 +345,7 @@ export interface DesktopPlatformBridge {
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
+    setTitleBarOverlay(color: string, symbolColor: string): Promise<void>;
   };
 }
 
@@ -395,9 +398,15 @@ export interface DesktopServiceBridge {
 }
 
 export interface DesktopMenuBridge {
+  readonly platform: DesktopRuntimePlatform;
   onCommand(handler: (payload: MenuCommandPayload) => void): {
     dispose: () => void;
   };
+  openTopLevel(
+    menuId: DesktopTopLevelMenuId,
+    anchorX: number,
+    anchorY: number,
+  ): Promise<void>;
 }
 
 export interface DesktopAppUpdatesBridge {

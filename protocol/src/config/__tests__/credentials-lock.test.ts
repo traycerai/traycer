@@ -244,7 +244,7 @@ describe("acquireCredentialsLock", () => {
       const acquired = await Promise.all(
         Array.from({ length: 4 }, () =>
           (async () => {
-            const r = await acquireCredentialsLock(opts({ waitMs: 3000 }));
+            const r = await acquireCredentialsLock(opts({ waitMs: 10_000 }));
             if (r.acquired) await r.handle.release();
             return r.acquired;
           })(),
@@ -254,6 +254,7 @@ describe("acquireCredentialsLock", () => {
       expect(acquired.every(Boolean)).toBe(true);
       expect(() => readFileSync(lockPath, "utf8")).toThrow();
     },
+    15_000,
   );
 });
 

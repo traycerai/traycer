@@ -19,8 +19,12 @@ concurrency:
 
 jobs:
   test:
-    name: test (${{ matrix.project }})
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.project == 'traycer-clients-gui-app' && 'ubuntu-latest-8-cores' || 'ubuntu-latest' }}
+    # The GUI suite deliberately runs isolated two-worker forks: disabling
+    # isolation makes tests leak state. The organization caps every job at ten
+    # minutes, so run its deterministic Vitest shards as four parallel matrix
+    # jobs.
     strategy:
       # Run every project even if one fails, so a single red project doesn't
       # mask the others.
@@ -29,12 +33,31 @@ jobs:
         # The nx projects that own a `test` target. Names are exact nx project
         # names (gui-app's differs from its package scope). Keep in sync with
         # `nx show projects --with-target test`.
-        project:
-          - "@traycer/protocol"
-          - traycer-clients-gui-app
-          - "@traycer-clients/desktop"
-          - "@traycer-clients/shared"
-          - "@traycer-clients/traycer-cli"
+        include:
+          - project: "@traycer/protocol"
+            name: "test (@traycer/protocol)"
+            test_args: ""
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app)"
+            test_args: "-- --shard=1/4"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 2)"
+            test_args: "-- --shard=2/4"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 3)"
+            test_args: "-- --shard=3/4"
+          - project: traycer-clients-gui-app
+            name: "test (traycer-clients-gui-app shard 4)"
+            test_args: "-- --shard=4/4"
+          - project: "@traycer-clients/desktop"
+            name: "test (@traycer-clients/desktop)"
+            test_args: ""
+          - project: "@traycer-clients/shared"
+            name: "test (@traycer-clients/shared)"
+            test_args: ""
+          - project: "@traycer-clients/traycer-cli"
+            name: "test (@traycer-clients/traycer-cli)"
+            test_args: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -65,7 +88,7 @@ jobs:
             nx-${{ runner.os }}-${{ matrix.project }}-
       - run: bun install --frozen-lockfile
       - name: Test
-        run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --tui=false
+        run: bunx nx run-many --target=test --projects="${{ matrix.project }}" --tui=false ${{ matrix.test_args }}
 
   # macOS job: the desktop workspace's packaging/signing-adjacent assertions
   # (prepack unit suite + the real electron-builder pack in test:packaging)
