@@ -996,6 +996,47 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBeNull();
   });
 
+  it("shows Oh My Pi's PATH-only not-found guidance without a bundled row", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "omp",
+          selected: { kind: "path" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <RunnerHostContext.Provider value={createRunnerHost()}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(
+      screen.getByText(
+        "Oh My Pi must be installed on this machine. It ships without a bundled binary.",
+      ),
+    ).toBeDefined();
+    const guide = screen.getByRole("link", {
+      name: "Oh My Pi installation guide",
+    });
+    expect(guide.getAttribute("href")).toBe("https://omp.sh/#install");
+    fireEvent.click(guide);
+    expect(providerMocks.openExternalLink).toHaveBeenCalledWith(
+      "https://omp.sh/#install",
+    );
+    expect(
+      screen.getByRole("button", { name: "Add custom path" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("radio", { name: "Select bundled binary" }),
+    ).toBeNull();
+  });
+
   it("orders the provider rail by the default provider order", () => {
     providerMocks.listResult.data = {
       providers: [

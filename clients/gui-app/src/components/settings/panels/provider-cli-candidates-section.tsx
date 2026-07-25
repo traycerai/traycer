@@ -24,8 +24,33 @@ import { cn } from "@/lib/utils";
 // table past the panel width.
 const TABLE_GRID =
   "grid grid-cols-[2.25rem_minmax(0,1fr)_minmax(5.5rem,auto)_2.25rem] items-center";
-const HERMES_INSTALLATION_URL =
-  "https://hermes-agent.nousresearch.com/docs/getting-started/installation";
+
+type ProviderId = ProviderCliState["providerId"];
+
+interface PathOnlyInstallGuide {
+  // Short binary-facing label for the "<name> must be installed" sentence.
+  // Deliberately not `PROVIDER_DISPLAY_NAMES`, whose product names ("Hermes
+  // Agent") read wrong in that sentence.
+  readonly name: string;
+  readonly url: string;
+}
+
+// Providers that ship no bundled binary: the host can only discover them on
+// PATH, so an empty candidate list means "not installed" and the empty table
+// is replaced by install guidance. Keyed by provider id, never by display
+// name - "Oh My Pi" contains the separate "Pi" provider's name as a
+// substring.
+const PATH_ONLY_INSTALL_GUIDES: Partial<
+  Record<ProviderId, PathOnlyInstallGuide>
+> = {
+  hermes: {
+    name: "Hermes",
+    url: "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+  },
+  // Anchor, not the site root: omp.sh is a single landing page and `#install`
+  // is its install section, so the link lands where the label promises.
+  omp: { name: "Oh My Pi", url: "https://omp.sh/#install" },
+};
 
 interface ProviderCandidateConfig {
   readonly selected: ProviderSelection;
@@ -114,19 +139,21 @@ export function ProviderCliCandidatesSection({
 
   if (!showCliCandidates) return null;
 
-  const isEmptyHermesState =
-    providerId === "hermes" && cliConfig.candidates.length === 0;
+  const installGuide =
+    cliConfig.candidates.length === 0
+      ? PATH_ONLY_INSTALL_GUIDES[providerId]
+      : undefined;
 
   return (
     <>
-      {isEmptyHermesState && !adding ? (
+      {installGuide !== undefined && !adding ? (
         <div className="rounded-lg border border-border/60 bg-muted/10 p-3 text-ui-sm text-muted-foreground">
           <p>
-            Hermes must be installed on this machine. It ships without a bundled
-            binary.
+            {installGuide.name} must be installed on this machine. It ships
+            without a bundled binary.
           </p>
           <a
-            href={HERMES_INSTALLATION_URL}
+            href={installGuide.url}
             target="_blank"
             rel="noreferrer"
             onClick={(event) => {
@@ -137,11 +164,11 @@ export function ProviderCliCandidatesSection({
               if (runnerHost === null) return;
               // oxlint-disable-next-line react-doctor/no-prevent-default -- desktop shell opens external links via the Electron `openExternalLink` bridge, not renderer navigation; the null-guard above preserves native anchor nav in web builds.
               event.preventDefault();
-              openExternalLink.mutate(HERMES_INSTALLATION_URL);
+              openExternalLink.mutate(installGuide.url);
             }}
             className="mt-1 inline-flex text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded"
           >
-            Hermes installation guide
+            {installGuide.name} installation guide
           </a>
         </div>
       ) : (
