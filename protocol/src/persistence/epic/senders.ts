@@ -396,6 +396,21 @@ export type HermesChatSessionAnchor = z.infer<
   typeof hermesChatSessionAnchorSchema
 >;
 
+// omp (Oh My Pi, `omp --mode rpc`) resumes at session granularity only — the
+// RPC surface reloads a whole session id with no per-message truncation/fork
+// point — so the anchor carries just the session id. `sessionId` is the omp
+// RPC session id.
+export const ompChatSessionAnchorSchema = z.object({
+  harnessId: z.literal("omp"),
+  hostId: z.string(),
+  sessionId: z.string(),
+  sessionWorkspaceSnapshot: sessionWorkspaceSnapshotSchema,
+  createdAt: z.number(),
+  coveredUntilMessageId: z.string().nullable().default(null),
+  ...profileSnapshotFields,
+});
+export type OmpChatSessionAnchor = z.infer<typeof ompChatSessionAnchorSchema>;
+
 export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   claudeChatSessionAnchorSchema,
   codexChatSessionAnchorSchema,
@@ -414,5 +429,6 @@ export const chatSessionAnchorSchema = z.discriminatedUnion("harnessId", [
   devinChatSessionAnchorSchema,
   piChatSessionAnchorSchema,
   hermesChatSessionAnchorSchema,
+  ompChatSessionAnchorSchema,
 ]);
 export type ChatSessionAnchor = z.infer<typeof chatSessionAnchorSchema>;
