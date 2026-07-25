@@ -9,7 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -90,6 +90,17 @@ vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
   }),
 }));
 
+// One STABLE data object, like real TanStack Query data (referentially stable
+// across renders). A per-call literal gives `treePaths` a new identity every
+// render, which defeats the panel's applied-paths guard and loops the
+// reset -> re-assert -> snapshot-notify cycle.
+const UNARY_TREE_DATA = {
+  workspacePath: WORKSPACE_PATH,
+  files: [{ path: "unary.md", name: "unary.md" }],
+  gitStatus: [],
+  truncated: false,
+};
+
 vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
   useWorkspaceListFileTree: (
     workspacePath: string | null,
@@ -97,14 +108,7 @@ vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
   ) => {
     listFileTreeCalls.push({ workspacePath, enabled });
     return {
-      data: enabled
-        ? {
-            workspacePath,
-            files: [{ path: "unary.md", name: "unary.md" }],
-            gitStatus: [],
-            truncated: false,
-          }
-        : undefined,
+      data: enabled ? UNARY_TREE_DATA : undefined,
       error: null,
       isLoading: false,
     };
@@ -126,48 +130,101 @@ vi.mock("@/components/epic-canvas/dnd/epic-canvas-dnd-context-value", () => ({
 const expandedInModel = new Set<string>();
 const expandedAtLastReset = new Set<string>();
 
+// Reactive search snapshot for the mocked `useFileTreeSearch`, recomputed on
+// every setSearch/resetPaths so the panel's zero-match empty state is
+// observable. Matching mirrors the real controller: case-insensitive
+// substring over the listed paths.
+let mockListedPaths: ReadonlyArray<string> = [];
+let mockSearchValue = "";
+let mockSearchSnapshot = {
+  isOpen: false,
+  value: "",
+  matchingPaths: [] as ReadonlyArray<string>,
+};
+const searchSnapshotListeners = new Set<() => void>();
+function refreshSearchSnapshot(): void {
+  const value = mockSearchValue;
+  const matchingPaths =
+    value.length === 0
+      ? []
+      : mockListedPaths.filter((path) =>
+          path.toLowerCase().includes(value.toLowerCase()),
+        );
+  const previous = mockSearchSnapshot;
+  if (
+    previous.value === value &&
+    previous.matchingPaths.length === matchingPaths.length &&
+    previous.matchingPaths.every((path, i) => path === matchingPaths[i])
+  ) {
+    return;
+  }
+  mockSearchSnapshot = { isOpen: value.length > 0, value, matchingPaths };
+  for (const listener of searchSnapshotListeners) listener();
+}
+// Stable identities: an inline subscribe would make useSyncExternalStore
+// resubscribe every render and loop on any snapshot change.
+function subscribeToSearchSnapshot(listener: () => void): () => void {
+  searchSnapshotListeners.add(listener);
+  return () => {
+    searchSnapshotListeners.delete(listener);
+  };
+}
+function getSearchSnapshot(): typeof mockSearchSnapshot {
+  return mockSearchSnapshot;
+}
+
+// ONE stable model object, like the real `useFileTree` (its model identity
+// never changes for a mounted tree). A per-render model would re-run every
+// model-dependent effect on each render - with the reactive search snapshot
+// above, that is an infinite loop jsdom would otherwise hide.
+const mockModel = {
+  setSearch: (value: string | null) => {
+    setSearchCalls.push(value);
+    // The real model takes over expansion while a filter is applied (it
+    // reveals its own matches) and restores the pre-filter set when the
+    // filter clears. Mirroring that is what makes "filtering must not churn
+    // coverage" observable here at all.
+    expandedInModel.clear();
+    if (value === null) {
+      for (const path of expandedAtLastReset) expandedInModel.add(path);
+    }
+    mockSearchValue = value ?? "";
+    refreshSearchSnapshot();
+  },
+  setGitStatus: () => undefined,
+  resetPaths: (
+    paths: ReadonlyArray<string>,
+    options:
+      { readonly initialExpandedPaths?: ReadonlyArray<string> } | undefined,
+  ) => {
+    resetPathsCalls.push({
+      paths,
+      initialExpandedPaths: options?.initialExpandedPaths,
+    });
+    expandedInModel.clear();
+    expandedAtLastReset.clear();
+    for (const path of options?.initialExpandedPaths ?? []) {
+      expandedInModel.add(path);
+      expandedAtLastReset.add(path);
+    }
+    mockListedPaths = paths;
+    refreshSearchSnapshot();
+  },
+  subscribe: () => () => undefined,
+  getItem: (path: string) =>
+    path.endsWith("/")
+      ? {
+          isDirectory: () => true,
+          isExpanded: () => expandedInModel.has(path),
+        }
+      : null,
+};
+
 vi.mock("@pierre/trees/react", () => ({
   FileTree: () => <div data-testid="pierre-file-tree-stub" />,
-  useFileTree: () => ({
-    model: {
-      setSearch: (value: string | null) => {
-        setSearchCalls.push(value);
-        // The real model takes over expansion while a filter is applied (it
-        // reveals its own matches) and restores the pre-filter set when the
-        // filter clears. Mirroring that is what makes "filtering must not churn
-        // coverage" observable here at all.
-        expandedInModel.clear();
-        if (value === null) {
-          for (const path of expandedAtLastReset) expandedInModel.add(path);
-        }
-      },
-      setGitStatus: () => undefined,
-      resetPaths: (
-        paths: ReadonlyArray<string>,
-        options:
-          { readonly initialExpandedPaths?: ReadonlyArray<string> } | undefined,
-      ) => {
-        resetPathsCalls.push({
-          paths,
-          initialExpandedPaths: options?.initialExpandedPaths,
-        });
-        expandedInModel.clear();
-        expandedAtLastReset.clear();
-        for (const path of options?.initialExpandedPaths ?? []) {
-          expandedInModel.add(path);
-          expandedAtLastReset.add(path);
-        }
-      },
-      subscribe: () => () => undefined,
-      getItem: (path: string) =>
-        path.endsWith("/")
-          ? {
-              isDirectory: () => true,
-              isExpanded: () => expandedInModel.has(path),
-            }
-          : null,
-    },
-  }),
+  useFileTreeSearch: () =>
+    useSyncExternalStore(subscribeToSearchSnapshot, getSearchSnapshot),
+  useFileTree: () => ({ model: mockModel }),
 }));
 
 import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
@@ -350,6 +407,10 @@ function renderPanel(client: MockWsStreamClient): void {
 
 describe("sidebar file tree source selection", () => {
   beforeEach(() => {
+    mockListedPaths = [];
+    mockSearchValue = "";
+    mockSearchSnapshot = { isOpen: false, value: "", matchingPaths: [] };
+    searchSnapshotListeners.clear();
     listFileTreeCalls.length = 0;
     resetPathsCalls.length = 0;
     setSearchCalls.length = 0;
@@ -425,6 +486,10 @@ describe("sidebar file tree filter source", () => {
   }
 
   beforeEach(() => {
+    mockListedPaths = [];
+    mockSearchValue = "";
+    mockSearchSnapshot = { isOpen: false, value: "", matchingPaths: [] };
+    searchSnapshotListeners.clear();
     listFileTreeCalls.length = 0;
     resetPathsCalls.length = 0;
     setSearchCalls.length = 0;
@@ -595,6 +660,43 @@ describe("sidebar file tree filter source", () => {
       expect(setSearchCalls.at(-1)).toBe("main.ts");
     });
     expect(searchCalls).toHaveLength(1);
+  });
+
+  it("shows an explicit empty state when the local filter matches nothing", async () => {
+    // Pierre renders the FULL tree on zero matches; the panel must replace
+    // that with an honest "no matches" state instead of a misleading root
+    // listing.
+    installSearchHost({
+      reject: new HostRpcError({
+        code: "E_HOST_UNSUPPORTED",
+        message: "This host does not support 'workspace.searchPaths'.",
+        requestId: "request-test",
+        method: "workspace.searchPaths",
+        fatalDetails: null,
+      }),
+    });
+    renderLiveTree();
+
+    typeFilter("zzz-no-such-file");
+    await waitFor(() => {
+      expect(screen.getByLabelText("No matching files")).toBeTruthy();
+    });
+
+    // A query that does match clears the empty state again.
+    typeFilter("unary");
+    await waitFor(() => {
+      expect(screen.queryByLabelText("No matching files")).toBeNull();
+    });
+  });
+
+  it("shows the empty state when host search returns zero results", async () => {
+    installSearchHost({ results: [] });
+    renderLiveTree();
+
+    typeFilter("zzz-no-such-file");
+    await waitFor(() => {
+      expect(screen.getByLabelText("No matching files")).toBeTruthy();
+    });
   });
 
   it("never asks the host to search while on the unary snapshot", async () => {

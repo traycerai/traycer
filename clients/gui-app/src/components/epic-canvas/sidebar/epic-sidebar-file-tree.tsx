@@ -32,7 +32,8 @@ import {
   type ChangeEvent,
   type MouseEvent,
 } from "react";
-import { FileTree, useFileTree } from "@pierre/trees/react";
+import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
+import { cn } from "@/lib/utils";
 import type {
   FileTree as PierreFileTreeModel,
   FileTreeDirectoryHandle,
@@ -560,6 +561,18 @@ export function FileTreePanelBodyForWorkspace(props: {
     model.setGitStatus(gitStatus);
   }, [model, gitStatus]);
 
+  // Pierre renders the FULL tree when a search matches zero rows - honest for
+  // an always-fully-loaded tree, but here it reads as "the filter is broken".
+  // Both filter modes surface an explicit empty state instead: host search by
+  // an empty result set, the local filter by the model's live match count.
+  const pierreSearch = useFileTreeSearch(model);
+  const noMatches =
+    source.mode === "host-search"
+      ? source.paths.length === 0
+      : source.localFilterQuery !== null &&
+        pierreSearch.value.length > 0 &&
+        pierreSearch.matchingPaths.length === 0;
+
   const handleDoubleClick = useCallback((event: MouseEvent<HTMLElement>) => {
     const treePath = extractPierreItemPathFromEvent(event);
     if (treePath === null) return;
@@ -607,7 +620,19 @@ export function FileTreePanelBodyForWorkspace(props: {
         />
       </InputGroup>
       <div {...bridge.wrapperProps} className="relative min-h-0 flex-1">
-        <FileTree model={model} style={PIERRE_FILE_TREE_THEME_STYLE} />
+        {/* `invisible`, not unmount: the model keeps its DOM/state for the
+            instant the query changes to something that does match. */}
+        <div className={cn("h-full", noMatches && "invisible")}>
+          <FileTree model={model} style={PIERRE_FILE_TREE_THEME_STYLE} />
+        </div>
+        {noMatches ? (
+          <output
+            aria-label="No matching files"
+            className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center text-ui-xs text-muted-foreground"
+          >
+            No files match the filter.
+          </output>
+        ) : null}
         {source.isLoading ? (
           <output
             aria-label="Loading files"

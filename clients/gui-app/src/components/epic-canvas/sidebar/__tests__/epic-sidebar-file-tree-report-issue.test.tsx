@@ -339,6 +339,9 @@ vi.mock(
 
 vi.mock("@pierre/trees/react", () => ({
   FileTree: () => <div data-testid="pierre-file-tree-stub" />,
+  // No filtering in these tests: a static idle snapshot keeps the panel's
+  // zero-match empty state out of the picture.
+  useFileTreeSearch: () => ({ isOpen: false, value: "", matchingPaths: [] }),
   useFileTree: () => ({
     model: {
       setSearch: () => undefined,
