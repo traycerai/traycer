@@ -21,8 +21,14 @@ afterEach(() => {
  * strings would have gone undetected.
  */
 describe("<ChatFilterMenu />", () => {
-  function open(): void {
-    render(<ChatFilterMenu epicId={EPIC_ID} disabled={false} />);
+  function open(canArchive: boolean): void {
+    render(
+      <ChatFilterMenu
+        epicId={EPIC_ID}
+        disabled={false}
+        canArchive={canArchive}
+      />,
+    );
     // Radix's DropdownMenuTrigger opens on pointerdown, not the click event.
     fireEvent.pointerDown(
       screen.getByRole("button", { name: "Filter agents" }),
@@ -31,13 +37,15 @@ describe("<ChatFilterMenu />", () => {
   }
 
   it("names the trigger for Agents, not chats", () => {
-    render(<ChatFilterMenu epicId={EPIC_ID} disabled={false} />);
+    render(
+      <ChatFilterMenu epicId={EPIC_ID} disabled={false} canArchive={false} />,
+    );
     expect(screen.getByRole("button", { name: "Filter agents" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Filter chats" })).toBeNull();
   });
 
   it("offers the interface axis: All / Chat / Terminal", () => {
-    open();
+    open(false);
     const options = screen
       .getAllByRole("menuitemradio")
       .map((item) => item.textContent);
@@ -51,13 +59,13 @@ describe("<ChatFilterMenu />", () => {
   });
 
   it("labels the group as the interface axis", () => {
-    open();
+    open(false);
     expect(screen.getByText("Interface")).toBeTruthy();
     expect(screen.queryByText("Show")).toBeNull();
   });
 
   it("persists the internal filter value, not the label, when an interface is picked", () => {
-    open();
+    open(false);
     const terminal = screen
       .getAllByRole("menuitemradio")
       .find((item) => item.textContent === "Terminal");
@@ -67,5 +75,34 @@ describe("<ChatFilterMenu />", () => {
     expect(
       useLeftPanelStore.getState().chatFilterByEpicId[EPIC_ID].origin,
     ).toBe("tui");
+  });
+
+  it('omits "Show archived" entirely when the host lacks archive support (B4)', () => {
+    open(false);
+    expect(screen.queryByTestId("epic-sidebar-show-archived")).toBeNull();
+    expect(screen.queryByText("Show archived")).toBeNull();
+  });
+
+  it('offers "Show archived" and toggles the per-epic store flag when supported (B3/B4)', () => {
+    open(true);
+
+    const item = screen.getByTestId("epic-sidebar-show-archived");
+    expect(item).toBeTruthy();
+    expect(screen.getByText("Show archived")).toBeTruthy();
+    // Default off.
+    expect(
+      useLeftPanelStore.getState().chatShowArchivedByEpicId[EPIC_ID] ?? false,
+    ).toBe(false);
+
+    fireEvent.click(item);
+    expect(useLeftPanelStore.getState().chatShowArchivedByEpicId[EPIC_ID]).toBe(
+      true,
+    );
+
+    fireEvent.click(item);
+    // Toggle off drops the key rather than storing false.
+    expect(
+      useLeftPanelStore.getState().chatShowArchivedByEpicId[EPIC_ID] ?? false,
+    ).toBe(false);
   });
 });
