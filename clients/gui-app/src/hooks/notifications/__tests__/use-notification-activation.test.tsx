@@ -315,6 +315,158 @@ describe("useNotificationActivation", () => {
     });
     expect(onResult).toHaveBeenCalledWith("success");
   });
+
+  it("routes chat notifications to the exact open chat tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const notifiedChatTabId = store.openEpicTab("epic-chat", "Chat task");
+    store.openTileInTab(notifiedChatTabId, {
+      id: "chat-notified",
+      instanceId: "chat-notified-instance",
+      type: "chat",
+      name: "Notified chat",
+      hostId: "host-1",
+    });
+    const canvas =
+      useEpicCanvasStore.getState().canvasByTabId[notifiedChatTabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected notified chat canvas");
+    }
+    const paneId = canvas.activePaneId;
+    const otherTabId = store.openEpicTab("epic-chat", "Other task view");
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-chat",
+          chatId: "chat-notified",
+        },
+        receivedAt: 903,
+        feedId: "host:chat",
+        onResult: null,
+      });
+    });
+
+    expect(otherTabId).not.toBe(notifiedChatTabId);
+    expect(navigateSpy.mock.calls[0][0]).toEqual({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-chat", tabId: notifiedChatTabId },
+      search: {
+        focusedAt: 903,
+        focusArtifactId: "chat-notified",
+        focusThreadId: undefined,
+        migrationSource: undefined,
+        focusPaneId: paneId,
+        focusTileInstanceId: "chat-notified-instance",
+      },
+    });
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(notifiedChatTabId);
+  });
+
+  it("reopens a closed Task at its exact open chat tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const notifiedChatTabId = store.openEpicTab("epic-hidden", "Hidden task");
+    store.openTileInTab(notifiedChatTabId, {
+      id: "chat-hidden",
+      instanceId: "chat-hidden-instance",
+      type: "chat",
+      name: "Hidden chat",
+      hostId: "host-1",
+    });
+    const canvas =
+      useEpicCanvasStore.getState().canvasByTabId[notifiedChatTabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected hidden chat canvas");
+    }
+    const paneId = canvas.activePaneId;
+    store.closeTab(notifiedChatTabId);
+    store.openEpicTab("epic-other", "Other task");
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-hidden",
+          chatId: "chat-hidden",
+        },
+        receivedAt: 904,
+        feedId: "host:hidden-chat",
+        onResult: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      params: { epicId: "epic-hidden", tabId: notifiedChatTabId },
+      search: {
+        focusedAt: 904,
+        focusArtifactId: "chat-hidden",
+        focusPaneId: paneId,
+        focusTileInstanceId: "chat-hidden-instance",
+      },
+    });
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(
+      notifiedChatTabId,
+    );
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(notifiedChatTabId);
+  });
+
+  it("reopens the owning Task when both it and its chat were closed", () => {
+    const store = useEpicCanvasStore.getState();
+    const notifiedChatTabId = store.openEpicTab("epic-closed", "Closed task");
+    store.openTileInTab(notifiedChatTabId, {
+      id: "chat-closed",
+      instanceId: "chat-closed-instance",
+      type: "chat",
+      name: "Closed chat",
+      hostId: "host-1",
+    });
+    const canvas =
+      useEpicCanvasStore.getState().canvasByTabId[notifiedChatTabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected closed chat canvas");
+    }
+    store.closeCanvasTab(
+      notifiedChatTabId,
+      canvas.activePaneId,
+      "chat-closed-instance",
+    );
+    store.closeTab(notifiedChatTabId);
+    store.openEpicTab("epic-closed", "Other task view");
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-closed",
+          chatId: "chat-closed",
+        },
+        receivedAt: 905,
+        feedId: "host:closed-chat",
+        onResult: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      params: { epicId: "epic-closed", tabId: notifiedChatTabId },
+      search: {
+        focusedAt: 905,
+        focusArtifactId: "chat-closed",
+      },
+    });
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(
+      notifiedChatTabId,
+    );
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(notifiedChatTabId);
+  });
 });
 
 describe("useNotificationActivation origin-host guard (P0-1)", () => {

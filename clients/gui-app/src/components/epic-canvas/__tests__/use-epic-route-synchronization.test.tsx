@@ -28,7 +28,7 @@ interface TestState {
   activeArtifactId: string | null;
   autoOpenTarget: {
     readonly id: string;
-    readonly type: "spec";
+    readonly type: "chat" | "spec";
     readonly name: string;
   } | null;
   nestedFocusEnabled: boolean;
@@ -318,6 +318,40 @@ describe("useEpicRouteSynchronization", () => {
     expect(lastNavigateSearchPatch()).toMatchObject({
       focusPaneId: "pane-focused",
       focusTileInstanceId: "tile-focused",
+    });
+  });
+
+  it("reopens a closed chat for an explicit notification focus", async () => {
+    testState.autoOpenTarget = {
+      id: "chat-notified",
+      type: "chat",
+      name: "Notified chat",
+    };
+
+    renderHook(
+      (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+      {
+        initialProps: {
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          focusedAt: 904,
+          focusArtifactId: "chat-notified",
+          focusThreadId: undefined,
+          focusPaneId: undefined,
+          focusTileInstanceId: undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(testState.canvasStore.openTileInTab).toHaveBeenCalledWith(
+        TAB_ID,
+        expect.objectContaining({
+          id: "chat-notified",
+          type: "chat",
+          name: "Notified chat",
+        }),
+      );
     });
   });
 
