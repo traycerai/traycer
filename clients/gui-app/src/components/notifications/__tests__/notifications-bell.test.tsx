@@ -385,8 +385,8 @@ describe("NotificationsBell", () => {
 
     expectNoBellIndicators();
     expect(
-      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications");
+      screen.getByRole("button", { name: "Notifications" }),
+    ).not.toBeNull();
 
     act(() => {
       useHostNotificationsStore.getState().applySnapshot({
@@ -414,8 +414,8 @@ describe("NotificationsBell", () => {
 
     expectNoBellIndicators();
     expect(
-      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications");
+      screen.getByRole("button", { name: "Notifications" }),
+    ).not.toBeNull();
   });
 
   it("shows the partial host subtitle when the host summary has not landed", async () => {
@@ -442,7 +442,7 @@ describe("NotificationsBell", () => {
     const runnerHost = createRunnerHost();
     mountBell(runnerHost, { wsStreamClient: streamClient });
 
-    fireEvent.click(screen.getByTestId("notifications-bell"));
+    fireEvent.click(screen.getByRole("button", { name: "Notifications" }));
     expect(
       (await screen.findByTestId("notifications-subtitle")).textContent,
     ).toBe("Task activity isn't available on this host version");
@@ -458,7 +458,7 @@ describe("NotificationsBell", () => {
     const runnerHost = createRunnerHost();
     mountBell(runnerHost, { wsStreamClient: streamClient });
 
-    fireEvent.click(screen.getByTestId("notifications-bell"));
+    fireEvent.click(screen.getByRole("button", { name: "Notifications" }));
     expect(
       (await screen.findByTestId("notifications-subtitle")).textContent,
     ).toBe("Task activity is unavailable right now");
@@ -565,8 +565,8 @@ describe("NotificationsBell", () => {
 
       expectNoBellIndicators();
       expect(
-        screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-      ).toBe("Notifications");
+        screen.getByRole("button", { name: "Notifications" }),
+      ).not.toBeNull();
 
       act(() => {
         useNotificationsPopoverStore.getState().setOpen(true);

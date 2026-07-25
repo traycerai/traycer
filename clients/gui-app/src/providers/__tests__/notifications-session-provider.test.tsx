@@ -946,8 +946,8 @@ describe("<NotificationsSessionProvider />", () => {
     expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
     expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
     expect(
-      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications");
+      screen.getByRole("button", { name: "Notifications" }),
+    ).not.toBeNull();
 
     // (3) Reconnect open + fresh atomic snapshot → exact summary + badge.
     act(() => {
