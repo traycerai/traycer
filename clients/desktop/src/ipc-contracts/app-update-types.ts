@@ -44,6 +44,15 @@ export interface DesktopAppUpdateSnapshot {
   // dialog with the steps instead of disabling it - the update can still be
   // applied, just not fully automatically.
   readonly installGuidance: DesktopAppUpdateGuidance | null;
+  // True from the moment `installDownloadedUpdate` hands off to
+  // `quitAndInstall` until the install either ends the process or fails back to
+  // "error". The quit it triggers is not instant (`before-quit` drains an
+  // in-flight host mutation, then the renderer projections), so without this the
+  // renderer sees NO state change for the whole drain and every restart
+  // affordance - in every window - stays armed to fire a second install. Status
+  // deliberately stays "ready" throughout: the artifact is still staged, and the
+  // updater's own "ready" guards key on that.
+  readonly installInFlight: boolean;
   readonly errorMessage: string | null;
   readonly lastCheckedAt: string | null;
   readonly lastCheckIntent: DesktopAppUpdateCheckIntent | null;

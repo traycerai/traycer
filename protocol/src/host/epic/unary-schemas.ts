@@ -1038,6 +1038,33 @@ export type DeleteChatRequest = z.infer<typeof deleteChatRequestSchema>;
 export const deleteChatResponseSchema = z.object({ deleted: z.boolean() });
 export type DeleteChatResponse = z.infer<typeof deleteChatResponseSchema>;
 
+// Optional (non-floor) capability: durable host-backed archive toggle. Sets or
+// clears `archivedAt` on a single chat OR terminal-agent record, resolved by
+// `chatId` (one method keyed by id covers both the `chats` and `tuiAgents`
+// maps). Idempotent - archiving an already-archived record, or unarchiving an
+// active one, is a no-op. Old hosts lack it; callers get E_HOST_UNSUPPORTED for
+// this call only and hide the archive affordance.
+export const setChatArchivedRequestSchema = z.object({
+  epicId: z.string(),
+  // Names either a chat (in `chats`) or a terminal-agent (in `tuiAgents`)
+  // record; the host resolves the id across both maps.
+  chatId: z.string(),
+  archived: z.boolean(),
+});
+export type SetChatArchivedRequest = z.infer<
+  typeof setChatArchivedRequestSchema
+>;
+
+// `updated` is true when the record's `archivedAt` actually changed; false when
+// the record was already in the requested state (idempotent no-op) or no record
+// matched the id.
+export const setChatArchivedResponseSchema = z.object({
+  updated: z.boolean(),
+});
+export type SetChatArchivedResponse = z.infer<
+  typeof setChatArchivedResponseSchema
+>;
+
 export const reparentChatRequestSchema = z.object({
   epicId: z.string(),
   chatId: z.string(),

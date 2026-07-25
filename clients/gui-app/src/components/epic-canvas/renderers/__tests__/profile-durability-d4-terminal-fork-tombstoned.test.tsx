@@ -179,6 +179,7 @@ function sourceAgentWithProfile(profileId: string | null): TuiAgentProjection {
     reasoningEffort: "high",
     agentMode: "regular",
     profileId,
+    archivedAt: null,
     harnessSessionId: "source-session",
     terminalAgentArgs: null,
     terminalShellCommand: "claude",
