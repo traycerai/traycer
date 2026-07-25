@@ -33,9 +33,11 @@ describe("listCloudTasksRequestForHistorySearch", () => {
     });
   });
 
-  it("requests the recent cloud page for renderer-local last-viewed sorting", () => {
+  it("requests central last-viewed sorting", () => {
     const search = parseHistorySearch({ historySort: "last-viewed" });
 
-    expect(listCloudTasksRequestForHistorySearch(search).sort).toBe("recent");
+    expect(listCloudTasksRequestForHistorySearch(search).sort).toBe(
+      "last-viewed",
+    );
   });
 });

@@ -87,12 +87,12 @@ describe("home-page history helpers", () => {
       makeItem({ id: "c", title: "Charlie", isPinned: false }),
     ];
 
-    expect(
-      sortHistoryItems(items, "title-asc", {}).map((item) => item.id),
-    ).toEqual(["b", "z", "a", "c"]);
+    expect(sortHistoryItems(items, "title-asc").map((item) => item.id)).toEqual(
+      ["b", "z", "a", "c"],
+    );
   });
 
-  it("sorts viewed tasks by view recency while keeping pins first", () => {
+  it("preserves server last-viewed order while keeping pins first", () => {
     const items = [
       makeItem({ id: "unseen-new", title: "Unseen new", updatedAtMs: 40 }),
       makeItem({ id: "viewed-old", title: "Viewed old", updatedAtMs: 30 }),
@@ -102,15 +102,12 @@ describe("home-page history helpers", () => {
     ];
 
     expect(
-      sortHistoryItems(items, "last-viewed", {
-        "viewed-old": 100,
-        "viewed-new": 200,
-      }).map((item) => item.id),
+      sortHistoryItems(items, "last-viewed").map((item) => item.id),
     ).toEqual([
       "pinned",
-      "viewed-new",
-      "viewed-old",
       "unseen-new",
+      "viewed-old",
+      "viewed-new",
       "unseen-old",
     ]);
   });

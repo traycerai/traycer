@@ -22,10 +22,6 @@ export type HistorySortOption =
   | "title-desc"
   | "relevance";
 
-export type HistoryLastViewedAtByEpicId = Readonly<
-  Record<string, number | undefined>
->;
-
 export const DEFAULT_SORT: HistorySortOption = "recent";
 
 const BUCKET_ORDER: Record<HistoryRecencyBucket, number> = {
@@ -288,7 +284,6 @@ export function filterHistoryItems(
 export function sortHistoryItems(
   items: ReadonlyArray<HistoryItem>,
   sort: HistorySortOption,
-  lastViewedAtByEpicId: HistoryLastViewedAtByEpicId,
 ): ReadonlyArray<HistoryItem> {
   switch (sort) {
     case "recent":
@@ -302,14 +297,10 @@ export function sortHistoryItems(
               BUCKET_ORDER[right.updatedBucket],
         );
     case "last-viewed":
-      return items
-        .slice()
-        .sort(
-          (left, right) =>
-            comparePinnedHistoryItems(left, right) ||
-            compareLastViewedHistoryItems(left, right, lastViewedAtByEpicId) ||
-            right.updatedAtMs - left.updatedAtMs,
-        );
+      // The central list endpoint already returns the complete eligible set in
+      // last-viewed order. Preserve that order while still projecting an
+      // optimistic pin bit into its pinned-first partition.
+      return prioritizePinnedHistoryItems(items);
     case "oldest":
       return items
         .slice()
@@ -337,21 +328,8 @@ export function sortHistoryItems(
             right.title.localeCompare(left.title),
         );
     case "relevance":
-      return sortHistoryItems(items, "recent", lastViewedAtByEpicId);
+      return sortHistoryItems(items, "recent");
   }
-}
-
-function compareLastViewedHistoryItems(
-  left: HistoryItem,
-  right: HistoryItem,
-  lastViewedAtByEpicId: HistoryLastViewedAtByEpicId,
-): number {
-  const leftViewedAt = lastViewedAtByEpicId[left.epicId];
-  const rightViewedAt = lastViewedAtByEpicId[right.epicId];
-  if (leftViewedAt === undefined && rightViewedAt === undefined) return 0;
-  if (leftViewedAt === undefined) return 1;
-  if (rightViewedAt === undefined) return -1;
-  return rightViewedAt - leftViewedAt;
 }
 
 /** Stable pinned-first partition for relevance-ranked search results. */

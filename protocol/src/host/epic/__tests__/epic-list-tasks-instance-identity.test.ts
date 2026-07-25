@@ -3,6 +3,7 @@ import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { epicListTasksUpgradeV10ToV11 } from "@traycer/protocol/host/epic/contracts";
 import {
   listTasksRequestSchema,
+  listTasksRequestSchemaV11,
   listTasksResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
 
@@ -25,7 +26,7 @@ import {
  */
 describe("epic.listTasks instance identity", () => {
   const hostContract =
-    hostRpcRegistry["epic.listTasks"][1].versions[1].contract;
+    hostRpcRegistry["epic.listTasks"][1].versions[2].contract;
 
   it("host request schema is the canonical listTasksRequestSchema instance", () => {
     expect(hostContract.requestSchema).toBe(listTasksRequestSchema);
@@ -33,6 +34,19 @@ describe("epic.listTasks instance identity", () => {
 
   it("host response schema is the canonical listTasksResponseSchema instance", () => {
     expect(hostContract.responseSchema).toBe(listTasksResponseSchema);
+  });
+
+  it("keeps released requests frozen while the latest schema accepts last-viewed", () => {
+    const request = {
+      limit: 20,
+      filters: null,
+      sort: "last-viewed",
+      extensionPhaseVersion: "1.0.0",
+      extensionEpicVersion: "2.0.0",
+    } as const;
+
+    expect(listTasksRequestSchemaV11.safeParse(request).success).toBe(false);
+    expect(listTasksRequestSchema.parse(request).sort).toBe("last-viewed");
   });
 
   it("parses server-driven history filters, sort, and facets", () => {

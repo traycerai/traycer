@@ -7,6 +7,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
+import { useEpicRecordViewed } from "@/hooks/epic/use-epic-record-viewed-mutation";
 import { usePhaseMigrateToEpic } from "@/hooks/migration/use-phase-migrate-to-epic-mutation";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import { createReportIssueContext } from "@/lib/report-issue-context";
@@ -47,7 +48,8 @@ function EpicRouteTabSync(props: {
     (s) => s.resolveTargetTabForEpic,
   );
   const setActiveTab = useEpicCanvasStore((s) => s.setActiveTab);
-  const recordEpicViewed = useEpicCanvasStore((s) => s.recordEpicViewed);
+  const recordViewedMutation = useEpicRecordViewed();
+  const recordViewed = recordViewedMutation.mutate;
   const { tasks } = useCloudEpicTasksQuery(undefined, { enabled: true });
   const taskTitle = findCachedTaskTitle(tasks, epicId);
   // Guards the resolve-and-redirect path so a churning dependency (e.g. cloud
@@ -56,8 +58,8 @@ function EpicRouteTabSync(props: {
   const resolvedForRouteRef = useRef<string | null>(null);
 
   useEffect(() => {
-    recordEpicViewed(epicId, Date.now());
-  }, [epicId, recordEpicViewed]);
+    recordViewed({ epicId });
+  }, [epicId, recordViewed]);
 
   useEffect(() => {
     const tab = useEpicCanvasStore.getState().tabsById[tabId];

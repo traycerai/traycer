@@ -14,6 +14,8 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
 
+const recordViewed = vi.hoisted(() => vi.fn());
+
 vi.mock("@/components/layout/app-shell", () => ({
   AppShell: (props: { readonly children: ReactNode }) => (
     <div data-testid="app-shell">{props.children}</div>
@@ -57,6 +59,10 @@ vi.mock("@/stores/tabs/use-deep-link-tab-sync", () => ({
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewed }),
 }));
 
 vi.mock("@/hooks/migration/use-phase-migrate-to-epic-mutation", () => ({
@@ -151,6 +157,7 @@ describe("/epics/$epicId/$tabId route", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    recordViewed.mockReset();
     seedSignedInAuth();
     // Past the one-time tour, so RootComponent's global onboarding gate is inert.
     useOnboardingStore.setState({ completedAt: 1_700_000_000_000 });
@@ -177,7 +184,7 @@ describe("/epics/$epicId/$tabId route", () => {
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([TAB_ID]);
     expect(Object.keys(state.tabsById)).toEqual([TAB_ID]);
-    expect(state.lastViewedAtByEpicId[EPIC_ID]).toEqual(expect.any(Number));
+    expect(recordViewed).toHaveBeenCalledWith({ epicId: EPIC_ID });
   });
 
   it("repairs a stale tab route to a sibling tab without carrying nested focus params", async () => {
