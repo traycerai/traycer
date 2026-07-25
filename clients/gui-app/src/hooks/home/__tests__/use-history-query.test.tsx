@@ -283,7 +283,9 @@ describe("useHistoryQuery", () => {
       />,
     );
 
-    expect(screen.getByTestId("titles").textContent).toBe("Beta search flow");
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
   });
 
   it("unions a task matched by its worktree directory name via id fetch", () => {
@@ -309,7 +311,9 @@ describe("useHistoryQuery", () => {
       />,
     );
 
-    expect(screen.getByTestId("titles").textContent).toBe("Beta search flow");
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
   });
 
   it("appends branch-matched extras without hijacking the cloud title search", () => {
@@ -345,9 +349,9 @@ describe("useHistoryQuery", () => {
       />,
     );
 
-    expect(screen.getByTestId("titles").textContent).toBe(
-      "Beta search flow|Alpha workbench",
-    );
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow|Alpha workbench");
   });
 
   it("dedups a task matched by both the cloud query and a local worktree string", () => {
@@ -369,7 +373,9 @@ describe("useHistoryQuery", () => {
       />,
     );
 
-    expect(screen.getByTestId("titles").textContent).toBe("Beta search flow");
+    expect(
+      screen.getByRole("status", { name: "History titles" }).textContent,
+    ).toBe("Beta search flow");
   });
 
   it("lifts an optimistically pinned row above unpinned rows in the settled server order", () => {
