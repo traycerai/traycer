@@ -1,14 +1,24 @@
 import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
 import {
   __resetAppLocalNotificationsStoreForTests,
   emitTerminalCrashedNotification,
   useAppLocalNotificationsStore,
 } from "@/stores/notifications/app-local-notifications-store";
-import type { EpicTerminalRef } from "@/stores/epics/canvas/types";
+import type {
+  EpicArtifactRef,
+  EpicTerminalRef,
+} from "@/stores/epics/canvas/types";
 
 const TERMINAL_NODE: EpicTerminalRef = {
   id: "terminal-1",
@@ -79,3 +89,92 @@ function renderTerminalTabIcon(): void {
     </NotificationIndicatorsProvider>,
   );
 }
+
+const TUI_AGENT_NODE: EpicArtifactRef = {
+  id: "agent-1",
+  instanceId: "agent-instance-1",
+  type: "terminal-agent",
+  name: "Plan Critic",
+  hostId: "host-1",
+};
+
+const TUI_ACTIVITY_TEST_ID = `terminal-tab-activity-${TUI_AGENT_NODE.id}`;
+
+describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
+  afterEach(() => {
+    cleanup();
+    __getOpenEpicRegistryForTests().disposeAll();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  // Regression: the TUI-agent tab used to hardcode `running={false}`, so a
+  // working agent spun in the sidebar but never in its own tab.
+  it("swaps the idle icon for the spinner while the agent is working", () => {
+    const handle = registerEpicSession("epic-1");
+
+    renderTuiAgentTabIcon();
+
+    expect(screen.queryByTestId(TUI_ACTIVITY_TEST_ID)).toBeNull();
+
+    act(() => {
+      handle.awareness.setLocalState({
+        [AGENT_WORKING_AWARENESS_FIELD]: [TUI_AGENT_NODE.id],
+      });
+    });
+
+    expect(screen.getByTestId(TUI_ACTIVITY_TEST_ID)).toBeTruthy();
+    expect(
+      screen.getByRole("status", { name: "Agent in progress" }),
+    ).toBeTruthy();
+
+    act(() => {
+      handle.awareness.setLocalState({
+        [AGENT_WORKING_AWARENESS_FIELD]: [],
+      });
+    });
+
+    expect(screen.queryByTestId(TUI_ACTIVITY_TEST_ID)).toBeNull();
+  });
+
+  // The shared icon renders outside an open-epic session too (drag previews,
+  // mount-lifecycle tests); an unregistered Epic must read as idle, not throw.
+  it("renders the idle icon with no registered Epic session", () => {
+    renderTuiAgentTabIcon();
+
+    expect(screen.queryByTestId(TUI_ACTIVITY_TEST_ID)).toBeNull();
+  });
+});
+
+function registerEpicSession(epicId: string): OpenEpicStoreHandle {
+  return __getOpenEpicRegistryForTests().acquire(epicId, () =>
+    createOpenEpicStore({
+      epicId,
+      userId: null,
+      streamClientFactory: fakeStreamClientFactory,
+      onAuthError: null,
+    }),
+  );
+}
+
+function renderTuiAgentTabIcon(): void {
+  render(
+    <NotificationIndicatorsProvider indicators={{ epics: {}, chats: {} }}>
+      <EpicNodeTabIcon
+        node={TUI_AGENT_NODE}
+        epicId="epic-1"
+        variant="live"
+        className="size-3.5 shrink-0"
+        defaultIcon={undefined}
+      />
+    </NotificationIndicatorsProvider>,
+  );
+}
+
+const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
