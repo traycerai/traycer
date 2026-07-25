@@ -626,7 +626,7 @@ describe("streamTraycerCliJson reports an external kill by its signal", () => {
       args: ["host", "install", "--release", "1.1.8-rc.2"],
       onEvent: () => undefined,
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: null,
     });
     await vi.waitFor(() => {
