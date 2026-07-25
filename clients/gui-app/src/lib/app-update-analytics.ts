@@ -25,6 +25,17 @@ export function trackUpdateDownloadStarted(source: AnalyticsSource): void {
   });
 }
 
+/**
+ * The restart gestures ("Restart" on the ready toast, the header tick) install
+ * immediately - there is no confirmation step in between, so the gesture itself
+ * is the tracked intent.
+ */
+export function trackUpdateRestartRequested(source: AnalyticsSource): void {
+  Analytics.getInstance().track(AnalyticsEvent.UpdateRestartRequested, {
+    source,
+  });
+}
+
 export function settleUpdateDownloadOutcome(
   status: "error" | "ready",
   errorMessage: string | null,

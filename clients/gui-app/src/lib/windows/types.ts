@@ -232,6 +232,11 @@ export interface DesktopAppUpdateSnapshot {
   // dialog with the steps instead of disabling it - the update can still be
   // applied, just not fully automatically.
   readonly installGuidance: DesktopAppUpdateGuidance | null;
+  // True from the moment the main process hands off to `quitAndInstall` until
+  // the install either ends the process or fails back to "error". The quit is
+  // not instant, so this is what every restart affordance reads to go pending -
+  // it's broadcast, so a second window can't fire a duplicate install either.
+  readonly installInFlight: boolean;
   readonly errorMessage: string | null;
   readonly lastCheckedAt: string | null;
   readonly lastCheckIntent: DesktopAppUpdateCheckIntent | null;
