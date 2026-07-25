@@ -435,6 +435,10 @@ function routeEpicChatNotification(
   );
 }
 
+function isChatArtifactTileType(type: string | undefined): boolean {
+  return type === "chat" || type === "terminal-agent";
+}
+
 function routeOpenChatNotification(
   navigate: NavigateFn,
   payload: ChatNotificationPayload,
@@ -457,7 +461,7 @@ function routeOpenChatNotification(
       if (found === null) return [];
       const tile =
         state.canvasByTabId[tabId]?.tilesByInstanceId[found.instanceId];
-      if (tile?.type !== "chat" && tile?.type !== "terminal-agent") return [];
+      if (!isChatArtifactTileType(tile?.type)) return [];
       return [{ tabId, ...found }];
     })
     .at(0);
@@ -469,10 +473,7 @@ function routeOpenChatNotification(
         (closed) => {
           const node = closed?.node;
           if (node === undefined) return false;
-          return (
-            node.id === chatId &&
-            (node.type === "chat" || node.type === "terminal-agent")
-          );
+          return node.id === chatId && isChatArtifactTileType(node.type);
         },
       );
     });
