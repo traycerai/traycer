@@ -771,6 +771,31 @@ describe("retireCompetingCliRegistrationAtLaunch", () => {
     },
   );
 
+  // An unreadable LaunchAgents directory must not read as "already clean".
+  // `0o600` drops the directory's SEARCH (execute) bit, which is the one that
+  // makes `access` on a known filename fail with EACCES; a directory that is
+  // merely unlistable (`0o300`) still resolves names inside it just fine. That
+  // EACCES-vs-ENOENT split is the whole distinction under test. Skipped as
+  // root for the same reason as the test above.
+  it.skipIf(process.getuid?.() === 0)(
+    "does not report an unreadable LaunchAgents directory as nothing-to-retire",
+    async () => {
+      getLoginItemSettings.mockReturnValue({ status: "enabled" });
+      writeLegacyCliManifest();
+      const agentsDir = join(workHome, "Library", "LaunchAgents");
+      chmodSync(agentsDir, 0o600);
+      try {
+        await expect(retireCompetingCliRegistrationAtLaunch()).resolves.toBe(
+          "retire-failed",
+        );
+      } finally {
+        chmodSync(agentsDir, 0o755);
+      }
+      // Untouched: we never attempt an `rm` on a path we could not read.
+      expect(existsSync(legacyCliManifestPath())).toBe(true);
+    },
+  );
+
   // The doc comment sells serialization through the registration lock as a
   // safety property; pin it. A repair must not interleave with a register
   // cycle's own CLI-label cleanup.

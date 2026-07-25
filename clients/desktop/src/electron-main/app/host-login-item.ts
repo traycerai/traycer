@@ -367,6 +367,38 @@ async function retireLegacyLabelRegistrations(): Promise<void> {
   });
 }
 
+// Whether the competing CLI manifest is there. Mirrors `ManifestProbe` in the
+// CLI's `service/platforms/macos.ts`, and for the same reason: "we could not
+// read the directory" has to stay distinct from "there is no manifest".
+//
+// Deliberately local rather than folded into `fileExists` - that helper's
+// other callers WANT the swallow. `hasPendingLoginItemRevision` documents a
+// read error as "no pending revision" so an FS hiccup never blocks the ensure
+// fast path, and `hostManagesHostLoginItem` fails safe to "not a host-managed
+// build". Only the retire path treats absent as proof of a clean machine.
+type CliManifestProbe =
+  | { readonly kind: "present" }
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable"; readonly cause: unknown };
+
+async function probeCliLabelManifest(
+  manifest: string,
+): Promise<CliManifestProbe> {
+  try {
+    await access(manifest, constants.F_OK);
+    return { kind: "present" };
+  } catch (cause) {
+    // ENOENT - and only ENOENT - is positive proof there is no manifest.
+    // EACCES on the containing directory means we could not look.
+    const missing =
+      typeof cause === "object" &&
+      cause !== null &&
+      "code" in cause &&
+      cause.code === "ENOENT";
+    return missing ? { kind: "absent" } : { kind: "unreadable", cause };
+  }
+}
+
 /**
  * Delete `~/Library/LaunchAgents/<cli-label>.plist` - the manifest that would
  * `RunAtLoad` a second host beside the agent-label one.
@@ -381,7 +413,22 @@ async function removeCliLabelManifest(): Promise<
   "removed" | "absent" | "failed"
 > {
   const manifest = userLaunchAgentPlistPath(CLI_HOST_LABEL);
-  if (!(await fileExists(manifest))) return "absent";
+  const probe = await probeCliLabelManifest(manifest);
+  if (probe.kind === "absent") return "absent";
+  if (probe.kind === "unreadable") {
+    // NOT `absent`: that is the value the launch repair turns into
+    // `nothing-to-retire` ("this machine is already clean"), and an
+    // unreadable `~/Library/LaunchAgents` proves no such thing. No `rm`
+    // attempt either - `rm(force)` cannot tell "removed" from "was never
+    // there", so on a path we could not even read it would report a removal
+    // that may not have happened. Hedged wording for the same reason: we
+    // cannot see whether a manifest is there at all.
+    log.warn(
+      "[host-login-item] could not read the CLI LaunchAgent manifest, so it was not removed — if one is present it may auto-start a competing host at next login",
+      { manifest, err: probe.cause },
+    );
+    return "failed";
+  }
   try {
     await rm(manifest, { force: true });
   } catch (err) {
@@ -405,9 +452,13 @@ async function removeCliLabelManifest(): Promise<
  *   - `agent-not-enabled` - SMAppService is not reporting `enabled`, so we
  *     have no proof a host would still start at login without the CLI
  *     registration. Deliberately does nothing (see the doc below).
- *   - `nothing-to-retire` - no competing manifest on disk. Steady state.
- *   - `retired` / `retire-failed` - a competing manifest was found, and the
- *     removal did or did not succeed.
+ *   - `nothing-to-retire` - positively no competing manifest on disk. Steady
+ *     state, and never inferred from a directory we could not read.
+ *   - `retired` - a competing manifest was found and removed.
+ *   - `retire-failed` - the manifest was not removed: either the removal
+ *     itself failed, or `~/Library/LaunchAgents` was unreadable so we could
+ *     not tell whether one is there. Both leave the relapse possible, which
+ *     is what this value means.
  */
 export type LaunchCompetingRegistrationRepair =
   | "not-applicable"
