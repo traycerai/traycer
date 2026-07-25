@@ -11,6 +11,7 @@ export {
   __setProcessStartTimeReaderForTest,
   computeProcessIdentityVerdict,
   currentProcessIdentityToken,
+  getPublishedProcessIdentityVerdict,
   isProcessAlive,
   readLiveProcessStartTimeMs,
   readProcessStartTimeMs,
@@ -18,4 +19,5 @@ export {
   type ProcessIdentityToken,
   type ProcessIdentityVerdict,
   type ProcessLivenessVerdict,
+  type PublishedProcessIdentityVerdict,
 } from "@traycer-clients/shared/host-lock/process-identity";

@@ -18,9 +18,9 @@ import {
 
 import {
   buildLaunchAgentPlist,
+  classifyLaunchdPrintOutput,
   createMacosController,
   isSmAppServiceLaunchAgentPath,
-  parseLaunchctlPrintPath,
   readRegisteredCliInvocation,
   type ProcessRunner,
 } from "../macos";
@@ -872,12 +872,90 @@ describe("macOS service lifecycle", () => {
       ),
     ).toBe(false);
     expect(
-      parseLaunchctlPrintPath(
+      classifyLaunchdPrintOutput(
         `gui/501/ai.traycer.host = {\n\tpath = /Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist\n\tstate = running\n}\n`,
       ),
-    ).toBe(
-      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist",
-    );
+    ).toEqual({
+      kind: "smappservice",
+      path: "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.plist",
+    });
+  });
+
+  // Verbatim `launchctl print` output captured from a macOS build that
+  // reports SMAppService jobs WITHOUT an in-bundle plist path. Keying
+  // ownership on the bundle path alone classified this as `cli-or-other`,
+  // which silently disarmed every SMAppService guard at once and let
+  // `host install` bootstrap a second host beside Desktop's agent.
+  it("classifies an SMAppService job that reports no bundle path", () => {
+    const printOutput = [
+      "gui/501/ai.traycer.host.staging.agent = {",
+      "\tactive count = 1",
+      "\tpath = (submitted by smd.321)",
+      "\ttype = Submitted",
+      "\tmanaged_by = com.apple.xpc.ServiceManagement",
+      "\tstate = running",
+      "",
+      "\tprogram identifier = Contents/Library/LaunchAgents/Traycer Staging Host.app/Contents/MacOS/traycer (mode: 2)",
+      "\tparent bundle identifier = ai.traycer.desktop.staging",
+      "\targuments = {",
+      "\t\tContents/Library/LaunchAgents/Traycer Staging Host.app/Contents/MacOS/traycer",
+      "\t\thost",
+      "\t\tstart",
+      "\t}",
+      "",
+      "\tenvironment = {",
+      "\t\tOSLogRateLimit => 64",
+      "\t\tXPC_SERVICE_NAME => ai.traycer.host.staging.agent",
+      "\t}",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(classifyLaunchdPrintOutput(printOutput)).toEqual({
+      kind: "smappservice",
+      path: "(submitted by smd.321)",
+    });
+  });
+
+  it("classifies a raw CLI-bootstrapped LaunchAgent as cli-or-other", () => {
+    const printOutput = [
+      "gui/501/ai.traycer.host = {",
+      "\tactive count = 1",
+      "\tpath = /Users/me/Library/LaunchAgents/ai.traycer.host.plist",
+      "\ttype = LaunchAgent",
+      "\tstate = running",
+      "",
+      "\tprogram = /Users/me/.traycer/cli/bin/traycer",
+      "\targuments = {",
+      "\t\t/Users/me/.traycer/cli/bin/traycer",
+      "\t\thost",
+      "\t\tstart",
+      "\t}",
+      "}",
+      "",
+    ].join("\n");
+
+    expect(classifyLaunchdPrintOutput(printOutput)).toEqual({
+      kind: "cli-or-other",
+      path: "/Users/me/Library/LaunchAgents/ai.traycer.host.plist",
+    });
+  });
+
+  it("treats managed_by and type as independent SMAppService signals", () => {
+    expect(
+      classifyLaunchdPrintOutput(
+        "gui/501/x = {\n\tmanaged_by = com.apple.xpc.ServiceManagement\n}\n",
+      ),
+    ).toEqual({
+      kind: "smappservice",
+      path: "(SMAppService-managed; no plist path)",
+    });
+    expect(
+      classifyLaunchdPrintOutput("gui/501/x = {\n\ttype = Submitted\n}\n"),
+    ).toEqual({
+      kind: "smappservice",
+      path: "(SMAppService-managed; no plist path)",
+    });
   });
 
   it("reports externally-managed when launchd loads the label from an SMAppService path even if a stale raw plist exists", async () => {

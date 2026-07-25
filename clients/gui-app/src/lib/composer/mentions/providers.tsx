@@ -16,6 +16,7 @@ import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/hos
 import { mentionAttachmentFromSuggestion } from "./attachments";
 import {
   artifactIcon,
+  artifactsIcon,
   descriptionForSuggestion,
   detailForSuggestion,
   epicIcon,
@@ -34,7 +35,14 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 
 export type MentionProviderId =
-  "files" | "folders" | "worktree" | "git" | "epic" | "chat" | EpicArtifactKind;
+  | "files"
+  | "folders"
+  | "worktree"
+  | "git"
+  | "epic"
+  | "chat"
+  | "artifacts"
+  | "review";
 
 export interface MentionMenuCopy {
   readonly header: string;
@@ -99,6 +107,11 @@ type WorkspacePathMentionRequestParams = RequestOfMethod<
   "workspace.mentionFiles"
 >;
 
+type WorkspaceSearchPathsRequestParams = RequestOfMethod<
+  HostRpcRegistry,
+  "workspace.searchPaths"
+>;
+
 type WorkspaceGitMentionRequestParams = RequestOfMethod<
   HostRpcRegistry,
   "workspace.mentionGitRoot"
@@ -114,6 +127,20 @@ type EpicArtifactMentionRequestParams = RequestOfMethod<
   "epic.mentionSpecs"
 >;
 
+/**
+ * Scoped file/folder search over ONE Epic-attached root. Emitted (instead of
+ * the legacy raw-root `workspace.mentionFiles`/`mentionFolders`) only for roots
+ * demonstrably attached to the current Epic on this host. `suggestionKind` says
+ * which result kind the reconstruction keeps; `root` is the known, already
+ * authorized root the reconstruction joins against.
+ */
+export interface MentionSearchPathsRequest {
+  readonly method: "workspace.searchPaths";
+  readonly params: WorkspaceSearchPathsRequestParams;
+  readonly suggestionKind: "file" | "folder";
+  readonly root: string;
+}
+
 export type MentionWorkspaceRequest =
   | {
       readonly method: WorkspacePathMentionMethod;
@@ -122,7 +149,8 @@ export type MentionWorkspaceRequest =
   | {
       readonly method: WorkspaceGitMentionMethod;
       readonly params: WorkspaceGitMentionRequestParams;
-    };
+    }
+  | MentionSearchPathsRequest;
 
 export type MentionEpicRequest =
   | {
@@ -143,6 +171,14 @@ export interface ComposerMentionProviderContext {
   readonly currentEpicId: string | null;
   /** Every referenceable Agent in the open Task, both interfaces. */
   readonly agentEntries: ReadonlyArray<EpicAgentMentionEntry>;
+  /**
+   * The subset of `roots` demonstrably attached to `currentEpicId` on this
+   * host (a binding running dir or resolved workspace folder). File/folder
+   * mentions for these roots use the scoped `workspace.searchPaths`; roots
+   * outside this set (global folders, or any root when there is no current
+   * Epic) keep the legacy raw-root RPC so a suggestion never disappears.
+   */
+  readonly epicAttachedRoots: ReadonlySet<string>;
 }
 
 export const ROOT_MENTION_STEP: MentionFlowStep = { kind: "root" };
@@ -239,8 +275,11 @@ class FileMentionProvider extends ComposerMentionProvider {
   rootWorkspaceRequests(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionWorkspaceRequest> {
-    if (context.roots.length === 0) return EMPTY_WORKSPACE_REQUESTS;
-    return [workspacePathRequest(context, "workspace.mentionFiles")];
+    return workspacePathOrSearchRequests(
+      context,
+      "workspace.mentionFiles",
+      "file",
+    );
   }
 
   workspaceRequests(
@@ -291,8 +330,11 @@ class FolderMentionProvider extends ComposerMentionProvider {
   rootWorkspaceRequests(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionWorkspaceRequest> {
-    if (context.roots.length === 0) return EMPTY_WORKSPACE_REQUESTS;
-    return [workspacePathRequest(context, "workspace.mentionFolders")];
+    return workspacePathOrSearchRequests(
+      context,
+      "workspace.mentionFolders",
+      "folder",
+    );
   }
 
   workspaceRequests(
@@ -344,7 +386,15 @@ class WorktreeMentionProvider extends ComposerMentionProvider {
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionWorkspaceRequest> {
     if (context.roots.length === 0) return EMPTY_WORKSPACE_REQUESTS;
-    return [workspacePathRequest(context, "workspace.mentionWorktrees")];
+    // Worktrees are directory-context mentions, not file/folder path search, so
+    // they stay on the legacy raw-root RPC.
+    return [
+      legacyPathRequestForRoots(
+        context,
+        [...context.roots],
+        "workspace.mentionWorktrees",
+      ),
+    ];
   }
 
   workspaceRequests(
@@ -579,28 +629,16 @@ const EPIC_ARTIFACT_MENTION_METHODS: Record<
   review: "epic.mentionReviews",
 };
 
-const EPIC_ARTIFACT_PLURAL_LABELS: Record<EpicArtifactKind, string> = {
-  spec: "Specs",
-  ticket: "Tickets",
-  story: "Stories",
-  review: "Reviews",
-};
+const STANDARD_ARTIFACT_KINDS: ReadonlyArray<EpicArtifactKind> = [
+  "spec",
+  "ticket",
+  "story",
+];
 
-const EPIC_ARTIFACT_DESCRIPTIONS: Record<EpicArtifactKind, string> = {
-  spec: "Spec artifacts",
-  ticket: "Ticket artifacts",
-  story: "Story artifacts",
-  review: "Review artifacts",
-};
 function isArtifactMentionProviderId(
   providerId: MentionProviderId,
-): providerId is EpicArtifactKind {
-  return (
-    providerId === "spec" ||
-    providerId === "ticket" ||
-    providerId === "story" ||
-    providerId === "review"
-  );
+): providerId is "artifacts" | "review" {
+  return providerId === "artifacts" || providerId === "review";
 }
 
 export function isArtifactMentionStep(step: MentionFlowStep): boolean {
@@ -610,27 +648,32 @@ export function isArtifactMentionStep(step: MentionFlowStep): boolean {
 }
 
 class ArtifactMentionProvider extends ComposerMentionProvider {
-  readonly id: EpicArtifactKind;
+  readonly id: "artifacts" | "review";
   readonly rootOrder: number;
   protected readonly label: string;
   protected readonly description: string;
-  private readonly artifactKind: EpicArtifactKind;
+  private readonly artifactKinds: ReadonlySet<EpicArtifactKind>;
 
-  constructor(kind: EpicArtifactKind, rootOrder: number) {
+  constructor(
+    id: "artifacts" | "review",
+    artifactKinds: ReadonlyArray<EpicArtifactKind>,
+    rootOrder: number,
+  ) {
     super();
-    this.id = kind;
+    this.id = id;
     this.rootOrder = rootOrder;
-    this.artifactKind = kind;
-    this.label = EPIC_NODE_LABELS[kind];
-    this.description = EPIC_ARTIFACT_DESCRIPTIONS[kind];
+    this.artifactKinds = new Set(artifactKinds);
+    this.label = id === "artifacts" ? "Artifacts" : EPIC_NODE_LABELS.review;
+    this.description =
+      id === "artifacts" ? "Task artifacts" : "Review artifacts";
   }
 
   rootEntry(_context: ComposerMentionProviderContext): MentionMenuEntry | null {
     return providerEntry({
-      id: `provider:${this.artifactKind}`,
+      id: `provider:${this.id}`,
       label: this.label,
       description: this.description,
-      icon: artifactIcon(this.artifactKind),
+      icon: this.id === "artifacts" ? artifactsIcon() : artifactIcon("review"),
       step: this.providerStep("root", null),
     });
   }
@@ -639,7 +682,8 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
     return context.epicEntries.flatMap((entry) =>
-      entry.kind === "epic-artifact" && entry.artifactType === this.artifactKind
+      entry.kind === "epic-artifact" &&
+      this.artifactKinds.has(entry.artifactType)
         ? suggestionEntry(entry)
         : [],
     );
@@ -648,9 +692,9 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
   rootEpicRequests(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionEpicRequest> {
-    return [
-      epicRequest(context, EPIC_ARTIFACT_MENTION_METHODS[this.artifactKind]),
-    ];
+    return [...this.artifactKinds].map((kind) =>
+      epicRequest(context, EPIC_ARTIFACT_MENTION_METHODS[kind]),
+    );
   }
 
   epicRequests(
@@ -668,7 +712,7 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
       backEntry("Mentions"),
       ...context.epicEntries.flatMap((entry) =>
         entry.kind === "epic-artifact" &&
-        entry.artifactType === this.artifactKind
+        this.artifactKinds.has(entry.artifactType)
           ? suggestionEntry(entry)
           : [],
       ),
@@ -676,7 +720,7 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
   }
 
   menuCopy(_step: MentionFlowStep): MentionMenuCopy {
-    const plural = EPIC_ARTIFACT_PLURAL_LABELS[this.artifactKind];
+    const plural = this.id === "artifacts" ? "Artifacts" : "Reviews";
     return {
       header: plural,
       empty: `No ${plural.toLowerCase()} available`,
@@ -770,10 +814,8 @@ export const mentionProviderRegistry = new MentionProviderRegistry([
   new GitMentionProvider(),
   new EpicMentionProvider(),
   new AgentMentionProvider(),
-  new ArtifactMentionProvider("spec", 50),
-  new ArtifactMentionProvider("ticket", 60),
-  new ArtifactMentionProvider("story", 70),
-  new ArtifactMentionProvider("review", 80),
+  new ArtifactMentionProvider("artifacts", STANDARD_ARTIFACT_KINDS, 50),
+  new ArtifactMentionProvider("review", ["review"], 60),
 ]);
 
 interface ProviderEntryArgs {
@@ -890,14 +932,73 @@ function scoreAgentEntry(
   return null;
 }
 
-function workspacePathRequest(
+/**
+ * Build the file/folder mention requests for the current roots, splitting them
+ * between the scoped `workspace.searchPaths` (for roots attached to the current
+ * Epic on this host) and the legacy raw-root RPC (for everything else, and for
+ * all roots when there is no current Epic). A root that cannot be scoped always
+ * falls back to legacy, so a suggestion is never dropped by scoping.
+ */
+function workspacePathOrSearchRequests(
   context: ComposerMentionProviderContext,
+  legacyMethod: WorkspacePathMentionMethod,
+  suggestionKind: "file" | "folder",
+): ReadonlyArray<MentionWorkspaceRequest> {
+  if (context.roots.length === 0) return EMPTY_WORKSPACE_REQUESTS;
+  const epicId = context.currentEpicId;
+  if (epicId === null) {
+    return [
+      legacyPathRequestForRoots(context, [...context.roots], legacyMethod),
+    ];
+  }
+
+  const requests: MentionWorkspaceRequest[] = context.roots
+    .filter((root) => context.epicAttachedRoots.has(root))
+    .map((root) =>
+      searchPathsMentionRequest(context, epicId, root, suggestionKind),
+    );
+  const legacyRoots = context.roots.filter(
+    (root) => !context.epicAttachedRoots.has(root),
+  );
+  if (legacyRoots.length > 0) {
+    requests.push(
+      legacyPathRequestForRoots(context, legacyRoots, legacyMethod),
+    );
+  }
+  return requests.length > 0 ? requests : EMPTY_WORKSPACE_REQUESTS;
+}
+
+function searchPathsMentionRequest(
+  context: ComposerMentionProviderContext,
+  epicId: string,
+  root: string,
+  suggestionKind: "file" | "folder",
+): MentionSearchPathsRequest {
+  return {
+    method: "workspace.searchPaths",
+    suggestionKind,
+    root,
+    params: {
+      epicId,
+      reference: { root },
+      query: context.query.trim(),
+      limit: context.limit,
+      // Request exactly the kind this provider renders so the host spends the
+      // whole limit on it (a folder mention is never starved by files).
+      kinds: suggestionKind === "folder" ? "folders" : "files",
+    },
+  };
+}
+
+function legacyPathRequestForRoots(
+  context: ComposerMentionProviderContext,
+  roots: ReadonlyArray<string>,
   method: WorkspacePathMentionMethod,
 ): MentionWorkspaceRequest {
   return {
     method,
     params: {
-      roots: [...context.roots],
+      roots: [...roots],
       query: context.query.trim(),
       limit: context.limit,
     },

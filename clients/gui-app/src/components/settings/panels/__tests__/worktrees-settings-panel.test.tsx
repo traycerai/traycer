@@ -39,6 +39,7 @@ import {
   EMPTY_WORKTREE_TIER_FILTERS,
   useWorktreesSettingsViewStore,
 } from "@/stores/settings/worktrees-settings-view-store";
+import { useWorktreesSettingsSelectionStore } from "@/stores/settings/worktrees-settings-selection-store";
 import {
   installWorktreeVirtualizerOffsetHeight,
   WORKTREE_TEST_VIRTUAL_ITEM_HEIGHT,
@@ -300,6 +301,9 @@ beforeEach(() => {
     searchText: "",
     sortMode: DEFAULT_WORKTREE_SORT_MODE,
     tierFilters: EMPTY_WORKTREE_TIER_FILTERS,
+  });
+  useWorktreesSettingsSelectionStore.setState({
+    selectedPathsByHost: new Map(),
   });
   virtualViewportHeight = 100_000;
   restoreOffsetHeight = installWorktreeVirtualizerOffsetHeight(
@@ -954,6 +958,39 @@ describe("WorktreesList delete flow", () => {
     ).toBe("false");
   });
 
+  it("preserves selection when the Worktrees settings panel remounts", () => {
+    const rendered = renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: WORKTREES,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
+    );
+    expect(screen.getByText("1 selected")).not.toBeNull();
+
+    rendered.unmount();
+    renderDefault();
+
+    expect(screen.getByText("1 selected")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-clean" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-dirty" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
   it("gives the scroll viewport a minimum bottom clearance while selecting, and removes it once cleared", () => {
     renderDefault();
     const scrollRegion = screen.getByTestId("worktrees-virtual-scroll");
@@ -1065,6 +1102,41 @@ describe("WorktreesList delete flow", () => {
 
     fireEvent.click(screen.getByTestId("worktrees-select-all"));
     expect(screen.getByText("1 selected")).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual(["/wt/dirty"]);
+  });
+
+  it("preserves hidden selections when a searched worktree is deselected", () => {
+    renderDefault();
+
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
+    expect(screen.getByText("2 selected")).not.toBeNull();
+
+    const search = screen.getByRole("searchbox", {
+      name: "Search worktrees",
+    });
+    fireEvent.change(search, { target: { value: "clean" } });
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
+    );
+
+    expect(screen.queryByTestId("worktrees-selection-action-bar")).toBeNull();
+
+    fireEvent.change(search, { target: { value: "" } });
+
+    expect(screen.getByText("1 selected")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-clean" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-dirty" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
 
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     fireEvent.click(screen.getByTestId("confirm-action"));

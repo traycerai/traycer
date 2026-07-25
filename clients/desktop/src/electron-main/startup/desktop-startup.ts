@@ -27,6 +27,8 @@ import {
   HostController,
 } from "../host/host-controller";
 import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
+import { readPublishedHostProcessLiveness } from "../host/host-process-liveness";
+import { createHostRecoveryGovernor } from "../host/host-recovery-governor";
 import {
   refreshRegistryUpdateState,
   setActiveEnvironment,
@@ -326,14 +328,24 @@ async function timed(
 // (two documented sync-filesystem exceptions: the GPU preference read in
 // app/gpu-acceleration.ts and the memory-backed /proc write in
 // app/core-dump-guard.ts, which must land before Chromium spawns children).
-function runPreReady(state: BootState): void {
+export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
   applyHardwareAccelerationPreference();
-  registerAppScheme();
   suppressWslKernelCoreDumps();
+  // `initCrashReporter()` must run before `registerAppScheme()`. When a
+  // Sentry DSN is configured, `SentryElectron.init()` makes its own raw
+  // `protocol.registerSchemesAsPrivileged([sentry-ipc])` call and only
+  // afterwards replaces that method with a Proxy that merges every later
+  // registration into its own. Electron keeps only the last RAW call, so
+  // registering `app` first (before Sentry) gets silently discarded -
+  // `app://renderer` loses its secure/cors/fetch privileges and becomes a
+  // non-secure context, disabling `navigator.clipboard`/`crypto.subtle` in
+  // the renderer. Registering `app` after Sentry lets its Proxy fold it in
+  // alongside `sentry-ipc`. Do not reorder these two calls.
   initCrashReporter();
   installGlobalErrorHandlers();
+  registerAppScheme();
   installProcessGoneListeners();
 
   registerDeepLinkHandling(() => deliverAuthReturnSignal(state));
@@ -694,12 +706,23 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
   // disk still names an unreachable host. Started after bootstrap so the
   // initial 60s readiness wait can't register as an outage.
   void hostReady.then(() => {
+    // One authority for automatic restarts, holding both the liveness gate and
+    // the attempt budget. It re-reads pid.json itself inside `requestRespawn`
+    // so the "never kill a live host" rule can't be bypassed by adding another
+    // caller later.
+    const recoveryGovernor = createHostRecoveryGovernor({
+      now: undefined,
+      readLiveness: () =>
+        readPublishedHostProcessLiveness(services.host.pidMetadataFile),
+    });
     const healthMonitor = startHostHealthMonitor({
       host: services.host,
       intervalMs: undefined,
       probe: undefined,
       readMetadata: undefined,
       respawn: () => respawnIfDown(services.hostController),
+      governor: recoveryGovernor,
+      readLiveness: undefined,
     });
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
