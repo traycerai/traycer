@@ -174,9 +174,11 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
 function mountBell(
   runnerHost: MockRunnerHost,
-  options: {
-    readonly wsStreamClient?: WsStreamClient<HostStreamRpcRegistry>;
-  } = {},
+  options:
+    | {
+        readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+      }
+    | undefined,
 ): void {
   const bell = (
     <QueryClientProvider client={createTestQueryClient()}>
@@ -188,7 +190,7 @@ function mountBell(
     </QueryClientProvider>
   );
 
-  if (options.wsStreamClient === undefined) {
+  if (options === undefined) {
     render(bell);
     return;
   }
@@ -243,7 +245,7 @@ describe("NotificationsBell", () => {
 
   it("keeps bell click open and close behavior unchanged", async () => {
     const runnerHost = createRunnerHost();
-    mountBell(runnerHost);
+    mountBell(runnerHost, undefined);
 
     expect(screen.queryByTestId("notifications-popover")).toBeNull();
     expect(useNotificationsPopoverStore.getState().open).toBe(false);
@@ -265,7 +267,7 @@ describe("NotificationsBell", () => {
 
   it("suppresses title-bar dragging only while the popover is open", async () => {
     const runnerHost = createRunnerHost();
-    mountBell(runnerHost);
+    mountBell(runnerHost, undefined);
 
     const isSuppressed = () =>
       useTitleBarDragStore.getState().suppressors.has("notifications");
@@ -289,7 +291,7 @@ describe("NotificationsBell", () => {
     const runnerHost = createRunnerHost();
     const { factory, handle } = fakeFactory();
     openNotificationsStream(factory, null);
-    mountBell(runnerHost);
+    mountBell(runnerHost, undefined);
 
     act(() => {
       handle().callbacks.onSnapshot(
@@ -317,7 +319,7 @@ describe("NotificationsBell", () => {
 
   it("renders the exact uncapped attention badge and label", () => {
     const runnerHost = createRunnerHost();
-    mountBell(runnerHost);
+    mountBell(runnerHost, undefined);
 
     act(() => {
       useHostNotificationsStore.getState().applySnapshot({
@@ -371,7 +373,7 @@ describe("NotificationsBell", () => {
     const runnerHost = createRunnerHost();
     const { factory, handle } = fakeFactory();
     openNotificationsStream(factory, null);
-    mountBell(runnerHost);
+    mountBell(runnerHost, undefined);
 
     // Host summary null → unknown kind, but renders like clear (no dot).
     act(() => {
@@ -421,7 +423,7 @@ describe("NotificationsBell", () => {
     activeHostIdRef.value = null;
     directoryRef.value = { findById: () => null };
     const runnerHost = createRunnerHost();
-    mountBell(runnerHost);
+    mountBell(runnerHost, undefined);
 
     fireEvent.click(screen.getByTestId("notifications-bell"));
     expect(
@@ -469,7 +471,7 @@ describe("NotificationsBell", () => {
       summary: { unreadCount: 0, attentionCount: 0 },
     });
     const runnerHost = createRunnerHost();
-    mountBell(runnerHost);
+    mountBell(runnerHost, undefined);
 
     fireEvent.click(screen.getByTestId("notifications-bell"));
     expect(
@@ -559,7 +561,7 @@ describe("NotificationsBell", () => {
       // No host summary applied → isPartial / unknown bell state.
       // Unknown still buckets as "unknown" for analytics, but renders no dot.
       activeHostIdRef.value = mockLocalHostEntry.hostId;
-      mountBell(runnerHost);
+      mountBell(runnerHost, undefined);
 
       expectNoBellIndicators();
       expect(
