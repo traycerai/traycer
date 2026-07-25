@@ -432,7 +432,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
       args: ["host", "download", "--automatic"],
       onEvent: () => undefined,
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: null,
     });
 
@@ -484,7 +484,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
         }
       },
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: null,
     });
     expect(capturedArgs).toContain("--json");
@@ -520,7 +520,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
         args: ["host", "install", "latest", "--json"],
         onEvent: () => undefined,
         env: null,
-        timeoutMs: 5_000,
+        idleTimeoutMs: 5_000,
         signal: null,
       });
     } catch (err) {
@@ -551,7 +551,7 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
       args: ["host", "download", "--automatic"],
       onEvent: () => undefined,
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: abortController.signal,
     });
 
@@ -598,7 +598,7 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
       args: ["host", "download", "--automatic"],
       onEvent: () => undefined,
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: abortController.signal,
     });
     await vi.waitFor(() => {
@@ -626,7 +626,7 @@ describe("streamTraycerCliJson reports an external kill by its signal", () => {
       args: ["host", "install", "--release", "1.1.8-rc.2"],
       onEvent: () => undefined,
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: null,
     });
     await vi.waitFor(() => {
@@ -653,7 +653,7 @@ describe("streamTraycerCliJson timeout waits for the child close", () => {
         args: ["host", "download", "--automatic"],
         onEvent: () => undefined,
         env: null,
-        timeoutMs: 5_000,
+        idleTimeoutMs: 5_000,
         signal: null,
       });
 
@@ -673,8 +673,61 @@ describe("streamTraycerCliJson timeout waits for the child close", () => {
       await Promise.resolve();
       expect(settled).toBe(false);
 
+      // The idle kill is a SIGKILL, so `close` carries a signal. The
+      // timeout check runs before the signal branch, so this still reports
+      // the idle budget rather than the bare "killed by SIGKILL".
       child.close(null, "SIGKILL");
-      await expect(promise).rejects.toThrow("timed out");
+      await expect(promise).rejects.toThrow("produced no output");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // traycer#585/#589: this budget is inactivity, not wall-clock. A 700MB
+  // host download on a throttled link runs far past any fixed ceiling we
+  // would be willing to set, but it never stops reporting - the CLI emits a
+  // progress event per chunk and heartbeats while a transfer is stalled.
+  it("re-arms the idle budget on every event, and only kills a child that goes quiet", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new HangingFakeChild();
+      spawnImpl = () => child;
+      const { streamTraycerCliJson } = await import("../traycer-cli");
+
+      const promise = streamTraycerCliJson<unknown>({
+        args: ["host", "download", "--automatic"],
+        onEvent: () => undefined,
+        env: null,
+        idleTimeoutMs: 5_000,
+        signal: null,
+      });
+
+      // Four reporting rounds - 16s in total, well past the 5s budget.
+      for (let round = 0; round < 4; round += 1) {
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(child.killed).toBe(false);
+        child.stdout.emit(
+          "data",
+          `${JSON.stringify({
+            type: "progress",
+            stage: "download",
+            percent: round * 25,
+            bytes: round * 1_000_000,
+            totalBytes: 4_000_000,
+            message: "downloading host",
+            timestamp: "2026-05-15T00:00:00Z",
+          })}\n`,
+        );
+      }
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(child.killed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.killed).toBe(true);
+      expect(child.killSignal).toBe("SIGKILL");
+
+      child.close(null, "SIGKILL");
+      await expect(promise).rejects.toThrow("produced no output for 5000ms");
     } finally {
       vi.useRealTimers();
     }
