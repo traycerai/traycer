@@ -933,7 +933,8 @@ describe("<NotificationsSessionProvider />", () => {
     expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
     expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
 
-    // (2) Disconnect → summary unknown, rows preserved, neutral unknown indicator.
+    // (2) Disconnect → summary unknown, rows preserved; unknown renders like clear
+    // (no indicator) so the bell stays quiet while status is unresolved.
     act(() => {
       streamClient.session.emitStatus("reconnecting");
     });
@@ -941,14 +942,12 @@ describe("<NotificationsSessionProvider />", () => {
     expect(
       useHostNotificationsStore.getState().byId["connected-host-row"],
     ).toBeDefined();
-    expect(
-      screen.getByTestId("notifications-unknown-indicator"),
-    ).not.toBeNull();
+    expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
     expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
     expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
     expect(
-      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications, task notification status unavailable");
+      screen.getByRole("button", { name: "Notifications" }),
+    ).not.toBeNull();
 
     // (3) Reconnect open + fresh atomic snapshot → exact summary + badge.
     act(() => {
