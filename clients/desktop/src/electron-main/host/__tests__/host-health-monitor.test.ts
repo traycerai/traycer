@@ -21,13 +21,24 @@ import {
   type HostHealthMonitor,
 } from "../host-health-monitor";
 import {
+  BREAKER_MAX_CONSECUTIVE_GRANTS,
   createHostRecoveryGovernor,
+  RESPAWN_BACKOFF_MS,
+  SUSTAINED_HEALTH_MS,
   type HostProcessLiveness,
 } from "../host-recovery-governor";
 import { HostRecoveryDeferredError } from "../../startup/host-health-respawn";
 import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
 
 const INTERVAL_MS = 1_000;
+
+// Derived from the governor's own constants, not re-guessed here, so a
+// retuned backoff or sustained-health window can't silently desync these
+// waits from what they are meant to cross.
+const BACKOFF_TICKS =
+  Math.ceil(RESPAWN_BACKOFF_MS[RESPAWN_BACKOFF_MS.length - 1] / INTERVAL_MS) +
+  20;
+const SUSTAINED_TICKS = Math.ceil(SUSTAINED_HEALTH_MS / INTERVAL_MS) + 20;
 
 const DEAD = (): Promise<HostProcessLiveness> => Promise.resolve("dead");
 const ALIVE = (): Promise<HostProcessLiveness> => Promise.resolve("alive");
@@ -482,9 +493,13 @@ describe("startHostHealthMonitor", () => {
 
     // Drive five paced respawns, each separated by its backoff, with a single
     // successful probe in between - the shape of the incident.
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt < BREAKER_MAX_CONSECUTIVE_GRANTS;
+      attempt += 1
+    ) {
       reachable = false;
-      await ticks(320);
+      await ticks(BACKOFF_TICKS);
       reachable = true;
       await ticks(1);
     }
@@ -493,7 +508,7 @@ describe("startHostHealthMonitor", () => {
     // Sixth confirmed outage: the budget is spent, so recovery belongs to the
     // user's Retry rather than to another restart.
     reachable = false;
-    await ticks(320);
+    await ticks(BACKOFF_TICKS);
     expect(respawn).toHaveBeenCalledTimes(5);
     monitor.dispose();
   });
@@ -513,20 +528,24 @@ describe("startHostHealthMonitor", () => {
     // paced state proves nothing: enough time passes to satisfy the backoff
     // anyway, so the next respawn happens whether or not sustained health
     // forgave anything. From a tripped breaker, only forgiveness can.
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (
+      let attempt = 0;
+      attempt < BREAKER_MAX_CONSECUTIVE_GRANTS;
+      attempt += 1
+    ) {
       reachable = false;
-      await ticks(320);
+      await ticks(BACKOFF_TICKS);
       reachable = true;
       await ticks(1);
     }
     reachable = false;
-    await ticks(320);
+    await ticks(BACKOFF_TICKS);
     expect(respawn).toHaveBeenCalledTimes(5);
 
     // A genuinely recovered host: reachable continuously past the sustained
     // window, which forgives the spent attempts and re-arms recovery.
     reachable = true;
-    await ticks(320);
+    await ticks(SUSTAINED_TICKS);
     reachable = false;
     // Two ticks: just enough to confirm one outage, so this counts the grant
     // the re-armed budget allowed rather than however many a long window fits.
