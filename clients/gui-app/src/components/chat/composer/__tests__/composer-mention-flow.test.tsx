@@ -68,6 +68,12 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function pressKey(editor: Editor, key: string): void {
+  editor.view.dom.dispatchEvent(
+    new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+  );
+}
+
 describe("composer mention flow", () => {
   it("opens picker when user types @ and tracks query updates", async () => {
     const { editor, pickerStore } = makeFixture();
@@ -87,6 +93,25 @@ describe("composer mention flow", () => {
       if (node.type.name === "mention") mentionNodeCount += 1;
     });
     expect(mentionNodeCount).toBe(0);
+  });
+
+  it("keeps spaces in the mention query until Escape returns to prompt typing", async () => {
+    const { editor, pickerStore } = makeFixture();
+    editor.commands.insertContent("@release notes");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(true);
+    expect(pickerStore.getState().query).toBe("release notes");
+
+    pressKey(editor, "Escape");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(false);
+    editor.commands.insertContent(" are ready");
+    await flush();
+
+    expect(pickerStore.getState().open).toBe(false);
+    expect(editor.state.doc.textContent).toBe("@release notes are ready");
   });
 
   it("commits a mention atom + trailing space and continues typing outside the chip", async () => {

@@ -176,7 +176,9 @@ function buildFakeBridge(
       },
     },
     menu: {
+      platform: "darwin",
       onCommand: (_handler) => ({ dispose: () => undefined }),
+      openTopLevel: async () => undefined,
     },
     appUpdates: {
       getSnapshot: async () => ({
@@ -454,6 +456,7 @@ function buildFakeBridge(
       },
       windowEx: {
         setOverlayIcon: async () => undefined,
+        setTitleBarOverlay: async () => undefined,
       },
     },
     power: {

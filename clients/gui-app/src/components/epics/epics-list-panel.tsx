@@ -117,7 +117,7 @@ const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
 // Single source of a row's display label for both visible text and accessible
 // names. `item.title` is the RAW title (epics can be empty); apply the
-// source-aware "Untitled epic" fallback for epics, while phases already carry
+// source-aware "Untitled task" fallback for epics, while phases already carry
 // their own baked fallback and render verbatim.
 function historyItemDisplayTitle(item: HistoryItem): string {
   return item.taskType === "phase"
@@ -763,7 +763,7 @@ function describeDeleteTitle(
   if (ids.length > 1) return `Delete ${ids.length} epics?`;
   const match = items.find((item) => item.epicId === ids[0]);
   if (match === undefined) return "Delete 1 epic?";
-  // `match.title` is RAW; apply the source-aware "Untitled epic" fallback (prompt
+  // `match.title` is RAW; apply the source-aware "Untitled task" fallback (prompt
   // slice, else literal) for the rendered confirmation. Phases already carry
   // their own baked fallback.
   const matchTitle =
@@ -1052,7 +1052,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     }
     // Passing the row's title threads it through tab creation so the
     // cold-open canvas skeleton can render the real epic title at +0ms,
-    // not "Untitled epic" until the snapshot arrives.
+    // not "Untitled task" until the snapshot arrives.
     openEpicFromCommand(navigate, item.epicId, pathname, {
       title: item.title,
       source: "direct_ui",
