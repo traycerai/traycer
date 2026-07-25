@@ -175,6 +175,7 @@ function useFileTreeSource(args: {
     workspacePath: args.workspacePath,
     enabled: !useUnaryFallback,
   });
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- the ONE sanctioned caller: the old-host fallback the deprecation notice itself names
   const unary = useWorkspaceListFileTree(args.workspacePath, useUnaryFallback);
 
   const unaryFiles = unary.data?.files;

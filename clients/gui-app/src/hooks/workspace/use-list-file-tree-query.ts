@@ -4,11 +4,14 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 const WORKSPACE_FILE_TREE_MAX_FILES = 25_000;
 
 /**
- * Recursive 25k-file snapshot with a poll. Still the source for surfaces that
- * need a whole-workspace path list (command-palette fuzzy search), and the
- * file-tree panel's fallback for hosts that predate
- * `workspace.subscribeFileList` - hence the explicit `enabled` gate rather
- * than an implicit "always on".
+ * @deprecated Recursive 25k-file snapshot with a poll. Its ONLY remaining
+ * caller is the file-tree panel's fallback for hosts that predate
+ * `workspace.subscribeFileList` (the command palette moved to
+ * `workspace.searchPaths`) - hence the explicit `enabled` gate. Do not add new
+ * consumers: live trees use the `workspace.subscribeFileList` stream
+ * (`use-workspace-file-list-subscription`), path search uses
+ * `use-workspace-search-paths-query`. Delete this hook when the old-host
+ * fallback is retired.
  */
 export function useWorkspaceListFileTree(
   workspacePath: string | null,
