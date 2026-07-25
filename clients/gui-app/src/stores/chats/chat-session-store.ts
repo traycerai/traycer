@@ -58,6 +58,7 @@ import type {
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueuedItem,
+  ChatQueueDeliveryPolicy,
   ChatQueueState,
   ChatRunSettings,
   ChatRunStatus,
@@ -86,7 +87,10 @@ import type {
 import { v4 as uuidv4 } from "uuid";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 
-type ChatStreamClientHandle = Pick<ChatStreamClient, "sendAction" | "close">;
+type ChatStreamClientHandle = Pick<
+  ChatStreamClient,
+  "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
+>;
 
 export type ChatStreamClientFactory = (
   epicId: string,
@@ -312,6 +316,17 @@ export interface ChatSessionState {
   readonly runStatus: ChatRunStatus;
   readonly activeTurn: ChatActiveTurn | null;
   /**
+   * Whether the tab's negotiated `chat.subscribe` protocol version understands
+   * the `after_safe_point` explicit-steer delivery policy (host handshake
+   * minor >= 5). A new renderer paired with a released <=1.4 host must NOT emit
+   * `after_safe_point`: that host predates same-turn steering and would inject
+   * the message under whatever ordering/settings it does understand. Captured
+   * once the stream reaches `open` (the version is stable per connection);
+   * `false` until then and on any non-open status, so `Mod-Enter` degrades to
+   * the plain-Enter queue alias until steer support is confirmed.
+   */
+  readonly steerProtocolSupported: boolean;
+  /**
    * The host's own `isTurnInProgress()`: is a turn genuinely active or
    * activating right now? Narrower than `runStatus !== "idle"`, which also
    * reads "running" for a pending queued item or visible background work
@@ -419,6 +434,7 @@ export interface ChatSessionState {
     content: JsonContent,
     sender: UserMessageSender,
     settings: ChatRunSettings,
+    deliveryPolicy: ChatQueueDeliveryPolicy,
   ) => SentChatMessageAction | null;
   /**
    * Sends the initial handoff message reusing its pre-minted ids (shared with
@@ -1450,10 +1466,22 @@ export function createChatSessionStore(
             if (reason?.kind === "fatalError") return reason.details;
             return state.fatalClose;
           };
+          // The negotiated `chat.subscribe` version is stable per connection and
+          // available once the handshake completes (status `open`). Capture the
+          // steer-protocol capability there so the composer only resolves
+          // `after_safe_point` against a host that understands it; a non-open
+          // status drops it back to `false` so a reconnect re-confirms.
+          const resolveSteerProtocolSupported = () => {
+            if (status === "open") {
+              return streamClient?.sameTurnSteeringProtocolSupported() ?? false;
+            }
+            return false;
+          };
           return {
             connectionStatus: status,
             runStatus: status === "closed" ? "idle" : state.runStatus,
             activeTurn: status === "closed" ? null : state.activeTurn,
+            steerProtocolSupported: resolveSteerProtocolSupported(),
             fatalClose: resolveFatalClose(),
           };
         });
@@ -1584,6 +1612,7 @@ export function createChatSessionStore(
       queue: EMPTY_QUEUE,
       runStatus: "idle",
       activeTurn: null,
+      steerProtocolSupported: false,
       turnInProgress: undefined,
       pendingApprovals: [],
       pendingFileEditApprovals: [],
@@ -1631,7 +1660,7 @@ export function createChatSessionStore(
         }
         set({ missingWorktreePaths: next });
       },
-      sendMessage: (content, sender, settings) => {
+      sendMessage: (content, sender, settings, deliveryPolicy) => {
         const clientActionId = uuidv4();
         const messageId = uuidv4();
         // A worktree staged mid-chat ("Create new worktree") rides on this send;
@@ -1656,7 +1685,7 @@ export function createChatSessionStore(
           sender,
           settings,
           accountContext: useAccountContextStore.getState().accountContext,
-          deliveryPolicy: "auto",
+          deliveryPolicy,
           worktreeIntent,
         };
         // Consume before dispatch so the pending action captures precisely the

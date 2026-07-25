@@ -192,6 +192,7 @@ export type AnalyticsSetting =
   | "quoteReplyEnabled"
   | "showGlobalResourceMonitor"
   | "showNavigatorResourceStats"
+  | "steerOnModEnterEnabled"
   | "summonHotkeyChord"
   | "summonHotkeyEnabled"
   | "terminalCursorBlink"

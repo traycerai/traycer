@@ -4,7 +4,10 @@ import {
   defineUpgradePath,
   type DowngradeResult,
 } from "@traycer/protocol/framework/index";
-import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  defineVersionedStreamRpcRegistry,
+  type VersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   agentCreateV10,
   agentCreateV20,
@@ -94,6 +97,7 @@ import {
   chatSubscribeV12,
   chatSubscribeV13,
   chatSubscribeV14,
+  chatSubscribeV15,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -4334,183 +4338,231 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *    background-items controls as an additive minor instead of a major, to
  *    stay compatible with host-v1.0.0).
  */
-export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
-  "epic.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: epicSubscribeV10,
-        },
+const EPIC_SUBSCRIBE_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: epicSubscribeV10,
       },
     },
   },
-  "chat.subscribe": {
-    1: {
-      latestMinor: 4,
-      versions: {
-        0: {
-          contract: chatSubscribeV10,
-        },
-        1: {
-          contract: chatSubscribeV11,
-        },
-        2: {
-          contract: chatSubscribeV12,
-        },
-        3: {
-          contract: chatSubscribeV13,
-        },
-        4: {
-          contract: chatSubscribeV14,
-        },
+} as const;
+
+const CHAT_SUBSCRIBE_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 5,
+    versions: {
+      0: {
+        contract: chatSubscribeV10,
+      },
+      1: {
+        contract: chatSubscribeV11,
+      },
+      2: {
+        contract: chatSubscribeV12,
+      },
+      3: {
+        contract: chatSubscribeV13,
+      },
+      4: {
+        contract: chatSubscribeV14,
+      },
+      5: {
+        contract: chatSubscribeV15,
       },
     },
   },
-  "notifications.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: notificationsSubscribeV10,
-        },
+} as const;
+
+const NOTIFICATIONS_SUBSCRIBE_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: notificationsSubscribeV10,
       },
     },
   },
-  "host.notifications.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsSubscribeV10,
-        },
+} as const;
+
+const HOST_NOTIFICATIONS_SUBSCRIBE_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: hostNotificationsSubscribeV10,
       },
     },
   },
-  "host.notifications.feed.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsFeedSubscribeV10,
-        },
+} as const;
+
+const HOST_NOTIFICATIONS_FEED_SUBSCRIBE_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: hostNotificationsFeedSubscribeV10,
       },
     },
   },
-  "terminal.subscribe": {
-    1: {
-      latestMinor: 4,
-      versions: {
-        0: {
-          contract: terminalSubscribeV10,
-        },
-        1: {
-          contract: terminalSubscribeV11,
-        },
-        2: {
-          contract: terminalSubscribeV12,
-        },
-        3: {
-          contract: terminalSubscribeV13,
-        },
-        4: {
-          contract: terminalSubscribeV14,
-        },
+} as const;
+
+const TERMINAL_SUBSCRIBE_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 4,
+    versions: {
+      0: {
+        contract: terminalSubscribeV10,
+      },
+      1: {
+        contract: terminalSubscribeV11,
+      },
+      2: {
+        contract: terminalSubscribeV12,
+      },
+      3: {
+        contract: terminalSubscribeV13,
+      },
+      4: {
+        contract: terminalSubscribeV14,
       },
     },
   },
-  "git.subscribeStatus": {
-    1: {
-      latestMinor: 2,
-      versions: {
-        0: {
-          contract: gitSubscribeStatusV10,
-        },
-        // Nested-snapshot minor: `submodules[]` + `nestedFingerprint` + v1.1
-        // file rows on server frames. Additive; the HOST resolver projects
-        // frames per negotiated minor (streams have no version bridges). See
-        // the COMPAT POSTURE note on `gitSubscribeStatusV11`.
-        1: {
-          contract: gitSubscribeStatusV11,
-        },
-        // Guaranteed-fresh stream replacement: required `freshNonce` on the
-        // v1.2 open and snapshot/updated frames. Lower-minor projection stays
-        // explicit in the host resolver because streams have no bridges.
-        2: {
-          contract: gitSubscribeStatusV12,
-        },
+} as const;
+
+const GIT_SUBSCRIBE_STATUS_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 2,
+    versions: {
+      0: {
+        contract: gitSubscribeStatusV10,
+      },
+      // Nested-snapshot minor: `submodules[]` + `nestedFingerprint` + v1.1
+      // file rows on server frames. Additive; the HOST resolver projects
+      // frames per negotiated minor (streams have no version bridges). See
+      // the COMPAT POSTURE note on `gitSubscribeStatusV11`.
+      1: {
+        contract: gitSubscribeStatusV11,
+      },
+      // Guaranteed-fresh stream replacement: required `freshNonce` on the
+      // v1.2 open and snapshot/updated frames. Lower-minor projection stays
+      // explicit in the host resolver because streams have no bridges.
+      2: {
+        contract: gitSubscribeStatusV12,
       },
     },
   },
-  "resources.subscribe": {
-    1: {
-      latestMinor: 3,
-      versions: {
-        0: {
-          contract: resourcesSubscribeV10,
-        },
-        1: {
-          contract: resourcesSubscribeV11,
-        },
-        2: {
-          contract: resourcesSubscribeV12,
-        },
-        3: {
-          contract: resourcesSubscribeV13,
-        },
+} as const;
+
+const RESOURCES_SUBSCRIBE_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 3,
+    versions: {
+      0: {
+        contract: resourcesSubscribeV10,
+      },
+      1: {
+        contract: resourcesSubscribeV11,
+      },
+      2: {
+        contract: resourcesSubscribeV12,
+      },
+      3: {
+        contract: resourcesSubscribeV13,
       },
     },
   },
-  "agent.inbox.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentInboxSubscribeV10,
-        },
+} as const;
+
+const AGENT_INBOX_SUBSCRIBE_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: agentInboxSubscribeV10,
       },
     },
   },
-  "migration.run": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: migrationRunV10,
-        },
+} as const;
+
+const MIGRATION_RUN_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: migrationRunV10,
       },
     },
   },
-  "worktree.deleteByPath": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: worktreeDeleteByPathStreamV10,
-        },
+} as const;
+
+const WORKTREE_DELETE_BY_PATH_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: worktreeDeleteByPathStreamV10,
       },
     },
   },
-  "worktree.changed": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: worktreeChangedV10,
-        },
+} as const;
+
+const WORKTREE_CHANGED_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: worktreeChangedV10,
       },
     },
   },
-  "speech.dictate": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: speechDictateV10,
-        },
+} as const;
+
+const SPEECH_DICTATE_STREAM_METHOD_REGISTRY = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: speechDictateV10,
       },
     },
   },
-});
+} as const;
+
+type HostStreamRpcRegistryDefinition = {
+  readonly "epic.subscribe": typeof EPIC_SUBSCRIBE_STREAM_METHOD_REGISTRY;
+  readonly "chat.subscribe": typeof CHAT_SUBSCRIBE_STREAM_METHOD_REGISTRY;
+  readonly "notifications.subscribe": typeof NOTIFICATIONS_SUBSCRIBE_STREAM_METHOD_REGISTRY;
+  readonly "host.notifications.subscribe": typeof HOST_NOTIFICATIONS_SUBSCRIBE_STREAM_METHOD_REGISTRY;
+  readonly "host.notifications.feed.subscribe": typeof HOST_NOTIFICATIONS_FEED_SUBSCRIBE_STREAM_METHOD_REGISTRY;
+  readonly "terminal.subscribe": typeof TERMINAL_SUBSCRIBE_STREAM_METHOD_REGISTRY;
+  readonly "git.subscribeStatus": typeof GIT_SUBSCRIBE_STATUS_STREAM_METHOD_REGISTRY;
+  readonly "resources.subscribe": typeof RESOURCES_SUBSCRIBE_STREAM_METHOD_REGISTRY;
+  readonly "agent.inbox.subscribe": typeof AGENT_INBOX_SUBSCRIBE_STREAM_METHOD_REGISTRY;
+  readonly "migration.run": typeof MIGRATION_RUN_STREAM_METHOD_REGISTRY;
+  readonly "worktree.deleteByPath": typeof WORKTREE_DELETE_BY_PATH_STREAM_METHOD_REGISTRY;
+  readonly "worktree.changed": typeof WORKTREE_CHANGED_STREAM_METHOD_REGISTRY;
+  readonly "speech.dictate": typeof SPEECH_DICTATE_STREAM_METHOD_REGISTRY;
+};
+
+export const hostStreamRpcRegistry: VersionedStreamRpcRegistry<HostStreamRpcRegistryDefinition> =
+  defineVersionedStreamRpcRegistry({
+    "epic.subscribe": EPIC_SUBSCRIBE_STREAM_METHOD_REGISTRY,
+    "chat.subscribe": CHAT_SUBSCRIBE_STREAM_METHOD_REGISTRY,
+    "notifications.subscribe": NOTIFICATIONS_SUBSCRIBE_STREAM_METHOD_REGISTRY,
+    "host.notifications.subscribe":
+      HOST_NOTIFICATIONS_SUBSCRIBE_STREAM_METHOD_REGISTRY,
+    "host.notifications.feed.subscribe":
+      HOST_NOTIFICATIONS_FEED_SUBSCRIBE_STREAM_METHOD_REGISTRY,
+    "terminal.subscribe": TERMINAL_SUBSCRIBE_STREAM_METHOD_REGISTRY,
+    "git.subscribeStatus": GIT_SUBSCRIBE_STATUS_STREAM_METHOD_REGISTRY,
+    "resources.subscribe": RESOURCES_SUBSCRIBE_STREAM_METHOD_REGISTRY,
+    "agent.inbox.subscribe": AGENT_INBOX_SUBSCRIBE_STREAM_METHOD_REGISTRY,
+    "migration.run": MIGRATION_RUN_STREAM_METHOD_REGISTRY,
+    "worktree.deleteByPath": WORKTREE_DELETE_BY_PATH_STREAM_METHOD_REGISTRY,
+    "worktree.changed": WORKTREE_CHANGED_STREAM_METHOD_REGISTRY,
+    "speech.dictate": SPEECH_DICTATE_STREAM_METHOD_REGISTRY,
+  });
 
 export type HostStreamRpcRegistry = typeof hostStreamRpcRegistry;

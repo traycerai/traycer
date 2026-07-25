@@ -227,6 +227,7 @@ function createHandle(): ChatSessionStoreHandle {
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: () => ({
       sendAction: () => undefined,
+      sameTurnSteeringProtocolSupported: () => true,
       close: () => undefined,
     }),
   });

@@ -25,7 +25,7 @@ function makeEditor(): Editor {
     element: el,
     extensions: buildComposerExtensions({
       pickerStore: createComposerPickerStore(),
-      placeholder: "t",
+      getPlaceholder: () => "t",
       onSubmit: { current: () => {} },
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,

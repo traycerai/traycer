@@ -853,6 +853,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       queue: s.queue,
       runStatus: s.runStatus,
       activeTurn: s.activeTurn,
+      steerProtocolSupported: s.steerProtocolSupported,
       turnInProgress: s.turnInProgress,
       pendingApprovals: s.pendingApprovals,
       pendingFileEditApprovals: s.pendingFileEditApprovals,
@@ -1316,7 +1317,20 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           input.content,
         );
         if (actionId === null) return false;
-        if (
+        // Cmd+Enter in edit mode = save-and-steer (decision 14): the steer
+        // carries the settings and the host picks safe-point vs interrupt-restart
+        // (any drift was already confirmed by the composer's steer dialog).
+        // Plain Enter just saves the edit with its restamped settings.
+        if (input.deliveryPolicy === "after_safe_point") {
+          if (
+            chatActions.queueSteerNow(
+              activeEditingQueueItemId,
+              input.settings,
+            ) === null
+          ) {
+            return false;
+          }
+        } else if (
           chatActions.queueSettingsUpdate(
             activeEditingQueueItemId,
             input.settings,
@@ -1340,6 +1354,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         input.content,
         sender,
         input.settings,
+        input.deliveryPolicy,
       );
       if (sent === null) return false;
       if (shouldMarkTitlePending) {
@@ -1377,7 +1392,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         plainTextPromptContent(option.prompt),
       );
       return (
-        chatActions.sendMessage(content, sender, nextStepSettings) !== null
+        chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
+        null
       );
     },
     [canSendNextStep, chatActions, nextStepSettings, profile],
@@ -1396,7 +1412,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     const content = buildSubmittedChatJSONContent(
       plainTextPromptContent("Implement the plan above."),
     );
-    return chatActions.sendMessage(content, sender, nextStepSettings) !== null;
+    return (
+      chatActions.sendMessage(content, sender, nextStepSettings, "auto") !==
+      null
+    );
   }, [canAct, chatActions, nextStepSettings, profile]);
   const planActions = useMemo<ChatPlanActionsContextValue>(
     () => ({
@@ -1537,13 +1556,33 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [accessFlags.isViewer, canAct],
   );
 
+  // Steer capability is a stable boolean (flips only when the running turn's
+  // harness changes), so it never churns the memoized composer per streamed
+  // token. `getActiveTurnForSteer` reads the live turn at submit time for the
+  // settings-drift comparison, avoiding a reactive activeTurn prop.
+  const steerCapable = state.activeTurn?.sameTurnSteeringSupported ?? false;
+  const steerProtocolSupported = state.steerProtocolSupported;
+  const getActiveTurnForSteer = useCallback(
+    () => handle.store.getState().activeTurn,
+    [handle.store],
+  );
   const lowerTurn = useMemo(
     () => ({
       activeTurnStatus: composerActiveTurnStatus,
+      steerCapable,
+      steerProtocolSupported,
+      getActiveTurnForSteer,
       stopDisabled,
       onStopTurn: chatActions.stopTurn,
     }),
-    [composerActiveTurnStatus, stopDisabled, chatActions.stopTurn],
+    [
+      composerActiveTurnStatus,
+      steerCapable,
+      steerProtocolSupported,
+      getActiveTurnForSteer,
+      stopDisabled,
+      chatActions.stopTurn,
+    ],
   );
 
   const forkPendingInterviewAssistantMessageId =

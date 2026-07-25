@@ -139,10 +139,12 @@ export interface ChatStreamClientOptions {
 export class ChatStreamClient {
   private readonly session: IStreamSession;
   private readonly callbacks: ChatStreamCallbacks;
+  private readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
   private closed: boolean;
 
   constructor(options: ChatStreamClientOptions) {
     this.callbacks = options.callbacks;
+    this.wsStreamClient = options.wsStreamClient;
     this.closed = false;
     this.session = options.wsStreamClient.subscribe("chat.subscribe", {
       epicId: options.epicId,
@@ -159,6 +161,21 @@ export class ChatStreamClient {
   sendAction(frame: ChatSubscribeClientFrame): void {
     if (this.closed) return;
     this.session.sendClientFrame(frame, null);
+  }
+
+  /**
+   * Whether the negotiated `chat.subscribe` protocol version understands the
+   * `after_safe_point` explicit-steer delivery policy (minor >= 5, added with
+   * same-turn steering). A new renderer paired with a released <=1.4 host must
+   * degrade `Mod-Enter` to a plain queued send: that host predates steering and
+   * would inject the message under whatever ordering/settings it does
+   * understand. Read lazily from the handshake, mirroring
+   * `TerminalStreamClient`'s per-frame version read.
+   */
+  sameTurnSteeringProtocolSupported(): boolean {
+    const version =
+      this.wsStreamClient.getMethodSchemaVersion("chat.subscribe");
+    return version !== null && version.major === 1 && version.minor >= 5;
   }
 
   close(): void {

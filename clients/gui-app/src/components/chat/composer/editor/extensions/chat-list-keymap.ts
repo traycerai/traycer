@@ -1,9 +1,12 @@
 import { Extension } from "@tiptap/core";
 import type { Editor } from "@tiptap/core";
+import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 import type { ComposerPickerStore } from "../../picker/composer-picker-store";
 
 export interface ChatListKeymapOptions {
-  readonly onSubmit: { readonly current: () => void };
+  readonly onSubmit: {
+    readonly current: (source: ChatComposerSubmitSource) => void;
+  };
   readonly pickerStore: ComposerPickerStore | null;
 }
 
@@ -21,7 +24,14 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
     const { onSubmit, pickerStore } = this.options;
     return {
       "Mod-Enter": () => {
-        onSubmit.current();
+        // Steer chord (decision 12): with an open @mention/slash picker, commit
+        // the highlighted item and then submit-as-steer in one press, rather
+        // than sending the half-typed trigger. With no picker it is a plain
+        // submit-as-steer. A highlighted row that legally refuses to commit
+        // (disabled/loading) absorbs the chord exactly like Enter does, instead
+        // of falling through to submit the half-typed trigger.
+        if (commitPickerRefused(pickerStore)) return true;
+        onSubmit.current("mod-enter");
         return true;
       },
       "Shift-Enter": ({ editor }) => {
@@ -48,7 +58,7 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
       Backspace: ({ editor }) => handleQuoteBackspaceUnwrap(editor),
       Enter: () => {
         if (handlePickerEnter(pickerStore)) return true;
-        onSubmit.current();
+        onSubmit.current("enter");
         return true;
       },
     };
@@ -58,15 +68,33 @@ export const ChatListKeymap = Extension.create<ChatListKeymapOptions>({
 function handlePickerEnter(pickerStore: ComposerPickerStore | null): boolean {
   if (pickerStore === null) return false;
   const state = pickerStore.getState();
-  if (!state.open || state.items.length === 0) return false;
-  // An open, non-empty picker owns Enter outright - including when the
-  // highlighted row legally refuses to commit (a disabled row). Returning
-  // `commitActiveItem()` directly would fall through to `onSubmit` and send a
-  // half-typed message with the picker still on screen. This binding wins over
-  // the suggestion plugin's own key handling, so the refusal has to be
-  // absorbed here rather than there.
+  if (!state.open) return false;
+  // An OPEN picker owns Enter outright - whether it can commit (a highlighted,
+  // enabled row) or not (empty results, still loading, or the active row legally
+  // refusing). `commitActiveItem()` commits when it can and no-ops (returns
+  // false) otherwise; either way we absorb the keypress so a half-typed trigger
+  // is never submitted with the picker still on screen. Returning
+  // `commitActiveItem()` directly, or short-circuiting on `items.length === 0`,
+  // would fall through to `onSubmit` in exactly those can't-commit states. This
+  // binding wins over the suggestion plugin's own key handling, so the absorb has
+  // to happen here rather than there.
   state.commitActiveItem();
   return true;
+}
+
+// Mod-Enter's picker handling differs from Enter's only on a SUCCESSFUL commit:
+// it does NOT absorb the keypress, so the same chord proceeds to submit as a
+// steer (commit + steer in one press). Whenever the OPEN picker cannot commit -
+// empty results, still loading, or the active row legally refusing (all of which
+// make `commitActiveItem` return false) - it absorbs the chord exactly like
+// Enter, so the half-typed trigger is never sent with the picker still open.
+// With no open picker nothing is committed and the submit runs. Returns true
+// when the commit was refused and the caller must NOT submit.
+function commitPickerRefused(pickerStore: ComposerPickerStore | null): boolean {
+  if (pickerStore === null) return false;
+  const state = pickerStore.getState();
+  if (!state.open) return false;
+  return !state.commitActiveItem();
 }
 
 // Shift-Enter on an empty final line inside a blockquote lifts the caret out

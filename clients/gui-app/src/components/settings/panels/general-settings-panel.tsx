@@ -105,6 +105,12 @@ export function GeneralSettingsPanel() {
   );
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
+  const steerOnModEnterEnabled = useSettingsStore(
+    (s) => s.steerOnModEnterEnabled,
+  );
+  const setSteerOnModEnterEnabled = useSettingsStore(
+    (s) => s.setSteerOnModEnterEnabled,
+  );
 
   return (
     <SettingsPanelShell title="General">
@@ -176,6 +182,20 @@ export function GeneralSettingsPanel() {
               setQuoteReplyEnabled(value);
             }}
             aria-label="Quote reply on text selection"
+          />
+        }
+      />
+      <SettingsRow
+        label="Steer with Cmd+Enter"
+        description="While a turn is running on a supported harness, Cmd+Enter sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing."
+        control={
+          <Switch
+            checked={steerOnModEnterEnabled}
+            onCheckedChange={(value) => {
+              trackGeneralSetting("steerOnModEnterEnabled");
+              setSteerOnModEnterEnabled(value);
+            }}
+            aria-label="Steer with Cmd+Enter"
           />
         }
       />
