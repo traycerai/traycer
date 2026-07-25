@@ -650,7 +650,9 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   }, []);
 
   return (
-    <main className="onboarding-shell relative isolate flex h-svh flex-1 overflow-hidden bg-[#0f1917] text-white">
+    // h-full, not h-svh: the standalone shell owns the viewport height and
+    // reserves the Windows title-bar band above this page.
+    <main className="onboarding-shell relative isolate flex h-full flex-1 overflow-hidden bg-[#0f1917] text-white">
       <style>{ONBOARDING_STYLE}</style>
       <div
         className="pointer-events-none absolute inset-0 bg-cover bg-center opacity-40"
@@ -658,7 +660,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
       />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(14,27,24,0.88),rgba(14,27,24,0.88)),radial-gradient(120%_90%_at_50%_-18%,rgba(95,125,113,0.18),transparent_58%)]" />
 
-      <div className="relative z-10 grid h-svh w-full grid-rows-[var(--onboarding-shell-rows)] overflow-hidden">
+      <div className="relative z-10 grid h-full w-full grid-rows-[var(--onboarding-shell-rows)] overflow-hidden">
         <header className="relative z-10">
           <div className="relative flex h-full items-center justify-center px-10 max-sm:px-5">
             <OnboardingWordmark />

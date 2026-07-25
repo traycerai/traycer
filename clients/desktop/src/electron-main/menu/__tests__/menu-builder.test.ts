@@ -3,6 +3,7 @@ import type { MenuCommandId } from "../../../ipc-contracts/window-types";
 import type { MenuState } from "../menu-state";
 
 interface CapturedMenuItem {
+  readonly id?: string;
   readonly label?: string;
   readonly role?: string;
   readonly type?: string;
@@ -81,6 +82,24 @@ function menuByLabel(
 }
 
 describe("buildApplicationMenu", () => {
+  it("assigns stable ids to every renderer-visible Windows submenu", () => {
+    const items = template(
+      buildApplicationMenu(buildState("win32"), {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+      }),
+    );
+
+    expect(items.map((item) => item.id)).toEqual([
+      "traycer.top-level-menu.file",
+      "traycer.top-level-menu.edit",
+      "traycer.top-level-menu.view",
+      "traycer.top-level-menu.window",
+      "traycer.top-level-menu.help",
+    ]);
+  });
+
   it("renders the exact pending host-update version only when one is available", () => {
     const commands: MenuCommandId[] = [];
     const state = buildState("darwin");
