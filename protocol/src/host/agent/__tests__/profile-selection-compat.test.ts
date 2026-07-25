@@ -9,15 +9,21 @@ import {
   agentConfigureRequestSchemaV20,
   agentConfigureResponseSchema,
   agentConfigureDowngradeV20ToV10,
+  agentConfigureDowngradeV30ToV10,
+  agentConfigureDowngradeV30ToV20,
   agentConfigureUpgradeV10ToV20,
   agentCreateDowngradeV20ToV10,
   agentCreateUpgradeV10ToV20,
   agentCreateUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV30ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV30ToV20,
   agentGetProviderProfileRateLimitsRequestSchema,
   agentGetProviderProfileRateLimitsResponseSchema,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
   agentListProviderProfilesDowngradeV20ToV10,
+  agentListProviderProfilesDowngradeV30ToV10,
+  agentListProviderProfilesDowngradeV30ToV20,
   agentListProviderProfilesRequestSchema,
   agentListProviderProfilesResponseSchema,
   agentListProviderProfilesUpgradeV10ToV20,
@@ -564,15 +570,17 @@ describe("optional-method capability negotiation", () => {
       split.manifest["agent.getProviderProfileRateLimits"],
     ).toBeUndefined();
     expect(split.manifest["agent.configure"]).toBeUndefined();
+    // v3.0 is the advertised latest: the v1.1.8 tags froze v2.0 with the
+    // pre-omp id sets, so omp opened a new major on all three methods.
     expect(split.optionalManifest["agent.listProviderProfiles"]).toEqual({
-      major: 2,
+      major: 3,
       minor: 0,
     });
     expect(
       split.optionalManifest["agent.getProviderProfileRateLimits"],
-    ).toEqual({ major: 2, minor: 0 });
+    ).toEqual({ major: 3, minor: 0 });
     expect(split.optionalManifest["agent.configure"]).toEqual({
-      major: 2,
+      major: 3,
       minor: 0,
     });
   });
@@ -594,9 +602,12 @@ describe("optional-method capability negotiation", () => {
     expect(
       hostRpcRegistry["agent.configure"][2].versions[0].contract.schemaVersion,
     ).toEqual({ major: 2, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.configure"][3].versions[0].contract.schemaVersion,
+    ).toEqual({ major: 3, minor: 0 });
   });
 
-  it("keeps agent.listProviderProfiles@1.0 and agent.getProviderProfileRateLimits@1.0 frozen pre-hermes, and advertises their v2.0 hermes-inclusive line", () => {
+  it("keeps every released profile-method major frozen and advertises the omp-inclusive v3.0 line", () => {
     expect(
       hostRpcRegistry["agent.listProviderProfiles"][1].versions[0].contract
         .schemaVersion,
@@ -613,6 +624,15 @@ describe("optional-method capability negotiation", () => {
       hostRpcRegistry["agent.getProviderProfileRateLimits"][2].versions[0]
         .contract.schemaVersion,
     ).toEqual({ major: 2, minor: 0 });
+    // The omp-inclusive lines: v2.0 above is frozen pre-omp, v3.0 carries it.
+    expect(
+      hostRpcRegistry["agent.listProviderProfiles"][3].versions[0].contract
+        .schemaVersion,
+    ).toEqual({ major: 3, minor: 0 });
+    expect(
+      hostRpcRegistry["agent.getProviderProfileRateLimits"][3].versions[0]
+        .contract.schemaVersion,
+    ).toEqual({ major: 3, minor: 0 });
   });
 });
 
@@ -656,7 +676,49 @@ describe("agent.listProviderProfiles v1 <-> v2 hermes-provider translation", () 
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
-    expect(downgraded.error.message).toMatch(/hermes/i);
+    // The message deliberately names no single provider - it must stay honest
+    // for every post-v4.0 id, not just the first one that forced the bridge.
+    expect(downgraded.error.message).toMatch(/newer Traycer client/i);
+  });
+
+  // omp lives only on v3.0: the v1.1.8 tags froze v2.0 with the 17-id enum, so
+  // an omp response cannot even be constructed at v2.0 any more - the bridges
+  // under test start at v3.0.
+  it("downgrades a pre-omp v3.0 response to v2.0 as a pure pass-through", () => {
+    const downgraded =
+      agentListProviderProfilesDowngradeV30ToV20.downgradeResponse(
+        preHermesResponse,
+      );
+    expect(downgraded).toEqual({ ok: true, value: preHermesResponse });
+  });
+
+  it("passes a hermes response through the v3->v2 downgrade (v2.0 shipped with hermes)", () => {
+    const response = { ...preHermesResponse, providerId: "hermes" as const };
+    const downgraded =
+      agentListProviderProfilesDowngradeV30ToV20.downgradeResponse(response);
+    expect(downgraded).toEqual({ ok: true, value: response });
+  });
+
+  it("fails closed downgrading an omp response to v2.0", () => {
+    const downgraded =
+      agentListProviderProfilesDowngradeV30ToV20.downgradeResponse({
+        ...preHermesResponse,
+        providerId: "omp",
+      });
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+  });
+
+  it("fails closed downgrading an omp response all the way to v1.0", () => {
+    const downgraded =
+      agentListProviderProfilesDowngradeV30ToV10.downgradeResponse({
+        ...preHermesResponse,
+        providerId: "omp",
+      });
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
   });
 });
 
@@ -774,6 +836,102 @@ describe("agent.getProviderProfileRateLimits v1 <-> v2 hermes-provider translati
       },
     });
   });
+
+  it("keeps a grok-available read intact on the v3->v2 downgrade", () => {
+    // Unlike v1.0, the frozen v2.0 union carries the grok available arm (grok
+    // rate limits predate the v1.1.8 tags), so this bridge must NOT degrade it.
+    const rateLimits = {
+      provider: "grok" as const,
+      available: true as const,
+      subscriptionTier: "SuperGrok",
+      periodType: "USAGE_PERIOD_TYPE_WEEKLY" as const,
+      periodStart: 1753142400000,
+      periodEnd: 1753747200000,
+      period: {
+        usedPercent: 12,
+        resetsAt: 1753747200000,
+        durationMinutes: 10080,
+      },
+      monthlyLimit: null,
+      onDemandCap: 0,
+      onDemandUsed: 0,
+      prepaidBalance: 0,
+    };
+    const downgraded =
+      agentGetProviderProfileRateLimitsDowngradeV30ToV20.downgradeResponse({
+        rateLimits,
+        usageUpdatedAt: 1753142400000,
+      });
+    expect(downgraded).toEqual({
+      ok: true,
+      value: { rateLimits, usageUpdatedAt: 1753142400000 },
+    });
+  });
+
+  it("passes a hermes rate-limit read through the v3->v2 downgrade", () => {
+    const response = {
+      rateLimits: {
+        provider: "hermes" as const,
+        available: false as const,
+        reason: "timeout" as const,
+      },
+      usageUpdatedAt: null,
+    };
+    const downgraded =
+      agentGetProviderProfileRateLimitsDowngradeV30ToV20.downgradeResponse(
+        response,
+      );
+    expect(downgraded).toEqual({ ok: true, value: response });
+  });
+
+  it("fails closed downgrading an omp rate-limit read to v2.0", () => {
+    const downgraded =
+      agentGetProviderProfileRateLimitsDowngradeV30ToV20.downgradeResponse({
+        rateLimits: { provider: "omp", available: false, reason: "timeout" },
+        usageUpdatedAt: null,
+      });
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+  });
+
+  it("still degrades grok but fails closed on omp across the v3->v1 bridge", () => {
+    const grokDowngraded =
+      agentGetProviderProfileRateLimitsDowngradeV30ToV10.downgradeResponse({
+        rateLimits: {
+          provider: "grok",
+          available: true,
+          subscriptionTier: "SuperGrok",
+          periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+          periodStart: 1753142400000,
+          periodEnd: 1753747200000,
+          period: null,
+          monthlyLimit: null,
+          onDemandCap: null,
+          onDemandUsed: null,
+          prepaidBalance: null,
+        },
+        usageUpdatedAt: null,
+      });
+    expect(grokDowngraded).toEqual({
+      ok: true,
+      value: {
+        rateLimits: {
+          provider: "grok",
+          available: false,
+          reason: "unsupported_provider",
+        },
+        usageUpdatedAt: null,
+      },
+    });
+
+    const ompDowngraded =
+      agentGetProviderProfileRateLimitsDowngradeV30ToV10.downgradeResponse({
+        rateLimits: { provider: "omp", available: false, reason: "timeout" },
+        usageUpdatedAt: null,
+      });
+    expect(ompDowngraded.ok).toBe(false);
+  });
 });
 
 describe("agent.configure v1 <-> v2 hermes-harness response translation", () => {
@@ -804,6 +962,62 @@ describe("agent.configure v1 <-> v2 hermes-harness response translation", () => 
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
-    expect(downgraded.error.message).toMatch(/hermes/i);
+    // Generalized alongside the listProviderProfiles bridge: the copy must not
+    // name Hermes now that omp shares the same fail-closed path.
+    expect(downgraded.error.message).toMatch(/newer Traycer client/i);
+  });
+
+  // As with listProviderProfiles, omp only exists on v3.0 now.
+  it("passes a hermes-configured response through the v3->v2 downgrade (v2.0 shipped with hermes)", () => {
+    const response = {
+      settings: { ...preHermesSettings, harnessId: "hermes" as const },
+      warnings: [],
+    };
+    const downgraded =
+      agentConfigureDowngradeV30ToV20.downgradeResponse(response);
+    expect(downgraded).toEqual({ ok: true, value: response });
+  });
+
+  it("fails closed downgrading an omp-configured response to v2.0", () => {
+    const response = {
+      settings: { ...preHermesSettings, harnessId: "omp" as const },
+      warnings: [],
+    };
+    const downgraded =
+      agentConfigureDowngradeV30ToV20.downgradeResponse(response);
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+  });
+
+  it("fails closed downgrading an omp-configured response all the way to v1.0", () => {
+    const response = {
+      settings: { ...preHermesSettings, harnessId: "omp" as const },
+      warnings: [],
+    };
+    const downgraded =
+      agentConfigureDowngradeV30ToV10.downgradeResponse(response);
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
+  });
+
+  it("refuses the v3->v1 request downgrade, like the v2->v1 bridge", () => {
+    // v1.0 has no `permissionMode`, so an explicit choice cannot be carried to
+    // a v1.0 host regardless of which newer major the caller negotiated.
+    const downgraded = agentConfigureDowngradeV30ToV10.downgradeRequest({
+      epicId: "e",
+      senderAgentId: "s",
+      agentId: "a",
+      harnessId: "claude",
+      model: "opus-4.7",
+      profileSelection: { kind: "ambient" },
+      reasoningEffort: null,
+      fastMode: false,
+      permissionMode: "supervised",
+    });
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
   });
 });
