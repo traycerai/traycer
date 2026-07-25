@@ -1,7 +1,18 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import {
+  cleanup,
+  fireEvent,
+  render as testingRender,
+  screen,
+} from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TextSegment } from "@/components/chat/segments/text-segment";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  createOpenEpicStore,
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
 
 const KNOWN_AGENT_ID = "be923cf0-e487-4572-b76b-8c70cf6136dd";
 const KNOWN_ROLE_CLAIM_ID = "e901561e-f565-461f-8f45-b9bd1c3dd07d";
@@ -10,49 +21,40 @@ const tileNavigationMocks = vi.hoisted(() => ({
   openTileInEpic: vi.fn(),
 }));
 
-vi.mock("@/lib/epic-selectors", () => ({
-  useEpicArtifactRecords: () => [
-    {
-      id: KNOWN_AGENT_ID,
-      parentId: null,
-      name: "Planning Agent",
-      type: "chat",
-      status: null,
-      hostId: "host-1",
-    },
-    {
-      id: "abcdef12-1111-4111-8111-111111111111",
-      parentId: null,
-      name: "First ambiguous agent",
-      type: "chat",
-      status: null,
-      hostId: "host-1",
-    },
-    {
-      id: "abcdef12-2222-4222-8222-222222222222",
-      parentId: null,
-      name: "Second ambiguous agent",
-      type: "chat",
-      status: null,
-      hostId: "host-1",
-    },
-  ],
-  useEpicAgentRoleClaimsByAgentId: () => ({
-    [KNOWN_AGENT_ID]: [
+vi.mock("@/lib/epic-selectors", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
+  return {
+    ...actual,
+    useEpicArtifactRecords: () => [
       {
-        claimId: KNOWN_ROLE_CLAIM_ID,
-        agentId: KNOWN_AGENT_ID,
-        userId: "user-1",
-        role: "Master of Ceremonies",
-        scope: "Celebration",
-        claimedAt: 1,
+        id: KNOWN_AGENT_ID,
+        parentId: null,
+        name: "Planning Agent",
+        type: "chat",
+        status: null,
+        hostId: "host-1",
+      },
+      {
+        id: "abcdef12-1111-4111-8111-111111111111",
+        parentId: null,
+        name: "First ambiguous agent",
+        type: "chat",
+        status: null,
+        hostId: "host-1",
+      },
+      {
+        id: "abcdef12-2222-4222-8222-222222222222",
+        parentId: null,
+        name: "Second ambiguous agent",
+        type: "chat",
+        status: null,
+        hostId: "host-1",
       },
     ],
-  }),
-  useOpenEpicId: () => "epic-1",
-  useEpicChatHarnessId: () => null,
-  useMaybeEpicTuiAgentHarnessId: () => null,
-}));
+    useEpicChatHarnessId: () => null,
+    useMaybeEpicTuiAgentHarnessId: () => null,
+  };
+});
 
 vi.mock("@/components/ui/tooltip-wrapper", () => ({
   TooltipWrapper: ({ children }: { readonly children: ReactNode }) => (
@@ -75,11 +77,54 @@ const COMPLETE_BLOCK = [
   "</TRAYCER_NEXT_STEPS>",
 ].join("\n");
 
+const noopStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
+
+let epicHandle: OpenEpicStoreHandle;
+
+function render(ui: ReactElement) {
+  return testingRender(ui, {
+    wrapper: ({ children }) => (
+      <EpicSessionContext.Provider value={epicHandle}>
+        {children}
+      </EpicSessionContext.Provider>
+    ),
+  });
+}
+
 describe("TextSegment next steps rendering", () => {
   let copiedText: string | null = null;
 
   beforeEach(() => {
     copiedText = null;
+    epicHandle = createOpenEpicStore({
+      epicId: "epic-1",
+      streamClientFactory: noopStreamClientFactory,
+      userId: null,
+      onAuthError: null,
+    });
+    epicHandle.store.setState({
+      agentRoles: {
+        byAgentId: {
+          [KNOWN_AGENT_ID]: [
+            {
+              claimId: KNOWN_ROLE_CLAIM_ID,
+              agentId: KNOWN_AGENT_ID,
+              userId: "user-1",
+              role: "Master of Ceremonies",
+              scope: "Celebration",
+              claimedAt: 1,
+            },
+          ],
+        },
+      },
+    });
     tileNavigationMocks.openTileInEpic.mockClear();
     const clipboard = {
       writeText: vi.fn((value: string) => {
@@ -96,6 +141,7 @@ describe("TextSegment next steps rendering", () => {
 
   afterEach(() => {
     cleanup();
+    epicHandle.dispose();
   });
 
   it("renders prose and prompt options as action buttons", () => {
