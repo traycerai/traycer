@@ -320,6 +320,24 @@ interface HostPathSearchResult {
  * re-probes, since the state is compared against the live scope key rather
  * than reset by an effect.
  */
+/**
+ * "This host cannot serve the method, ever" - the signal that latches the
+ * panel onto local filtering for this (host, workspace). Two shapes qualify:
+ * the clean client-side `E_HOST_UNSUPPORTED` (method absent from the
+ * negotiated manifest), and the host-side 404 `RPC_ERROR` a host returns when
+ * its registry carries the CONTRACT but no resolver is wired (a host built
+ * between an OSS contract landing and its internal resolver landing
+ * over-advertised exactly this way; see `handler.ts` "No resolver registered").
+ * Transient failures (timeouts, connection drops) deliberately do NOT latch.
+ */
+function isHostCannotServeError(error: HostRpcError): boolean {
+  if (error.code === "E_HOST_UNSUPPORTED") return true;
+  return (
+    error.code === "RPC_ERROR" &&
+    error.message.includes("No resolver registered")
+  );
+}
+
 function useHostPathSearch(args: {
   readonly epicId: string;
   readonly hostId: string | null;
@@ -346,7 +364,8 @@ function useHostPathSearch(args: {
   });
 
   if (
-    searchQuery.error?.code === "E_HOST_UNSUPPORTED" &&
+    searchQuery.error !== null &&
+    isHostCannotServeError(searchQuery.error) &&
     unsupportedScopeKey !== scopeKey
   ) {
     setUnsupportedScopeKey(scopeKey);

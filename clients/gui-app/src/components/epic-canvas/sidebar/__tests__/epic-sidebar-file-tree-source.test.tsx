@@ -542,6 +542,36 @@ describe("sidebar file tree filter source", () => {
     expect(searchCalls).toHaveLength(1);
   });
 
+  it("latches onto local filtering when the host advertises the method but has no resolver", async () => {
+    // A host built between the OSS contract landing and its internal resolver
+    // landing negotiates `workspace.searchPaths` (the registry-derived
+    // manifest carried the contract) and then 404s the request. That verdict
+    // must latch exactly like E_HOST_UNSUPPORTED - without it the panel
+    // re-asks on every keystroke and never settles into the local filter.
+    installSearchHost({
+      reject: new HostRpcError({
+        code: "RPC_ERROR",
+        message: "No resolver registered for method 'workspace.searchPaths'",
+        requestId: "request-test",
+        method: "workspace.searchPaths",
+        fatalDetails: null,
+      }),
+    });
+    renderLiveTree();
+
+    typeFilter("main");
+    await waitFor(() => {
+      expect(setSearchCalls.at(-1)).toBe("main");
+    });
+    expect(searchCalls).toHaveLength(1);
+
+    typeFilter("main.ts");
+    await waitFor(() => {
+      expect(setSearchCalls.at(-1)).toBe("main.ts");
+    });
+    expect(searchCalls).toHaveLength(1);
+  });
+
   it("never asks the host to search while on the unary snapshot", async () => {
     installSearchHost({ results: [fileResult("src/lib/main.ts")] });
     const client = new MockWsStreamClient("unsupported");
