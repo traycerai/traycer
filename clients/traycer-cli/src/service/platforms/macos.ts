@@ -364,10 +364,9 @@ type LaunchdOwnership =
   | { readonly kind: "cli-or-other"; readonly path: string | null };
 
 // Probe launchd for who currently owns this label. `launchctl print`
-// exits 0 when loaded and includes `path = <plist>`; non-zero means not
-// loaded. Tolerate non-zero so a fresh install skips bootout. Genuine
-// launchctl unavailability surfaces later at bootstrap with a clearer
-// error.
+// exits 0 when loaded; non-zero means not loaded. Tolerate non-zero so a
+// fresh install skips bootout. Genuine launchctl unavailability surfaces
+// later at bootstrap with a clearer error.
 //
 // Point-in-time by design: this reads what launchd has LOADED right now.
 // With Desktop's login item disabled (requires-approval) or BTM unloaded,
@@ -391,9 +390,55 @@ async function inspectLaunchdOwnership(
   if (result.exitCode !== 0) {
     return { kind: "not-loaded" };
   }
-  const path = parseLaunchctlPrintPath(`${result.stdout}\n${result.stderr}`);
-  if (path !== null && isSmAppServiceLaunchAgentPath(path)) {
-    return { kind: "smappservice", path };
+  return classifyLaunchdPrintOutput(`${result.stdout}\n${result.stderr}`);
+}
+
+// Marker launchd prints for jobs submitted through the ServiceManagement
+// framework (SMAppService / SMJobSubmit) rather than bootstrapped from a
+// plist path.
+const SERVICE_MANAGEMENT_MANAGED_BY = "com.apple.xpc.ServiceManagement";
+const SERVICE_MANAGEMENT_JOB_TYPE = "Submitted";
+// `launchctl print` of an SMAppService job can report a placeholder instead
+// of a plist path; keep the refusal messages readable when even that is
+// absent.
+const SMAPPSERVICE_PATH_UNKNOWN = "(SMAppService-managed; no plist path)";
+
+/**
+ * Decide who owns a loaded label from `launchctl print` output.
+ *
+ * Three independent signals, because the output format is NOT stable across
+ * macOS releases and keying on any single one has already broken once:
+ *
+ *   - `managed_by = com.apple.xpc.ServiceManagement` - the precise marker.
+ *   - `type = Submitted` - the same job family; a plist bootstrapped from
+ *     `~/Library/LaunchAgents` always reports `type = LaunchAgent`, so this
+ *     cannot misclassify a CLI-managed job.
+ *   - an in-bundle `<App>.app/Contents/Library/LaunchAgents/` plist path.
+ *
+ * The bundle-path signal alone was the original implementation. On macOS
+ * builds that print
+ *
+ *     path = (submitted by smd.321)
+ *     type = Submitted
+ *     managed_by = com.apple.xpc.ServiceManagement
+ *
+ * there is no bundle path at all, so ownership fell through to
+ * `cli-or-other` and EVERY consumer of this probe failed at once:
+ * `installService`'s two SMAppService refusals, `statusService`'s
+ * `externally-managed` state, install-lifecycle's externally-managed
+ * short-circuit, and the stop/start/restart guards. The observable damage
+ * was a second host bootstrapped under the CLI label beside Desktop's
+ * agent, both racing the same `pid.json` and stores.
+ */
+function classifyLaunchdPrintOutput(printOutput: string): LaunchdOwnership {
+  const fields = parseLaunchctlPrintFields(printOutput);
+  const path = fields.get("path") ?? null;
+  const isServiceManagement =
+    fields.get("managed_by") === SERVICE_MANAGEMENT_MANAGED_BY ||
+    fields.get("type") === SERVICE_MANAGEMENT_JOB_TYPE ||
+    (path !== null && isSmAppServiceLaunchAgentPath(path));
+  if (isServiceManagement) {
+    return { kind: "smappservice", path: path ?? SMAPPSERVICE_PATH_UNKNOWN };
   }
   return { kind: "cli-or-other", path };
 }
@@ -406,15 +451,32 @@ function isSmAppServiceLaunchAgentPath(plistPath: string): boolean {
   return /\/[^/]+\.app\/Contents\/Library\/LaunchAgents\//i.test(plistPath);
 }
 
-// Extract `path = ...` from `launchctl print` output. Format is stable
-// enough across recent macOS releases; missing path is treated as
-// non-SMAppService (fail open to CLI ownership for CLI-managed installs).
-function parseLaunchctlPrintPath(printOutput: string): string | null {
-  const match = printOutput.match(/^\s*path\s*=\s*(.+?)\s*$/m);
-  if (match === null) return null;
-  const raw = match[1];
-  if (raw === undefined || raw.length === 0) return null;
-  return raw;
+/**
+ * Collect the top-level `key = value` pairs from `launchctl print` output.
+ *
+ * First occurrence wins: the fields we care about (`path`, `type`,
+ * `managed_by`) are printed in the job's top-level block, while nested
+ * blocks (`environment`, `arguments`, ...) can repeat similar keys further
+ * down. Nested environment entries use `=>` rather than `=` and are
+ * excluded outright so they can never shadow a real field.
+ */
+function parseLaunchctlPrintFields(
+  printOutput: string,
+): ReadonlyMap<string, string> {
+  const fields = new Map<string, string>();
+  for (const line of printOutput.split("\n")) {
+    const match = line.match(
+      /^\s*([A-Za-z_][A-Za-z0-9_ ]*?)\s*=(?!>)\s*(.+?)\s*$/,
+    );
+    if (match === null) continue;
+    const key = match[1];
+    const value = match[2];
+    if (key === undefined || value === undefined || value.length === 0) {
+      continue;
+    }
+    if (!fields.has(key)) fields.set(key, value);
+  }
+  return fields;
 }
 
 // launchctl returns "Service is already loaded" / "Bootstrap failed:
@@ -909,7 +971,7 @@ function unescapeXml(value: string): string {
 
 export {
   buildPlist as buildLaunchAgentPlist,
+  classifyLaunchdPrintOutput,
   isSmAppServiceLaunchAgentPath,
-  parseLaunchctlPrintPath,
   readRegisteredCliInvocation,
 };
