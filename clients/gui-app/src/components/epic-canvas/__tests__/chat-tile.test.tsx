@@ -409,6 +409,7 @@ function emitChatSnapshotWithMessages(input: {
         claudePendingWakes: [],
         messages: [...input.messages],
         events: [],
+        archivedAt: null,
       },
       access: {
         role: input.access,

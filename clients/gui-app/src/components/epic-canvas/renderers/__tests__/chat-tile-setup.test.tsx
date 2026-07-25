@@ -157,6 +157,7 @@ function emitSnapshot(
         claudePendingWakes: [],
         messages: [...messages],
         events: [...events],
+        archivedAt: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
