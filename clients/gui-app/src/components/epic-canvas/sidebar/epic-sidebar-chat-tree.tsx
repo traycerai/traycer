@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
+import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
   NotificationIndicatorsContext,
@@ -257,15 +258,7 @@ interface ChatDescendantStatusRollup {
   readonly doneCount: number;
 }
 
-interface ChatDescendantIds {
-  readonly chatIds: ReadonlyArray<string>;
-  readonly agentIds: ReadonlyArray<string>;
-}
-
-const EMPTY_CHAT_DESCENDANT_IDS: ChatDescendantIds = {
-  chatIds: [],
-  agentIds: [],
-};
+const EMPTY_CHAT_DESCENDANT_IDS: ReadonlyArray<string> = [];
 
 /**
  * Collects the chat / terminal-agent descendants of `nodeId` so a collapsed
@@ -273,21 +266,21 @@ const EMPTY_CHAT_DESCENDANT_IDS: ChatDescendantIds = {
  * the artifact tree's `collectDescendantArtifactEntries`: filter-hidden
  * subtrees are skipped along with their children (the rollup must never point
  * at a row the user cannot reach by expanding) and the walk is cycle-guarded
- * via `visited`.
+ * via `visited`. Chats and terminal-agents are collected alike - both are
+ * chat-scoped notification entities plus an activity tier.
  */
 function collectDescendantChatIds(
   nodeId: string,
   tree: TreeSlice,
   visibleIds: ReadonlySet<string> | null,
-): ChatDescendantIds {
+): ReadonlyArray<string> {
   const rootChildren = Object.hasOwn(tree.childrenByParent, nodeId)
     ? tree.childrenByParent[nodeId]
     : null;
   if (rootChildren === null || rootChildren.length === 0) {
     return EMPTY_CHAT_DESCENDANT_IDS;
   }
-  const chatIds: string[] = [];
-  const agentIds: string[] = [];
+  const descendantIds: string[] = [];
   const visited = new Set<string>([nodeId]);
   const stack = [...rootChildren];
   while (stack.length > 0) {
@@ -297,25 +290,25 @@ function collectDescendantChatIds(
     if (visibleIds !== null && !visibleIds.has(id)) continue;
     if (!Object.hasOwn(tree.nodeById, id)) continue;
     const node = tree.nodeById[id];
-    if (node.type === "chat") chatIds.push(id);
-    if (node.type === "terminal-agent") agentIds.push(id);
+    if (CHATS_TREE_FILTER(node.type)) descendantIds.push(id);
     if (Object.hasOwn(tree.childrenByParent, id)) {
       for (const childId of tree.childrenByParent[id]) stack.push(childId);
     }
   }
-  if (chatIds.length === 0 && agentIds.length === 0) {
+  if (descendantIds.length === 0) {
     return EMPTY_CHAT_DESCENDANT_IDS;
   }
-  return { chatIds, agentIds };
+  return descendantIds;
 }
 
 /**
  * Rollup over a collapsed parent's hidden chat descendants, or `null` when
- * there are none or none has a notable status. Each descendant chat is
- * classified once, under its own highest tier - the per-chat attention
- * precedence goes through the shared `attentionTone`, so failure > interview >
- * approval lives in exactly one place. Terminal-agent descendants contribute
- * only running-ness - epic-wide activity is their sole status authority. Only
+ * there are none or none has a notable status. Each descendant is classified
+ * once, under its own highest tier - the per-chat attention precedence goes
+ * through the shared `attentionTone`, so failure > interview > approval lives
+ * in exactly one place. Terminal-agent descendants are classified the same
+ * way: their `agent.stopped` notifications are chat-scoped to the agent id,
+ * so they carry real indicator entries alongside their activity tier. Only
  * mounted inside `ChatSidebarNodeIconWithNestedStatus` (rendered solely for
  * collapsed parents), so leaves and expanded rows carry none of these
  * subscriptions; the shallow-compared flat result lets Zustand bail re-renders
@@ -345,7 +338,7 @@ function useChatDescendantStatus(args: {
         background: 0,
         done: 0,
       };
-      for (const chatId of descendants.chatIds) {
+      for (const chatId of descendants) {
         const indicatorState = selectNotificationIndicatorState(
           state,
           { epicId, chatId },
@@ -356,12 +349,6 @@ function useChatDescendantStatus(args: {
           activityTiers.get(chatId),
         );
         if (kind !== null) counts[kind] += 1;
-      }
-      for (const agentId of descendants.agentIds) {
-        // Terminal-agent descendants contribute only activity - epic-wide
-        // awareness is their sole status authority.
-        const tier = activityTiers.get(agentId);
-        if (tier !== undefined) counts[activityTierKind(tier)] += 1;
       }
       const kind =
         CHAT_STATUS_ORDER.find((candidate) => counts[candidate] > 0) ?? null;
@@ -518,17 +505,19 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       }),
     [rootIds, expandedIds, tree, visibleIds, comparator],
   );
-  // Indicator state must cover every chat in the (filter-visible) tree, not
-  // just rows currently revealed by expansion: a collapsed parent rolls its
-  // hidden descendants' statuses up into a badge, so their indicators have to
-  // be observed even while their rows are unmounted. Sorted for a stable
-  // query identity across expand/collapse churn.
+  // Indicator state must cover every chat AND terminal-agent in the
+  // (filter-visible) tree, not just rows currently revealed by expansion: a
+  // collapsed parent rolls its hidden descendants' statuses up into a badge,
+  // so their indicators have to be observed even while their rows are
+  // unmounted. TUI agents are chat-scoped entities (their `agent.stopped`
+  // rows are keyed by the agent id). Sorted for a stable query identity
+  // across expand/collapse churn.
   const indicatorChatIds = useMemo(
     () =>
       Object.keys(tree.nodeById)
         .filter(
           (id) =>
-            tree.nodeById[id].type === "chat" &&
+            CHATS_TREE_FILTER(tree.nodeById[id].type) &&
             (visibleIds === null || visibleIds.has(id)),
         )
         .sort(),
@@ -1675,16 +1664,10 @@ const ChatSidebarNodeIconWithNestedStatus = memo(
     });
     if (rollup !== null) {
       const selfTier = activityTiers.get(props.nodeId);
-      // Terminal-agent parents have no notification states of their own -
-      // activity is their only tier (their indicator entry is always empty).
-      const agentSelfRank =
-        selfTier === undefined
-          ? 0
-          : CHAT_STATUS_RANKS[activityTierKind(selfTier)];
-      const selfRank =
-        props.artifactType === "chat"
-          ? chatSelfStatusRank(selfIndicator, selfTier)
-          : agentSelfRank;
+      // Chat and terminal-agent parents rank alike: a TUI agent's
+      // `agent.stopped` notifications are chat-scoped to its id, so its
+      // indicator entry is as real as a chat's.
+      const selfRank = chatSelfStatusRank(selfIndicator, selfTier);
       if (CHAT_STATUS_RANKS[rollup.kind] > selfRank) {
         return <NestedChatStatusIcon nodeId={props.nodeId} rollup={rollup} />;
       }
@@ -1768,6 +1751,7 @@ function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
   if (props.artifactType === "terminal-agent") {
     return (
       <TerminalAgentProgressIcon
+        epicId={props.epicId}
         nodeId={props.nodeId}
         Icon={props.Icon}
         artifactIconColorMode={props.artifactIconColorMode}
@@ -1785,13 +1769,15 @@ function ChatSidebarNodeIcon(props: ChatSidebarNodeIconProps) {
 }
 
 /**
- * Terminal-agent (TUI) sidebar icon. Swaps the static icon for the running
- * spinner while the agent is working, mirroring `ChatProgressIcon` for GUI
- * chats. Epic-wide active-agent awareness is the sole authority here - a TUI
- * agent's PTY runs host-side, so there is no renderer run-status to smooth
- * against and no waiting-for-approval state to style.
+ * Terminal-agent (TUI) sidebar icon. Notification status (failure /
+ * unread-done, chat-scoped to the agent id) wins over the running spinner,
+ * mirroring `ChatProgressIcon` for GUI chats; the idle slot is the harness
+ * brand mark. Epic-wide active-agent awareness is the sole run authority -
+ * a TUI agent's PTY runs host-side, so there is no renderer run-status to
+ * smooth against and no waiting-for-approval state to style.
  */
 function TerminalAgentProgressIcon(props: {
+  readonly epicId: string;
   readonly nodeId: string;
   readonly Icon: LucideIcon;
   readonly artifactIconColorMode: "byType" | "none";
@@ -1799,39 +1785,39 @@ function TerminalAgentProgressIcon(props: {
 }) {
   const isActive = useEpicActiveAgentIds().has(props.nodeId);
   const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
-  if (!isActive) {
-    // The underlying harness's brand mark (Claude, Codex, …) so the row reads
-    // as the tool driving the agent. Brand marks keep their own colors and
-    // intentionally don't follow the per-type icon-color customization; the
-    // generic bot glyph is the fallback for unresolved/legacy records.
-    if (harnessId !== null) {
-      return (
-        <SidebarAgentHarnessIcon nodeId={props.nodeId} harnessId={harnessId} />
-      );
-    }
-    return (
+  const indicatorState = useSurfaceNotificationIndicatorState({
+    epicId: props.epicId,
+    chatId: props.nodeId,
+  });
+  // The underlying harness's brand mark (Claude, Codex, …) so the row reads
+  // as the tool driving the agent. Brand marks keep their own colors and
+  // intentionally don't follow the per-type icon-color customization; the
+  // generic bot glyph is the fallback for unresolved/legacy records.
+  const idleIcon =
+    harnessId !== null ? (
+      <SidebarAgentHarnessIcon nodeId={props.nodeId} harnessId={harnessId} />
+    ) : (
       <StaticSidebarNodeIcon
         Icon={props.Icon}
         artifactIconColorMode={props.artifactIconColorMode}
         iconStyle={props.iconStyle}
       />
     );
-  }
   return (
-    <span
+    <NotificationIndicatorIcon
+      state={indicatorState}
+      running={isActive ? "turn" : false}
+      subjectId={props.nodeId}
+      testIdPrefix="terminal-agent-sidebar"
       className={cn(
-        "inline-flex size-3.5 shrink-0 items-center justify-center",
+        "size-3.5 shrink-0",
         props.artifactIconColorMode === "none" && "text-muted-foreground/70",
       )}
       style={props.iconStyle}
-      title="Agent in progress"
-    >
-      <AgentSpinningDots
-        className="text-current"
-        testId="terminal-agent-sidebar-spinner"
-        variant={undefined}
-      />
-    </span>
+      runningTitle="Agent in progress"
+      defaultIcon={idleIcon}
+      statusPresentation="message"
+    />
   );
 }
 

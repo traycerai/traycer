@@ -1394,6 +1394,41 @@ describe("chat descendant status rollup", () => {
     ).toBeTruthy();
   });
 
+  it("surfaces a terminal-agent's chat-scoped unread-done: rollup while collapsed, own row indicator when expanded", () => {
+    seedNestedChatTree();
+    testState.tuiHarnessIds = { "agent-child": "codex" };
+    // TUI `agent.stopped` rows are chat-scoped to the agent id, so the
+    // indicator entry lands under the terminal-agent's own id.
+    testState.indicatorChats = {
+      "agent-child": indicator({ unreadDone: true }),
+    };
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    // Hidden behind the collapsed root, the agent's completion rolls up.
+    expect(
+      screen.getByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeTruthy();
+
+    // Expanded, the agent row wears its own done indicator instead of the
+    // harness brand mark.
+    testState.expandedIds = new Set(["chat-root"]);
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("terminal-agent-sidebar-done-agent-child"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("sidebar-agent-harness-agent-child"),
+    ).toBeNull();
+  });
+
   it("lets a hidden failure take the slot from a merely-running parent, with a breakdown tooltip", () => {
     seedNestedChatTree();
     testState.activeAgentIds = new Set(["chat-root", "agent-child"]);
