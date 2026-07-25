@@ -8,6 +8,16 @@ export type {
 export type { CreateRegistryClientOptions, RegistryTransport } from "./client";
 export { createDefaultRegistryClient, createRegistryClient } from "./client";
 export { currentHostPlatformKey } from "./platform-key";
+export {
+  acquireDownloadSlot,
+  releaseDownloadSlot,
+  releaseDownloadSlotOwnership,
+  refreshDownloadSlotClaim,
+} from "./download-cache";
+export type {
+  AcquireDownloadSlotOptions,
+  DownloadSlot,
+} from "./download-cache";
 export { resolveManifestUrl } from "./manifest-url";
 export {
   parseHostVersionsManifest,

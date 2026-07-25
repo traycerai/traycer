@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -8,7 +9,7 @@ import {
 } from "node:fs";
 import { platform as osPlatform } from "node:os";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Environment = "dev" | "production";
@@ -97,6 +98,9 @@ import { downloadAndStageHost } from "../download-stage";
 
 const ENV: Environment = "production";
 let archiveTmpDir = "";
+// Path the fake registry client handed back on its most recent download,
+// so a test can assert the caller released that exact slot.
+let lastFakeArchivePath = "";
 
 function executableBasename(): string {
   return osPlatform() === "win32" ? "traycer-host.exe" : "traycer-host";
@@ -204,6 +208,50 @@ function fakeRegistryClient(opts: FakeClientOptions): RegistryClient {
       const callDir = mkdtempSync(join(archiveTmpDir, "arc-"));
       const archivePath = join(callDir, executableBasename());
       writeFileSync(archivePath, "fake host binary");
+      // The real client stages into the shared download cache and stamps
+      // the archive with an ownership marker holding ITS OWN process identity
+      // (registry/download-cache.ts). Mirror that sibling faithfully - the
+      // release path is a compare-and-delete, so a marker recording someone
+      // else's pid is deliberately left alone.
+      writeFileSync(
+        `${archivePath}.owner`,
+        JSON.stringify({ pid: process.pid, startedAtMs: null }),
+      );
+      lastFakeArchivePath = archivePath;
+      return {
+        archivePath,
+        archiveSha256: "fake-sha256",
+        signatureKeyId: "fake-key-id",
+        signatureVerifiedAt: new Date().toISOString(),
+      };
+    },
+  };
+}
+
+// Downloads "successfully" but stages an archive whose basename is not the
+// expected host executable, so `resolveHostExecutable` throws AFTER the
+// transfer and verification have both passed. Reproduces every local
+// post-download failure - a bad extract, a tree missing the binary, a
+// `cli-lock` wait that times out - in the one shape this harness can force.
+function unresolvableArchiveRegistryClient(
+  base: RegistryClient,
+  onArchive: (archivePath: string) => void,
+): RegistryClient {
+  return {
+    ...base,
+    async downloadAndVerify(entry, asset, onProgress) {
+      onProgress({
+        downloadedBytes: asset.sizeBytes,
+        totalBytes: asset.sizeBytes,
+      });
+      const callDir = mkdtempSync(join(archiveTmpDir, "arc-"));
+      const archivePath = join(callDir, "not-the-host-binary");
+      writeFileSync(archivePath, "fake host binary");
+      writeFileSync(
+        `${archivePath}.owner`,
+        JSON.stringify({ pid: process.pid, startedAtMs: null }),
+      );
+      onArchive(archivePath);
       return {
         archivePath,
         archiveSha256: "fake-sha256",
@@ -282,6 +330,10 @@ describe("downloadAndStageHost", () => {
     archiveTmpDir = mkdtempSync(
       join(tmpdir(), "traycer-download-stage-archives-"),
     );
+    // Cleared per test so an absence assertion cannot pass against a stale
+    // path from an earlier test whose files are already gone - that would
+    // make a "the slot was released" check succeed without a release.
+    lastFakeArchivePath = "";
   });
 
   afterEach(() => {
@@ -533,7 +585,7 @@ describe("downloadAndStageHost", () => {
     expect(staged?.source).toEqual({ kind: "registry", value: "1.5.0" });
   });
 
-  it("removes the whole download temp directory, not just the archive file, on a successful promote", async () => {
+  it("releases the download slot - archive and ownership marker - on a successful promote, without touching the cache dir", async () => {
     await writeInstall("1.0.0", {});
     const client = fakeRegistryClient({
       latest: "1.5.0",
@@ -551,12 +603,52 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
     });
-    // The fake client's `downloadAndVerify` creates its archive inside a
-    // fresh `arc-*` subdirectory of `archiveTmpDir` (mirroring the real
-    // registry client's `mkdtemp(tmpdir(), "traycer-host-dl-")` shape) -
-    // removing only the archive FILE would leave that directory behind
-    // on every successful download.
-    expect(readdirSync(archiveTmpDir)).toEqual([]);
+    // The archive now lives in the SHARED download cache keyed by
+    // version+sha (registry/download-cache.ts), so the consumer must drop
+    // its own archive plus the ownership marker and nothing else. The old
+    // `rm(dirname(archivePath))` would take the whole cache with it -
+    // including another process's in-flight partial.
+    // The download actually ran, so the absence checks below are about this
+    // test's own archive rather than an empty path.
+    expect(lastFakeArchivePath).not.toBe("");
+    expect(existsSync(lastFakeArchivePath)).toBe(false);
+    expect(existsSync(`${lastFakeArchivePath}.owner`)).toBe(false);
+    expect(existsSync(dirname(lastFakeArchivePath))).toBe(true);
+  });
+
+  it("keeps the verified archive and drops only the claim when the work AFTER the download fails", async () => {
+    await writeInstall("1.0.0", {});
+    let stagedArchivePath = "";
+    const client = unresolvableArchiveRegistryClient(
+      fakeRegistryClient({
+        latest: "1.5.0",
+        versions: [
+          { version: "1.0.0", yanked: false },
+          { version: "1.5.0", yanked: false },
+        ],
+        downloadGate: null,
+        onDownloadStart: null,
+      }),
+      (archivePath) => {
+        stagedArchivePath = archivePath;
+      },
+    );
+    await expect(
+      downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: client,
+      }),
+    ).rejects.toThrow(/expected executable/);
+    // These bytes already cleared sha256 AND minisign. Whatever failed
+    // afterwards is local, so re-downloading them over the throttled link
+    // this whole feature exists for could not produce anything different -
+    // the next run resumes this file over a single 416 instead. Only the
+    // ownership claim comes off, so another process is free to take it.
+    expect(existsSync(stagedArchivePath)).toBe(true);
+    expect(existsSync(`${stagedArchivePath}.owner`)).toBe(false);
   });
 
   it("yank-heal: discards a now-yanked stage with no download when the target resolves back to installed", async () => {

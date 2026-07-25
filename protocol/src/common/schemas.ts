@@ -26,7 +26,7 @@ export const jsonContentMarkSchema = z.object({
 
 export const agentModeSchema = z.enum(["regular", "epic"]);
 export type AgentMode = z.infer<typeof agentModeSchema>;
-export const DEFAULT_AGENT_MODE: AgentMode = "epic";
+export const DEFAULT_AGENT_MODE: AgentMode = "regular";
 
 /**
  * Billing/account context a turn runs under: the signed-in user's personal

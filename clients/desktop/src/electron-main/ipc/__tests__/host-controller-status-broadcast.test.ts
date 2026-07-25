@@ -190,7 +190,13 @@ describe("registerHostControllerStatusBroadcast", () => {
     expect(bridge.fanOutCalls).toHaveLength(1);
   });
 
-  it("does not publish an older status read after a newer mutation tick has settled", async () => {
+  // A host install streams progress far faster than `getStatus()` (three JSON
+  // reads plus a reachability probe) can resolve. Letting one read start per
+  // tick piled thousands of concurrent fs operations onto libuv's threadpool
+  // and stalled the main process, so a burst must collapse to a bounded
+  // number of reads. Publishing the newest status is a property of that
+  // serialization rather than a separate ordering guard.
+  it("collapses a burst of mutation ticks into one in-flight read plus one trailing re-read", async () => {
     const progressListeners = new Set<() => void>();
     const resolvers: Array<(status: HostControllerStatus) => void> = [];
     const hostController = {
@@ -209,19 +215,72 @@ describe("registerHostControllerStatusBroadcast", () => {
     const bridge = fakeBridge(hostController);
     registerHostControllerStatusBroadcast(bridge);
 
-    hostController.emitProgress();
-    hostController.emitProgress();
+    for (let tick = 0; tick < 50; tick += 1) hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    // Only the first tick started a read; the other 49 collapsed into a
+    // single pending re-read rather than 49 concurrent ones.
+    expect(resolvers).toHaveLength(1);
+
+    resolvers[0]!(fakeStatus(null));
     await vi.advanceTimersByTimeAsync(0);
     expect(resolvers).toHaveLength(2);
 
-    const newer = { ...fakeStatus(null), stagedVersion: "2.0.0" };
-    resolvers[1]!(newer);
-    await vi.advanceTimersByTimeAsync(0);
-    resolvers[0]!(fakeStatus(null));
+    const newest = { ...fakeStatus(null), stagedVersion: "2.0.0" };
+    resolvers[1]!(newest);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(bridge.fanOutCalls).toEqual([
-      ["runnerHost:event:host:controllerStatusChange", newer],
+    // The burst drains to exactly two reads and leaves the renderer holding
+    // the newest status - no third read queued behind it.
+    expect(resolvers).toHaveLength(2);
+    expect(bridge.fanOutCalls.at(-1)).toEqual([
+      "runnerHost:event:host:controllerStatusChange",
+      newest,
+    ]);
+  });
+
+  // The tick queued behind a failed read may carry the mutation's terminal
+  // status. Dropping it would leave the renderer showing the operation as
+  // active (controls disabled) until the idle interval fires, so the drain
+  // loop must survive a failed read and still run the trailing re-read.
+  it("services the queued re-read after a failed in-flight read", async () => {
+    const progressListeners = new Set<() => void>();
+    const reads: Array<{
+      resolve: (status: HostControllerStatus) => void;
+      reject: (err: Error) => void;
+    }> = [];
+    const hostController = {
+      getStatus: () =>
+        new Promise<HostControllerStatus>((resolve, reject) => {
+          reads.push({ resolve, reject });
+        }),
+      onMutationProgress(listener: () => void): () => void {
+        progressListeners.add(listener);
+        return () => progressListeners.delete(listener);
+      },
+      emitProgress(): void {
+        for (const listener of progressListeners) listener();
+      },
+    } as IpcHostController & { emitProgress(): void };
+    const bridge = fakeBridge(hostController);
+    registerHostControllerStatusBroadcast(bridge);
+
+    hostController.emitProgress();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toHaveLength(1);
+
+    // A second tick lands while the first read is in flight, then that read
+    // fails.
+    hostController.emitProgress();
+    reads[0]!.reject(new Error("transient getStatus failure"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toHaveLength(2);
+
+    const terminal = { ...fakeStatus(null), stagedVersion: "2.0.0" };
+    reads[1]!.resolve(terminal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bridge.fanOutCalls.at(-1)).toEqual([
+      "runnerHost:event:host:controllerStatusChange",
+      terminal,
     ]);
   });
 
