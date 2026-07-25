@@ -20,7 +20,7 @@ export interface OpenTopLevelMenuVariables {
  * bridge) rather than a surfaced error, since the strip only renders when the
  * bridge is present.
  */
-export function useOpenTopLevelMenuMutation(): UseMutationResult<
+export function useRunnerOpenTopLevelMenuMutation(): UseMutationResult<
   void,
   Error,
   OpenTopLevelMenuVariables

@@ -9,7 +9,7 @@ import {
 import { isWindows } from "@/lib/keybindings/platform";
 import { resolveDesktopMenuPopupBridge } from "@/lib/windows/desktop-capabilities";
 import type { DesktopTopLevelMenuId } from "@/lib/windows/types";
-import { useOpenTopLevelMenuMutation } from "@/hooks/runner/use-open-top-level-menu-mutation";
+import { useRunnerOpenTopLevelMenuMutation } from "@/hooks/runner/use-open-top-level-menu-mutation";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 
 const NO_DRAG_STYLE = { WebkitAppRegion: "no-drag" } as CSSProperties;
@@ -45,7 +45,7 @@ export function WindowsMenuBar(): ReactNode {
     new Map(),
   );
   const [mnemonicsVisible, setMnemonicsVisible] = useState(false);
-  const { mutate: openTopLevelMenu } = useOpenTopLevelMenuMutation();
+  const { mutate: openTopLevelMenu } = useRunnerOpenTopLevelMenuMutation();
 
   const openMenu = useCallback(
     (menuId: DesktopTopLevelMenuId, anchorX: number, anchorY: number): void => {
