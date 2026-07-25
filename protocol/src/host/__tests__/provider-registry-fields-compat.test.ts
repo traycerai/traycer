@@ -18,6 +18,8 @@ import {
   providerVersionVisibilitySchema,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
+  providersListResponseSchemaV40,
+  providersListResponseSchemaV50,
   providersSetEnabledResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -201,7 +203,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v2.0 downgrade never leaks the new fields to a v2.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      5,
+      6,
       2,
       { providers: [stateWithRegistryFields] },
     );
@@ -217,7 +219,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
   it("latest -> v3.0 downgrade never leaks the new fields to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      5,
+      6,
       3,
       { providers: [stateWithRegistryFields] },
     );
@@ -232,11 +234,11 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
 });
 
 describe("providers.list old-host upgrade fills honest defaults for the new fields", () => {
-  it("upgrades a pre-registry v3.0 response to v5.0 with the new fields null/false", () => {
+  it("upgrades a pre-registry v3.0 response to v6.0 with the new fields null/false", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 3, minor: 0 },
-      { major: 5, minor: 0 },
+      { major: 6, minor: 0 },
       providersListResponseSchemaV30.parse({
         providers: [providerState("amp")],
       }),
@@ -246,11 +248,11 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
     expect(upgraded.providers[0].advisory).toBeNull();
   });
 
-  it("upgrades a v2.0 response to v5.0 with the new fields null along the chain", () => {
+  it("upgrades a v2.0 response to v6.0 with the new fields null along the chain", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 2, minor: 0 },
-      { major: 5, minor: 0 },
+      { major: 6, minor: 0 },
       providersListResponseSchemaV20.parse({
         providers: [providerState("codex")],
       }),
@@ -259,13 +261,77 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
     expect(upgraded.providers[0].versionVisibility).toBeNull();
     expect(upgraded.providers[0].advisory).toBeNull();
   });
+
+  it("upgrades a v4.0 response to v6.0 - the path a released host actually takes", () => {
+    // The case that was missing, and the only one that runs in the field:
+    // `host-v1.1.7` tops out at `providers.list` 4.0. The earlier cases both
+    // route through the v3->v4 bridge, which is where the fill used to live -
+    // so they passed while the released path filled nothing, because v4.0's
+    // frozen target does not model the fields and silently discarded it.
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 4, minor: 0 },
+      { major: 6, minor: 0 },
+      providersListResponseSchemaV40.parse({
+        providers: [{ ...providerState("amp"), profiles: [] }],
+      }),
+    );
+    expect(upgraded.providers[0].managedInstallState).toBeNull();
+    expect(upgraded.providers[0].versionVisibility).toBeNull();
+    expect(upgraded.providers[0].advisory).toBeNull();
+  });
+
+  it("upgrades a v5.0 response to v6.0, where the fill now lives", () => {
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 5, minor: 0 },
+      { major: 6, minor: 0 },
+      providersListResponseSchemaV50.parse({
+        providers: [{ ...providerState("amp"), profiles: [] }],
+      }),
+    );
+    expect(upgraded.providers[0].managedInstallState).toBeNull();
+    expect(upgraded.providers[0].versionVisibility).toBeNull();
+    expect(upgraded.providers[0].advisory).toBeNull();
+  });
+});
+
+describe("providers.list v5.0 is frozen against the registry fields", () => {
+  it("v5.0 does not model them, so a v6.0 -> v5.0 downgrade strips them", () => {
+    // `cli-v1.1.8` shipped v5.0. Growing it is the same defect class as the
+    // original mutation-echo break, on the carrier line itself. v5.0 pins the
+    // frozen v4.0 base shape precisely so a field added to the LIVE base shape
+    // cannot reach it.
+    const downgraded = downgradeResponseAcrossMajors(
+      hostRpcRegistry["providers.list"],
+      6,
+      5,
+      { providers: [stateWithRegistryFields] },
+    );
+    expect(downgraded.ok).toBe(true);
+    if (!downgraded.ok) return;
+    expect(downgraded.value.providers[0]).not.toHaveProperty(
+      "managedInstallState",
+    );
+    expect(downgraded.value.providers[0]).not.toHaveProperty(
+      "versionVisibility",
+    );
+    expect(downgraded.value.providers[0]).not.toHaveProperty("advisory");
+  });
+
+  it("parses a v5.0 payload that carries the fields by dropping them", () => {
+    const parsed = providersListResponseSchemaV50.parse({
+      providers: [stateWithRegistryFields],
+    });
+    expect(parsed.providers[0]).not.toHaveProperty("managedInstallState");
+  });
 });
 
 // The provider.* state-echo mutations never carry the registry fields on ANY
 // line. Both their released majors are pinned to frozen shapes that don't
 // model them, so a host whose in-memory state carries the fields (every host
 // after T3) still emits the exact wire a released 2.0/2.1 peer expects. This
-// is what `providers.list` - the sole carrier, properly versioned at v5.0 -
+// is what `providers.list` - the sole carrier, properly versioned at v6.0 -
 // exists for; see `providerMutationCliStateSchemaV21`'s comment.
 describe("provider.* mutation lines never carry the provider-pack-registry fields", () => {
   it("providerMutationCliStateSchemaV20 drops the unmodeled keys on parse", () => {

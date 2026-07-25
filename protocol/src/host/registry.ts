@@ -1036,14 +1036,19 @@ export const providersListUpgradeV3ToV4 = defineUpgradePath<
   // the v3.0 line (and below) predates it, so its providers upgrade to
   // `profiles: []` (same "old host never had this feature" semantics as the
   // v1.0 -> v2.0 `availabilityPending` fill above). Devin/Pi absence needs no
-  // transform - a v3.0 provider set is a valid v4.0 subset. The provider-pack-
-  // registry fields ship the same way - see `PROVIDER_LIVE_FIELDS_PRE_REGISTRY`.
+  // transform - a v3.0 provider set is a valid v4.0 subset.
+  //
+  // The provider-pack-registry fields are deliberately NOT filled here. This
+  // bridge's target, `providersListResponseSchemaV40`, is frozen and does not
+  // model them, so a fill here is discarded - and the only released host in the
+  // field (v1.1.7) tops out at 4.0, which made this the one upgrade path that
+  // runs in practice while filling nothing. They are filled on the v5.0 -> v6.0
+  // hop instead, whose target is the live shape that models them.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     providers: response.providers.map((provider) => ({
       ...provider,
       profiles: [],
-      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
       loginCapability: upgradeLoginCapabilityFromV10(provider.loginCapability),
     })),
   }),
@@ -1117,9 +1122,25 @@ export const providersListUpgradeV5ToV6 = defineUpgradePath<
 >({
   from: { major: 5, minor: 0 },
   to: { major: 6, minor: 0 },
-  // Purely additive: a v5.0 response without omp is already a valid v6.0 one.
+  // Additive in both directions that matter: a v5.0 provider set is already a
+  // valid v6.0 one (omp simply never appears), and v6.0 adds the
+  // provider-pack-registry fields.
+  //
+  // This is the fill's real home. A v5.0 host predates the registry entirely,
+  // so its providers upgrade to the honest "this host has no managed packs"
+  // reading - same "old host never had this feature" semantics as the
+  // `profiles: []` fill on the v3->v4 hop. It must happen here rather than on
+  // an earlier hop because this is the first bridge whose TARGET schema
+  // actually models the fields; `upgradeResponseToVersion` chains these
+  // callbacks by cast with no re-parse, so a fill onto a frozen target is
+  // simply dropped.
   upgradeRequest: (request) => request,
-  upgradeResponse: (response) => response,
+  upgradeResponse: (response) => ({
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    })),
+  }),
 });
 
 export const providersListDowngradeV6ToV5 = defineDowngradePath<
@@ -4876,9 +4897,10 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
 // directly-imported contract const (`chatSubscribeV15`), so this is a
 // narrow, intentional trade-off - confirmed by a full workspace
 // compile+build with this annotation in place.
-type HostStreamRpcMethodMap = typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
-  readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
-};
+type HostStreamRpcMethodMap =
+  typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
+    readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
+  };
 
 export type HostStreamRpcRegistry =
   VersionedStreamRpcRegistry<HostStreamRpcMethodMap>;

@@ -870,15 +870,22 @@ export const providersListResponseSchemaV40 = z.object({
 /**
  * Frozen `providers.list` response as shipped in protocol v5.0.
  *
- * Structurally identical to the live shape except for the id enum: v5.0 and
- * v6.0 differ only by `omp` (verified against the `cli-v1.1.8` tree - the
- * whole file delta is the new id, its display name, and comments). Pinned so
- * a future `.extend()` on the live shape cannot silently leak back into this
- * already-shipped one.
+ * Both halves are pinned - the id enum AND the base shape. Pinning only the
+ * enum is not enough: this schema originally spread the LIVE base shape, whose
+ * comment ("so a future `.extend()` cannot silently leak back") described the
+ * intent but not the effect. A field ADDED to the live base shape leaks in the
+ * same way an `.extend()` would, and the provider-pack-registry fields did
+ * exactly that - `managedInstallState`, `versionVisibility` and `advisory`
+ * appeared on this already-shipped line and grew it.
+ *
+ * `providerCliStateBaseShapeV40` is the right pin: v4.0 and v5.0 differ only by
+ * the id enum, so the twelve keys below are precisely what `cli-v1.1.8` shipped
+ * on v5.0. The registry fields live on the live shape and therefore reach
+ * clients only through v6.0.
  */
 export const providerCliStateSchemaV50 = z.object({
   providerId: providerIdSchemaV50,
-  ...providerCliStateBaseShape,
+  ...providerCliStateBaseShapeV40,
   auth: PROVIDER_AUTH_SCHEMA_V20,
 });
 export type ProviderCliStateV50 = z.infer<typeof providerCliStateSchemaV50>;
