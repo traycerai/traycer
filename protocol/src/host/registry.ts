@@ -352,10 +352,12 @@ import {
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
+  providersListResponseSchemaV50,
   downgradeProviderCliStateToV10,
   downgradeProviderCliStateListToV20,
   downgradeProviderCliStateListToV30,
   downgradeProviderCliStateListToV40,
+  downgradeProviderCliStateListToV50,
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateV10ToMutationV20,
   providersRemoveCustomPathRequestSchema,
@@ -1040,7 +1042,104 @@ export const providersListV50 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 5, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
+  // Frozen: `cli-v1.1.8` shipped this line, so it must serve the v5.0 id set
+  // rather than the live one. Before that release it pointed at the canonical
+  // schema, which is exactly how `omp` first tried to ride v5.0.
+  responseSchema: providersListResponseSchemaV50,
+});
+
+export const providersListV60 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 6, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV5ToV6 = defineUpgradePath<
+  typeof providersListV50,
+  typeof providersListV60
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 6, minor: 0 },
+  // Purely additive: a v5.0 response without omp is already a valid v6.0 one.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersListDowngradeV6ToV5 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV50
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop omp so an already-shipped v5.0 client's strict decode never sees it.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV50.parse({
+      providers: downgradeProviderCliStateListToV50(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV6ToV4 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV40
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV40.parse({
+      providers: downgradeProviderCliStateListToV40(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV6ToV3 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV30
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV6ToV2 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV20
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV6ToV1 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV10
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: downgradeProviderStateListForV10(response.providers),
+    }),
+  }),
 });
 
 export const providersListUpgradeV4ToV5 = defineUpgradePath<
@@ -3904,6 +4003,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         2: providersListDowngradeV5ToV2,
         3: providersListDowngradeV5ToV3,
         4: providersListDowngradeV5ToV4,
+      },
+    },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV60,
+          upgradeFromPreviousVersion: providersListUpgradeV5ToV6,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV6ToV1,
+        2: providersListDowngradeV6ToV2,
+        3: providersListDowngradeV6ToV3,
+        4: providersListDowngradeV6ToV4,
+        5: providersListDowngradeV6ToV5,
       },
     },
   },

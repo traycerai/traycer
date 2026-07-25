@@ -102,11 +102,8 @@ export type ProviderIdV30 = z.infer<typeof providerIdSchemaV30>;
  * Hermes/omp). Used only by the frozen v4.0 `providers.list` response so an
  * already-shipped v4.0 client never receives post-v4.0 providers; the v5.0
  * line adds them with a v5→v4 (and v5→v3 / v5→v2 / v5→v1) downgrade bridge.
- * The v5.0 line is still unreleased (the newest released baseline is
- * host-v1.1.7 / cli-v1.1.7, which shipped v4.0), so post-v4.0 ids keep
- * landing on it rather than opening a v6.0. Do not add new providers here -
- * extend the latest `providerIdSchema` and use the existing v5 bridge
- * instead.
+ * Do not add new providers here - extend the latest `providerIdSchema` and
+ * use the existing bridges instead.
  */
 export const providerIdSchemaV40 = z.enum([
   "claude-code",
@@ -127,6 +124,34 @@ export const providerIdSchemaV40 = z.enum([
   "pi",
 ]);
 export type ProviderIdV40 = z.infer<typeof providerIdSchemaV40>;
+
+/**
+ * Frozen provider id set as shipped in protocol v5.0 (with Hermes, before omp).
+ *
+ * This line IS released - `cli-v1.1.8` (tagged 2026-07-25) shipped v5.0, so a
+ * client in the field strict-decodes exactly these ids and would reject `omp`
+ * on the full-catalog `providers.list` broadcast. omp opened v6.0 instead.
+ */
+export const providerIdSchemaV50 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+]);
+export type ProviderIdV50 = z.infer<typeof providerIdSchemaV50>;
 
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
@@ -739,6 +764,26 @@ export const providerCliStateSchemaV40 = z.object({
 export type ProviderCliStateV40 = z.infer<typeof providerCliStateSchemaV40>;
 export const providersListResponseSchemaV40 = z.object({
   providers: z.array(providerCliStateSchemaV40),
+});
+
+/**
+ * Frozen `providers.list` response as shipped in protocol v5.0.
+ *
+ * Structurally identical to the live shape except for the id enum: v5.0 and
+ * v6.0 differ only by `omp` (verified against the `cli-v1.1.8` tree - the
+ * whole file delta is the new id, its display name, and comments). Pinned so
+ * a future `.extend()` on the live shape cannot silently leak back into this
+ * already-shipped one.
+ */
+export const providerCliStateSchemaV50 = z.object({
+  providerId: providerIdSchemaV50,
+  ...providerCliStateBaseShape,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+});
+export type ProviderCliStateV50 = z.infer<typeof providerCliStateSchemaV50>;
+
+export const providersListResponseSchemaV50 = z.object({
+  providers: z.array(providerCliStateSchemaV50),
 });
 export type ProvidersListResponseV40 = z.infer<
   typeof providersListResponseSchemaV40
@@ -1392,6 +1437,20 @@ export function downgradeProviderCliStateListToV40(
 ): ProviderCliStateV40[] {
   return states.flatMap((state) => {
     const parsed = providerCliStateSchemaV40.safeParse(state);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/**
+ * Drop post-v5.0 providers (currently `omp`) for an already-shipped v5.0
+ * client. Same filter-by-reparse shape as the older bridges: an entry whose
+ * id is not in the frozen v5.0 enum simply does not survive the parse.
+ */
+export function downgradeProviderCliStateListToV50(
+  states: readonly unknown[],
+): ProviderCliStateV50[] {
+  return states.flatMap((state) => {
+    const parsed = providerCliStateSchemaV50.safeParse(state);
     return parsed.success ? [parsed.data] : [];
   });
 }

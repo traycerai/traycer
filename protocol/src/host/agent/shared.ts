@@ -140,12 +140,8 @@ export type GuiHarnessIdV30 = z.infer<typeof guiHarnessIdSchemaV30>;
  * Frozen harness id set as shipped in protocol v4.0 (with Devin/Pi, before
  * Hermes/omp). Used only by the frozen v4.0 response schema of
  * `agent.gui.listHarnesses` so already-shipped v4.0 clients never receive
- * post-v4.0 ids; the v5.0 line adds them and v5→v4 / v5→v3 / v5→v2 / v5→v1
- * bridges filter them for older callers. The v5.0 line is still unreleased
- * (newest released baseline: host-v1.1.7 / cli-v1.1.7, which shipped v4.0),
- * so post-v4.0 ids keep landing on it rather than opening a v6.0. Do NOT add
- * new harnesses here - extend the latest `guiHarnessIdSchema` and use the
- * existing v5 bridge instead.
+ * post-v4.0 ids. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing bridges instead.
  */
 export const guiHarnessIdSchemaV40 = harnessIdSchema.extract([
   "claude",
@@ -166,6 +162,36 @@ export const guiHarnessIdSchemaV40 = harnessIdSchema.extract([
   "pi",
 ]);
 export type GuiHarnessIdV40 = z.infer<typeof guiHarnessIdSchemaV40>;
+
+/**
+ * Frozen harness id set as shipped in protocol v5.0 (with Hermes, before omp).
+ *
+ * This line IS released - `cli-v1.1.8` (tagged 2026-07-25) shipped v5.0, so a
+ * client in the field strict-decodes exactly these 17 ids. omp therefore could
+ * not join v5.0 and opened v6.0 instead, with v6→v5 … v6→v1 bridges that drop
+ * post-v5.0 ids. Do NOT add new harnesses here - extend the latest
+ * `guiHarnessIdSchema` and use the existing v6 bridge instead.
+ */
+export const guiHarnessIdSchemaV50 = harnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+]);
+export type GuiHarnessIdV50 = z.infer<typeof guiHarnessIdSchemaV50>;
 
 export const tuiHarnessIdSchema = harnessIdSchema.extract([
   "claude",

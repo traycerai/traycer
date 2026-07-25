@@ -49,6 +49,7 @@ import {
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
+  providersListResponseSchemaV50,
   providersSetApiKeyResponseSchemaV10,
 } from "@traycer/protocol/host/provider-schemas";
 // Importing from the registry runs `defineVersionedRpcRegistry` (full structural
@@ -67,6 +68,11 @@ import {
   providersListDowngradeV5ToV2,
   providersListDowngradeV5ToV3,
   providersListDowngradeV5ToV4,
+  providersListDowngradeV6ToV1,
+  providersListDowngradeV6ToV2,
+  providersListDowngradeV6ToV3,
+  providersListDowngradeV6ToV4,
+  providersListDowngradeV6ToV5,
   providersSetApiKeyDowngradeV2ToV1,
 } from "@traycer/protocol/host/registry";
 
@@ -669,8 +675,10 @@ describe("post-v4.0 Hermes/omp non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v
     expect(() => listAgentsResponseSchemaV10.parse(toV1.value)).not.toThrow();
   });
 
-  it("drops Hermes and omp from providers.list for v4.0, v3.0, v2.0, and v1.0 callers", () => {
-    const v5Response = providersListResponseSchema.parse({
+  it("drops omp from providers.list for every released caller down to v1.0", () => {
+    // v6.0 is the live line: `cli-v1.1.8` shipped v5.0, so omp could not join
+    // it and every v5.0-and-older caller must have omp filtered out.
+    const v6Response = providersListResponseSchema.parse({
       providers: [
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
@@ -681,7 +689,7 @@ describe("post-v4.0 Hermes/omp non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v
       ],
     });
 
-    const toV4 = providersListDowngradeV5ToV4.downgradeResponse(v5Response);
+    const toV4 = providersListDowngradeV6ToV4.downgradeResponse(v6Response);
     expect(toV4.ok).toBe(true);
     if (!toV4.ok) return;
     expect(toV4.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -691,7 +699,17 @@ describe("post-v4.0 Hermes/omp non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v
       providersListResponseSchemaV40.parse(toV4.value),
     ).not.toThrow();
 
-    const toV3 = providersListDowngradeV5ToV3.downgradeResponse(v5Response);
+    const toV5 = providersListDowngradeV6ToV5.downgradeResponse(v6Response);
+    expect(toV5.ok).toBe(true);
+    if (!toV5.ok) return;
+    expect(toV5.value.providers.map((provider) => provider.providerId)).toEqual(
+      ["cursor", "amp", "devin", "pi", "hermes"],
+    );
+    expect(() =>
+      providersListResponseSchemaV50.parse(toV5.value),
+    ).not.toThrow();
+
+    const toV3 = providersListDowngradeV6ToV3.downgradeResponse(v6Response);
     expect(toV3.ok).toBe(true);
     if (!toV3.ok) return;
     expect(toV3.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -701,7 +719,7 @@ describe("post-v4.0 Hermes/omp non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v
       providersListResponseSchemaV30.parse(toV3.value),
     ).not.toThrow();
 
-    const toV2 = providersListDowngradeV5ToV2.downgradeResponse(v5Response);
+    const toV2 = providersListDowngradeV6ToV2.downgradeResponse(v6Response);
     expect(toV2.ok).toBe(true);
     if (!toV2.ok) return;
     expect(toV2.value.providers.map((provider) => provider.providerId)).toEqual(
@@ -711,7 +729,7 @@ describe("post-v4.0 Hermes/omp non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v
       providersListResponseSchemaV20.parse(toV2.value),
     ).not.toThrow();
 
-    const toV1 = providersListDowngradeV5ToV1.downgradeResponse(v5Response);
+    const toV1 = providersListDowngradeV6ToV1.downgradeResponse(v6Response);
     expect(toV1.ok).toBe(true);
     if (!toV1.ok) return;
     expect(toV1.value.providers.map((provider) => provider.providerId)).toEqual(
