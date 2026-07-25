@@ -6,7 +6,7 @@ import {
   type EpicChatProjection,
   type EpicTuiAgentProjection,
 } from "@/lib/epic-selectors";
-import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { cn } from "@/lib/utils";
 
 const DELETED_OWNER_LABEL: Record<PrOwnerRef["ownerKind"], string> = {
@@ -24,10 +24,9 @@ function resolvePrOwnerLabel(args: {
     return displayTitle(args.chat.title, "chat");
   }
   if (args.tuiAgent === null) return DELETED_OWNER_LABEL["terminal-agent"];
-  return tuiAgentDisplayTitle({
-    title: args.tuiAgent.title,
-    harnessId: args.tuiAgent.harnessId,
-  });
+  // Harness identity is interface metadata, never the title fallback (see
+  // `display-title.ts`), so an untitled owner reads "Untitled terminal agent".
+  return displayTitle(args.tuiAgent.title, "terminal-agent");
 }
 
 /**

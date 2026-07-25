@@ -21,6 +21,7 @@ import {
 import { MockHostMessenger } from "../mock/mock-host-messenger";
 import { MockRunnerHost } from "../mock/mock-runner-host";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
+import type { RpcSchedulingPolicy } from "../rpc-scheduling-policy";
 
 const pingV10 = defineRpcContract({
   method: "host.ping",
@@ -38,6 +39,11 @@ const registry = defineVersionedRpcRegistry({
     },
   },
 });
+
+const schedulingPolicy: RpcSchedulingPolicy<typeof registry> = {
+  modeFor: () => "latest",
+  joinResponseTimeoutMs: () => null,
+};
 
 class RecordingInvalidator implements IHostQueryInvalidator {
   readonly calls: Array<string | null> = [];
@@ -144,6 +150,8 @@ function buildRuntime(options: {
     requestContextProvider: provider,
     directory,
     invalidator,
+    schedulingPolicy,
+    requestCoordinator: null,
   });
   return { runtime, provider, directory, invalidator, runnerHost };
 }

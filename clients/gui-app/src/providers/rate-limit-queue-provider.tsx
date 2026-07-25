@@ -12,9 +12,8 @@ import { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS } from "@/lib/rate-limits/rate-li
 
 /**
  * Background poll cadence for the `ephemeralProcess` lane (codex, claude-code),
- * matching the `httpFetch` lane's own `refetchInterval`
- * (`HTTP_FETCH_RATE_LIMIT_REFETCH_INTERVAL_MS`) so both lanes settle to the
- * same background freshness regardless of fetch cost class. The serial
+ * matching the `httpFetch` lane's table-owned fixed cadence so both lanes
+ * settle to the same background freshness regardless of fetch cost class. The serial
  * queue's five-minute freshness floor, turn-completion enqueues, and manual refresh
  * all keep data fresher between ticks. Defined in `rate-limit-timing.ts`
  * (shared with `ephemeral-fetch-queue.ts`'s cool-down) and re-exported here so
@@ -45,8 +44,8 @@ export { EPHEMERAL_RATE_LIMIT_POLL_INTERVAL_MS };
  * exists for is glancing at the icon while Traycer sits visible-but-unfocused on
  * a second monitor, and pausing on mere focus-loss would break exactly that.
  *
- * `httpFetch` providers are intentionally absent here - they poll via their
- * query's own `refetchInterval` and never enter this queue.
+ * `httpFetch` providers are intentionally absent here - their observers opt
+ * into table-owned polling and never enter this queue.
  */
 export function RateLimitQueueProvider(): null {
   const hostId = useReactiveActiveHostId();

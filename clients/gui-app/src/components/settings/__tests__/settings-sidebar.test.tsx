@@ -77,11 +77,14 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(ids).not.toContain("service");
   });
 
-  it("SETTINGS_SECTIONS includes the Agents section", () => {
+  it("labels the agent-selection section for selection, not the Task's Agents", () => {
     const ids = SETTINGS_SECTIONS.map((section) => section.id);
     const labels = SETTINGS_SECTIONS.map((section) => section.label);
+    // The id stays `agents` (compatibility identifier + `/settings/agents`
+    // route); only the product copy moves.
     expect(ids).toContain("agents");
-    expect(labels).toContain("Agents");
+    expect(labels).toContain("Agent selection");
+    expect(labels).not.toContain("Agents");
   });
 
   it("delays sub-leader digit badges in settings navigation", async () => {

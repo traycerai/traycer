@@ -480,9 +480,12 @@ import {
   AMBIENT_AUTH_PENDING_REPOLL_CAP,
   AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS,
 } from "@/components/settings/panels/use-provider-profile-login-flow";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 const OPENCODE_CANDIDATES: readonly ProviderCliCandidate[] = [
   {
@@ -584,6 +587,7 @@ function profileWithAccent(
           },
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: input.duplicateOfProfileId,
     ambientDriftNotice: input.ambientDriftNotice,
     accentColor,
@@ -745,6 +749,20 @@ function firstRemoveProfileCall(): readonly [
   return call;
 }
 
+// A non-null runner host so the desktop external-link path (preventDefault +
+// openExternalLink) runs; host-less renders fall back to native anchor nav.
+function createRunnerHost(): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.example/sign-in",
+    authnBaseUrl: "https://auth.example",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
     providerMocks.listResult.data = {
@@ -805,6 +823,7 @@ describe("<ProvidersSettingsPanel />", () => {
     providerMocks.removeProfileMutate.mockReset();
     providerMocks.refreshProviders.mockClear();
     providerMocks.refreshUsageLimits.mockClear();
+    useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
   afterEach(() => {
@@ -812,6 +831,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // fake timers mid-test, and a leaked fake clock would strand every later
     // test's timers (and Testing Library's own unmount work).
     vi.useRealTimers();
+    useProvidersFocusStore.getState().clearFocusHarnessId();
     cleanup();
     useDesktopDialogStore.setState({
       activeDialog: null,
@@ -895,6 +915,84 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(
       screen.queryByRole("button", { name: "Add custom path" }),
+    ).toBeNull();
+  });
+
+  it("selects Hermes' PATH candidate without rendering a bundled row", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "hermes",
+          selected: { kind: "path" },
+          candidates: [
+            {
+              kind: "path",
+              path: "/usr/local/bin/hermes",
+              version: "0.1.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    const pathRadio = screen.getByRole<HTMLInputElement>("radio", {
+      name: "Select /usr/local/bin/hermes",
+    });
+    expect(pathRadio.checked).toBe(true);
+    expect(
+      screen.queryByRole("radio", { name: "Select bundled binary" }),
+    ).toBeNull();
+  });
+
+  it("shows Hermes' PATH-only not-found guidance without a bundled row", () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "hermes",
+          selected: { kind: "path" },
+          candidates: [],
+          envOverrides: [],
+        }),
+      ],
+    };
+
+    render(
+      <RunnerHostContext.Provider value={createRunnerHost()}>
+        <TooltipProvider>
+          <ProvidersSettingsPanel />
+        </TooltipProvider>
+      </RunnerHostContext.Provider>,
+    );
+
+    expect(
+      screen.getByText(
+        "Hermes must be installed on this machine. It ships without a bundled binary.",
+      ),
+    ).toBeDefined();
+    const guide = screen.getByRole("link", {
+      name: "Hermes installation guide",
+    });
+    expect(guide.getAttribute("href")).toBe(
+      "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+    );
+    fireEvent.click(guide);
+    expect(providerMocks.openExternalLink).toHaveBeenCalledWith(
+      "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+    );
+    expect(
+      screen.getByRole("button", { name: "Add custom path" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("radio", { name: "Select bundled binary" }),
     ).toBeNull();
   });
 
@@ -1259,11 +1357,16 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(manageProfileButton.getAttribute("data-variant")).toBe("outline");
     expect(manageProfileButton.getAttribute("data-size")).toBe("xs");
-    const profileSummaryActions = manageProfileButton.closest(".flex-wrap");
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
     if (!(profileSummaryActions instanceof HTMLElement)) {
       throw new Error("Expected profile summary and actions row");
     }
-    expect(within(profileSummaryActions).getByText("No plan")).toBeDefined();
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
     fireEvent.focus(manageProfileButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
       "Change the profile name and accent color, sign in again, or remove this profile.",
@@ -1531,6 +1634,7 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
+          startInReauth={false}
           failedAttempt={null}
           onAddProfile={vi.fn()}
           onDismissFailedAttempt={vi.fn()}
@@ -1717,7 +1821,32 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Signed out, Signed out" }),
     );
-    expect(screen.getAllByText("Signed out").length).toBeGreaterThan(0);
+    const manageProfileButton = screen.getByRole("button", {
+      name: "Manage profile",
+    });
+    const profileSummaryActions = manageProfileButton.closest(
+      '[data-slot="profile-summary-actions"]',
+    );
+    if (!(profileSummaryActions instanceof HTMLElement)) {
+      throw new Error("Expected signed-out profile summary and actions row");
+    }
+    expect(
+      within(profileSummaryActions).getByText("Signed out", {
+        selector: '[data-slot="badge"]',
+      }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", { name: "Sign in" }),
+    ).toBeDefined();
+    expect(
+      within(profileSummaryActions).getByRole("button", {
+        name: "Manage profile",
+      }),
+    ).toBe(manageProfileButton);
+    expect(within(profileSummaryActions).queryByText("No plan")).toBeNull();
+    expect(
+      profileSummaryActions.querySelectorAll('[data-slot="badge"]'),
+    ).toHaveLength(1);
   });
 
   it("redacts a profile's email by default and reveals it on toggle", () => {
@@ -3495,6 +3624,93 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
   });
 
+  it("opens a signed-out profile deep link on the exact provider and starts sign-in", async () => {
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "codex",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+        }),
+        {
+          ...providerState({
+            providerId: "claude-code",
+            selected: { kind: "bundled" },
+            candidates: [],
+            envOverrides: [],
+            profiles: [
+              profile({
+                profileId: "ambient",
+                kind: "ambient",
+                label: "Terminal account",
+                email: "ambient@example.test",
+                tier: null,
+                authStatus: "authenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+              profile({
+                profileId: "work-profile",
+                kind: "managed",
+                label: "Work",
+                email: "work@example.test",
+                tier: "Pro",
+                authStatus: "unauthenticated",
+                duplicateOfProfileId: null,
+                ambientDriftNotice: null,
+              }),
+            ],
+          }),
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: null,
+          },
+        },
+      ],
+    };
+    useProvidersFocusStore.getState().setProfileFocus({
+      harnessId: "claude",
+      hostId: "local",
+      profileId: "work-profile",
+      startSignIn: true,
+    });
+
+    render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen
+        .getByRole("button", { name: "Claude Code", hidden: true })
+        .getAttribute("data-active"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("menuitem", {
+          name: "Work, Signed out",
+          hidden: true,
+        })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
+    await waitFor(() => {
+      expect(providerMocks.startLoginMutate).toHaveBeenCalledWith(
+        {
+          providerId: "claude-code",
+          profileId: "work-profile",
+          createProfile: null,
+        },
+        expect.anything(),
+      );
+    });
+  });
+
   it("signs in again for an existing profile, states when a different account was applied, and can cancel the restart", async () => {
     providerMocks.listResult.data = {
       providers: [
@@ -3544,14 +3760,15 @@ describe("<ProvidersSettingsPanel />", () => {
 
     // Defaults to the ambient profile - select "Work" (signed out) first.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
-    fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
-    fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalled();
     });
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getByRole("dialog", { name: "Edit profile" })).toBeDefined();
+    expect(
+      screen.getByRole("dialog", { name: "Sign in to Work" }),
+    ).toBeDefined();
     expect(screen.getByLabelText("Profile name")).toHaveProperty(
       "disabled",
       true,
@@ -4058,6 +4275,7 @@ describe("<ProvidersSettingsPanel />", () => {
               },
               usageUpdatedAt: null,
               rateLimitStatus: "unknown",
+              rateLimitLimitedScopes: null,
               duplicateOfProfileId: null,
               ambientDriftNotice: null,
               accentColor: null,
@@ -4138,7 +4356,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove profile" }));
     expect(
       screen.getByText(
-        "Chats that ran on Work will show it as removed. Running sessions on this profile must be stopped first.",
+        "Agents that ran on Work will show it as removed. Running sessions on this profile must be stopped first.",
       ),
     ).toBeDefined();
     fireEvent.click(screen.getByTestId("confirm-action"));

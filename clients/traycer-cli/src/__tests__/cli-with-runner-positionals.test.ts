@@ -10,6 +10,23 @@ import {
 import { Command } from "commander";
 import { buildProgram, extractActionPositionals } from "../index";
 import * as hostInstallModule from "../commands/host-install";
+import * as hostUpdateModule from "../commands/host-update";
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+// This test exercises the real runner through Commander. Its logger is not
+// part of the positional-forwarding contract, and must not append to a live
+// per-environment CLI log as a side effect.
+vi.mock("../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+}));
 
 // `host install` accepts a registry version via the `--release`
 // flag (defaults to `latest`) or a local archive via `--from`; the
@@ -97,11 +114,11 @@ describe("traycer host install - --release / --from handling", () => {
   // because we re-suppress it inside the helper.
   let exitSpy: MockInstance;
   beforeEach(() => {
-    exitSpy = vi.spyOn(process, "exit").mockImplementation(((
-      code: number | undefined,
-    ) => {
-      throw new Error(`__test_exit_${code ?? 0}`);
-    }) as never);
+    exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((code: string | number | null | undefined): never => {
+        throw new Error(`__test_exit_${code ?? 0}`);
+      });
   });
   afterEach(() => {
     exitSpy.mockRestore();

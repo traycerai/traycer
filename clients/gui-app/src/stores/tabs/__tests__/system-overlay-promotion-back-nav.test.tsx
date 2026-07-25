@@ -88,10 +88,10 @@ function buildRouter(windowId: string) {
     validateSearch: (raw) => systemTabOverlaySearchSchema.parse(raw),
     component: GuardedRoot,
   });
-  const epicRoute = createRoute({
+  const draftRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: "/epics/$epicId/$tabId",
-    component: () => <div data-testid="epic-route" />,
+    path: "/draft/$draftId",
+    component: () => <div data-testid="draft-route" />,
   });
   const settingsRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -100,7 +100,7 @@ function buildRouter(windowId: string) {
   });
   const history = createPersistentMemoryHistory(null, windowId);
   return createRouter({
-    routeTree: rootRoute.addChildren([epicRoute, settingsRoute]),
+    routeTree: rootRoute.addChildren([draftRoute, settingsRoute]),
     history,
   });
 }
@@ -149,11 +149,11 @@ describe("back stays functional after promoting a system overlay to a tab", () =
 
   it("back click #1 after promotion escapes the overlay entry instead of re-pushing the tab route", async () => {
     const windowId = "promote-back-nav";
-    seedPersisted(windowId, ["/epics/e/t0", "/epics/e/t1"], 1);
+    seedPersisted(windowId, ["/draft/d0", "/draft/d1"], 1);
     const router = buildRouter(windowId);
     render(<RouterProvider router={router} />);
     await waitFor(() =>
-      expect(router.state.location.pathname).toBe("/epics/e/t1"),
+      expect(router.state.location.pathname).toBe("/draft/d1"),
     );
     await waitFor(() => expect(modalProbe.current).not.toBeNull());
 
@@ -216,7 +216,7 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     // survives - back click #1 lands on the real underlying page, not a
     // re-push of /settings/general onto a byte-identical stack.
     expect(afterFirstBack.rendered).not.toBe(before.rendered);
-    expect(router.state.location.pathname).toBe("/epics/e/t1");
+    expect(router.state.location.pathname).toBe("/draft/d1");
     expect(afterFirstBack.canGoBack).toBe(true);
 
     // Note: `GateLike` here still remounts the guard on every /settings
@@ -239,6 +239,6 @@ describe("back stays functional after promoting a system overlay to a tab", () =
       expect(router.state.location.pathname).not.toBe("/settings/general");
     }
 
-    expect(router.state.location.pathname).toBe("/epics/e/t0");
+    expect(router.state.location.pathname).toBe("/draft/d0");
   });
 });

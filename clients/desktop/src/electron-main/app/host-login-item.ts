@@ -1,10 +1,15 @@
 import { app } from "electron";
 import { spawn } from "node:child_process";
-import { access, rm } from "node:fs/promises";
+import { access, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join } from "node:path";
 import { config, isDevBuild } from "../../config";
-import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
+import {
+  getHostFsLayout,
+  labelForEnvironment,
+  smAppServiceAgentLabelId,
+  userLaunchAgentPlistPath,
+} from "../host/host-paths";
 import type { Environment } from "../host/host-paths";
 import { isHostRemovedByUser } from "../host/host-removal-state";
 import { log } from "./logger";
@@ -22,25 +27,46 @@ import { log } from "./logger";
 //
 // This runs POST sign-in (auth-first boot), not at launch.
 
-// Environment-scoped to match the in-bundle plist written by
-// `desktop-install-cloud.js` (`hostAgentLabel`) and the CLI's
-// `serviceLabelFor`: production → `ai.traycer.host`, other slots nest under
-// their name. SMAppService resolves the plist by this exact filename.
-const HOST_LABEL = labelForEnvironment(config.environment).id;
-const HOST_SERVICE_NAME = `${HOST_LABEL}.plist`;
+// The CLI-owned label for this environment (`ai.traycer.host[.env]`) - the
+// label raw `launchctl` installs (and every pre-label-split registration)
+// live under. The desktop never registers this label: it only cleans it up
+// (legacy plist removal, bootout, old-serviceName unregister) inside the
+// register cycle.
+const CLI_HOST_LABEL = labelForEnvironment(config.environment).id;
+// The label the desktop actually registers via SMAppService
+// (`<cli-label>.agent`). Split from the CLI label because BTM matches
+// SMAppService registrations to legacy `~/Library/LaunchAgents` records by
+// label, and such a record survives file deletion and bootout - see
+// `smAppServiceAgentLabelId`'s doc for the full mechanism and the lockstep
+// sites. Matches the in-bundle plist written by `desktop-install-cloud.js`
+// (`hostAgentLabel`) and `scripts/prepack/inject-host-launch-agent.cjs`;
+// SMAppService resolves the plist by this exact filename.
+const HOST_AGENT_LABEL = smAppServiceAgentLabelId(CLI_HOST_LABEL);
+const HOST_SERVICE_NAME = `${HOST_AGENT_LABEL}.plist`;
+// The serviceName this app registered BEFORE the label split. The bundle
+// keeps shipping this plist inert (never registered) for a few releases so
+// the transition `unregister` below can resolve it and drop the old
+// app-scoped BTM record on machines that upgraded from a same-label
+// SMAppService install - without the file, SMAppService can't resolve the
+// serviceName and the old record would linger as a ghost Login Items row.
+const LEGACY_HOST_SERVICE_NAME = `${CLI_HOST_LABEL}.plist`;
 
 // Every SMAppService mutation for the host label must flow through this
 // promise tail. `registerHostLoginItem` is a non-atomic bootout → unregister
-// → register sequence; `ensureHost`, the pending-revision monitor, and
-// `respawnHost` can all need it independently. Letting any two of them cross
-// that boundary at the same time can leave BTM with the stale LWCR this module
-// is designed to clear.
+// → register sequence; `HostController`'s `convergeReady`, `applyStaged`,
+// `activateInstalled`, `installVersion`, `respawn`, `recoverIfDown`,
+// `freePortAndRestart` (all via `runLockedMacActivationCycle`), and
+// `applyPendingLoginItemRevisionIfIdle` can all need it independently.
+// Letting any two of them cross that boundary at the same time can leave BTM
+// with the stale LWCR this module is designed to clear.
 //
-// This intentionally serializes rather than coalesces. The callers own their
-// own policies (force-ensure handling, monitor failure budget, and respawn
-// dedup/backoff), so a second caller must receive its own eventual result
-// after the first cycle settles. The tail always resolves so a failed cycle
-// never wedges later callers.
+// This intentionally serializes rather than coalesces. Each caller is
+// already independently exclusive at the `HostController` level - the
+// mutation lane for enqueued intents, the desktop cli-lock for
+// `applyPendingLoginItemRevisionIfIdle` - so this tail is defense-in-depth
+// against the specific SMAppService boundary, not the primary exclusion
+// mechanism. The tail always resolves so a failed cycle never wedges later
+// callers.
 let hostLoginItemRegistrationTail: Promise<void> = Promise.resolve();
 
 export function withHostLoginItemRegistrationLock<Result>(
@@ -146,14 +172,41 @@ const REGISTER_STATUS_POLL_DEADLINE_MS = 1500;
 const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
 
 /**
- * Register the in-bundle LaunchAgent as a login item via SMAppService.
+ * Register the in-bundle LaunchAgent as a login item via SMAppService,
+ * under the agent label (`<cli-label>.agent`).
  *
  * Caller must have confirmed `hostManagesHostLoginItem()` and installed
  * the host bytes first.
  *
- * The implementation begins with `launchctl bootout`, then runs an
- * SMAppService **unregister → register** pair. The bootout is the
- * load-bearing step on macOS 26+; the SMAppService cycle is kept for
+ * Once the cycle is committed (both guards passed), it runs:
+ *
+ *   1. rm `~/Library/LaunchAgents/<cli-label>.plist` (legacy CLI manifest)
+ *   2. `launchctl bootout gui/<uid>/<cli-label>` (legacy/CLI job)
+ *   3. unregister the old serviceName `<cli-label>.plist` (transition
+ *      cleanup for machines that were SMAppService-registered under the
+ *      shared label pre-split)
+ *   4. `launchctl bootout gui/<uid>/<agent-label>` (LWCR flush, macOS 26+)
+ *   5. SMAppService unregister → register of the agent plist
+ *   6. poll status until settled; clear the pending-revision marker on
+ *      `enabled`
+ *
+ * Steps 1–3 exist to prevent a competing host at login (an intact legacy
+ * registration would `RunAtLoad` the old CLI's host alongside the new
+ * agent) and to drop the old app-scoped record on healthy machines - NOT
+ * to make registration succeed. They are best-effort; step 5 does not
+ * depend on any of them. They are also deliberately coupled to the
+ * committed cycle: a deferred (`deferred-busy` / `removed-by-user`) cycle
+ * runs none of them, so a busy host paused mid-update keeps its legacy
+ * *job* loaded until a cycle actually proceeds.
+ *
+ * That coupling no longer extends to the manifest FILE:
+ * `retireCompetingCliRegistrationAtLaunch` deletes it on every launch with
+ * no busy check. Deliberate - an orphaned loaded job keeps running on
+ * launchd's in-memory definition, so the only thing lost is its auto-restart
+ * after a crash, and that is precisely the competing host we want gone.
+ *
+ * The agent-label bootout (step 4) is the load-bearing LWCR step on macOS
+ * 26+; the SMAppService unregister → register pair is kept for
  * defense-in-depth on older macOS where the bootout would be a no-op.
  *
  * SMAppService's BTM database caches a Lightweight Code Requirement
@@ -193,11 +246,12 @@ const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
  */
 // `revalidateBeforeBootout`, when provided, is called INSIDE the locked
 // section immediately before `bootoutStaleAgent()` - not just at the call
-// site - because a caller's own idle/busy check (e.g. the pending-revision
-// fast path's `probeHostActivityBusy`) can go stale while queued behind
-// another in-flight cycle (`respawnHost` and `runEnsureHost` share this same
-// lock). Without a re-check here, a cycle that was idle when queued could
-// still boot out a host that picked up real work while waiting its turn.
+// site - because a caller's own idle/busy check (e.g.
+// `HostController.applyPendingLoginItemRevisionIfIdle`'s `probeHostBusyVerdict`
+// probe) can go stale while queued behind another in-flight cycle (every
+// `HostController` SMAppService section shares this same lock). Without a
+// re-check here, a cycle that was idle when queued could still boot out a
+// host that picked up real work while waiting its turn.
 // Return `false` from the callback to defer without mutating anything;
 // `registerHostLoginItemUnserialized` reports that back as `"deferred-busy"`.
 export function registerHostLoginItem(
@@ -237,14 +291,21 @@ async function registerHostLoginItemUnserialized(
 
   const plistPath = inAppLaunchAgentPlistPath();
 
-  // Flush BTM's stale LWCR before touching SMAppService. On macOS 26+
-  // this is the load-bearing step — SMAppService.unregister no longer
-  // drops the BTM entry, so without bootout the subsequent register
-  // hands launchd a stale CDHash and every spawn is SIGKILL'd inside
-  // dyld init. See the docstring above for the full mechanism.
-  await bootoutStaleAgent();
+  // Steps 1–3: retire every registration under the legacy shared label.
+  // Runs only here - after both guards - so a deferred cycle leaves the
+  // legacy registration fully intact (see the docstring's coupling
+  // invariant).
+  await retireLegacyLabelRegistrations();
 
-  const clearedOk = trySetLoginItemSettings(false);
+  // Step 4: flush BTM's stale LWCR for the agent label before touching
+  // SMAppService. On macOS 26+ this is the load-bearing step —
+  // SMAppService.unregister no longer drops the BTM entry, so without
+  // bootout the subsequent register hands launchd a stale CDHash and every
+  // spawn is SIGKILL'd inside dyld init. See the docstring above for the
+  // full mechanism.
+  await bootoutStaleAgent(HOST_AGENT_LABEL);
+
+  const clearedOk = trySetLoginItemSettings(false, HOST_SERVICE_NAME);
   if (!clearedOk) {
     return "not-registered";
   }
@@ -255,7 +316,7 @@ async function registerHostLoginItemUnserialized(
     status: cleared,
   });
 
-  const registeredOk = trySetLoginItemSettings(true);
+  const registeredOk = trySetLoginItemSettings(true, HOST_SERVICE_NAME);
   if (!registeredOk) {
     return "not-registered";
   }
@@ -276,6 +337,211 @@ async function registerHostLoginItemUnserialized(
 }
 
 /**
+ * Steps 1–3 of the register cycle: retire the legacy shared-label
+ * registrations so nothing can start a second host beside the agent-label
+ * one at the next login.
+ *
+ *   1. Remove the CLI-written `~/Library/LaunchAgents/<cli-label>.plist`
+ *      (pre-1.1.7 installs) - an intact file with an `[enabled]` BTM legacy
+ *      record would `RunAtLoad` the old CLI's host alongside the agent.
+ *   2. Bootout the legacy/CLI job under `<cli-label>` so a currently-loaded
+ *      one stops running against the label we just orphaned.
+ *   3. Unregister the old serviceName (`<cli-label>.plist`) - drops the old
+ *      app-scoped BTM record on machines that were SMAppService-registered
+ *      under the shared label before the split. Resolves against the inert
+ *      copy of the old plist the bundle keeps shipping; on machines whose
+ *      only old-label record is the untouchable dangling LEGACY record this
+ *      is a harmless no-op.
+ *
+ * Every step is best-effort (warn + continue): the agent-label register
+ * does not depend on any of them, and a failed cleanup leaves the machine
+ * no worse than before the cycle ran.
+ */
+async function retireLegacyLabelRegistrations(): Promise<void> {
+  await removeCliLabelManifest();
+  await bootoutStaleAgent(CLI_HOST_LABEL);
+  const unregistered = trySetLoginItemSettings(false, LEGACY_HOST_SERVICE_NAME);
+  log.info("[host-login-item] retired legacy-label SMAppService registration", {
+    serviceName: LEGACY_HOST_SERVICE_NAME,
+    unregistered,
+  });
+}
+
+// Whether the competing CLI manifest is there. Mirrors `ManifestProbe` in the
+// CLI's `service/platforms/macos.ts`, and for the same reason: "we could not
+// read the directory" has to stay distinct from "there is no manifest".
+//
+// Deliberately local rather than folded into `fileExists` - that helper's
+// other callers WANT the swallow. `hasPendingLoginItemRevision` documents a
+// read error as "no pending revision" so an FS hiccup never blocks the ensure
+// fast path, and `hostManagesHostLoginItem` fails safe to "not a host-managed
+// build". Only the retire path treats absent as proof of a clean machine.
+type CliManifestProbe =
+  | { readonly kind: "present" }
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable"; readonly cause: unknown };
+
+async function probeCliLabelManifest(
+  manifest: string,
+): Promise<CliManifestProbe> {
+  try {
+    await access(manifest, constants.F_OK);
+    return { kind: "present" };
+  } catch (cause) {
+    // ENOENT - and only ENOENT - is positive proof there is no manifest.
+    // EACCES on the containing directory means we could not look.
+    const missing =
+      typeof cause === "object" &&
+      cause !== null &&
+      "code" in cause &&
+      cause.code === "ENOENT";
+    return missing ? { kind: "absent" } : { kind: "unreadable", cause };
+  }
+}
+
+/**
+ * Delete `~/Library/LaunchAgents/<cli-label>.plist` - the manifest that would
+ * `RunAtLoad` a second host beside the agent-label one.
+ *
+ * Single implementation shared by the register cycle's step 1 and the
+ * launch-time repair, so the two can never drift on what "retired" means.
+ * The register cycle pairs it with a bootout of the same label; the launch
+ * repair deliberately does not (see
+ * `retireCompetingCliRegistrationAtLaunch`).
+ */
+async function removeCliLabelManifest(): Promise<
+  "removed" | "absent" | "failed"
+> {
+  const manifest = userLaunchAgentPlistPath(CLI_HOST_LABEL);
+  const probe = await probeCliLabelManifest(manifest);
+  if (probe.kind === "absent") return "absent";
+  if (probe.kind === "unreadable") {
+    // NOT `absent`: that is the value the launch repair turns into
+    // `nothing-to-retire` ("this machine is already clean"), and an
+    // unreadable `~/Library/LaunchAgents` proves no such thing. No `rm`
+    // attempt either - `rm(force)` cannot tell "removed" from "was never
+    // there", so on a path we could not even read it would report a removal
+    // that may not have happened. Hedged wording for the same reason: we
+    // cannot see whether a manifest is there at all.
+    log.warn(
+      "[host-login-item] could not read the CLI LaunchAgent manifest, so it was not removed — if one is present it may auto-start a competing host at next login",
+      { manifest, err: probe.cause },
+    );
+    return "failed";
+  }
+  try {
+    await rm(manifest, { force: true });
+  } catch (err) {
+    log.warn(
+      "[host-login-item] failed to remove CLI LaunchAgent manifest — the CLI label may auto-start a competing host at next login",
+      { manifest, err },
+    );
+    return "failed";
+  }
+  log.info("[host-login-item] removed CLI LaunchAgent manifest", { manifest });
+  return "removed";
+}
+
+/**
+ * What `retireCompetingCliRegistrationAtLaunch` did this launch. Returned
+ * (rather than logged and swallowed) so the startup caller can log one line
+ * and tests can assert the gates without reading the logger.
+ *
+ *   - `not-applicable` - not a build/platform where Desktop owns
+ *     registration, or the user removed the host on this device.
+ *   - `agent-not-enabled` - SMAppService is not reporting `enabled`, so we
+ *     have no proof a host would still start at login without the CLI
+ *     registration. Deliberately does nothing (see the doc below).
+ *   - `nothing-to-retire` - positively no competing manifest on disk. Steady
+ *     state, and never inferred from a directory we could not read.
+ *   - `retired` - a competing manifest was found and removed.
+ *   - `retire-failed` - the manifest was not removed: either the removal
+ *     itself failed, or `~/Library/LaunchAgents` was unreadable so we could
+ *     not tell whether one is there. Both leave the relapse possible, which
+ *     is what this value means.
+ */
+export type LaunchCompetingRegistrationRepair =
+  | "not-applicable"
+  | "agent-not-enabled"
+  | "nothing-to-retire"
+  | "retired"
+  | "retire-failed";
+
+/**
+ * Remove a `~/Library/LaunchAgents/<cli-label>.plist` that would start a
+ * SECOND host beside this app's SMAppService agent at the next login.
+ *
+ * Why this exists separately from `retireLegacyLabelRegistrations`, which
+ * does strictly more: that runs ONLY inside a committed register cycle, and
+ * the routine "open the app, host is already healthy" path never runs one.
+ * A machine that acquired a dual registration during the v1.1.7 window
+ * therefore keeps it indefinitely - updating to v1.1.8 does not clear it,
+ * because a desktop auto-update swaps bytes without a register cycle and
+ * the CLI now refuses to touch the plist rather than removing it. Both jobs
+ * are `RunAtLoad`, so every login starts two hosts against one data dir;
+ * they start simultaneously, which is precisely the case the CLI
+ * supervisor's incumbent probe cannot see (no `pid.json` exists yet).
+ *
+ * Two deliberate narrowings versus the register cycle:
+ *
+ *   1. Gated on SMAppService reporting `enabled`. Under `requires-approval`
+ *      the user has disabled the login item and launchd will not spawn the
+ *      agent; removing the CLI plist there would take away the machine's
+ *      only auto-starting host. `not-registered` / `not-found` /
+ *      `not-supported` fail into the same no-op. Same availability bias as
+ *      `findLiveIncumbentHost` in the CLI: never leave a machine with no
+ *      host to prevent a duplicate.
+ *
+ *      ACCEPTED GAP: `enabled` proves the agent is REGISTERED and enabled,
+ *      not that launchd can actually spawn it. An agent wedged by a stale
+ *      BTM Lightweight Code Requirement (the LWCR / `EX_CONFIG` failure
+ *      documented on `registerHostLoginItem` above) also reads `enabled`
+ *      while every spawn is SIGKILLed inside dyld init - and that is the
+ *      same v1.1.7 cohort this repair targets. On such a machine the CLI
+ *      registration may be the only one that works, and this deletes it.
+ *      Accepted rather than gated harder: distinguishing a wedged agent
+ *      needs a real spawn observation this code has no access to at launch,
+ *      and the damage self-heals on the next app launch, whose register
+ *      cycle does the bootout + re-register that clears the LWCR. Revisit
+ *      if the wedge is seen in the field alongside a dual registration.
+ *   2. Removes the manifest but does NOT bootout the running job. Boot-out
+ *      would kill a host that may be serving this session's tabs right now
+ *      - and at launch we have no idea whether the competing host or the
+ *      agent is the one `pid.json` currently names. Deleting the manifest
+ *      is the durable half: the duplicate cannot return at the next login,
+ *      and the machine converges to one host without anything being ripped
+ *      away mid-session. The residual is that a machine already running two
+ *      hosts keeps running two until the next login. The CLI's
+ *      `retireCompetingRegistration` DOES bootout, because it only runs
+ *      inside an explicit `host install` the user asked for.
+ *
+ * Best-effort and idempotent; safe to call on every launch. Serialized
+ * through the same registration lock as the register cycle so the two can
+ * never interleave on the CLI label.
+ */
+export function retireCompetingCliRegistrationAtLaunch(): Promise<LaunchCompetingRegistrationRepair> {
+  return withHostLoginItemRegistrationLock(
+    retireCompetingCliRegistrationUnserialized,
+  );
+}
+
+async function retireCompetingCliRegistrationUnserialized(): Promise<LaunchCompetingRegistrationRepair> {
+  if (!(await hostManagesHostLoginItem())) return "not-applicable";
+  // A host the user removed on this device must not be repaired back into
+  // existence; `unregisterHostLoginItem` deliberately leaves the machine
+  // alone once the sentinel is set.
+  if (await isHostRemovedByUser()) return "not-applicable";
+  if (readHostLoginItemStatus() !== "enabled") return "agent-not-enabled";
+  const outcome = await removeCliLabelManifest();
+  if (outcome === "absent") return "nothing-to-retire";
+  if (outcome === "failed") return "retire-failed";
+  log.info(
+    "[host-login-item] retired competing CLI registration (dual-registration repair)",
+  );
+  return "retired";
+}
+
+/**
  * Whether `scripts/desktop-install-cloud.js` (internal repo) left a pending
  * LaunchAgent revision marker for `environment` - see `getHostFsLayout`'s
  * doc comment for the full cross-repo contract. Best-effort: a read error
@@ -288,14 +554,59 @@ export async function hasPendingLoginItemRevision(
   return fileExists(getHostFsLayout(environment).pendingLoginItemRevisionFile);
 }
 
+// M-B (finding): `clearPendingLoginItemRevision` is best-effort - a failed
+// unlink leaves the marker on disk AFTER a successful apply. A plain existence
+// check would then re-run the disruptive SMAppService cycle on every monitor
+// tick / convergeReady forever. Remember the mtime of a marker whose clear
+// failed so a marker that still carries that exact mtime reads as
+// already-resolved (suppress the redundant re-cycle), while a genuinely newer
+// revision - the installer rewrites the file, bumping its mtime - re-arms and
+// applies normally. In-memory only: a process restart re-reads the marker and
+// re-applies, which is correct (it is still on disk).
+let appliedPendingRevisionMtimeMs: number | null = null;
+
+/**
+ * Whether there is a pending LaunchAgent revision this process has NOT already
+ * applied. Differs from `hasPendingLoginItemRevision` only when a prior
+ * successful apply could not delete its marker (see M-B above): that lingering
+ * marker reads as "nothing pending" here, so the controller never churns
+ * re-registering an already-active plist.
+ */
+export async function hasUnappliedPendingLoginItemRevision(
+  environment: Environment,
+): Promise<boolean> {
+  const markerPath = getHostFsLayout(environment).pendingLoginItemRevisionFile;
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await stat(markerPath)).mtimeMs;
+  } catch {
+    // Absent or unreadable - same fail-open posture as
+    // `hasPendingLoginItemRevision` ("nothing pending").
+    return false;
+  }
+  return (
+    appliedPendingRevisionMtimeMs === null ||
+    mtimeMs !== appliedPendingRevisionMtimeMs
+  );
+}
+
 async function clearPendingLoginItemRevision(
   environment: Environment,
 ): Promise<void> {
+  const markerPath = getHostFsLayout(environment).pendingLoginItemRevisionFile;
   try {
-    await rm(getHostFsLayout(environment).pendingLoginItemRevisionFile, {
-      force: true,
-    });
+    await rm(markerPath, { force: true });
+    // Cleared cleanly - there is no lingering marker to suppress.
+    appliedPendingRevisionMtimeMs = null;
   } catch (err) {
+    // M-B: the marker for the revision we just applied could not be removed.
+    // Latch its mtime so `hasUnappliedPendingLoginItemRevision` stops treating
+    // it as pending; a newer revision (different mtime) still re-arms.
+    try {
+      appliedPendingRevisionMtimeMs = (await stat(markerPath)).mtimeMs;
+    } catch {
+      appliedPendingRevisionMtimeMs = null;
+    }
     log.warn(
       "[host-login-item] failed to clear pending LaunchAgent revision marker",
       { err },
@@ -321,25 +632,39 @@ export function unregisterHostLoginItem(): Promise<void> {
 }
 
 async function unregisterHostLoginItemUnserialized(): Promise<void> {
-  await bootoutStaleAgent();
-  const cleared = trySetLoginItemSettings(false);
+  // Both labels: the agent label is the live registration on post-split
+  // builds; the CLI label covers machines mid-transition (a legacy/CLI job
+  // still loaded, or an old-label SMAppService record not yet retired by a
+  // register cycle).
+  await bootoutStaleAgent(HOST_AGENT_LABEL);
+  await bootoutStaleAgent(CLI_HOST_LABEL);
+  const cleared = trySetLoginItemSettings(false, HOST_SERVICE_NAME);
+  const clearedLegacy = trySetLoginItemSettings(
+    false,
+    LEGACY_HOST_SERVICE_NAME,
+  );
   log.info("[host-login-item] SMAppService registration torn down", {
     serviceName: HOST_SERVICE_NAME,
     cleared,
+    clearedLegacy,
   });
 }
 
-function trySetLoginItemSettings(openAtLogin: boolean): boolean {
+function trySetLoginItemSettings(
+  openAtLogin: boolean,
+  serviceName: string,
+): boolean {
   try {
     app.setLoginItemSettings({
       openAtLogin,
       type: "agentService",
-      serviceName: HOST_SERVICE_NAME,
+      serviceName,
     });
     return true;
   } catch (err) {
     log.warn("[host-login-item] setLoginItemSettings threw", {
       openAtLogin,
+      serviceName,
       err,
     });
     return false;
@@ -400,7 +725,7 @@ function inAppLaunchAgentPlistPath(): string {
 const BOOTOUT_TIMEOUT_MS = 5_000;
 
 /**
- * Forcibly drop the host agent from launchd's GUI domain so BTM
+ * Forcibly drop the job under `labelId` from launchd's GUI domain so BTM
  * releases its cached LWCR. On macOS 26+ this is the only path that
  * actually flushes BTM — see `registerHostLoginItem`'s docstring for
  * the mechanism. Safe to call on a clean machine: launchctl exits
@@ -412,11 +737,11 @@ const BOOTOUT_TIMEOUT_MS = 5_000;
  * log and return so the caller's register cycle still runs. The worst
  * case is we degrade to the pre-fix behavior for this one call.
  */
-async function bootoutStaleAgent(): Promise<void> {
+async function bootoutStaleAgent(labelId: string): Promise<void> {
   if (process.platform !== "darwin") return;
   if (typeof process.getuid !== "function") return;
   const uid = process.getuid();
-  const target = `gui/${uid}/${HOST_LABEL}`;
+  const target = `gui/${uid}/${labelId}`;
   // Wrap `spawn` so TypeScript resolves the (command, args, options)
   // overload here rather than against the `BootoutSpawnFn` alias.
   //

@@ -9,8 +9,9 @@ import {
   type ReactNode,
 } from "react";
 import { Check, FileText, FolderGit2, Search } from "lucide-react";
-import type { WorktreeBindingSelectorRow } from "@traycer/protocol/host";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
 import { Badge } from "@/components/ui/badge";
+import { WorktreeRowDisabledBadge } from "@/components/worktree/worktree-row-disabled-badge";
 import {
   InputGroup,
   InputGroupAddon,
@@ -39,7 +40,7 @@ export interface GitDiffRepoSwitcherProps {
   readonly roots: ReadonlyArray<GitDiffRepoSwitcherRootInput>;
   readonly activeRootSubmodules: ReadonlyArray<GitSubmoduleSummary>;
   readonly selected: GitDiffRepoSelection | null;
-  readonly onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  readonly onSelectRoot: (row: WorktreeBindingSelectorRowV12) => void;
   readonly hostSection: ReactNode | null;
   readonly autoFocusSearch: boolean;
   readonly triggerClassName: string | undefined;
@@ -64,7 +65,7 @@ export function GitDiffRepoSwitcher(
     [props.activeRootSubmodules, props.roots, props.selected, searchQuery],
   );
 
-  const handleSelectRoot = (row: WorktreeBindingSelectorRow): void => {
+  const handleSelectRoot = (row: WorktreeBindingSelectorRowV12): void => {
     props.onSelectRoot(row);
     props.onOpenChange(false);
   };
@@ -142,7 +143,7 @@ export interface GitDiffRepoSwitcherDropdownProps {
   readonly model: GitDiffRepoSwitcherModel;
   readonly searchQuery: string;
   readonly onSearchQueryChange: (query: string) => void;
-  readonly onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  readonly onSelectRoot: (row: WorktreeBindingSelectorRowV12) => void;
   readonly autoFocusSearch: boolean;
 }
 
@@ -209,7 +210,7 @@ export function GitDiffRepoSwitcherDropdown(
 
 function RepoSwitcherRowButton(props: {
   readonly row: GitDiffRepoSwitcherRow;
-  readonly onSelectRoot: (row: WorktreeBindingSelectorRow) => void;
+  readonly onSelectRoot: (row: WorktreeBindingSelectorRowV12) => void;
 }): ReactNode {
   const { row } = props;
   const disabled = row.disabledLabel !== null;
@@ -328,9 +329,10 @@ function RepoSwitcherRowMarker(props: {
   const { row } = props;
   if (row.disabledLabel !== null) {
     return (
-      <Badge variant="destructive" className="shrink-0">
-        {row.disabledLabel}
-      </Badge>
+      <WorktreeRowDisabledBadge
+        label={row.disabledLabel}
+        pending={row.pending}
+      />
     );
   }
   return (

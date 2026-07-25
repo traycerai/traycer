@@ -15,6 +15,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostNotificationsSetConfigForClient } from "@/hooks/host/use-host-notifications-set-config-mutation";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostQueryKeys } from "@/lib/query-keys";
 
 type NotificationConfig = ResponseOfMethod<
@@ -48,6 +49,7 @@ describe("useHostNotificationsSetConfigForClient", () => {
     const client = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: { invalidateHostScope: () => undefined },
+      schedulingPolicy: hostRpcSchedulingPolicy,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
         requestId: () => "req-1",

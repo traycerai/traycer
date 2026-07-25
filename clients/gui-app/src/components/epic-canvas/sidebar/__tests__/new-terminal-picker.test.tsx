@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import type {
   WorktreeBindingSelectorDisabledReason,
-  WorktreeBindingSelectorRow,
+  WorktreeBindingSelectorRowV12,
 } from "@traycer/protocol/host";
 import { NewTerminalPicker } from "../new-terminal-picker";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -23,7 +23,7 @@ const selectById = vi.fn();
 interface BindingsQueryStub {
   readonly data:
     | {
-        readonly rows: WorktreeBindingSelectorRow[];
+        readonly rows: WorktreeBindingSelectorRowV12[];
         readonly folderlessCwd: string | null;
       }
     | undefined;
@@ -81,7 +81,7 @@ function makeRow(
   runningDir: string,
   branch: string,
   disabledReason: WorktreeBindingSelectorDisabledReason | null,
-): WorktreeBindingSelectorRow {
+): WorktreeBindingSelectorRowV12 {
   return {
     hostId,
     runningDir,
@@ -96,6 +96,7 @@ function makeRow(
     setupState: "not_required",
     disabledReason,
     sources: [],
+    isGitResolvePending: false,
   };
 }
 

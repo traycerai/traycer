@@ -4,7 +4,10 @@ import {
   playNotificationChime,
 } from "@/lib/notifications/notification-display";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
-import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import {
+  useMergedNotificationsActions,
+  type MergedNotificationRow,
+} from "@/stores/notifications/merged-notifications";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import {
@@ -15,22 +18,31 @@ import {
   recordAppLocalDisplayReceipt,
   type AppLocalDisplayReceiptVersion,
 } from "@/lib/notifications/app-local-display-receipts";
+import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 
 export function NotificationEmissionController(): null {
   const showNotification = useNotificationShow();
   const { activate } = useNotificationActivation();
+  const actions = useMergedNotificationsActions();
   const inFlightVersionsRef = useRef(new Set<string>());
   const drainScheduledRef = useRef(false);
   const onToastClick = useCallback(
-    (row: MergedNotificationRow, activatedAt: number): void => {
+    (row: MergedNotificationRow): void => {
       if (row.payload === null) return;
       activate({
         payload: row.payload,
-        receivedAt: activatedAt,
-        onActivated: null,
+        receivedAt: row.createdAt,
+        feedId: row.feedId,
+        onResult: activationResultHandler({
+          row,
+          feedId: row.feedId,
+          surface: "toast",
+          markAsRead: actions.markAsRead,
+          onSuccess: null,
+        }),
       });
     },
-    [activate],
+    [activate, actions],
   );
 
   const drainPendingNotifications = useCallback((): void => {

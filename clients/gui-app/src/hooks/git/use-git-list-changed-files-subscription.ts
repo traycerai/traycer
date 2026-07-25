@@ -1,4 +1,10 @@
-import { useMemo, useEffect, useReducer, useState } from "react";
+import {
+  useMemo,
+  useEffect,
+  useReducer,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -7,10 +13,12 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   gitSubscribeStatusEventSchema,
   gitSubscribeStatusEventSchemaV11,
+  gitSubscribeStatusEventSchemaV12,
   type GitListChangedFilesResponse,
   type GitListChangedFilesResponseV11,
   type GitSubscribeStatusEvent,
   type GitSubscribeStatusEventV11,
+  type GitSubscribeStatusEventV12,
   type RepoMode,
   type RepoState,
 } from "@traycer/protocol/host/git-schemas";
@@ -30,7 +38,9 @@ import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
  * both minors.
  */
 type GitSubscribeStatusStreamEvent =
-  GitSubscribeStatusEvent | GitSubscribeStatusEventV11;
+  | GitSubscribeStatusEvent
+  | GitSubscribeStatusEventV11
+  | GitSubscribeStatusEventV12;
 
 export interface GitListChangedFilesSubscriptionResult {
   readonly data: GitListChangedFilesResponse | null;
@@ -52,6 +62,37 @@ interface SharedSubscription {
   unsubscribeFromStream: () => void;
   lastEvent: GitSubscribeStatusStreamEvent | null;
   consumers: Map<symbol, () => void>;
+  sessionGeneration: number;
+  closeCurrentSession: () => void;
+  isRefreshing: boolean;
+  refreshPromise: Promise<void> | null;
+  settleRefresh: (() => void) | null;
+  refreshTimeout: number | null;
+}
+
+interface GitSubscriptionRefreshStateArgs {
+  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry> | null;
+  readonly hostId: string | null;
+  readonly runningDir: string | null;
+  readonly ignoreWhitespace: boolean;
+}
+
+interface ReplaceStreamSessionArgs {
+  readonly shared: SharedSubscription;
+  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly queryClient: QueryClient;
+  readonly args: ActiveSubscriptionArgs;
+  readonly freshNonce: string | null;
+}
+
+interface V12FrameHandlerArgs {
+  readonly value: unknown;
+  readonly shared: SharedSubscription;
+  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry>;
+  readonly queryClient: QueryClient;
+  readonly args: ActiveSubscriptionArgs;
+  readonly awaitingFreshNonce: { current: string | null };
+  readonly markTerminal: (event: GitSubscribeStatusEvent) => void;
 }
 
 /**
@@ -64,6 +105,7 @@ interface SharedSubscription {
  * entry against the new client.
  */
 const subscriptions = new Map<string, SharedSubscription>();
+const refreshStateListeners = new Map<string, Set<() => void>>();
 
 function subscriptionKeyFor(
   client: WsStreamClient<HostStreamRpcRegistry>,
@@ -100,6 +142,91 @@ export function __resetSubscriptionsForTesting(): void {
     sub.unsubscribeFromStream();
   }
   subscriptions.clear();
+  refreshStateListeners.clear();
+}
+
+/** Shared replacement state for every refresh surface addressing one stream. */
+export function useGitSubscriptionRefreshState(
+  args: GitSubscriptionRefreshStateArgs,
+): boolean {
+  const key =
+    args.wsStreamClient === null ||
+    args.hostId === null ||
+    args.runningDir === null
+      ? null
+      : subscriptionKeyFor(args.wsStreamClient, {
+          hostId: args.hostId,
+          runningDir: args.runningDir,
+          ignoreWhitespace: args.ignoreWhitespace,
+        });
+  return useSyncExternalStore(
+    (onStoreChange) => {
+      if (key === null) return () => undefined;
+      let listeners = refreshStateListeners.get(key);
+      if (listeners === undefined) {
+        listeners = new Set();
+        refreshStateListeners.set(key, listeners);
+      }
+      listeners.add(onStoreChange);
+      return () => {
+        const current = refreshStateListeners.get(key);
+        if (current === undefined) return;
+        current.delete(onStoreChange);
+        if (current.size === 0) refreshStateListeners.delete(key);
+      };
+    },
+    () =>
+      key === null ? false : (subscriptions.get(key)?.isRefreshing ?? false),
+    () => false,
+  );
+}
+
+/**
+ * Starts (or joins) the v1.2 fresh replacement for an already-observed stream.
+ * `null` tells callers to retain their negotiated-minor <=1 unary fallback.
+ */
+export function refreshGitSubscriptionWithFreshNonce(args: {
+  readonly wsStreamClient: WsStreamClient<HostStreamRpcRegistry> | null;
+  readonly queryClient: QueryClient;
+  readonly hostId: string | null;
+  readonly runningDir: string | null;
+  readonly ignoreWhitespace: boolean;
+}): Promise<void> | null {
+  const client = args.wsStreamClient;
+  if (client === null || args.hostId === null || args.runningDir === null) {
+    return null;
+  }
+  const version = client.getMethodSchemaVersion("git.subscribeStatus");
+  if (version === null || version.major !== 1 || version.minor < 2) {
+    return null;
+  }
+  const subscriptionArgs: ActiveSubscriptionArgs = {
+    hostId: args.hostId,
+    runningDir: args.runningDir,
+    ignoreWhitespace: args.ignoreWhitespace,
+  };
+  const key = subscriptionKeyFor(client, subscriptionArgs);
+  const shared = subscriptions.get(key);
+  if (shared === undefined) return null;
+  if (shared.refreshPromise !== null) return shared.refreshPromise;
+
+  const freshNonce = crypto.randomUUID();
+  shared.isRefreshing = true;
+  shared.refreshPromise = new Promise<void>((resolve) => {
+    shared.settleRefresh = resolve;
+  });
+  notifyRefreshState(key);
+  replaceStreamSession({
+    shared,
+    wsStreamClient: client,
+    queryClient: args.queryClient,
+    args: subscriptionArgs,
+    freshNonce,
+  });
+  shared.refreshTimeout = window.setTimeout(() => {
+    settleSharedRefresh(shared, key);
+  }, 10_000);
+  return shared.refreshPromise;
 }
 
 export function useGitListChangedFilesSubscription(args: {
@@ -161,6 +288,7 @@ export function useGitListChangedFilesSubscription(args: {
         activeArgs,
       );
       subscriptions.set(key, shared);
+      notifyRefreshState(key);
     }
 
     // Increment ref count and register local consumer.
@@ -193,6 +321,7 @@ export function useGitListChangedFilesSubscription(args: {
       if (shared.refCount === 0) {
         shared.unsubscribeFromStream();
         subscriptions.delete(key);
+        notifyRefreshState(key);
       }
     };
   }, [stableArgs, queryClient, wsStreamClient, consumerId]);
@@ -240,38 +369,69 @@ function createSharedSubscription(
   queryClient: QueryClient,
   args: ActiveSubscriptionArgs,
 ): SharedSubscription {
+  const shared: SharedSubscription = {
+    refCount: 0,
+    unsubscribeFromStream: () => undefined,
+    lastEvent: null,
+    consumers: new Map(),
+    sessionGeneration: 0,
+    closeCurrentSession: () => undefined,
+    isRefreshing: false,
+    refreshPromise: null,
+    settleRefresh: null,
+    refreshTimeout: null,
+  };
+  const key = subscriptionKeyFor(wsStreamClient, args);
+  shared.unsubscribeFromStream = () => {
+    shared.sessionGeneration += 1;
+    shared.closeCurrentSession();
+    settleSharedRefresh(shared, key);
+  };
+  replaceStreamSession({
+    shared,
+    wsStreamClient,
+    queryClient,
+    args,
+    freshNonce: null,
+  });
+  return shared;
+}
+
+function replaceStreamSession(opts: ReplaceStreamSessionArgs): void {
+  const { shared, wsStreamClient, queryClient, args, freshNonce } = opts;
+  // Retire the old generation BEFORE close. A synchronous close callback is
+  // then ignored and cannot publish a terminal error over the preserved cache.
+  shared.sessionGeneration += 1;
+  const generation = shared.sessionGeneration;
+  shared.closeCurrentSession();
   const session = wsStreamClient.subscribe("git.subscribeStatus", {
     hostId: args.hostId,
     runningDir: args.runningDir,
     ignoreWhitespace: args.ignoreWhitespace,
+    freshNonce,
   });
-
   let sessionClosed = false;
-  const shared: SharedSubscription = {
-    refCount: 0,
-    unsubscribeFromStream: () => {
-      sessionClosed = true;
-      session.close();
-    },
-    lastEvent: null,
-    consumers: new Map(),
+  shared.closeCurrentSession = () => {
+    sessionClosed = true;
+    session.close();
   };
+  const awaitingFreshNonce = { current: freshNonce };
 
   // Terminal teardown that keeps the map entry (and its error) alive for the
   // mounted consumers: the entry only leaves the map through the refCount
   // lifecycle, so a later fresh mount re-subscribes from scratch while the
   // current ones render the error instead of a forever-pending skeleton.
   const markTerminal = (event: GitSubscribeStatusEvent): void => {
+    if (generation !== shared.sessionGeneration) return;
     sessionClosed = true;
     session.close();
     shared.lastEvent = event;
-    for (const consumer of shared.consumers.values()) {
-      consumer();
-    }
+    settleSharedRefresh(shared, subscriptionKeyFor(wsStreamClient, args));
+    notifyConsumers(shared);
   };
 
   session.onServerFrame((envelope) => {
-    if (sessionClosed) return;
+    if (sessionClosed || generation !== shared.sessionGeneration) return;
 
     // The negotiated version is read AT DELIVERY TIME (never from a
     // render-stale closure): the handshake can settle after the subscribe,
@@ -280,11 +440,26 @@ function createSharedSubscription(
     const negotiated = wsStreamClient.getMethodSchemaVersion(
       "git.subscribeStatus",
     );
+    const v12Frames =
+      negotiated !== null && negotiated.major === 1 && negotiated.minor >= 2;
     const richFrames =
       negotiated !== null && negotiated.major === 1 && negotiated.minor >= 1;
 
     // Server wraps the event as `envelope.value` per the host's
     // SendServerFrame contract (see git-stream-resolvers.ts).
+    if (v12Frames) {
+      handleV12ServerFrame({
+        value: envelope.value,
+        shared,
+        wsStreamClient,
+        queryClient,
+        args,
+        awaitingFreshNonce,
+        markTerminal,
+      });
+      return;
+    }
+
     if (richFrames) {
       const parseResult = gitSubscribeStatusEventSchemaV11.safeParse(
         envelope.value,
@@ -298,9 +473,7 @@ function createSharedSubscription(
         return;
       }
       shared.lastEvent = event;
-      for (const consumer of shared.consumers.values()) {
-        consumer();
-      }
+      notifyConsumers(shared);
       writeRichEventIntoCache(queryClient, args, event, {
         parentSlotWrite: "always",
         richSlotWrite: "always",
@@ -321,10 +494,7 @@ function createSharedSubscription(
     }
 
     shared.lastEvent = event;
-
-    for (const consumer of shared.consumers.values()) {
-      consumer();
-    }
+    notifyConsumers(shared);
 
     // Minor 0 / unknown: today's behavior verbatim - the frame writes ONLY
     // the v1.0 slot. It must never touch the rich slot: in this state the
@@ -341,7 +511,7 @@ function createSharedSubscription(
   // domain error frame - without this handler the subscription would sit in
   // a pending state forever (the stuck git-diff skeleton incident).
   session.onStatusChange((status, reason) => {
-    if (sessionClosed) return;
+    if (sessionClosed || generation !== shared.sessionGeneration) return;
     if (status !== "closed") return;
     markTerminal({
       type: "error",
@@ -349,8 +519,58 @@ function createSharedSubscription(
       isFatal: true,
     });
   });
+}
 
-  return shared;
+function handleV12ServerFrame(args: V12FrameHandlerArgs): void {
+  const parseResult = gitSubscribeStatusEventSchemaV12.safeParse(args.value);
+  if (!parseResult.success) return;
+  const event = parseResult.data;
+  if (event.type === "error" && event.isFatal) {
+    args.markTerminal(event);
+    return;
+  }
+  if (args.awaitingFreshNonce.current !== null) {
+    if (
+      event.type !== "snapshot" ||
+      event.freshNonce !== args.awaitingFreshNonce.current
+    ) {
+      return;
+    }
+    args.awaitingFreshNonce.current = null;
+    settleSharedRefresh(
+      args.shared,
+      subscriptionKeyFor(args.wsStreamClient, args.args),
+    );
+  }
+  args.shared.lastEvent = event;
+  notifyConsumers(args.shared);
+  writeRichEventIntoCache(args.queryClient, args.args, event, {
+    parentSlotWrite: "always",
+    richSlotWrite: "always",
+    invalidateDiffs: true,
+  });
+}
+
+function settleSharedRefresh(shared: SharedSubscription, key: string): void {
+  if (shared.refreshTimeout !== null) {
+    clearTimeout(shared.refreshTimeout);
+    shared.refreshTimeout = null;
+  }
+  const settle = shared.settleRefresh;
+  shared.settleRefresh = null;
+  shared.refreshPromise = null;
+  if (!shared.isRefreshing && settle === null) return;
+  shared.isRefreshing = false;
+  settle?.();
+  notifyRefreshState(key);
+}
+
+function notifyRefreshState(key: string): void {
+  for (const listener of refreshStateListeners.get(key) ?? []) listener();
+}
+
+function notifyConsumers(shared: SharedSubscription): void {
+  for (const consumer of shared.consumers.values()) consumer();
 }
 
 function describeStreamClose(reason: StreamCloseReason | null): string {

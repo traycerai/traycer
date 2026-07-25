@@ -103,7 +103,7 @@
     "unified": "catalog:",
     "unist-util-visit": "catalog:",
     "uuid": "catalog:",
-    "wavesurfer.js": "^7.12.10",
+    "wavesurfer.js": "^7.12.11",
     "y-protocols": "catalog:",
     "yjs": "catalog:",
     "zod": "catalog:",
@@ -112,6 +112,7 @@
   "devDependencies": {
     "@tanstack/eslint-plugin-query": "catalog:",
     "@tanstack/eslint-plugin-router": "catalog:",
+    "@tanstack/react-query-devtools": "catalog:",
     "@testing-library/react": "catalog:",
     "@testing-library/user-event": "catalog:",
     "@types/culori": "catalog:",

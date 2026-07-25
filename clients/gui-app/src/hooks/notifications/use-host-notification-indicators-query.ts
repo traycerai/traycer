@@ -58,7 +58,9 @@ export function useHostNotificationIndicators(
       userId === null
         ? undefined
         : notificationsQueryKeys.indicatorIdentity(userId),
-    options: { enabled: args.enabled && userId !== null },
+    options: {
+      enabled: args.enabled && userId !== null,
+    },
     combine: (results) => ({
       data: mergeIndicatorResponses(results),
       isPending: results.some((result) => result.isPending),

@@ -1,10 +1,18 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Environment } from "../runner/environment";
+import type { ProgressInfo } from "../runner/output";
 import { createCliLogger, errorFromUnknown } from "../logger";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import { downloadToFile, fetchText } from "./fetch-resource";
+import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
+import {
+  acquireDownloadSlot,
+  releaseDownloadSlot,
+  releaseDownloadSlotOwnership,
+} from "./download-cache";
+import {
+  downloadToFile,
+  fetchText,
+  type NetworkHeartbeat,
+  type NetworkHeartbeatListener,
+} from "./fetch-resource";
 import { parseHostVersionsManifestWithWarnings } from "./manifest-schema";
 import { resolveManifestUrl } from "./manifest-url";
 import { verifyMinisignArchive } from "./minisign";
@@ -16,6 +24,14 @@ import type {
   HostVersionsManifest,
   RegistryClient,
 } from "./types";
+
+const YANK_LOOKUP_TIMEOUT_MS = 10_000;
+
+export interface RegistryYankLookup {
+  // Returns false for an entry missing from the manifest and for every
+  // registry failure. Those conditions must preserve a newer installed host.
+  isVersionYanked(version: string): Promise<boolean>;
+}
 
 // Real registry client. Replaces the NP-2 stub now that NP-4 ships the
 // hosted versions.json fetcher, asset resolver, and minisign + sha256
@@ -42,10 +58,11 @@ export interface CreateRegistryClientOptions {
   // fails loudly at construction; tests pass `false` because the fake
   // transport substitutes the verify chain wholesale.
   readonly requireTrustedKeys: boolean;
+  readonly onProgress: ((info: ProgressInfo) => void) | null;
 }
 
 export interface RegistryTransport {
-  fetchText(url: string): Promise<string>;
+  fetchText(opts: RegistryFetchTextOptions): Promise<string>;
   downloadToFile(opts: {
     readonly url: string;
     readonly destPath: string;
@@ -55,11 +72,18 @@ export interface RegistryTransport {
       readonly downloadedBytes: number;
       readonly totalBytes: number;
     }) => void;
+    readonly onHeartbeat: NetworkHeartbeatListener | null;
   }): Promise<{ readonly downloadedBytes: number; readonly sha256: string }>;
 }
 
+export interface RegistryFetchTextOptions {
+  readonly url: string;
+  readonly onHeartbeat: NetworkHeartbeatListener | null;
+}
+
 const DEFAULT_TRANSPORT: RegistryTransport = {
-  fetchText: (url) => fetchText(url, { signal: null }),
+  fetchText: ({ url, onHeartbeat }) =>
+    fetchText(url, { signal: null, onHeartbeat }),
   downloadToFile: (opts) =>
     downloadToFile({
       ...opts,
@@ -127,7 +151,11 @@ export async function createRegistryClient(
         environment: opts.environment,
         manifestUrl: manifestUrlInfo.url,
       });
-      const body = await transport.fetchText(manifestUrlInfo.url);
+      const body = await transport.fetchText({
+        url: manifestUrlInfo.url,
+        onHeartbeat: (heartbeat) =>
+          emitRegistryHeartbeat(opts.onProgress, "manifest", heartbeat),
+      });
       let parsedJson: unknown;
       try {
         parsedJson = JSON.parse(body);
@@ -286,24 +314,54 @@ export async function createRegistryClient(
           exitCode: 1,
         });
       }
-      const tmpDir = await mkdtemp(join(tmpdir(), "traycer-host-dl-"));
+      // The archive path is stable across CLI invocations (keyed by
+      // version + sha256) so a re-spawned CLI resumes the previous
+      // process's partial file instead of starting from zero - the whole
+      // point of traycer#585/#588. `acquireDownloadSlot` owns the
+      // concurrency + sweep policy for that shared location.
+      const slot = await acquireDownloadSlot({
+        environment: opts.environment,
+        version: entry.version,
+        sha256: asset.sha256,
+        urlBasename: archiveBasenameFromUrl(asset.url),
+      });
+      const archivePath = slot.archivePath;
       logger.debug("Registry download started", {
         environment: opts.environment,
+        resumable: slot.resumable,
       });
-      // Track whether we succeeded so the `finally` block can clean up
-      // the tmpdir on failure. On success the caller (installer) is
-      // responsible for moving the archive out and removing the dir.
+      // The `finally` has to tell three outcomes apart, and it needs BOTH
+      // of these to do it. `transferred` says the bytes are complete and
+      // sha256-verified; `failure` says whether what went wrong afterwards
+      // condemns them.
+      //
+      // Only a TRUST failure condemns an archive: a bad signature, or a
+      // keyId that does not match the manifest. Those reproduce on every
+      // retry, so the file must go. Everything else after the transfer -
+      // above all fetching the sub-1KB `.minisig`, which gives up after
+      // four attempts and would fail routinely on the throttled links this
+      // work exists for - is a transport failure, and deleting a fully
+      // verified 700MB archive because a tiny signature fetch flaked is
+      // exactly the "downloads forever, never finishes" loop being fixed.
       let succeeded = false;
+      let transferred = false;
+      let failure: unknown = null;
       try {
-        const archivePath = join(tmpDir, archiveBasenameFromUrl(asset.url));
         const download = await transport.downloadToFile({
           url: asset.url,
           destPath: archivePath,
           expectedSizeBytes: asset.sizeBytes,
           expectedSha256: asset.sha256,
           onProgress: (info) => onProgress(info),
+          onHeartbeat: (heartbeat) =>
+            emitRegistryHeartbeat(opts.onProgress, "archive", heartbeat),
         });
-        const signatureText = await transport.fetchText(asset.signatureUrl);
+        transferred = true;
+        const signatureText = await transport.fetchText({
+          url: asset.signatureUrl,
+          onHeartbeat: (heartbeat) =>
+            emitRegistryHeartbeat(opts.onProgress, "signature", heartbeat),
+        });
         const verifyResult = await verifyMinisignArchive({
           archivePath,
           signatureText,
@@ -342,25 +400,45 @@ export async function createRegistryClient(
           signatureKeyId: verifyResult.keyId,
           signatureVerifiedAt: new Date().toISOString(),
         };
+      } catch (err) {
+        failure = err;
+        throw err;
       } finally {
-        // On failure, scrub the tmpdir so we don't leak the partial
-        // archive (downloadToFile aborts on size-cap / stream error
-        // without unlinking) or an empty tmpdir. Best-effort: rm errors
-        // are swallowed so they don't mask the original throw - the
-        // pathological case (rm fails on a tmpdir) leaves at worst the
-        // empty dir behind, which the OS cleans up on reboot anyway.
-        if (!succeeded) {
-          await rm(tmpDir, { recursive: true, force: true }).catch((err) => {
-            logger.warn(
-              "Registry failed to clean temporary download directory",
-              {
-                environment: opts.environment,
-                errorName: errorFromUnknown(err).name,
-              },
-            );
-          });
-          logger.warn("Registry cleaned failed download attempt", {
+        // On success the caller owns the verified archive until it has
+        // extracted it, and releases the slot itself.
+        //
+        // Both releases are `.catch`-guarded. Today neither can reject -
+        // download-cache.ts swallows its own fs errors - but that is its
+        // internal detail, and an unguarded await in a `finally` would let a
+        // future change there replace the error being propagated. Callers
+        // route on `REGISTRY_UNAVAILABLE` vs `HOST_VERIFY_FAILED`; losing
+        // that code to a cleanup failure would turn a retryable download
+        // into an unrecognized one.
+        if (!succeeded && transferred && isTrustFailure(failure)) {
+          // Complete bytes that the trust chain rejected. Resuming into
+          // them would just reproduce the same verdict, so drop the file
+          // with the claim.
+          await releaseDownloadSlot(opts.environment, archivePath).catch(
+            () => undefined,
+          );
+          logger.warn("Registry discarded an unverifiable download", {
             environment: opts.environment,
+          });
+        } else if (!succeeded) {
+          // Keep whatever landed on disk and drop only the ownership
+          // claim, so the next invocation resumes it. Covers both a failed
+          // transfer (the case a throttled connection hits over and over)
+          // and a post-transfer transport failure, where the archive is
+          // complete and sha256-verified and only the signature fetch has
+          // yet to succeed - the next run re-verifies it over one 416
+          // round-trip instead of re-downloading it.
+          await releaseDownloadSlotOwnership(
+            opts.environment,
+            archivePath,
+          ).catch(() => undefined);
+          logger.warn("Registry left a resumable download in place", {
+            environment: opts.environment,
+            transferComplete: transferred,
           });
         }
       }
@@ -380,12 +458,115 @@ export async function createRegistryClient(
 // dereferenced.
 export async function createDefaultRegistryClient(
   environment: Environment,
+  onProgress: ((info: ProgressInfo) => void) | null,
 ): Promise<RegistryClient> {
   return createRegistryClient({
     environment,
     transport: null,
     requireTrustedKeys: true,
+    onProgress,
   });
+}
+
+// Create one lookup per provisioning run. It shares only a manifest promise
+// and its result; every state snapshot still asks whether its installed
+// version is yanked. This read is advisory, unlike installer manifest fetches:
+// offline, malformed, and timed-out responses all intentionally fail open.
+export function createRegistryYankLookup(
+  environment: Environment,
+): RegistryYankLookup {
+  const logger = createCliLogger(environment);
+  const manifestUrl = resolveManifestUrl().url;
+  let manifestPromise: Promise<HostVersionsManifest | null> | null = null;
+
+  const fetchManifest = async (): Promise<HostVersionsManifest | null> => {
+    const controller = new AbortController();
+    let watchdogExpired = false;
+    const watchdog = setTimeout(() => {
+      watchdogExpired = true;
+      controller.abort();
+    }, YANK_LOOKUP_TIMEOUT_MS);
+    try {
+      const body = await fetchText(manifestUrl, {
+        signal: controller.signal,
+        onHeartbeat: null,
+      });
+      const parsed: unknown = JSON.parse(body);
+      return parseHostVersionsManifestWithWarnings(parsed, manifestUrl)
+        .manifest;
+    } catch (err) {
+      logger.warn("Registry yank lookup failed open", {
+        environment,
+        manifestUrl,
+        watchdogExpired,
+        errorName: errorFromUnknown(err).name,
+      });
+      return null;
+    } finally {
+      clearTimeout(watchdog);
+    }
+  };
+
+  return {
+    async isVersionYanked(version: string): Promise<boolean> {
+      manifestPromise ??= fetchManifest();
+      const manifest = await manifestPromise;
+      return (
+        manifest?.versions.find((entry) => entry.version === version)
+          ?.yanked === true
+      );
+    },
+  };
+}
+
+function emitRegistryHeartbeat(
+  onProgress: ((info: ProgressInfo) => void) | null,
+  resource: "manifest" | "archive" | "signature",
+  heartbeat: NetworkHeartbeat,
+): void {
+  if (onProgress === null) return;
+  const resourceLabel = resource === "archive" ? "host archive" : resource;
+  onProgress({
+    stage: `registry-${resource}-${heartbeat.phase}`,
+    message: registryHeartbeatMessage(resourceLabel, heartbeat),
+    percent: null,
+    // Attempt counters belong in the message, not in the byte fields. A
+    // heartbeat is a liveness tick, not a transfer measurement: putting
+    // `attempt`/`maxAttempts` here made Desktop's progress bar redraw as
+    // "1 byte of 4" every time a retry fired mid-download. All three
+    // numeric fields stay null so the renderer holds the last real values.
+    bytes: null,
+    totalBytes: null,
+  });
+}
+
+function registryHeartbeatMessage(
+  resourceLabel: string,
+  heartbeat: NetworkHeartbeat,
+): string {
+  if (heartbeat.phase === "attempt") {
+    // No denominator when the counter has no ceiling worth quoting - an
+    // archive download is bounded by consecutive stalls, not by attempts,
+    // so "attempt 41/200" would read as a countdown that is not running.
+    const of =
+      heartbeat.maxAttempts === null ? "" : `/${heartbeat.maxAttempts}`;
+    return `fetching ${resourceLabel} (attempt ${heartbeat.attempt}${of})`;
+  }
+  if (heartbeat.phase === "watchdog") {
+    return `fetching ${resourceLabel} stalled; retrying`;
+  }
+  return `retrying ${resourceLabel} shortly`;
+}
+
+// Whether a post-transfer failure condemns the bytes on disk. The verify
+// chain reports `HOST_VERIFY_FAILED` for everything that makes an archive
+// untrustworthy (a signature that does not check out, a keyId the manifest
+// does not pin); a network failure fetching the signature reports
+// `REGISTRY_UNAVAILABLE` and says nothing about the archive itself.
+function isTrustFailure(err: unknown): boolean {
+  return (
+    err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_VERIFY_FAILED
+  );
 }
 
 function archiveBasenameFromUrl(url: string): string {

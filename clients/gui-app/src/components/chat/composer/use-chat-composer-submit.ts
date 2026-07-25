@@ -46,6 +46,7 @@ interface UseChatComposerSubmitArgs {
    */
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
+  readonly attachmentPreparationPending: boolean;
   readonly onSubmitMessage:
     ((input: ChatComposerSubmitInput) => boolean) | null;
 }
@@ -68,6 +69,7 @@ export function useChatComposerSubmit(args: UseChatComposerSubmitArgs) {
     sendDisabled,
     workspaceBlocked,
     imagesUnsupported,
+    attachmentPreparationPending,
     onSubmitMessage,
   } = args;
   const appendMessage = useChatStore((state) => state.appendMessage);
@@ -79,7 +81,8 @@ export function useChatComposerSubmit(args: UseChatComposerSubmitArgs) {
       hasPendingApprovals ||
       sendDisabled ||
       workspaceBlocked ||
-      imagesUnsupported
+      imagesUnsupported ||
+      attachmentPreparationPending
     ) {
       return;
     }
@@ -139,6 +142,7 @@ export function useChatComposerSubmit(args: UseChatComposerSubmitArgs) {
     editorRef,
     hasPendingApprovals,
     imagesUnsupported,
+    attachmentPreparationPending,
     onSubmitMessage,
     pickerStore,
     sendDisabled,

@@ -1,8 +1,7 @@
 import { HostPicker } from "@/components/layout/header/host-picker";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
-import { HostOperationStatusListener } from "@/components/layout/bridges/host-operation-status-listener";
-import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
+import { HostControllerStatusListener } from "@/components/layout/bridges/host-controller-status-listener";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
@@ -30,7 +29,6 @@ import { AppLocalNotificationsPersistLifecycleBridge } from "@/providers/app-loc
 import { LandingTerminalPersistLifecycleBridge } from "@/providers/landing-terminal-persist-lifecycle-bridge";
 import { LandingTerminalTombstoneRecoveryBridge } from "@/providers/landing-terminal-tombstone-recovery-bridge";
 import { EpicTabExistenceReconciler } from "@/providers/epic-tab-existence-reconciler";
-import { CliCredentialSeeder } from "@/providers/cli-credential-seeder";
 import { HarnessCatalogPrefetcher } from "@/providers/harness-catalog-prefetcher";
 import { HistoryPruneProvider } from "@/providers/history-prune-provider";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
@@ -46,10 +44,6 @@ import { createAppRouter, type AppRouter } from "@/router";
 // load (mirrors `theme-applier.ts`). The class drives the `wco:`
 // Tailwind variant so titlebar insets toggle on fullscreen.
 import "@/lib/window-controls-overlay";
-// Side-effect import: keeps the Windows native min/max/close controls in
-// sync with the active theme by pushing theme-derived overlay colors to the
-// desktop shell on every theme change (no-op on web / mac / Linux).
-import "@/lib/title-bar-overlay-theme";
 import { startMainThreadBlockProbe } from "@/lib/perf/main-thread-block-probe";
 
 // Surface renderer main-thread stalls (Long Tasks) so slow-feeling RPCs caused
@@ -60,7 +54,15 @@ import { RouterProvider } from "@tanstack/react-router";
 import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { LazyMotion, domMax } from "motion/react";
-import { useMemo, type ReactNode } from "react";
+import { lazy, Suspense, useMemo, type ReactNode } from "react";
+
+const ReactQueryDevtools = import.meta.env.DEV
+  ? lazy(() =>
+      import("@tanstack/react-query-devtools").then((module) => ({
+        default: module.ReactQueryDevtools,
+      })),
+    )
+  : null;
 
 export interface TraycerAppProps {
   readonly runnerHost: IRunnerHost;
@@ -146,6 +148,11 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                 </KeybindingProvider>
               </TooltipProvider>
             </ThemeProvider>
+            {ReactQueryDevtools === null ? null : (
+              <Suspense fallback={null}>
+                <ReactQueryDevtools initialIsOpen={false} />
+              </Suspense>
+            )}
           </QueryClientProvider>
         </WindowsBridgeProvider>
       </LazyMotion>
@@ -215,11 +222,9 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
   return (
     <>
       <RunnerHostBridges />
-      <HostRegistryUpdateListener />
-      <HostOperationStatusListener />
+      <HostControllerStatusListener />
       <AppUpdateToastController />
       <WorktreeDeleteProgressToastBridge />
-      <CliCredentialSeeder />
       <HarnessCatalogPrefetcher />
       <RateLimitQueueProvider />
       <HistoryPruneProvider router={props.router} />

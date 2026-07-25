@@ -398,8 +398,9 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "app",
     kind: "chord",
     // Control+Shift+M - uses the Control key specifically (the separate ⌃ key on
-    // macOS), avoiding the Command-based conflicts: ⌘Space (Spotlight),
-    // ⌘⇧Space (window summon), ⌘⇧V (split group vertically).
+    // macOS), avoiding the Command-based conflicts: ⌘Space (Spotlight), ⌘⇧V
+    // (split group vertically). The desktop global summon shortcut is checked
+    // live by conflict detection rather than hand-avoided here.
     defaultChord: "ctrl+shift+m",
   },
   "composer.model-picker.toggle": {

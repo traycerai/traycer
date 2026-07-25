@@ -36,7 +36,8 @@ export const epicSchema = z.object({
   deletedArtifacts: z.record(z.string(), deletedEpicArtifactSchema),
   // TUI agent sessions live alongside chats in their own map. Records carry
   // resume metadata (harnessId + harnessSessionId + hostId +
-  // workspaceFolders); transcript bytes stay in the host-owned PTY.
+  // workspaceFolders); supported transcripts come from host-local provider
+  // session history and are not persisted in the epic record.
   // Default `{}` so existing epics without the field still parse.
   tuiAgents: z.record(z.string(), tuiAgentSchema).default({}),
 });

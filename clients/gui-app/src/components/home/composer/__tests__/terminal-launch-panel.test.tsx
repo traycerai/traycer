@@ -48,9 +48,8 @@ function makeToolbarStore() {
     tuiOnly: true,
   });
   // The Start gate reads the selected harness's runtime `modes` from the
-  // catalog (so a schema-TUI harness that advertises only `gui` is blocked in
-  // lockstep with the store's reroute), so seed a loaded catalog where `claude`
-  // is TUI-capable - otherwise Start stays disabled.
+  // catalog, so seed a loaded catalog where `claude` is TUI-capable - otherwise
+  // Start stays disabled.
   store.getState().setCatalog({
     harnesses: [
       {
@@ -82,7 +81,7 @@ function makeGuiOnlyToolbarStore() {
     seedKey: "test",
     values: {
       permission: "supervised",
-      selection: { harnessId: "cursor", modelSlug: "", profileId: null },
+      selection: { harnessId: "traycer", modelSlug: "", profileId: null },
       reasoning: "",
       serviceTier: "",
       agentMode: "regular",
@@ -90,14 +89,13 @@ function makeGuiOnlyToolbarStore() {
     onSettingsChange: null,
     tuiOnly: true,
   });
-  // `cursor` is a schema-TUI harness (`isTuiHarnessId("cursor")` is true) whose
-  // adapter advertises only `gui`, so it can't back a terminal agent. The Start
-  // gate must follow the runtime `modes`, not the schema id.
+  // A GUI-only harness cannot back a terminal agent. The Start gate follows
+  // the runtime `modes` advertised by the host.
   store.getState().setCatalog({
     harnesses: [
       {
-        id: "cursor",
-        label: "Cursor",
+        id: "traycer",
+        label: "Traycer",
         enabled: true,
         available: true,
         error: null,
@@ -107,7 +105,7 @@ function makeGuiOnlyToolbarStore() {
         availabilityPending: false,
       },
     ],
-    modelsHarnessId: "cursor",
+    modelsHarnessId: "traycer",
     models: [],
     modelsLoaded: true,
     tuiOnly: true,
@@ -142,13 +140,11 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     renderPanel(onStart);
 
     const input = screen.getByLabelText<HTMLInputElement>(
-      "Terminal agent CLI arguments",
+      "Terminal interface CLI arguments",
     );
     expect(input.value).toBe("--from-settings");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start terminal agent" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -162,12 +158,13 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     const onStart = vi.fn();
     renderPanel(onStart);
 
-    fireEvent.change(screen.getByLabelText("Terminal agent CLI arguments"), {
-      target: { value: "" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start terminal agent" }),
+    fireEvent.change(
+      screen.getByLabelText("Terminal interface CLI arguments"),
+      {
+        target: { value: "" },
+      },
     );
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -180,12 +177,13 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     const onStart = vi.fn();
     renderPanel(onStart);
 
-    fireEvent.change(screen.getByLabelText("Terminal agent CLI arguments"), {
-      target: { value: "--dangerously-skip-permissions" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start terminal agent" }),
+    fireEvent.change(
+      screen.getByLabelText("Terminal interface CLI arguments"),
+      {
+        target: { value: "--dangerously-skip-permissions" },
+      },
     );
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -194,7 +192,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     );
   });
 
-  it("blocks Start for a schema-TUI harness that advertises only gui (cursor)", () => {
+  it("blocks Start for a GUI-only harness", () => {
     const onStart = vi.fn();
     render(
       <TooltipProvider>
@@ -207,7 +205,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       </TooltipProvider>,
     );
 
-    const start = screen.getByRole("button", { name: "Start terminal agent" });
+    const start = screen.getByRole("button", { name: "Start agent" });
     expect(start.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(start);
     expect(onStart).not.toHaveBeenCalled();

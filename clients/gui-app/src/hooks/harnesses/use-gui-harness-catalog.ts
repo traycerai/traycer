@@ -18,6 +18,7 @@ import {
   type UseHostQueryOptions,
 } from "@/hooks/host/use-host-query";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 
 // Model catalogs are CACHE-ONLY: `staleTime: Infinity` on every model query -
 // the batched fan-out in `useGuiHarnessCatalog` and the standalone
@@ -84,76 +85,6 @@ export function harnessCatalogEntryNeedsRefresh(
   return Date.now() - entry.dataUpdatedAt >= HARNESS_CATALOG_REFRESH_AFTER_MS;
 }
 
-// An availability probe can transiently fail - most often a cold-start SDK
-// timeout for Claude (loading its ~200MB native CLI) when the host probes all
-// harnesses in parallel at boot. The renderer hides any harness with
-// `available: false`, so without a faster retry a transient drop stayed hidden
-// for the full 15-min steady-state window (only the picker's manual refresh or
-// an app restart recovered it).
-//
-// While any harness is unavailable we re-fetch on a backoff instead, starting at
-// the host's availability-cache TTL (re-fetching faster just re-reads the same
-// cached failure, since the host won't re-probe until its 30s cache expires)
-// and doubling toward a few-minute ceiling. So a transient drop self-heals in
-// ~30s, while a harness that is genuinely absent settles to a periodic re-check
-// rather than re-spawning the heavy Claude probe every half-minute. Once every
-// harness reports available we drop back to the long steady-state interval and
-// stop polling.
-//
-// `availabilityPending` rows are different: the host returned immediately (no
-// probe complete yet) and is actively working in the background. Poll fast —
-// matching the authPending / versionPending cadence — until all pending flags
-// clear, then fall to the normal unavailable backoff or steady-state interval.
-const HARNESS_AVAILABILITY_PENDING_REFRESH_MS = 800;
-const HARNESS_AVAILABILITY_RETRY_MIN_MS = 30 * 1000;
-const HARNESS_AVAILABILITY_RETRY_MAX_MS = 5 * 60 * 1000;
-
-// Consecutive "saw an unavailable harness" fetches, keyed by query hash
-// (host + method + params), so the backoff advances once per fetch rather
-// than on every `refetchInterval` evaluation, and resets the moment the catalog
-// goes fully available. Entries are dropped on recovery, so the map only ever
-// holds currently-degraded hosts.
-const unavailableStreaks = new Map<
-  string,
-  { readonly updateCount: number; readonly attempts: number }
->();
-
-export function nextHarnessAvailabilityRefetchInterval(args: {
-  readonly queryHash: string;
-  readonly dataUpdateCount: number;
-  readonly data: ListGuiHarnessesResponse | undefined;
-}): number {
-  const { queryHash, dataUpdateCount, data } = args;
-  // No data yet (initial load) or a hard RPC rejection (handled by TanStack's
-  // own retry/backoff) - keep the steady-state cadence.
-  if (data === undefined) {
-    unavailableStreaks.delete(queryHash);
-    return HARNESS_AVAILABILITY_REFRESH_MS;
-  }
-  // Poll fast while the host is still running availability probes in the
-  // background. Once all pending flags clear, fall through to the normal
-  // unavailable backoff or steady-state interval.
-  if (data.harnesses.some((harness) => harness.availabilityPending)) {
-    return HARNESS_AVAILABILITY_PENDING_REFRESH_MS;
-  }
-  if (data.harnesses.every((harness) => harness.available)) {
-    unavailableStreaks.delete(queryHash);
-    return HARNESS_AVAILABILITY_REFRESH_MS;
-  }
-  const previous = unavailableStreaks.get(queryHash);
-  // Advance the attempt count only when a new fetch has landed since we last
-  // recorded one; repeated evaluations between fetches must not inflate it.
-  const attempts =
-    previous !== undefined && previous.updateCount === dataUpdateCount
-      ? previous.attempts
-      : (previous?.attempts ?? 0) + 1;
-  unavailableStreaks.set(queryHash, { updateCount: dataUpdateCount, attempts });
-  return Math.min(
-    HARNESS_AVAILABILITY_RETRY_MIN_MS * 2 ** (attempts - 1),
-    HARNESS_AVAILABILITY_RETRY_MAX_MS,
-  );
-}
-
 /**
  * Activity gating shared by the catalog/provider query hooks. `enabled`
  * controls whether the query may fetch; `subscribed` controls whether this
@@ -213,12 +144,6 @@ export function useGuiHarnessesQuery(
     options: {
       enabled: activity.enabled,
       subscribed: activity.subscribed,
-      refetchInterval: (query) =>
-        nextHarnessAvailabilityRefetchInterval({
-          queryHash: query.queryHash,
-          dataUpdateCount: query.state.dataUpdateCount,
-          data: query.state.data,
-        }),
       staleTime: HARNESS_AVAILABILITY_REFRESH_MS,
     },
   });
@@ -393,6 +318,13 @@ export function useRefreshHarnessCatalog(): () => Promise<void> {
   return useCallback(async () => {
     const hostId = client.getActiveHostId();
     if (hostId === null) return;
+    getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
+      hostQueryKeys.method<HostRpcRegistry, "agent.gui.listHarnesses">(
+        hostId,
+        "agent.gui.listHarnesses",
+        {},
+      ),
+    );
     // `invalidateQueries` resolves once the refetches it triggers on active
     // queries settle, so awaiting all of them lets the caller drive a spinner
     // that reflects real refetch progress (not just fire-and-forget).

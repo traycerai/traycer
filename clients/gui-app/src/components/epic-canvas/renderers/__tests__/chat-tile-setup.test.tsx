@@ -157,6 +157,7 @@ function emitSnapshot(
         claudePendingWakes: [],
         messages: [...messages],
         events: [...events],
+        archivedAt: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
@@ -863,7 +864,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     clickWarningReportAction();
 
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
-      title: "Chat action failed",
+      title: "Agent action failed",
       message: null,
       code: null,
       source: "Chat",

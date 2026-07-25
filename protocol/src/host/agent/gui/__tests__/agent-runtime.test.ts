@@ -106,6 +106,42 @@ describe("agent runtime stream schema", () => {
       type: "user_message.anchor_resolved",
       anchor: { harnessId: "cursor", cursorRunId: null },
     });
+
+    // Hermes anchor: `hermesSessionId` is the ACP session id, resolved to a
+    // string once `session/new` returns and null until then. Both parse.
+    expect(
+      runtimeEventSchema.parse({
+        type: "user_message.anchor_resolved",
+        messageId: "message_3",
+        blockId: "ses_hermes",
+        timestamp: 8,
+        anchor: {
+          harnessId: "hermes",
+          sessionId: "ses_hermes",
+          hermesSessionId: "ses_hermes",
+        },
+      }),
+    ).toMatchObject({
+      type: "user_message.anchor_resolved",
+      anchor: { harnessId: "hermes", hermesSessionId: "ses_hermes" },
+    });
+
+    expect(
+      runtimeEventSchema.parse({
+        type: "user_message.anchor_resolved",
+        messageId: "message_4",
+        blockId: "ses_hermes_pending",
+        timestamp: 9,
+        anchor: {
+          harnessId: "hermes",
+          sessionId: "ses_hermes_pending",
+          hermesSessionId: null,
+        },
+      }),
+    ).toMatchObject({
+      type: "user_message.anchor_resolved",
+      anchor: { harnessId: "hermes", hermesSessionId: null },
+    });
   });
 
   it("accepts runtime plan events", () => {
@@ -246,7 +282,8 @@ describe("agent runtime stream schema", () => {
       title: "Model changed",
       message: "Codex switched from gpt-5 to gpt-5-safe.",
       details: [{ label: "Reason", value: "highRiskCyberActivity" }],
-      fallbackText: "Codex switched from gpt-5 to gpt-5-safe (highRiskCyberActivity).",
+      fallbackText:
+        "Codex switched from gpt-5 to gpt-5-safe (highRiskCyberActivity).",
       metadata: {
         type: "model_rerouted",
         fromModel: "gpt-5",
@@ -331,6 +368,18 @@ describe("agent runtime stream schema", () => {
             path: "/tmp/project/.agents/skills/frontend-design/SKILL.md",
           },
         },
+        skillInvocations: [
+          {
+            name: "frontend-design",
+            path: "/tmp/project/.agents/skills/frontend-design/SKILL.md",
+            metadata: {},
+          },
+          {
+            name: "react-best-practices",
+            path: "/tmp/project/.agents/skills/react-best-practices/SKILL.md",
+            metadata: {},
+          },
+        ],
       }),
     ).toMatchObject({
       harnessId: "claude",
@@ -341,6 +390,10 @@ describe("agent runtime stream schema", () => {
       },
       systemPrompt: null,
       slashInvocation: { kind: "skill", name: "frontend-design" },
+      skillInvocations: [
+        { name: "frontend-design" },
+        { name: "react-best-practices" },
+      ],
     });
 
     expect(
@@ -351,5 +404,26 @@ describe("agent runtime stream schema", () => {
         input: { command: "bun test" },
       }),
     ).toMatchObject({ approvalId: "approval-1" });
+  });
+
+  it("leaves skillInvocations undefined for callers that omit it", () => {
+    const parsed = runtimeAgentRunInputSchema.parse({
+      harnessId: "claude",
+      prompt: "Build the thing",
+      model: "claude-sonnet-4-5",
+      reasoningEffort: "high",
+      permissionMode: "supervised",
+      providerWorkspace: {
+        workspaceKind: "provider",
+        primaryWorkspace: "/tmp/project",
+        secondaryWorkspaces: [],
+      },
+    });
+
+    // `skillInvocations` is `.optional()` with no `.default()` - an older
+    // caller created before multi-skill composer support omits the field
+    // entirely, and the schema must not backfill it with `[]`.
+    expect(parsed.skillInvocations).toBeUndefined();
+    expect("skillInvocations" in parsed).toBe(false);
   });
 });

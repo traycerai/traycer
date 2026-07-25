@@ -216,6 +216,19 @@ export type ListTerminalsResponseV20 = z.infer<
   typeof listTerminalsResponseSchemaV20
 >;
 
+// `terminal.list@2.1` - additive `homeCwd` on the response. A current host
+// returns the process-account home directory (non-empty string). `null` is
+// reserved for compatibility: the v2.0 → v2.1 response upgrade supplies
+// `homeCwd: null` because an older host cannot authoritatively provide it.
+// Request shape is unchanged from `@2.0`.
+export const listTerminalsResponseSchemaV21 = z.object({
+  sessions: z.array(canonicalTerminalSessionInfoSchema),
+  homeCwd: z.string().min(1).nullable(),
+});
+export type ListTerminalsResponseV21 = z.infer<
+  typeof listTerminalsResponseSchemaV21
+>;
+
 // `terminal.rename@1.0` - overrides the session's display title. Title
 // lives on the in-memory session record only; it does not persist across
 // host restarts (PTYs themselves don't either). `updated: false` means

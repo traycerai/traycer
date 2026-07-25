@@ -79,8 +79,23 @@ function quoteCodeBlockNode(text: string, language: string): JsonContent {
   };
 }
 
+// A triple-click's captured `Selection.toString()` carries trailing
+// block-boundary blank lines the browser synthesizes at the selection's end
+// (one exact-last-paragraph triple-click observed 2 trailing LFs in real
+// Chromium). Left alone, each becomes a real empty paragraph inside the
+// blockquote - visible blank rows the user never selected. Internal blank
+// lines (between two real lines) stay: they're deliberate paragraph spacing.
 function normalizedQuoteLines(text: string): string[] {
-  return text.split(LINE_BREAK_REGEX).map((line) => line.replace(/\s+$/, ""));
+  const lines = text
+    .split(LINE_BREAK_REGEX)
+    .map((line) => line.replace(/\s+$/, ""));
+  return withoutTrailingEmptyLines(lines);
+}
+
+function withoutTrailingEmptyLines(lines: string[]): string[] {
+  let end = lines.length;
+  while (end > 1 && lines[end - 1].length === 0) end -= 1;
+  return lines.slice(0, end);
 }
 
 function quoteParagraphNode(line: string): JsonContent {

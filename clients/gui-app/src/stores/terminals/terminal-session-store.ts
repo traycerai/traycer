@@ -600,11 +600,29 @@ export function createTerminalSessionStore(
       requestResize: (cols, rows) => {
         if (disposed || streamClient === null) return null;
         const state = get();
-        if (state.status === "exited" || state.status === "lost") return null;
-        if (state.requestedCols === cols && state.requestedRows === rows) {
+        if (state.status === "exited") return null;
+        // Dedupe only a size that is BOTH already requested and already the
+        // effective grid. Skipping on requested alone stranded the xterm
+        // engine's latch self-heal: a resize frame lost in flight leaves
+        // `requested` recorded while the host never adopted it, and the
+        // engine's deliberate re-report of the same size must reach the wire
+        // to retry. Calls arriving here are already engine-dedupe-gated, so
+        // this cannot re-send on render-tick churn.
+        if (
+          state.requestedCols === cols &&
+          state.requestedRows === rows &&
+          state.effectiveCols === cols &&
+          state.effectiveRows === rows
+        ) {
           return null;
         }
-        if (state.connectionStatus !== "open") {
+        // "lost" stashes rather than drops: the xterm engine records every
+        // report in its own dedupe before this store sees it, so a dropped
+        // resize here is never re-offered - after the reconnect the session
+        // would stay latched at the pre-disconnect grid. The stash is flushed
+        // by `flushRequestedResize` once the reconnect's snapshot restores the
+        // session to "running".
+        if (state.status === "lost" || state.connectionStatus !== "open") {
           set({
             requestedCols: cols,
             requestedRows: rows,

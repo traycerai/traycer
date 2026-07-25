@@ -3,7 +3,6 @@ import {
   chatDisplayTitle,
   displayTitle,
   epicDisplayTitle,
-  tuiAgentDisplayTitle,
   UNTITLED_EPIC_TITLE,
 } from "@/lib/display-title";
 
@@ -13,13 +12,16 @@ describe("displayTitle", () => {
   });
 
   it("falls back to the per-kind label when empty", () => {
-    expect(displayTitle("", "epic")).toBe("Untitled epic");
+    expect(displayTitle("", "epic")).toBe("Untitled task");
     expect(displayTitle("", "chat")).toBe("Untitled chat");
     expect(displayTitle("", "terminal-agent")).toBe("Untitled terminal agent");
+    // The interface-agnostic durable-Agent fallback, used for both Chat- and
+    // Terminal-interface Agent rows on durable surfaces.
+    expect(displayTitle("", "agent")).toBe("Untitled agent");
   });
 
   it("exposes the single-sourced empty-epic literal", () => {
-    expect(UNTITLED_EPIC_TITLE).toBe("Untitled epic");
+    expect(UNTITLED_EPIC_TITLE).toBe("Untitled task");
   });
 });
 
@@ -50,38 +52,15 @@ describe("epicDisplayTitle", () => {
     expect(derived).not.toContain("\n");
   });
 
-  it("falls back to 'Untitled epic' when title and prompt are empty", () => {
+  it("falls back to 'Untitled task' when title and prompt are empty", () => {
     expect(epicDisplayTitle({ title: "", initialUserPrompt: "" })).toBe(
-      "Untitled epic",
+      "Untitled task",
     );
   });
 
-  it("falls back to 'Untitled epic' when the prompt is whitespace-only", () => {
+  it("falls back to 'Untitled task' when the prompt is whitespace-only", () => {
     expect(epicDisplayTitle({ title: "", initialUserPrompt: "   \n\t " })).toBe(
-      "Untitled epic",
-    );
-  });
-});
-
-describe("tuiAgentDisplayTitle", () => {
-  it("returns the raw title when non-empty (harness ignored)", () => {
-    expect(
-      tuiAgentDisplayTitle({ title: "Renamed agent", harnessId: "claude" }),
-    ).toBe("Renamed agent");
-  });
-
-  it("derives the harness label when the title is empty", () => {
-    expect(tuiAgentDisplayTitle({ title: "", harnessId: "claude" })).toBe(
-      "Claude Code",
-    );
-    expect(tuiAgentDisplayTitle({ title: "", harnessId: "codex" })).toBe(
-      "Codex",
-    );
-    expect(tuiAgentDisplayTitle({ title: "", harnessId: "opencode" })).toBe(
-      "OpenCode",
-    );
-    expect(tuiAgentDisplayTitle({ title: "", harnessId: "cursor" })).toBe(
-      "Cursor",
+      "Untitled task",
     );
   });
 });

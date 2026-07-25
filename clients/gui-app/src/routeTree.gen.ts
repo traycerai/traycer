@@ -9,35 +9,30 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from "./routes/__root";
-import { Route as SettingsRouteImport } from "./routes/settings";
-import { Route as OnboardingRouteImport } from "./routes/onboarding";
-import { Route as EpicsRouteImport } from "./routes/epics";
 import { Route as IndexRouteImport } from "./routes/index";
-import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
-import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
-import { Route as SettingsWorktreesRouteImport } from "./routes/settings.worktrees";
-import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
-import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
-import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
-import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
-import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
-import { Route as SettingsHostRouteImport } from "./routes/settings.host";
-import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
-import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
-import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
-import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
-import { Route as DraftNewRouteImport } from "./routes/draft.new";
+import { Route as EpicsRouteImport } from "./routes/epics";
+import { Route as OnboardingRouteImport } from "./routes/onboarding";
+import { Route as SettingsRouteImport } from "./routes/settings";
 import { Route as DraftDraftIdRouteImport } from "./routes/draft.$draftId";
+import { Route as DraftNewRouteImport } from "./routes/draft.new";
+import { Route as EpicsIndexRouteImport } from "./routes/epics/index";
+import { Route as SettingsIndexRouteImport } from "./routes/settings.index";
+import { Route as SettingsAgentsRouteImport } from "./routes/settings.agents";
+import { Route as SettingsAppearanceRouteImport } from "./routes/settings.appearance";
+import { Route as SettingsDiagnosticsRouteImport } from "./routes/settings.diagnostics";
+import { Route as SettingsGeneralRouteImport } from "./routes/settings.general";
+import { Route as SettingsHostRouteImport } from "./routes/settings.host";
+import { Route as SettingsKeybindingsRouteImport } from "./routes/settings.keybindings";
+import { Route as SettingsNotificationsRouteImport } from "./routes/settings.notifications";
+import { Route as SettingsProvidersRouteImport } from "./routes/settings.providers";
+import { Route as SettingsServiceRouteImport } from "./routes/settings.service";
+import { Route as SettingsShellRouteImport } from "./routes/settings.shell";
+import { Route as SettingsWorktreesRouteImport } from "./routes/settings.worktrees";
 import { Route as EpicsEpicIdTabIdRouteImport } from "./routes/epics.$epicId.$tabId";
 
-const SettingsRoute = SettingsRouteImport.update({
-  id: "/settings",
-  path: "/settings",
-  getParentRoute: () => rootRouteImport,
-} as any);
-const OnboardingRoute = OnboardingRouteImport.update({
-  id: "/onboarding",
-  path: "/onboarding",
+const IndexRoute = IndexRouteImport.update({
+  id: "/",
+  path: "/",
   getParentRoute: () => rootRouteImport,
 } as any);
 const EpicsRoute = EpicsRouteImport.update({
@@ -45,69 +40,34 @@ const EpicsRoute = EpicsRouteImport.update({
   path: "/epics",
   getParentRoute: () => rootRouteImport,
 } as any);
-const IndexRoute = IndexRouteImport.update({
-  id: "/",
-  path: "/",
+const OnboardingRoute = OnboardingRouteImport.update({
+  id: "/onboarding",
+  path: "/onboarding",
   getParentRoute: () => rootRouteImport,
 } as any);
-const SettingsIndexRoute = SettingsIndexRouteImport.update({
-  id: "/",
-  path: "/",
-  getParentRoute: () => SettingsRoute,
+const SettingsRoute = SettingsRouteImport.update({
+  id: "/settings",
+  path: "/settings",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const DraftDraftIdRoute = DraftDraftIdRouteImport.update({
+  id: "/draft/$draftId",
+  path: "/draft/$draftId",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const DraftNewRoute = DraftNewRouteImport.update({
+  id: "/draft/new",
+  path: "/draft/new",
+  getParentRoute: () => rootRouteImport,
 } as any);
 const EpicsIndexRoute = EpicsIndexRouteImport.update({
   id: "/",
   path: "/",
   getParentRoute: () => EpicsRoute,
 } as any);
-const SettingsWorktreesRoute = SettingsWorktreesRouteImport.update({
-  id: "/worktrees",
-  path: "/worktrees",
-  getParentRoute: () => SettingsRoute,
-} as any);
-const SettingsShellRoute = SettingsShellRouteImport.update({
-  id: "/shell",
-  path: "/shell",
-  getParentRoute: () => SettingsRoute,
-} as any);
-const SettingsServiceRoute = SettingsServiceRouteImport.update({
-  id: "/service",
-  path: "/service",
-  getParentRoute: () => SettingsRoute,
-} as any);
-const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
-  id: "/providers",
-  path: "/providers",
-  getParentRoute: () => SettingsRoute,
-} as any);
-const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
-  id: "/notifications",
-  path: "/notifications",
-  getParentRoute: () => SettingsRoute,
-} as any);
-const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
-  id: "/keybindings",
-  path: "/keybindings",
-  getParentRoute: () => SettingsRoute,
-} as any);
-const SettingsHostRoute = SettingsHostRouteImport.update({
-  id: "/host",
-  path: "/host",
-  getParentRoute: () => SettingsRoute,
-} as any);
-const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
-  id: "/general",
-  path: "/general",
-  getParentRoute: () => SettingsRoute,
-} as any);
-const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
-  id: "/diagnostics",
-  path: "/diagnostics",
-  getParentRoute: () => SettingsRoute,
-} as any);
-const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
-  id: "/appearance",
-  path: "/appearance",
+const SettingsIndexRoute = SettingsIndexRouteImport.update({
+  id: "/",
+  path: "/",
   getParentRoute: () => SettingsRoute,
 } as any);
 const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
@@ -115,15 +75,55 @@ const SettingsAgentsRoute = SettingsAgentsRouteImport.update({
   path: "/agents",
   getParentRoute: () => SettingsRoute,
 } as any);
-const DraftNewRoute = DraftNewRouteImport.update({
-  id: "/draft/new",
-  path: "/draft/new",
-  getParentRoute: () => rootRouteImport,
+const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
+  id: "/appearance",
+  path: "/appearance",
+  getParentRoute: () => SettingsRoute,
 } as any);
-const DraftDraftIdRoute = DraftDraftIdRouteImport.update({
-  id: "/draft/$draftId",
-  path: "/draft/$draftId",
-  getParentRoute: () => rootRouteImport,
+const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
+  id: "/diagnostics",
+  path: "/diagnostics",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsGeneralRoute = SettingsGeneralRouteImport.update({
+  id: "/general",
+  path: "/general",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsHostRoute = SettingsHostRouteImport.update({
+  id: "/host",
+  path: "/host",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
+  id: "/keybindings",
+  path: "/keybindings",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
+  id: "/notifications",
+  path: "/notifications",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
+  id: "/providers",
+  path: "/providers",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsServiceRoute = SettingsServiceRouteImport.update({
+  id: "/service",
+  path: "/service",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsShellRoute = SettingsShellRouteImport.update({
+  id: "/shell",
+  path: "/shell",
+  getParentRoute: () => SettingsRoute,
+} as any);
+const SettingsWorktreesRoute = SettingsWorktreesRouteImport.update({
+  id: "/worktrees",
+  path: "/worktrees",
+  getParentRoute: () => SettingsRoute,
 } as any);
 const EpicsEpicIdTabIdRoute = EpicsEpicIdTabIdRouteImport.update({
   id: "/$epicId/$tabId",
@@ -274,18 +274,11 @@ export interface RootRouteChildren {
 
 declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
-    "/settings": {
-      id: "/settings";
-      path: "/settings";
-      fullPath: "/settings";
-      preLoaderRoute: typeof SettingsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    "/onboarding": {
-      id: "/onboarding";
-      path: "/onboarding";
-      fullPath: "/onboarding";
-      preLoaderRoute: typeof OnboardingRouteImport;
+    "/": {
+      id: "/";
+      path: "/";
+      fullPath: "/";
+      preLoaderRoute: typeof IndexRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/epics": {
@@ -295,19 +288,33 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof EpicsRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/": {
-      id: "/";
-      path: "/";
-      fullPath: "/";
-      preLoaderRoute: typeof IndexRouteImport;
+    "/onboarding": {
+      id: "/onboarding";
+      path: "/onboarding";
+      fullPath: "/onboarding";
+      preLoaderRoute: typeof OnboardingRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/settings/": {
-      id: "/settings/";
-      path: "/";
-      fullPath: "/settings/";
-      preLoaderRoute: typeof SettingsIndexRouteImport;
-      parentRoute: typeof SettingsRoute;
+    "/settings": {
+      id: "/settings";
+      path: "/settings";
+      fullPath: "/settings";
+      preLoaderRoute: typeof SettingsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/draft/$draftId": {
+      id: "/draft/$draftId";
+      path: "/draft/$draftId";
+      fullPath: "/draft/$draftId";
+      preLoaderRoute: typeof DraftDraftIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/draft/new": {
+      id: "/draft/new";
+      path: "/draft/new";
+      fullPath: "/draft/new";
+      preLoaderRoute: typeof DraftNewRouteImport;
+      parentRoute: typeof rootRouteImport;
     };
     "/epics/": {
       id: "/epics/";
@@ -316,74 +323,11 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof EpicsIndexRouteImport;
       parentRoute: typeof EpicsRoute;
     };
-    "/settings/worktrees": {
-      id: "/settings/worktrees";
-      path: "/worktrees";
-      fullPath: "/settings/worktrees";
-      preLoaderRoute: typeof SettingsWorktreesRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
-    "/settings/shell": {
-      id: "/settings/shell";
-      path: "/shell";
-      fullPath: "/settings/shell";
-      preLoaderRoute: typeof SettingsShellRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
-    "/settings/service": {
-      id: "/settings/service";
-      path: "/service";
-      fullPath: "/settings/service";
-      preLoaderRoute: typeof SettingsServiceRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
-    "/settings/providers": {
-      id: "/settings/providers";
-      path: "/providers";
-      fullPath: "/settings/providers";
-      preLoaderRoute: typeof SettingsProvidersRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
-    "/settings/notifications": {
-      id: "/settings/notifications";
-      path: "/notifications";
-      fullPath: "/settings/notifications";
-      preLoaderRoute: typeof SettingsNotificationsRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
-    "/settings/keybindings": {
-      id: "/settings/keybindings";
-      path: "/keybindings";
-      fullPath: "/settings/keybindings";
-      preLoaderRoute: typeof SettingsKeybindingsRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
-    "/settings/host": {
-      id: "/settings/host";
-      path: "/host";
-      fullPath: "/settings/host";
-      preLoaderRoute: typeof SettingsHostRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
-    "/settings/general": {
-      id: "/settings/general";
-      path: "/general";
-      fullPath: "/settings/general";
-      preLoaderRoute: typeof SettingsGeneralRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
-    "/settings/diagnostics": {
-      id: "/settings/diagnostics";
-      path: "/diagnostics";
-      fullPath: "/settings/diagnostics";
-      preLoaderRoute: typeof SettingsDiagnosticsRouteImport;
-      parentRoute: typeof SettingsRoute;
-    };
-    "/settings/appearance": {
-      id: "/settings/appearance";
-      path: "/appearance";
-      fullPath: "/settings/appearance";
-      preLoaderRoute: typeof SettingsAppearanceRouteImport;
+    "/settings/": {
+      id: "/settings/";
+      path: "/";
+      fullPath: "/settings/";
+      preLoaderRoute: typeof SettingsIndexRouteImport;
       parentRoute: typeof SettingsRoute;
     };
     "/settings/agents": {
@@ -393,19 +337,75 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof SettingsAgentsRouteImport;
       parentRoute: typeof SettingsRoute;
     };
-    "/draft/new": {
-      id: "/draft/new";
-      path: "/draft/new";
-      fullPath: "/draft/new";
-      preLoaderRoute: typeof DraftNewRouteImport;
-      parentRoute: typeof rootRouteImport;
+    "/settings/appearance": {
+      id: "/settings/appearance";
+      path: "/appearance";
+      fullPath: "/settings/appearance";
+      preLoaderRoute: typeof SettingsAppearanceRouteImport;
+      parentRoute: typeof SettingsRoute;
     };
-    "/draft/$draftId": {
-      id: "/draft/$draftId";
-      path: "/draft/$draftId";
-      fullPath: "/draft/$draftId";
-      preLoaderRoute: typeof DraftDraftIdRouteImport;
-      parentRoute: typeof rootRouteImport;
+    "/settings/diagnostics": {
+      id: "/settings/diagnostics";
+      path: "/diagnostics";
+      fullPath: "/settings/diagnostics";
+      preLoaderRoute: typeof SettingsDiagnosticsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/general": {
+      id: "/settings/general";
+      path: "/general";
+      fullPath: "/settings/general";
+      preLoaderRoute: typeof SettingsGeneralRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/host": {
+      id: "/settings/host";
+      path: "/host";
+      fullPath: "/settings/host";
+      preLoaderRoute: typeof SettingsHostRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/keybindings": {
+      id: "/settings/keybindings";
+      path: "/keybindings";
+      fullPath: "/settings/keybindings";
+      preLoaderRoute: typeof SettingsKeybindingsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/notifications": {
+      id: "/settings/notifications";
+      path: "/notifications";
+      fullPath: "/settings/notifications";
+      preLoaderRoute: typeof SettingsNotificationsRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/providers": {
+      id: "/settings/providers";
+      path: "/providers";
+      fullPath: "/settings/providers";
+      preLoaderRoute: typeof SettingsProvidersRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/service": {
+      id: "/settings/service";
+      path: "/service";
+      fullPath: "/settings/service";
+      preLoaderRoute: typeof SettingsServiceRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/shell": {
+      id: "/settings/shell";
+      path: "/shell";
+      fullPath: "/settings/shell";
+      preLoaderRoute: typeof SettingsShellRouteImport;
+      parentRoute: typeof SettingsRoute;
+    };
+    "/settings/worktrees": {
+      id: "/settings/worktrees";
+      path: "/worktrees";
+      fullPath: "/settings/worktrees";
+      preLoaderRoute: typeof SettingsWorktreesRouteImport;
+      parentRoute: typeof SettingsRoute;
     };
     "/epics/$epicId/$tabId": {
       id: "/epics/$epicId/$tabId";

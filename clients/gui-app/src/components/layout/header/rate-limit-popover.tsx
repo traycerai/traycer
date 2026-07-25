@@ -60,10 +60,7 @@ import {
   resolveRateLimitProfileId,
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
-import {
-  enqueueRateLimitFetch,
-  enqueueRateLimitFetchBatch,
-} from "@/lib/rate-limits/ephemeral-fetch-queue";
+import { enqueueRateLimitFetchBatch } from "@/lib/rate-limits/ephemeral-fetch-queue";
 import {
   formatUnavailableReason,
   resolvePopoverProviderRateLimitState,
@@ -80,7 +77,9 @@ import { queryKeys } from "@/lib/query-keys";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
   PROVIDER_RATE_LIMITS_STALE_TIME_MS,
+  isRateLimitProfileFetchEligible,
   rateLimitFetchLane,
+  type RateLimitFetchEligibility,
   type RateLimitProviderId,
 } from "@/lib/rate-limit-providers";
 import { useRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
@@ -118,9 +117,168 @@ type RailTabDescriptor =
   | { readonly kind: "traycer" };
 
 const PERSONAL_ACCOUNT_CONTEXT: AccountContext = { type: "PERSONAL" };
+const NO_RATE_LIMIT_FETCH_ELIGIBILITY: RateLimitFetchEligibility = {
+  ambient: false,
+  managedProfiles: false,
+};
 
 const POPOVER_SURFACE_CLASS_NAME =
-  "w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] resize overflow-hidden";
+  "relative w-[min(92vw,30rem)] min-w-[min(92vw,20rem,var(--radix-popover-content-available-width))] max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] overflow-hidden";
+
+type RateLimitPopoverResizeDirection =
+  "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
+
+interface RateLimitPopoverPositionLock {
+  readonly wrapperElement: HTMLElement;
+  offsetXPx: number;
+  offsetYPx: number;
+  readonly setOffset: (xPx: number, yPx: number) => void;
+  readonly restore: () => void;
+}
+
+interface RateLimitPopoverViewportBounds {
+  readonly rightPx: number;
+  readonly bottomPx: number;
+}
+
+interface RateLimitPopoverResizeDrag {
+  readonly pointerId: number;
+  readonly direction: RateLimitPopoverResizeDirection;
+  readonly startClientX: number;
+  readonly startClientY: number;
+  readonly startLeftPx: number;
+  readonly startTopPx: number;
+  readonly startRightPx: number;
+  readonly startBottomPx: number;
+  readonly startWidthPx: number;
+  readonly startHeightPx: number;
+  readonly viewportRightPx: number;
+  readonly viewportBottomPx: number;
+  readonly positionLock: RateLimitPopoverPositionLock;
+  readonly restorePositionOnCancel: boolean;
+  readonly startPositionOffsetXPx: number;
+  readonly startPositionOffsetYPx: number;
+  readonly previousInlineWidth: string;
+  readonly previousInlineHeight: string;
+  latestWidthPx: number;
+  latestHeightPx: number;
+  moved: boolean;
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS = [
+  "n",
+  "ne",
+  "e",
+  "se",
+  "s",
+  "sw",
+  "w",
+  "nw",
+] as const;
+
+function isRateLimitPopoverResizeDirection(
+  value: string | undefined,
+): value is RateLimitPopoverResizeDirection {
+  return RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.some(
+    (direction) => direction === value,
+  );
+}
+
+const RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES = {
+  n: "absolute inset-x-3 top-0 z-20 h-2 cursor-n-resize touch-none",
+  ne: "absolute top-0 right-0 z-30 size-3 cursor-ne-resize touch-none",
+  e: "absolute inset-y-3 right-0 z-20 w-2 cursor-e-resize touch-none",
+  se: "absolute right-0 bottom-0 z-30 size-3 cursor-se-resize touch-none",
+  s: "absolute inset-x-3 bottom-0 z-20 h-2 cursor-s-resize touch-none",
+  sw: "absolute bottom-0 left-0 z-30 size-3 cursor-sw-resize touch-none",
+  w: "absolute inset-y-3 left-0 z-20 w-2 cursor-w-resize touch-none",
+  nw: "absolute top-0 left-0 z-30 size-3 cursor-nw-resize touch-none",
+} satisfies Record<RateLimitPopoverResizeDirection, string>;
+
+const RATE_LIMIT_POPOVER_COLLISION_PADDING_PX = 12;
+
+// Radix owns the floating wrapper's transform and rewrites it whenever content
+// size changes. Lock that transform for the rest of this popover opening so a
+// resize can move the exact active edge without Radix re-anchoring underneath
+// the pointer. The observer only restores one expected transform; it never
+// derives another offset from the moved element, avoiding a feedback loop.
+function createRateLimitPopoverPositionLock(
+  wrapperElement: HTMLElement,
+): RateLimitPopoverPositionLock {
+  const originalTransform = wrapperElement.style.transform;
+  const originalTransformPriority =
+    wrapperElement.style.getPropertyPriority("transform");
+  let expectedTransform = originalTransform;
+  let restored = false;
+  const applyExpectedTransform = (): void => {
+    if (restored) return;
+    if (
+      wrapperElement.style.transform === expectedTransform &&
+      wrapperElement.style.getPropertyPriority("transform") === "important"
+    ) {
+      return;
+    }
+    wrapperElement.style.setProperty(
+      "transform",
+      expectedTransform,
+      "important",
+    );
+  };
+  const observer = new MutationObserver(applyExpectedTransform);
+  const positionLock: RateLimitPopoverPositionLock = {
+    wrapperElement,
+    offsetXPx: 0,
+    offsetYPx: 0,
+    setOffset: (xPx, yPx) => {
+      positionLock.offsetXPx = xPx;
+      positionLock.offsetYPx = yPx;
+      const offsetTransform = `translate(${xPx}px, ${yPx}px)`;
+      expectedTransform =
+        originalTransform === "" || originalTransform === "none"
+          ? offsetTransform
+          : `${originalTransform} ${offsetTransform}`;
+      applyExpectedTransform();
+    },
+    restore: () => {
+      if (restored) return;
+      restored = true;
+      observer.disconnect();
+      if (originalTransform === "") {
+        wrapperElement.style.removeProperty("transform");
+        return;
+      }
+      wrapperElement.style.setProperty(
+        "transform",
+        originalTransform,
+        originalTransformPriority,
+      );
+    },
+  };
+  observer.observe(wrapperElement, {
+    attributes: true,
+    attributeFilter: ["style"],
+  });
+  applyExpectedTransform();
+  return positionLock;
+}
+
+function rateLimitPopoverViewportBounds(
+  surface: HTMLDivElement,
+  rect: DOMRect,
+): RateLimitPopoverViewportBounds {
+  const ownerDocument = surface.ownerDocument;
+  const win = ownerDocument.defaultView;
+  const viewportWidth =
+    ownerDocument.documentElement.clientWidth || win?.innerWidth || rect.right;
+  const viewportHeight =
+    ownerDocument.documentElement.clientHeight ||
+    win?.innerHeight ||
+    rect.bottom;
+  return {
+    rightPx: viewportWidth - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+    bottomPx: viewportHeight - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX,
+  };
+}
 
 type RateLimitPopoverSurfaceVariant = "content" | "empty";
 
@@ -199,20 +357,27 @@ function configuredProviderProfiles(
   return provider === undefined ? [] : provider.profiles;
 }
 
+function providerFetchEligibility(
+  providers: ReadonlyArray<ConfiguredRateLimitProvider>,
+  providerId: RateLimitProviderId,
+): RateLimitFetchEligibility {
+  return (
+    providers.find((candidate) => candidate.providerId === providerId)
+      ?.fetchEligibility ?? NO_RATE_LIMIT_FETCH_ELIGIBILITY
+  );
+}
+
 function refreshTargetsForProvider(
   provider: ConfiguredRateLimitProvider,
 ): ReadonlyArray<string | null> {
-  if (provider.profiles.length === 0) return [null];
+  if (provider.profiles.length === 0) {
+    return provider.fetchEligibility.ambient ? [null] : [];
+  }
   return provider.profiles
-    .filter(profileLoggedInForUsage)
+    .filter((profile) =>
+      isRateLimitProfileFetchEligible(provider.fetchEligibility, profile),
+    )
     .map(rateLimitProfileId);
-}
-
-function profileLoggedInForUsage(profile: ProviderProfile): boolean {
-  return (
-    profile.auth.status === "authenticated" ||
-    profile.auth.status === "configured"
-  );
 }
 
 function rateLimitProfileId(profile: ProviderProfile): string | null {
@@ -239,7 +404,7 @@ export function RateLimitPopover({
       side="bottom"
       align="end"
       sideOffset={8}
-      collisionPadding={12}
+      collisionPadding={RATE_LIMIT_POPOVER_COLLISION_PADDING_PX}
       role="dialog"
       aria-label="Usage limits"
       className="w-fit max-w-[var(--radix-popover-content-available-width)] max-h-[var(--radix-popover-content-available-height)] gap-0 overflow-hidden rounded-xl p-0"
@@ -272,9 +437,9 @@ export function RateLimitPopover({
 }
 
 /**
- * Viewport-bounded, two-axis CSS resize surface. The browser owns live drag
- * frames and writes the resulting inline dimensions; pointer release commits
- * that measured size once so subsequent opens restore it.
+ * Viewport-bounded resize surface with OS-style hit areas on every edge and
+ * corner. Drag frames mutate inline dimensions directly, while pointer release
+ * commits the final measured size once so subsequent opens restore it.
  */
 function RateLimitPopoverResizeSurface({
   variant,
@@ -285,49 +450,172 @@ function RateLimitPopoverResizeSurface({
 }): ReactNode {
   const size = useRateLimitPopoverStore((state) => state.size);
   const setSize = useRateLimitPopoverStore((state) => state.setSize);
-  const surfaceRef = useRef<HTMLDivElement | null>(null);
-  const commitResizedDimensions = (
-    event: ReactPointerEvent<HTMLDivElement>,
-  ): void => {
-    if (event.target !== event.currentTarget) return;
-    const { width, height } = event.currentTarget.getBoundingClientRect();
-    if (width <= 0 || height <= 0) return;
-    setSize({ widthPx: width, heightPx: height });
-  };
-  useEffect(() => {
-    const surface = surfaceRef.current;
-    if (surface === null) return;
-    const win = surface.ownerDocument.defaultView;
-    if (win === null) return;
+  const dragRef = useRef<RateLimitPopoverResizeDrag | null>(null);
+  const positionLockRef = useRef<RateLimitPopoverPositionLock | null>(null);
+  useEffect(
+    () => () => {
+      positionLockRef.current?.restore();
+    },
+    [],
+  );
 
-    let initialized = false;
-    let applyTimer: number | null = null;
-    const applyMeasuredSize = (): void => {
-      const { width, height } = surface.getBoundingClientRect();
-      if (width <= 0 || height <= 0) return;
-      surface.style.width = `${width}px`;
-      surface.style.height = `${height}px`;
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 || dragRef.current !== null) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const direction = target.dataset.resizeDirection;
+    if (!isRateLimitPopoverResizeDirection(direction)) return;
+
+    const surface = event.currentTarget;
+    const positionWrapper = surface.closest<HTMLElement>(
+      "[data-radix-popper-content-wrapper]",
+    );
+    if (positionWrapper === null) return;
+    const rect = surface.getBoundingClientRect();
+    const { width, height } = rect;
+    if (width <= 0 || height <= 0) return;
+    const viewportBounds = rateLimitPopoverViewportBounds(surface, rect);
+    event.preventDefault();
+    event.stopPropagation();
+    surface.setPointerCapture(event.pointerId);
+    const existingPositionLock = positionLockRef.current;
+    const restorePositionOnCancel =
+      existingPositionLock === null ||
+      existingPositionLock.wrapperElement !== positionWrapper;
+    if (
+      existingPositionLock !== null &&
+      existingPositionLock.wrapperElement !== positionWrapper
+    ) {
+      existingPositionLock.restore();
+    }
+    const positionLock = restorePositionOnCancel
+      ? createRateLimitPopoverPositionLock(positionWrapper)
+      : existingPositionLock;
+    positionLockRef.current = positionLock;
+    const drag: RateLimitPopoverResizeDrag = {
+      pointerId: event.pointerId,
+      direction,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startLeftPx: rect.left,
+      startTopPx: rect.top,
+      startRightPx: rect.right,
+      startBottomPx: rect.bottom,
+      startWidthPx: width,
+      startHeightPx: height,
+      viewportRightPx: viewportBounds.rightPx,
+      viewportBottomPx: viewportBounds.bottomPx,
+      positionLock,
+      restorePositionOnCancel,
+      startPositionOffsetXPx: positionLock.offsetXPx,
+      startPositionOffsetYPx: positionLock.offsetYPx,
+      previousInlineWidth: surface.style.width,
+      previousInlineHeight: surface.style.height,
+      latestWidthPx: width,
+      latestHeightPx: height,
+      moved: false,
     };
-    const observer = new ResizeObserver(() => {
-      if (!initialized) {
-        initialized = true;
-        return;
+    dragRef.current = drag;
+    // Freeze both axes at their computed dimensions before the first drag frame;
+    // otherwise a content reflow can change the untouched axis mid-drag.
+    surface.style.width = `${width}px`;
+    surface.style.height = `${height}px`;
+  };
+
+  const resizeDuringDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const deltaX = event.clientX - drag.startClientX;
+    const deltaY = event.clientY - drag.startClientY;
+    const resizeFromLeft = drag.direction.includes("w");
+    const resizeFromRight = drag.direction.includes("e");
+    const resizeFromTop = drag.direction.includes("n");
+    const resizeFromBottom = drag.direction.includes("s");
+    let widthDelta = 0;
+    if (resizeFromLeft) widthDelta = -deltaX;
+    else if (resizeFromRight) widthDelta = deltaX;
+    let heightDelta = 0;
+    if (resizeFromTop) heightDelta = -deltaY;
+    else if (resizeFromBottom) heightDelta = deltaY;
+    let maxWidthPx = drag.startWidthPx;
+    if (resizeFromLeft) {
+      maxWidthPx = drag.startRightPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromRight) {
+      maxWidthPx = drag.viewportRightPx - drag.startLeftPx;
+    }
+    let maxHeightPx = drag.startHeightPx;
+    if (resizeFromTop) {
+      maxHeightPx =
+        drag.startBottomPx - RATE_LIMIT_POPOVER_COLLISION_PADDING_PX;
+    } else if (resizeFromBottom) {
+      maxHeightPx = drag.viewportBottomPx - drag.startTopPx;
+    }
+    drag.latestWidthPx = Math.min(
+      Math.max(1, maxWidthPx),
+      Math.max(1, drag.startWidthPx + widthDelta),
+    );
+    drag.latestHeightPx = Math.min(
+      Math.max(1, maxHeightPx),
+      Math.max(1, drag.startHeightPx + heightDelta),
+    );
+    event.currentTarget.style.width = `${drag.latestWidthPx}px`;
+    event.currentTarget.style.height = `${drag.latestHeightPx}px`;
+    const measured = event.currentTarget.getBoundingClientRect();
+    drag.moved =
+      measured.width !== drag.startWidthPx ||
+      measured.height !== drag.startHeightPx;
+    const offsetDeltaXPx = resizeFromLeft
+      ? drag.startWidthPx - measured.width
+      : 0;
+    const offsetDeltaYPx = resizeFromTop
+      ? drag.startHeightPx - measured.height
+      : 0;
+    drag.positionLock.setOffset(
+      drag.startPositionOffsetXPx + offsetDeltaXPx,
+      drag.startPositionOffsetYPx + offsetDeltaYPx,
+    );
+  };
+
+  const finishResize = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    commit: boolean,
+  ): void => {
+    const drag = dragRef.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    const surface = event.currentTarget;
+    if (surface.hasPointerCapture(event.pointerId)) {
+      surface.releasePointerCapture(event.pointerId);
+    }
+    if (!commit || !drag.moved) {
+      surface.style.width = drag.previousInlineWidth;
+      surface.style.height = drag.previousInlineHeight;
+      if (drag.restorePositionOnCancel) {
+        drag.positionLock.restore();
+        if (positionLockRef.current === drag.positionLock) {
+          positionLockRef.current = null;
+        }
+      } else {
+        drag.positionLock.setOffset(
+          drag.startPositionOffsetXPx,
+          drag.startPositionOffsetYPx,
+        );
       }
-      if (applyTimer !== null) win.clearTimeout(applyTimer);
-      applyTimer = win.setTimeout(applyMeasuredSize, 100);
-    });
-    observer.observe(surface);
-    return () => {
-      observer.disconnect();
-      if (applyTimer === null) return;
-      win.clearTimeout(applyTimer);
-      applyMeasuredSize();
-    };
-  }, []);
+      return;
+    }
+
+    const measured = surface.getBoundingClientRect();
+    const widthPx = measured.width > 0 ? measured.width : drag.latestWidthPx;
+    const heightPx =
+      measured.height > 0 ? measured.height : drag.latestHeightPx;
+    surface.style.width = `${widthPx}px`;
+    surface.style.height = `${heightPx}px`;
+    setSize({ widthPx, heightPx });
+  };
 
   return (
     <div
-      ref={surfaceRef}
       data-testid="rate-limit-popover-resize-surface"
       className={cn(
         POPOVER_SURFACE_CLASS_NAME,
@@ -340,9 +628,22 @@ function RateLimitPopoverResizeSurface({
           ? undefined
           : { width: size.widthPx, height: size.heightPx }
       }
-      onPointerUp={commitResizedDimensions}
+      onPointerDown={startResize}
+      onPointerMove={resizeDuringDrag}
+      onPointerUp={(event) => finishResize(event, true)}
+      onPointerCancel={(event) => finishResize(event, false)}
+      onLostPointerCapture={(event) => finishResize(event, false)}
     >
       {children}
+      {RATE_LIMIT_POPOVER_RESIZE_DIRECTIONS.map((direction) => (
+        <div
+          key={direction}
+          aria-hidden="true"
+          data-resize-direction={direction}
+          data-testid={`rate-limit-popover-resize-${direction}`}
+          className={RATE_LIMIT_POPOVER_RESIZE_HANDLE_CLASS_NAMES[direction]}
+        />
+      ))}
     </div>
   );
 }
@@ -456,6 +757,7 @@ function RateLimitDetailPane({
     <RateLimitProviderBlock
       providerId={tab}
       profiles={configuredProviderProfiles(providers, tab)}
+      fetchEligibility={providerFetchEligibility(providers, tab)}
       variant="popover-detail"
       onReady={null}
       profileSelection={profileSelection}
@@ -652,6 +954,10 @@ function RateLimitOverview({
               <RateLimitProviderBlock
                 providerId={tab.providerId}
                 profiles={configuredProviderProfiles(providers, tab.providerId)}
+                fetchEligibility={providerFetchEligibility(
+                  providers,
+                  tab.providerId,
+                )}
                 variant="popover-overview"
                 onReady={onReady}
                 profileSelection={profileSelection}
@@ -780,8 +1086,11 @@ function RateLimitRefreshAllButton({
   const httpFetchOptions =
     httpFetchProviders.length === 0
       ? null
-      : providerRateLimitQueryOptions(httpFetchProviders[0].providerId, null)
-          .options;
+      : providerRateLimitQueryOptions(
+          httpFetchProviders[0].providerId,
+          null,
+          true,
+        ).options;
   const httpFetchQueries = useHostQueriesWithResponseMap<
     HostRpcRegistry,
     "host.getRateLimitUsage",
@@ -793,6 +1102,7 @@ function RateLimitRefreshAllButton({
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,
         target.profileId,
+        true,
       );
       return { method, params };
     }),
@@ -806,6 +1116,10 @@ function RateLimitRefreshAllButton({
     draining ||
     httpFetchQueries.some((query) => query.isFetching) ||
     traycerRefreshing;
+  const hasRefreshTarget =
+    httpFetchRequests.length > 0 ||
+    ephemeralProcessRequests.length > 0 ||
+    traycerRefreshTarget.enabled;
 
   // Fire-and-forget, not awaited: httpFetch providers refresh concurrently via a
   // direct invalidation, ephemeralProcess profiles fan out inside one queued
@@ -844,6 +1158,8 @@ function RateLimitRefreshAllButton({
     return Promise.resolve();
   };
 
+  if (!hasRefreshTarget) return null;
+
   return (
     <RefreshIconButton
       onRefresh={refreshAll}
@@ -880,12 +1196,14 @@ type PopoverBlockVariant = "popover-detail" | "popover-overview";
 function RateLimitProviderBlock({
   providerId,
   profiles,
+  fetchEligibility,
   variant,
   onReady,
   profileSelection,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly fetchEligibility: RateLimitFetchEligibility;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
@@ -895,6 +1213,7 @@ function RateLimitProviderBlock({
       <ProfileRateLimitProviderBlock
         providerId={providerId}
         profiles={profiles}
+        fetchEligibility={fetchEligibility}
         variant={variant}
         onReady={onReady}
         profileSelection={profileSelection}
@@ -905,6 +1224,7 @@ function RateLimitProviderBlock({
   return (
     <SingleProfileRateLimitProviderBlock
       providerId={providerId}
+      fetchEligible={fetchEligibility.ambient}
       variant={variant}
       onReady={onReady}
     />
@@ -913,14 +1233,16 @@ function RateLimitProviderBlock({
 
 function SingleProfileRateLimitProviderBlock({
   providerId,
+  fetchEligible,
   variant,
   onReady,
 }: {
   readonly providerId: RateLimitProviderId;
+  readonly fetchEligible: boolean;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
 }): ReactNode {
-  const query = useHostProviderRateLimitsQuery(providerId, null);
+  const query = useHostProviderRateLimitsQuery(providerId, null, fetchEligible);
   // Single source of truth for this provider's refresh action + spinner state
   // (fresh-on-open, queue routing, and the ephemeralProcess `draining` fold-in),
   // shared verbatim with the Settings card so they can't drift apart.
@@ -928,6 +1250,7 @@ function SingleProfileRateLimitProviderBlock({
     providerId,
     profileId: null,
     usageUpdatedAt: null,
+    fetchEligible,
     isFetching: query.isFetching,
     refetch: query.refetch,
   });
@@ -943,8 +1266,14 @@ function SingleProfileRateLimitProviderBlock({
       ? (query.data?.lastGoodAt ?? query.dataUpdatedAt)
       : query.dataUpdatedAt;
   useEffect(() => {
-    if (state.kind !== "cold" && onReady !== null) onReady();
-  }, [state.kind, onReady]);
+    // A disabled query with no cache stays pending forever by design: it is a
+    // passive observer for a signed-out provider, not a queue-owned cold
+    // read. Reveal that provider in Overview so its unavailable state cannot
+    // remain hidden behind the global loading indicator.
+    if ((!fetchEligible || state.kind !== "cold") && onReady !== null) {
+      onReady();
+    }
+  }, [fetchEligible, onReady, state.kind]);
 
   // Chip next to the name, single-provider tab only (Overview stays
   // condensed - same scoping the plan/tier line used before it moved into
@@ -956,7 +1285,13 @@ function SingleProfileRateLimitProviderBlock({
       : null;
 
   return (
-    <div className="flex flex-col gap-2">
+    // Ambient (profile-less) providers - grok, openrouter, kilocode - reuse the
+    // exact per-profile card container `RateLimitProviderProfileRow` gives
+    // codex/claude, so every provider's usage sits inside the same card in both
+    // popover tabs (the header+body flat block otherwise floated loose against
+    // the sibling cards - the design-language gap the user flagged). Overview
+    // keeps its between-provider dividers; this cards each block's own content.
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/40 p-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           {/* Overview stacks every provider's block in one scrollable list with
@@ -988,7 +1323,7 @@ function SingleProfileRateLimitProviderBlock({
           {/* Overview has its own "Refresh all" on the rail (item 2 feedback:
               a per-provider icon there was redundant); only the single-provider
               detail tab keeps this one. */}
-          {variant === "popover-detail" ? (
+          {variant === "popover-detail" && fetchEligible ? (
             <RefreshIconButton
               onRefresh={refresh}
               label={`Refresh ${providerDisplayName(providerId)}`}
@@ -1009,12 +1344,14 @@ function SingleProfileRateLimitProviderBlock({
 function ProfileRateLimitProviderBlock({
   providerId,
   profiles,
+  fetchEligibility,
   variant,
   onReady,
   profileSelection,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly fetchEligibility: RateLimitFetchEligibility;
   readonly variant: PopoverBlockVariant;
   readonly onReady: (() => void) | null;
   readonly profileSelection: RateLimitProfileSelection;
@@ -1028,46 +1365,78 @@ function ProfileRateLimitProviderBlock({
     providerId,
     profiles,
   );
-  const rows = profiles.filter(profileLoggedInForUsage);
-  const targets = rows.map((profile) => ({
+  const targets = profiles.map((profile) => ({
     profile,
     profileId: rateLimitProfileId(profile),
+    fetchEligible: isRateLimitProfileFetchEligible(fetchEligibility, profile),
   }));
-  const queryOptions = providerRateLimitQueryOptions(providerId, null).options;
-  const queries = useHostQueriesWithResponseMap<
+  const refreshEligibleTargets = targets.filter(
+    (target) => target.fetchEligible,
+  );
+  const passiveTargets = targets.filter((target) => !target.fetchEligible);
+  const fetchEligibleQueries = useHostQueriesWithResponseMap<
     HostRpcRegistry,
     "host.getRateLimitUsage",
     ProviderRateLimitEnvelope
   >({
     client,
-    requests: targets.map((target) => {
+    requests: refreshEligibleTargets.map((target) => {
       const { method, params } = providerRateLimitQueryOptions(
         providerId,
         target.profileId,
+        true,
       );
       return { method, params };
     }),
     cacheKeyIdentity: undefined,
-    options: queryOptions,
+    options: providerRateLimitQueryOptions(providerId, null, true).options,
     mapResponse: mapResponseToProviderRateLimitEnvelope,
+  });
+  const passiveQueries = useHostQueriesWithResponseMap<
+    HostRpcRegistry,
+    "host.getRateLimitUsage",
+    ProviderRateLimitEnvelope
+  >({
+    client,
+    requests: passiveTargets.map((target) => {
+      const { method, params } = providerRateLimitQueryOptions(
+        providerId,
+        target.profileId,
+        false,
+      );
+      return { method, params };
+    }),
+    cacheKeyIdentity: undefined,
+    options: providerRateLimitQueryOptions(providerId, null, false).options,
+    mapResponse: mapResponseToProviderRateLimitEnvelope,
+  });
+  const queries = targets.map((target) => {
+    const index = target.fetchEligible
+      ? refreshEligibleTargets.indexOf(target)
+      : passiveTargets.indexOf(target);
+    return target.fetchEligible
+      ? fetchEligibleQueries[index]
+      : passiveQueries[index];
   });
   const lane = rateLimitFetchLane(providerId);
   const isRefreshing =
     lane === "ephemeralProcess"
       ? draining
-      : queries.some((query) => query.isFetching);
+      : fetchEligibleQueries.some((query) => query.isFetching);
 
   const refresh = (): Promise<void> => {
     if (lane === "ephemeralProcess") {
-      targets.forEach((target) => {
-        void enqueueRateLimitFetch(providerId, DEFAULT_ACCOUNT_CONTEXT, {
-          force: true,
+      void enqueueRateLimitFetchBatch(
+        refreshEligibleTargets.map((target) => ({
+          providerId,
+          accountContext: DEFAULT_ACCOUNT_CONTEXT,
           profileId: target.profileId,
-        });
-      });
+        })),
+        { force: true },
+      );
       return Promise.resolve();
     }
-    targets.forEach((target) => {
+    refreshEligibleTargets.forEach((target) => {
       void queryClient.invalidateQueries({
         queryKey: queryKeys.hostMethod<
           HostRpcRegistry,
@@ -1087,23 +1456,6 @@ function ProfileRateLimitProviderBlock({
     if (onReady !== null) onReady();
   }, [onReady]);
 
-  if (rows.length === 0) {
-    return (
-      <div className="flex flex-col gap-2">
-        <ProviderGroupHeader
-          providerId={providerId}
-          variant={variant}
-          refresh={refresh}
-          isRefreshing={isRefreshing}
-        />
-        <RateLimitErrorMessage
-          message="No logged-in profiles."
-          reportContext={null}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col gap-2">
       <ProviderGroupHeader
@@ -1111,6 +1463,7 @@ function ProfileRateLimitProviderBlock({
         variant={variant}
         refresh={refresh}
         isRefreshing={isRefreshing}
+        refreshEligible={refreshEligibleTargets.length > 0}
       />
       <div className="flex flex-col gap-2">
         {targets.map((target, index) => {
@@ -1120,6 +1473,7 @@ function ProfileRateLimitProviderBlock({
               providerId={providerId}
               profile={target.profile}
               profileId={target.profileId}
+              fetchEligible={target.fetchEligible}
               active={activeProfileId === target.profileId}
               variant={variant}
               query={queries[index]}
@@ -1136,11 +1490,13 @@ function ProviderGroupHeader({
   variant,
   refresh,
   isRefreshing,
+  refreshEligible,
 }: {
   readonly providerId: RateLimitProviderId;
   readonly variant: PopoverBlockVariant;
   readonly refresh: () => Promise<void>;
   readonly isRefreshing: boolean;
+  readonly refreshEligible: boolean;
 }): ReactNode {
   return (
     <div className="flex min-w-0 items-center justify-between gap-2">
@@ -1152,7 +1508,7 @@ function ProviderGroupHeader({
           {providerDisplayName(providerId)}
         </span>
       </div>
-      {variant === "popover-detail" ? (
+      {variant === "popover-detail" && refreshEligible ? (
         <RefreshIconButton
           onRefresh={refresh}
           label={`Refresh ${providerDisplayName(providerId)}`}
@@ -1167,6 +1523,7 @@ function RateLimitProviderProfileRow({
   providerId,
   profile,
   profileId,
+  fetchEligible,
   active,
   variant,
   query,
@@ -1174,6 +1531,7 @@ function RateLimitProviderProfileRow({
   readonly providerId: RateLimitProviderId;
   readonly profile: ProviderProfile;
   readonly profileId: string | null;
+  readonly fetchEligible: boolean;
   readonly active: boolean;
   readonly variant: PopoverBlockVariant;
   readonly query: {
@@ -1187,6 +1545,7 @@ function RateLimitProviderProfileRow({
     providerId,
     profileId,
     profile.usageUpdatedAt,
+    fetchEligible,
   );
   const queryState: ProviderRateLimitQueryState = {
     isPending: query.isPending,

@@ -203,7 +203,7 @@ function PrimaryPinControl(props: {
       <TooltipWrapper
         label={
           primaryLocked
-            ? "Primary folder. New agent commands and terminals start here. Primary cannot be changed after the chat starts."
+            ? "Primary folder. New agent commands and terminals start here. Primary cannot be changed after the agent starts."
             : "Primary folder. New agent commands and terminals start here."
         }
         side="top"
@@ -233,7 +233,7 @@ function PrimaryPinControl(props: {
       label={
         item.canChangePrimary
           ? "Primary cannot be changed from this view."
-          : "Primary cannot be changed after the chat starts."
+          : "Primary cannot be changed after the agent starts."
       }
       side="top"
       sideOffset={undefined}

@@ -7,10 +7,8 @@ import type {
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { QueryActivityOptions } from "@/hooks/harnesses/use-gui-harness-catalog";
-import {
-  PROVIDERS_LIST_REFRESH_MS,
-  providersListRefetchInterval,
-} from "@/hooks/providers/providers-list-refetch-interval";
+
+const PROVIDERS_LIST_REFRESH_MS = 15 * 60 * 1_000;
 
 type ProvidersListQueryResult = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
@@ -40,12 +38,6 @@ export function useProvidersListForClient(
       enabled: activity.enabled,
       subscribed: activity.subscribed,
       staleTime: PROVIDERS_LIST_REFRESH_MS,
-      // The host returns the list immediately with pending version/auth
-      // probes. Poll quickly while probes are pending; bounded while any
-      // profile is near/at its rate limit; once settled, refresh only on the
-      // steady catalog cadence while this query stays mounted.
-      refetchInterval: (query) =>
-        providersListRefetchInterval(query.state.data),
     },
   });
 }

@@ -139,6 +139,7 @@ const TURN_RUNNING: ChatLowerTurnState = {
 };
 const INTERVIEW: ChatLowerInterviewState = {
   pending: null,
+  isBusy: false,
   onAnswer: () => null,
   onError: () => null,
   onFork: null,

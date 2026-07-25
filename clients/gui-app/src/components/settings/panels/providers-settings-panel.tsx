@@ -8,6 +8,7 @@ import type {
   HostRpcError,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
@@ -42,6 +43,7 @@ import {
 import { ProviderAuthBadge, ProviderAuthLine } from "./provider-auth-display";
 import { TraycerSubscriptionSection } from "./traycer-subscription-section";
 import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
+import { resolveRateLimitFetchEligibility } from "@/lib/rate-limit-providers";
 import {
   AddProviderProfileDialog,
   type FailedProviderProfileAttempt,
@@ -64,8 +66,8 @@ type ProvidersListQuery = UseQueryResult<
 // otherwise the first provider in the list.
 function initialActiveProviderId(
   providers: readonly ProviderCliState[],
+  focusHarnessId: GuiHarnessId | null,
 ): ProviderId {
-  const focusHarnessId = useProvidersFocusStore.getState().focusHarnessId;
   if (focusHarnessId !== null) {
     const match = providers.find(
       (p) => providerIdToGuiHarnessId(p.providerId) === focusHarnessId,
@@ -80,7 +82,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   codex: "OpenAI's Codex CLI.",
   opencode: "OpenCode CLI agent.",
   cursor:
-    "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
+    "Cursor coding agent - SDK-driven agents authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   openrouter:
     "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
@@ -97,6 +99,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   devin:
     "Devin agent - Cognition's coding CLI via Windsurf/Devin login or API key.",
   pi: "Pi agent - pi.dev coding agent via your configured model API key (BYOK).",
+  hermes: "Hermes Agent - Nous Research's coding CLI via your Hermes account.",
+  omp: "Oh My Pi - can1357's coding CLI via your linked provider subscriptions.",
 };
 
 function hasPendingProviderProbe(
@@ -104,8 +108,14 @@ function hasPendingProviderProbe(
 ): boolean {
   return providers.some(
     (provider) =>
-      provider.authPending ||
-      provider.candidates.some((candidate) => candidate.versionPending),
+      // A disabled provider's probes are irrelevant (the host clears these
+      // flags for disabled providers at the wire boundary); don't render a
+      // stuck "checking…" for one, and stay correct against an older host that
+      // still surfaces the flags.
+      provider.enabled &&
+      (provider.authPending ||
+        provider.availabilityPending ||
+        provider.candidates.some((candidate) => candidate.versionPending)),
   );
 }
 
@@ -155,7 +165,9 @@ export function ProvidersSettingsPanel() {
   const activeHostId = useReactiveActiveHostId();
   const hostsQuery = useHostDirectoryList();
   const hosts = useMemo(() => hostsQuery.data ?? [], [hostsQuery.data]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => useProvidersFocusStore.getState().focusHostId,
+  );
   const effectiveId = selectedId ?? activeHostId;
   // Reach a non-active host through a transient client (the Worktrees
   // pattern) so picking one never rebinds the app-wide active host. Null when
@@ -252,7 +264,7 @@ function ProvidersSettingsPanelInner({
   return (
     <SettingsPanelShell
       title="Providers"
-      description="Choose the CLI binary Traycer runs for each agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it from new chats."
+      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
       fillHeight
       bodyClassName="max-h-[min(85vh,52rem)]"
       headerAction={
@@ -341,12 +353,20 @@ function ProvidersRailLayout({
     () => sortProviderStatesByProviderOrder(providers),
     [providers],
   );
+  const [initialFocus, setInitialFocus] = useState(() => {
+    const focus = useProvidersFocusStore.getState();
+    return {
+      harnessId: focus.focusHarnessId,
+      profileId: focus.focusProfileId,
+      startSignIn: focus.startSignIn,
+    };
+  });
   // A deep-link entry point (e.g. the model picker's "Add API key" CTA) can ask
   // the panel to open on a specific provider via the focus store. Read it once
   // for the initial selection, then clear it so a later manual open starts on
   // the first provider again.
   const [activeId, setActiveId] = useState<ProviderId>(() =>
-    initialActiveProviderId(orderedProviders),
+    initialActiveProviderId(orderedProviders, initialFocus.harnessId),
   );
   useEffect(() => {
     useProvidersFocusStore.getState().clearFocusHarnessId();
@@ -378,7 +398,14 @@ function ProvidersRailLayout({
             badge: null,
             description: null,
             trailing: null,
-            onSelect: setActiveId,
+            onSelect: (providerId) => {
+              setInitialFocus({
+                harnessId: null,
+                profileId: null,
+                startSignIn: false,
+              });
+              setActiveId(providerId);
+            },
           }))}
         />
       </nav>
@@ -389,6 +416,8 @@ function ProvidersRailLayout({
           providers={orderedProviders}
           hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
+          initialProfileId={initialFocus.profileId}
+          initialSignIn={initialFocus.startSignIn}
         />
       </div>
     </div>
@@ -441,11 +470,15 @@ function ProviderDetail({
   providers,
   hostId,
   isSelectedHostLocal,
+  initialProfileId,
+  initialSignIn,
 }: {
   readonly state: ProviderCliState;
   readonly providers: readonly ProviderCliState[];
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
+  readonly initialProfileId: string | null;
+  readonly initialSignIn: boolean;
 }) {
   const providerId = state.providerId;
   // Whichever host `useHostClient()` currently resolves to - the app-wide
@@ -467,7 +500,10 @@ function ProviderDetail({
   // (and this `useState`'s lazy initializer) whenever the active provider
   // changes.
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
-    () => defaultSelectedProfileId(state.profiles),
+    () =>
+      state.profiles.some((profile) => profile.profileId === initialProfileId)
+        ? initialProfileId
+        : defaultSelectedProfileId(state.profiles),
   );
 
   const setEnabled = useProvidersSetEnabled();
@@ -475,6 +511,11 @@ function ProviderDetail({
     state,
     isSelectedHostLocal,
   );
+  const shouldStartInReauth =
+    initialSignIn &&
+    initialProfileId !== null &&
+    selectedProfileId === initialProfileId &&
+    canAddProfile;
   const enabledProviderCount = providers.filter(
     (provider) => provider.enabled,
   ).length;
@@ -529,6 +570,7 @@ function ProviderDetail({
           providerId={providerId}
           profileId={null}
           usageUpdatedAt={null}
+          fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
         />
       ) : null}
       <ProviderProfileScopedSection
@@ -536,6 +578,7 @@ function ProviderDetail({
         hostId={hostId}
         isSelectedHostLocal={isSelectedHostLocal}
         canAddProfile={canAddProfile}
+        startInReauth={shouldStartInReauth}
         failedAttempt={failedProfileAttempt}
         onAddProfile={() => setAddProfileOpen(true)}
         onDismissFailedAttempt={() => setFailedProfileAttempt(null)}

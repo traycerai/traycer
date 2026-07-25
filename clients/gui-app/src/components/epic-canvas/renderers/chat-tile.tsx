@@ -73,6 +73,7 @@ import {
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
   mentionRootsFromWorktreeBinding,
+  mentionRootsFromWorktreeBindingAndIntent,
   useWorkspaceMentionRoots,
   worktreeBindingIsFolderless,
 } from "@/hooks/composer/use-workspace-mention-roots";
@@ -916,6 +917,22 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => mentionRootsFromWorktreeBinding(state.worktreeBinding),
     [state.worktreeBinding],
   );
+  // Composer-scoped roots: the staged worktree intent layers over the binding
+  // (`stagedEntry ?? bindingEntry`), matching what the send path will
+  // materialize. Next-message surfaces - the composer's mention search and
+  // slash-command discovery, and the inline-edit composer whose resend also
+  // carries the staged intent - read these, so a staged replacement stops
+  // discovery from probing the superseded (possibly deleted) worktree path.
+  // History-scoped link resolution below intentionally stays on the committed
+  // binding: existing messages ran in the old workspace.
+  const composerMentionRoots = useMemo(
+    () =>
+      mentionRootsFromWorktreeBindingAndIntent(
+        state.worktreeBinding,
+        stagedChatWorktreeIntent ?? null,
+      ),
+    [state.worktreeBinding, stagedChatWorktreeIntent],
+  );
   const isFolderlessWorkspace = worktreeBindingIsFolderless(
     state.worktreeBinding,
   );
@@ -1209,6 +1226,25 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       ),
     [hostPendingInterviewIds, renderedMessages],
   );
+  // Block IDs whose answer/skip action is still in flight or accepted-but-
+  // unresolved. Recomputes only when actions change (not per streaming token),
+  // and yields a stable `false` whenever no interview is pending, so the
+  // composer memo below never churns during normal streaming.
+  const interviewActionBlockIds = useMemo(
+    () =>
+      new Set(
+        [
+          ...Object.values(state.pendingActions),
+          ...Object.values(state.acceptedActions),
+        ]
+          .map((action) => action.interviewBlockId)
+          .filter((blockId): blockId is string => blockId !== null),
+      ),
+    [state.pendingActions, state.acceptedActions],
+  );
+  const interviewBusy =
+    pendingInterview !== null &&
+    interviewActionBlockIds.has(pendingInterview.blockId);
   const showCompletedRestoreToast = useCallback(() => {
     if (state.restore === null || state.restore.kind !== "completed") return;
     showRestoreResultToast(state.restore.results);
@@ -1250,7 +1286,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       canAct,
       currentComposerSettings,
       editSettings,
-      mentionRoots,
+      mentionRoots: composerMentionRoots,
+      fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       node,
       chatTitle: projectedChatTitle ?? state.chat?.title ?? null,
@@ -1530,12 +1567,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const lowerInterview = useMemo(
     () => ({
       pending: pendingInterview,
+      isBusy: interviewBusy,
       onAnswer: handleInterviewAnswer,
       onError: handleInterviewError,
       onFork: forkFromPendingInterview,
     }),
     [
       pendingInterview,
+      interviewBusy,
       handleInterviewAnswer,
       handleInterviewError,
       forkFromPendingInterview,
@@ -1596,7 +1635,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       fallbackSettingsSeed: composerFallbackSettingsSeed,
       nodeId: node.id,
       isActive,
-      mentionRoots,
+      mentionRoots: composerMentionRoots,
       fallbackToGlobalMentionRoots: !isFolderlessWorkspace,
       currentEpicId,
       onSubmitMessage: submitMessage,
@@ -1610,7 +1649,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       composerFallbackSettingsSeed,
       node.id,
       isActive,
-      mentionRoots,
+      composerMentionRoots,
       isFolderlessWorkspace,
       currentEpicId,
       submitMessage,
@@ -1636,7 +1675,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     node,
     viewTabId,
     tabHostId: activeHostId,
-    mentionRoots,
     linkResolutionRoots,
     currentEpicId,
     snapshotLoaded: state.snapshotLoaded,
@@ -1864,6 +1902,7 @@ function useChatMissingWorktreeFocusRefresh(args: {
     params: { epicId: args.epicId, ownerId: args.chatId, ownerKind: "chat" },
     options: {
       enabled: args.hasBinding && args.surfaceVisible,
+      poll: false,
       staleTime: 0,
       refetchOnWindowFocus: true,
     },
@@ -1969,7 +2008,7 @@ function useCachedCollaborators(
     client,
     method: "epic.listCollaborators",
     params: { epicId },
-    options: { enabled: false },
+    options: { enabled: false, poll: false },
   });
   return useMemo(() => flattenCollaborators(data?.collaborators ?? []), [data]);
 }

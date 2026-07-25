@@ -37,6 +37,7 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
+import { defineRpcContract } from "@traycer/protocol/framework/index";
 
 export const resourcesSubscribeOpenRequestV10Schema = z.object({
   epicId: z.string(),
@@ -117,6 +118,21 @@ export const ownerResourceSnapshotSchema = z.object({
 });
 export type OwnerResourceSnapshotWire = z.infer<
   typeof ownerResourceSnapshotSchema
+>;
+
+/**
+ * Frozen `@1.3` owner snapshot: adds `harnessId`, the provider that owns the
+ * tree (`claude`, `codex`, …) so the client can render the provider icon
+ * instead of a generic "GUI agent" / "TUI agent" label. `null` for a
+ * harness-less owner (a plain terminal shell). Additive-only: the `@1.0`–`@1.2`
+ * `ownerResourceSnapshotSchema` above stays frozen.
+ */
+export const ownerResourceSnapshotSchemaV13 = z.object({
+  ...ownerResourceSnapshotSchema.shape,
+  harnessId: z.string().nullable(),
+});
+export type OwnerResourceSnapshotWireV13 = z.infer<
+  typeof ownerResourceSnapshotSchemaV13
 >;
 
 /** Sum of the local owner snapshots that share the epic (owner roots only). */
@@ -268,4 +284,64 @@ export const resourcesSubscribeV12 = defineStreamRpcContract({
   openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
   serverFrameSchema: resourcesSubscribeServerFrameSchemaV12,
   clientFrameSchema: resourcesSubscribeClientFrameSchema,
+});
+
+// `@1.3` frame: identical to `@1.2` except `owners` carry `harnessId`. Prior
+// minors stay frozen; a client on `@1.2` or below never receives the field.
+const resourcesProjectionFieldsV13 = {
+  ...resourcesProjectionFieldsV12,
+  owners: z.array(ownerResourceSnapshotSchemaV13),
+} as const;
+
+export const resourcesSubscribeServerFrameSchemaV13 = z.discriminatedUnion(
+  "kind",
+  [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...resourcesProjectionFieldsV13,
+    }),
+    z.object({
+      kind: z.literal("update"),
+      ...resourcesProjectionFieldsV13,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ],
+);
+export type ResourcesSubscribeServerFrameV13 = z.infer<
+  typeof resourcesSubscribeServerFrameSchemaV13
+>;
+
+export const resourcesSubscribeV13 = defineStreamRpcContract({
+  method: "resources.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: resourcesSubscribeOpenRequestV11Schema,
+  serverFrameSchema: resourcesSubscribeServerFrameSchemaV13,
+  clientFrameSchema: resourcesSubscribeClientFrameSchema,
+});
+
+// ── `resources.kill@1.0` — unary ────────────────────────────────────────────
+// Terminates the entire process subtree beneath each requested pid (graceful
+// SIGTERM, then SIGKILL escalation for survivors). Brand-new method, NOT on the
+// released floor: an old host simply lacks it. The host re-derives which pids
+// are killable from its own live sample (tracked owner/other trees, minus the
+// app + host process trees), so a stale or stray pid is silently skipped rather
+// than trusted. `killed` echoes the subset the host actually acted on.
+export const resourcesKillRequestSchema = z.object({
+  pids: z.array(z.number().int().nonnegative()),
+});
+export type ResourcesKillRequest = z.infer<typeof resourcesKillRequestSchema>;
+
+export const resourcesKillResponseSchema = z.object({
+  killed: z.array(z.number().int().nonnegative()),
+});
+export type ResourcesKillResponse = z.infer<typeof resourcesKillResponseSchema>;
+
+export const resourcesKillV10 = defineRpcContract({
+  method: "resources.kill",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: resourcesKillRequestSchema,
+  responseSchema: resourcesKillResponseSchema,
 });

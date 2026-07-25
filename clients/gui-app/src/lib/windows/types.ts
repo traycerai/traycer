@@ -1,7 +1,15 @@
 import type {
-  HostOperationStatus,
-  HostRegistryUpdateState,
-} from "@traycer-clients/shared/platform/runner-host";
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+
+export type {
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+import type { HostControllerStatus } from "@traycer-clients/shared/platform/runner-host";
 
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
@@ -108,6 +116,9 @@ export interface DesktopMenuCommandPayload {
   readonly windowId: string;
 }
 
+export type DesktopTopLevelMenuId =
+  "file" | "edit" | "view" | "window" | "help";
+
 export interface DesktopZoomBridge {
   readonly ladder: readonly number[];
   get(): Promise<number>;
@@ -179,6 +190,14 @@ export interface DesktopMenuBridge {
   };
 }
 
+export interface DesktopMenuPopupBridge {
+  openTopLevel(
+    menuId: DesktopTopLevelMenuId,
+    anchorX: number,
+    anchorY: number,
+  ): Promise<void>;
+}
+
 export type DesktopAppUpdateStatus =
   | "idle"
   | "checking"
@@ -209,6 +228,7 @@ export interface DesktopAppUpdateSnapshot {
   readonly sequence: number;
   readonly status: DesktopAppUpdateStatus;
   readonly currentVersion: string;
+  readonly allowPrerelease: boolean;
   readonly latestVersion: string | null;
   // Whole-percent download progress (0-100) while `status` is "downloading";
   // null in every other state (including before a user-initiated download).
@@ -223,6 +243,11 @@ export interface DesktopAppUpdateSnapshot {
   // dialog with the steps instead of disabling it - the update can still be
   // applied, just not fully automatically.
   readonly installGuidance: DesktopAppUpdateGuidance | null;
+  // True from the moment the main process hands off to `quitAndInstall` until
+  // the install either ends the process or fails back to "error". The quit is
+  // not instant, so this is what every restart affordance reads to go pending -
+  // it's broadcast, so a second window can't fire a duplicate install either.
+  readonly installInFlight: boolean;
   readonly errorMessage: string | null;
   readonly lastCheckedAt: string | null;
   readonly lastCheckIntent: DesktopAppUpdateCheckIntent | null;
@@ -233,6 +258,9 @@ export interface DesktopAppUpdatesBridge {
   checkForUpdates(
     intent: DesktopAppUpdateCheckIntent,
   ): Promise<DesktopAppUpdateSnapshot>;
+  setAllowPrerelease(
+    allowPrerelease: boolean,
+  ): Promise<DesktopAppUpdateSnapshot>;
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
@@ -240,14 +268,30 @@ export interface DesktopAppUpdatesBridge {
   };
 }
 
-export interface DesktopHostRegistryUpdatesBridge {
-  onChange(handler: (state: HostRegistryUpdateState) => void): {
+/**
+ * Wire snapshot pushed on `globalShortcutsChange` and returned by
+ * `getSnapshot`. `sequence` guards against an out-of-order frame overwriting
+ * a newer one in the renderer's store, the same monotonic pattern
+ * `DesktopAppUpdateSnapshot` uses.
+ */
+export interface DesktopGlobalShortcutsSnapshot {
+  readonly sequence: number;
+  readonly statuses: Readonly<Record<GlobalShortcutId, GlobalShortcutStatus>>;
+}
+
+export interface DesktopGlobalShortcutsBridge {
+  getSnapshot(): Promise<DesktopGlobalShortcutsSnapshot>;
+  set(
+    id: GlobalShortcutId,
+    intent: GlobalShortcutIntent,
+  ): Promise<GlobalShortcutStatus>;
+  onChange(handler: (snapshot: DesktopGlobalShortcutsSnapshot) => void): {
     dispose(): void;
   };
 }
 
-export interface DesktopHostOperationStatusBridge {
-  onChange(handler: (status: HostOperationStatus | null) => void): {
+export interface DesktopHostControllerStatusBridge {
+  onChange(handler: (status: HostControllerStatus) => void): {
     dispose(): void;
   };
 }

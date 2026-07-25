@@ -10,6 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -33,6 +34,12 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { __resetWorktreeDeleteRunForTests } from "@/components/settings/panels/use-worktree-delete-run";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { WORKTREE_BINDING_INVALIDATIONS } from "@/hooks/worktree/invalidations";
+import {
+  DEFAULT_WORKTREE_SORT_MODE,
+  EMPTY_WORKTREE_TIER_FILTERS,
+  useWorktreesSettingsViewStore,
+} from "@/stores/settings/worktrees-settings-view-store";
+import { useWorktreesSettingsSelectionStore } from "@/stores/settings/worktrees-settings-selection-store";
 import {
   installWorktreeVirtualizerOffsetHeight,
   WORKTREE_TEST_VIRTUAL_ITEM_HEIGHT,
@@ -290,6 +297,14 @@ let virtualViewportHeight = 100_000;
 let restoreOffsetHeight: (() => void) | null = null;
 
 beforeEach(() => {
+  useWorktreesSettingsViewStore.setState({
+    searchText: "",
+    sortMode: DEFAULT_WORKTREE_SORT_MODE,
+    tierFilters: EMPTY_WORKTREE_TIER_FILTERS,
+  });
+  useWorktreesSettingsSelectionStore.setState({
+    selectedPathsByHost: new Map(),
+  });
   virtualViewportHeight = 100_000;
   restoreOffsetHeight = installWorktreeVirtualizerOffsetHeight(
     () => virtualViewportHeight,
@@ -346,6 +361,32 @@ function renderList(args: {
   );
 }
 
+// Renders the toolbar with explicit props (the `renderList` helper always
+// passes the null-timestamp default) so tests can exercise the freshness label.
+function renderListWithToolbar(toolbarProps: ToolbarTestProps): void {
+  const queryClient = new QueryClient();
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>{props.children}</TooltipProvider>
+    </QueryClientProvider>
+  );
+  render(
+    <Wrapper>
+      <WorktreesList
+        openStreamTransport={() => stubOpenStreamTransport()}
+        hostId="host-a"
+        worktrees={WORKTREES}
+        enrichedByPath={fullyEnriched(WORKTREES)}
+        erroredPaths={new Set()}
+        seededPaths={new Set()}
+        onVisiblePathsChange={vi.fn()}
+        taskTitlesByEpicId={new Map()}
+        toolbarProps={toolbarProps}
+      />
+    </Wrapper>,
+  );
+}
+
 function renderDefault(): void {
   renderList({
     hostId: "host-a",
@@ -383,7 +424,17 @@ function callbacksFor(path: string): WorktreeDeleteStreamCallbacks {
   return callbacks;
 }
 
-function testToolbarProps() {
+type ToolbarTestProps = {
+  hosts: readonly HostDirectoryEntry[];
+  value: string | null;
+  onChange: (hostId: string) => void;
+  onRefresh: () => Promise<unknown>;
+  refreshing: boolean;
+  canRefresh: boolean;
+  lastUpdatedAt: number | null;
+};
+
+function testToolbarProps(): ToolbarTestProps {
   return {
     hosts: [],
     value: null,
@@ -391,6 +442,7 @@ function testToolbarProps() {
     onRefresh: vi.fn(),
     refreshing: false,
     canRefresh: true,
+    lastUpdatedAt: null,
   };
 }
 
@@ -630,7 +682,7 @@ describe("WorktreesList delete flow", () => {
   it("disables delete for an in-use worktree", () => {
     renderDefault();
     const busyButton = screen.getByRole("button", {
-      name: /in use by an active chat or agent/i,
+      name: /in use by an active agent/i,
     });
     expect(busyButton.hasAttribute("disabled")).toBe(true);
   });
@@ -839,6 +891,29 @@ describe("WorktreesList delete flow", () => {
     ).toContain("whitespace-nowrap");
   });
 
+  it("shows the freshness label for a real timestamp and suppresses it while refreshing", () => {
+    // A non-null lastUpdatedAt renders the "Updated …" label; the null-timestamp
+    // fixtures elsewhere only cover its absence.
+    renderListWithToolbar({
+      ...testToolbarProps(),
+      lastUpdatedAt: Date.now() - 60_000,
+      refreshing: false,
+    });
+    const label = screen.getByTestId("worktrees-updated-ago");
+    expect(label.textContent).toMatch(/^Updated /);
+
+    cleanup();
+
+    // While a manual refresh is in flight the timestamp is suppressed (the
+    // spinning Refresh button stands in for it).
+    renderListWithToolbar({
+      ...testToolbarProps(),
+      lastUpdatedAt: Date.now() - 60_000,
+      refreshing: true,
+    });
+    expect(screen.queryByTestId("worktrees-updated-ago")).toBeNull();
+  });
+
   it("selecting the first row does not insert a new top bar that shifts the list", () => {
     renderDefault();
     const scrollRegion = screen.getByTestId("worktrees-virtual-scroll");
@@ -879,6 +954,39 @@ describe("WorktreesList delete flow", () => {
     expect(
       screen
         .getByRole("checkbox", { name: "Select worktree feat-clean" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+  });
+
+  it("preserves selection when the Worktrees settings panel remounts", () => {
+    const rendered = renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees: WORKTREES,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
+    );
+    expect(screen.getByText("1 selected")).not.toBeNull();
+
+    rendered.unmount();
+    renderDefault();
+
+    expect(screen.getByText("1 selected")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-clean" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-dirty" })
         .getAttribute("aria-checked"),
     ).toBe("false");
   });
@@ -941,6 +1049,15 @@ describe("WorktreesList delete flow", () => {
     expect(scrollRegion.style.paddingBottom).toBe("128px");
   });
 
+  it("renders an actionable select-all control with enabled foreground contrast", () => {
+    renderDefault();
+
+    const selectAll = screen.getByTestId("worktrees-select-all");
+    expect(selectAll.hasAttribute("disabled")).toBe(false);
+    expect(selectAll.classList.contains("text-foreground")).toBe(true);
+    expect(selectAll.classList.contains("text-muted-foreground")).toBe(false);
+  });
+
   it("excludes an in-use row and a backgrounded-deleting row from selection and select-all", () => {
     renderDefault();
     confirmDelete("feat-dirty");
@@ -985,6 +1102,41 @@ describe("WorktreesList delete flow", () => {
 
     fireEvent.click(screen.getByTestId("worktrees-select-all"));
     expect(screen.getByText("1 selected")).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(streamMock.paths).toEqual(["/wt/dirty"]);
+  });
+
+  it("preserves hidden selections when a searched worktree is deselected", () => {
+    renderDefault();
+
+    fireEvent.click(screen.getByTestId("worktrees-select-all"));
+    expect(screen.getByText("2 selected")).not.toBeNull();
+
+    const search = screen.getByRole("searchbox", {
+      name: "Search worktrees",
+    });
+    fireEvent.change(search, { target: { value: "clean" } });
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select worktree feat-clean" }),
+    );
+
+    expect(screen.queryByTestId("worktrees-selection-action-bar")).toBeNull();
+
+    fireEvent.change(search, { target: { value: "" } });
+
+    expect(screen.getByText("1 selected")).not.toBeNull();
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-clean" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Select worktree feat-dirty" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
 
     fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
     fireEvent.click(screen.getByTestId("confirm-action"));
@@ -1510,11 +1662,11 @@ describe("WorktreesList delete flow", () => {
     confirmDelete("feat-clean");
     act(() => {
       streamMock.callbacks?.onFailed(
-        "Worktree /wt/clean is in use by an active chat session",
+        "Worktree /wt/clean is in use by an active agent session",
       );
     });
     expect(screen.getByTestId("worktree-delete-error").textContent).toContain(
-      "in use by an active chat session",
+      "in use by an active agent session",
     );
     expect(streamMock.closeCount).toBe(1);
   });
@@ -2977,6 +3129,62 @@ describe("WorktreesList v1.2 signals", () => {
       "Delete worktree feat-new",
       "Delete worktree feat-unknown",
     ]);
+  });
+
+  it("restores search, tier filters, and sort order after the panel remounts", () => {
+    const worktrees = [
+      entry({
+        worktreePath: "/wt/merged",
+        branch: "feat-merged",
+        createdAt: 2_000,
+        branchStatus: { ahead: 0, behind: 0, mergedIntoDefault: true },
+      }),
+      entry({
+        worktreePath: "/wt/review",
+        branch: "feat-review",
+        createdAt: 1_000,
+        branchStatus: { ahead: 2, behind: 0, mergedIntoDefault: false },
+      }),
+    ];
+    const rendered = renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search worktrees" }),
+      { target: { value: "feat-merged" } },
+    );
+    fireEvent.click(screen.getByTestId("worktrees-filter-merged"));
+    fireEvent.click(screen.getByTestId("worktrees-sort-oldest"));
+
+    rendered.unmount();
+    renderList({
+      hostId: "host-a",
+      queryClient: new QueryClient(),
+      worktrees,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    const restoredSearch = screen.getByRole("searchbox", {
+      name: "Search worktrees",
+    });
+    if (!(restoredSearch instanceof HTMLInputElement)) {
+      throw new Error("expected the worktree search control to be an input");
+    }
+    expect(restoredSearch.value).toBe("feat-merged");
+    screen.getByRole("button", { name: "Filter: Landed" });
+    screen.getByRole("button", { name: "Sort: Oldest" });
   });
 
   it("keeps distinct labels for all three green tiers: Landed, At base commit, Unreferenced", () => {

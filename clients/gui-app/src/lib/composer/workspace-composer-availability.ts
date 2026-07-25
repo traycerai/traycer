@@ -54,6 +54,8 @@ export const UNRESOLVED_WORKSPACE_FOLDER_HINT =
   "Locate the selected workspace folder on this host to continue.";
 export const CHECKING_WORKSPACE_FOLDER_HINT =
   "Checking workspace folders on this host.";
+export const WORKSPACE_FOLDER_CHECK_FAILED_HINT =
+  "Couldn't check workspace folders on this host. Return to the app to retry.";
 
 /**
  * The disabled-send hint shown when one or more bound folders are missing on
@@ -107,6 +109,11 @@ const WORKSPACE_COMPOSER_UNRESOLVED: WorkspaceComposerAvailability = {
   disabledHint: UNRESOLVED_WORKSPACE_FOLDER_HINT,
 };
 
+const WORKSPACE_COMPOSER_RESOLUTION_ERROR: WorkspaceComposerAvailability = {
+  status: "blocked",
+  disabledHint: WORKSPACE_FOLDER_CHECK_FAILED_HINT,
+};
+
 export function workspaceComposerCanStart(
   availability: WorkspaceComposerAvailability,
 ): boolean {
@@ -121,9 +128,11 @@ export function workspaceComposerCanStart(
 function deriveWorkspaceFoldersAvailability(
   folders: ReadonlyArray<ResolvedFolder>,
   isResolving: boolean,
+  didResolutionFail: boolean,
   allowEmptyFolders: boolean,
 ): WorkspaceComposerAvailability {
   if (isResolving) return WORKSPACE_COMPOSER_CHECKING;
+  if (didResolutionFail) return WORKSPACE_COMPOSER_RESOLUTION_ERROR;
   if (!allowEmptyFolders && folders.length === 0) {
     return WORKSPACE_COMPOSER_EMPTY;
   }
@@ -136,15 +145,27 @@ function deriveWorkspaceFoldersAvailability(
 export function deriveResolvedWorkspaceAvailability(
   folders: ReadonlyArray<ResolvedFolder>,
   isResolving: boolean,
+  didResolutionFail: boolean,
 ): WorkspaceComposerAvailability {
-  return deriveWorkspaceFoldersAvailability(folders, isResolving, false);
+  return deriveWorkspaceFoldersAvailability(
+    folders,
+    isResolving,
+    didResolutionFail,
+    false,
+  );
 }
 
 export function deriveFolderlessAllowedWorkspaceAvailability(
   folders: ReadonlyArray<ResolvedFolder>,
   isResolving: boolean,
+  didResolutionFail: boolean,
 ): WorkspaceComposerAvailability {
-  return deriveWorkspaceFoldersAvailability(folders, isResolving, true);
+  return deriveWorkspaceFoldersAvailability(
+    folders,
+    isResolving,
+    didResolutionFail,
+    true,
+  );
 }
 
 export function deriveWorktreeBindingWorkspaceAvailability(

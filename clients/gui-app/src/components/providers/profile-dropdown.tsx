@@ -186,6 +186,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           const entry = usagePresentation.entries.get(previewProfileId);
           if (
             entry === undefined ||
+            !entry.fetchEligible ||
             entry.refreshStatus !== "idle" ||
             !usagePresentation.isHostReady
           ) {
@@ -218,7 +219,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                 }
               }}
               aria-label={accessibleLabel}
-              aria-keyshortcuts={usageEntry === undefined ? undefined : "R"}
+              aria-keyshortcuts={usageEntry?.fetchEligible ? "R" : undefined}
               aria-current={selected ? "true" : undefined}
               className={cn("pr-1.5", statusSuffix !== null && "opacity-60")}
               onFocus={(event) => preview(commitId, event.currentTarget)}

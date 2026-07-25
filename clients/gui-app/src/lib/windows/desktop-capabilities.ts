@@ -1,9 +1,10 @@
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type {
   DesktopAppUpdatesBridge,
-  DesktopHostOperationStatusBridge,
-  DesktopHostRegistryUpdatesBridge,
+  DesktopGlobalShortcutsBridge,
+  DesktopHostControllerStatusBridge,
   DesktopMenuBridge,
+  DesktopMenuPopupBridge,
   DesktopPowerBridge,
   DesktopSupportBridge,
   DesktopZoomBridge,
@@ -14,6 +15,13 @@ export function resolveDesktopMenuBridge(
 ): DesktopMenuBridge | null {
   const value: unknown = Reflect.get(runnerHost, "menu");
   return isDesktopMenuBridge(value) ? value : null;
+}
+
+export function resolveDesktopMenuPopupBridge(
+  runnerHost: IRunnerHost,
+): DesktopMenuPopupBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "menu");
+  return isDesktopMenuPopupBridge(value) ? value : null;
 }
 
 export function resolveDesktopSupportBridge(
@@ -44,22 +52,28 @@ export function resolveDesktopZoomBridge(
   return isDesktopZoomBridge(value) ? value : null;
 }
 
-export function resolveDesktopHostRegistryUpdatesBridge(
+export function resolveDesktopHostControllerStatusBridge(
   runnerHost: IRunnerHost,
-): DesktopHostRegistryUpdatesBridge | null {
-  const value: unknown = Reflect.get(runnerHost, "hostRegistryUpdates");
-  return isDesktopHostRegistryUpdatesBridge(value) ? value : null;
+): DesktopHostControllerStatusBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "hostControllerStatus");
+  return isDesktopHostControllerStatusBridge(value) ? value : null;
 }
 
-export function resolveDesktopHostOperationStatusBridge(
+export function resolveDesktopGlobalShortcutsBridge(
   runnerHost: IRunnerHost,
-): DesktopHostOperationStatusBridge | null {
-  const value: unknown = Reflect.get(runnerHost, "hostOperationStatus");
-  return isDesktopHostOperationStatusBridge(value) ? value : null;
+): DesktopGlobalShortcutsBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "globalShortcuts");
+  return isDesktopGlobalShortcutsBridge(value) ? value : null;
 }
 
 function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
   return isRecord(value) && typeof value.onCommand === "function";
+}
+
+function isDesktopMenuPopupBridge(
+  value: unknown,
+): value is DesktopMenuPopupBridge {
+  return isRecord(value) && typeof value.openTopLevel === "function";
 }
 
 function isDesktopSupportBridge(value: unknown): value is DesktopSupportBridge {
@@ -78,6 +92,7 @@ function isDesktopAppUpdatesBridge(
     isRecord(value) &&
     typeof value.getSnapshot === "function" &&
     typeof value.checkForUpdates === "function" &&
+    typeof value.setAllowPrerelease === "function" &&
     typeof value.downloadUpdate === "function" &&
     typeof value.installUpdate === "function" &&
     typeof value.onChange === "function"
@@ -101,15 +116,20 @@ function isDesktopZoomBridge(value: unknown): value is DesktopZoomBridge {
   );
 }
 
-function isDesktopHostRegistryUpdatesBridge(
+function isDesktopGlobalShortcutsBridge(
   value: unknown,
-): value is DesktopHostRegistryUpdatesBridge {
-  return isRecord(value) && typeof value.onChange === "function";
+): value is DesktopGlobalShortcutsBridge {
+  return (
+    isRecord(value) &&
+    typeof value.getSnapshot === "function" &&
+    typeof value.set === "function" &&
+    typeof value.onChange === "function"
+  );
 }
 
-function isDesktopHostOperationStatusBridge(
+function isDesktopHostControllerStatusBridge(
   value: unknown,
-): value is DesktopHostOperationStatusBridge {
+): value is DesktopHostControllerStatusBridge {
   return isRecord(value) && typeof value.onChange === "function";
 }
 

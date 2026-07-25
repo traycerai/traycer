@@ -124,7 +124,8 @@ describe("legacy (pre-profile) persisted artifacts parse with profile defaults",
       claudeMessageUuid: "uuid-1",
       createdAt: 0,
     };
-    const parsedClaude = claudeChatSessionAnchorSchema.parse(legacyClaudeAnchor);
+    const parsedClaude =
+      claudeChatSessionAnchorSchema.parse(legacyClaudeAnchor);
     expect(parsedClaude.profileId).toBeNull();
     expect(parsedClaude.labelSnapshot).toBeNull();
     expect(parsedClaude.accountUuid).toBeNull();
@@ -218,6 +219,38 @@ describe("ProviderCliState.profiles[] downgrade to v1.0", () => {
     });
     expect(state.profiles[0].duplicateOfProfileId).toBeNull();
     expect(state.profiles[0].ambientDriftNotice).toBeNull();
+    // Same old-host guard as the two fields above: a build that predates
+    // rateLimitLimitedScopes yields null (profile-level fallback in the GUI).
+    expect(state.profiles[0].rateLimitLimitedScopes).toBeNull();
+  });
+
+  it("degrades a malformed rateLimitLimitedScopes to null without dropping the profile", () => {
+    const state = providerCliStateSchema.parse({
+      ...providerState("claude-code"),
+      profiles: [
+        {
+          profileId: "profile-1",
+          kind: "managed" as const,
+          authType: "oauth" as const,
+          label: "Work",
+          auth: {
+            status: "authenticated" as const,
+            badgeText: null,
+            label: null,
+            detail: null,
+          },
+          identity: null,
+          usageUpdatedAt: null,
+          // A newer host's severity vocabulary grew a value this client's
+          // frozen enum doesn't know - the whole field must degrade to null
+          // (profile-level fallback) instead of wiping the profile via the
+          // array-level `.catch([])` on `profiles`.
+          rateLimitLimitedScopes: [{ family: "Fable", severity: "soft_limit" }],
+        },
+      ],
+    });
+    expect(state.profiles).toHaveLength(1);
+    expect(state.profiles[0].rateLimitLimitedScopes).toBeNull();
   });
 
   it("degrades an out-of-palette reusedTombstone.accentColor to null without dropping the profile or the profiles array", () => {
@@ -292,11 +325,11 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
 
   it("downgradeProviderCliStateListToV20 never leaks profile identity to a v2.0 caller", () => {
     // Latest major carries profiles[]; the path from latest → v2.0 must strip
-    // them (whether latest is v3.0 or v4.0). Use 4 explicitly - providers.list
-    // latest after the Devin/Pi freeze is v4.0.
+    // them. Use 6 explicitly - providers.list latest after the omp freeze is
+    // v6.0 (`cli-v1.1.8` shipped v5.0, so that line is frozen).
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      4,
+      6,
       2,
       { providers: [stateWithProfile] },
     );
@@ -353,7 +386,7 @@ describe("providers.list v3.0 line predates profiles[]", () => {
   it("latest -> v3.0 downgrade never leaks profile identity to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      4,
+      6,
       3,
       { providers: [stateWithProfile] },
     );
@@ -448,9 +481,7 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
     expect(downgraded.value.state).not.toHaveProperty("profiles");
-    expect(JSON.stringify(downgraded.value)).not.toContain(
-      "work@example.com",
-    );
+    expect(JSON.stringify(downgraded.value)).not.toContain("work@example.com");
   });
 });
 

@@ -128,6 +128,7 @@ export function mentionAttrsFromAttachment(
       artifactId: mention.artifactId,
       artifactType: mention.artifactType,
       chatId: mention.chatId,
+      terminalAgentId: mention.terminalAgentId,
       status: mention.status,
     };
   }
@@ -150,7 +151,11 @@ export function mentionAttachmentFromAttrs(
   if (contextType === "git") {
     return gitMentionAttachmentFromAttrs(attrs);
   }
-  if (contextType === "epic" || contextType === "chat") {
+  if (
+    contextType === "epic" ||
+    contextType === "chat" ||
+    contextType === "terminal-agent"
+  ) {
     return entityMentionAttachmentFromAttrs(attrs, contextType);
   }
   if (isArtifactContextType(contextType)) {
@@ -302,12 +307,37 @@ function literalTextInlineNodes(text: string): JsonContent[] {
 export function slashCommandPlainTextFromAttrs(
   attrs: Record<string, unknown> | undefined,
 ): string {
+  const name = slashCommandNameFromAttrs(attrs);
+  if (name === null) return "";
+  return `/${name}`;
+}
+
+/**
+ * What the chip reads on screen, which is not always what it serializes to.
+ *
+ * A skill picked with `$` keeps that character in its label so the composer
+ * shows back what was typed, while `slashCommandPlainTextFromAttrs` still emits
+ * the canonical `/name` the provider and the round-trip parser expect. Skills
+ * reach the host through `skillInvocations`, keyed off the node's `kind` rather
+ * than this text, so the trigger stays a purely local affordance.
+ */
+export function slashCommandLabelFromAttrs(
+  attrs: Record<string, unknown> | undefined,
+): string {
+  const name = slashCommandNameFromAttrs(attrs);
+  if (name === null) return "";
+  return `${stringValue(attrs?.trigger) === "$" ? "$" : "/"}${name}`;
+}
+
+function slashCommandNameFromAttrs(
+  attrs: Record<string, unknown> | undefined,
+): string | null {
   const name =
     stringValue(attrs?.commandName) ??
     stringValue(attrs?.name) ??
     stringValue(attrs?.id);
-  if (name === null) return "";
-  return `/${name.replace(/^\/+/, "")}`;
+  if (name === null) return null;
+  return name.replace(/^[/$]+/, "");
 }
 
 function entityMentionId(
@@ -315,6 +345,9 @@ function entityMentionId(
 ): string {
   if (mention.contextType === "epic") return mention.epicId;
   if (mention.contextType === "chat") return mention.chatId ?? mention.path;
+  if (mention.contextType === "terminal-agent") {
+    return mention.terminalAgentId ?? mention.path;
+  }
   return mention.artifactId ?? mention.path;
 }
 
@@ -521,11 +554,17 @@ function entityMentionAttachmentFromAttrs(
     description: stringValue(attrs.description) ?? path,
     epicId,
     artifactId:
-      contextType === "epic" || contextType === "chat"
+      contextType === "epic" ||
+      contextType === "chat" ||
+      contextType === "terminal-agent"
         ? null
         : (stringValue(attrs.artifactId) ?? id),
     artifactType,
     chatId: contextType === "chat" ? (stringValue(attrs.chatId) ?? id) : null,
+    terminalAgentId:
+      contextType === "terminal-agent"
+        ? (stringValue(attrs.terminalAgentId) ?? id)
+        : null,
     status: statusValue(attrs.status),
   };
 }

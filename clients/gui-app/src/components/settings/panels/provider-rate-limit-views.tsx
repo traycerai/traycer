@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import type {
   ProviderRateLimits,
   ProviderRateLimitWindow,
+  RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
 import { classifyProviderRateLimitWindow } from "@traycer/protocol/host/rate-limit";
 import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
@@ -34,6 +35,7 @@ import {
 import {
   formatResetFullDateTime,
   useIsFarReset,
+  useRelativeTimestamp,
   useResetCountdown,
   useSampledNow,
 } from "@/lib/relative-time";
@@ -106,6 +108,7 @@ type OpenRouterRateLimits = Extract<
   { provider: "openrouter" }
 >;
 type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
+type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
 
 const MINUTES_PER_HOUR = 60;
 // A manual reset expiring inside this window is tinted `text-destructive` in the
@@ -333,6 +336,30 @@ function ProviderNumberRow({
       <span className="text-muted-foreground">{label}</span>
       <span className="font-mono text-ui-xs text-foreground">
         {format(value)}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The string analogue of `ProviderNumberRow`: a neutral labeled value (no bar,
+ * no severity color) for provider fields that are already display strings - a
+ * plan tier, a formatted date range. Renders nothing when the provider didn't
+ * report the value.
+ */
+function ProviderTextRow({
+  label,
+  value,
+}: {
+  readonly label: string;
+  readonly value: string | null;
+}): ReactNode {
+  if (value === null) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 text-ui-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate font-mono text-ui-xs text-foreground">
+        {value}
       </span>
     </div>
   );
@@ -981,6 +1008,153 @@ export function KiloCodeRateLimitView({
   );
 }
 
+/**
+ * Grok's period bar label: the billing period's cadence taken from the
+ * provider's `periodType` token (e.g. `"USAGE_PERIOD_TYPE_WEEKLY"` -> "Weekly"),
+ * falling back to the synthesized window's own duration when the type token is
+ * absent. Only the last `_`-segment carries the cadence, so the leading
+ * `USAGE_PERIOD_TYPE_` scaffolding is dropped before title-casing.
+ */
+function formatGrokPeriodLabel(
+  periodType: string | null,
+  durationMinutes: number | null,
+): string {
+  if (periodType !== null) {
+    const parts = periodType.split("_").filter((part) => part.length > 0);
+    if (parts.length > 0) return titleCaseFromToken(parts[parts.length - 1]);
+  }
+  return formatWindowDuration(durationMinutes);
+}
+
+/** Compact calendar date ("Jul 22, 2026") for a grok billing-period bound. */
+function formatGrokPeriodDate(epochMs: number): string {
+  return new Date(epochMs).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+/**
+ * The billing period's start-end range ("Jul 22, 2026 - Jul 29, 2026"), shown
+ * in grok's unmeasured-period fallback where there's no usage bar to carry a
+ * reset date. `null` unless both bounds are known.
+ */
+function formatGrokPeriodRange(
+  periodStart: number | null,
+  periodEnd: number | null,
+): string | null {
+  if (periodStart === null || periodEnd === null) return null;
+  return `${formatGrokPeriodDate(periodStart)} - ${formatGrokPeriodDate(periodEnd)}`;
+}
+
+/**
+ * Grok's unmeasured-period fallback: an available subscription may report its
+ * tier and billing-period bounds without a measurable usage window. Surfacing
+ * the plan and the period dates keeps the card meaningful instead of blank.
+ * Each row drops out on its own when the field is absent.
+ *
+ * The `Plan` row is suppressed on `popover-detail`, where the popover header
+ * already renders the same tier as a chip (`resolveProviderPlanLabel`) - the
+ * same reason Codex/Claude keep the tier out of their card bodies. The Settings
+ * card and the Overview tab render no such chip, so there the `Plan` row is the
+ * only tier surface and stays. The billing-period row shows on every surface.
+ */
+function GrokPeriodFallback({
+  subscriptionTier,
+  periodStart,
+  periodEnd,
+  variant,
+}: {
+  readonly subscriptionTier: string | null;
+  readonly periodStart: number | null;
+  readonly periodEnd: number | null;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  return (
+    <>
+      {variant !== "popover-detail" ? (
+        <ProviderTextRow label="Plan" value={subscriptionTier} />
+      ) : null}
+      <ProviderTextRow
+        label="Billing period"
+        value={formatGrokPeriodRange(periodStart, periodEnd)}
+      />
+    </>
+  );
+}
+
+/**
+ * Grok's usage detail. Grok reports a billing-period credit picture rather than
+ * rolling-utilization windows, so three shapes are handled:
+ *
+ * - `period` present -> the period usage bar, reusing the shared `RateLimitWindowRow`
+ *   so its "% used · Resets <date>" reads identically to codex/claude; the bar's
+ *   label is the period cadence ("Weekly").
+ * - `period` null -> the unmeasured-period fallback (`GrokPeriodFallback`): the
+ *   plan tier and the billing period's dates.
+ * - the raw credit figures (prepaid balance, monthly limit, on-demand
+ *   used/limit) render only where xAI actually reported them - it omits fields
+ *   freely by account type - as neutral `$`-denominated rows, the same
+ *   percentage-free treatment OpenRouter/Kilo Code credits get.
+ */
+export function GrokRateLimitView({
+  data,
+  variant,
+}: {
+  readonly data: GrokRateLimits;
+  readonly variant: RateLimitViewVariant;
+}): ReactNode {
+  // Overview keeps only the period usage (bar or fallback) and the prepaid
+  // balance; the monthly limit and on-demand figures are single-provider-tab
+  // detail, matching how OpenRouter/Kilo Code trim their Overview.
+  const overview = isOverviewVariant(variant);
+  return (
+    <div className="flex flex-col gap-3">
+      {data.period !== null ? (
+        <RateLimitWindowRow
+          label={formatGrokPeriodLabel(
+            data.periodType,
+            data.period.durationMinutes,
+          )}
+          window={data.period}
+        />
+      ) : (
+        <GrokPeriodFallback
+          subscriptionTier={data.subscriptionTier}
+          periodStart={data.periodStart}
+          periodEnd={data.periodEnd}
+          variant={variant}
+        />
+      )}
+      <ProviderNumberRow
+        label="Prepaid balance"
+        value={data.prepaidBalance}
+        format={formatProviderCurrency}
+      />
+      {!overview ? (
+        <>
+          <ProviderNumberRow
+            label="Monthly limit"
+            value={data.monthlyLimit}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="On-demand used"
+            value={data.onDemandUsed}
+            format={formatProviderCurrency}
+          />
+          <ProviderNumberRow
+            label="On-demand limit"
+            value={data.onDemandCap}
+            format={formatProviderCurrency}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export function ProviderRateLimitBody(
   props: ProviderRateLimitQueryState & {
     readonly codexResetAction: CodexResetCreditActionRenderer | null;
@@ -1025,18 +1199,68 @@ export function ProviderRateLimitBody(
       </p>
     );
   }
-  return (
+  const detail = (
     <ProviderRateLimitDetail
       data={data}
       variant="settings"
       codexResetAction={props.codexResetAction}
     />
   );
+  // Fresh reading: render as-is. The Providers panel header already carries a
+  // "Checked Xm ago" for provider status, so a healthy usage card needs no
+  // second timestamp.
+  if (!state.degraded) return detail;
+  // Degraded: a retained last-known-good reading is being shown after the
+  // latest poll failed. Surface the ORIGINAL update time plus a failed-refresh
+  // note and dim the reading in place - the same treatment the header popover
+  // gives this state, so the stale numbers can't be mistaken for fresh.
+  return (
+    <div className="flex flex-col gap-2">
+      <StaleUsageRefreshNote
+        lastGoodAt={state.lastGoodAt}
+        degradedReason={state.degradedReason}
+      />
+      <div className="opacity-60">{detail}</div>
+    </div>
+  );
+}
+
+/**
+ * The failed-refresh / stale line the Settings usage card shows while it's
+ * displaying a retained last-known-good reading after the latest poll failed
+ * (Core Flows degraded state): the ORIGINAL `lastGoodAt` as "Updated Xm ago"
+ * (never the failed attempt's time, so it can't read as fresh) followed by a
+ * note - the specific transient reason's plain-language copy when the envelope
+ * itself is why (`degradedReason` non-null), otherwise the generic "refresh
+ * failed" for a thrown query-level exception with no specific reason. Mirrors
+ * the header popover's `UsageLimitUpdatedLabel` copy verbatim; kept a local
+ * component so neither component-only file has to import the other. Renders the
+ * note alone in the (production-unreachable) case where an available degraded
+ * reading somehow carries no timestamp, keeping the single relative-time hook
+ * call unconditional.
+ */
+function StaleUsageRefreshNote({
+  lastGoodAt,
+  degradedReason,
+}: {
+  readonly lastGoodAt: number | null;
+  readonly degradedReason: RateLimitUnavailableReason | null;
+}): ReactNode {
+  const ago = useRelativeTimestamp(lastGoodAt ?? 0);
+  const note =
+    degradedReason !== null
+      ? formatUnavailableReason(degradedReason)
+      : "refresh failed";
+  return (
+    <p className="text-ui-xs text-muted-foreground">
+      {lastGoodAt !== null ? `Updated ${ago} · ${note}` : note}
+    </p>
+  );
 }
 
 /**
  * Renders one provider's available-arm detail. Exhaustive over every
- * `available: true` arm (`data.provider` is now four-way, not the old binary
+ * `available: true` arm (`data.provider` is now five-way, not the old binary
  * codex/claude split), so a new provider arm added to the wire union fails the
  * build here until it gets a view. Exported so the header popover reuses the
  * exact same per-provider bodies the Settings card shows (Core Flows: "both
@@ -1070,5 +1294,10 @@ export function ProviderRateLimitDetail({
       return <OpenRouterRateLimitView data={data} variant={variant} />;
     case "kilocode":
       return <KiloCodeRateLimitView data={data} variant={variant} />;
+    // Grok reports no rolling usage *windows* either - only a synthesized
+    // billing-period bar plus credit figures - so, like OpenRouter/Kilo Code,
+    // `variant` drives just the Overview-vs-detail trim.
+    case "grok":
+      return <GrokRateLimitView data={data} variant={variant} />;
   }
 }

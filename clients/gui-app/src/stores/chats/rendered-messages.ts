@@ -3,6 +3,7 @@ import type {
   AgentSender,
   AssistantMessage,
   ChatEvent,
+  ChatSessionAnchor,
   Message,
   UserMessage,
   UserMessageSender,
@@ -21,7 +22,6 @@ import {
   turnCheckpointManifestSchema,
   type TurnCheckpointManifest,
 } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
-import { AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import {
   buildAttachmentsFromJSONContent,
   extractPlainTextFromComposerJSONContent,
@@ -486,6 +486,7 @@ interface PendingPauseRequest {
 interface PendingTurnMetaInput {
   readonly harnessId: AgentSender["harnessId"] | null;
   readonly model: string | null;
+  readonly profileLabel: string | null;
   readonly reasoningEffort: string | null;
   readonly serviceTier: string | null;
 }
@@ -503,6 +504,7 @@ const NO_TURN_PAUSE: TurnPauseAccounting = {
 const NO_PENDING_TURN_META_INPUT: PendingTurnMetaInput = {
   harnessId: null,
   model: null,
+  profileLabel: null,
   reasoningEffort: null,
   serviceTier: null,
 };
@@ -515,6 +517,64 @@ function stoppedSignature(stopped: TurnStoppedEventInfo | null): string {
   return stopped === null
     ? "stopped:none"
     : `stopped:${stopped.stoppedAt}:${stopped.reason ?? ""}`;
+}
+
+function profileLabelFromSessionAnchor(
+  sessionAnchor: ChatSessionAnchor,
+): string {
+  if (sessionAnchor.labelSnapshot !== null) {
+    return sessionAnchor.labelSnapshot;
+  }
+  return sessionAnchor.profileId === null ? "Terminal account" : "profile";
+}
+
+/**
+ * Associate the immutable profile label on each provider-session anchor with
+ * every assistant turn that follows it. Continuation messages do not carry a
+ * new anchor, so the last anchor remains in effect until the host mints the
+ * next one. The active turn needs an explicit mapping before its first
+ * assistant record exists; its `userMessageId` identifies the initiating row.
+ */
+function profileLabelsByTurnKeyFromMessages(input: {
+  readonly messages: ReadonlyArray<Message>;
+  readonly activeTurnId: string | null;
+  readonly activeTurnUserMessageId: string | null;
+  readonly activeTurnHarnessId: AgentSender["harnessId"] | null;
+  readonly activeTurnProfileId: string | null;
+}): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+  let currentAnchor: ChatSessionAnchor | null = null;
+  let activeTurnAnchor: ChatSessionAnchor | null = null;
+
+  for (const message of input.messages) {
+    if (message.role === "user") {
+      if (message.sessionAnchor !== null) {
+        currentAnchor = message.sessionAnchor;
+      }
+      if (message.messageId === input.activeTurnUserMessageId) {
+        activeTurnAnchor = currentAnchor;
+      }
+      continue;
+    }
+    if (currentAnchor?.harnessId === message.sender.harnessId) {
+      labels.set(
+        assistantTurnKey(message),
+        profileLabelFromSessionAnchor(currentAnchor),
+      );
+    }
+  }
+
+  if (
+    input.activeTurnId !== null &&
+    activeTurnAnchor?.harnessId === input.activeTurnHarnessId &&
+    activeTurnAnchor.profileId === input.activeTurnProfileId
+  ) {
+    labels.set(
+      input.activeTurnId,
+      profileLabelFromSessionAnchor(activeTurnAnchor),
+    );
+  }
+  return labels;
 }
 
 function buildTurnPauseAccounting(input: {
@@ -738,8 +798,31 @@ export function useRenderedMessages(
   // on its stable primitive fields (not the object identity) to avoid busting
   // this memo each frame. These are all set at turn-start and never rewritten
   // per delta, so they make safe, churn-free deps.
-  const activeTurnProjection = projectActiveTurn(input.activeTurn);
-  const activeTurnId = activeTurnProjection.turnId;
+  const activeTurnId = input.activeTurn?.turnId ?? null;
+  const activeTurnUserMessageId = input.activeTurn?.userMessageId ?? null;
+  const activeTurnHarnessId = input.activeTurn?.harnessId ?? null;
+  const activeTurnProfileId = input.activeTurn?.profileId ?? null;
+  const profileLabelsByTurnKey = useMemo(
+    () =>
+      profileLabelsByTurnKeyFromMessages({
+        messages: input.messages,
+        activeTurnId,
+        activeTurnUserMessageId,
+        activeTurnHarnessId,
+        activeTurnProfileId,
+      }),
+    [
+      input.messages,
+      activeTurnId,
+      activeTurnUserMessageId,
+      activeTurnHarnessId,
+      activeTurnProfileId,
+    ],
+  );
+  const activeTurnProjection = projectActiveTurn(
+    input.activeTurn,
+    profileLabelsByTurnKey,
+  );
   const activeTurnMetaInput = activeTurnProjection.metaInput;
   const runStatus = input.runStatus;
   // The run-state indicator belongs to the single active turn; `idle`
@@ -908,6 +991,7 @@ export function useRenderedMessages(
     return renderPersistedMessages({
       messages: partition.settled,
       userMessagesById,
+      profileLabelsByTurnKey,
       liveAssistant: null,
       externallyNestedSteeredMessageIds: activeTurnSteeredMessageIds,
       checkpointViews,
@@ -922,6 +1006,7 @@ export function useRenderedMessages(
   }, [
     partition,
     userMessagesById,
+    profileLabelsByTurnKey,
     activeTurnSteeredMessageIds,
     retainedTurnKeys,
     checkpointViews,
@@ -944,6 +1029,7 @@ export function useRenderedMessages(
         : renderPersistedMessages({
             messages: partition.activeTurn,
             userMessagesById,
+            profileLabelsByTurnKey,
             liveAssistant,
             externallyNestedSteeredMessageIds: NO_STEERED_IDS,
             checkpointViews,
@@ -960,6 +1046,7 @@ export function useRenderedMessages(
     [
       partition,
       userMessagesById,
+      profileLabelsByTurnKey,
       liveAssistant,
       checkpointViews,
       activeTurnId,
@@ -984,6 +1071,7 @@ export function useRenderedMessages(
       renderLiveAssistant({
         liveAssistant,
         userMessagesById,
+        profileLabelsByTurnKey,
         mergesIntoPersisted: liveMergesIntoPersisted,
         checkpointViews,
         activeRunState,
@@ -993,6 +1081,7 @@ export function useRenderedMessages(
     [
       liveAssistant,
       userMessagesById,
+      profileLabelsByTurnKey,
       liveMergesIntoPersisted,
       checkpointViews,
       activeRunState,
@@ -1150,6 +1239,7 @@ export function useRenderedMessages(
 
 function projectActiveTurn(
   activeTurn: ChatActiveTurn | null,
+  profileLabelsByTurnKey: ReadonlyMap<string, string>,
 ): ActiveTurnProjection {
   if (activeTurn === null) {
     return { turnId: null, metaInput: NO_PENDING_TURN_META_INPUT };
@@ -1159,6 +1249,7 @@ function projectActiveTurn(
     metaInput: {
       harnessId: activeTurn.harnessId,
       model: activeTurn.model,
+      profileLabel: profileLabelsByTurnKey.get(activeTurn.turnId) ?? null,
       reasoningEffort: activeTurn.reasoningEffort,
       serviceTier: activeTurn.serviceTier,
     },
@@ -1227,7 +1318,7 @@ function buildForkedChatLinkMessages(
       return [];
     }
     const sourceChatTitle =
-      metadataString(metadata, "sourceChatTitle") ?? "Untitled chat";
+      metadataString(metadata, "sourceChatTitle") ?? "Untitled agent";
     const id = `forked-chat-link:${event.eventId}`;
     return [
       {
@@ -1296,6 +1387,7 @@ function pendingTurnMeta(
   return {
     provider: turn.harnessId,
     providerLabel: display.providerLabel,
+    profileLabel: turn.profileLabel,
     modelLabel: display.modelLabel,
     reasoningEffort: turn.reasoningEffort,
     reasoningEffortLabel: ctx.resolveAgentReasoningLabel(
@@ -1328,6 +1420,8 @@ interface AssistantTurnAccumulator {
   timestamp: number;
   blocks: ContentBlock[];
   blocksVersion: number | null;
+  /** Profile label captured on the user message that initiated this turn. */
+  profileLabel: string | null;
   /**
    * Per-turn run metadata mirrored from the contributing `AssistantMessage`
    * records (identical across records of one turn). Drives the elapsed
@@ -1348,6 +1442,8 @@ interface PersistedMessagesRenderInput {
    * turns that may live in the other partition).
    */
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
+  /** Immutable profile-label snapshots keyed by assistant turn identity. */
+  readonly profileLabelsByTurnKey: ReadonlyMap<string, string>;
   readonly liveAssistant: LiveAssistantMessage | null;
   /**
    * Steered user ids nested inside turns OUTSIDE this partition; their user
@@ -1375,6 +1471,8 @@ interface RenderLiveAssistantInput {
   readonly liveAssistant: LiveAssistantMessage | null;
   /** Snapshot-wide user lookup for steer rows nested in the live turn. */
   readonly userMessagesById: ReadonlyMap<string, UserMessage>;
+  /** Immutable profile-label snapshots keyed by assistant turn identity. */
+  readonly profileLabelsByTurnKey: ReadonlyMap<string, string>;
   // Whether a persisted assistant message already shares the live turnId; the
   // hook derives this once from the head/tail partition and threads it in so
   // we don't re-scan the snapshot for the same predicate every streamed frame.
@@ -1393,7 +1491,11 @@ function renderPersistedMessages(
   const turnAccumulator = new Map<string, AssistantTurnAccumulator>();
   for (const message of input.messages) {
     if (message.role !== "assistant") continue;
-    addAssistantMessageToAccumulator(turnAccumulator, message);
+    addAssistantMessageToAccumulator(
+      turnAccumulator,
+      message,
+      input.profileLabelsByTurnKey.get(assistantTurnKey(message)) ?? null,
+    );
   }
   appendLiveAssistantBlocks(turnAccumulator, input.liveAssistant);
   const userMessagesById = input.userMessagesById;
@@ -1584,6 +1686,7 @@ function renderPersistedAssistantMessageTurn(
     completionToken,
     runState ?? "none",
     String(startedAt),
+    acc.profileLabel ?? "profile:none",
     turnPauseSignature(pause),
     stoppedSignature(stopped),
   ].join(":");
@@ -1610,6 +1713,7 @@ function renderPersistedAssistantMessageTurn(
 function addAssistantMessageToAccumulator(
   turnAccumulator: Map<string, AssistantTurnAccumulator>,
   message: AssistantMessage,
+  profileLabel: string | null,
 ): void {
   const turnKey = assistantTurnKey(message);
   const existing = turnAccumulator.get(turnKey);
@@ -1631,6 +1735,7 @@ function addAssistantMessageToAccumulator(
     existing.reasoningEffort =
       existing.reasoningEffort ?? message.reasoningEffort;
     existing.serviceTier = existing.serviceTier ?? message.serviceTier;
+    existing.profileLabel = existing.profileLabel ?? profileLabel;
     // `costUsd` is cumulative-to-turn-end and lands on the completing record,
     // which may be processed after an earlier sibling. Take the LATEST non-null
     // (last-wins) so the final cumulative cost is not pinned to a stale partial.
@@ -1645,6 +1750,7 @@ function addAssistantMessageToAccumulator(
     timestamp: message.timestamp,
     blocks: [...message.blocks],
     blocksVersion: message.blocksVersion ?? null,
+    profileLabel,
     reasoningEffort: message.reasoningEffort,
     serviceTier: message.serviceTier,
     costUsd: message.usage?.costUsd ?? null,
@@ -1856,6 +1962,7 @@ function renderAssistantTurnSlice(
   const assistantMeta: AssistantTurnMeta = {
     provider: input.acc.sender.harnessId,
     providerLabel: agentSender.providerLabel,
+    profileLabel: input.acc.profileLabel,
     modelLabel: agentSender.modelLabel,
     reasoningEffort: input.acc.reasoningEffort,
     reasoningEffortLabel: input.ctx.resolveAgentReasoningLabel(
@@ -2176,6 +2283,8 @@ function renderLiveAssistant(
       timestamp: liveAssistant.timestamp,
       blocks: [...liveAssistant.blocks],
       blocksVersion: liveAssistant.blocksVersion,
+      profileLabel:
+        input.profileLabelsByTurnKey.get(liveAssistant.turnId) ?? null,
       reasoningEffort: liveAssistant.reasoningEffort,
       serviceTier: liveAssistant.serviceTier,
       // A live turn has no final cost yet; it surfaces once the turn completes
@@ -2360,9 +2469,11 @@ function buildAssistantSegments(
     }
   }
   const nested = suppressRedundantResumeMarkers(nestSubagentChildren(flat));
-  const visible = suppressAuthErrors(
-    suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested)),
-  );
+  // Auth errors (`code: "auth"`) deliberately render as normal error segments:
+  // suppressing them made a headless (A2A-triggered) auth failure completely
+  // invisible after the transient re-auth banner cleared. Like rate-limit
+  // errors, the transcript row and the composer banner now coexist.
+  const visible = suppressEditToolCalls(suppressSubagentSpawnToolCalls(nested));
   // The card's merged change rides on the `artifact_operation` block itself
   // (set at emit from the turn's checkpoint builder), so no manifest enrichment
   // is needed for the card - it's available the moment the edit completes.
@@ -2394,20 +2505,6 @@ function artifactChangeRowsFromManifest(
       },
     ];
   });
-}
-
-/**
- * Drop `error` segments tagged `code: "auth"`. A signed-out provider is a
- * connection condition surfaced live above the composer (the re-auth banner),
- * not a transcript row - so the failed turn collapses to an empty slice instead
- * of leaving a scary red error card. An auth-only turn renders zero segments.
- */
-function suppressAuthErrors<T extends MessageSegment>(
-  flat: ReadonlyArray<T>,
-): ReadonlyArray<T> {
-  return flat.filter(
-    (s) => !(s.kind === "error" && s.code === AUTH_ERROR_CODE),
-  );
 }
 
 function isSubagentChildSegment(

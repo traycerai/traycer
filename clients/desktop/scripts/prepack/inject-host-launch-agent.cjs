@@ -58,12 +58,25 @@ const CONFIG_PATH = path.resolve(__dirname, "..", "..", "src", "config.ts");
 const CLI_BINARY_NAME = "traycer";
 const HOST_NODE_OPTIONS = "--max-semi-space-size=16";
 const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
-// Matches `PRODUCTION_LABEL.id` in `src/electron-main/host/host-paths.ts` -
-// the desktop resolves the plist to register by this exact filename.
+// Matches `PRODUCTION_LABEL.id` in `src/electron-main/host/host-paths.ts`.
 // Production-only: `scripts/set-deploy-target.cjs --target=production` (run
 // by release-desktop.yml before packaging) is the only stamp this label is
 // valid for - see `isProductionStamped` below.
+//
+// Since the label split (`host-paths.ts:smAppServiceAgentLabelId`), the
+// desktop registers the AGENT label below - `<cli-label>.agent` - and
+// resolves the plist to register by that exact filename. The CLI label's
+// plist still ships, but INERT: never registered, present only so the
+// desktop's transition cleanup (`unregister` of the old serviceName in
+// `host-login-item.ts`) can resolve it and drop the old app-scoped BTM
+// record on machines that upgraded from a pre-split SMAppService install.
+// Time-boxed: remove the inert plist once the fleet has cycled through a
+// few post-split releases. The `.agent` derivation must stay in lockstep
+// with `host-paths.ts:smAppServiceAgentLabelId`, the CLI's
+// `service/label.ts:smAppServiceAgentLabelId`, and the internal repo's
+// `desktop-install-cloud.js:hostAgentLabel` (none can import this file).
 const PRODUCTION_LABEL = "ai.traycer.host";
+const PRODUCTION_AGENT_LABEL = `${PRODUCTION_LABEL}.agent`;
 
 // `set-deploy-target.cjs` rewrites `environment: "dev"` to
 // `environment: "production"` in place before packaging for release; an
@@ -253,10 +266,6 @@ exports.afterPack = async function afterPack(context) {
   }
 
   const relativeHelperBinary = path.relative(appPath, helperBinary);
-  const plistBody = buildLaunchAgentPlist(
-    PRODUCTION_LABEL,
-    relativeHelperBinary,
-  );
   const launchAgentsDir = path.join(
     appPath,
     "Contents",
@@ -264,9 +273,15 @@ exports.afterPack = async function afterPack(context) {
     "LaunchAgents",
   );
   fs.mkdirSync(launchAgentsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(launchAgentsDir, `${PRODUCTION_LABEL}.plist`),
-    plistBody,
-    "utf8",
-  );
+  // The registered agent plist plus the inert old-label plist (see the
+  // label-split rationale above the label constants). Identical bodies
+  // apart from the Label; the old one is never loaded by anything - the
+  // desktop only ever `unregister`s its serviceName.
+  for (const label of [PRODUCTION_AGENT_LABEL, PRODUCTION_LABEL]) {
+    fs.writeFileSync(
+      path.join(launchAgentsDir, `${label}.plist`),
+      buildLaunchAgentPlist(label, relativeHelperBinary),
+      "utf8",
+    );
+  }
 };

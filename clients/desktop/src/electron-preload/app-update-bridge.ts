@@ -15,6 +15,9 @@ export interface AppUpdateBridgeSurface {
     checkForUpdates(
       intent: DesktopAppUpdateCheckIntent,
     ): Promise<DesktopAppUpdateSnapshot>;
+    setAllowPrerelease(
+      allowPrerelease: boolean,
+    ): Promise<DesktopAppUpdateSnapshot>;
     downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
     installUpdate(): Promise<DesktopAppUpdateSnapshot>;
     onChange(handler: Listener<DesktopAppUpdateSnapshot>): Disposable;
@@ -32,6 +35,11 @@ export function buildAppUpdateBridge(): AppUpdateBridgeSurface {
         ipcRenderer.invoke(
           RunnerHostInvoke.appUpdateCheck,
           intent,
+        ) as Promise<DesktopAppUpdateSnapshot>,
+      setAllowPrerelease: (allowPrerelease) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.appUpdateSetAllowPrerelease,
+          allowPrerelease,
         ) as Promise<DesktopAppUpdateSnapshot>,
       downloadUpdate: () =>
         ipcRenderer.invoke(

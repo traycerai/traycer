@@ -307,6 +307,13 @@ describe("<TraycerApp />", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "dev-runner-token",
         refreshToken: "dev-runner-token-refresh",
+        authnBaseUrl: host.authnBaseUrl,
+        savedAt: "2024-01-01T00:00:00.000Z",
+        user: {
+          id: "user-1",
+          email: "test@example.com",
+          name: "Test User",
+        },
       });
 
       const listTasksResponse: ListTasksResponse = {
@@ -380,6 +387,13 @@ describe("<TraycerApp />", () => {
       host.tokenStoreEntries.set("traycer.token", {
         token: "dev-runner-token",
         refreshToken: "dev-runner-token-refresh",
+        authnBaseUrl: host.authnBaseUrl,
+        savedAt: "2024-01-01T00:00:00.000Z",
+        user: {
+          id: "user-1",
+          email: "test@example.com",
+          name: "Test User",
+        },
       });
 
       const messenger = new MockHostMessenger<HostRpcRegistry>({
@@ -434,6 +448,13 @@ describe("<TraycerApp />", () => {
     host.tokenStoreEntries.set("traycer.token", {
       token: "dev-runner-token",
       refreshToken: "dev-runner-token-refresh",
+      authnBaseUrl: host.authnBaseUrl,
+      savedAt: "2024-01-01T00:00:00.000Z",
+      user: {
+        id: "user-1",
+        email: "test@example.com",
+        name: "Test User",
+      },
     });
 
     const messengerFactory: MessengerFactory<HostRpcRegistry> = (args) =>

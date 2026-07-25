@@ -7,7 +7,10 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
+import type {
+  WorktreeBindingOwnerKind,
+  WorktreeFolderIntent,
+} from "@traycer/protocol/host/worktree-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,11 +26,13 @@ import {
 import { FilePathTooltip } from "@/components/file-path-tooltip";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { useFocusEpicTerminalSession } from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
 import { useWorktreeRetrySetupFor } from "@/hooks/worktree/use-worktree-retry-setup-mutation";
+import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
 import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
 import { cn } from "@/lib/utils";
 import { LiveElapsed } from "./segment-elapsed";
@@ -68,6 +73,19 @@ export interface SetupCardWorkspace {
    */
   readonly worktreePath: string | null;
   readonly branch: string | null;
+  /**
+   * Failure reason from the failing `setup.*` event (a provision failure's
+   * git error). `null` for non-failed states and for script failures, which
+   * surface the exit code + terminal output instead.
+   */
+  readonly errorMessage: string | null;
+  /**
+   * Non-null only for a provision failure (`git worktree add` never ran or
+   * failed): the exact folder intent the failed create attempted. Retry
+   * re-provisions from it via `worktree.create` - `worktree.retrySetup` only
+   * re-runs setup scripts and rejects an entry with no worktree.
+   */
+  readonly retryFolderIntent: WorktreeFolderIntent | null;
 }
 
 /**
@@ -138,6 +156,7 @@ export function SetupCardSegment(props: {
   const focusTerminal = useFocusEpicTerminalSession(viewTabId);
   const tabClient = useTabHostClient();
   const retrySetup = useWorktreeRetrySetupFor(tabClient);
+  const worktreeCreate = useWorktreeCreateForClient(tabClient);
   const terminalList = useTerminalListFor(tabClient, {
     kind: "epic",
     epicId: aggregate.epicId,
@@ -164,12 +183,51 @@ export function SetupCardSegment(props: {
     return livenessKnown ? "ended" : "live";
   };
 
-  const handleRetry = (workspacePath: string): void => {
+  const handleRetry = (workspace: SetupCardWorkspace): void => {
+    // A provision failure has no worktree to re-run setup inside -
+    // `worktree.retrySetup` would reject it ("entry has no worktree"). Retry
+    // it by re-provisioning from the exact intent the failing event carried.
+    // Script failures keep the in-place `retrySetup` path: the worktree
+    // exists and only its setup script needs to re-run.
+    if (workspace.retryFolderIntent !== null) {
+      worktreeCreate.mutate(
+        {
+          epicId: aggregate.epicId,
+          ownerId: aggregate.ownerId,
+          ownerKind: aggregate.ownerKind,
+          entries: [workspace.retryFolderIntent],
+        },
+        {
+          // A failed entry does NOT reject the RPC - it rides `perEntry` on a
+          // successful response, so the hook's `onError` toast never sees it.
+          // Surface it here; the host separately appends a fresh
+          // `setup.failed` event that refreshes this card's reason.
+          onSuccess: (response) => {
+            const failed = response.perEntry.find(
+              (entry) =>
+                entry.workspacePath === workspace.workspacePath && !entry.ok,
+            );
+            if (failed === undefined) return;
+            reportableErrorToast(
+              failed.errorMessage ?? "Couldn't create worktree.",
+              undefined,
+              createReportIssueContext({
+                title: "Worktree re-provision failed",
+                message: failed.errorMessage,
+                code: null,
+                source: "Setup",
+              }),
+            );
+          },
+        },
+      );
+      return;
+    }
     retrySetup.mutate({
       epicId: aggregate.epicId,
       ownerId: aggregate.ownerId,
       ownerKind: aggregate.ownerKind,
-      workspacePath,
+      workspacePath: workspace.workspacePath,
     });
   };
 
@@ -205,7 +263,7 @@ export function SetupCardSegment(props: {
     focusTerminal,
     livenessFor,
     onRetry: handleRetry,
-    retryPending: retrySetup.isPending,
+    retryPending: retrySetup.isPending || worktreeCreate.isPending,
     tabReady,
     active: isActive,
   };
@@ -319,7 +377,7 @@ interface SharedHandlers {
     cwd: string,
   ) => void;
   readonly livenessFor: (sessionId: string | null) => TerminalLiveness;
-  readonly onRetry: (workspacePath: string) => void;
+  readonly onRetry: (workspace: SetupCardWorkspace) => void;
   readonly retryPending: boolean;
   /** Tab host client resolved - gates the `tabClient`-routed Retry. */
   readonly tabReady: boolean;
@@ -348,17 +406,14 @@ function WorkspaceSetupDetail(
   const liveness = livenessFor(entry.terminalSessionId);
   const retry =
     (entry.state === "failed" || entry.state === "cancelled") && tabReady ? (
-      <RetryButton
-        pending={retryPending}
-        onRetry={() => onRetry(entry.workspacePath)}
-      />
+      <RetryButton pending={retryPending} onRetry={() => onRetry(entry)} />
     ) : null;
   const reportIssue =
     entry.state === "failed" ? (
       <ReportIssueAction
         context={createReportIssueContext({
           title: "Worktree setup failed",
-          message: null,
+          message: entry.errorMessage,
           code: null,
           source: "Setup",
         })}
@@ -416,6 +471,16 @@ function WorkspaceSetupDetail(
           {reportIssue}
         </li>
       </ol>
+      {entry.state === "failed" && entry.errorMessage !== null ? (
+        // `role="alert"` announces the provisioning failure to assistive tech
+        // when it appears, and gives the message an accessible query handle.
+        <p
+          role="alert"
+          className="m-0 whitespace-pre-wrap break-words pl-6 text-ui-sm text-destructive"
+        >
+          {entry.errorMessage}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -72,6 +72,7 @@ function profile(
       accountUuid === null ? null : { email: null, tier: null, accountUuid },
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,

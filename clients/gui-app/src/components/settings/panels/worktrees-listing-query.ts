@@ -6,7 +6,9 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -116,7 +118,20 @@ export function useWorktreeListing(
    * every already-landed page too.
    */
   readonly retryPartial: () => Promise<unknown>;
-  readonly refreshing: boolean;
+  /**
+   * True only while the user's explicit Refresh (the forced-listing mutation)
+   * is in flight - NOT during background page fetches or enrichment. The
+   * toolbar keys the Refresh button's disabled/spinner state off this, so it
+   * stays clickable while a cold fleet is still converging its rows.
+   */
+  readonly isRefreshPending: boolean;
+  /**
+   * When the listing data was last written: a live fetch's wall-clock stamp,
+   * or the snapshot's own save time while the warm-open seed is still what's
+   * showing. `null` until any data exists. Drives the toolbar's
+   * "Updated Xm ago" label under the manual-refresh model.
+   */
+  readonly lastUpdatedAt: number | null;
 } {
   const readiness = useReactiveHostReadiness(client);
   const enabled = reachable && client !== null && readiness.isReady;
@@ -151,32 +166,38 @@ export function useWorktreeListing(
     >(key, seededListingData(snapshot.entries), {
       updatedAt: snapshot.savedAt,
     });
+    // Under `staleTime: Infinity` a seed would otherwise read as fresh
+    // forever. The snapshot is ANOTHER session's truth, so mark it
+    // invalidated: the observer reconciles it against the host exactly once
+    // (on enable), and only live data earned this session sticks.
+    void queryClient.invalidateQueries({ queryKey: key });
     logPerfEvent("worktree.listing_restore", {
       restoredCount: snapshot.entries.length,
     });
   }, [queryClient, readiness.hostId]);
-  const fetchWorktreeListPage = async ({
+  const fetchWorktreeListPage = ({
     pageParam,
   }: {
     readonly pageParam: string | null;
-  }): Promise<WorktreeListAllForHostResponseV14> => {
-    if (client === null) {
-      throw hostClientUnavailableError("worktree.listAllForHost");
-    }
-    return client.request("worktree.listAllForHost", {
-      ...SETTINGS_WORKTREE_LIST_BASE_PARAMS,
-      cursor: pageParam,
-      forceRefresh: false,
+  }): Promise<WorktreeListAllForHostResponseV14> =>
+    withHostQueryErrorBoundary("worktree.listAllForHost", async () => {
+      if (client === null) {
+        throw hostClientUnavailableError("worktree.listAllForHost");
+      }
+      return client.request("worktree.listAllForHost", {
+        ...SETTINGS_WORKTREE_LIST_BASE_PARAMS,
+        cursor: pageParam,
+        forceRefresh: false,
+      });
     });
-  };
   const {
     data,
+    dataUpdatedAt,
     error,
     fetchNextPage,
     fetchStatus,
     hasNextPage,
     isError,
-    isFetching,
     isFetchingNextPage,
     isPending,
     isSuccess,
@@ -194,51 +215,59 @@ export function useWorktreeListing(
       initialPageParam: null,
       getNextPageParam: (lastPage) => lastPage.nextCursor,
       enabled,
+      // Manual-refresh model: the listing never expires on its own. The host
+      // pushes `worktree.changed` only on real mutations now (no periodic
+      // sweep), so freshness is owned by the Refresh button + invalidation;
+      // the toolbar surfaces `lastUpdatedAt` so staleness is visible instead
+      // of silently refetched.
+      staleTime: Infinity,
     }),
   );
-  // `HostRpcError` error generic: the mutationFn only rejects via
-  // `client.request`, whose failures are always host RPC errors.
   const refreshMutation = useMutation<
     WorktreeListAllForHostResponseV14,
     HostRpcError,
     { readonly client: HostClient<HostRpcRegistry>; readonly hostId: string }
-  >({
-    mutationKey: worktreeMutationKeys.refreshListing(),
-    // The Refresh button's only failure signal was the spinner stopping - the
-    // rejected promise is swallowed by useRefreshSpinner.
-    onError: (error) =>
-      toastFromHostError(error, "Couldn't refresh worktrees."),
-    mutationFn: (input) =>
-      input.client.request("worktree.listAllForHost", {
-        includeActivity: false,
-        activityPaths: null,
-        cursor: null,
-        limit: null,
-        forceRefresh: true,
-      }),
-    onSuccess: (response, input) => {
-      queryClient.setQueryData<
-        InfiniteData<WorktreeListAllForHostResponseV14, string | null>
-      >(listingQueryKeyFor(input.hostId), {
-        pages: [response],
-        pageParams: [null],
-      });
-      // The forced listing re-resolves the BASE rows, so every cached overlay
-      // is now older than its base row and `acceptedEnrichedByPath` rejects it
-      // - the rows read "Checking..." until something re-probes them. Nothing
-      // would: the overlays keep their keys, so they are neither invalidated
-      // nor sweep candidates. Without this the Refresh button strands every
-      // on-screen row, permanently on a host that lacks `worktree.changed`.
-      void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(
-          input.hostId,
-          "worktree.listAllForHost",
+  >(
+    withHostMutationLifecycleBoundary("worktree.listAllForHost", {
+      mutationKey: worktreeMutationKeys.refreshListing(),
+      // The Refresh button's only failure signal was the spinner stopping - the
+      // rejected promise is swallowed by useRefreshSpinner.
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't refresh worktrees."),
+      mutationFn: (input) =>
+        withHostQueryErrorBoundary("worktree.listAllForHost", () =>
+          input.client.request("worktree.listAllForHost", {
+            includeActivity: false,
+            activityPaths: null,
+            cursor: null,
+            limit: null,
+            forceRefresh: true,
+          }),
         ),
-        refetchType: "active",
-        predicate: (query) => isPerPathEnrichmentQueryKey(query.queryKey),
-      });
-    },
-  });
+      onSuccess: (response, input) => {
+        queryClient.setQueryData<
+          InfiniteData<WorktreeListAllForHostResponseV14, string | null>
+        >(listingQueryKeyFor(input.hostId), {
+          pages: [response],
+          pageParams: [null],
+        });
+        // The forced listing re-resolves the BASE rows, so every cached overlay
+        // is now older than its base row and `acceptedEnrichedByPath` rejects it
+        // - the rows read "Checking..." until something re-probes them. Nothing
+        // would: the overlays keep their keys, so they are neither invalidated
+        // nor sweep candidates. Without this the Refresh button strands every
+        // on-screen row, permanently on a host that lacks `worktree.changed`.
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            input.hostId,
+            "worktree.listAllForHost",
+          ),
+          refetchType: "active",
+          predicate: (query) => isPerPathEnrichmentQueryKey(query.queryKey),
+        });
+      },
+    }),
+  );
   useEffect(() => {
     if (!enabled) return;
     if (!hasNextPage) return;
@@ -335,6 +364,7 @@ export function useWorktreeListing(
       });
     },
     retryPartial: () => fetchNextPage(),
-    refreshing: isFetching || refreshMutation.isPending,
+    isRefreshPending: refreshMutation.isPending,
+    lastUpdatedAt: dataUpdatedAt === 0 ? null : dataUpdatedAt,
   };
 }

@@ -426,7 +426,7 @@ describe("<TerminalAgentForkDialog />", () => {
     );
 
     const argsInput = screen.getByRole("textbox", {
-      name: "Terminal agent additional arguments",
+      name: "Terminal interface CLI arguments",
     });
     expect((argsInput as HTMLInputElement).value).toBe("--from-source");
     fireEvent.click(screen.getByRole("button", { name: "Fork" }));
@@ -475,6 +475,7 @@ function sourceAgentWithTerminalArgs(
     reasoningEffort: "high",
     agentMode: "regular",
     profileId: null,
+    archivedAt: null,
     harnessSessionId: "source-session",
     terminalAgentArgs,
     terminalShellCommand: "claude",

@@ -14,24 +14,26 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { runnerQueryKeys } from "@/lib/query-keys/runner-mutation-keys";
 import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-store";
 import type {
-  HostInstallResult,
+  ApplyStagedOk,
+  HostControllerStatus,
   HostInstalledRecord,
-  HostOperationStatus,
-  HostRegistryUpdateState,
   IHostManagement,
   IRunnerHost,
+  MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 
-// Ticket: host-update-race-conditions. Reported bug: triggering an update
-// from the landing-page banner left the Settings → Host "Update" button
-// clickable, and clicking it there threw the CLI's "update locked" error
-// while the banner still spun. Both surfaces now read one shared
-// `hostOperationStatus` query - primed via `getOperationStatus()` and pushed
-// by `HostOperationStatusListener` in production. Here we push it directly
-// via `queryClient.setQueryData`, exactly the mechanism the listener uses,
-// to prove BOTH surfaces observe the SAME state regardless of which one
-// triggered the mutation.
+// Ticket: renderer-surfaces-cutover (Host Update Layer Redesign). Reported
+// bug (host-update-race-conditions): triggering an update from the
+// landing-page banner left the Settings → Host "Update" button clickable,
+// and clicking it there threw the CLI's "update locked" error while the
+// banner still spun. Both surfaces now read one shared canonical
+// `HostControllerStatus` query - primed via `getHostControllerStatus()` and
+// pushed by `HostControllerStatusListener` in production. Here we push it
+// directly via `queryClient.setQueryData`, exactly the mechanism the
+// listener uses, to prove BOTH surfaces observe the SAME mutation-lane state
+// regardless of which one triggered the mutation, and that a concurrent
+// download-lane push does NOT disable either surface's button.
 
 vi.mock("sonner", () => ({
   toast: {
@@ -41,21 +43,28 @@ vi.mock("sonner", () => ({
   },
 }));
 
+const READY_STATUS: HostControllerStatus = {
+  download: null,
+  mutation: null,
+  installedVersion: "1.4.2",
+  latestVersion: "1.5.0",
+  stagedVersion: "1.5.0",
+  installedRuntimeVersion: null,
+  runningRuntimeVersion: null,
+  updateReady: true,
+  activation: "activated",
+  reachable: true,
+  removedByUser: false,
+  checkedAt: "2026-05-15T00:00:00Z",
+};
+
 function makeManagement(overrides: {
-  readonly updateHost: () => Promise<HostInstallResult>;
+  readonly applyStaged: () => Promise<MutationOutcome<ApplyStagedOk>>;
 }): IHostManagement {
   const notImplemented =
     (method: string) =>
     (..._args: unknown[]): Promise<never> =>
       Promise.reject(new Error(`${method} not implemented in mock`));
-  const registryState: HostRegistryUpdateState = {
-    checkedAt: "2026-05-15T00:00:00Z",
-    latestVersion: "1.5.0",
-    installedVersion: "1.4.2",
-    updateAvailable: true,
-    reachable: true,
-    errorMessage: null,
-  };
   const installedRecord: HostInstalledRecord = {
     version: "1.4.2",
     installedAt: "2026-05-10T00:00:00Z",
@@ -69,8 +78,11 @@ function makeManagement(overrides: {
     arch: "arm64",
   };
   return {
-    installHost: vi.fn(notImplemented("installHost")),
-    updateHost: vi.fn(overrides.updateHost),
+    getHostControllerStatus: vi.fn(() => Promise.resolve(READY_STATUS)),
+    convergeReady: vi.fn(notImplemented("convergeReady")),
+    applyStaged: vi.fn(overrides.applyStaged),
+    activateInstalled: vi.fn(notImplemented("activateInstalled")),
+    installVersion: vi.fn(notImplemented("installVersion")),
     uninstallHost: vi.fn(notImplemented("uninstallHost")),
     restartHost: vi.fn(() => Promise.resolve()),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
@@ -89,10 +101,17 @@ function makeManagement(overrides: {
     ),
     installedRecord: vi.fn(() => Promise.resolve(installedRecord)),
     registerService: vi.fn(notImplemented("registerService")),
-    ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
-    registryCheck: vi.fn(() => Promise.resolve(registryState)),
-    getOperationStatus: vi.fn(() => Promise.resolve(null)),
+    registryCheck: vi.fn(() =>
+      Promise.resolve({
+        checkedAt: "2026-05-15T00:00:00Z",
+        latestVersion: "1.5.0",
+        installedVersion: "1.4.2",
+        updateAvailable: true,
+        reachable: true,
+        errorMessage: null,
+      }),
+    ),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
     getHostName: vi.fn(() =>
@@ -150,28 +169,29 @@ describe("host update - shared state across the banner and Settings → Host", (
     useHostUpdateBannerStore.setState({ snoozeUntilByVersion: {} });
   });
 
-  it("disables Settings' Update button and shows the shared percent once the banner's update is broadcast as in-progress", async () => {
-    let resolveUpdate: (value: HostInstallResult) => void = () => undefined;
-    const updateHost = vi.fn(
+  it("disables Settings' Update button and shows the shared percent once the banner's apply is broadcast as in-progress", async () => {
+    let resolveApply: (value: MutationOutcome<ApplyStagedOk>) => void = () =>
+      undefined;
+    const applyStaged = vi.fn(
       () =>
-        new Promise<HostInstallResult>((resolve) => {
-          resolveUpdate = resolve;
+        new Promise<MutationOutcome<ApplyStagedOk>>((resolve) => {
+          resolveApply = resolve;
         }),
     );
-    const management = makeManagement({ updateHost });
+    const management = makeManagement({ applyStaged });
     const queryClient = renderBothSurfaces(makeHost(management));
 
-    const bannerInstallButton = await screen.findByRole("button", {
-      name: /^Install$/,
+    const bannerUpdateButton = await screen.findByRole("button", {
+      name: /^Update now$/,
     });
-    const settingsUpdateButton = await screen.findByRole("button", {
-      name: /^Update$/,
-    });
+    const settingsUpdateButton = await screen.findByTestId(
+      "settings-host-update-action",
+    );
     expect(settingsUpdateButton.hasAttribute("disabled")).toBe(false);
 
-    fireEvent.click(bannerInstallButton);
+    fireEvent.click(bannerUpdateButton);
     await waitFor(() => {
-      expect(updateHost).toHaveBeenCalledTimes(1);
+      expect(applyStaged).toHaveBeenCalledTimes(1);
     });
 
     // Before the shared status push arrives, Settings' button is driven
@@ -180,21 +200,25 @@ describe("host update - shared state across the banner and Settings → Host", (
     // click here would race the banner's in-flight CLI subprocess.
     expect(settingsUpdateButton.hasAttribute("disabled")).toBe(false);
 
-    // Simulate the main-process broadcast `HostOperationStatusListener`
-    // pipes into this same query cache entry once the banner's update
+    // Simulate the main-process broadcast `HostControllerStatusListener`
+    // pipes into this same query cache entry once the banner's apply
     // actually starts running on the CLI side.
     act(() => {
-      queryClient.setQueryData<HostOperationStatus>(
-        runnerQueryKeys.hostOperationStatus(management),
+      queryClient.setQueryData<HostControllerStatus>(
+        runnerQueryKeys.hostControllerStatus(management),
         {
-          operationId: "op-1",
-          kind: "update",
-          stage: "download",
-          percent: 37,
-          bytes: 37,
-          totalBytes: 100,
-          message: "downloading",
-          startedAt: "2026-05-15T00:00:00Z",
+          ...READY_STATUS,
+          mutation: {
+            kind: "apply",
+            progress: {
+              stage: "download",
+              percent: 37,
+              bytes: 37,
+              totalBytes: 100,
+              message: "downloading",
+            },
+            startedAt: "2026-05-15T00:00:00Z",
+          },
         },
       );
     });
@@ -207,66 +231,97 @@ describe("host update - shared state across the banner and Settings → Host", (
     expect(percentReadouts.length).toBeGreaterThanOrEqual(1);
 
     act(() => {
-      queryClient.setQueryData<HostOperationStatus | null>(
-        runnerQueryKeys.hostOperationStatus(management),
-        null,
+      queryClient.setQueryData<HostControllerStatus>(
+        runnerQueryKeys.hostControllerStatus(management),
+        {
+          ...READY_STATUS,
+          installedVersion: "1.5.0",
+          stagedVersion: null,
+          updateReady: false,
+          mutation: null,
+        },
       );
     });
-    resolveUpdate({
-      version: "1.5.0",
-      installedAt: "2026-05-15T00:00:00Z",
-      executablePath: "/tmp/traycerd",
-      source: { kind: "registry", value: "1.5.0" },
-      archiveSha256: "deadbeef",
-      signatureKeyId: "stub",
-      sizeBytes: 1024,
-      previousVersion: "1.4.2",
-      serviceLifecycle: {
-        priorServiceState: "running",
-        stoppedBeforeSwap: true,
-        postSwapAction: "restart",
-        postSwapError: null,
-      },
+    resolveApply({
+      kind: "ok",
+      value: { appliedVersion: "1.5.0", runningActivated: true },
     });
 
     await waitFor(() => {
-      expect(settingsUpdateButton.hasAttribute("disabled")).toBe(false);
+      expect(screen.queryByTestId("settings-host-update-action")).toBeNull();
     });
   });
 
-  it("a shared in-progress status from another surface disables the banner's Install button even though the banner never called updateHost itself", async () => {
-    const updateHost = vi.fn(
-      () => new Promise<HostInstallResult>(() => undefined),
+  it("a shared in-progress status from another surface disables the banner's Update button even though the banner never called applyStaged itself", async () => {
+    const applyStaged = vi.fn(
+      () => new Promise<MutationOutcome<ApplyStagedOk>>(() => undefined),
     );
-    const management = makeManagement({ updateHost });
+    const management = makeManagement({ applyStaged });
     const queryClient = renderBothSurfaces(makeHost(management));
 
-    const bannerInstallButton = await screen.findByRole("button", {
-      name: /^Install$/,
+    const bannerUpdateButton = await screen.findByRole("button", {
+      name: /^Update now$/,
     });
-    expect(bannerInstallButton.hasAttribute("disabled")).toBe(false);
+    expect(bannerUpdateButton.hasAttribute("disabled")).toBe(false);
 
     // Settings (or the background auto-update reconciler) started the
     // operation - the banner never touched its own mutation.
     act(() => {
-      queryClient.setQueryData<HostOperationStatus>(
-        runnerQueryKeys.hostOperationStatus(management),
+      queryClient.setQueryData<HostControllerStatus>(
+        runnerQueryKeys.hostControllerStatus(management),
         {
-          operationId: "op-2",
-          kind: "update",
-          stage: null,
-          percent: null,
-          bytes: null,
-          totalBytes: null,
-          message: null,
-          startedAt: "2026-05-15T00:00:00Z",
+          ...READY_STATUS,
+          mutation: {
+            kind: "apply",
+            progress: null,
+            startedAt: "2026-05-15T00:00:00Z",
+          },
         },
       );
     });
 
     await waitFor(() => {
-      expect(bannerInstallButton.hasAttribute("disabled")).toBe(true);
+      expect(bannerUpdateButton.hasAttribute("disabled")).toBe(true);
     });
-    expect(updateHost).not.toHaveBeenCalled();
+    expect(applyStaged).not.toHaveBeenCalled();
+  });
+
+  it("a concurrent download-lane push does not disable either surface's action button", async () => {
+    const applyStaged = vi.fn(
+      () => new Promise<MutationOutcome<ApplyStagedOk>>(() => undefined),
+    );
+    const management = makeManagement({ applyStaged });
+    const queryClient = renderBothSurfaces(makeHost(management));
+
+    const bannerUpdateButton = await screen.findByRole("button", {
+      name: /^Update now$/,
+    });
+    const settingsUpdateButton = await screen.findByTestId(
+      "settings-host-update-action",
+    );
+
+    act(() => {
+      queryClient.setQueryData<HostControllerStatus>(
+        runnerQueryKeys.hostControllerStatus(management),
+        {
+          ...READY_STATUS,
+          download: {
+            version: "1.6.0",
+            progress: { percent: 12, bytes: 12, totalBytes: 100 },
+            lastError: null,
+          },
+        },
+      );
+    });
+
+    // Give the pushed status a tick to propagate, then assert neither
+    // surface's action disabled off it - the download lane must never gate
+    // the mutation-lane buttons.
+    await waitFor(() => {
+      expect(management.getHostControllerStatus).toHaveBeenCalled();
+    });
+    expect(bannerUpdateButton.hasAttribute("disabled")).toBe(false);
+    expect(settingsUpdateButton.hasAttribute("disabled")).toBe(false);
+    expect(applyStaged).not.toHaveBeenCalled();
   });
 });

@@ -17,6 +17,7 @@ interface ComposerToolbarProps {
   showNextTurnPermissionNote: boolean;
   showAgentModeTooltip: boolean;
   canSubmit: boolean;
+  attachmentPending: boolean;
   onSubmit: () => void;
   activeTurnStatus: ChatActiveTurn["status"] | null;
   stopDisabled: boolean;
@@ -49,6 +50,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
     showNextTurnPermissionNote,
     showAgentModeTooltip,
     canSubmit,
+    attachmentPending,
     onSubmit,
     activeTurnStatus,
     stopDisabled,
@@ -111,6 +113,7 @@ function ComposerToolbarImpl(props: ComposerToolbarProps) {
           <ComposerToolbarRight
             store={store}
             canSubmit={canSubmit}
+            attachmentPending={attachmentPending}
             onSubmit={onSubmit}
             activeTurnStatus={activeTurnStatus}
             stopDisabled={stopDisabled}

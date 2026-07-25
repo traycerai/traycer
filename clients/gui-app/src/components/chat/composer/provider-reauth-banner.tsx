@@ -50,6 +50,8 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { handleSignInLinkCopyError } from "@/components/settings/panels/provider-sign-in-link";
+import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 function noop(): void {}
 
@@ -72,6 +74,8 @@ interface ProviderReauthBannerProps {
    */
   readonly state: ProviderCliState | null;
   readonly reason: ProviderReauthReason;
+  /** The blocked managed profile id; null only for provider-wide auth. */
+  readonly profileId: string | null;
   /** The blocked profile's own label - only set for `profile_unauthenticated`. */
   readonly profileLabel: string | null;
   /**
@@ -91,7 +95,9 @@ interface ProviderReauthBannerProps {
 function ProfileUnavailableBanner({
   providerId,
   reason,
+  profileId,
   profileLabel,
+  hostId,
   onContinueOnAmbient,
 }: {
   readonly providerId: ProviderId;
@@ -99,15 +105,32 @@ function ProfileUnavailableBanner({
     ProviderReauthReason,
     "profile_missing" | "profile_unauthenticated"
   >;
+  readonly profileId: string | null;
   readonly profileLabel: string | null;
+  readonly hostId: string;
   readonly onContinueOnAmbient: () => void;
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
   const message =
     reason === "profile_missing"
-      ? `This chat's ${providerLabel} profile is no longer available.`
+      ? `This agent's ${providerLabel} profile is no longer available.`
       : `"${profileLabel ?? providerLabel}" is signed out.`;
   const { openSettings } = useSystemTabModalActions();
+  const openProviderSettings = (): void => {
+    if (profileId !== null) {
+      useProvidersFocusStore.getState().setProfileFocus({
+        harnessId: providerIdToGuiHarnessId(providerId),
+        hostId,
+        profileId,
+        startSignIn: reason === "profile_unauthenticated",
+      });
+    } else {
+      useProvidersFocusStore
+        .getState()
+        .setFocusHarnessId(providerIdToGuiHarnessId(providerId));
+    }
+    openSettings({ section: "providers", resetToGeneral: false });
+  };
   return (
     <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
       <span className="text-foreground/90">{message}</span>
@@ -115,14 +138,10 @@ function ProfileUnavailableBanner({
         <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
           Continue on Terminal account
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() =>
-            openSettings({ section: "providers", resetToGeneral: false })
-          }
-        >
-          Reconnect in Settings
+        <Button size="sm" variant="ghost" onClick={openProviderSettings}>
+          {reason === "profile_unauthenticated"
+            ? "Sign in"
+            : "Manage in Settings"}
         </Button>
       </div>
     </ReauthBannerShell>
@@ -230,6 +249,7 @@ export function ProviderReauthBanner({
   providerId,
   state,
   reason,
+  profileId,
   profileLabel,
   onContinueOnAmbient,
 }: ProviderReauthBannerProps) {
@@ -272,7 +292,9 @@ export function ProviderReauthBanner({
       <ProfileUnavailableBanner
         providerId={providerId}
         reason={reason}
+        profileId={profileId}
         profileLabel={profileLabel}
+        hostId={tabHostId}
         onContinueOnAmbient={onContinueOnAmbient}
       />
     );
@@ -285,8 +307,8 @@ export function ProviderReauthBanner({
       <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
         <span className="text-foreground/90">{message}</span>
         <span className="text-ui-xs text-muted-foreground">
-          This chat&apos;s machine is unavailable. Reconnect once it&apos;s back
-          online.
+          This agent&apos;s machine is unavailable. Reconnect once it&apos;s
+          back online.
         </span>
       </ReauthBannerShell>
     );

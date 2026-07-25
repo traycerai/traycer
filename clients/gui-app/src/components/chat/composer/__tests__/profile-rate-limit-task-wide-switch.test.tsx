@@ -48,6 +48,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus,
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
@@ -99,8 +100,10 @@ function usageEntry(
   };
   return {
     profileId,
+    fetchEligible: true,
     refreshStatus: "idle",
     refresh,
+    ensureFresh: () => Promise.resolve(),
     projection: {
       kind: "detail",
       severity: "running_low",
@@ -132,10 +135,12 @@ function renderBanner(input: {
         harnessId="claude"
         providerId="claude-code"
         severity="hard_limit"
+        limitedFamilies={[]}
         current={CURRENT}
         profiles={profiles}
         destinations={destinations}
         primaryTarget={primaryTarget}
+        probeTarget={null}
         runTargetHostId={null}
         onSwitchProfile={input.onSwitchProfile}
         affectedChatCount={input.affectedChatCount}

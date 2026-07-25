@@ -160,6 +160,7 @@ vi.mock("@/lib/reportable-error-toast", () => ({
 }));
 
 import { ProviderReauthBanner } from "../provider-reauth-banner";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
 // TokenReauthForm reads/writes the TanStack Query cache (useQueryClient +
 // useTabRefreshProviders), so every banner render needs a QueryClient in scope.
@@ -265,6 +266,12 @@ function claudeState(
   };
 }
 
+function codexState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "codex" };
+}
+
 function cursorState(): ProviderCliState {
   return {
     providerId: "cursor",
@@ -346,6 +353,7 @@ describe("<ProviderReauthBanner />", () => {
     mocks.openExternalLink.mockClear();
     mocks.reportableErrorToast.mockClear();
     mocks.hostKind = "local";
+    useProvidersFocusStore.getState().clearFocusHarnessId();
   });
 
   afterEach(() => {
@@ -358,6 +366,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -372,6 +381,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="droid"
         state={droidState()}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -394,6 +404,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="droid"
         state={droidState()}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -419,6 +430,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -454,6 +466,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -476,6 +489,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -493,6 +507,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -524,6 +539,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -547,6 +563,7 @@ describe("<ProviderReauthBanner />", () => {
           providerId="claude-code"
           state={claudeState(CODE_PASTE_CLAUDE_CAP)}
           reason="provider_unauthenticated"
+          profileId={null}
           profileLabel={null}
           onContinueOnAmbient={null}
         />,
@@ -585,6 +602,7 @@ describe("<ProviderReauthBanner />", () => {
           providerId="claude-code"
           state={claudeState(CODE_PASTE_CLAUDE_CAP)}
           reason="provider_unauthenticated"
+          profileId={null}
           profileLabel={null}
           onContinueOnAmbient={null}
         />,
@@ -620,6 +638,7 @@ describe("<ProviderReauthBanner />", () => {
           providerId="claude-code"
           state={claudeState(CODE_PASTE_CLAUDE_CAP)}
           reason="provider_unauthenticated"
+          profileId={null}
           profileLabel={null}
           onContinueOnAmbient={null}
         />,
@@ -660,6 +679,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -686,6 +706,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -715,6 +736,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -751,6 +773,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -792,6 +815,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -832,6 +856,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -847,6 +872,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -865,6 +891,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CODE_PASTE_CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -889,6 +916,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -907,6 +935,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -956,6 +985,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -994,6 +1024,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -1017,6 +1048,7 @@ describe("<ProviderReauthBanner />", () => {
           codePaste: null,
         })}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -1035,6 +1067,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="claude-code"
         state={claudeState(CLAUDE_CAP)}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -1051,6 +1084,7 @@ describe("<ProviderReauthBanner />", () => {
         providerId="cursor"
         state={cursorState()}
         reason="provider_unauthenticated"
+        profileId={null}
         profileLabel={null}
         onContinueOnAmbient={null}
       />,
@@ -1078,6 +1112,7 @@ describe("<ProviderReauthBanner />", () => {
           providerId="claude-code"
           state={claudeState(CLAUDE_CAP)}
           reason="profile_missing"
+          profileId="removed-profile"
           profileLabel={null}
           onContinueOnAmbient={onContinueOnAmbient}
         />,
@@ -1085,7 +1120,7 @@ describe("<ProviderReauthBanner />", () => {
 
       expect(
         screen.getByText(
-          "This chat's Claude Code profile is no longer available.",
+          "This agent's Claude Code profile is no longer available.",
         ),
       ).toBeDefined();
       expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
@@ -1095,7 +1130,15 @@ describe("<ProviderReauthBanner />", () => {
       expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
 
       fireEvent.click(
-        screen.getByRole("button", { name: "Reconnect in Settings" }),
+        screen.getByRole("button", { name: "Manage in Settings" }),
+      );
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "claude",
+          focusHostId: "host-1",
+          focusProfileId: "removed-profile",
+          startSignIn: false,
+        }),
       );
       expect(mocks.openSettings).toHaveBeenCalledWith({
         section: "providers",
@@ -1110,6 +1153,7 @@ describe("<ProviderReauthBanner />", () => {
           providerId="claude-code"
           state={claudeState(CLAUDE_CAP)}
           reason="profile_unauthenticated"
+          profileId="work-profile"
           profileLabel="Work"
           onContinueOnAmbient={onContinueOnAmbient}
         />,
@@ -1120,6 +1164,48 @@ describe("<ProviderReauthBanner />", () => {
         screen.getByRole("button", { name: "Continue on Terminal account" }),
       );
       expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "claude",
+          focusHostId: "host-1",
+          focusProfileId: "work-profile",
+          startSignIn: true,
+        }),
+      );
+      expect(mocks.openSettings).toHaveBeenCalledWith({
+        section: "providers",
+        resetToGeneral: false,
+      });
+    });
+
+    it("opens the exact signed-out Codex profile in Settings", () => {
+      render(
+        <ProviderReauthBanner
+          providerId="codex"
+          state={codexState(CLAUDE_CAP)}
+          reason="profile_unauthenticated"
+          profileId="codex-work-profile"
+          profileLabel="Codex Work"
+          onContinueOnAmbient={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "codex",
+          focusHostId: "host-1",
+          focusProfileId: "codex-work-profile",
+          startSignIn: true,
+        }),
+      );
+      expect(mocks.openSettings).toHaveBeenCalledWith({
+        section: "providers",
+        resetToGeneral: false,
+      });
     });
   });
 });

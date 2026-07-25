@@ -445,7 +445,8 @@ export interface ChatMessageSteerBadge {
 
 /**
  * Per-turn agent run metadata for an assistant row, surfaced in the elapsed
- * footer's info tooltip (provider, model, reasoning effort, fast mode). Only
+ * footer's info tooltip (provider, profile, model, reasoning effort, fast
+ * mode). Only
  * set on assistant rows; `null` for user/system rows and assistant turns that
  * predate the persisted `reasoningEffort` / `serviceTier` fields.
  */
@@ -453,6 +454,8 @@ export interface AssistantTurnMeta {
   /** Raw harness id, used to pick the provider's mono icon for the footer. */
   readonly provider: GuiHarnessId;
   readonly providerLabel: string;
+  /** Profile label snapshotted when the turn's provider session was minted. */
+  readonly profileLabel: string | null;
   readonly modelLabel: string | null;
   /** Raw persisted reasoning effort id from the host turn. */
   readonly reasoningEffort: string | null;

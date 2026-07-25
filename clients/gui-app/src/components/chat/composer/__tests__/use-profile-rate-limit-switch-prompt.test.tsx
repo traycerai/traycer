@@ -6,13 +6,17 @@ import type {
   ProviderProfile,
   ProviderProfileRateLimitStatus,
 } from "@traycer/protocol/host/provider-schemas";
+import type { ModelOption } from "@/components/home/data/landing-options";
 
 const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
 }));
 
-vi.mock("@/hooks/providers/use-tab-providers-list-query", () => ({
-  useTabProvidersList: (activity: { enabled: boolean }) =>
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: (
+    _client: unknown,
+    activity: { enabled: boolean },
+  ) =>
     activity.enabled
       ? { data: { providers: mocks.providers } }
       : { data: undefined },
@@ -29,9 +33,17 @@ function profile(input: {
   readonly kind: "ambient" | "managed";
   readonly label: string;
   readonly rateLimitStatus: ProviderProfileRateLimitStatus;
+  readonly rateLimitLimitedScopes: ProviderProfile["rateLimitLimitedScopes"];
   readonly authenticated: boolean;
 }): ProviderProfile {
-  const { profileId, kind, label, rateLimitStatus, authenticated } = input;
+  const {
+    profileId,
+    kind,
+    label,
+    rateLimitStatus,
+    rateLimitLimitedScopes,
+    authenticated,
+  } = input;
   return {
     profileId,
     kind,
@@ -46,11 +58,31 @@ function profile(input: {
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus,
+    rateLimitLimitedScopes,
     duplicateOfProfileId: null,
     accentColor: null,
     ambientDriftNotice: null,
   };
 }
+
+function model(slug: string, label: string): ModelOption {
+  return {
+    harnessId: "claude",
+    slug,
+    label,
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    metadata: {},
+  };
+}
+
+const OPUS = model("opus[1m]", "Opus");
+const FABLE = model("claude-fable-5[1m]", "Fable");
 
 function visiblePrompt(prompt: ProfileRateLimitSwitchPrompt) {
   if (prompt.kind !== "visible") {
@@ -88,7 +120,30 @@ function claudeState(
 
 function currentPrompt(profileId: string | null) {
   return renderHook(() =>
-    useProfileRateLimitSwitchPrompt("claude", profileId, true),
+    useProfileRateLimitSwitchPrompt({
+      harnessId: "claude",
+      profileId,
+      selectedModel: null,
+      active: true,
+      client: null,
+    }),
+  );
+}
+
+function currentPromptForModel(
+  profileId: string | null,
+  selectedModel: ModelOption | null,
+) {
+  return renderHook(
+    (props: { readonly selectedModel: ModelOption | null }) =>
+      useProfileRateLimitSwitchPrompt({
+        harnessId: "claude",
+        profileId,
+        selectedModel: props.selectedModel,
+        active: true,
+        client: null,
+      }),
+    { initialProps: { selectedModel } },
   );
 }
 
@@ -111,6 +166,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "ambient",
           label: "Terminal account",
           rateLimitStatus: "hard_limit",
+          rateLimitLimitedScopes: null,
           authenticated: true,
         }),
       ],
@@ -125,6 +181,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "ambient",
           label: "Terminal account",
           rateLimitStatus: "hard_limit",
+          rateLimitLimitedScopes: null,
           authenticated: true,
         }),
         profile({
@@ -132,6 +189,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "managed",
           label: "Work",
           rateLimitStatus: "ok",
+          rateLimitLimitedScopes: null,
           authenticated: true,
         }),
       ],
@@ -146,6 +204,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "ambient",
           label: "Terminal account",
           rateLimitStatus: "ok",
+          rateLimitLimitedScopes: null,
           authenticated: true,
         }),
         profile({
@@ -153,6 +212,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "managed",
           label: "Work",
           rateLimitStatus: "ok",
+          rateLimitLimitedScopes: null,
           authenticated: true,
         }),
       ],
@@ -161,17 +221,24 @@ describe("useProfileRateLimitSwitchPrompt", () => {
   ] as const)("returns hidden for %s", (_name, active, profiles, profileId) => {
     mocks.providers = profiles === null ? [] : [claudeState(profiles)];
     const { result } = renderHook(() =>
-      useProfileRateLimitSwitchPrompt("claude", profileId, active),
+      useProfileRateLimitSwitchPrompt({
+        harnessId: "claude",
+        profileId,
+        selectedModel: null,
+        active,
+        client: null,
+      }),
     );
     expect(result.current.kind).toBe("hidden");
   });
 
-  it("projects a visible near-limit warning with ordered destinations and the first selectable primary", () => {
+  it("projects a visible near-limit warning with ordered destinations and the first KNOWN-healthy primary", () => {
     const current = profile({
       profileId: "ambient",
       kind: "ambient",
       label: "Company",
       rateLimitStatus: "near_limit",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     const blocked = profile({
@@ -179,6 +246,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "managed",
       label: "Blocked",
       rateLimitStatus: "hard_limit",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     const unknown = profile({
@@ -186,6 +254,15 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "managed",
       label: "Unknown",
       rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      authenticated: true,
+    });
+    const healthy = profile({
+      profileId: "healthy",
+      kind: "managed",
+      label: "Healthy",
+      rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     const signedOut = profile({
@@ -193,9 +270,12 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "managed",
       label: "Signed out",
       rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       authenticated: false,
     });
-    mocks.providers = [claudeState([current, blocked, unknown, signedOut])];
+    mocks.providers = [
+      claudeState([current, blocked, unknown, healthy, signedOut]),
+    ];
 
     const { result } = currentPrompt(null);
     expect(result.current).toMatchObject({
@@ -203,17 +283,57 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       providerId: "claude-code",
       severity: "near_limit",
       current,
-      profiles: [current, blocked, unknown, signedOut],
+      profiles: [current, blocked, unknown, healthy, signedOut],
     });
     if (result.current.kind !== "visible") return;
     expect(
       result.current.destinations.map((entry) => entry.profile.label),
-    ).toEqual(["Blocked", "Unknown", "Signed out"]);
+    ).toEqual(["Blocked", "Unknown", "Healthy", "Signed out"]);
+    // Unknown is NOT weakly healthy: absence of gauge evidence never powers
+    // the one-click switch. The proven-ok profile is the first selectable.
     expect(
       result.current.destinations.map((entry) => entry.selectable),
-    ).toEqual([false, true, false]);
-    expect(result.current.primaryTarget?.profile.label).toBe("Unknown");
-    expect(result.current.primaryTarget?.profileId).toBe("unknown");
+    ).toEqual([false, false, true, false]);
+    expect(result.current.primaryTarget?.profile.label).toBe("Healthy");
+    // A known primary exists, so no automatic check is spent on the unknown.
+    expect(result.current.probeTarget).toBeNull();
+  });
+
+  it("keeps an unknown destination unselectable and nominates it as the probe target when no known primary exists", () => {
+    const current = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Company",
+      rateLimitStatus: "hard_limit",
+      rateLimitLimitedScopes: null,
+      authenticated: true,
+    });
+    const signedOutUnknown = profile({
+      profileId: "signed-out-unknown",
+      kind: "managed",
+      label: "Signed out unknown",
+      rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      authenticated: false,
+    });
+    const unknown = profile({
+      profileId: "unknown",
+      kind: "managed",
+      label: "Unknown",
+      rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      authenticated: true,
+    });
+    mocks.providers = [claudeState([current, signedOutUnknown, unknown])];
+
+    const { result } = currentPrompt(null);
+    const prompt = visiblePrompt(result.current);
+    // Even against a HARD-limited current profile, unknown is incomparable -
+    // never strictly better, never the confident one-click button.
+    expect(prompt.destinations.every((entry) => !entry.selectable)).toBe(true);
+    expect(prompt.primaryTarget).toBeNull();
+    // The single automatic check goes to the first AUTHENTICATED unknown.
+    expect(prompt.probeTarget?.profile.label).toBe("Unknown");
   });
 
   it("keeps the warning visible with no selectable destination", () => {
@@ -224,6 +344,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "ambient",
           label: "Company",
           rateLimitStatus: "hard_limit",
+          rateLimitLimitedScopes: null,
           authenticated: true,
         }),
         profile({
@@ -231,6 +352,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "managed",
           label: "Blocked",
           rateLimitStatus: "hard_limit",
+          rateLimitLimitedScopes: null,
           authenticated: true,
         }),
         profile({
@@ -238,6 +360,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "managed",
           label: "Signed out",
           rateLimitStatus: "ok",
+          rateLimitLimitedScopes: null,
           authenticated: false,
         }),
       ]),
@@ -258,6 +381,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "ambient",
       label: "Company",
       rateLimitStatus: "near_limit",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     const first = profile({
@@ -265,6 +389,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "managed",
       label: "First",
       rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     const second = profile({
@@ -272,6 +397,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "managed",
       label: "Second",
       rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     mocks.providers = [claudeState([source, first, second])];
@@ -305,6 +431,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "ambient",
       label: "Company",
       rateLimitStatus: "near_limit",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     const first = profile({
@@ -312,6 +439,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "managed",
       label: "First",
       rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     const second = profile({
@@ -319,6 +447,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "managed",
       label: "Second",
       rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     mocks.providers = [claudeState([source, first, second])];
@@ -350,6 +479,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "ambient",
       label: "Company",
       rateLimitStatus: "near_limit",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     const first = profile({
@@ -357,6 +487,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "managed",
       label: "First",
       rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     const second = profile({
@@ -364,6 +495,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
       kind: "managed",
       label: "Second",
       rateLimitStatus: "ok",
+      rateLimitLimitedScopes: null,
       authenticated: true,
     });
     mocks.providers = [claudeState([source, first])];
@@ -397,6 +529,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "ambient",
           label: "Company",
           rateLimitStatus: "near_limit",
+          rateLimitLimitedScopes: null,
           authenticated: true,
         }),
         profile({
@@ -404,6 +537,7 @@ describe("useProfileRateLimitSwitchPrompt", () => {
           kind: "managed",
           label: "Work",
           rateLimitStatus: "ok",
+          rateLimitLimitedScopes: null,
           authenticated: true,
         }),
       ]),
@@ -418,5 +552,230 @@ describe("useProfileRateLimitSwitchPrompt", () => {
     });
     expect(first.result.current.kind).toBe("hidden");
     expect(second.result.current.kind).toBe("hidden");
+  });
+
+  describe("model-scoped eligibility (the Fable-vs-Opus fix)", () => {
+    const fableLimited = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Work",
+      rateLimitStatus: "near_limit",
+      rateLimitLimitedScopes: [{ family: "Fable", severity: "near_limit" }],
+      authenticated: true,
+    });
+    const healthy = profile({
+      profileId: "other",
+      kind: "managed",
+      label: "Other",
+      rateLimitStatus: "ok",
+      rateLimitLimitedScopes: [],
+      authenticated: true,
+    });
+
+    it("hides a Fable-scoped warning when Opus is the selected model", () => {
+      mocks.providers = [claudeState([fableLimited, healthy])];
+      const { result } = currentPromptForModel(null, OPUS);
+      expect(result.current.kind).toBe("hidden");
+    });
+
+    it("shows a Fable-scoped warning when Fable is the selected model, naming the family", () => {
+      mocks.providers = [claudeState([fableLimited, healthy])];
+      const { result } = currentPromptForModel(null, FABLE);
+      const prompt = visiblePrompt(result.current);
+      expect(prompt.severity).toBe("near_limit");
+      expect(prompt.limitedFamilies).toEqual(["Fable"]);
+    });
+
+    it("shows a shared-window warning regardless of the selected model, with generic copy", () => {
+      const sharedLimited = {
+        ...fableLimited,
+        rateLimitLimitedScopes: [
+          { family: null, severity: "near_limit" as const },
+        ],
+      };
+      mocks.providers = [claudeState([sharedLimited, healthy])];
+      const { result } = currentPromptForModel(null, OPUS);
+      const prompt = visiblePrompt(result.current);
+      expect(prompt.severity).toBe("near_limit");
+      expect(prompt.limitedFamilies).toEqual([]);
+    });
+
+    it("falls back to the profile-level status when per-scope data is unavailable (old host)", () => {
+      const scopelessLimited = {
+        ...fableLimited,
+        rateLimitLimitedScopes: null,
+      };
+      mocks.providers = [claudeState([scopelessLimited, healthy])];
+      const { result } = currentPromptForModel(null, OPUS);
+      expect(visiblePrompt(result.current).severity).toBe("near_limit");
+    });
+
+    it("shows a scoped warning when no model is resolved (conservative fallback)", () => {
+      mocks.providers = [claudeState([fableLimited, healthy])];
+      const { result } = currentPromptForModel(null, null);
+      expect(visiblePrompt(result.current).severity).toBe("near_limit");
+    });
+
+    it("re-evaluates when the composer switches models", () => {
+      mocks.providers = [claudeState([fableLimited, healthy])];
+      const { result, rerender } = currentPromptForModel(null, FABLE);
+      expect(result.current.kind).toBe("visible");
+      rerender({ selectedModel: OPUS });
+      expect(result.current.kind).toBe("hidden");
+    });
+
+    it("names only the families at the effective severity and resurfaces when severity moves between the same families", () => {
+      const mixed = {
+        ...fableLimited,
+        rateLimitStatus: "hard_limit" as const,
+        rateLimitLimitedScopes: [
+          { family: "Fable", severity: "hard_limit" as const },
+          { family: "Fable 5", severity: "near_limit" as const },
+        ],
+      };
+      mocks.providers = [claudeState([mixed, healthy])];
+      const { result, rerender } = currentPromptForModel(null, FABLE);
+      const prompt = visiblePrompt(result.current);
+      expect(prompt.severity).toBe("hard_limit");
+      // The near-limit "Fable 5" scope matches the model too, but the
+      // hard-limit banner must not name it.
+      expect(prompt.limitedFamilies).toEqual(["Fable"]);
+      act(() => prompt.dismiss());
+      expect(result.current.kind).toBe("hidden");
+
+      // Same families, same overall severity - but the hard limit moved from
+      // "Fable" to "Fable 5". The per-scope severity in the key resurfaces it.
+      mocks.providers = [
+        claudeState([
+          {
+            ...mixed,
+            rateLimitLimitedScopes: [
+              { family: "Fable", severity: "near_limit" as const },
+              { family: "Fable 5", severity: "hard_limit" as const },
+            ],
+          },
+          healthy,
+        ]),
+      ];
+      rerender({ selectedModel: FABLE });
+      const resurfaced = visiblePrompt(result.current);
+      expect(resurfaced.severity).toBe("hard_limit");
+      expect(resurfaced.limitedFamilies).toEqual(["Fable 5"]);
+    });
+
+    it("keeps a Fable-scoped dismissal from suppressing a later shared-window warning", () => {
+      mocks.providers = [claudeState([fableLimited, healthy])];
+      const { result, rerender } = currentPromptForModel(null, FABLE);
+      act(() => visiblePrompt(result.current).dismiss());
+      expect(result.current.kind).toBe("hidden");
+
+      mocks.providers = [
+        claudeState([
+          {
+            ...fableLimited,
+            rateLimitLimitedScopes: [
+              { family: "Fable", severity: "near_limit" as const },
+              { family: null, severity: "near_limit" as const },
+            ],
+          },
+          healthy,
+        ]),
+      ];
+      rerender({ selectedModel: FABLE });
+      expect(result.current.kind).toBe("visible");
+    });
+  });
+
+  describe("destination tiers (suggest only strictly better profiles)", () => {
+    function selectableLabels(prompt: ProfileRateLimitSwitchPrompt) {
+      return visiblePrompt(prompt)
+        .destinations.filter((entry) => entry.selectable)
+        .map((entry) => entry.profile.label);
+    }
+
+    it("keeps a near-limit destination unselectable while the current profile is only near-limit", () => {
+      mocks.providers = [
+        claudeState([
+          profile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Current",
+            rateLimitStatus: "near_limit",
+            rateLimitLimitedScopes: [{ family: null, severity: "near_limit" }],
+            authenticated: true,
+          }),
+          profile({
+            profileId: "also-near",
+            kind: "managed",
+            label: "Also near",
+            rateLimitStatus: "near_limit",
+            rateLimitLimitedScopes: [{ family: null, severity: "near_limit" }],
+            authenticated: true,
+          }),
+        ]),
+      ];
+      const { result } = currentPromptForModel(null, OPUS);
+      expect(selectableLabels(result.current)).toEqual([]);
+    });
+
+    it("offers a near-limit destination as a strictly better tier once the current profile is hard-limited", () => {
+      mocks.providers = [
+        claudeState([
+          profile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Current",
+            rateLimitStatus: "hard_limit",
+            rateLimitLimitedScopes: [{ family: null, severity: "hard_limit" }],
+            authenticated: true,
+          }),
+          profile({
+            profileId: "near",
+            kind: "managed",
+            label: "Near",
+            rateLimitStatus: "near_limit",
+            rateLimitLimitedScopes: [{ family: null, severity: "near_limit" }],
+            authenticated: true,
+          }),
+          profile({
+            profileId: "also-hard",
+            kind: "managed",
+            label: "Also hard",
+            rateLimitStatus: "hard_limit",
+            rateLimitLimitedScopes: [{ family: null, severity: "hard_limit" }],
+            authenticated: true,
+          }),
+        ]),
+      ];
+      const { result } = currentPromptForModel(null, OPUS);
+      expect(selectableLabels(result.current)).toEqual(["Near"]);
+    });
+
+    it("keeps a destination selectable when its only limit gates a family the selected model doesn't use", () => {
+      mocks.providers = [
+        claudeState([
+          profile({
+            profileId: "ambient",
+            kind: "ambient",
+            label: "Current",
+            rateLimitStatus: "near_limit",
+            rateLimitLimitedScopes: [{ family: null, severity: "near_limit" }],
+            authenticated: true,
+          }),
+          profile({
+            profileId: "fable-only",
+            kind: "managed",
+            label: "Fable only",
+            rateLimitStatus: "near_limit",
+            rateLimitLimitedScopes: [
+              { family: "Fable", severity: "near_limit" },
+            ],
+            authenticated: true,
+          }),
+        ]),
+      ];
+      const { result } = currentPromptForModel(null, OPUS);
+      expect(selectableLabels(result.current)).toEqual(["Fable only"]);
+    });
   });
 });

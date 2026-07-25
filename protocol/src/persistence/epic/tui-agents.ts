@@ -37,8 +37,9 @@ import { worktreeBindingWorkspaceModeSchema } from "../../host/worktree-schemas"
  * non-empty title is itself the "already titled" marker and is never
  * overwritten.
  *
- * No transcript fields: TUI scrollback lives in the host's PTY buffer and
- * is not part of the cloud-synced epic record.
+ * No transcript fields: supported TUI transcripts are read from host-local
+ * provider session history and are not part of the cloud-synced epic record.
+ * Live terminal scrollback is a separate, ephemeral PTY concern.
  */
 
 const baseTuiAgentFields = {
@@ -62,6 +63,12 @@ const baseTuiAgentFields = {
   // runs on. `null` = the ambient/host login, so records persisted before
   // profiles existed still parse cleanly. See the multi-profile decision log.
   profileId: z.string().nullable().default(null).catch(null),
+  // Wall-clock ms when this terminal-agent session was archived, or `null`
+  // while active. Same host-backed archive flag as `chatSchema.archivedAt`;
+  // a single `epic.setChatArchived` RPC keyed by id covers chats and TUI
+  // agents alike. Defaulted so records persisted before archiving existed
+  // parse unchanged.
+  archivedAt: z.number().nullable().default(null),
 } as const;
 
 export const claudeTuiAgentSchema = z.object({
@@ -94,13 +101,12 @@ export const opencodeTuiAgentSchema = z.object({
 });
 export type OpencodeTuiAgent = z.infer<typeof opencodeTuiAgentSchema>;
 
+// Reserved for backward compatibility with the previously released persisted
+// union and for planned Cursor TUI support. Current runtime catalogs do not
+// advertise this surface, so normal product flows do not create these records.
 export const cursorTuiAgentSchema = z.object({
   harnessId: z.literal("cursor"),
   ...baseTuiAgentFields,
-  // The chat id minted by `cursor-agent create-chat` and resumed with
-  // `cursor-agent --resume <id>`. Minting is synchronous but can fail
-  // (offline/unauthenticated); null then means "no chat yet - re-mint on the
-  // next launch" rather than persisting a bogus, non-resumable id.
   harnessSessionId: z.string().nullable().catch(null),
 });
 export type CursorTuiAgent = z.infer<typeof cursorTuiAgentSchema>;

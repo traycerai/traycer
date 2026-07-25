@@ -1,5 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { UseMutationResult } from "@tanstack/react-query";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type {
   HostRpcError,
   ResponseOfMethod,
@@ -68,35 +70,40 @@ export function useGitRefreshWorktreeStatus(): UseMutationResult<
     HostRpcError,
     GitRefreshWorktreeStatusVariables,
     GitRefreshWorktreeStatusContext
-  >({
-    mutationKey: gitMutationKeys.refreshWorktreeStatus(),
-    mutationFn: (variables) => {
-      const entry = directory.findById(variables.hostId);
-      const client =
-        entry === null ? null : buildTransientHostClient(globalClient, entry);
-      if (client === null) {
-        return Promise.reject<GitListChangedFilesResponse>(
-          hostClientUnavailableError("git.listChangedFiles"),
-        );
-      }
-      // Parent-only: this refresh feeds the v1.0 change-list slot; the nested
-      // snapshot has its own invalidation path.
-      return client.request("git.listChangedFiles", {
+  >(
+    withHostMutationLifecycleBoundary("git.listChangedFiles", {
+      mutationKey: gitMutationKeys.refreshWorktreeStatus(),
+      mutationFn: (variables) =>
+        withHostQueryErrorBoundary("git.listChangedFiles", () => {
+          const entry = directory.findById(variables.hostId);
+          const client =
+            entry === null
+              ? null
+              : buildTransientHostClient(globalClient, entry);
+          if (client === null) {
+            return Promise.reject<GitListChangedFilesResponse>(
+              hostClientUnavailableError("git.listChangedFiles"),
+            );
+          }
+          // Parent-only: this refresh feeds the v1.0 change-list slot; the nested
+          // snapshot has its own invalidation path.
+          return client.request("git.listChangedFiles", {
+            hostId: variables.hostId,
+            runningDir: variables.runningDir,
+            ignoreWhitespace: variables.ignoreWhitespace,
+            includeSubmodules: false,
+          });
+        }),
+      onMutate: (variables) => ({
         hostId: variables.hostId,
         runningDir: variables.runningDir,
         ignoreWhitespace: variables.ignoreWhitespace,
-        includeSubmodules: false,
-      });
-    },
-    onMutate: (variables) => ({
-      hostId: variables.hostId,
-      runningDir: variables.runningDir,
-      ignoreWhitespace: variables.ignoreWhitespace,
+      }),
+      onSuccess: (data, _variables, context) => {
+        writeGitListChangedFilesResponse(queryClient, context, data);
+      },
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't refresh git status."),
     }),
-    onSuccess: (data, _variables, context) => {
-      writeGitListChangedFilesResponse(queryClient, context, data);
-    },
-    onError: (error) =>
-      toastFromHostError(error, "Couldn't refresh git status."),
-  });
+  );
 }

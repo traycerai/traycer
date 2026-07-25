@@ -132,7 +132,9 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
       numberedFolder(index),
     );
     useWorkspaceFoldersStore.getState().addResolvedFolders(initialFolders);
-    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraft(null, undefined);
 
     // Keep both representations at the supported 50-folder cap while making
     // their membership and primary choices diverge. On the next add, global

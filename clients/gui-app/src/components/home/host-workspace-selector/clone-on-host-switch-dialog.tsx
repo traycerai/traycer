@@ -15,7 +15,7 @@ interface CloneOnHostSwitchDialogProps {
   readonly onConfirm: () => void;
 }
 
-/** Confirm dialog before cloning a chat onto a different host. */
+/** Confirm dialog before cloning an agent onto a different host. */
 export function CloneOnHostSwitchDialog(props: CloneOnHostSwitchDialogProps) {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -24,10 +24,10 @@ export function CloneOnHostSwitchDialog(props: CloneOnHostSwitchDialogProps) {
         data-testid="clone-on-host-switch-dialog"
       >
         <DialogHeader>
-          <DialogTitle>Open this chat on {props.targetHostLabel}?</DialogTitle>
+          <DialogTitle>Open this agent on {props.targetHostLabel}?</DialogTitle>
           <DialogDescription>
-            A new chat is created on {props.targetHostLabel}. The current chat
-            stays where it is - chat tabs are bound to a host for life.
+            A new agent is created on {props.targetHostLabel}. The current agent
+            stays where it is - agents are bound to a host for life.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

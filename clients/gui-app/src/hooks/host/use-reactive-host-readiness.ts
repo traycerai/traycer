@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 
 export interface ReactiveHostReadiness {
@@ -11,7 +11,7 @@ export interface ReactiveHostReadiness {
 const SNAPSHOT_SEPARATOR = "\u0000";
 
 export function useReactiveHostReadiness<Registry extends VersionedRpcRegistry>(
-  client: HostClient<Registry> | null,
+  client: HostRequester<Registry> | null,
 ): ReactiveHostReadiness {
   const subscribe = useCallback(
     (callback: () => void) => {
@@ -39,7 +39,7 @@ export function useReactiveHostReadiness<Registry extends VersionedRpcRegistry>(
 }
 
 function readHostReadinessSnapshot<Registry extends VersionedRpcRegistry>(
-  client: HostClient<Registry> | null,
+  client: HostRequester<Registry> | null,
 ): string {
   return [
     client?.getActiveHostId() ?? "",

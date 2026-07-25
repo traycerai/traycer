@@ -31,6 +31,7 @@ function profile(
     identity: null,
     usageUpdatedAt: null,
     rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
     duplicateOfProfileId: null,
     accentColor,
     ambientDriftNotice: null,

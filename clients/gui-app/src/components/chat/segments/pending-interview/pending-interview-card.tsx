@@ -14,6 +14,7 @@ import { QuestionPage } from "./question-page";
 import { QUESTION_TRANSITION, useInterviewCard } from "./use-interview-card";
 
 interface PendingInterviewCardProps {
+  chatId: string;
   blockId: string;
   toolName: string | null;
   title: string | null;
@@ -22,6 +23,11 @@ interface PendingInterviewCardProps {
   // Whether this card's chat tab is the active one in its pane - gates focus
   // for multi-pane layouts (see useInterviewCard).
   isActive: boolean;
+  // True while a Submit/Skip for this interview block is in flight or accepted
+  // but unresolved (from the chat session's pending/accepted actions). Locks
+  // every affordance so the action cannot be double-sent; clears on a
+  // rejected/failed ack so the retained draft becomes retryable.
+  isBusy: boolean;
   /**
    * `null` disables the Submit/Skip affordances while the chat cannot send.
    * The card still paginates so the pending question remains readable.
@@ -56,7 +62,6 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
     draft,
     direction,
     pendingLabel,
-    dispatched,
     isLast,
     answeredCount,
     canAdvance,
@@ -71,9 +76,11 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
     setOtherText,
     setFreeText,
   } = useInterviewCard({
+    chatId: props.chatId,
     blockId: props.blockId,
     questions: props.questions,
     isActive: props.isActive,
+    isBusy: props.isBusy,
     onSubmit: props.onSubmit,
     onSkip: props.onSkip,
   });
@@ -111,6 +118,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
               question={question}
               draft={draft}
               isActive={props.isActive}
+              disabled={props.isBusy}
               pendingLabel={pendingLabel}
               onToggleOption={toggleOption}
               onToggleOther={toggleOther}
@@ -125,7 +133,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
           <QuestionPager
             current={safeIndex + 1}
             total={total}
-            disabled={dispatched}
+            disabled={props.isBusy}
             onPrevious={goPrevious}
             onNext={goNext}
           />
@@ -133,7 +141,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
           {props.onFork !== null ? (
             <InterviewForkActions
               onFork={props.onFork}
-              disabled={dispatched}
+              disabled={props.isBusy}
               display="labels"
             />
           ) : null}
@@ -227,7 +235,7 @@ function QuestionPager(props: QuestionPagerProps) {
         type="button"
         size="icon-xs"
         variant="ghost"
-        disabled={props.current <= 1 || props.disabled}
+        disabled={props.disabled || props.current <= 1}
         onClick={props.onPrevious}
         aria-label="Previous question"
       >
@@ -240,7 +248,7 @@ function QuestionPager(props: QuestionPagerProps) {
         type="button"
         size="icon-xs"
         variant="ghost"
-        disabled={props.current >= props.total || props.disabled}
+        disabled={props.disabled || props.current >= props.total}
         onClick={props.onNext}
         aria-label="Next question"
       >

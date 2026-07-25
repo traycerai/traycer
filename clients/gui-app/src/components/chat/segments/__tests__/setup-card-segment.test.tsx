@@ -16,8 +16,30 @@ import {
   type SetupWorkspaceState,
 } from "@/components/chat/segments/setup-card-segment";
 
+// Shapes the typed `createMutate` mock needs so per-call `onSuccess` handling
+// (the perEntry-failure toast) can be exercised without `any` leakage.
+type CreatePerEntryResult = {
+  workspacePath: string;
+  ok: boolean;
+  worktreePath: string | null;
+  branch: string | null;
+  errorMessage: string | null;
+};
+type CreateMutateOptions = {
+  onSuccess: (response: {
+    binding: { entries: [] };
+    perEntry: CreatePerEntryResult[];
+  }) => void;
+};
+
 const focusTerminal = vi.hoisted(() => vi.fn());
 const retryMutate = vi.hoisted(() => vi.fn());
+const createMutate = vi.hoisted(() =>
+  vi.fn<
+    (variables: unknown, options: CreateMutateOptions | undefined) => void
+  >(),
+);
+const errorToast = vi.hoisted(() => vi.fn());
 // `value === undefined` models the "liveness not yet known" window (the query
 // has not settled); an array models a settled `terminal.list` response.
 const terminalSessions = vi.hoisted<{
@@ -58,6 +80,17 @@ vi.mock("@/hooks/worktree/use-worktree-retry-setup-mutation", () => ({
   },
 }));
 
+vi.mock("@/hooks/worktree/use-worktree-create-mutation", () => ({
+  useWorktreeCreateForClient: () => ({
+    mutate: createMutate,
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: errorToast,
+}));
+
 // Contract guard: the state union is exactly these five. If it drifts,
 // `Exclude<...>` stops resolving to `never` and `bun run compile` fails.
 type UnexpectedStates = Exclude<
@@ -81,6 +114,8 @@ function workspace(
     terminalSessionId: "term-1",
     worktreePath: "/worktrees/repo/feature",
     branch: "feature",
+    errorMessage: null,
+    retryFolderIntent: null,
     ...overrides,
   };
 }
@@ -122,6 +157,8 @@ function expand() {
 beforeEach(() => {
   focusTerminal.mockReset();
   retryMutate.mockReset();
+  createMutate.mockReset();
+  errorToast.mockReset();
   terminalSessions.value = undefined;
   tabClient.value = {};
   retryClientArg.value = "unset";
@@ -318,6 +355,125 @@ describe("<SetupCardSegment /> single-repo dropdown (two steps)", () => {
       ownerKind: "chat",
       workspacePath: "/repo",
     });
+  });
+
+  it("re-provisions a provision failure via worktree.create, not retrySetup", () => {
+    const folderIntent = {
+      kind: "worktree" as const,
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+      branch: {
+        type: "new" as const,
+        name: "traycer/fresh-fox",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+      scripts: null,
+    };
+    renderCard(
+      viewModel("failed", [
+        workspace({
+          state: "failed",
+          worktreePath: null,
+          errorMessage: "fatal: could not create work tree dir",
+          retryFolderIntent: folderIntent,
+        }),
+      ]),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+    expect(createMutate).toHaveBeenCalledTimes(1);
+    expect(createMutate.mock.calls[0][0]).toEqual({
+      epicId: EPIC_ID,
+      ownerId: OWNER_ID,
+      ownerKind: "chat",
+      entries: [folderIntent],
+    });
+    expect(retryMutate).not.toHaveBeenCalled();
+  });
+
+  it("toasts the per-entry error when the re-provision resolves with a failed entry", () => {
+    // A failed entry does NOT reject the RPC - it rides `perEntry` on a
+    // successful response - so the hook-level onError toast never fires and
+    // the per-call onSuccess must surface it instead.
+    const folderIntent = {
+      kind: "worktree" as const,
+      workspacePath: "/repo",
+      repoIdentifier: null,
+      isPrimary: true,
+      branch: {
+        type: "new" as const,
+        name: "traycer/fresh-fox",
+        source: "main",
+        carryUncommittedChanges: false,
+      },
+      scripts: null,
+    };
+    renderCard(
+      viewModel("failed", [
+        workspace({
+          state: "failed",
+          worktreePath: null,
+          errorMessage: "git worktree add failed",
+          retryFolderIntent: folderIntent,
+        }),
+      ]),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry setup" }));
+
+    const options = createMutate.mock.calls[0][1];
+    expect(options).toBeDefined();
+
+    // An all-ok response never toasts.
+    options?.onSuccess({
+      binding: { entries: [] },
+      perEntry: [
+        {
+          workspacePath: "/repo",
+          ok: true,
+          worktreePath: "/worktrees/fresh-fox",
+          branch: "traycer/fresh-fox",
+          errorMessage: null,
+        },
+      ],
+    });
+    expect(errorToast).not.toHaveBeenCalled();
+
+    options?.onSuccess({
+      binding: { entries: [] },
+      perEntry: [
+        {
+          workspacePath: "/repo",
+          ok: false,
+          worktreePath: null,
+          branch: "traycer/fresh-fox",
+          errorMessage:
+            "traycer/fresh-fox is already checked out in /elsewhere",
+        },
+      ],
+    });
+    expect(errorToast).toHaveBeenCalledWith(
+      "traycer/fresh-fox is already checked out in /elsewhere",
+      undefined,
+      expect.objectContaining({ title: "Worktree re-provision failed" }),
+    );
+  });
+
+  it("renders the provision failure reason on the failed card", () => {
+    renderCard(
+      viewModel("failed", [
+        workspace({
+          state: "failed",
+          worktreePath: null,
+          errorMessage: "fatal: a branch named 'traycer/x' already exists",
+        }),
+      ]),
+    );
+
+    expect(screen.getByRole("alert").textContent).toBe(
+      "fatal: a branch named 'traycer/x' already exists",
+    );
   });
 
   it("offers Retry on a cancelled setup after expand", () => {

@@ -1048,7 +1048,7 @@ describe("useLandingComposerActions", () => {
         },
       },
     });
-    useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().createDraft(null, undefined);
     useWorkspaceFoldersStore.setState({
       folders: [GLOBAL_WORKSPACE_PATH],
       folderInfoByPath: {
@@ -1131,6 +1131,8 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     insertImageAttachments: () => undefined,
+    beginPathInsertion: () => null,
+    rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

@@ -195,6 +195,15 @@ interface LeftPanelStore {
   readonly localRootCreatePendingByEpicPanel: RootCreatePendingByPanel<LeftPanelRootCreatePending>;
   readonly acknowledgedRootCreatePendingByEpicPanel: RootCreatePendingByPanel<LeftPanelAcknowledgedRootCreatePending>;
   readonly chatFilterByEpicId: Readonly<Record<string, ChatFilter>>;
+  /**
+   * Per-epic "Show archived" reveal for the Agents panel. Deliberately NOT a
+   * field on {@link ChatFilter}: `isChatFilterActive` drives the visible-id set
+   * that `mergeForcedExpanded` force-expands, so folding this in would expand
+   * the entire tree the moment anything was archived. It is also the opposite
+   * of a filter - it reveals rows rather than hiding them - so it must not
+   * light the "your view is filtered" dot either.
+   */
+  readonly chatShowArchivedByEpicId: Readonly<Record<string, boolean>>;
   readonly artifactFilterByEpicId: Readonly<Record<string, ArtifactFilter>>;
   readonly chatSortByEpicId: Readonly<Record<string, SortMode>>;
   readonly artifactSortByEpicId: Readonly<Record<string, SortMode>>;
@@ -265,6 +274,7 @@ interface LeftPanelStore {
 
   readonly setChatOrigin: (epicId: string, origin: ChatOriginFilter) => void;
   readonly clearChatFilter: (epicId: string) => void;
+  readonly toggleChatShowArchived: (epicId: string) => void;
   readonly toggleArtifactStatus: (
     epicId: string,
     status: ArtifactStatusFilter,
@@ -715,6 +725,7 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
       localRootCreatePendingByEpicPanel: {},
       acknowledgedRootCreatePendingByEpicPanel: {},
       chatFilterByEpicId: {},
+      chatShowArchivedByEpicId: {},
       artifactFilterByEpicId: {},
       chatSortByEpicId: {},
       artifactSortByEpicId: {},
@@ -1025,6 +1036,25 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
         });
       },
 
+      toggleChatShowArchived: (epicId) => {
+        set((state) => {
+          const current = state.chatShowArchivedByEpicId[epicId] ?? false;
+          if (current) {
+            // Drop the key rather than storing `false` so the default state
+            // leaves no entry behind, matching how an inactive filter clears.
+            const next = { ...state.chatShowArchivedByEpicId };
+            delete next[epicId];
+            return { chatShowArchivedByEpicId: next };
+          }
+          return {
+            chatShowArchivedByEpicId: {
+              ...state.chatShowArchivedByEpicId,
+              [epicId]: true,
+            },
+          };
+        });
+      },
+
       toggleArtifactStatus: (epicId, status) => {
         set((state) => {
           const current = getFilterOrEmpty(
@@ -1181,6 +1211,13 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
           state.chatFilterByEpicId,
           isChatFilterActive,
         ),
+        // Only the `true` entries; the toggle already deletes on the way back
+        // to the default, so this is belt-and-braces against a stale persisted
+        // `false` from an older build.
+        chatShowArchivedByEpicId: filterActiveByEpic(
+          state.chatShowArchivedByEpicId,
+          (showArchived) => showArchived,
+        ),
         artifactFilterByEpicId: filterActiveByEpic(
           state.artifactFilterByEpicId,
           isArtifactFilterActive,
@@ -1204,6 +1241,14 @@ export function useChatFilter(epicId: string): ChatFilter {
   return useLeftPanelStore((s) =>
     getFilterOrEmpty(s.chatFilterByEpicId, epicId, EMPTY_CHAT_FILTER),
   );
+}
+
+/**
+ * Whether the Agents panel is currently revealing archived rows for this epic.
+ * Default `false` - archived rows and their subtrees stay hidden.
+ */
+export function useChatShowArchived(epicId: string): boolean {
+  return useLeftPanelStore((s) => s.chatShowArchivedByEpicId[epicId] ?? false);
 }
 
 export function useArtifactFilter(epicId: string): ArtifactFilter {

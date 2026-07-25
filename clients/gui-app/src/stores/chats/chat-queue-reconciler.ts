@@ -369,6 +369,7 @@ export function addAcceptedAction(
       [pending.clientActionId]: {
         clientActionId: pending.clientActionId,
         action: pending.action,
+        interviewBlockId: pending.interviewBlockId,
         messageId: pending.messageId,
         acceptedAt: now,
         restoreContent: pending.restoreContent,
@@ -382,6 +383,16 @@ export function addAcceptedAction(
  * Prune accepted actions to enforce retention time limit (5 minutes) and
  * record cap (64 records). Prioritizes send/editUserMessage actions and
  * recent entries. Returns the same object if no pruning is needed.
+ *
+ * An accepted-but-unresolved interview action (`interviewBlockId !== null`)
+ * is a lifecycle lock, not generic action history: the UI busy-gate and the
+ * duplicate-dispatch guard both read it via `existingInterviewActionId`, and
+ * it must survive until the host's `interviewAnswered`/`interviewErrored`
+ * frame authoritatively clears it (`withoutInterviewActionsForBlock`).
+ * Exempt it from the retention window and record cap below, or a
+ * slow-to-resolve interview (or enough unrelated traffic to evict it from the
+ * cap) would silently un-gate a duplicate submission before the host
+ * responds.
  */
 export function pruneAcceptedActions(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
@@ -390,7 +401,13 @@ export function pruneAcceptedActions(
   const RETENTION_MS = 5 * 60 * 1_000;
   const MAX_RECORDS = 64;
 
-  const unexpired = Object.values(acceptedActions).filter(
+  const all = Object.values(acceptedActions);
+  const interviewLocked = all.filter(
+    (action) => action.interviewBlockId !== null,
+  );
+  const prunable = all.filter((action) => action.interviewBlockId === null);
+
+  const unexpired = prunable.filter(
     (action) => now - action.acceptedAt <= RETENTION_MS,
   );
   const retained =
@@ -399,10 +416,11 @@ export function pruneAcceptedActions(
       : unexpired
           .toSorted(compareAcceptedActionForRetention)
           .slice(0, MAX_RECORDS);
-  if (retained.length === Object.keys(acceptedActions).length) {
+  const kept = [...interviewLocked, ...retained];
+  if (kept.length === all.length) {
     return acceptedActions;
   }
-  return retained.reduce<Record<string, AcceptedChatAction>>((next, action) => {
+  return kept.reduce<Record<string, AcceptedChatAction>>((next, action) => {
     next[action.clientActionId] = action;
     return next;
   }, {});

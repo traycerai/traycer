@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -59,6 +59,19 @@ function wrapper(props: { children: ReactNode }) {
   );
 }
 
+function isScopedSearchForEpic(
+  call: { readonly method: string; readonly params: unknown },
+  epicId: string,
+) {
+  return (
+    call.method === "workspace.searchPaths" &&
+    typeof call.params === "object" &&
+    call.params !== null &&
+    "epicId" in call.params &&
+    call.params.epicId === epicId
+  );
+}
+
 describe("useWorkspaceEntries", () => {
   beforeEach(() => {
     hostClient = createHostClient();
@@ -101,11 +114,11 @@ describe("useWorkspaceEntries", () => {
 
     await waitFor(() => expect(result.current.data).toHaveLength(1));
     expect(messenger.calls).toEqual([
-      {
+      expect.objectContaining({
         method: "workspace.mentionFiles",
         params: { roots: ["/repo"], query: "app", limit: 8 },
         requestId: "request-test",
-      },
+      }),
     ]);
   });
 
@@ -121,4 +134,377 @@ describe("useWorkspaceEntries", () => {
 
     expect(messenger.calls).toHaveLength(0);
   });
+
+  function fileSearchRequest() {
+    return {
+      method: "workspace.searchPaths" as const,
+      suggestionKind: "file" as const,
+      root: "/repo",
+      params: {
+        epicId: "epic-1",
+        reference: { root: "/repo" },
+        query: "app",
+        limit: 50,
+        kinds: "files" as const,
+      },
+    };
+  }
+
+  function scopedFileSearchRequest(root: string, epicId: string) {
+    return {
+      method: "workspace.searchPaths" as const,
+      suggestionKind: "file" as const,
+      root,
+      params: {
+        epicId,
+        reference: { root },
+        query: "app",
+        limit: 50,
+        kinds: "files" as const,
+      },
+    };
+  }
+
+  it("reconstructs scoped searchPaths results into mention suggestions", async () => {
+    messenger.setHandlers({
+      "workspace.searchPaths": (params) => ({
+        epicId: params.epicId,
+        root: "root" in params.reference ? params.reference.root : "",
+        outcome: "ready",
+        results: [{ kind: "file", relPath: "src/app.ts", name: "app.ts" }],
+        truncated: false,
+      }),
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWorkspaceEntries({
+          client: hostClient,
+          requests: [fileSearchRequest()],
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+    expect(result.current.data[0]).toMatchObject({
+      kind: "file",
+      relPath: "src/app.ts",
+      absolutePath: "/repo/src/app.ts",
+      workspacePath: "/repo",
+    });
+    // The scoped RPC was used - not the legacy raw-root one.
+    expect(messenger.calls.map((call) => call.method)).toEqual([
+      "workspace.searchPaths",
+    ]);
+  });
+
+  it("reconstructs a folders-only scoped result into folder suggestions", async () => {
+    messenger.setHandlers({
+      "workspace.searchPaths": (params) => ({
+        epicId: params.epicId,
+        root: "root" in params.reference ? params.reference.root : "",
+        outcome: "ready",
+        results: [{ kind: "folder", relPath: "src/lib", name: "lib" }],
+        truncated: false,
+      }),
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWorkspaceEntries({
+          client: hostClient,
+          requests: [
+            {
+              method: "workspace.searchPaths",
+              suggestionKind: "folder",
+              root: "/repo",
+              params: {
+                epicId: "epic-1",
+                reference: { root: "/repo" },
+                query: "lib",
+                limit: 50,
+                kinds: "folders",
+              },
+            },
+          ],
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+    expect(result.current.data[0]).toMatchObject({
+      kind: "folder",
+      relPath: "src/lib/",
+      absolutePath: "/repo/src/lib",
+      workspacePath: "/repo",
+    });
+  });
+
+  it("falls back to the legacy RPC when a scoped request errors", async () => {
+    messenger.setHandlers({
+      "workspace.searchPaths": () => {
+        throw new Error("host does not support searchPaths");
+      },
+      "workspace.mentionFiles": () => ({
+        entries: [legacyFileSuggestion()],
+      }),
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWorkspaceEntries({
+          client: hostClient,
+          requests: [fileSearchRequest()],
+        }),
+      { wrapper },
+    );
+
+    // The scoped failure is recovered by a legacy fallback for the same root,
+    // so the suggestion never disappears and no error surfaces.
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+    expect(result.current.error).toBeNull();
+    expect(messenger.calls.map((call) => call.method)).toContain(
+      "workspace.mentionFiles",
+    );
+  });
+
+  it("falls back to the legacy RPC on a typed root_unavailable outcome", async () => {
+    messenger.setHandlers({
+      "workspace.searchPaths": (params) => ({
+        epicId: params.epicId,
+        root: "root" in params.reference ? params.reference.root : "",
+        outcome: "root_unavailable",
+        results: [],
+        truncated: false,
+      }),
+      "workspace.mentionFiles": () => ({
+        entries: [legacyFileSuggestion()],
+      }),
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWorkspaceEntries({
+          client: hostClient,
+          requests: [fileSearchRequest()],
+        }),
+      { wrapper },
+    );
+
+    // A rejected root is observably distinct from a match-less search: it routes
+    // through the legacy RPC rather than dropping the root's suggestions.
+    await waitFor(() =>
+      expect(messenger.calls.map((call) => call.method)).toContain(
+        "workspace.mentionFiles",
+      ),
+    );
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+  });
+
+  it("does NOT fall back on a ready outcome with zero matches", async () => {
+    messenger.setHandlers({
+      "workspace.searchPaths": (params) => ({
+        epicId: params.epicId,
+        root: "root" in params.reference ? params.reference.root : "",
+        outcome: "ready",
+        results: [],
+        truncated: false,
+      }),
+      "workspace.mentionFiles": () => ({
+        entries: [legacyFileSuggestion()],
+      }),
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWorkspaceEntries({
+          client: hostClient,
+          requests: [fileSearchRequest()],
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    // Ready + empty means "searched, nothing matched" - no legacy fallback and
+    // no suggestions.
+    expect(result.current.data).toHaveLength(0);
+    expect(messenger.calls.map((call) => call.method)).toEqual([
+      "workspace.searchPaths",
+    ]);
+  });
+
+  it("drops a late scoped reply whose echoed root no longer matches", async () => {
+    messenger.setHandlers({
+      "workspace.searchPaths": (params) => ({
+        epicId: params.epicId,
+        // A stale reply for a previously-selected workspace.
+        root: "/some/other/workspace",
+        outcome: "ready",
+        results: [{ kind: "file", relPath: "x.ts", name: "x.ts" }],
+        truncated: false,
+      }),
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWorkspaceEntries({
+          client: hostClient,
+          requests: [fileSearchRequest()],
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.data).toHaveLength(0);
+  });
+
+  it("does not reuse a pending root's placeholder state after the request slot changes", async () => {
+    let resolveFirst: (() => void) | null = null;
+    messenger.setHandlers({
+      "workspace.searchPaths": (params) => {
+        if ("root" in params.reference && params.reference.root === "/repo-a") {
+          return new Promise<void>((resolve) => {
+            resolveFirst = resolve;
+          }).then(() => ({
+            epicId: params.epicId,
+            root: "/repo-a",
+            outcome: "root_unavailable" as const,
+            results: [],
+            truncated: false,
+          }));
+        }
+        return {
+          epicId: params.epicId,
+          root: "root" in params.reference ? params.reference.root : "",
+          outcome: "ready" as const,
+          results: [],
+          truncated: false,
+        };
+      },
+      "workspace.mentionFiles": () => ({ entries: [legacyFileSuggestion()] }),
+    });
+
+    const { result, rerender } = renderHook(
+      ({ request }) =>
+        useWorkspaceEntries({ client: hostClient, requests: [request] }),
+      {
+        initialProps: {
+          request: scopedFileSearchRequest("/repo-a", "epic-a"),
+        },
+        wrapper,
+      },
+    );
+
+    await waitFor(() =>
+      expect(
+        messenger.calls.some((call) => isScopedSearchForEpic(call, "epic-a")),
+      ).toBe(true),
+    );
+
+    rerender({ request: scopedFileSearchRequest("/repo-b", "epic-b") });
+
+    await waitFor(() =>
+      expect(
+        messenger.calls.some((call) => isScopedSearchForEpic(call, "epic-b")),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.data).toHaveLength(0);
+    expect(messenger.calls.map((call) => call.method)).not.toContain(
+      "workspace.mentionFiles",
+    );
+
+    act(() => {
+      resolveFirst?.();
+    });
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.data).toHaveLength(0);
+    expect(messenger.calls.map((call) => call.method)).not.toContain(
+      "workspace.mentionFiles",
+    );
+  });
+
+  it("does not fall back for a previous root_unavailable reply after the request slot changes", async () => {
+    let resolveSecond: (() => void) | null = null;
+    messenger.setHandlers({
+      "workspace.searchPaths": (params) => {
+        if ("root" in params.reference && params.reference.root === "/repo-a") {
+          return {
+            epicId: params.epicId,
+            root: "/repo-a",
+            outcome: "root_unavailable" as const,
+            results: [],
+            truncated: false,
+          };
+        }
+        return new Promise<void>((resolve) => {
+          resolveSecond = resolve;
+        }).then(() => ({
+          epicId: params.epicId,
+          root: "/repo-b",
+          outcome: "ready" as const,
+          results: [],
+          truncated: false,
+        }));
+      },
+      "workspace.mentionFiles": () => ({ entries: [legacyFileSuggestion()] }),
+    });
+
+    const { result, rerender } = renderHook(
+      ({ request }) =>
+        useWorkspaceEntries({ client: hostClient, requests: [request] }),
+      {
+        initialProps: {
+          request: scopedFileSearchRequest("/repo-a", "epic-a"),
+        },
+        wrapper,
+      },
+    );
+
+    await waitFor(() =>
+      expect(messenger.calls.map((call) => call.method)).toContain(
+        "workspace.mentionFiles",
+      ),
+    );
+    const legacyCallCount = messenger.calls.filter(
+      (call) => call.method === "workspace.mentionFiles",
+    ).length;
+
+    rerender({ request: scopedFileSearchRequest("/repo-b", "epic-b") });
+
+    await waitFor(() =>
+      expect(
+        messenger.calls.some((call) => isScopedSearchForEpic(call, "epic-b")),
+      ).toBe(true),
+    );
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "workspace.mentionFiles",
+      ),
+    ).toHaveLength(legacyCallCount);
+    expect(result.current.data).toHaveLength(0);
+
+    act(() => {
+      resolveSecond?.();
+    });
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.data).toHaveLength(0);
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "workspace.mentionFiles",
+      ),
+    ).toHaveLength(legacyCallCount);
+  });
 });
+
+function legacyFileSuggestion() {
+  return {
+    kind: "file" as const,
+    id: "file:/repo:src/app.ts",
+    label: "app.ts",
+    relPath: "src/app.ts",
+    absolutePath: "/repo/src/app.ts",
+    workspacePath: "/repo",
+    description: "src",
+  };
+}

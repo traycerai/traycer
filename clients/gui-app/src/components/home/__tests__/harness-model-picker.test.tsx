@@ -886,6 +886,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -904,6 +905,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -1189,6 +1191,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -1207,6 +1210,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -1436,6 +1440,47 @@ describe("<HarnessModelPicker />", () => {
     ).not.toBeNull();
   });
 
+  it("keeps a provider visible when its terminal profile reports the logout before the provider summary converges", async () => {
+    const codex = codexModels();
+    const signedOutClaude: HarnessOption = {
+      ...CLAUDE_HARNESS,
+      available: false,
+      error: "Claude is signed out",
+    };
+    queryMock.harnesses = [signedOutClaude, CODEX_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(signedOutClaude, []),
+      catalogHarness(CODEX_HARNESS, codex),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", []],
+    ]);
+    const claude = providerCliStateWithProfiles({
+      providerId: "claude-code",
+      profiles: claudeProfilesForDropdown().map((profile) =>
+        profile.kind === "ambient"
+          ? {
+              ...profile,
+              auth: { ...profile.auth, status: "unauthenticated" },
+            }
+          : profile,
+      ),
+    });
+    queryMock.providerStates = [
+      {
+        ...claude,
+        auth: { ...claude.auth, status: "unavailable" },
+      },
+    ];
+
+    renderPicker(undefined);
+
+    await openPicker();
+    const claudeTab = screen.getByRole("tab", { name: "Claude" });
+    expect(claudeTab.getAttribute("data-degraded")).toBe("true");
+  });
+
   it("renders a single unlabeled rail entry when a provider has exactly one profile", async () => {
     queryMock.providerStates = [
       providerCliStateWithProfiles({
@@ -1455,6 +1500,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -1495,6 +1541,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -1513,6 +1560,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -1658,6 +1706,7 @@ describe("<HarnessModelPicker />", () => {
       identity: null,
       usageUpdatedAt: null,
       rateLimitStatus: "unknown" as const,
+      rateLimitLimitedScopes: null,
       duplicateOfProfileId: null,
       accentColor: null,
       ambientDriftNotice: null,
@@ -1741,6 +1790,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -1759,6 +1809,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -1865,6 +1916,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -1883,6 +1935,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2116,6 +2169,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2134,6 +2188,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2177,6 +2232,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2195,6 +2251,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2237,6 +2294,7 @@ describe("<HarnessModelPicker />", () => {
         identity: null,
         usageUpdatedAt: null,
         rateLimitStatus: "unknown",
+        rateLimitLimitedScopes: null,
         duplicateOfProfileId: null,
         accentColor: null,
         ambientDriftNotice: null,
@@ -2255,6 +2313,7 @@ describe("<HarnessModelPicker />", () => {
         identity: null,
         usageUpdatedAt: null,
         rateLimitStatus: "unknown",
+        rateLimitLimitedScopes: null,
         duplicateOfProfileId: null,
         accentColor: null,
         ambientDriftNotice: null,
@@ -2352,6 +2411,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2370,6 +2430,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2428,6 +2489,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2446,6 +2508,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2487,6 +2550,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2505,6 +2569,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2545,6 +2610,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,
@@ -2563,6 +2629,7 @@ describe("<HarnessModelPicker />", () => {
             identity: null,
             usageUpdatedAt: null,
             rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
             duplicateOfProfileId: null,
             accentColor: null,
             ambientDriftNotice: null,

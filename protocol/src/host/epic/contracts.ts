@@ -51,6 +51,8 @@ import {
   removeEpicRepoResponseSchema,
   resolveArtifactByPathRequestSchema,
   resolveArtifactByPathResponseSchema,
+  searchArtifactsRequestSchema,
+  searchArtifactsResponseSchema,
   renameArtifactRequestSchema,
   renameArtifactResponseSchema,
   renameChatRequestSchema,
@@ -65,13 +67,18 @@ import {
   replyToCommentThreadResponseSchema,
   revokeEpicCollaboratorRequestSchema,
   revokeEpicCollaboratorResponseSchema,
+  setChatArchivedRequestSchema,
+  setChatArchivedResponseSchema,
   setCommentThreadResolvedRequestSchema,
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
   setEpicPinnedResponseSchema,
   updateArtifactStatusRequestSchema,
   updateArtifactStatusResponseSchema,
+  updateChatProfileRequestSchema,
+  updateChatProfileResponseSchema,
   updateChatRunSettingsRequestSchema,
+  updateChatRunSettingsRequestSchemaV11,
   updateChatRunSettingsResponseSchema,
   updateEpicRequestSchema,
   updateEpicResponseSchema,
@@ -267,6 +274,41 @@ export const epicUpdateChatRunSettingsV10 = defineRpcContract({
   responseSchema: updateChatRunSettingsResponseSchema,
 });
 
+// v1.1 tightens `settings` to the wire-strict tuple (no zod-default
+// backstops): a subset-field patch is a validation error at the canonical
+// minor instead of a silent null-clobber. Shipped as a minor so the loose
+// v1.0 shape stays an explicitly bridged legacy line rather than the live
+// contract. See `updateChatRunSettingsRequestSchemaV11`.
+export const epicUpdateChatRunSettingsV11 = defineRpcContract({
+  method: "epic.updateChatRunSettings",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: updateChatRunSettingsRequestSchemaV11,
+  responseSchema: updateChatRunSettingsResponseSchema,
+});
+
+// A parsed v1.0 request has already materialized the loose schema's defaults
+// (serviceTier/profileId -> null), so it satisfies the strict tuple as-is;
+// the request upgrade is the identity. The response is unchanged.
+export const epicUpdateChatRunSettingsUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicUpdateChatRunSettingsV10,
+  typeof epicUpdateChatRunSettingsV11
+>({
+  from: epicUpdateChatRunSettingsV10.schemaVersion,
+  to: epicUpdateChatRunSettingsV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// Optional (non-floor) capability: narrow profile-only settings update - the
+// host patches its own authoritative persisted tuple. See the schema doc in
+// `unary-schemas.ts` for why no sibling model/harness update exists.
+export const epicUpdateChatProfileV10 = defineRpcContract({
+  method: "epic.updateChatProfile",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: updateChatProfileRequestSchema,
+  responseSchema: updateChatProfileResponseSchema,
+});
+
 export const epicDeleteChatV10 = defineRpcContract({
   method: "epic.deleteChat",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -279,6 +321,18 @@ export const epicReparentChatV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: reparentChatRequestSchema,
   responseSchema: reparentChatResponseSchema,
+});
+
+// Optional (non-floor) capability: durable host-backed archive toggle for a
+// chat or terminal-agent record. Registered with a `degrade: unsupported`
+// strategy (see registry.ts) so an old host that lacks it fails only this
+// call - it must never enter the released floor, which would be
+// handshake-fatal for existing peers. See the schema doc in `unary-schemas.ts`.
+export const epicSetChatArchivedV10 = defineRpcContract({
+  method: "epic.setChatArchived",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: setChatArchivedRequestSchema,
+  responseSchema: setChatArchivedResponseSchema,
 });
 
 export const epicCreateTuiAgentV10 = defineRpcContract({
@@ -395,6 +449,17 @@ export const epicResolveArtifactByPathV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: resolveArtifactByPathRequestSchema,
   responseSchema: resolveArtifactByPathResponseSchema,
+});
+
+// `epic.searchArtifacts@1.0` - Epic-scoped artifact title/path/body search over
+// the epic's on-disk Markdown mirror + authoritative Y.Doc metadata. Optional
+// (non-floor): an old host lacks it in its optional manifest and returns
+// E_HOST_UNSUPPORTED for this call only, so the sidebar degrades to no search.
+export const epicSearchArtifactsV10 = defineRpcContract({
+  method: "epic.searchArtifacts",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: searchArtifactsRequestSchema,
+  responseSchema: searchArtifactsResponseSchema,
 });
 
 export { epicSubscribeV10 };

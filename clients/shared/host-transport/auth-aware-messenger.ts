@@ -1,27 +1,18 @@
-import type { AuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type {
+  AuthorityBoundAuthRevalidator,
+  RevalidateOutcome,
+} from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
   HostRpcError,
+  HostAuthoritySupersededError,
+  HostRequestAbortedError,
+  type HostRequestAuthority,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
 } from "./host-messenger";
-
-/**
- * Optional retry policy for the auth-aware wrapper.
- *
- * The CLI and renderer use this when a caller must complete the refresh loop
- * inside the transport layer: after a revalidation that actually rotated the
- * bearer, the wrapper retries the request once on the rotated value.
- *
- * Retry is gated on the bearer *changing* (compared before/after revalidation)
- * so a rejected/network-failed refresh - which leaves the bearer untouched -
- * does not waste a retry that would deterministically fail the same way.
- */
-export interface AuthAwareRetryPolicy {
-  readonly bearer: () => OpenFrameBearerSource | null;
-}
 
 /**
  * Wraps an `IHostMessenger` so a `HostRpcError` with `code ===
@@ -40,14 +31,7 @@ export interface AuthAwareRetryPolicy {
  * `getBearerToken()` throws) by returning `null`. The gate then compares
  * before/after: equal-or-null means "no rotation happened", so don't retry.
  */
-function readBearer(retry: AuthAwareRetryPolicy | null): string | null {
-  if (retry === null) {
-    return null;
-  }
-  const source = retry.bearer();
-  if (source === null) {
-    return null;
-  }
+function readBearer(source: OpenFrameBearerSource): string | null {
   try {
     return source.getBearerToken();
   } catch {
@@ -57,10 +41,11 @@ function readBearer(retry: AuthAwareRetryPolicy | null): string | null {
 
 export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
   inner: IHostMessenger<Registry>,
-  auth: AuthRevalidator,
-  options: { readonly retry: AuthAwareRetryPolicy } | null,
+  auth: AuthorityBoundAuthRevalidator,
 ): IHostMessenger<Registry> {
   const runWithAuthRecovery = async <Response>(
+    authority: HostRequestAuthority,
+    method: string,
     call: () => Promise<Response>,
   ): Promise<Response> => {
     try {
@@ -76,21 +61,36 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
       if (cause.fatalDetails?.retryable === true) {
         throw cause;
       }
-      const retry = options?.retry ?? null;
-      const before = readBearer(retry);
+      if (authority.abortSignal.aborted) {
+        throw new HostRequestAbortedError({
+          message:
+            "Host request authority was aborted before authentication recovery",
+          requestId: "authority-aborted",
+          method,
+        });
+      }
+      const before = readBearer(authority.bearer);
+      let outcome: RevalidateOutcome | "superseded";
       try {
-        await auth.revalidateCurrentContext();
+        outcome = await auth.revalidateExpectedBearer(authority.bearer);
       } catch {
-        // Revalidation itself failed (e.g. a renderer provider torn down
-        // mid-flight). Surface the ORIGINAL UNAUTHORIZED, not the revalidation
-        // error: callers key recovery (session-expired cascade, error toasts)
-        // on `code === "UNAUTHORIZED"`, which a generic error would defeat.
         throw cause;
       }
-      if (retry === null) {
+      if (outcome === "superseded") {
+        throw new HostAuthoritySupersededError();
+      }
+      if (outcome !== "rotated" || authority.abortSignal.aborted) {
+        if (authority.abortSignal.aborted) {
+          throw new HostRequestAbortedError({
+            message:
+              "Host request authority was aborted during authentication recovery",
+            requestId: "authority-aborted",
+            method,
+          });
+        }
         throw cause;
       }
-      const after = readBearer(retry);
+      const after = readBearer(authority.bearer);
       if (after === null || after === before) {
         throw cause;
       }
@@ -102,16 +102,25 @@ export function createAuthAwareMessenger<Registry extends VersionedRpcRegistry>(
     request<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
+      authority: HostRequestAuthority,
     ): Promise<ResponseOfMethod<Registry, Method>> {
-      return runWithAuthRecovery(() => inner.request(method, params));
+      return runWithAuthRecovery(authority, method, () =>
+        inner.request(method, params, authority),
+      );
     },
     requestWithResponseTimeout<Method extends keyof Registry & string>(
       method: Method,
       params: RequestOfMethod<Registry, Method>,
       responseTimeoutMs: number,
+      authority: HostRequestAuthority,
     ): Promise<ResponseOfMethod<Registry, Method>> {
-      return runWithAuthRecovery(() =>
-        inner.requestWithResponseTimeout(method, params, responseTimeoutMs),
+      return runWithAuthRecovery(authority, method, () =>
+        inner.requestWithResponseTimeout(
+          method,
+          params,
+          responseTimeoutMs,
+          authority,
+        ),
       );
     },
   };

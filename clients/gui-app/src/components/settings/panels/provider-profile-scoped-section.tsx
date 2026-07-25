@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  LogIn,
   Plus,
   RefreshCw,
   Settings2,
@@ -53,6 +54,10 @@ import {
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
+import {
+  isRateLimitProfileFetchEligible,
+  resolveRateLimitFetchEligibility,
+} from "@/lib/rate-limit-providers";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -85,11 +90,22 @@ function profileDriftKey(
   return `${providerId}:${profile.profileId}:${notice.changedAt}`;
 }
 
+function profileRateLimitFetchEligible(
+  state: ProviderCliState,
+  profile: ProviderProfile,
+): boolean {
+  return isRateLimitProfileFetchEligible(
+    resolveRateLimitFetchEligibility(state),
+    profile,
+  );
+}
+
 interface ProviderProfileScopedSectionProps {
   readonly state: ProviderCliState;
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
+  readonly startInReauth: boolean;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
   readonly onDismissFailedAttempt: () => void;
@@ -122,6 +138,7 @@ export function ProviderProfileScopedSection(
     hostId,
     isSelectedHostLocal,
     canAddProfile,
+    startInReauth,
     failedAttempt,
     onAddProfile,
     onDismissFailedAttempt,
@@ -132,8 +149,11 @@ export function ProviderProfileScopedSection(
   const [dismissedDriftKeys, setDismissedDriftKeys] = useState<
     readonly string[]
   >([]);
-  const [editProfileOpen, setEditProfileOpen] = useState(false);
+  const [editProfileOpen, setEditProfileOpen] = useState(startInReauth);
   const [editSessionId, setEditSessionId] = useState(0);
+  const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(
+    startInReauth ? "sign-in" : "manage",
+  );
 
   if (profiles.length === 0) return null;
 
@@ -158,6 +178,13 @@ export function ProviderProfileScopedSection(
   };
 
   const openProfileEditor = (): void => {
+    setEditIntent("manage");
+    setEditSessionId((current) => current + 1);
+    setEditProfileOpen(true);
+  };
+
+  const openProfileSignIn = (): void => {
+    setEditIntent("sign-in");
     setEditSessionId((current) => current + 1);
     setEditProfileOpen(true);
   };
@@ -184,6 +211,10 @@ export function ProviderProfileScopedSection(
               providerId={state.providerId}
               profileId={profileCommitId(selectedProfile)}
               usageUpdatedAt={selectedProfile.usageUpdatedAt}
+              fetchEligible={profileRateLimitFetchEligible(
+                state,
+                selectedProfile,
+              )}
             />
           </div>
         </div>
@@ -201,11 +232,32 @@ export function ProviderProfileScopedSection(
           onCloseAutoFocus={null}
           usagePresentation={null}
         />
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div
+          data-slot="profile-summary-actions"
+          className="flex min-w-0 items-center justify-end gap-2"
+        >
           <ProfileSummary
             key={selectedProfile.profileId}
             profile={selectedProfile}
           />
+          {selectedProfile.auth.status === "unauthenticated" ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="secondary"
+              className="shrink-0"
+              disabled={!canAddProfile}
+              title={
+                canAddProfile
+                  ? undefined
+                  : "Sign in requires a local host with browser sign-in available."
+              }
+              onClick={openProfileSignIn}
+            >
+              <LogIn data-icon="inline-start" />
+              Sign in
+            </Button>
+          ) : null}
           <TooltipWrapper
             label="Change the profile name and accent color, sign in again, or remove this profile."
             side="bottom"
@@ -216,6 +268,7 @@ export function ProviderProfileScopedSection(
               type="button"
               size="xs"
               variant="outline"
+              className="shrink-0"
               onClick={openProfileEditor}
             >
               <Settings2 data-icon="inline-start" />
@@ -283,6 +336,7 @@ export function ProviderProfileScopedSection(
           providerId={state.providerId}
           profileId={profileCommitId(selectedProfile)}
           usageUpdatedAt={selectedProfile.usageUpdatedAt}
+          fetchEligible={profileRateLimitFetchEligible(state, selectedProfile)}
         />
       </div>
 
@@ -292,6 +346,7 @@ export function ProviderProfileScopedSection(
         profile={selectedProfile}
         profiles={profiles}
         canOauth={canAddProfile}
+        startInReauth={editIntent === "sign-in"}
         open={editProfileOpen}
         onOpenChange={setEditProfileOpen}
         remainingProfilesAfterRemoval={orderedProfiles.filter(
@@ -316,11 +371,11 @@ function ProfileSummary({
   }
   const tier = profile.identity?.tier;
   const planText =
-    tier === null || tier === undefined || tier.length === 0 ? "No plan" : tier;
+    tier === null || tier === undefined || tier.length === 0 ? null : tier;
 
   return (
-    <div className="grid min-w-[75%] flex-1 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 text-ui-xs text-muted-foreground">
-      <div className="flex min-w-0 items-center gap-1">
+    <div className="flex min-w-0 flex-1 items-center gap-2 text-ui-xs text-muted-foreground">
+      <div className="flex min-w-0 flex-1 items-center gap-1">
         <span className="min-w-0 truncate" title={email ?? undefined}>
           {emailText}
         </span>
@@ -344,16 +399,18 @@ function ProfileSummary({
           </button>
         ) : null}
       </div>
-      <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+      <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">
         {profileAuthStatusText(profile)}
       </Badge>
-      <Badge
-        variant="outline"
-        className="h-5 max-w-[min(28vw,14rem)] px-1.5 text-[10px]"
-        title={planText}
-      >
-        <span className="truncate">{planText}</span>
-      </Badge>
+      {planText !== null ? (
+        <Badge
+          variant="outline"
+          className="h-5 max-w-[min(28vw,14rem)] shrink-0 px-1.5 text-[10px]"
+          title={planText}
+        >
+          <span className="truncate">{planText}</span>
+        </Badge>
+      ) : null}
     </div>
   );
 }
@@ -425,11 +482,28 @@ function ProfileEditErrors({
   );
 }
 
+function profileEditDialogCopy(
+  profile: ProviderProfile,
+  startInReauth: boolean,
+) {
+  if (startInReauth) {
+    return {
+      title: `Sign in to ${profileDisplayLabel(profile)}`,
+      description: "Reconnect this profile without changing its name or color.",
+    };
+  }
+  return {
+    title: "Edit profile",
+    description: `Update how ${profileDisplayLabel(profile)} appears and which account it uses.`,
+  };
+}
+
 function ProfileEditDialog({
   state,
   profile,
   profiles,
   canOauth,
+  startInReauth,
   open,
   onOpenChange,
   remainingProfilesAfterRemoval,
@@ -439,6 +513,7 @@ function ProfileEditDialog({
   readonly profile: ProviderProfile;
   readonly profiles: readonly ProviderProfile[];
   readonly canOauth: boolean;
+  readonly startInReauth: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /** The provider's other profiles, ordered - what stays once `profile` is
@@ -452,7 +527,7 @@ function ProfileEditDialog({
   const removeProfile = useRemoveProviderProfile();
   const renameProfile = useRenameProviderProfile();
   const recolorProfile = useRecolorProviderProfile();
-  const [switchingAccount, setSwitchingAccount] = useState(false);
+  const [switchingAccount, setSwitchingAccount] = useState(startInReauth);
   const [confirmRemoveOpen, setConfirmRemoveOpen] = useState(false);
   const [label, setLabel] = useState(profile.label);
   const [committedLabel, setCommittedLabel] = useState(profile.label);
@@ -468,6 +543,7 @@ function ProfileEditDialog({
   const removeProfilePresentation = PROFILE_REMOVE_PRESENTATION[profile.kind];
   const removeProfileDisabledReason = removeProfilePresentation.disabledReason;
   const isTerminalProfile = removeProfileDisabledReason !== null;
+  const dialogCopy = profileEditDialogCopy(profile, startInReauth);
 
   const commitProfile = (onSuccess: () => void): void => {
     if (savePending || invalid) return;
@@ -537,11 +613,10 @@ function ProfileEditDialog({
         >
           <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
             <DialogTitle className="text-ui font-semibold leading-snug">
-              Edit profile
+              {dialogCopy.title}
             </DialogTitle>
             <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
-              Update how {profileDisplayLabel(profile)} appears and which
-              account it uses.
+              {dialogCopy.description}
             </DialogDescription>
           </DialogHeader>
 
@@ -664,7 +739,7 @@ function ProfileEditDialog({
         open={confirmRemoveOpen}
         onOpenChange={setConfirmRemoveOpen}
         title={`Remove ${profileDisplayLabel(profile)}?`}
-        description={`Chats that ran on ${profileDisplayLabel(profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
+        description={`Agents that ran on ${profileDisplayLabel(profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
         cascadeSummary={null}
         actionLabel="Remove"
         isPending={removeProfile.isPending}

@@ -46,9 +46,9 @@ export function NotificationHooksSection(props: {
           </h2>
           <p className="max-w-[72ch] text-ui-sm text-muted-foreground">
             Run a script or POST to a URL when notifications fire. Each hook
-            picks its own severities, the same ones as Interruptions above.
-            Edits here and hand-edits to the file below are the same thing —
-            both reload immediately.
+            further filters the severities enabled under Host notifications
+            above. Edits here and hand-edits to the file below are the same
+            thing — both reload immediately.
           </p>
         </div>
         <Button

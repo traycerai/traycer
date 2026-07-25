@@ -6,8 +6,17 @@ import { useCallback, useEffect, useState, type RefObject } from "react";
  * re-reads the live `Selection` (Chromium/Electron can collapse or retarget the
  * selection before the click dispatches across the portal).
  *
- * `text` is the raw `Selection.toString()` value - normalization (per-line
- * trailing trim, blockquote/codeBlock shaping) is `buildQuoteBlockquote`'s job.
+ * `text` is the raw `Selection.toString()` value - this preserves the
+ * browser's own block-boundary blank lines (`\n\n` between paragraphs),
+ * which a derived `Range.toString()` would flatten away. EXCEPTION: when the
+ * end was clamped back into the quotable root (the triple-click tail) and
+ * the clamped-away region held visible `[data-quote-exclude]` text, that
+ * text is stripped from the tail - real `Selection.toString()` DOES include
+ * it (it's ordinary rendered HTML, just excluded from quoting), unlike an
+ * SVG `<title>`/`<desc>`/`<metadata>`/`<defs>`, which produces no layout box
+ * and so the browser's own stringifier already omits. Further normalization
+ * (per-line trailing trim, dropping trailing blank lines, blockquote/
+ * codeBlock shaping) is `buildQuoteBlockquote`'s job.
  * `range` is a detached clone of the live range; the popover reads its live
  * `getBoundingClientRect()` for anchoring and guards against its nodes being
  * disconnected.
@@ -213,22 +222,30 @@ export function resolveQuoteSelection(
   // Clone so the snapshot is immutable against later selection mutations; the
   // clone still references the live nodes, so its rect tracks their position.
   const range = liveRange.cloneRange();
+  // Text found under a [data-quote-exclude] ancestor in the clamped-away
+  // region, one entry per rendered descendant - real `Selection.toString()`
+  // includes it (unlike non-rendered SVG chrome), so it's stripped from the
+  // tail of `selectionText` below.
+  let excludedTailParts: ReadonlyArray<string> = [];
   if (end.clampToRootEnd) {
     // The clamp exists for the triple-click tail, where the clamped-away
-    // region holds no text. A drag that genuinely selected content past the
-    // root would keep that out-of-root text in `selectionText` below (the
-    // range is clamped but the emitted text is not), so any non-whitespace
-    // in the clamped-away region rejects the gesture instead.
+    // region holds no USER-VISIBLE, non-excluded text (only whitespace,
+    // non-rendered SVG chrome like <title>/<desc>, or a [data-quote-exclude]
+    // sibling). A drag that genuinely selected visible content past the root
+    // rejects instead of clamping.
     const clampedAway = liveRange.cloneRange();
     clampedAway.setStart(startRoot, startRoot.childNodes.length);
-    if (clampedAway.toString().trim().length > 0) return null;
+    if (rangeHasVisibleText(clampedAway)) return null;
+    excludedTailParts = excludedVisibleTailParts(clampedAway);
     range.setEnd(startRoot, startRoot.childNodes.length);
   }
 
   if (rangeIntersectsExcluded(range, startRoot)) return null;
 
   return {
-    text: selectionText,
+    text: end.clampToRootEnd
+      ? stripExcludedTail(selectionText, excludedTailParts)
+      : selectionText,
     fenceLanguage: detectFenceLanguage(range, startRoot),
     range,
     root: startRoot,
@@ -258,10 +275,18 @@ function quotableRootForEnd(
   startRoot: Element,
 ): EndResolution {
   if (isTextNode(container)) {
-    return {
-      root: closestQuotable(container.parentElement),
-      clampToRootEnd: false,
-    };
+    const here = closestQuotable(container.parentElement);
+    // A double-click's word selection can absorb the block's trailing
+    // whitespace and finalize at offset 0 of the NEXT text node - on a turn's
+    // LAST block that node sits outside the quotable root. offset 0 means no
+    // character of this text node is selected, so it's the same tail landing
+    // as the triple-click element@0 case below: clamp back into the root
+    // rather than rejecting, and let the caller's clamped-away guard reject a
+    // drag that genuinely selected content past the root.
+    if (here !== startRoot && offset === 0) {
+      return { root: startRoot, clampToRootEnd: true };
+    }
+    return { root: here, clampToRootEnd: false };
   }
   const element = asElement(container);
   if (element === null) return { root: null, clampToRootEnd: false };
@@ -313,6 +338,128 @@ function fenceBoundaryNode(
       ? childAt(container, offset)
       : childAt(container, offset - 1);
   return child ?? container;
+}
+
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+// SVG element names whose subtree is never painted even though it appears in
+// `Range.toString()` - a provider icon's `<title>Claude</title>`, `<desc>`,
+// and definition containers (`<metadata>`, `<defs>`) that only exist to be
+// referenced via `<use>`. Scoped to the SVG namespace below so an
+// HTML-authored element that happens to be named e.g. `desc` isn't mistaken
+// for one. SVG `<text>` IS painted and is deliberately excluded from this set.
+const NON_VISIBLE_SVG_TAGS = new Set(["title", "desc", "metadata", "defs"]);
+
+/** Whether `range` covers any user-visible, non-whitespace text - i.e. text
+ *  outside SVG `<title>`/`<desc>` and `[data-quote-exclude]` subtrees. Walks a
+ *  `cloneContents()` snapshot (which already slices partial boundary text
+ *  nodes to just their in-range portion) instead of `Range.toString()`, so
+ *  invisible accessibility text doesn't get counted as real tail content by
+ *  the clamped-away guard above. */
+function rangeHasVisibleText(range: Range): boolean {
+  const fragment = range.cloneContents();
+  const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node !== null) {
+    if (
+      node.textContent !== null &&
+      node.textContent.trim().length > 0 &&
+      !hasNonVisibleTextAncestor(node)
+    ) {
+      return true;
+    }
+    node = walker.nextNode();
+  }
+  return false;
+}
+
+function hasNonVisibleTextAncestor(node: Node): boolean {
+  return (
+    isUnderNonVisibleSvgAncestor(node) || isUnderQuoteExcludeAncestor(node)
+  );
+}
+
+function isUnderNonVisibleSvgAncestor(node: Node): boolean {
+  let ancestor = node.parentElement;
+  while (ancestor !== null) {
+    if (
+      ancestor.namespaceURI === SVG_NAMESPACE &&
+      NON_VISIBLE_SVG_TAGS.has(ancestor.tagName.toLowerCase())
+    ) {
+      return true;
+    }
+    ancestor = ancestor.parentElement;
+  }
+  return false;
+}
+
+function isUnderQuoteExcludeAncestor(node: Node): boolean {
+  let ancestor = node.parentElement;
+  while (ancestor !== null) {
+    if (ancestor.hasAttribute("data-quote-exclude")) return true;
+    ancestor = ancestor.parentElement;
+  }
+  return false;
+}
+
+/** Collects the text found under a `[data-quote-exclude]` ancestor within
+ *  `range`'s content, ONE ENTRY PER TEXT NODE (document order) rather than a
+ *  single joined string - real `[data-quote-exclude]` chrome (e.g.
+ *  `NextStepsActionGroup`) commonly renders several SEPARATE descendants
+ *  (one button per option) under one excluded container, and Chromium
+ *  synthesizes a layout separator between them in `Selection.toString()`
+ *  even though they share an ancestor. Joining the parts directly would lose
+ *  that boundary and make the tail unmatchable. Non-rendered SVG chrome
+ *  (which the browser's own stringifier already omits) is excluded. */
+function excludedVisibleTailParts(range: Range): ReadonlyArray<string> {
+  const fragment = range.cloneContents();
+  const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT);
+  const parts: string[] = [];
+  let node = walker.nextNode();
+  while (node !== null) {
+    if (
+      isUnderQuoteExcludeAncestor(node) &&
+      !isUnderNonVisibleSvgAncestor(node)
+    ) {
+      const text = node.textContent ?? "";
+      if (text.trim().length > 0) parts.push(text);
+    }
+    node = walker.nextNode();
+  }
+  return parts;
+}
+
+/** Removes a whitespace-tolerant trailing occurrence of `excludedParts` from
+ *  the end of `selectionText`. Each part matches with internal `\s+`
+ *  tolerance (a single rendered node's own whitespace/line-break layout),
+ *  and CONSECUTIVE parts are joined with `\s*` (an optional Chromium-inserted
+ *  layout separator between separately rendered descendants of one excluded
+ *  container) - see {@link excludedVisibleTailParts}. A miss (the parts
+ *  don't actually form a trailing suffix) safely no-ops rather than
+ *  mangling `selectionText`. */
+function stripExcludedTail(
+  selectionText: string,
+  excludedParts: ReadonlyArray<string>,
+): string {
+  const partPatterns = excludedParts
+    .map(wordsToPattern)
+    .filter((pattern): pattern is string => pattern !== null);
+  if (partPatterns.length === 0) return selectionText;
+  const pattern = partPatterns.join("\\s*");
+  return selectionText.replace(new RegExp(`\\s*${pattern}\\s*$`), "");
+}
+
+function wordsToPattern(text: string): string | null {
+  const words = text
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word.length > 0);
+  if (words.length === 0) return null;
+  return words.map(escapeRegExpLiteral).join("\\s+");
+}
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function rangeIntersectsExcluded(range: Range, root: Element): boolean {
