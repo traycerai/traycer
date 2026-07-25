@@ -46,8 +46,11 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 
-const GROUP_EDITOR_FOCUS_TARGET_SELECTOR =
-  "[data-composer-editor], [data-artifact-editor]";
+const SELECTED_GROUP_TAB_SELECTOR =
+  '[data-tab-instance-id][data-selected="true"]';
+const PRIMARY_CHAT_COMPOSER_SELECTOR =
+  "[data-chat-composer] [data-composer-editor]";
+const ARTIFACT_EDITOR_SELECTOR = "[data-artifact-editor]";
 
 // ---------------------------------------------------------------------------
 // Narrow router adapter - decouples dispatch from `@tanstack/react-router`'s
@@ -705,9 +708,12 @@ function focusGroupInDirection(
 function focusGroupEditor(groupId: string): boolean {
   if (typeof document === "undefined") return false;
   const group = document.querySelector<HTMLElement>(groupIdSelector(groupId));
-  const editor = group?.querySelector<HTMLElement>(
-    GROUP_EDITOR_FOCUS_TARGET_SELECTOR,
+  const selectedTab = group?.querySelector<HTMLElement>(
+    SELECTED_GROUP_TAB_SELECTOR,
   );
+  const editor =
+    selectedTab?.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
+    selectedTab?.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR);
   if (editor === undefined || editor === null) return false;
   editor.focus({ preventScroll: true });
   return true;
