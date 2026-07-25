@@ -45,6 +45,7 @@ import {
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/index";
 import type { TimerHandle } from "./timer-handle";
+import { recordNegotiatedHostMethods } from "./negotiated-manifest-registry";
 
 /**
  * Minimal endpoint shape the transport layer needs to dial a host. The
@@ -234,6 +235,15 @@ export class WsRpcClient<
       const mergedHostManifest = mergeConnectionManifests(
         ackFrame.manifest,
         ackFrame.optionalManifest,
+      );
+      // Publish what this host advertised so UI layers can gate an optional
+      // (non-floor) affordance without calling the method to find out. Recorded
+      // BEFORE the compatibility check: an incompatible pairing still tells us
+      // truthfully which methods the host has, and the gate wants that fact
+      // even when this particular call is about to fail.
+      recordNegotiatedHostMethods(
+        selected.hostId,
+        Object.keys(mergedHostManifest),
       );
       const clientCanonical = mergedClientManifest[method];
       const hostCanonical = mergedHostManifest[method];

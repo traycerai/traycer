@@ -315,6 +315,13 @@ export type NotificationBellState =
  * collaboration/system contribution never gets promoted into a composite
  * number, per the "never present a stale/understated count as exact"
  * invariant.
+ *
+ * `unknown` renders identically to `clear` (no dot, plain bell) - a bare gray
+ * dot with no path forward was confusing whether the cause was "still
+ * connecting" or "this host will never support notifications". It stays a
+ * distinct kind rather than folding into `clear` outright because analytics
+ * still needs to bucket "confirmed zero" separately from "we don't know" (see
+ * the open-lifecycle tracking in `notifications-bell.tsx`).
  */
 export function useNotificationBellState(): NotificationBellState {
   const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
@@ -335,13 +342,13 @@ export function useNotificationBellState(): NotificationBellState {
 }
 
 /** Screen-reader label matching the visual bell state exactly - never a bare
- * count with no state context. */
+ * count with no state context. `unknown` shares `clear`'s label since both
+ * render the same plain bell with no indicator. */
 export function notificationBellAccessibleLabel(
   state: NotificationBellState,
 ): string {
   switch (state.kind) {
     case "unknown":
-      return "Notifications, task notification status unavailable";
     case "clear":
       return "Notifications";
     case "quietDot":
