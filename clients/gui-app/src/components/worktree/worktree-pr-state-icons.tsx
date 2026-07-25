@@ -6,42 +6,14 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react";
-import {
-  GitMerge,
-  GitPullRequest,
-  GitPullRequestClosed,
-  type LucideIcon,
-} from "lucide-react";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { cn } from "@/lib/utils";
 import { RunnerHostContext } from "@/providers/runner-host-context";
-import type {
-  WorktreeDisplayedPrState,
-  WorktreePrReference,
-} from "@/components/worktree/worktree-pr-metadata-model";
-
-/**
- * Text-only PR palette for the icon variant, derived from the pill palette in
- * `worktree-pr-metadata.tsx` - same validated `-800` / `dark:-300` tokens,
- * minus the pill's border and 10% tint.
- *
- * Dropping the tint only ADDS contrast: the tint composites toward the text in
- * both variants (darkening a light surface, lightening a dark one), so tokens
- * that clear 4.5:1 over the tinted pill clear it by more on the untinted
- * sidebar surface. Keeping the same tokens is therefore safe and keeps the two
- * variants from drifting into different greens.
- */
-const PR_ICON_CLASS: Record<WorktreeDisplayedPrState, string> = {
-  open: "text-green-800 dark:text-green-300",
-  closed: "text-red-800 dark:text-red-300",
-  merged: "text-purple-800 dark:text-purple-300",
-};
-
-const PR_ICON: Record<WorktreeDisplayedPrState, LucideIcon> = {
-  open: GitPullRequest,
-  closed: GitPullRequestClosed,
-  merged: GitMerge,
-};
+import type { WorktreePrReference } from "@/components/worktree/worktree-pr-metadata-model";
+import {
+  PR_STATE_ICON,
+  PR_STATE_TINT_CLASS,
+} from "@/components/worktree/worktree-pr-state-palette";
 
 /**
  * Icon-only PR references for a sidebar chat row's second line: one glyph +
@@ -122,7 +94,7 @@ function WorktreePrStateIcon(props: {
     },
     [],
   );
-  const Icon = PR_ICON[props.reference.state];
+  const Icon = PR_STATE_ICON[props.reference.state];
   return (
     <span
       role="link"
@@ -134,7 +106,7 @@ function WorktreePrStateIcon(props: {
       className={cn(
         "inline-flex shrink-0 cursor-pointer items-center gap-0.5 font-medium",
         "focus-visible:ring-ring rounded-sm focus-visible:outline-none focus-visible:ring-2",
-        PR_ICON_CLASS[props.reference.state],
+        PR_STATE_TINT_CLASS[props.reference.state],
       )}
       onClick={openOnClick}
       onKeyDown={openOnKeyDown}

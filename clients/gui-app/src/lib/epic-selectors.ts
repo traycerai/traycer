@@ -1280,6 +1280,35 @@ export function useEpicNodeArchived(nodeId: string): boolean {
 }
 
 /**
+ * A row's last-activity time, read from the CHAT / TERMINAL-AGENT PROJECTION
+ * rather than from its `TreeNode`.
+ *
+ * The tree node carries an `updatedAt` too, and it is tempting to use since the
+ * row already holds the node - but it is a lagging copy. `CHAT_TREE_KEYS` in
+ * `epic-projector.ts` deliberately omits `updatedAt`, so touching a chat never
+ * sets `structuralTreeDirty` and never rebuilds the tree; the node keeps
+ * whatever `updatedAt` it had at the last STRUCTURAL change (rename, reparent,
+ * create). Reading it made the sidebar row disagree with the hover card, which
+ * self-sources the projection. Adding `updatedAt` to `CHAT_TREE_KEYS` would fix
+ * the disagreement the wrong way round - it would rebuild the whole tree on
+ * every message, which is precisely what that omission prevents.
+ *
+ * Selected as a primitive `number`, so `Object.is` still skips the render for
+ * every unrelated projection change.
+ */
+export function useEpicNodeUpdatedAt(nodeId: string): number {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return s.chats.byId[nodeId].updatedAt;
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+      return s.tuiAgents.byId[nodeId].updatedAt;
+    }
+    return 0;
+  });
+}
+
+/**
  * A GUI chat row's persisted harness id, selected as a primitive so unrelated
  * chat projection churn cannot re-render the sidebar icon. New chats normally
  * persist settings at creation; legacy or optimistic records can still have

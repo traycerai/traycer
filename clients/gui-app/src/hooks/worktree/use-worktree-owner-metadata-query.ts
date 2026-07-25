@@ -1,22 +1,157 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
-  WorktreeBinding,
-  WorktreeBindingOwnerKind,
-  WorktreeHostEntryV12,
+  HostRpcError,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  LEGACY_HOST_RESOLVED_AT,
+  type WorktreeBinding,
+  type WorktreeBindingOwnerKind,
+  type WorktreeHostEntryV14,
+  type WorktreeWorkspaceSummaryV13,
 } from "@traycer/protocol/host/worktree-schemas";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useHostMutation, useHostQuery } from "@/hooks/host/use-host-query";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useWorktreeGetBinding } from "@/hooks/worktree/use-worktree-get-binding-query";
+import { useWorktreeListByWorkspacePathsForClient } from "@/hooks/worktree/use-worktree-list-by-workspace-paths-query";
 import type { HostRpcRegistry } from "@/lib/host";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { queryKeys, worktreeMutationKeys } from "@/lib/query-keys";
 
-const EMPTY_WORKTREES: readonly WorktreeHostEntryV12[] = [];
+const EMPTY_WORKTREES: readonly WorktreeHostEntryV14[] = [];
+const EMPTY_WORKSPACES: readonly WorktreeWorkspaceSummaryV13[] = [];
+
+type WorktreeListAllForHostResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "worktree.listAllForHost"
+>;
+
+type WorktreeListByWorkspacePathsResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "worktree.listByWorkspacePaths"
+>;
+
+/**
+ * The host's derive time for whatever is on screen, or `null` when nothing has
+ * been derived yet.
+ *
+ * The OLDEST stamp across every row wins: the card is only as fresh as its
+ * stalest folder. `LEGACY_HOST_RESOLVED_AT` (the literal `1`, stamped for rows
+ * bridged from a host that predates `resolvedAt`) is dropped rather than
+ * rendered - it is a resolved-marker, not a time, and an age computed from it
+ * reads as 1970.
+ */
+function oldestResolvedAt(stamps: ReadonlyArray<number | null>): number | null {
+  const real = stamps.flatMap((stamp) =>
+    stamp === null || stamp === LEGACY_HOST_RESOLVED_AT ? [] : [stamp],
+  );
+  return real.length === 0 ? null : Math.min(...real);
+}
+
+/**
+ * Splits an owner's binding into the two path sets that need two DIFFERENT
+ * host reads.
+ *
+ * `worktreePaths` are managed worktrees, covered by the host-wide worktree walk
+ * (`worktree.listAllForHost`). Everything else is a folder the owner runs in
+ * directly - the walk never sees it, and its binding entry carries no branch
+ * (that field records the branch a worktree binding was CREATED on), so its
+ * facts have to come from the per-workspace summary
+ * (`worktree.listByWorkspacePaths`) instead. Missing that second read is what
+ * left a plain folder reading "No branch" no matter how often it was refreshed.
+ *
+ * Mutable arrays on purpose: both request schemas take mutable path lists.
+ */
+function bindingRunPaths(binding: WorktreeBinding | null): {
+  readonly worktreePaths: string[];
+  readonly workspacePaths: string[];
+} {
+  const entries = binding?.entries ?? [];
+  const isManagedWorktree = (entry: (typeof entries)[number]): boolean =>
+    entry.mode === "worktree" && entry.worktreePath !== null;
+  return {
+    worktreePaths: Array.from(
+      new Set(
+        entries.flatMap((entry) =>
+          isManagedWorktree(entry) && entry.worktreePath !== null
+            ? [entry.worktreePath]
+            : [],
+        ),
+      ),
+    ),
+    workspacePaths: Array.from(
+      new Set(
+        entries.flatMap((entry) =>
+          isManagedWorktree(entry) ? [] : [entry.workspacePath],
+        ),
+      ),
+    ),
+  };
+}
+
+/**
+ * Whether the card still has nothing to show. A caller-supplied binding skips
+ * the binding RPC entirely, so its pending flag must not count; likewise an
+ * owner with no managed worktrees never issues the worktree listing.
+ */
+function ownerMetadataPending(input: {
+  readonly enabled: boolean;
+  readonly bindingSupplied: boolean;
+  readonly bindingPending: boolean;
+  readonly worktreePathCount: number;
+  readonly worktreesPending: boolean;
+}): boolean {
+  if (!input.enabled) return false;
+  if (!input.bindingSupplied && input.bindingPending) return true;
+  return input.worktreePathCount > 0 && input.worktreesPending;
+}
+
+/** The binding failure outranks the listing's: without it there is no list. */
+function ownerMetadataError(input: {
+  readonly enabled: boolean;
+  readonly bindingSupplied: boolean;
+  readonly bindingError: HostRpcError | null;
+  readonly worktreesError: HostRpcError | null;
+}): HostRpcError | null {
+  if (!input.enabled) return null;
+  if (!input.bindingSupplied && input.bindingError !== null) {
+    return input.bindingError;
+  }
+  return input.worktreesError;
+}
 
 export interface WorktreeOwnerMetadata {
   readonly binding: WorktreeBinding | null;
-  readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly worktrees: readonly WorktreeHostEntryV14[];
+  /**
+   * Per-workspace summaries for the entries that are NOT managed worktrees.
+   * `worktrees` above comes from a walk of managed worktrees only, so a folder
+   * the owner runs in directly never appears there and has no branch without
+   * this.
+   */
+  readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
   readonly isPending: boolean;
   readonly error: HostRpcError | null;
+  /**
+   * When the HOST last derived these facts, or `null` before anything has been
+   * derived.
+   *
+   * Deliberately the rows' own `resolvedAt` and not the query's client-side
+   * `dataUpdatedAt`: the card unmounts on close, so every re-open refetches and
+   * `dataUpdatedAt` is always ~now - it reported "Checked now" forever while
+   * the host was serving facts from its TTL cache that could be an hour old.
+   * Staleness is the entire point of the label, so it has to come from the
+   * side that actually does the deriving.
+   */
+  readonly checkedAt: number | null;
+  readonly isRefreshing: boolean;
+  /**
+   * Re-derives this owner's worktree facts from disk. Resolves once the host
+   * has answered (or rejects, having already toasted).
+   */
+  readonly refresh: () => Promise<void>;
 }
 
 /**
@@ -33,6 +168,8 @@ export function useWorktreeOwnerMetadata(args: {
   readonly binding: WorktreeBinding | null | undefined;
   readonly enabled: boolean;
 }): WorktreeOwnerMetadata {
+  const queryClient = useQueryClient();
+  const readiness = useReactiveHostReadiness(args.client);
   const bindingQuery = useWorktreeGetBinding({
     client: args.client,
     epicId: args.epicId,
@@ -47,18 +184,29 @@ export function useWorktreeOwnerMetadata(args: {
     args.binding === undefined
       ? (bindingQuery.data?.binding ?? null)
       : args.binding;
-  const worktreePaths = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (binding?.entries ?? []).flatMap((entry) =>
-            entry.mode === "worktree" && entry.worktreePath !== null
-              ? [entry.worktreePath]
-              : [],
-          ),
-        ),
-      ),
+  const { worktreePaths, workspacePaths } = useMemo(
+    () => bindingRunPaths(binding),
     [binding],
+  );
+  const workspacesQuery = useWorktreeListByWorkspacePathsForClient(
+    args.client,
+    { workspacePaths, enabled: args.enabled },
+  );
+  // The background read's params, held in ONE place because the forced refresh
+  // below has to write its response into this query's cache entry - and a key
+  // rebuilt from a second, hand-copied literal silently forks the moment either
+  // side changes.
+  const listParams = useMemo(
+    () => ({
+      includeActivity: true,
+      activityPaths: worktreePaths,
+      cursor: null,
+      limit: null,
+      // A background read: serve the host's TTL-cached view. Only an explicit
+      // Refresh (below, and the Settings toolbar's) forces a disk recompute.
+      forceRefresh: false,
+    }),
+    [worktreePaths],
   );
   const worktreesQuery = useHostQuery<
     HostRpcRegistry,
@@ -67,28 +215,139 @@ export function useWorktreeOwnerMetadata(args: {
     cacheKeyIdentity: undefined,
     client: args.client,
     method: "worktree.listAllForHost",
-    params: {
-      includeActivity: true,
-      activityPaths: worktreePaths,
-      cursor: null,
-      limit: null,
-      // A background read: serve the host's TTL-cached view. Only the
-      // Settings toolbar's explicit Refresh forces a disk recompute.
-      forceRefresh: false,
-    },
+    params: listParams,
     options: { enabled: args.enabled && worktreePaths.length > 0 },
   });
+  const listQueryKey = queryKeys.hostMethod<
+    HostRpcRegistry,
+    "worktree.listAllForHost"
+  >(readiness.hostId, "worktree.listAllForHost", listParams);
+  const refreshMutation = useHostMutation<
+    HostRpcRegistry,
+    "worktree.listAllForHost",
+    unknown,
+    // Mutable `string[]`, matching the request schema's own `activityPaths`
+    // rather than copying a readonly view into it on every call.
+    { readonly worktreePaths: string[] }
+  >({
+    client: args.client,
+    method: "worktree.listAllForHost",
+    // Scoped to this owner's paths, never the whole fleet: the host re-derives
+    // exactly what the card is showing (branch, uncommitted count, and the `gh`
+    // PR facts, which a plain read only ever warms while they are still null -
+    // a PR that has since merged or closed never re-probes without this).
+    mapVariables: (variables) => ({
+      includeActivity: true,
+      activityPaths: variables.worktreePaths,
+      cursor: null,
+      limit: null,
+      forceRefresh: true,
+    }),
+    options: {
+      mutationKey: worktreeMutationKeys.refreshOwnerMetadata(args.ownerId),
+      // The card can be gone by the time this lands (the pointer left), so the
+      // toast is the only place a failure can surface.
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't refresh workspace details."),
+      // Lands in the SAME cache entry the card renders from. Reissuing the
+      // query with `forceRefresh: true` in its params instead would fork a
+      // second key that no observer reads, so the fresh facts would never
+      // reach the screen.
+      onSuccess: (response) => {
+        queryClient.setQueryData<WorktreeListAllForHostResponse>(
+          listQueryKey,
+          response,
+        );
+      },
+    },
+  });
+  // The same treatment for the plain-folder summaries. Without it Refresh would
+  // re-derive the worktree rows and quietly leave every non-worktree folder on
+  // whatever branch the host had cached.
+  const workspacesQueryKey = queryKeys.hostMethod<
+    HostRpcRegistry,
+    "worktree.listByWorkspacePaths"
+  >(readiness.hostId, "worktree.listByWorkspacePaths", {
+    workspacePaths,
+    scriptRefs: [],
+    forceRefresh: false,
+  });
+  const refreshWorkspacesMutation = useHostMutation<
+    HostRpcRegistry,
+    "worktree.listByWorkspacePaths",
+    unknown,
+    { readonly workspacePaths: string[] }
+  >({
+    client: args.client,
+    method: "worktree.listByWorkspacePaths",
+    mapVariables: (variables) => ({
+      workspacePaths: variables.workspacePaths,
+      scriptRefs: [],
+      forceRefresh: true,
+    }),
+    options: {
+      mutationKey: worktreeMutationKeys.refreshOwnerWorkspaces(args.ownerId),
+      onError: (error) =>
+        toastFromHostError(error, "Couldn't refresh workspace details."),
+      onSuccess: (response) => {
+        queryClient.setQueryData<WorktreeListByWorkspacePathsResponse>(
+          workspacesQueryKey,
+          response,
+        );
+      },
+    },
+  });
+  const refreshWorktrees = refreshMutation.mutateAsync;
+  const refreshWorkspaces = refreshWorkspacesMutation.mutateAsync;
+  const refetchBinding = bindingQuery.refetch;
+  const suppliedBinding = args.binding;
+  const refresh = useCallback(async () => {
+    // The binding decides WHICH folders the card lists, the listing decides
+    // what it says about them; a refresh that skipped the binding would keep
+    // showing a folder the owner no longer runs in.
+    await Promise.all([
+      suppliedBinding === undefined ? refetchBinding() : null,
+      worktreePaths.length === 0
+        ? null
+        : refreshWorktrees({ worktreePaths }).then(() => undefined),
+      workspacePaths.length === 0
+        ? null
+        : refreshWorkspaces({ workspacePaths }).then(() => undefined),
+    ]);
+  }, [
+    refetchBinding,
+    refreshWorkspaces,
+    refreshWorktrees,
+    suppliedBinding,
+    workspacePaths,
+    worktreePaths,
+  ]);
 
+  const worktrees = worktreesQuery.data?.worktrees ?? EMPTY_WORKTREES;
+  const workspaces = workspacesQuery.data?.workspaces ?? EMPTY_WORKSPACES;
   return {
     binding,
-    worktrees: worktreesQuery.data?.worktrees ?? EMPTY_WORKTREES,
-    isPending:
-      args.enabled &&
-      ((args.binding === undefined && bindingQuery.isPending) ||
-        (worktreePaths.length > 0 && worktreesQuery.isPending)),
-    error: args.enabled
-      ? ((args.binding === undefined ? bindingQuery.error : null) ??
-        worktreesQuery.error)
-      : null,
+    worktrees,
+    workspaces,
+    isPending: ownerMetadataPending({
+      enabled: args.enabled,
+      bindingSupplied: suppliedBinding !== undefined,
+      bindingPending: bindingQuery.isPending,
+      worktreePathCount: worktreePaths.length,
+      worktreesPending: worktreesQuery.isPending,
+    }),
+    error: ownerMetadataError({
+      enabled: args.enabled,
+      bindingSupplied: suppliedBinding !== undefined,
+      bindingError: bindingQuery.error,
+      worktreesError: worktreesQuery.error,
+    }),
+    checkedAt: oldestResolvedAt([
+      ...worktrees.map((entry) => entry.resolvedAt),
+      ...workspaces.map((summary) => summary.resolvedAt),
+    ]),
+    isRefreshing:
+      refreshMutation.isPending || refreshWorkspacesMutation.isPending,
+    refresh,
   };
 }

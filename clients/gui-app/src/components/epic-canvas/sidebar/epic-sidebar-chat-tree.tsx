@@ -30,6 +30,8 @@ import {
 } from "@/lib/epic-tree-cascade";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { useCompactRelativeTime } from "@/lib/relative-time";
 import { OwnerResourceChip } from "@/components/resources/resource-usage-chip";
 import type { ResourceOwnerKindWire } from "@traycer/protocol/host/resources/subscribe";
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
@@ -108,6 +110,7 @@ import {
   useEpicArtifactRecords,
   useEpicConnectionStatus,
   useEpicNodeArchived,
+  useEpicNodeUpdatedAt,
   useEpicNodeHostId,
   useEpicNodeOwnerKind,
   useEpicPermissionRole,
@@ -121,7 +124,6 @@ import {
   Archive,
   ArchiveRestore,
   Check,
-  MessageSquareLock,
   MessagesSquare,
   MoreHorizontal,
   Pencil,
@@ -141,7 +143,6 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import {
   BASE_PAD_LEFT,
@@ -180,16 +181,15 @@ import {
   SidebarDropdownMenuItems,
   type SidebarRowMenuEntry,
 } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
-import { ChatRowSecondLine } from "@/components/epic-canvas/sidebar/chat-row-second-line";
-import { EpicChatWorktreeMetadataProvider } from "@/components/epic-canvas/sidebar/epic-chat-worktree-metadata-provider";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
-import { useSampledNow } from "@/lib/relative-time";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
-import type { IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
+import {
+  BACKGROUND_ACTIVITY_TITLE,
+  type IndicatorRunningKind,
+} from "@/components/notifications/notification-indicator-icon";
 
 interface ChatTreePanelBodyProps {
   readonly epicId: string;
@@ -362,7 +362,7 @@ function collectDescendantChatIds(
  * precedence goes through the shared `attentionTone`, so failure > interview >
  * approval lives in exactly one place. Terminal-agent descendants contribute
  * only running-ness - epic-wide activity is their sole status authority. Only
- * mounted inside `ChatRowStatusWithNestedRollup` (rendered solely for
+ * mounted inside `ChatRowLeadingIconWithNestedRollup` (rendered solely for
  * collapsed parents), so leaves and expanded rows carry none of these
  * subscriptions; the shallow-compared flat result lets Zustand bail re-renders
  * whose rollup did not change.
@@ -812,25 +812,21 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
 
   return (
     <NotificationIndicatorsProvider indicators={notificationIndicators.data}>
-      {/* One batch for the whole tree, per distinct host among its rows - row 2
-          reads it from context and never queries per row. */}
-      <EpicChatWorktreeMetadataProvider epicId={epicId}>
-        <SidebarArchiveSupportedContext.Provider value={canArchive}>
-          <SidebarViewerContext.Provider value={isViewer}>
-            <SidebarSortContext.Provider value={comparator}>
-              <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                <SidebarContent className="gap-0">
-                  <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-                    <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
-                      {panelContent}
-                    </SidebarGroupContent>
-                  </SidebarGroup>
-                </SidebarContent>
-              </SidebarFilterVisibilityContext.Provider>
-            </SidebarSortContext.Provider>
-          </SidebarViewerContext.Provider>
-        </SidebarArchiveSupportedContext.Provider>
-      </EpicChatWorktreeMetadataProvider>
+      <SidebarArchiveSupportedContext.Provider value={canArchive}>
+        <SidebarViewerContext.Provider value={isViewer}>
+          <SidebarSortContext.Provider value={comparator}>
+            <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+              <SidebarContent className="gap-0">
+                <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+                  <SidebarGroupContent className="flex min-h-0 flex-1 flex-col">
+                    {panelContent}
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              </SidebarContent>
+            </SidebarFilterVisibilityContext.Provider>
+          </SidebarSortContext.Provider>
+        </SidebarViewerContext.Provider>
+      </SidebarArchiveSupportedContext.Provider>
     </NotificationIndicatorsProvider>
   );
 }
@@ -923,9 +919,11 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   const showChildren = hasChildren && expanded;
   const artifactType = node?.type ?? "chat";
   const nodeName = node?.title ?? "";
-  // Row 1's trailing status chip falls back to a muted relative last-activity
-  // time when the row is idle (no attention / running / done state).
-  const updatedAt = node?.updatedAt ?? 0;
+  // Trailing slot content at rest: a muted relative last-activity time, which
+  // the archive/menu controls replace on hover. Read from the PROJECTION, not
+  // `node.updatedAt` - the tree node is a lagging copy (see the selector's
+  // doc), and using it made this row disagree with the hover card.
+  const updatedAt = useEpicNodeUpdatedAt(nodeId);
   const openableType: OpenableEpicNodeKind | null = isOpenableEpicNodeKind(
     artifactType,
   )
@@ -1176,8 +1174,8 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
       canEdit={canEdit}
       canMutate={canMutate}
       isDisconnected={isDisconnected}
-      openableType={openableType}
       updatedAt={updatedAt}
+      openableType={openableType}
       isRenaming={isRenaming}
       renameInputRef={renameInputRef}
       renameValue={renameValue}
@@ -1221,8 +1219,8 @@ interface ChatNodeShellProps {
   readonly canEdit: boolean;
   readonly canMutate: boolean;
   readonly isDisconnected: boolean;
-  readonly openableType: OpenableEpicNodeKind | null;
   readonly updatedAt: number;
+  readonly openableType: OpenableEpicNodeKind | null;
   readonly isRenaming: boolean;
   readonly renameInputRef: React.RefObject<HTMLInputElement | null>;
   readonly renameValue: string;
@@ -1279,7 +1277,7 @@ function ChatNodeShell(props: ChatNodeShellProps) {
 function ChatNodeShellArchivable(props: ChatNodeShellProps) {
   // Resolved once per row and used by both archive affordances, so the hover
   // button and the menu entry can never disagree about whether this row is
-  // busy. Same lattice the trailing chip renders from.
+  // busy. Same lattice the leading status icon renders from.
   const statusKind = useChatRowOwnStatusKind({
     epicId: props.epicId,
     nodeId: props.nodeId,
@@ -1399,7 +1397,6 @@ function ChatNodeShellBody(
             epicId={epicId}
             depth={depth}
             artifactType={artifactType}
-            updatedAt={updatedAt}
             renameInputRef={renameInputRef}
             renameValue={renameValue}
             onRenameValueChange={onRenameValueChange}
@@ -1420,9 +1417,9 @@ function ChatNodeShellBody(
             depth={depth}
             isActive={isActive}
             canEdit={canEdit}
+            updatedAt={updatedAt}
             hasChildren={hasChildren}
             expanded={expanded}
-            updatedAt={updatedAt}
             onToggle={onToggle}
             onClick={onClick}
             onDoubleClick={onDoubleClick}
@@ -1583,20 +1580,15 @@ function SidebarRowCheckbox(props: {
  */
 function ChatRowLeadingIconSlot(props: { readonly children: ReactNode }) {
   return (
-    // Decorative for assistive tech. The leading icon is status-aware by
-    // design (`ChatProgressIcon` carries the spinner / read-only lock), so
-    // without this a read-only row announced "Read-only agent" TWICE - once
-    // here and once from the trailing `ChatOwnStatusChip` - and likewise for
-    // running and approval states. Hiding the slot leaves the TRAILING chip as
-    // the single announced status while the icon stays visually identical.
-    // Nothing is lost: the row's identity is already carried by its explicit
-    // `aria-label` (the title). Scoped to this slot only - the trailing chip
-    // and the whole text column stay in the a11y tree. Safe to hide because
-    // nothing inside is focusable or interactive.
-    <span
-      aria-hidden
-      className="inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
-    >
+    // NOT `aria-hidden`. This slot was hidden while a trailing status chip
+    // existed, because the two announced the same state and a read-only row
+    // said "Read-only agent" twice. The row now carries no trailing chip, so
+    // this icon is the row's ONLY status surface (`ChatProgressIcon` for chats,
+    // the spinner / rollup for agents) - hiding it would drop running,
+    // approval, failure, and read-only from the a11y tree entirely rather than
+    // de-duplicating them. The status elements inside own their own
+    // `role="status"` and accessible names; nothing here is focusable.
+    <span className="inline-flex h-3.5 w-[1.125rem] shrink-0 items-center">
       {props.children}
     </span>
   );
@@ -1625,11 +1617,92 @@ function useNodeIconDisplay(artifactType: EpicNodeKind): {
 }
 
 /**
- * Leading identity icon for a sidebar row, vertically centered on the two-line
- * card by the row scaffold. Chat rows get the status-aware chat glyph, TUI
- * rows the harness brand, and any other node kind its static registry glyph.
+ * Leading icon for a sidebar row - the row's single status surface now that no
+ * trailing chip exists. A COLLAPSED PARENT resolves its hidden descendants'
+ * rollup here too: that rollup used to live in the trailing slot, and dropping
+ * the slot without rehoming it would leave a failure inside a collapsed subtree
+ * with nowhere to surface.
  */
 function ChatRowLeadingIcon(props: {
+  readonly epicId: string;
+  readonly nodeId: string;
+  readonly artifactType: EpicNodeKind;
+  readonly hasChildren: boolean;
+  readonly expanded: boolean;
+}) {
+  if (props.hasChildren && !props.expanded) {
+    return (
+      <ChatRowLeadingIconWithNestedRollup
+        epicId={props.epicId}
+        nodeId={props.nodeId}
+        artifactType={props.artifactType}
+      />
+    );
+  }
+  return (
+    <ChatRowOwnLeadingIcon
+      epicId={props.epicId}
+      nodeId={props.nodeId}
+      artifactType={props.artifactType}
+    />
+  );
+}
+
+/**
+ * Leading slot for a collapsed parent. Merges the parent's own status with the
+ * hidden descendants' rollup on the shared ladder: the more urgent one owns the
+ * slot, ties go to the parent - so a hidden failure can never sit invisible
+ * behind a parent that is merely running. When the parent's own status wins it
+ * renders the same icon a leaf row shows. Mounted only for collapsed parents,
+ * so rows without a rollup carry none of these subscriptions.
+ */
+const ChatRowLeadingIconWithNestedRollup = memo(
+  function ChatRowLeadingIconWithNestedRollup(props: {
+    readonly epicId: string;
+    readonly nodeId: string;
+    readonly artifactType: EpicNodeKind;
+  }) {
+    const rollup = useChatDescendantStatus({
+      epicId: props.epicId,
+      nodeId: props.nodeId,
+    });
+    const activityTiers = useEpicAgentActivityTiers();
+    const selfIndicator = useSurfaceNotificationIndicatorState({
+      epicId: props.epicId,
+      chatId: props.nodeId,
+    });
+    if (rollup !== null) {
+      const selfTier = activityTiers.get(props.nodeId);
+      // Terminal-agent parents have no notification states of their own -
+      // activity is their only tier (their indicator entry is always empty).
+      const agentSelfRank =
+        selfTier === undefined
+          ? 0
+          : CHAT_STATUS_RANKS[activityTierKind(selfTier)];
+      const selfRank =
+        props.artifactType === "chat"
+          ? chatSelfStatusRank(selfIndicator, selfTier)
+          : agentSelfRank;
+      if (CHAT_STATUS_RANKS[rollup.kind] > selfRank) {
+        return <NestedChatStatusIcon nodeId={props.nodeId} rollup={rollup} />;
+      }
+    }
+    return (
+      <ChatRowOwnLeadingIcon
+        epicId={props.epicId}
+        nodeId={props.nodeId}
+        artifactType={props.artifactType}
+      />
+    );
+  },
+);
+
+/**
+ * A row's OWN identity/status glyph, ignoring any descendants. Chat rows get
+ * the status-aware chat glyph, TUI rows the harness brand, and any other node
+ * kind its static registry glyph.
+ */
+function ChatRowOwnLeadingIcon(props: {
   readonly epicId: string;
   readonly nodeId: string;
   readonly artifactType: EpicNodeKind;
@@ -1664,11 +1737,35 @@ function ChatRowLeadingIcon(props: {
  * chats. Epic-wide active-agent awareness is the sole authority here - a TUI
  * agent's PTY runs host-side, so there is no renderer run-status to smooth
  * against and no waiting-for-approval state to style.
+ *
+ * The awareness TIER splits that running arm in two, exactly as the chat icon
+ * and the descendant rollup already do. Without it a TUI agent kept non-idle by
+ * a scheduled wakeup wore the busy spinner, and - worse - disagreed with its own
+ * parent, whose collapsed rollup rendered the calm background glyph for the same
+ * agent. The trailing status chip used to carry this split; it went away with
+ * the row redesign, and the split has to land somewhere.
  */
 function TerminalAgentProgressIcon(props: { readonly nodeId: string }) {
   const isActive = useEpicActiveAgentIds().has(props.nodeId);
+  const tier = useEpicAgentActivityTiers().get(props.nodeId);
   const harnessId = useMaybeEpicTuiAgentHarnessId(props.nodeId);
   const icon = useNodeIconDisplay("terminal-agent");
+  if (isActive && tier === "background") {
+    return (
+      <span
+        role="status"
+        aria-label={BACKGROUND_ACTIVITY_TITLE}
+        className={cn(
+          "inline-flex items-center justify-center",
+          icon.className,
+        )}
+        style={icon.style}
+        title={BACKGROUND_ACTIVITY_TITLE}
+      >
+        <BackgroundActivityGlyph testId="terminal-agent-sidebar-background" />
+      </span>
+    );
+  }
   if (!isActive) {
     // The underlying harness's brand mark (Claude, Codex, …) so the row reads
     // as the tool driving the agent. Brand marks keep their own colors and
@@ -1736,7 +1833,6 @@ interface ChatRenameRowProps {
   readonly epicId: string;
   readonly depth: number;
   readonly artifactType: EpicNodeKind;
-  readonly updatedAt: number;
   readonly renameInputRef: React.RefObject<HTMLInputElement | null>;
   readonly renameValue: string;
   readonly onRenameValueChange: (value: string) => void;
@@ -1753,7 +1849,6 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     epicId,
     depth,
     artifactType,
-    updatedAt,
     renameInputRef,
     renameValue,
     onRenameValueChange,
@@ -1763,10 +1858,9 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     nodeName,
     nodeId,
   } = props;
-  // Two-line scaffold parity with the display row: the same chevron spacer and
-  // leading icon sit centered beside a column whose row 1 is the rename input,
-  // and the same self-collapsing row-2 slot follows, so nothing shifts
-  // horizontally or vertically between viewing and renaming a two-line row.
+  // Scaffold parity with the display row: the same chevron spacer and leading
+  // icon sit centered beside a column whose single line is the rename input, so
+  // nothing shifts horizontally or vertically between viewing and renaming.
   return (
     <div
       className={cn(
@@ -1779,7 +1873,10 @@ function ChatRenameRow(props: ChatRenameRowProps) {
     >
       <TreeChevronSpacer />
       <ChatRowLeadingIconSlot>
-        <ChatRowLeadingIcon
+        {/* Deliberately the OWN-status variant, not the rollup-aware one: the
+            pre-refactor rename row rendered a non-rollup icon slot, so renaming
+            keeps showing this row's own status rather than a descendant's. */}
+        <ChatRowOwnLeadingIcon
           epicId={epicId}
           nodeId={nodeId}
           artifactType={artifactType}
@@ -1807,22 +1904,7 @@ function ChatRenameRow(props: ChatRenameRowProps) {
               variant={undefined}
             />
           ) : null}
-          {/* The pre-refactor rename row rendered the (status-bearing) icon
-              slot via `ChatSidebarNodeIcon`, which was NOT the rollup-aware
-              variant - so renaming keeps showing this row's OWN status, not a
-              nested one. */}
-          <ChatOwnStatusChip
-            epicId={epicId}
-            nodeId={nodeId}
-            artifactType={artifactType}
-            updatedAt={updatedAt}
-          />
         </div>
-        <ChatRowSecondLine
-          epicId={epicId}
-          nodeId={nodeId}
-          artifactType={artifactType}
-        />
       </div>
     </div>
   );
@@ -1837,9 +1919,9 @@ interface ChatRowButtonProps {
   readonly depth: number;
   readonly isActive: boolean;
   readonly canEdit: boolean;
+  readonly updatedAt: number;
   readonly hasChildren: boolean;
   readonly expanded: boolean;
-  readonly updatedAt: number;
   readonly onToggle: (event: React.MouseEvent<HTMLSpanElement>) => void;
   readonly onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClick: () => void;
@@ -1881,9 +1963,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
     depth,
     isActive,
     canEdit,
+    updatedAt,
     hasChildren,
     expanded,
-    updatedAt,
     onToggle,
     onClick,
     onDoubleClick,
@@ -1930,12 +2012,11 @@ function ChatRowButton(props: ChatRowButtonProps) {
   // that menu as "New child agent"), so the single-control pad-right reserve is
   // claimed whenever the row is editable and not bulk-selecting.
   const showRowControls = selectionMode ? false : canEdit;
-  // Two-line rows: `min-h-7` keeps a single-line row at the old height while a
-  // fed row-2 slot grows the row. The row itself is a horizontal flex -
-  // chevron, leading icon, then the two-line text column - and `items-center`
-  // is what centers the chevron and the leading icon across BOTH lines. No
-  // fixed height is involved: the column is the tallest child, so the short
-  // ones center against whatever height it happens to take.
+  // `min-h-7` is a FLOOR, not a height: the row is a horizontal flex - chevron,
+  // leading icon, then the text column - and `items-center` centers the short
+  // children against whatever height the column takes. Kept as a floor rather
+  // than a fixed height so a row whose title wraps, or which regains a second
+  // line, grows instead of clipping.
   const rowClassName = cn(
     "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
     "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
@@ -1978,30 +2059,15 @@ function ChatRowButton(props: ChatRowButtonProps) {
             epicId={epicId}
             nodeId={nodeId}
             artifactType={artifactType}
+            hasChildren={hasChildren}
+            expanded={expanded}
           />
         </ChatRowLeadingIconSlot>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="min-w-0 flex-1 truncate">{nodeName}</span>
-            {/* Selection mode is exactly when users act on rows in bulk, so the
-                status signal (and a collapsed parent's rollup) has to survive
-                here - the pre-refactor icon slot rendered in this variant too.
-                The archive hover button is a sibling of the row and is simply
-                not rendered in this variant. */}
-            <ChatRowStatusSlot
-              epicId={epicId}
-              nodeId={nodeId}
-              artifactType={artifactType}
-              hasChildren={hasChildren}
-              expanded={expanded}
-              updatedAt={updatedAt}
-            />
+            {isArchived ? <ArchivedBadge /> : null}
           </span>
-          <ChatRowSecondLine
-            epicId={epicId}
-            nodeId={nodeId}
-            artifactType={artifactType}
-          />
         </span>
       </label>
     );
@@ -2014,10 +2080,10 @@ function ChatRowButton(props: ChatRowButtonProps) {
       {...listeners}
       type="button"
       // Explicit, so the row's accessible name is its TITLE rather than a
-      // concatenation of everything inside it. Row 2 now carries branch text,
-      // a "+N" badge and one PR icon per detected pull request, each with its
-      // own accessible name - without this the row announced as
-      // "T04 shell… traycer/notif-shell +2 Open PR #512 Open #512, …".
+      // concatenation of everything inside it. The row still carries an
+      // "Archived" badge, a resource chip and a relative timestamp, each with
+      // its own accessible name - without this the row announced as
+      // "T04 shell… Archived 12% 4h".
       aria-label={nodeName}
       data-testid={`epic-sidebar-item-${nodeId}`}
       data-artifact-type={artifactType}
@@ -2038,11 +2104,14 @@ function ChatRowButton(props: ChatRowButtonProps) {
           epicId={epicId}
           nodeId={nodeId}
           artifactType={artifactType}
+          hasChildren={hasChildren}
+          expanded={expanded}
         />
       </ChatRowLeadingIconSlot>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-center gap-1.5">
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+          {isArchived ? <ArchivedBadge /> : null}
           {resourceOwnerKind === null || !showNavigatorResourceStats ? null : (
             <OwnerResourceChip
               epicId={epicId}
@@ -2051,41 +2120,21 @@ function ChatRowButton(props: ChatRowButtonProps) {
               className={undefined}
             />
           )}
-          {/* Completes the hover SWAP the design calls for: while the archive
-              button is mounted, hovering the row hides the idle time so the
-              button takes its place rather than sitting alongside it.
-              `invisible` (not `hidden`) so the slot keeps its width and row 1
-              does not reflow under the pointer.
-
-              This blanks the WHOLE slot, so it is safe only while the slot is
-              showing the idle time. `chatRowArchiveState` guarantees that: it
-              withholds the button (and therefore this class) whenever the slot
-              could instead be rendering a collapsed parent's descendant
-              rollup, which must stay readable on hover.
-
-              Scoped to the TRAILING slot only - the leading icon is outside
-              this span, so the swap never blanks a row's identity glyph. */}
+          {/* Completes the hover SWAP: while the archive button is mounted,
+              hovering the row hides the time so the controls take its place
+              instead of sitting alongside it. `invisible` (not `hidden`) so the
+              slot keeps its width and the title does not reflow under the
+              pointer. Scoped to this trailing span only - the leading icon sits
+              outside it, so the swap never blanks the row's status glyph. */}
           <span
             className={cn(
               "flex-none",
               reserveArchiveSlot && "group-hover/tree-item:invisible",
             )}
           >
-            <ChatRowStatusSlot
-              epicId={epicId}
-              nodeId={nodeId}
-              artifactType={artifactType}
-              hasChildren={hasChildren}
-              expanded={expanded}
-              updatedAt={updatedAt}
-            />
+            <ChatRowIdleTime updatedAt={updatedAt} />
           </span>
         </span>
-        <ChatRowSecondLine
-          epicId={epicId}
-          nodeId={nodeId}
-          artifactType={artifactType}
-        />
       </span>
     </button>
   );
@@ -2098,6 +2147,43 @@ function ChatRowButton(props: ChatRowButtonProps) {
       ownerId={nodeId}
       ownerKind={ownerKind}
     />
+  );
+}
+
+/**
+ * Explicit "Archived" marker for an archived row. The dimmed row
+ * (`ARCHIVED_ROW_CLASS`) stays, but opacity ALONE is ambiguous - a faded row
+ * reads equally as disabled, unreachable, or still loading, and it is invisible
+ * to anyone who cannot compare it against a non-archived sibling. This states
+ * the reason in words. Matches the provider-profile badge
+ * (`provider-auth-display.tsx`) so the two read as one vocabulary.
+ */
+function ArchivedBadge(): ReactNode {
+  return (
+    <Badge
+      variant="outline"
+      className="h-4 shrink-0 rounded-sm border-border/60 bg-muted/20 px-1.5 text-[10px] font-normal leading-none text-muted-foreground"
+      data-testid="chat-row-archived-badge"
+    >
+      Archived
+    </Badge>
+  );
+}
+
+/**
+ * The row's trailing last-activity time, on the shared compact ladder
+ * (`now` / `10m` / `4h` / `1d` / `1w` / short date). Isolated in its own leaf
+ * so the shared 60s clock tick repaints this span rather than the whole row.
+ */
+function ChatRowIdleTime(props: { readonly updatedAt: number }): ReactNode {
+  const relative = useCompactRelativeTime(props.updatedAt);
+  return (
+    <span
+      className="flex-none tabular-nums text-ui-xs text-muted-foreground"
+      data-testid="chat-row-idle-time"
+    >
+      {relative}
+    </span>
   );
 }
 
@@ -2157,93 +2243,6 @@ function nestedChatStatusSummary(rollup: ChatDescendantStatusRollup): string {
   return `Nested: ${parts.join(" · ")}`;
 }
 
-interface ChatRowStatusProps {
-  readonly epicId: string;
-  readonly nodeId: string;
-  readonly artifactType: EpicNodeKind;
-  readonly updatedAt: number;
-}
-
-/**
- * Trailing status slot for row 1 - the redesign moves status off the removed
- * leading icon and onto the right of the title as a text + glyph chip (or a
- * muted relative last-activity time when idle). Every row shows its own status;
- * a collapsed parent additionally merges its hidden descendants' rollup, so the
- * chip and the rollup can't both claim the slot.
- */
-function ChatRowStatusSlot(
-  props: ChatRowStatusProps & {
-    readonly hasChildren: boolean;
-    readonly expanded: boolean;
-  },
-): ReactNode {
-  if (props.hasChildren && !props.expanded) {
-    return (
-      <ChatRowStatusWithNestedRollup
-        epicId={props.epicId}
-        nodeId={props.nodeId}
-        artifactType={props.artifactType}
-        updatedAt={props.updatedAt}
-      />
-    );
-  }
-  return (
-    <ChatOwnStatusChip
-      epicId={props.epicId}
-      nodeId={props.nodeId}
-      artifactType={props.artifactType}
-      updatedAt={props.updatedAt}
-    />
-  );
-}
-
-/**
- * Trailing slot for a collapsed parent. Merges the parent's own status with the
- * hidden descendants' rollup on the shared ladder: the more urgent one owns the
- * slot, ties go to the parent - so a hidden failure can never sit invisible
- * behind a parent that is merely running, and the rollup renders exactly where
- * users read a row's own status. When the parent's own status wins it renders
- * the same chip a leaf row shows. Mounted only for collapsed parents, so rows
- * without a rollup carry none of these subscriptions.
- */
-const ChatRowStatusWithNestedRollup = memo(
-  function ChatRowStatusWithNestedRollup(props: ChatRowStatusProps) {
-    const rollup = useChatDescendantStatus({
-      epicId: props.epicId,
-      nodeId: props.nodeId,
-    });
-    const activityTiers = useEpicAgentActivityTiers();
-    const selfIndicator = useSurfaceNotificationIndicatorState({
-      epicId: props.epicId,
-      chatId: props.nodeId,
-    });
-    if (rollup !== null) {
-      const selfTier = activityTiers.get(props.nodeId);
-      // Terminal-agent parents have no notification states of their own -
-      // activity is their only tier (their indicator entry is always empty).
-      const agentSelfRank =
-        selfTier === undefined
-          ? 0
-          : CHAT_STATUS_RANKS[activityTierKind(selfTier)];
-      const selfRank =
-        props.artifactType === "chat"
-          ? chatSelfStatusRank(selfIndicator, selfTier)
-          : agentSelfRank;
-      if (CHAT_STATUS_RANKS[rollup.kind] > selfRank) {
-        return <NestedChatStatusIcon nodeId={props.nodeId} rollup={rollup} />;
-      }
-    }
-    return (
-      <ChatOwnStatusChip
-        epicId={props.epicId}
-        nodeId={props.nodeId}
-        artifactType={props.artifactType}
-        updatedAt={props.updatedAt}
-      />
-    );
-  },
-);
-
 /**
  * The muted variant of the status icon: same glyph, same slot, reduced
  * opacity - the artifact tree's solid-vs-translucent "self vs descendant"
@@ -2289,8 +2288,8 @@ function NestedChatStatusGlyph(props: {
 }
 
 /**
- * The row's own trailing status kind. `idle` means nothing notable - the slot
- * falls back to a muted relative last-activity time.
+ * The row's own status kind. `idle` means nothing notable - the leading icon
+ * falls back to the plain glyph and the trailing slot to a relative time.
  */
 type ChatOwnStatusKind =
   | "failure"
@@ -2329,272 +2328,6 @@ function chatOwnStatusKind(
   if (state.unreadDone) return "done";
   if (isReadOnly) return "read-only";
   return "idle";
-}
-
-interface ChatOwnStatusPresentation {
-  readonly text: string;
-  readonly label: string;
-  readonly className: string;
-}
-
-// Chip text + accessible label + tone class per status. The glyph and its color
-// come through so the chip cannot drift from the notification tones; `working`
-// and `background` are activity tiers (not notification states) so they carry
-// local presentation.
-const CHAT_OWN_STATUS_PRESENTATION: Record<
-  Exclude<ChatOwnStatusKind, "idle">,
-  ChatOwnStatusPresentation
-> = {
-  failure: {
-    text: "Needs attention",
-    label: FAILURE_TONE.title,
-    className: FAILURE_TONE.className,
-  },
-  interview: {
-    text: "Interview",
-    label: INTERVIEW_TONE.title,
-    className: INTERVIEW_TONE.className,
-  },
-  approval: {
-    text: "Approval",
-    label: APPROVAL_TONE.title,
-    className: APPROVAL_TONE.className,
-  },
-  working: {
-    text: "Working",
-    label: "Agent in progress",
-    className: "text-primary",
-  },
-  background: {
-    text: "Background",
-    label: "Background activity — agent idle",
-    className: "text-muted-foreground",
-  },
-  // Accessible name kept identical to the pre-refactor lock icon so the
-  // read-only signal reads the same to assistive tech as it did before.
-  "read-only": {
-    text: "Read-only",
-    label: "Read-only agent",
-    className: "text-muted-foreground",
-  },
-  done: {
-    text: "Done",
-    label: DONE_TONE.title,
-    className: DONE_TONE.className,
-  },
-};
-
-/**
- * A row's own trailing status chip. Resolves the turn-vs-background authority
- * before presenting: an OPEN chat's session tri-state (`chatActivityIndicator`)
- * is authoritative, because the epic-awareness bit also spans background-only
- * phases - letting it force the turn spinner would re-conflate the two tiers on
- * any host that does not publish `AGENT_WORKING_TURN_AWARENESS_FIELD` (a
- * steady state, not a rollout window). Awareness tiers remain the fallback for
- * unopened rows, which have no session to ask.
- *
- * The session read is deliberately narrow: `useExistingChatSessionHandle` only
- * resolves a handle for chats that are actually open, so the extra store
- * subscriptions are paid by those few rows rather than by every row. Note the
- * narrowing bounds THIS chip's cost, not the row's total: the status-aware
- * leading `ChatProgressIcon` makes the same session read on every chat row by
- * design - an accepted cost of keeping that icon.
- */
-function ChatOwnStatusChip(props: ChatRowStatusProps): ReactNode {
-  const indicatorState = useSurfaceNotificationIndicatorState({
-    epicId: props.epicId,
-    chatId: props.nodeId,
-  });
-  const awarenessTier = useEpicAgentActivityTiers().get(props.nodeId);
-  const sessionHandle = useExistingChatSessionHandle(
-    props.epicId,
-    props.nodeId,
-  );
-  const isViewer = useContext(SidebarViewerContext);
-  // Terminal-agent rows have no chat session and never carried a read-only
-  // lock (their PTY runs host-side), so the viewer arm is chat-only.
-  const isChat = props.artifactType === "chat";
-  // Hoisted out of the JSX deliberately: `bun run lint` runs `eslint --fix`, and
-  // the JSX-leaked-render rule rewrites an inline `{a && b}` attribute into
-  // `{a ? b : null}`. That widens this to `boolean | null` and breaks
-  // `ChatOwnStatusChipPresentation`'s `isReadOnly: boolean` prop, so the value
-  // is computed here where the autofix does not reach.
-  const isReadOnlyRow = isChat && isViewer;
-  if (sessionHandle === null || !isChat) {
-    return (
-      <ChatOwnStatusChipPresentation
-        nodeId={props.nodeId}
-        indicatorState={indicatorState}
-        running={awarenessTier ?? false}
-        isReadOnly={isReadOnlyRow}
-        updatedAt={props.updatedAt}
-      />
-    );
-  }
-  return (
-    <ChatOwnStatusChipWithSession
-      handle={sessionHandle}
-      nodeId={props.nodeId}
-      indicatorState={indicatorState}
-      awarenessTier={awarenessTier}
-      updatedAt={props.updatedAt}
-    />
-  );
-}
-
-/**
- * The open-session arm. `useStore(api, selector)` (not the bound-store call
- * form) so the React Compiler still sees a hook, and each selector collapses to
- * a primitive / stable slot so queue and background-item array churn cannot
- * re-render the chip.
- */
-function ChatOwnStatusChipWithSession(props: {
-  readonly handle: ChatSessionStoreHandle;
-  readonly nodeId: string;
-  readonly indicatorState: NotificationIndicatorState;
-  readonly awarenessTier: AgentActivityTier | undefined;
-  readonly updatedAt: number;
-}): ReactNode {
-  const activity = useStore(props.handle.store, (state) =>
-    chatActivityIndicator(state),
-  );
-  const access = useStore(props.handle.store, (state) => state.access);
-  return (
-    <ChatOwnStatusChipPresentation
-      nodeId={props.nodeId}
-      indicatorState={props.indicatorState}
-      // Session tri-state wins; awareness only backfills the brief
-      // subscription-gap window where the session still reads idle.
-      running={activity ?? props.awarenessTier ?? false}
-      // A session's access snapshot is authoritative. Stay neutral while it is
-      // unknown so an owner never sees a lock flash before it arrives.
-      isReadOnly={access !== null && access.role !== "owner"}
-      updatedAt={props.updatedAt}
-    />
-  );
-}
-
-/**
- * Pure presentation for a resolved status. Tone colors come from
- * `notification-indicator-tones.ts` so the chip cannot drift from the per-row
- * notification icon it replaces.
- */
-function ChatOwnStatusChipPresentation(props: {
-  readonly nodeId: string;
-  readonly indicatorState: NotificationIndicatorState;
-  readonly running: IndicatorRunningKind;
-  readonly isReadOnly: boolean;
-  readonly updatedAt: number;
-}): ReactNode {
-  const kind = chatOwnStatusKind(
-    props.indicatorState,
-    props.running,
-    props.isReadOnly,
-  );
-  if (kind === "idle") {
-    return (
-      <ChatRowIdleTime nodeId={props.nodeId} updatedAt={props.updatedAt} />
-    );
-  }
-  const presentation = CHAT_OWN_STATUS_PRESENTATION[kind];
-  return (
-    <span
-      role="status"
-      aria-label={presentation.label}
-      // Kept even though `aria-label` duplicates it: the chip's VISIBLE text is
-      // the short `presentation.text` ("Background"), so the native tooltip is
-      // the only way a sighted mouse user gets the full
-      // "Background activity — agent idle" detail. (The idle slot is the
-      // opposite case - its title would repeat its own visible text verbatim,
-      // so it has none.)
-      title={presentation.label}
-      data-testid={`chat-row-status-${kind}-${props.nodeId}`}
-      className={cn(
-        "flex-none inline-flex items-center gap-1 text-ui-xs",
-        presentation.className,
-      )}
-    >
-      <ChatOwnStatusGlyph kind={kind} />
-      <span>{presentation.text}</span>
-    </span>
-  );
-}
-
-/**
- * Idle-slot muted relative time, in the reference design's compact form ("now",
- * "23m", "3h", "6d", then a short date) rather than the verbose app-wide
- * phrasing - the trailing slot competes with the title for truncation space, so
- * every character costs. A leaf component so only idle rows subscribe to the
- * shared 60s clock; a running/attention/done chip never pays for the tick.
- */
-function ChatRowIdleTime(props: {
-  readonly nodeId: string;
-  readonly updatedAt: number;
-}): ReactNode {
-  const now = useSampledNow();
-  return (
-    <span
-      data-testid={`chat-row-status-idle-${props.nodeId}`}
-      className="flex-none text-ui-xs tabular-nums text-muted-foreground"
-    >
-      {compactRelativeTime(props.updatedAt, now)}
-    </span>
-  );
-}
-
-const COMPACT_MINUTE_MS = 60_000;
-const COMPACT_HOUR_MS = 60 * COMPACT_MINUTE_MS;
-const COMPACT_DAY_MS = 24 * COMPACT_HOUR_MS;
-const COMPACT_WEEK_MS = 7 * COMPACT_DAY_MS;
-
-/**
- * Compact last-activity label. Negative deltas (a clock-skewed `updatedAt` in
- * the future) clamp to "now" rather than rendering a negative age.
- */
-function compactRelativeTime(updatedAt: number, now: number): string {
-  const diffMs = Math.max(0, now - updatedAt);
-  if (diffMs < COMPACT_MINUTE_MS) return "now";
-  if (diffMs < COMPACT_HOUR_MS) {
-    return `${Math.floor(diffMs / COMPACT_MINUTE_MS)}m`;
-  }
-  if (diffMs < COMPACT_DAY_MS) {
-    return `${Math.floor(diffMs / COMPACT_HOUR_MS)}h`;
-  }
-  if (diffMs < COMPACT_WEEK_MS) {
-    return `${Math.floor(diffMs / COMPACT_DAY_MS)}d`;
-  }
-  return new Date(updatedAt).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-/**
- * The chip glyph. `working` is the busy spinner; `background` the muted
- * background-activity glyph; the attention / done kinds reuse the shared
- * notification-tone icons (color inherited from the chip's tone class via
- * `currentColor`), so the chip and the nested rollup share one glyph source.
- */
-function ChatOwnStatusGlyph(props: {
-  readonly kind: Exclude<ChatOwnStatusKind, "idle">;
-}): ReactNode {
-  if (props.kind === "read-only") {
-    return <MessageSquareLock aria-hidden className="size-3.5" />;
-  }
-  if (props.kind === "working") {
-    return (
-      <AgentSpinningDots
-        className="text-current"
-        testId={undefined}
-        variant={undefined}
-      />
-    );
-  }
-  if (props.kind === "background") {
-    return <BackgroundActivityGlyph testId={undefined} />;
-  }
-  const Icon = CHAT_DESCENDANT_STATUS_TONES[props.kind].Icon;
-  return <Icon aria-hidden className="size-3.5" />;
 }
 
 /**
@@ -2641,11 +2374,12 @@ interface ChatRowArchiveDecision {
  * idle time and nothing else.
  *
  * That last condition is stricter than "my own status is idle", which is why
- * `hasChildren`/`expanded` are inputs. A COLLAPSED PARENT's slot renders
- * `ChatRowStatusWithNestedRollup`, which may show a muted rollup glyph standing
- * in for a hidden descendant that needs attention - the only signal those
- * descendants have. Showing the button there would blank that glyph on hover
- * and offer to archive the whole subtree, failure included. The shell cannot
+ * `hasChildren`/`expanded` are inputs. A COLLAPSED PARENT's leading slot renders
+ * `ChatRowLeadingIconWithNestedRollup`, which may show a muted rollup glyph
+ * standing in for a hidden descendant that needs attention - the only signal
+ * those descendants have. Showing the button there would blank the trailing
+ * time on hover while that glyph stands for a failure, and offer to archive the
+ * whole subtree, failure included. The shell cannot
  * tell which way the rollup resolved without duplicating its subscription, so
  * every collapsed parent is excluded; the menu entry stays the archive path for
  * those rows.
@@ -2769,19 +2503,18 @@ function chatRowMenuEntries(
 }
 
 /**
- * The row's resolved own status kind, for consumers OUTSIDE the trailing chip -
- * today the archive affordances, which must appear only on an idle row and stay
- * disabled while one is working.
+ * The row's resolved own status kind for the archive affordances, which must
+ * appear only on an idle row and stay disabled while one is working.
  *
- * Resolves through the same `chatOwnStatusKind` lattice the chip renders from,
- * so the two can never disagree, but reads an open chat's session through
- * `useSyncExternalStore` rather than the chip's parent/child component split.
+ * Resolves through the same `chatOwnStatusKind` lattice the leading status icon
+ * renders from, so the two can never disagree, but reads an open chat's session
+ * through `useSyncExternalStore` rather than the icon's parent/child split.
  * A hook cannot use that split - `useStore` can't be called conditionally on a
  * nullable handle - and the snapshots here are deliberately PRIMITIVES, so this
  * re-renders its caller only when the kind actually flips rather than on every
  * queue or background-item tick of an open chat.
  *
- * Same authority order as the chip: an open chat's session tri-state wins,
+ * Same authority order as the icon: an open chat's session tri-state wins,
  * epic awareness backfills the subscription-gap window and covers unopened
  * rows, and a session's own access snapshot overrides the epic-level viewer
  * role.

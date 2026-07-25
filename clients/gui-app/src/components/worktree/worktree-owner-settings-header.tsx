@@ -1,7 +1,9 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
+import { Lock } from "lucide-react";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { useCompactRelativeTime } from "@/lib/relative-time";
 import {
   deriveOwnerSettingsHeader,
   type OwnerSettingsHeaderView,
@@ -11,9 +13,13 @@ import { useGuiHarnessCatalog } from "@/hooks/harnesses/use-gui-harness-catalog"
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useChatById } from "@/lib/epic-selectors";
-import { cn } from "@/lib/utils";
 
 const EMPTY_PROFILES: ReadonlyArray<ProviderProfile> = [];
+
+interface SettingsSegment {
+  readonly key: string;
+  readonly node: ReactNode;
+}
 
 /**
  * The run-settings header block atop the chat/terminal-agent hover card. It
@@ -48,10 +54,9 @@ export function WorktreeOwnerSettingsHeader(props: {
       ? state.tuiAgents.byId[props.ownerId]
       : null,
   );
-  const chatSettings =
-    props.ownerKind === "chat" ? (chat?.settings ?? null) : null;
-  const hasSubject =
-    props.ownerKind === "chat" ? chatSettings !== null : tuiAgent !== null;
+  const isChat = props.ownerKind === "chat";
+  const chatSettings = isChat ? (chat?.settings ?? null) : null;
+  const hasSubject = isChat ? chatSettings !== null : tuiAgent !== null;
 
   // The dynamic label source, gated on `hasSubject` so a legacy row with no
   // settings never mounts the catalog fan-out at all. Warm entries render from
@@ -73,85 +78,185 @@ export function WorktreeOwnerSettingsHeader(props: {
     enabled: false,
     subscribed: profileNeeded,
   });
-  const profiles =
-    providersList.data?.providers.flatMap((provider) => provider.profiles) ??
-    EMPTY_PROFILES;
-
   const view = deriveOwnerSettingsHeader({
     ownerKind: props.ownerKind,
     chatSettings,
     tuiHarnessId: tuiAgent?.harnessId ?? null,
     tuiModel: tuiAgent?.model ?? null,
     harnesses: catalog.harnesses,
-    profiles,
+    profiles: listedProfiles(providersList.data?.providers ?? null),
   });
   if (view === null) return null;
-  return <OwnerSettingsHeaderRows view={view} />;
+  return (
+    <OwnerSettingsHeaderRows
+      view={view}
+      updatedAt={ownerUpdatedAt(props.ownerKind, chat, tuiAgent)}
+    />
+  );
 }
 
+/** Flattens every provider's profiles, or the shared empty list when cold. */
+function listedProfiles(
+  providers: ReadonlyArray<{
+    readonly profiles: ReadonlyArray<ProviderProfile>;
+  }> | null,
+): ReadonlyArray<ProviderProfile> {
+  if (providers === null) return EMPTY_PROFILES;
+  return providers.flatMap((provider) => provider.profiles);
+}
+
+/** Both record kinds carry `updatedAt`; read whichever this owner is. */
+function ownerUpdatedAt(
+  ownerKind: WorktreeBindingOwnerKind,
+  chat: { readonly updatedAt: number } | null | undefined,
+  tuiAgent: { readonly updatedAt: number } | null,
+): number | null {
+  const subject = ownerKind === "chat" ? chat : tuiAgent;
+  if (subject === null || subject === undefined) return null;
+  return subject.updatedAt;
+}
+
+/**
+ * The run settings as ONE dense line: provider mark, model, reasoning, then the
+ * permission mode behind a lock. Field labels ("Provider", "Model", …) are
+ * deliberately gone - each value is self-identifying, and the label column was
+ * costing four stacked rows to say what one line says. The harness NAME is
+ * dropped too: its brand mark already identifies it, and repeating the word
+ * next to the icon was the same redundancy in miniature.
+ *
+ * `flex-wrap` rather than a hard single line: a long model + profile pair on a
+ * narrow card wraps instead of overflowing or forcing a truncation that would
+ * hide the permission mode - the one value here with a safety consequence.
+ */
 function OwnerSettingsHeaderRows(props: {
   readonly view: OwnerSettingsHeaderView;
+  readonly updatedAt: number | null;
 }): ReactNode {
   const { view } = props;
+  // Collected as a list, then dot-joined - so a separator can only ever land
+  // BETWEEN two values that are actually present. Conditioning each dot on its
+  // own neighbours is what produces a leading dot when the model is absent, or
+  // a doubled one when reasoning is; that bug re-appears with every field
+  // added. Here a missing field simply drops out and its neighbours close up.
+  const allSegments: ReadonlyArray<SettingsSegment | null> = [
+    view.modelLabel === null
+      ? null
+      : {
+          key: "model",
+          node: (
+            <span
+              className="truncate font-medium"
+              data-testid="owner-settings-model"
+            >
+              {view.modelLabel}
+            </span>
+          ),
+        },
+    view.reasoningLabel === null
+      ? null
+      : {
+          key: "reasoning",
+          node: (
+            <span
+              className="truncate text-muted-foreground"
+              data-testid="owner-settings-reasoning"
+            >
+              {view.reasoningLabel}
+            </span>
+          ),
+        },
+    view.fastMode
+      ? {
+          key: "fast-mode",
+          node: (
+            <span
+              className="text-muted-foreground"
+              data-testid="owner-settings-fast-mode"
+            >
+              Fast
+            </span>
+          ),
+        }
+      : null,
+    view.permissionLabel === null
+      ? null
+      : {
+          key: "permissions",
+          node: (
+            <span
+              className="flex min-w-0 items-center gap-1 text-muted-foreground"
+              data-testid="owner-settings-permissions"
+            >
+              <Lock className="size-3 shrink-0" />
+              <span className="truncate">{view.permissionLabel}</span>
+            </span>
+          ),
+        },
+    view.profileLabel === null
+      ? null
+      : {
+          key: "profile",
+          node: (
+            <span
+              className="truncate text-muted-foreground"
+              data-testid="owner-settings-profile"
+            >
+              {view.profileLabel}
+            </span>
+          ),
+        },
+  ];
+  const segments = allSegments.filter(
+    (segment): segment is SettingsSegment => segment !== null,
+  );
   return (
     <span
-      className="flex flex-col gap-1 border-b border-border/70 px-3 py-2"
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/70 px-3 py-2 text-ui-xs"
       data-testid="owner-settings-header"
     >
-      <span className="pb-0.5 text-ui-xs font-medium text-muted-foreground">
-        Agent
-      </span>
-      <OwnerSettingsRow label="Provider" align="center">
-        <HarnessIcon harnessId={view.harnessId} className="size-3.5" />
-        <span className="truncate">{view.harnessName}</span>
-      </OwnerSettingsRow>
-      {view.modelLabel === null ? null : (
-        <OwnerSettingsRow label="Model" align="baseline">
-          <span className="truncate">{view.modelLabel}</span>
-        </OwnerSettingsRow>
-      )}
-      {view.reasoningLabel === null ? null : (
-        <OwnerSettingsRow label="Reasoning" align="baseline">
-          <span className="truncate">{view.reasoningLabel}</span>
-        </OwnerSettingsRow>
-      )}
-      {view.fastMode ? (
-        <OwnerSettingsRow label="Fast mode" align="baseline">
-          <span>On</span>
-        </OwnerSettingsRow>
-      ) : null}
-      {view.profileLabel === null ? null : (
-        <OwnerSettingsRow label="Profile" align="baseline">
-          <span className="truncate">{view.profileLabel}</span>
-        </OwnerSettingsRow>
-      )}
-      {view.permissionLabel === null ? null : (
-        <OwnerSettingsRow label="Permissions" align="baseline">
-          <span className="truncate">{view.permissionLabel}</span>
-        </OwnerSettingsRow>
+      <HarnessIcon harnessId={view.harnessId} className="size-3.5 shrink-0" />
+      {segments.map((segment, index) => (
+        <Fragment key={segment.key}>
+          {index === 0 ? null : (
+            // The separator the collapsed model picker uses
+            // (`harness-model-trigger.tsx`), so the two surfaces read as one
+            // vocabulary. Never follows the harness mark - a bullet hanging off
+            // an icon reads as debris rather than as joining two values.
+            <span
+              aria-hidden="true"
+              className="shrink-0 text-muted-foreground/70"
+            >
+              ·
+            </span>
+          )}
+          {segment.node}
+        </Fragment>
+      ))}
+      {props.updatedAt === null ? null : (
+        // `ml-auto` pins it to the far right of the line. Placed last so that
+        // when the row wraps on a narrow card the time trails the settings
+        // rather than stranding them under it.
+        <OwnerSettingsUpdatedAt updatedAt={props.updatedAt} />
       )}
     </span>
   );
 }
 
-function OwnerSettingsRow(props: {
-  readonly label: string;
-  readonly align: "baseline" | "center";
-  readonly children: ReactNode;
+/**
+ * Relative "last touched" for the owner, isolated in its own leaf because
+ * `useRelativeTimestamp` re-renders on a timer - keeping it here means the tick
+ * repaints this one span rather than the whole settings line.
+ */
+function OwnerSettingsUpdatedAt(props: {
+  readonly updatedAt: number;
 }): ReactNode {
+  const relative = useCompactRelativeTime(props.updatedAt);
   return (
     <span
-      className={cn(
-        "flex justify-between gap-4",
-        props.align === "center" ? "items-center" : "items-baseline",
-      )}
+      className="ml-auto shrink-0 whitespace-nowrap tabular-nums text-muted-foreground"
+      data-testid="owner-settings-updated-at"
     >
-      <span className="shrink-0 text-ui-xs text-muted-foreground">
-        {props.label}
-      </span>
-      <span className="flex min-w-0 items-center gap-1.5 text-ui-xs font-medium">
-        {props.children}
-      </span>
+      {relative}
     </span>
   );
 }
