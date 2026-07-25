@@ -546,8 +546,8 @@ describe("post-v3.0 Devin/Pi non-breaking v4→v3 / v4→v2 / v4→v1 downgrade 
   });
 });
 
-describe("post-v4.0 Hermes non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v1 downgrade bridges", () => {
-  it("drops Hermes from agent.gui.listHarnesses for v4.0, v3.0, v2.0, and v1.0 callers", () => {
+describe("post-v4.0 Hermes/omp non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v1 downgrade bridges", () => {
+  it("drops Hermes and omp from agent.gui.listHarnesses for v4.0, v3.0, v2.0, and v1.0 callers", () => {
     const v5Response = listGuiHarnessesResponseSchema.parse({
       harnesses: [
         harnessOption("claude"),
@@ -556,6 +556,7 @@ describe("post-v4.0 Hermes non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v1 do
         harnessOption("devin"),
         harnessOption("pi"),
         harnessOption("hermes"),
+        harnessOption("omp"),
       ],
     });
 
@@ -612,7 +613,7 @@ describe("post-v4.0 Hermes non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v1 do
     ).not.toThrow();
   });
 
-  it("drops Hermes agents from agent.list for v4.0, v3.0, v2.0, and v1.0 callers", () => {
+  it("drops Hermes and omp agents from agent.list for v4.0, v3.0, v2.0, and v1.0 callers", () => {
     const v5Response = listAgentsResponseSchema.parse({
       caller: { agentId: "self", canSendMessages: true },
       scope: "all",
@@ -622,6 +623,7 @@ describe("post-v4.0 Hermes non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v1 do
         agentSummary("a-devin", "devin"),
         agentSummary("a-pi", "pi"),
         agentSummary("a-hermes", "hermes"),
+        agentSummary("a-omp", "omp"),
         agentSummary("a-null", null),
       ],
     });
@@ -667,7 +669,7 @@ describe("post-v4.0 Hermes non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v1 do
     expect(() => listAgentsResponseSchemaV10.parse(toV1.value)).not.toThrow();
   });
 
-  it("drops Hermes from providers.list for v4.0, v3.0, v2.0, and v1.0 callers", () => {
+  it("drops Hermes and omp from providers.list for v4.0, v3.0, v2.0, and v1.0 callers", () => {
     const v5Response = providersListResponseSchema.parse({
       providers: [
         providerState("cursor", "unknown"),
@@ -675,6 +677,7 @@ describe("post-v4.0 Hermes non-breaking v5→v4 / v5→v3 / v5→v2 / v5→v1 do
         providerState("devin", "unknown"),
         providerState("pi", "unknown"),
         providerState("hermes", "unknown"),
+        providerState("omp", "unknown"),
       ],
     });
 

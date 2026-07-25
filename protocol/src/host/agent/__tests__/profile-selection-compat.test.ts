@@ -656,7 +656,20 @@ describe("agent.listProviderProfiles v1 <-> v2 hermes-provider translation", () 
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
-    expect(downgraded.error.message).toMatch(/hermes/i);
+    // The message deliberately names no single provider - it must stay honest
+    // for every post-v4.0 id, not just the first one that forced the bridge.
+    expect(downgraded.error.message).toMatch(/newer Traycer client/i);
+  });
+
+  it("fails closed downgrading an omp response to v1.0", () => {
+    const downgraded =
+      agentListProviderProfilesDowngradeV20ToV10.downgradeResponse({
+        ...preHermesResponse,
+        providerId: "omp",
+      });
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
   });
 });
 
@@ -804,6 +817,20 @@ describe("agent.configure v1 <-> v2 hermes-harness response translation", () => 
     expect(downgraded.ok).toBe(false);
     if (downgraded.ok) return;
     expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
-    expect(downgraded.error.message).toMatch(/hermes/i);
+    // Generalized alongside the listProviderProfiles bridge: the copy must not
+    // name Hermes now that omp shares the same fail-closed path.
+    expect(downgraded.error.message).toMatch(/newer Traycer client/i);
+  });
+
+  it("fails closed downgrading an omp-configured response to v1.0", () => {
+    const response = {
+      settings: { ...preHermesSettings, harnessId: "omp" as const },
+      warnings: [],
+    };
+    const downgraded =
+      agentConfigureDowngradeV20ToV10.downgradeResponse(response);
+    expect(downgraded.ok).toBe(false);
+    if (downgraded.ok) return;
+    expect(downgraded.error.code).toBe("DOWNGRADE_UNSUPPORTED");
   });
 });

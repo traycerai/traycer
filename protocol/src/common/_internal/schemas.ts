@@ -66,4 +66,5 @@ export const harnessIdSchema = z.enum([
   "devin",
   "pi",
   "hermes",
+  "omp",
 ]);

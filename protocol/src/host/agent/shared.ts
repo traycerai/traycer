@@ -66,6 +66,7 @@ export const guiHarnessIdSchema = harnessIdSchema.extract([
   "devin",
   "pi",
   "hermes",
+  "omp",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -137,12 +138,14 @@ export type GuiHarnessIdV30 = z.infer<typeof guiHarnessIdSchemaV30>;
 
 /**
  * Frozen harness id set as shipped in protocol v4.0 (with Devin/Pi, before
- * Hermes). Used only by the frozen v4.0 response schema of
+ * Hermes/omp). Used only by the frozen v4.0 response schema of
  * `agent.gui.listHarnesses` so already-shipped v4.0 clients never receive
  * post-v4.0 ids; the v5.0 line adds them and v5→v4 / v5→v3 / v5→v2 / v5→v1
- * bridges filter them for older callers. Do NOT add new harnesses here -
- * extend the latest `guiHarnessIdSchema` and use the existing v5 bridge
- * instead.
+ * bridges filter them for older callers. The v5.0 line is still unreleased
+ * (newest released baseline: host-v1.1.7 / cli-v1.1.7, which shipped v4.0),
+ * so post-v4.0 ids keep landing on it rather than opening a v6.0. Do NOT add
+ * new harnesses here - extend the latest `guiHarnessIdSchema` and use the
+ * existing v5 bridge instead.
  */
 export const guiHarnessIdSchemaV40 = harnessIdSchema.extract([
   "claude",
@@ -227,6 +230,7 @@ export const AGENT_FACING_HARNESS_IDS = [
   "devin",
   "pi",
   "hermes",
+  "omp",
 ] as const;
 
 export const AGENT_FACING_HARNESS_ID_LIST = AGENT_FACING_HARNESS_IDS.join(", ");
@@ -682,11 +686,11 @@ export const listAgentsResponseSchemaV30 = listAgentsResponseSchema.extend({
 });
 export type ListAgentsResponseV30 = z.infer<typeof listAgentsResponseSchemaV30>;
 
-// ── Frozen protocol-v4.0 agent.list response (with Devin/Pi, before Hermes) ─
-// `agent.list` enumerates every agent in the epic - including Hermes GUI
+// ── Frozen protocol-v4.0 agent.list response (with Devin/Pi, pre-Hermes/omp) ─
+// `agent.list` enumerates every agent in the epic - including Hermes/omp GUI
 // harness chats a newer client created - so an already-shipped v4.0 client
 // would hit a strict enum on those rows. v4.0 is frozen here as actually
-// shipped (with Devin/Pi); the v5.0 line carries Hermes rows and v5→v4 /
+// shipped (with Devin/Pi); the v5.0 line carries Hermes/omp rows and v5→v4 /
 // v5→v3 / v5→v2 / v5→v1 bridges drop them for older callers. Do not add new
 // harnesses here - use the existing v5 bridge.
 export const agentSummarySchemaV40 = agentSummarySchema.extend({

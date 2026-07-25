@@ -30,6 +30,7 @@ export const providerIdSchema = z.enum([
   "devin",
   "pi",
   "hermes",
+  "omp",
 ]);
 export type ProviderId = z.infer<typeof providerIdSchema>;
 
@@ -98,11 +99,14 @@ export type ProviderIdV30 = z.infer<typeof providerIdSchemaV30>;
 
 /**
  * Frozen provider id set as shipped in protocol v4.0 (with Devin/Pi, before
- * Hermes). Used only by the frozen v4.0 `providers.list` response so an
+ * Hermes/omp). Used only by the frozen v4.0 `providers.list` response so an
  * already-shipped v4.0 client never receives post-v4.0 providers; the v5.0
  * line adds them with a v5→v4 (and v5→v3 / v5→v2 / v5→v1) downgrade bridge.
- * Do not add new providers here - extend the latest `providerIdSchema` and
- * use the existing v5 bridge instead.
+ * The v5.0 line is still unreleased (the newest released baseline is
+ * host-v1.1.7 / cli-v1.1.7, which shipped v4.0), so post-v4.0 ids keep
+ * landing on it rather than opening a v6.0. Do not add new providers here -
+ * extend the latest `providerIdSchema` and use the existing v5 bridge
+ * instead.
  */
 export const providerIdSchemaV40 = z.enum([
   "claude-code",
@@ -143,6 +147,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   devin: "Devin",
   pi: "Pi",
   hermes: "Hermes Agent",
+  omp: "Oh My Pi",
 };
 
 /**
@@ -700,11 +705,12 @@ export type ProvidersListResponseV30 = z.infer<
 >;
 
 // ── Frozen protocol-v4.0 provider state + list response (with Devin/Pi, ────
-// before Hermes). `providers.list` always returns every provider; v4.0
+// before Hermes/omp). `providers.list` always returns every provider; v4.0
 // shipped (host-v1.1.7) with Devin/Pi, `profiles[]`, and the code-paste-
-// capable login capability. The v5.0 line adds Hermes, and the v5→v4 (and
-// v5→v3 / v5→v2 / v5→v1) downgrade bridges filter it for older callers. Do
-// not add new providers or fields here - use the existing v5 bridge.
+// capable login capability. The v5.0 line adds Hermes and omp, and the v5→v4
+// (and v5→v3 / v5→v2 / v5→v1) downgrade bridges filter them for older
+// callers. Do not add new providers or fields here - use the existing v5
+// bridge.
 //
 // Built as a hand-frozen snapshot of the base shape as actually released on
 // the v4.0 line, with the frozen v4.0 provider-id enum - NOT derived via
@@ -1379,8 +1385,8 @@ export function downgradeProviderCliStateListToV30(
 }
 
 // Downgrades a latest-shaped (v5.0) provider-state list to the frozen v4.0
-// shape, dropping Hermes (or any future post-v4.0 provider) so an already-
-// shipped v4.0 client's strict decode never sees it.
+// shape, dropping Hermes/omp (or any future post-v4.0 provider) so an
+// already-shipped v4.0 client's strict decode never sees them.
 export function downgradeProviderCliStateListToV40(
   states: readonly unknown[],
 ): ProviderCliStateV40[] {
