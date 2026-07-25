@@ -1,5 +1,6 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
+  chatActiveTurnSchema,
   chatQueuedItemSchema,
   chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
@@ -8,6 +9,7 @@ import {
   chatSubscribeV12,
   chatSubscribeV13,
   chatSubscribeV14,
+  chatSubscribeV15,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -1410,5 +1412,96 @@ describe("chat.subscribe@1.4 (inReplyTo on senders)", () => {
     if (parsed.kind !== "messageAccepted")
       throw new Error("expected messageAccepted");
     expect(parsed.message.sender).not.toHaveProperty("inReplyTo");
+  });
+});
+
+describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
+  // Pre-1.5 active turn shape: no sameTurnSteeringSupported field at all.
+  // A 1.5 client parsing frames from a 1.4 host (or persisted pre-field state)
+  // must still accept the carrier and default the capability to false.
+  const preV15ActiveTurn = {
+    turnId: "turn-1",
+    status: "running" as const,
+    harnessId: "claude" as const,
+    model: "claude-sonnet-4-5",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "epic" as const,
+    profileId: null,
+    userMessageId: "message-1",
+    startedAt: 1000,
+    updatedAt: 1000,
+  };
+
+  const activeTurnWithCapability = {
+    ...preV15ActiveTurn,
+    sameTurnSteeringSupported: true,
+  };
+
+  it("defaults missing sameTurnSteeringSupported to false on the live schema", () => {
+    const parsed = chatActiveTurnSchema.parse(preV15ActiveTurn);
+    expect(parsed.sameTurnSteeringSupported).toBe(false);
+  });
+
+  it("defaults missing sameTurnSteeringSupported through a live snapshot frame", () => {
+    const parsed = chatSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: preV15ActiveTurn,
+        runStatus: "running",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+      },
+    });
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.activeTurn?.sameTurnSteeringSupported).toBe(false);
+  });
+
+  it("defaults missing sameTurnSteeringSupported through a live turnStateChanged frame", () => {
+    const parsed = chatSubscribeServerFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: preV15ActiveTurn,
+    });
+    if (parsed.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(parsed.activeTurn?.sameTurnSteeringSupported).toBe(false);
+  });
+
+  it("strips sameTurnSteeringSupported for a 1.4 peer and retains it on 1.5", () => {
+    const frame = {
+      kind: "turnStateChanged" as const,
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running" as const,
+      activeTurn: activeTurnWithCapability,
+    };
+
+    const v14 = chatSubscribeV14.serverFrameSchema.parse(frame);
+    if (v14.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(v14.activeTurn).not.toHaveProperty("sameTurnSteeringSupported");
+
+    const v15 = chatSubscribeV15.serverFrameSchema.parse(frame);
+    if (v15.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(v15.activeTurn?.sameTurnSteeringSupported).toBe(true);
   });
 });

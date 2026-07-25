@@ -2129,6 +2129,7 @@ describe("chat status icon session authority (open session vs awareness)", () =>
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: () => ({
         sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => false,
         close: () => undefined,
       }),
     });

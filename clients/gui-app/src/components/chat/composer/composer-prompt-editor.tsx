@@ -18,6 +18,7 @@ import { Selection, type Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
+import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
@@ -129,7 +130,7 @@ export interface ComposerPromptEditorProps {
     content: JsonContent,
     selection: { from: number; to: number },
   ) => void;
-  readonly onSubmit: () => void;
+  readonly onSubmit: (source: ChatComposerSubmitSource) => void;
   readonly onPaste: ClipboardEventHandler<HTMLElement>;
   readonly onDragOver: DragEventHandler<HTMLElement>;
   readonly onDrop: DragEventHandler<HTMLElement>;
@@ -166,6 +167,19 @@ function usePastedImageBytesPresenceGetter(
   useLayoutEffect(() => {
     latest.current = hasPastedImageBytes;
   }, [hasPastedImageBytes]);
+  return useCallback(() => latest.current, []);
+}
+
+// Stable getter for the live placeholder, mirroring the presence-getter above.
+// The Tiptap Placeholder decoration closes over this once (extensions build
+// once) and re-reads it on each transaction, so a changing placeholder never
+// rebuilds the editor. The layout effect lands the new value before the owner's
+// no-op-transaction poke fires.
+function usePlaceholderGetter(placeholder: string): () => string {
+  const latest = useRef(placeholder);
+  useLayoutEffect(() => {
+    latest.current = placeholder;
+  }, [placeholder]);
   return useCallback(() => latest.current, []);
 }
 
@@ -234,13 +248,17 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     onEditorReadyRef.current = onEditorReady;
   });
 
-  const [stableSubmitHolder] = useState<{ readonly current: () => void }>(
-    () => ({
-      current: () => {
-        onSubmitRef.current();
-      },
-    }),
-  );
+  const [stableSubmitHolder] = useState<{
+    readonly current: (source: ChatComposerSubmitSource) => void;
+  }>(() => ({
+    current: (source) => {
+      onSubmitRef.current(source);
+    },
+  }));
+  // Live placeholder source. The editor is built once, so a changing placeholder
+  // (e.g. the mid-turn steer hint) flows through this stable getter rather than
+  // rebuilding extensions; an effect below re-reads it via a no-op transaction.
+  const getPlaceholder = usePlaceholderGetter(placeholder);
   const getHasPastedImageBytes =
     usePastedImageBytesPresenceGetter(hasPastedImageBytes);
   const getIngestPastedComposerImages = useIngestPastedComposerImagesGetter(
@@ -250,7 +268,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     () =>
       buildComposerExtensions({
         pickerStore,
-        placeholder,
+        getPlaceholder,
         onSubmit: stableSubmitHolder,
         slashProviderId,
         getHasPastedImageBytes,
@@ -258,9 +276,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       }),
     [
       getHasPastedImageBytes,
+      getPlaceholder,
       getIngestPastedComposerImages,
       pickerStore,
-      placeholder,
       slashProviderId,
       stableSubmitHolder,
     ],
@@ -336,6 +354,17 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       editor.view.dom.setAttribute(name, value);
     });
   }, [editor, editorAttributesObject]);
+
+  useEffect(() => {
+    // The Placeholder decoration only re-reads the getter on a transaction. Poke
+    // an empty one when the placeholder changes and the editor is showing it
+    // (empty), so a mid-turn steer hint appears without waiting for a keystroke.
+    // Skipped while non-empty to avoid disturbing an in-progress edit / IME.
+    // `usePlaceholderGetter`'s layout effect has already landed the new value.
+    if (editor !== null && editor.isEmpty) {
+      editor.view.dispatch(editor.state.tr);
+    }
+  }, [editor, placeholder]);
 
   const isReady = useCallback(() => editor !== null, [editor]);
 
