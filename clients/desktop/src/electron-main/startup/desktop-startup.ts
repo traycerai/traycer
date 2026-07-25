@@ -27,6 +27,8 @@ import {
   HostController,
 } from "../host/host-controller";
 import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
+import { readPublishedHostProcessLiveness } from "../host/host-process-liveness";
+import { createHostRecoveryGovernor } from "../host/host-recovery-governor";
 import {
   refreshRegistryUpdateState,
   setActiveEnvironment,
@@ -704,12 +706,23 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
   // disk still names an unreachable host. Started after bootstrap so the
   // initial 60s readiness wait can't register as an outage.
   void hostReady.then(() => {
+    // One authority for automatic restarts, holding both the liveness gate and
+    // the attempt budget. It re-reads pid.json itself inside `requestRespawn`
+    // so the "never kill a live host" rule can't be bypassed by adding another
+    // caller later.
+    const recoveryGovernor = createHostRecoveryGovernor({
+      now: undefined,
+      readLiveness: () =>
+        readPublishedHostProcessLiveness(services.host.pidMetadataFile),
+    });
     const healthMonitor = startHostHealthMonitor({
       host: services.host,
       intervalMs: undefined,
       probe: undefined,
       readMetadata: undefined,
       respawn: () => respawnIfDown(services.hostController),
+      governor: recoveryGovernor,
+      readLiveness: undefined,
     });
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
