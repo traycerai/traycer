@@ -702,7 +702,14 @@ function focusGroupInDirection(
       .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId),
   );
   focusGroupEditor(nextId);
+  refocusGroupEditorAfterCanvasCommit(nextId);
   return true;
+}
+
+function refocusGroupEditorAfterCanvasCommit(groupId: string): void {
+  window.requestAnimationFrame(() => {
+    focusGroupEditor(groupId);
+  });
 }
 
 function focusGroupEditor(groupId: string): boolean {
