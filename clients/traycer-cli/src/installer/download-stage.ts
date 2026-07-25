@@ -15,6 +15,7 @@ import {
   createDefaultRegistryClient,
   currentHostPlatformKey,
   releaseDownloadSlot,
+  releaseDownloadSlotOwnership,
   type HostVersionsManifest,
   type RegistryClient,
 } from "../registry";
@@ -343,6 +344,12 @@ export async function downloadAndStageHost(
 
   let ownedPath: string | null = null;
   let ownedConsumed = false;
+  // Whether the promote phase ran to a decision. Only then is the archive
+  // finished with; anything that THROWS out of the block below (a failed
+  // extract, a missing executable in the tree, a `cli-lock` wait that times
+  // out) leaves a downloaded, sha256- and signature-verified archive that a
+  // retry can reuse as-is. See the `finally`.
+  let archiveConsumed = false;
   try {
     progressStage(
       opts.onProgress,
@@ -387,7 +394,7 @@ export async function downloadAndStageHost(
 
     // Phase 3 - brief lock: reconcile, re-read, re-check the install
     // record still exists, and promote only per the intent policy.
-    return await withCliLock(
+    const outcome = await withCliLock(
       {
         environment: opts.environment,
         reason: "host-download-promote",
@@ -481,6 +488,12 @@ export async function downloadAndStageHost(
         } satisfies HostDownloadOutcome;
       },
     );
+    // Reached only by a normal return from the promote phase - promoted, or
+    // deliberately discarded because the install record vanished or the
+    // version is not newer. Either way this download is over and the archive
+    // will not be wanted again.
+    archiveConsumed = true;
+    return outcome;
   } finally {
     if (ownedPath !== null && !ownedConsumed) {
       await rm(ownedPath, { recursive: true, force: true }).catch(
@@ -489,12 +502,26 @@ export async function downloadAndStageHost(
     }
     // The verified archive is not auto-cleaned on success (by contract -
     // see registry/client.ts's `downloadAndVerify`): the caller owns
-    // releasing it once it has extracted what it needs. This drops the
-    // archive AND the download-cache claim on it; it must never be a plain
-    // `rm(dirname(...))`, because that directory is now the SHARED
-    // download cache, not a private per-invocation temp.
-    await releaseDownloadSlot(opts.environment, verified.archivePath).catch(
-      () => undefined,
-    );
+    // releasing it once it has extracted what it needs. Whichever release
+    // runs, it must never be a plain `rm(dirname(...))` - that directory is
+    // now the SHARED download cache, not a private per-invocation temp.
+    if (archiveConsumed) {
+      // Drop the archive AND the claim on it.
+      await releaseDownloadSlot(opts.environment, verified.archivePath).catch(
+        () => undefined,
+      );
+    } else {
+      // Something between the transfer and the promote decision threw. These
+      // bytes already cleared sha256 AND minisign, so re-downloading them
+      // could not produce anything different - it would just spend another
+      // ~800MB over the same throttled link this work exists for, only to
+      // hit the same local failure. Drop the claim and leave them: the next
+      // run's `acquireDownloadSlot` spares this version's slot from the
+      // sweep and resumes it over a single 416 round-trip.
+      await releaseDownloadSlotOwnership(
+        opts.environment,
+        verified.archivePath,
+      ).catch(() => undefined);
+    }
   }
 }

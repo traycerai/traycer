@@ -406,11 +406,21 @@ export async function createRegistryClient(
       } finally {
         // On success the caller owns the verified archive until it has
         // extracted it, and releases the slot itself.
+        //
+        // Both releases are `.catch`-guarded. Today neither can reject -
+        // download-cache.ts swallows its own fs errors - but that is its
+        // internal detail, and an unguarded await in a `finally` would let a
+        // future change there replace the error being propagated. Callers
+        // route on `REGISTRY_UNAVAILABLE` vs `HOST_VERIFY_FAILED`; losing
+        // that code to a cleanup failure would turn a retryable download
+        // into an unrecognized one.
         if (!succeeded && transferred && isTrustFailure(failure)) {
           // Complete bytes that the trust chain rejected. Resuming into
           // them would just reproduce the same verdict, so drop the file
           // with the claim.
-          await releaseDownloadSlot(opts.environment, archivePath);
+          await releaseDownloadSlot(opts.environment, archivePath).catch(
+            () => undefined,
+          );
           logger.warn("Registry discarded an unverifiable download", {
             environment: opts.environment,
           });
@@ -422,7 +432,10 @@ export async function createRegistryClient(
           // complete and sha256-verified and only the signature fetch has
           // yet to succeed - the next run re-verifies it over one 416
           // round-trip instead of re-downloading it.
-          await releaseDownloadSlotOwnership(opts.environment, archivePath);
+          await releaseDownloadSlotOwnership(
+            opts.environment,
+            archivePath,
+          ).catch(() => undefined);
           logger.warn("Registry left a resumable download in place", {
             environment: opts.environment,
             transferComplete: transferred,

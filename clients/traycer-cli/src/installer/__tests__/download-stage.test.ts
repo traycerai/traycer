@@ -228,6 +228,40 @@ function fakeRegistryClient(opts: FakeClientOptions): RegistryClient {
   };
 }
 
+// Downloads "successfully" but stages an archive whose basename is not the
+// expected host executable, so `resolveHostExecutable` throws AFTER the
+// transfer and verification have both passed. Reproduces every local
+// post-download failure - a bad extract, a tree missing the binary, a
+// `cli-lock` wait that times out - in the one shape this harness can force.
+function unresolvableArchiveRegistryClient(
+  base: RegistryClient,
+  onArchive: (archivePath: string) => void,
+): RegistryClient {
+  return {
+    ...base,
+    async downloadAndVerify(entry, asset, onProgress) {
+      onProgress({
+        downloadedBytes: asset.sizeBytes,
+        totalBytes: asset.sizeBytes,
+      });
+      const callDir = mkdtempSync(join(archiveTmpDir, "arc-"));
+      const archivePath = join(callDir, "not-the-host-binary");
+      writeFileSync(archivePath, "fake host binary");
+      writeFileSync(
+        `${archivePath}.owner`,
+        JSON.stringify({ pid: process.pid, startedAtMs: null }),
+      );
+      onArchive(archivePath);
+      return {
+        archivePath,
+        archiveSha256: "fake-sha256",
+        signatureKeyId: "fake-key-id",
+        signatureVerifiedAt: new Date().toISOString(),
+      };
+    },
+  };
+}
+
 function throwingRegistryClient(base: RegistryClient): RegistryClient {
   return {
     ...base,
@@ -573,6 +607,41 @@ describe("downloadAndStageHost", () => {
     expect(existsSync(lastFakeArchivePath)).toBe(false);
     expect(existsSync(`${lastFakeArchivePath}.owner`)).toBe(false);
     expect(existsSync(dirname(lastFakeArchivePath))).toBe(true);
+  });
+
+  it("keeps the verified archive and drops only the claim when the work AFTER the download fails", async () => {
+    await writeInstall("1.0.0", {});
+    let stagedArchivePath = "";
+    const client = unresolvableArchiveRegistryClient(
+      fakeRegistryClient({
+        latest: "1.5.0",
+        versions: [
+          { version: "1.0.0", yanked: false },
+          { version: "1.5.0", yanked: false },
+        ],
+        downloadGate: null,
+        onDownloadStart: null,
+      }),
+      (archivePath) => {
+        stagedArchivePath = archivePath;
+      },
+    );
+    await expect(
+      downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: false,
+        onProgress: noopProgress,
+        registryClient: client,
+      }),
+    ).rejects.toThrow(/expected executable/);
+    // These bytes already cleared sha256 AND minisign. Whatever failed
+    // afterwards is local, so re-downloading them over the throttled link
+    // this whole feature exists for could not produce anything different -
+    // the next run resumes this file over a single 416 instead. Only the
+    // ownership claim comes off, so another process is free to take it.
+    expect(existsSync(stagedArchivePath)).toBe(true);
+    expect(existsSync(`${stagedArchivePath}.owner`)).toBe(false);
   });
 
   it("yank-heal: discards a now-yanked stage with no download when the target resolves back to installed", async () => {
