@@ -55,6 +55,10 @@ export function createWindowsController(
     stop: (label) => stopService(label, run),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
+    // SMAppService is macOS-only, so there is no second registration path
+    // that could compete with the Scheduled Task here.
+    retireCompetingRegistration: () =>
+      Promise.resolve({ kind: "not-applicable" }),
   };
 }
 

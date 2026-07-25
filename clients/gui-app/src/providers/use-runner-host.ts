@@ -11,3 +11,10 @@ export function useRunnerHost(): IRunnerHost {
   }
   return value;
 }
+
+// Optional variant for components that must render outside a provider (e.g. the
+// app header in host-less test harnesses). Returns null instead of throwing so
+// a host-only affordance can degrade to nothing rather than crash the tree.
+export function useRunnerHostOrNull(): IRunnerHost | null {
+  return use(RunnerHostContext);
+}
