@@ -310,6 +310,38 @@ describe("PrDetailConversation review threads", () => {
     expect(screen.queryByTestId("pr-detail-conversation-empty")).toBeNull();
   });
 
+  it("gives the thread quote button a hover-reveal ancestor, so it isn't permanently invisible", () => {
+    // `PrQuoteAction` only turns visible via `group-hover/header`; without a
+    // `group/header` ancestor the button never leaves its transparent resting
+    // state no matter how the row is hovered or focused.
+    renderTab({
+      activity: activity([botReview("PRR_1", "Actionable comments posted: 1")]),
+      reviewThreads: threads([
+        thread({
+          id: "t1",
+          reviewId: "PRR_1",
+          isResolved: false,
+          line: 10,
+          body: "Note.",
+          totalCommentCount: 1,
+        }),
+      ]),
+      onQuoteThread: () => {},
+    });
+
+    const button = screen.getByTestId("pr-detail-thread-quote");
+    let ancestor: HTMLElement | null = button.parentElement;
+    let found = false;
+    while (ancestor !== null) {
+      if (ancestor.className.split(/\s+/).includes("group/header")) {
+        found = true;
+        break;
+      }
+      ancestor = ancestor.parentElement;
+    }
+    expect(found).toBe(true);
+  });
+
   it("quotes one finding, not the whole review", () => {
     const quoted: PrReviewThread[] = [];
     const only = thread({

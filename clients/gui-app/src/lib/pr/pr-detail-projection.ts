@@ -35,13 +35,23 @@ export function prReviewerRows(
   activity: PrActivitySection,
 ): readonly PrReviewerRow[] {
   const byLogin = new Map<string, PrReviewerRow>();
-  for (const item of activity.items) {
-    if (item.kind !== "review" || item.author === null) continue;
-    byLogin.set(item.author.login, { actor: item.author, state: item.state });
-  }
-  for (const request of core.reviewRequests) {
+  activity.items
+    .filter(
+      (
+        item,
+      ): item is Extract<PrActivityItem, { kind: "review" }> & {
+        author: PrActor;
+      } => item.kind === "review" && item.author !== null,
+    )
+    .forEach((item) => {
+      byLogin.set(item.author.login, {
+        actor: item.author,
+        state: item.state,
+      });
+    });
+  core.reviewRequests.forEach((request) => {
     byLogin.set(request.login, { actor: request, state: "requested" });
-  }
+  });
   return [...byLogin.values()];
 }
 
@@ -52,9 +62,14 @@ export function prParticipantActors(
 ): readonly PrActor[] {
   const byLogin = new Map<string, PrActor>();
   if (core.author !== null) byLogin.set(core.author.login, core.author);
-  for (const item of activity.items) {
-    if (item.author !== null) byLogin.set(item.author.login, item.author);
-  }
+  activity.items
+    .filter(
+      (item): item is PrActivityItem & { author: PrActor } =>
+        item.author !== null,
+    )
+    .forEach((item) => {
+      byLogin.set(item.author.login, item.author);
+    });
   return [...byLogin.values()];
 }
 
@@ -79,6 +94,13 @@ export function prCheckContextDotTone(
 export function formatPrCheckStatusLabel(context: PrCheckContext): string {
   if (context.status === "queued") return "Queued";
   if (context.status === "in_progress") return "Running";
+  // These three never reach a `conclusion` - GitHub reports them as
+  // in-flight states of their own, distinct from "completed" - so falling
+  // through to `formatPrCheckConclusionLabel(null)` would mislabel every one
+  // of them "Unknown" instead of describing what's actually happening.
+  if (context.status === "pending") return "Pending";
+  if (context.status === "requested") return "Requested";
+  if (context.status === "waiting") return "Waiting";
   return formatPrCheckConclusionLabel(context.conclusion);
 }
 
@@ -93,6 +115,7 @@ function formatPrCheckConclusionLabel(
   if (conclusion === "skipped") return "Skipped";
   if (conclusion === "timed_out") return "Timed out";
   if (conclusion === "stale") return "Stale";
+  if (conclusion === "startup_failure") return "Startup failed";
   return "Action required";
 }
 

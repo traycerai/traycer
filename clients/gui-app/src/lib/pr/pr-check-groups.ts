@@ -33,6 +33,12 @@ export function prCheckOutcome(context: PrCheckContext): PrCheckOutcome {
     case "timed_out":
     case "action_required":
       return "failing";
+    // A startup failure never ran to a verdict either, but unlike
+    // `cancelled`/`stale` GitHub itself calls it a failure - the job errored
+    // before it could even start, which is exactly the kind of thing a
+    // reader needs surfaced rather than folded into "didn't run".
+    case "startup_failure":
+      return "failing";
     // `cancelled` and `stale` sit with `skipped` rather than with failures:
     // none of them ran to a verdict, and calling a cancelled job "failing"
     // sends a reader hunting for a defect that isn't there.

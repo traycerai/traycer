@@ -35,6 +35,7 @@ import {
   DiffContentPrimitive,
 } from "@/components/diff/diff-content-primitive";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   formatPrActorName,
   formatPrReviewStateLabel,
@@ -324,7 +325,7 @@ function PrReviewThreadCard(props: {
       data-testid="pr-detail-review-thread"
       data-resolved={thread.isResolved}
     >
-      <div className="flex min-w-0 items-center gap-2 border-b border-border/50 px-2.5 py-1.5">
+      <div className="group/header flex min-w-0 items-center gap-2 border-b border-border/50 px-2.5 py-1.5">
         <FileCode
           className="size-3.5 shrink-0 text-muted-foreground"
           aria-hidden
@@ -333,16 +334,20 @@ function PrReviewThreadCard(props: {
           {anchor.label}
         </StartTruncatedText>
         {thread.isOutdated ? (
-          <span
-            className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground"
-            title={
+          <TooltipWrapper
+            label={
               anchor.isOriginal
                 ? "The line this points at has moved or gone; showing its position in the reviewed commit."
                 : "This thread refers to an earlier version of the file."
             }
+            side="top"
+            sideOffset={6}
+            align="center"
           >
-            Outdated
-          </span>
+            <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
+              Outdated
+            </span>
+          </TooltipWrapper>
         ) : null}
         {thread.isResolved ? (
           <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">

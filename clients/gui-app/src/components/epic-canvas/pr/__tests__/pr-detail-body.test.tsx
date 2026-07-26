@@ -33,6 +33,7 @@ import {
   WsStreamClient,
   type ParamsOf,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
 
 /**
  * `PrDetailBody` component-level tests - (b) GHES/unknown-host cache-only
@@ -599,18 +600,18 @@ describe("PrDetailBody", () => {
     expect(screen.queryByTestId("pr-detail-files")).toBeNull();
     expect(screen.queryByTestId("pr-detail-commit-item")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("pr-detail-tab-files"));
+    fireEvent.click(screen.getByRole("tab", { name: /Files/ }));
     expect(screen.getByTestId("pr-detail-files")).toBeTruthy();
     expect(screen.getByText("src/app.ts")).toBeTruthy();
 
-    fireEvent.click(screen.getByTestId("pr-detail-tab-commits"));
+    fireEvent.click(screen.getByRole("tab", { name: /Commits/ }));
     const commit = screen.getByTestId("pr-detail-commit-item");
     expect(commit.textContent).toContain("feat: first commit");
     expect(commit.textContent).toContain("abcdef1");
     // Commits carries commits only; the comment belongs to Feedback.
     expect(screen.queryByTestId("pr-detail-activity-item")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("pr-detail-tab-feedback"));
+    fireEvent.click(screen.getByRole("tab", { name: /Feedback/ }));
     expect(screen.getByTestId("pr-detail-activity-item").textContent).toContain(
       "later comment",
     );
@@ -728,6 +729,149 @@ describe("PrDetailBody", () => {
     const shellThreshold =
       /@min-\[(\d+)px\]:max-w-/.exec(overview)?.[1] ?? null;
     expect(shellThreshold).toBe(threshold);
+  });
+
+  it("caps the card's width fluidly instead of forcing a bare fixed width", async () => {
+    // `shrink-0` alone made this a hard-coded 18rem regardless of how much
+    // room the flex row actually had. `w-full max-w-[18rem]` keeps the same
+    // 18rem ceiling but lets the item size down to whatever space remains
+    // rather than overflowing it.
+    renderBody({
+      epicId: "epic-width",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 31,
+      isActive: true,
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-width",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 31,
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+    session.emitFrame(
+      buildPrDetailFrame({
+        core: { base: { owner: "acme", repo: "widgets", prNumber: 31 } },
+      }),
+    );
+    await screen.findByTestId("pr-detail-body");
+
+    const gutterClasses = screen.getByTestId("pr-detail-card-gutter").className;
+    expect(gutterClasses).toContain("w-full");
+    expect(gutterClasses).toContain("max-w-[18rem]");
+    expect(gutterClasses).not.toMatch(/(?<!max-)w-\[18rem\]/);
+  });
+
+  it("gives the active tab's content a tabpanel wired back to its tab button", async () => {
+    renderBody({
+      epicId: "epic-tabpanel",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 41,
+      isActive: true,
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-tabpanel",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 41,
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+    session.emitFrame(
+      buildPrDetailFrame({
+        core: { base: { owner: "acme", repo: "widgets", prNumber: 41 } },
+      }),
+    );
+    await screen.findByTestId("pr-detail-body");
+
+    const panel = screen.getByRole("tabpanel");
+    expect(panel.id).toBe("pr-detail-tabpanel-overview");
+    expect(panel.getAttribute("aria-labelledby")).toBe(
+      "pr-detail-tab-trigger-overview",
+    );
+
+    fireEvent.click(screen.getByTestId("pr-detail-tab-files"));
+    const filesPanel = screen.getByRole("tabpanel");
+    expect(filesPanel.id).toBe("pr-detail-tabpanel-files");
+    expect(filesPanel.getAttribute("aria-labelledby")).toBe(
+      "pr-detail-tab-trigger-files",
+    );
+    expect(
+      document
+        .getElementById("pr-detail-tab-trigger-files")
+        ?.getAttribute("aria-controls"),
+    ).toBe(filesPanel.id);
+  });
+
+  it("Fix in chat quotes the failing CHECK, not the generic PR overview", async () => {
+    // The queue keys check rows on `prCheckContextKey(context, index)`, which
+    // is the details URL when there is one. Matching on `entry.name` instead
+    // never hit, so every "Fix in chat" silently pasted the overview quote and
+    // the reader lost the one fact they asked for - which check failed.
+    chatRecordsRef.value = [
+      { id: "chat-9", title: "Technical Support Inquiry", updatedAt: 5_000 },
+    ];
+    renderBody({
+      epicId: "epic-9",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 21,
+      isActive: true,
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-9",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 21,
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    session.emitFrame(
+      buildPrDetailFrame({
+        core: { base: { owner: "acme", repo: "widgets", prNumber: 21 } },
+        checks: {
+          contexts: [
+            {
+              name: "pre-commit",
+              workflowName: "Run Pre-commit",
+              event: "pull_request",
+              appName: "GitHub Actions",
+              appLogoUrl: null,
+              description: null,
+              status: "completed",
+              conclusion: "failure",
+              detailsUrl: "https://ci/pre-commit",
+            },
+          ],
+        },
+      }),
+    );
+    await screen.findByTestId("pr-detail-queue");
+
+    fireEvent.click(screen.getByTestId("pr-detail-queue-send"));
+
+    const draft = JSON.stringify(readComposerDraftSnapshot("chat-9").content);
+    expect(draft).toContain("check pre-commit");
+    expect(draft).toContain("https://ci/pre-commit");
   });
 
   it("Fix in chat reveals the chat it wrote the quote into, so a correct send cannot look like a dead button", async () => {

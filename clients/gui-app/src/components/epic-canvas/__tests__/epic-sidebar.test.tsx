@@ -455,6 +455,38 @@ describe("<EpicLeftPanelRail />", () => {
     });
   });
 
+  describe("changed-dot accessibility", () => {
+    function renderRail() {
+      return render(
+        <EpicLeftPanelRail
+          epicId={EPIC_ID}
+          tabId={TAB_ID}
+          orientation="vertical"
+        />,
+      );
+    }
+
+    // The visible dot is `aria-hidden` (`pr-changed-dot`), so a screen-reader
+    // user's only way to learn "there's new PR activity" is the button's own
+    // accessible name.
+    it("names the new-updates state in the rail button's accessible name", () => {
+      usePrSeenFactsStore.getState().markChanged(HOST_ID, EPIC_ID);
+      renderRail();
+
+      const button = screen.getByTestId("epic-rail-pull-requests");
+      expect(button.getAttribute("aria-label")).toBe(
+        "Pull Requests, new pull request updates",
+      );
+    });
+
+    it("keeps the plain label once there is nothing new", () => {
+      renderRail();
+
+      const button = screen.getByTestId("epic-rail-pull-requests");
+      expect(button.getAttribute("aria-label")).toBe("Pull Requests");
+    });
+  });
+
   describe("rail context menu", () => {
     function renderRail() {
       return render(

@@ -42,6 +42,7 @@ export function prSeenFactKey(item: PrLightItem): string {
     "head",
     item.repoIdentifier.owner,
     item.repoIdentifier.repo,
+    item.baseRefName ?? "",
     item.headRefName ?? "",
     item.prUrl ?? "",
   ].join("|");
@@ -112,13 +113,13 @@ export function isChecksDeltaDotWorthy(
   const nextOverall = prChecksOverall(next);
   if (prevOverall === nextOverall) return false;
 
-  // Exclude "merely starting": success/failure unchanged and pending rose
-  // (overall often flips pass/none → pending when a new run begins).
-  if (
-    next.success === prev.success &&
-    next.failure === prev.failure &&
-    next.pending > prev.pending
-  ) {
+  // Terminal increases already returned above (including a rerun where a
+  // terminal count DECREASES because the check restarted, e.g.
+  // failure:1,pending:0 -> failure:0,pending:1 - that is a restart, not a
+  // conclusion). Any remaining pending increase is a check starting or
+  // rerunning, not concluding, and the overall bucket flip it can cause
+  // (pass/none -> pending) is exactly what this excludes.
+  if (next.pending > prev.pending) {
     return false;
   }
 

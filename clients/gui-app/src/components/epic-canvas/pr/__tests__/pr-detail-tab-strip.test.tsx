@@ -74,4 +74,60 @@ describe("PrDetailTabStrip", () => {
     fireEvent.click(screen.getByTestId("pr-detail-tab-files"));
     expect(picked).toEqual(["files"]);
   });
+
+  it("wires each tab to the panel it controls, both ways", () => {
+    renderStrip({ tab: "checks", onSelectTab: () => undefined });
+
+    for (const id of ["overview", "commits", "feedback", "checks", "files"]) {
+      const button = screen.getByTestId(`pr-detail-tab-${id}`);
+      const controls = button.getAttribute("aria-controls");
+      expect(controls).toBe(`pr-detail-tabpanel-${id}`);
+      expect(button.getAttribute("id")).toBe(`pr-detail-tab-trigger-${id}`);
+    }
+  });
+
+  it("keeps only the selected tab in the regular tab order (roving tabindex)", () => {
+    renderStrip({ tab: "feedback", onSelectTab: () => undefined });
+
+    for (const id of ["overview", "commits", "feedback", "checks", "files"]) {
+      const tab = screen.getByTestId(`pr-detail-tab-${id}`);
+      expect(tab.getAttribute("tabindex")).toBe(id === "feedback" ? "0" : "-1");
+    }
+  });
+
+  it("moves selection with ArrowRight/ArrowLeft, wrapping at both ends", () => {
+    const picked: PrDetailTabId[] = [];
+    renderStrip({ tab: "files", onSelectTab: (tab) => picked.push(tab) });
+
+    // Fired on the focused TAB, which is where the key actually lands under a
+    // roving tabindex - the strip's container is deliberately not focusable.
+    fireEvent.keyDown(screen.getByTestId("pr-detail-tab-files"), {
+      key: "ArrowRight",
+    });
+    expect(picked).toEqual(["overview"]);
+
+    picked.length = 0;
+    cleanup();
+    renderStrip({ tab: "overview", onSelectTab: (tab) => picked.push(tab) });
+    fireEvent.keyDown(screen.getByTestId("pr-detail-tab-overview"), {
+      key: "ArrowLeft",
+    });
+    expect(picked).toEqual(["files"]);
+  });
+
+  it("jumps to the first/last tab on Home/End", () => {
+    const picked: PrDetailTabId[] = [];
+    renderStrip({ tab: "checks", onSelectTab: (tab) => picked.push(tab) });
+
+    fireEvent.keyDown(screen.getByTestId("pr-detail-tab-checks"), {
+      key: "End",
+    });
+    expect(picked).toEqual(["files"]);
+
+    picked.length = 0;
+    fireEvent.keyDown(screen.getByTestId("pr-detail-tab-checks"), {
+      key: "Home",
+    });
+    expect(picked).toEqual(["overview"]);
+  });
 });

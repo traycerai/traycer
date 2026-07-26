@@ -226,13 +226,19 @@ export function PrRow(props: {
           />
         ) : null}
         <PrRowBadges item={item} />
-        <p
-          className="min-w-0 truncate text-ui-sm font-medium text-foreground"
-          title={prRowTitleText(item) ?? undefined}
-          data-testid="pr-row-title"
+        <TooltipWrapper
+          label={prRowTitleText(item)}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {prRowTitleText(item)}
-        </p>
+          <p
+            className="min-w-0 truncate text-ui-sm font-medium text-foreground"
+            data-testid="pr-row-title"
+          >
+            {prRowTitleText(item)}
+          </p>
+        </TooltipWrapper>
         <p className="flex min-w-0 items-center gap-1 font-mono text-ui-xs text-muted-foreground/80">
           <GitBranch className="size-3 shrink-0" aria-hidden />
           <span className="min-w-0 truncate">{formatPrBaseFromHead(item)}</span>

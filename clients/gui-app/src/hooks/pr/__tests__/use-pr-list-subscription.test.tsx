@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { PrSubscribeListForEpicServerFrame } from "@traycer/protocol/host/pr-schemas";
@@ -215,6 +215,80 @@ describe("usePrListSubscription", () => {
     // Unmounting the last (background) subscriber tears its session down too.
     unmountBackground();
     expect(backgroundSession.closed).toBe(true);
+  });
+
+  it("preserves a second, non-retrying consumer's ref count when the first consumer retries a terminal session", async () => {
+    const consumerA = renderHook(
+      () =>
+        usePrListSubscription({
+          hostId: "host1",
+          epicId: "epic1",
+          mode: "foreground",
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+
+    // A second consumer for the SAME (host, epic, mode) shares A's session -
+    // no new `subscribe` call.
+    const consumerB = renderHook(
+      () =>
+        usePrListSubscription({
+          hostId: "host1",
+          epicId: "epic1",
+          mode: "foreground",
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+
+    const firstSession = mockWsStreamClient.getSession(
+      "pr.subscribeListForEpic",
+      { epicId: "epic1", mode: "foreground" },
+    );
+    expect(firstSession).toBeDefined();
+    if (firstSession === undefined) return;
+    // The mock keys sessions by (method, params), so a retry's `subscribe`
+    // call for the SAME params returns this SAME object - `close` call counts
+    // are how this test observes distinct teardown lifecycles despite that.
+    const closeSpy = vi.spyOn(firstSession, "close");
+
+    // A fatal transport close marks the shared session terminal - both
+    // consumers observe the error.
+    act(() => {
+      firstSession.emitStatus("closed", { kind: "caller" });
+    });
+    await waitFor(() => {
+      expect(consumerA.result.current.error).not.toBeNull();
+    });
+    expect(consumerB.result.current.error).not.toBeNull();
+
+    // Consumer A retries: a fresh session replaces the terminal entry.
+    act(() => {
+      consumerA.result.current.sendRefresh();
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(2);
+    });
+    closeSpy.mockClear();
+
+    // Consumer A (the retrying one) unmounts. Consumer B never retried and is
+    // still mounted - migration must have moved B onto the FRESH session, so
+    // A's unmount (fresh refCount 2 -> 1) must NOT close the transport.
+    act(() => {
+      consumerA.unmount();
+    });
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    // The last remaining consumer (B) unmounting tears the fresh session down.
+    act(() => {
+      consumerB.unmount();
+    });
+    expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 
   it("flipping enabled from true to false tears down the underlying session (renderer-side proof that a whole-sidebar collapse unsubscribes)", async () => {

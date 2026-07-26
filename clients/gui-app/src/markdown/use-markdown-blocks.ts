@@ -84,13 +84,28 @@ const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 const HTML_TAG_PATTERN = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?(\/?)>/g;
 
 /**
+ * Strips HTML comments to a fixed point rather than in one pass: a single
+ * `.replace()` can uncover a new `<!--…-->` match at the seam it just closed
+ * (e.g. nested/overlapping markers), which would leave a comment-born `<tag>`
+ * in the string this feeds into the tag scan below.
+ */
+function stripHtmlComments(raw: string): string {
+  let stripped = raw;
+  for (;;) {
+    const next = stripped.replace(HTML_COMMENT_PATTERN, "");
+    if (next === stripped) return next;
+    stripped = next;
+  }
+}
+
+/**
  * Net open-container depth contributed by one raw-HTML token: `+1` per opening
  * tag of a mergeable container, `-1` per closing tag. Comments are stripped
  * first so a commented-out tag cannot unbalance the count.
  */
 function htmlContainerDepthDelta(raw: string): number {
   let delta = 0;
-  const withoutComments = raw.replace(HTML_COMMENT_PATTERN, "");
+  const withoutComments = stripHtmlComments(raw);
   for (const match of withoutComments.matchAll(HTML_TAG_PATTERN)) {
     const [, closingSlash, tagName, selfClosingSlash] = match;
     if (!MERGEABLE_HTML_CONTAINERS.has(tagName.toLowerCase())) continue;

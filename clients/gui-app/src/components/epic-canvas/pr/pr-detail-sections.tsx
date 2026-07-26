@@ -27,6 +27,7 @@ import {
   prChecksTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
 import { formatPrCheckStatusLabel } from "@/lib/pr/pr-detail-projection";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   formatPrCheckName,
   groupPrChecks,
@@ -159,12 +160,16 @@ export function PrDetailFilesChanged(props: {
               data-testid="pr-detail-file-row"
             >
               <PrFileChangeGlyph changeType={file.changeType} />
-              <span
-                className="min-w-0 flex-1 truncate font-mono text-foreground"
-                title={file.path}
+              <TooltipWrapper
+                label={file.path}
+                side="top"
+                sideOffset={undefined}
+                align={undefined}
               >
-                {file.path}
-              </span>
+                <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+                  {file.path}
+                </span>
+              </TooltipWrapper>
               {props.onQuoteFile !== null ? (
                 <PrFileQuoteButton file={file} onQuote={props.onQuoteFile} />
               ) : null}
@@ -357,15 +362,21 @@ function PrCheckRow(props: {
           {label}
         </span>
       ) : (
-        <button
-          type="button"
-          onClick={open}
-          data-testid="pr-detail-check-name"
-          title={label}
-          className="min-w-0 flex-1 truncate text-left text-foreground transition-colors hover:text-primary hover:underline focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+        <TooltipWrapper
+          label={label}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {label}
-        </button>
+          <button
+            type="button"
+            onClick={open}
+            data-testid="pr-detail-check-name"
+            className="min-w-0 flex-1 truncate text-left text-foreground transition-colors hover:text-primary hover:underline focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {label}
+          </button>
+        </TooltipWrapper>
       )}
       {context.description !== null && context.description.length > 0 ? (
         <span className="hidden min-w-0 max-w-[16ch] shrink truncate text-muted-foreground/70 @min-[34rem]:inline">
@@ -391,14 +402,20 @@ function PrCheckAppMark(props: {
   const { appLogoUrl, appName } = props.context;
   if (appLogoUrl === null || appLogoUrl.length === 0) return null;
   return (
-    <img
-      src={appLogoUrl}
-      alt=""
-      aria-hidden
-      loading="lazy"
-      data-testid="pr-detail-check-app-mark"
-      title={appName ?? undefined}
-      className="size-4 shrink-0 rounded-sm bg-muted/40 object-contain"
-    />
+    <TooltipWrapper
+      label={appName}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <img
+        src={appLogoUrl}
+        alt=""
+        aria-hidden
+        loading="lazy"
+        data-testid="pr-detail-check-app-mark"
+        className="size-4 shrink-0 rounded-sm bg-muted/40 object-contain"
+      />
+    </TooltipWrapper>
   );
 }

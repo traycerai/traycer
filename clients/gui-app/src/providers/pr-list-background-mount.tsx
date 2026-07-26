@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
@@ -84,16 +84,15 @@ export function PrListBackgroundMount(
   const markChanged = usePrSeenFactsStore((s) => s.markChanged);
   const clearChanged = usePrSeenFactsStore((s) => s.clearChanged);
 
-  const wasPanelVisibleRef = useRef(panelVisible);
-
-  // Clear the dot the moment the panel becomes visible (open clears).
+  // Clear the dot whenever the panel is visible: on the edge into
+  // visibility, but also on an ALREADY-visible mount (an epic opened
+  // straight onto the PR panel) and across a host switch that leaves the
+  // panel visible throughout - both are "look at the panel now" moments for
+  // whichever (hostId, epicId) scope is current, and a ref seeded from the
+  // first render's own value can never observe either as an edge.
   useEffect(() => {
-    if (hostId === null) return;
-    const becameVisible = panelVisible && !wasPanelVisibleRef.current;
-    wasPanelVisibleRef.current = panelVisible;
-    if (becameVisible) {
-      clearChanged(hostId, props.epicId);
-    }
+    if (hostId === null || !panelVisible) return;
+    clearChanged(hostId, props.epicId);
   }, [clearChanged, hostId, panelVisible, props.epicId]);
 
   useEffect(() => {

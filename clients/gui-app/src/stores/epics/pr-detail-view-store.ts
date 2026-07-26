@@ -30,6 +30,16 @@ export const PR_DETAIL_TABS = [
 
 export type PrDetailTabId = (typeof PR_DETAIL_TABS)[number];
 
+/** The `id` a tab's `role="tabpanel"` carries, and what the tab's `aria-controls` names. */
+export function prDetailTabPanelId(tab: PrDetailTabId): string {
+  return `pr-detail-tabpanel-${tab}`;
+}
+
+/** The `id` a tab button carries, and what its panel's `aria-labelledby` names. */
+export function prDetailTabButtonId(tab: PrDetailTabId): string {
+  return `pr-detail-tab-trigger-${tab}`;
+}
+
 export function prDetailViewKey(coordinates: {
   readonly githubHost: string;
   readonly owner: string;

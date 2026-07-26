@@ -95,9 +95,26 @@ function orderRepoGroupKeys(
       groupKey,
     ]);
   }
-  return firstSeen.flatMap((key) =>
-    pulled.has(key) ? [] : [key, ...(followersByGroupKey.get(key) ?? [])],
-  );
+  // Expansion is recursive because one repo can hold BOTH roles across two
+  // bindings: a submodule under one superproject and the superproject of
+  // another group. Expanding a single level would emit that repo as a
+  // follower while silently dropping the group that follows IT - its own
+  // `pulled` entry keeps it out of the first-seen pass, and
+  // `groupPrItemsByRepo` cannot catch it because its throw fires on a MISSING
+  // key, never on a dropped one.
+  const emitted = new Set<string>();
+  const expand = (key: string): readonly string[] => {
+    if (emitted.has(key)) return [];
+    emitted.add(key);
+    return [key, ...(followersByGroupKey.get(key) ?? []).flatMap(expand)];
+  };
+  return [
+    ...firstSeen.flatMap((key) => (pulled.has(key) ? [] : expand(key))),
+    // Two groups can pull each other, leaving a cycle with no root to expand
+    // from. Whatever the first pass did not reach keeps its first-seen place
+    // rather than vanishing from the list.
+    ...firstSeen.flatMap(expand),
+  ];
 }
 
 /**
@@ -113,7 +130,12 @@ export function groupPrItemsByRepo(
   for (const item of items) {
     const key = repoGroupKey(item.repoIdentifier);
     identifierByKey.set(key, item.repoIdentifier);
-    byKey.set(key, [...(byKey.get(key) ?? []), item]);
+    const bucket = byKey.get(key);
+    if (bucket === undefined) {
+      byKey.set(key, [item]);
+    } else {
+      bucket.push(item);
+    }
   }
   return orderRepoGroupKeys(items, (item) =>
     repoGroupKey(item.repoIdentifier),
@@ -270,15 +292,14 @@ export function prChecksSummary(
 }
 
 /**
- * Structural (not `PrLightItem`-specific) so `PrDetailCore` - which carries
- * the same two fields but is not a `PrLightItem` - can share this formatter
- * with the panel row.
- */
-/**
  * The panel row's branch line, read as a merge target: `base ← head`, the
  * direction GitHub's own compare control uses. The detail view keeps the
  * forward `head → base` reading of {@link formatPrBranchSummary}, where the
  * PR's own branch is the subject rather than the destination.
+ *
+ * Structural (not `PrLightItem`-specific) so `PrDetailCore` - which carries
+ * the same two fields but is not a `PrLightItem` - can share this formatter
+ * with the panel row.
  */
 export function formatPrBaseFromHead(item: {
   readonly headRefName: string | null;

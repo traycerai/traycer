@@ -107,7 +107,13 @@ export function usePrLocalDiffQuery(args: {
             throw hostClientUnavailableError("pr.getLocalDiff");
           }
           if (target === null) {
-            throw hostClientUnavailableError("pr.getLocalDiff");
+            // Distinct from the client guard above: the query is disabled in
+            // this state, so reaching here is defensive - but labelling it
+            // "host client unavailable" would send a reader hunting a
+            // transport fault that never happened.
+            throw new Error(
+              "pr.getLocalDiff: no local diff target on this PR frame",
+            );
           }
           const request: PrGetLocalDiffRequest = {
             linkGroupKey: target.linkGroupKey,

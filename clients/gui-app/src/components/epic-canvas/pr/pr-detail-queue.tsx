@@ -23,6 +23,7 @@ import {
   PR_TONE_TEXT_CLASS,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
 import { PrActorAvatar } from "@/components/epic-canvas/pr/pr-detail-avatar";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 
 const KIND_GLYPH = {
@@ -120,15 +121,21 @@ const QUEUE_WINDOW_NOTE =
 
 function PrQueueWindowNote(): ReactNode {
   return (
-    <span
-      className="inline-flex shrink-0 items-center text-muted-foreground/60 transition-colors hover:text-muted-foreground"
-      data-testid="pr-detail-queue-truncated"
-      title={QUEUE_WINDOW_NOTE}
-      aria-label={QUEUE_WINDOW_NOTE}
-      role="img"
+    <TooltipWrapper
+      label={QUEUE_WINDOW_NOTE}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <Info className="size-3.5 shrink-0" aria-hidden />
-    </span>
+      <span
+        className="inline-flex shrink-0 items-center text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+        data-testid="pr-detail-queue-truncated"
+        aria-label={QUEUE_WINDOW_NOTE}
+        role="img"
+      >
+        <Info className="size-3.5 shrink-0" aria-hidden />
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -206,31 +213,43 @@ function PrQueueRow(props: {
             the thing a reader wants to open, so it should not need a separate
             target beside it. No url means plain text, never a dead control. */}
         {item.detailsUrl === null ? (
-          <p
-            className={cn(
-              "min-w-0 truncate text-ui-sm text-foreground",
-              text.isIdentifier && "font-mono",
-            )}
-            title={text.headline}
-            data-testid="pr-detail-queue-headline"
+          <TooltipWrapper
+            label={text.headline}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            {text.headline}
-          </p>
+            <p
+              className={cn(
+                "min-w-0 truncate text-ui-sm text-foreground",
+                text.isIdentifier && "font-mono",
+              )}
+              data-testid="pr-detail-queue-headline"
+            >
+              {text.headline}
+            </p>
+          </TooltipWrapper>
         ) : (
-          <button
-            type="button"
-            onClick={openDetails}
-            title={text.headline}
-            data-testid="pr-detail-queue-headline"
-            className={cn(
-              "block min-w-0 max-w-full truncate text-left text-ui-sm text-foreground",
-              "transition-colors hover:text-primary hover:underline",
-              "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-              text.isIdentifier && "font-mono",
-            )}
+          <TooltipWrapper
+            label={text.headline}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            {text.headline}
-          </button>
+            <button
+              type="button"
+              onClick={openDetails}
+              data-testid="pr-detail-queue-headline"
+              className={cn(
+                "block min-w-0 max-w-full truncate text-left text-ui-sm text-foreground",
+                "transition-colors hover:text-primary hover:underline",
+                "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+                text.isIdentifier && "font-mono",
+              )}
+            >
+              {text.headline}
+            </button>
+          </TooltipWrapper>
         )}
         <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground/70">
           <span className="shrink-0">{KIND_SOURCE_LABEL[item.kind]}</span>

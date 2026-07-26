@@ -5,6 +5,7 @@ import type {
   PrAttentionQueue,
 } from "@/lib/pr/pr-attention-queue";
 import { PrDetailQueue } from "@/components/epic-canvas/pr/pr-detail-queue";
+import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
 /**
  * The Overview hero. Two things it must NOT do: shout its own caveat louder
@@ -64,7 +65,7 @@ describe("PrDetailQueue", () => {
     renderQueue(queue({ isWindowTruncated: true }), () => undefined);
 
     const note = screen.getByTestId("pr-detail-queue-truncated");
-    expect(note.getAttribute("title")).toMatch(/older feedback may exist/u);
+    expect(tooltipTextFor(note)).toMatch(/older feedback may exist/u);
     // The sentence is not rendered as visible body text anywhere.
     expect(
       screen.queryByText(/Derived from the last 20 activity items/u),

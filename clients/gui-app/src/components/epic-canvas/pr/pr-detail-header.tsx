@@ -10,7 +10,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { PrDetailCore, PrState } from "@traycer/protocol/host/pr-schemas";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { PrActorAvatar } from "@/components/epic-canvas/pr/pr-detail-avatar";
 import {
   PR_STATE_PILL_CLASS,
@@ -118,9 +120,15 @@ export function PrDetailHeader(props: {
           data-testid="pr-detail-refresh"
           className="text-muted-foreground hover:text-foreground"
         >
-          <RotateCcw
-            className={cn("size-4", props.refreshing && "animate-spin")}
-          />
+          {props.refreshing ? (
+            <AgentSpinningDots
+              testId="pr-detail-refresh-dots"
+              variant="dots"
+              className="size-4"
+            />
+          ) : (
+            <RotateCcw className="size-4" />
+          )}
         </Button>
       </div>
     </div>
@@ -173,26 +181,32 @@ function PrDetailIdentityBadge(props: {
   const Glyph = STATE_GLYPH[props.state];
   const isDraft = props.state === "draft";
   return (
-    <span
-      className={cn(
-        "mr-0.5 inline-flex shrink-0 -translate-y-0.5 items-center gap-1 rounded-full border px-2 py-0.5",
-        "align-middle text-ui-xs font-medium tabular-nums",
-        isDraft ? DRAFT_PILL_CLASS : PR_STATE_PILL_CLASS[props.state],
-      )}
-      data-testid="pr-detail-state-badge"
-      data-pr-state={props.state}
-      title={STATE_LABEL[props.state]}
+    <TooltipWrapper
+      label={STATE_LABEL[props.state]}
+      side="top"
+      sideOffset={6}
+      align="center"
     >
-      <Glyph
+      <span
         className={cn(
-          "size-3.5 shrink-0",
-          isDraft ? DRAFT_TINT_CLASS : PR_STATE_TINT_CLASS[props.state],
+          "mr-0.5 inline-flex shrink-0 -translate-y-0.5 items-center gap-1 rounded-full border px-2 py-0.5",
+          "align-middle text-ui-xs font-medium tabular-nums",
+          isDraft ? DRAFT_PILL_CLASS : PR_STATE_PILL_CLASS[props.state],
         )}
-        aria-hidden
-      />
-      <span className="sr-only">{STATE_LABEL[props.state]} </span>#
-      {props.prNumber}
-    </span>
+        data-testid="pr-detail-state-badge"
+        data-pr-state={props.state}
+      >
+        <Glyph
+          className={cn(
+            "size-3.5 shrink-0",
+            isDraft ? DRAFT_TINT_CLASS : PR_STATE_TINT_CLASS[props.state],
+          )}
+          aria-hidden
+        />
+        <span className="sr-only">{STATE_LABEL[props.state]} </span>#
+        {props.prNumber}
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -222,14 +236,18 @@ function PrDetailGitHubLink(props: {
 }): ReactNode {
   const runnerHost = use(RunnerHostContext);
   const openExternalLink = useRunnerOpenExternalLink();
+  const isPending = openExternalLink.isPending;
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {
       event.stopPropagation();
       if (props.prUrl === null || runnerHost === null) return;
       event.preventDefault();
+      // Guard against a second RunnerHost request firing while the first
+      // `openExternalLink` mutation for this PR is still in flight.
+      if (isPending) return;
       openExternalLink.mutate(props.prUrl);
     },
-    [openExternalLink, props.prUrl, runnerHost],
+    [isPending, openExternalLink, props.prUrl, runnerHost],
   );
 
   if (props.prUrl === null) {
@@ -262,11 +280,20 @@ function PrDetailGitHubLink(props: {
         target="_blank"
         rel="noreferrer"
         aria-label="Open on GitHub"
+        aria-disabled={isPending}
         data-testid="pr-detail-github-link"
         onClick={handleClick}
       >
         GitHub
-        <ExternalLink className="size-3" aria-hidden />
+        {isPending ? (
+          <AgentSpinningDots
+            testId="pr-detail-github-link-dots"
+            variant="dots"
+            className="size-3"
+          />
+        ) : (
+          <ExternalLink className="size-3" aria-hidden />
+        )}
       </a>
     </Button>
   );

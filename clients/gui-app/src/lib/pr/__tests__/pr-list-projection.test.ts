@@ -132,6 +132,55 @@ describe("groupPrItemsByRepo", () => {
     expect(groups[1]?.items).toHaveLength(2);
   });
 
+  it("keeps a group whose parent is itself a submodule of another group", () => {
+    // `traycer` is a submodule under /w/outer AND the superproject that owns
+    // `docs` under /w/inner. Expanding followers one level deep emitted
+    // `traycer` as a follower of `traycer-internal` and then dropped `docs`
+    // entirely - its `pulled` entry kept it out of the first-seen pass and
+    // nothing re-emitted it.
+    const groups = groupPrItemsByRepo([
+      item({ linkGroupKey: "/w/outer" }),
+      submoduleItem({ linkGroupKey: "/w/outer" }),
+      submoduleItem({
+        repoIdentifier: { owner: "traycerai", repo: "traycer" },
+        repoRole: "superproject",
+        linkGroupKey: "/w/inner",
+        base: { owner: "traycerai", repo: "traycer", prNumber: 676 },
+      }),
+      item({
+        base: { owner: "traycerai", repo: "docs", prNumber: 12 },
+        repoIdentifier: { owner: "traycerai", repo: "docs" },
+        repoRole: "submodule",
+        linkGroupKey: "/w/inner",
+      }),
+    ]);
+
+    expect(groups.map((group) => group.repoIdentifier.repo)).toEqual([
+      "traycer-internal",
+      "traycer",
+      "docs",
+    ]);
+  });
+
+  it("emits every group even when two groups pull each other", () => {
+    // A cycle leaves no root to expand from, so the first pass emits nothing
+    // for either group; both must still reach the output rather than vanish.
+    const groups = groupPrItemsByRepo([
+      item({ repoRole: "superproject", linkGroupKey: "/w/a" }),
+      submoduleItem({ repoRole: "submodule", linkGroupKey: "/w/a" }),
+      submoduleItem({
+        repoRole: "superproject",
+        linkGroupKey: "/w/b",
+        base: { owner: "traycerai", repo: "traycer", prNumber: 676 },
+      }),
+      item({ repoRole: "submodule", linkGroupKey: "/w/b" }),
+    ]);
+
+    expect(
+      [...groups.map((group) => group.repoIdentifier.repo)].sort(),
+    ).toEqual(["traycer", "traycer-internal"]);
+  });
+
   it("orders rows open → merged → closed within a group", () => {
     const groups = groupPrItemsByRepo([
       item({ state: "closed", base: null, headRefName: "closed-head" }),

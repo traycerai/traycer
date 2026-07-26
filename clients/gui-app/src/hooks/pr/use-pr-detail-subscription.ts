@@ -217,6 +217,14 @@ export function usePrDetailSubscription(args: {
     // terminal entry is what makes "Try again" actually reconnect instead of
     // spinning against a closed session.
     if (shared === undefined || shared.isTerminal) {
+      // A terminal entry can still carry OTHER mounted consumers - this
+      // effect's own cleanup already removed THIS consumer if it was
+      // previously attached, so anything left in `staleConsumers` belongs to
+      // a different hook instance. Migrate them onto the fresh session
+      // instead of leaving them ref-counted against the one we are about to
+      // close, which would silently drop their subscription the next time
+      // only THIS (retrying) consumer unmounts.
+      const staleConsumers = shared?.consumers;
       shared?.unsubscribeFromStream();
       shared = createSharedSubscription(
         wsStreamClient,
@@ -224,6 +232,13 @@ export function usePrDetailSubscription(args: {
         activeArgs,
       );
       subscriptions.set(key, shared);
+      if (staleConsumers !== undefined) {
+        for (const [id, notify] of staleConsumers) {
+          shared.consumers.set(id, notify);
+          shared.refCount += 1;
+          notify();
+        }
+      }
     }
 
     shared.refCount += 1;
@@ -237,15 +252,22 @@ export function usePrDetailSubscription(args: {
     }
 
     return () => {
-      shared.refCount -= 1;
-      shared.consumers.delete(consumerId);
+      // Look up the CURRENT entry at this key rather than closing over the
+      // one captured above: a sibling consumer's retry may have replaced a
+      // terminal entry with a fresh session in the meantime and migrated
+      // THIS consumer onto it (see the migration above), so releasing the
+      // stale captured `shared` would decrement/delete the wrong entry and
+      // leak this consumer's hold on the session that is actually live.
+      const current = subscriptions.get(key);
+      if (current === undefined || !current.consumers.has(consumerId)) return;
+      current.refCount -= 1;
+      current.consumers.delete(consumerId);
 
       // ADR-0003: no grace period - tear down immediately when ref count
-      // reaches 0. Only delete the map slot if it still holds THIS entry - a
-      // retry may have already replaced it with a fresh session.
-      if (shared.refCount === 0) {
-        shared.unsubscribeFromStream();
-        if (subscriptions.get(key) === shared) subscriptions.delete(key);
+      // reaches 0.
+      if (current.refCount === 0) {
+        current.unsubscribeFromStream();
+        if (subscriptions.get(key) === current) subscriptions.delete(key);
       }
     };
   }, [stableArgs, queryClient, wsStreamClient, consumerId, retryNonce]);
@@ -276,13 +298,15 @@ export function usePrDetailSubscription(args: {
     // After a terminal error the session is dead and its `sendRefresh` is a
     // no-op; a user "refresh"/"Try again" there means RECONNECT. Re-run the
     // subscribe effect (which replaces the terminal entry) instead of sending a
-    // frame into a closed session. A live session refreshes as normal.
-    if (errorEvent !== null) {
+    // frame into a closed session. A NONFATAL error leaves the session live,
+    // so it must still get an actual refresh frame rather than being treated
+    // as if the transport were dead.
+    if (subscription?.isTerminal === true) {
       retry();
       return;
     }
-    activeSubscriptionFor(wsStreamClient, stableArgs)?.sendRefresh();
-  }, [errorEvent, wsStreamClient, stableArgs]);
+    subscription?.sendRefresh();
+  }, [subscription, retry]);
 
   return {
     data,

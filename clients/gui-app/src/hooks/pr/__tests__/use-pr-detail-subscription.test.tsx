@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { PrSubscribeDetailServerFrame } from "@traycer/protocol/host/pr-schemas";
@@ -80,6 +80,7 @@ class MockStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusChangeHandler: StatusChangeHandler | null = null;
   closed: boolean = false;
+  sentClientFrames: StreamFrameEnvelope[] = [];
 
   onServerFrame(handler: ServerFrameHandler): void {
     this.serverFrameHandler = handler;
@@ -90,10 +91,10 @@ class MockStreamSession implements IStreamSession {
   }
 
   sendClientFrame(
-    _envelope: StreamFrameEnvelope,
+    envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    // No-op for this test.
+    this.sentClientFrames.push(envelope);
   }
 
   requestReconnect(): void {
@@ -271,5 +272,135 @@ describe("usePrDetailSubscription - non-default-host subscription", () => {
 
     unmount();
     expect(session.closed).toBe(true);
+  });
+
+  it("preserves a second, non-retrying consumer's ref count when the first consumer retries a terminal session", async () => {
+    tabHostIdRef.value = "host4";
+    const args = {
+      epicId: "epic-3",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 7,
+      enabled: true,
+    };
+
+    const consumerA = renderHook(() => usePrDetailSubscription(args), {
+      wrapper: createWrapper(),
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+
+    // A second consumer for the SAME PR/epic shares A's session - no new
+    // `subscribe` call.
+    const consumerB = renderHook(() => usePrDetailSubscription(args), {
+      wrapper: createWrapper(),
+    });
+    expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+
+    const firstSession = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-3",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 7,
+    });
+    expect(firstSession).toBeDefined();
+    if (firstSession === undefined) return;
+    // The mock keys sessions by (method, params), so a retry's `subscribe`
+    // call for the SAME params returns this SAME object - `close` call
+    // counts are how this test observes distinct teardown lifecycles despite
+    // that.
+    const closeSpy = vi.spyOn(firstSession, "close");
+
+    // A fatal transport close marks the shared session terminal - both
+    // consumers observe the error.
+    act(() => {
+      firstSession.emitStatus("closed", { kind: "caller" });
+    });
+    await waitFor(() => {
+      expect(consumerA.result.current.error).not.toBeNull();
+    });
+    expect(consumerB.result.current.error).not.toBeNull();
+
+    // Consumer A retries: a fresh session replaces the terminal entry.
+    act(() => {
+      consumerA.result.current.sendRefresh();
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(2);
+    });
+    closeSpy.mockClear();
+
+    // Consumer A (the retrying one) unmounts. Consumer B never retried and is
+    // still mounted - migration must have moved B onto the FRESH session, so
+    // A's unmount must NOT close the transport.
+    act(() => {
+      consumerA.unmount();
+    });
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    // The last remaining consumer (B) unmounting tears the fresh session
+    // down.
+    act(() => {
+      consumerB.unmount();
+    });
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends an actual refresh frame (not a reconnect) after a nonfatal error, since the session is still live", async () => {
+    tabHostIdRef.value = "host5";
+    const args = {
+      epicId: "epic-4",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 8,
+      enabled: true,
+    };
+
+    const { result } = renderHook(() => usePrDetailSubscription(args), {
+      wrapper: createWrapper(),
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+
+    const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-4",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 8,
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    // A NONFATAL error frame leaves the session live (`isTerminal` stays
+    // false) - only its `lastEvent` becomes an error.
+    act(() => {
+      session.emitFrame({
+        kind: "error",
+        hasBinaryPayload: false,
+        message: "transient hiccup",
+        isFatal: false,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.error).not.toBeNull();
+    });
+    expect(session.closed).toBe(false);
+
+    act(() => {
+      result.current.sendRefresh();
+    });
+
+    // A reconnect (`retry()`) would bump `subscribeCallCount`; a refresh
+    // frame on the still-live session must not.
+    expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    expect(session.sentClientFrames).toEqual([
+      { kind: "refresh", hasBinaryPayload: false },
+    ]);
   });
 });

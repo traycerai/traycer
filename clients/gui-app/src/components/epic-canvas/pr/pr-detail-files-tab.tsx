@@ -1,4 +1,10 @@
-import { useCallback, useMemo, type ReactNode } from "react";
+import {
+  use,
+  useCallback,
+  useMemo,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { FileDiff } from "lucide-react";
 import type {
   PrChangedFile,
@@ -7,8 +13,10 @@ import type {
 } from "@traycer/protocol/host/pr-schemas";
 import { Button } from "@/components/ui/button";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { makePrDiffTile } from "@/lib/pr/pr-diff-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import { PrDetailFilesChanged } from "@/components/epic-canvas/pr/pr-detail-sections";
 
 /**
@@ -55,14 +63,7 @@ export function PrDetailFilesTab(props: {
         <p className="px-1 text-ui-xs text-muted-foreground/70">
           The diff is read from your local checkout of this branch.{" "}
           {props.core.prUrl !== null ? (
-            <a
-              href={`${props.core.prUrl}/files`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-primary hover:underline"
-            >
-              View it on GitHub instead
-            </a>
+            <PrFilesGitHubFooterLink href={`${props.core.prUrl}/files`} />
           ) : null}
         </p>
       }
@@ -126,5 +127,38 @@ function PrOpenDiffButton(props: {
       <FileDiff className="size-3.5 shrink-0" aria-hidden />
       Open diff
     </Button>
+  );
+}
+
+/**
+ * The footer's "View it on GitHub instead" link - routed through the
+ * RunnerHost bridge (like every other GitHub link on this tile), not a bare
+ * `target="_blank"` anchor: in the desktop shell a plain anchor opens a
+ * second, unmanaged browser surface instead of the user's actual browser.
+ * With no RunnerHost bound (e.g. the web client), the click handler is a
+ * no-op and the anchor's native `target="_blank"` navigation still applies.
+ */
+function PrFilesGitHubFooterLink(props: { readonly href: string }): ReactNode {
+  const runnerHost = use(RunnerHostContext);
+  const openExternalLink = useRunnerOpenExternalLink();
+  const handleClick = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>): void => {
+      if (runnerHost === null) return;
+      event.preventDefault();
+      openExternalLink.mutate(props.href);
+    },
+    [openExternalLink, props.href, runnerHost],
+  );
+  return (
+    <a
+      href={props.href}
+      target="_blank"
+      rel="noreferrer"
+      className="text-primary hover:underline"
+      data-testid="pr-detail-files-github-footer-link"
+      onClick={handleClick}
+    >
+      View it on GitHub instead
+    </a>
   );
 }

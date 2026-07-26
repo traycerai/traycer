@@ -5,6 +5,7 @@ import type {
   PrChecksSection,
 } from "@traycer/protocol/host/pr-schemas";
 import { PrDetailChecks } from "@/components/epic-canvas/pr/pr-detail-sections";
+import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
 /**
  * The Checks tab. The reported problems, in order: a flat ungrouped wall, no
@@ -149,7 +150,7 @@ describe("PrDetailChecks", () => {
 
     const mark = screen.getByTestId("pr-detail-check-app-mark");
     expect(mark.getAttribute("src")).toBe("https://avatars/coderabbit.png");
-    expect(mark.getAttribute("title")).toBe("CodeRabbit");
+    expect(tooltipTextFor(mark)).toBe("CodeRabbit");
   });
 
   it("omits the mark entirely when the app served no icon", () => {

@@ -2,6 +2,7 @@ import { useCallback, type MouseEvent, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { PrOwnerRef } from "@traycer/protocol/host/pr-schemas";
 import { Badge } from "@/components/ui/badge";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   useChatById,
@@ -158,21 +159,42 @@ function PrOwnerBadge(props: {
     );
   }
 
+  // Same rule, other cause: `fallbackHostId` is nullable, so a legacy owner
+  // on a surface with no host bound still HAS a name worth showing but
+  // nothing to open it on. `openOwner` would return early, leaving a badge
+  // that looks clickable and silently isn't.
+  if (hostId === null) {
+    return (
+      <span
+        className="truncate text-ui-xs text-muted-foreground/70"
+        data-testid="pr-owner-unopenable"
+      >
+        {label}
+      </span>
+    );
+  }
+
   return (
     <Badge
       asChild
       variant="outline"
       className="max-w-[min(60vw,16rem)] cursor-pointer font-normal text-muted-foreground hover:bg-muted hover:text-foreground"
     >
-      <button
-        type="button"
-        title={label}
-        aria-label={`Open ${label}`}
-        onClick={openOwner}
-        data-testid="pr-owner-badge"
+      <TooltipWrapper
+        label={label}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <span className="truncate">{label}</span>
-      </button>
+        <button
+          type="button"
+          aria-label={`Open ${label}`}
+          onClick={openOwner}
+          data-testid="pr-owner-badge"
+        >
+          <span className="truncate">{label}</span>
+        </button>
+      </TooltipWrapper>
     </Badge>
   );
 }

@@ -610,7 +610,9 @@ function RailButton(props: RailButtonProps) {
         type="button"
         variant="ghost"
         size="icon-sm"
-        aria-label={label}
+        aria-label={
+          showChangedDot ? `${label}, new pull request updates` : label
+        }
         aria-current={active}
         data-testid={testId}
         data-pr-changed-dot={showChangedDot ? "true" : "false"}

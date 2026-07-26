@@ -69,9 +69,9 @@ export type PrChecksRollup = z.infer<typeof prChecksRollupSchema>;
  * substituting head owner/repo would misidentify a fork PR.
  */
 export const prBaseCoordinatesSchema = z.object({
-  owner: z.string(),
-  repo: z.string(),
-  prNumber: z.number().int(),
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  prNumber: z.number().int().positive(),
 });
 export type PrBaseCoordinates = z.infer<typeof prBaseCoordinatesSchema>;
 
@@ -177,7 +177,7 @@ export const prLightItemSchema = z.object({
 });
 export type PrLightItem = z.infer<typeof prLightItemSchema>;
 
-const prSubscribeListForEpicFrameFields = {
+const PR_SUBSCRIBE_LIST_FOR_EPIC_FRAME_FIELDS = {
   hasBinaryPayload: z.literal(false),
   sourceStatus: prSourceStatusSchema,
   items: z.array(prLightItemSchema),
@@ -188,11 +188,11 @@ export const prSubscribeListForEpicServerFrameSchema = z.discriminatedUnion(
   [
     z.object({
       kind: z.literal("snapshot"),
-      ...prSubscribeListForEpicFrameFields,
+      ...PR_SUBSCRIBE_LIST_FOR_EPIC_FRAME_FIELDS,
     }),
     z.object({
       kind: z.literal("updated"),
-      ...prSubscribeListForEpicFrameFields,
+      ...PR_SUBSCRIBE_LIST_FOR_EPIC_FRAME_FIELDS,
     }),
     z.object({
       kind: z.literal("error"),
@@ -210,10 +210,10 @@ export type PrSubscribeListForEpicServerFrame = z.infer<
 
 export const prSubscribeDetailOpenRequestSchema = z.object({
   epicId: z.string(),
-  githubHost: z.string(),
-  owner: z.string(),
-  repo: z.string(),
-  prNumber: z.number().int(),
+  githubHost: z.string().min(1),
+  owner: z.string().min(1),
+  repo: z.string().min(1),
+  prNumber: z.number().int().positive(),
 });
 export type PrSubscribeDetailOpenRequest = z.infer<
   typeof prSubscribeDetailOpenRequestSchema
@@ -223,6 +223,9 @@ export const prCheckStatusSchema = z.enum([
   "queued",
   "in_progress",
   "completed",
+  "pending",
+  "requested",
+  "waiting",
 ]);
 export type PrCheckStatus = z.infer<typeof prCheckStatusSchema>;
 
@@ -235,6 +238,7 @@ export const prCheckConclusionSchema = z.enum([
   "timed_out",
   "action_required",
   "stale",
+  "startup_failure",
 ]);
 export type PrCheckConclusion = z.infer<typeof prCheckConclusionSchema>;
 
@@ -520,7 +524,7 @@ export const prDetailCoreSchema = z.object({
 });
 export type PrDetailCore = z.infer<typeof prDetailCoreSchema>;
 
-const prSubscribeDetailFrameFields = {
+const PR_SUBSCRIBE_DETAIL_FRAME_FIELDS = {
   hasBinaryPayload: z.literal(false),
   sourceStatus: prSourceStatusSchema,
   liveness: prLivenessSchema,
@@ -535,11 +539,11 @@ const prSubscribeDetailFrameFields = {
 export const prSubscribeDetailServerFrameSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("snapshot"),
-    ...prSubscribeDetailFrameFields,
+    ...PR_SUBSCRIBE_DETAIL_FRAME_FIELDS,
   }),
   z.object({
     kind: z.literal("updated"),
-    ...prSubscribeDetailFrameFields,
+    ...PR_SUBSCRIBE_DETAIL_FRAME_FIELDS,
   }),
   z.object({
     kind: z.literal("error"),

@@ -22,6 +22,7 @@ import {
   derivePrAttentionQueue,
   type PrAttentionItem,
 } from "@/lib/pr/pr-attention-queue";
+import { prCheckContextKey } from "@/lib/pr/pr-check-groups";
 import {
   buildPrActivityQuote,
   buildPrReviewThreadQuote,
@@ -48,6 +49,8 @@ import { PrDetailTabStrip } from "@/components/epic-canvas/pr/pr-detail-tab-stri
 import { PrDetailChecks } from "@/components/epic-canvas/pr/pr-detail-sections";
 import { PrDetailFilesTab } from "@/components/epic-canvas/pr/pr-detail-files-tab";
 import {
+  prDetailTabButtonId,
+  prDetailTabPanelId,
   prDetailViewKey,
   usePrDetailTab,
   usePrDetailViewStore,
@@ -83,7 +86,7 @@ const PR_DETAIL_REFRESH_TIMEOUT_MS = 10_000;
  */
 const PR_DETAIL_SHELL_WIDTH = "max-w-3xl @min-[1180px]:max-w-[72rem]";
 const CARD_AT_WIDE = "hidden @min-[1180px]:block";
-const CARD_WIDTH = "w-[18rem]";
+const CARD_WIDTH = "w-full max-w-[18rem]";
 
 export function PrDetailBody(props: {
   readonly epicId: string;
@@ -263,8 +266,13 @@ function PrDetailLoaded(props: {
       // A queue row is a one-line projection, so re-resolve the fact it came
       // from and quote the FULL body rather than the row's summary.
       if (item.kind === "check-failure") {
+        // Rebuild the queue's own key rather than guessing at `entry.name`:
+        // `derivePrAttentionQueue` keys on `prCheckContextKey(context, index)`
+        // over this same `checks.contexts`, so anything else never matches and
+        // silently downgrades the quote to the generic overview.
         const context = checks.contexts.find(
-          (entry) => `check:${entry.name}` === item.key,
+          (entry, index) =>
+            `check:${prCheckContextKey(entry, index)}` === item.key,
         );
         if (context !== undefined) {
           sendPrQuoteToTarget(target, buildPrCheckQuote(core, context));
@@ -371,7 +379,13 @@ function PrDetailLoaded(props: {
             }}
           />
         </div>
-        <div className="min-w-0 pb-10">
+        <div
+          role="tabpanel"
+          id={prDetailTabPanelId(tab)}
+          aria-labelledby={prDetailTabButtonId(tab)}
+          tabIndex={0}
+          className="min-w-0 pb-10 focus-visible:outline-none"
+        >
           {tab === "overview" ? (
             <div className="flex min-w-0 flex-col gap-4">
               <PrDetailQueue

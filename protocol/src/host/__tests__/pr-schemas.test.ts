@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  prBaseCoordinatesSchema,
   prSubscribeListForEpicOpenRequestSchema,
   prLightItemSchema,
   prSubscribeListForEpicServerFrameSchema,
@@ -272,6 +273,35 @@ describe("prSubscribeListForEpicServerFrameSchema", () => {
   });
 });
 
+describe("prBaseCoordinatesSchema", () => {
+  it("parses a valid fixture unchanged", () => {
+    expect(prBaseCoordinatesSchema.parse(BASE_COORDINATES_FIXTURE)).toEqual(
+      BASE_COORDINATES_FIXTURE,
+    );
+  });
+
+  it("rejects an empty owner or repo, and a zero/negative prNumber", () => {
+    expect(() =>
+      prBaseCoordinatesSchema.parse({ ...BASE_COORDINATES_FIXTURE, owner: "" }),
+    ).toThrow();
+    expect(() =>
+      prBaseCoordinatesSchema.parse({ ...BASE_COORDINATES_FIXTURE, repo: "" }),
+    ).toThrow();
+    expect(() =>
+      prBaseCoordinatesSchema.parse({
+        ...BASE_COORDINATES_FIXTURE,
+        prNumber: 0,
+      }),
+    ).toThrow();
+    expect(() =>
+      prBaseCoordinatesSchema.parse({
+        ...BASE_COORDINATES_FIXTURE,
+        prNumber: -1,
+      }),
+    ).toThrow();
+  });
+});
+
 describe("prSubscribeDetailOpenRequestSchema", () => {
   it("parses and reparses a valid fixture unchanged", () => {
     const fixture = {
@@ -284,6 +314,28 @@ describe("prSubscribeDetailOpenRequestSchema", () => {
     const parsed1 = prSubscribeDetailOpenRequestSchema.parse(fixture);
     const parsed2 = prSubscribeDetailOpenRequestSchema.parse(parsed1);
     expect(parsed2).toEqual(parsed1);
+  });
+
+  it("rejects an empty githubHost/owner/repo, and a zero/negative prNumber", () => {
+    const fixture = {
+      epicId: "epic-1",
+      githubHost: "github.com",
+      owner: "traycerai",
+      repo: "traycer-internal",
+      prNumber: 4465,
+    };
+    expect(() =>
+      prSubscribeDetailOpenRequestSchema.parse({ ...fixture, githubHost: "" }),
+    ).toThrow();
+    expect(() =>
+      prSubscribeDetailOpenRequestSchema.parse({ ...fixture, owner: "" }),
+    ).toThrow();
+    expect(() =>
+      prSubscribeDetailOpenRequestSchema.parse({ ...fixture, repo: "" }),
+    ).toThrow();
+    expect(() =>
+      prSubscribeDetailOpenRequestSchema.parse({ ...fixture, prNumber: 0 }),
+    ).toThrow();
   });
 });
 
@@ -306,6 +358,20 @@ describe("prCheckContextSchema", () => {
       expect(parsed2).toEqual(parsed1);
       expect(parsed1.status).toBe(status);
     });
+  });
+
+  it("accepts GitHub's full CheckStatusState set, including pending/requested/waiting", () => {
+    (["queued", "in_progress", "completed", "pending", "requested", "waiting"] as const).forEach(
+      (status) => {
+        expect(prCheckStatusSchema.parse(status)).toBe(status);
+      },
+    );
+  });
+
+  it("accepts GitHub's startup_failure conclusion", () => {
+    expect(prCheckConclusionSchema.parse("startup_failure")).toBe(
+      "startup_failure",
+    );
   });
 
   it("parses and reparses every conclusion value unchanged", () => {

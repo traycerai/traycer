@@ -144,6 +144,24 @@ describe("isChecksDeltaDotWorthy", () => {
     const rollup = { success: 2, failure: 0, pending: 0, total: 2 };
     expect(isChecksDeltaDotWorthy(rollup, { ...rollup })).toBe(false);
   });
+
+  it("does NOT light on a fail-to-pending rerun (failure count drops as the check restarts)", () => {
+    expect(
+      isChecksDeltaDotWorthy(
+        { success: 0, failure: 1, pending: 0, total: 1 },
+        { success: 0, failure: 0, pending: 1, total: 1 },
+      ),
+    ).toBe(false);
+  });
+
+  it("does NOT light on a pass-to-pending rerun (success count drops as the check restarts)", () => {
+    expect(
+      isChecksDeltaDotWorthy(
+        { success: 1, failure: 0, pending: 0, total: 1 },
+        { success: 0, failure: 0, pending: 1, total: 1 },
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("evaluatePrListAgainstBaseline", () => {
@@ -225,5 +243,23 @@ describe("evaluatePrListAgainstBaseline", () => {
     expect(prSeenFactKey(identified)).not.toBe(prSeenFactKey(listOnly));
     expect(prSeenFactKey(identified).startsWith("id|")).toBe(true);
     expect(prSeenFactKey(listOnly).startsWith("head|")).toBe(true);
+  });
+
+  it("distinguishes list-only rows sharing a head branch but targeting different base branches", () => {
+    const intoMain = makeItem({
+      githubHost: null,
+      base: null,
+      baseRefName: "main",
+      headRefName: "shared-fork-head",
+      prUrl: null,
+    });
+    const intoRelease = makeItem({
+      githubHost: null,
+      base: null,
+      baseRefName: "release",
+      headRefName: "shared-fork-head",
+      prUrl: null,
+    });
+    expect(prSeenFactKey(intoMain)).not.toBe(prSeenFactKey(intoRelease));
   });
 });

@@ -128,9 +128,9 @@ describe("PrRow band 1: identity badges", () => {
   it("makes the number badge itself the GitHub link", () => {
     renderRow({});
 
-    const number = screen.getByTestId("pr-row-number");
-    expect(number.tagName).toBe("A");
-    expect(number.getAttribute("href")).toBe(
+    const link = screen.getByRole("link", { name: "Open #4226 on GitHub" });
+    expect(link).toBe(screen.getByTestId("pr-row-number"));
+    expect(link.getAttribute("href")).toBe(
       "https://github.com/traycerai/traycer-internal/pull/4226",
     );
   });
@@ -138,6 +138,9 @@ describe("PrRow band 1: identity badges", () => {
   it("keeps the number badge a plain badge when there is no PR url to open", () => {
     renderRow({ prUrl: null });
 
+    expect(
+      screen.queryByRole("link", { name: "Open #4226 on GitHub" }),
+    ).toBeNull();
     expect(screen.getByTestId("pr-row-number").tagName).not.toBe("A");
   });
 });
