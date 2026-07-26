@@ -36,6 +36,7 @@ import {
   createNotificationRoomEntryMap,
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
+import type { NotificationNavigate } from "@/lib/notifications";
 
 interface HostState {
   id: string | null;
@@ -93,6 +94,9 @@ const activateMock = vi.hoisted(() =>
 const notificationNavigateMock = vi.hoisted(() =>
   vi.fn(() => Promise.resolve()),
 );
+const activationHookState = vi.hoisted<{
+  navigate: NotificationNavigate | null;
+}>(() => ({ navigate: null }));
 const markAsReadMock = vi.hoisted(() => vi.fn<(feedId: string) => void>());
 const lastHostDisplay = vi.hoisted(() => ({
   originHostId: null as string | null,
@@ -106,10 +110,13 @@ const lastHostDisplay = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/notifications/use-notification-activation", () => ({
-  useNotificationActivationWithNavigate: () => ({
-    activate: activateMock,
-    pendingFeedId: null,
-  }),
+  useNotificationActivationWithNavigate: (navigate: NotificationNavigate) => {
+    activationHookState.navigate = navigate;
+    return {
+      activate: activateMock,
+      pendingFeedId: null,
+    };
+  },
 }));
 
 vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
@@ -491,6 +498,7 @@ describe("<NotificationsSessionProvider />", () => {
         dispose: vi.fn(),
       }),
     );
+    activationHookState.navigate = null;
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().resetForTests();
@@ -1773,6 +1781,7 @@ describe("<NotificationsSessionProvider />", () => {
     const { AnalyticsEvent } = await import("@/lib/analytics");
 
     const { streamClient } = await renderHostNotificationsProvider();
+    expect(activationHookState.navigate).toBe(notificationNavigateMock);
 
     act(() => {
       streamClient.session.emitServerFrame({
