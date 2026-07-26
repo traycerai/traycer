@@ -109,8 +109,13 @@ const TILE_RENDERERS: TileRendererRegistry = {
   "snapshot-diff": ({ node, viewTabId }) => (
     <SnapshotDiffTile node={node} viewTabId={viewTabId} />
   ),
-  "pr-detail": ({ node, epicId, isActive }) => (
-    <PrDetailTile node={node} epicId={epicId} isActive={isActive} />
+  "pr-detail": ({ node, epicId, viewTabId, isActive }) => (
+    <PrDetailTile
+      node={node}
+      epicId={epicId}
+      viewTabId={viewTabId}
+      isActive={isActive}
+    />
   ),
   // A blank tab's body IS the inline opener; picking content replaces it in
   // place (via openTileInPane). `tileId` is the group id; `isActive` drives

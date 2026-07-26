@@ -25,7 +25,6 @@ import {
   prReviewDecisionTone,
   prStateTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
-import { PrQuoteTargetPicker } from "@/components/epic-canvas/pr/pr-quote-target-picker";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 
@@ -94,8 +93,11 @@ export interface PrDetailCardProps {
  * column centred in a wide tile already leaves the gutter empty, so the
  * column renders identically whether the card is present or not and toggling
  * it costs no reflow. Because it only exists above the container-width
- * threshold, nothing may live ONLY here - every fact it carries also reaches
- * the reader through `PrDetailSummaryStrip` at narrower widths.
+ * threshold, nothing may live ONLY here: state and diffstat are in the header,
+ * checks in the tab badge and the Checks tab, reviewers on Feedback, and the
+ * quote target in the header's picker. Below the threshold the card is simply
+ * absent - there is deliberately no fallback strip, because everything a strip
+ * would have said is already on screen.
  *
  * `bg-canvas` is load-bearing, not decoration: the card sits ON the scrolling
  * document, so a translucent surface would let the reading column's text run
@@ -153,20 +155,18 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
           </ul>
         )}
       </PrCardSection>
-      <PrCardSection heading="Linked chats · send to">
-        <PrQuoteTargetPicker
-          target={props.target}
-          targets={props.targets}
-          onSelectTarget={props.onSelectTarget}
-          variant="card"
-        />
+      {/* No target PICKER here - the header carries the one picker for the
+          whole tile. A second copy in the card would be the same control in
+          two places, disagreeing about which is authoritative the moment one
+          of them is off-screen. The card keeps the ACTION. */}
+      <PrCardSection heading="Send to chat">
         <button
           type="button"
           onClick={props.onSendPr}
           disabled={props.target === null}
           data-testid="pr-detail-send-pr"
           className={cn(
-            "mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-primary/35 bg-primary/10 px-2 py-1.5",
+            "inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-primary/35 bg-primary/10 px-2 py-1.5",
             "text-ui-xs text-primary transition-colors hover:bg-primary/15",
             "disabled:opacity-50",
           )}

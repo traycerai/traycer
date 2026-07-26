@@ -14,12 +14,18 @@
  */
 import { create } from "zustand";
 
+/**
+ * Reading order, narrowest question first: what needs me (Overview), what did
+ * I change (Commits), what did others say (Feedback), what does CI think
+ * (Checks), and only then the full file list (Files) - the widest, least
+ * frequently answered question.
+ */
 export const PR_DETAIL_TABS = [
   "overview",
-  "feedback",
-  "files",
-  "checks",
   "commits",
+  "feedback",
+  "checks",
+  "files",
 ] as const;
 
 export type PrDetailTabId = (typeof PR_DETAIL_TABS)[number];

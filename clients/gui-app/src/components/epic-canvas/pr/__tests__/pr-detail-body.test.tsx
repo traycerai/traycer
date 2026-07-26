@@ -83,14 +83,45 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
   // The quote-target picker enumerates the epic's chats and terminal agents.
   // Both selectors reach the same `useOpenEpicHandle()` chain the two above do,
   // so they are stubbed for the same reason: that per-epic Y.doc is unrelated
-  // to the PR-detail behaviour under test. An empty list is the honest fixture
-  // - these PRs have no owners, so there is nothing to send a quote to.
-  useEpicChatRecords: () => EMPTY_EPIC_RECORDS,
+  // to the PR-detail behaviour under test.
+  useEpicChatRecords: () => chatRecordsRef.value,
   useEpicTerminalAgentRecords: () => EMPTY_EPIC_RECORDS,
+}));
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => tileNavigationMock,
 }));
 
 /** Stable identity: a fresh `[]` each call would re-run every dependent memo. */
 const EMPTY_EPIC_RECORDS: readonly never[] = [];
+
+/**
+ * Per-test chat fixtures. Hoisted and mutable because the selector mock is
+ * module-level, and the default has to stay EMPTY: most tests here assert on a
+ * PR with no owners, where having nothing to send to is the honest state.
+ */
+const chatRecordsRef = vi.hoisted(() => ({
+  value: [] as ReadonlyArray<{
+    readonly id: string;
+    readonly title: string;
+    readonly updatedAt: number;
+  }>,
+}));
+
+/**
+ * Structurally typed on the two fields the assertions read, rather than on
+ * `EpicCanvasTileRef` - the ref union's other members would force a cast at the
+ * call-site read, and the point of the test is which id and kind got opened.
+ */
+const tileNavigationMock = vi.hoisted(() => ({
+  openTileInTab: vi.fn(
+    (_tabId: string, _node: { readonly id: string; readonly type: string }) =>
+      null,
+  ),
+  openTilePreviewInTab: vi.fn(() => null),
+  openTileInEpic: vi.fn(() => null),
+  openTilePreviewInEpic: vi.fn(() => null),
+}));
 
 import { PrDetailBody } from "@/components/epic-canvas/pr/pr-detail-body";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -332,6 +363,7 @@ describe("PrDetailBody", () => {
         <TabHostProvider hostId="host1">
           <PrDetailBody
             epicId={props.epicId}
+            viewTabId="tab-1"
             githubHost={props.githubHost}
             owner={props.owner}
             repo={props.repo}
@@ -357,6 +389,8 @@ describe("PrDetailBody", () => {
     __resetPrDetailSubscriptionsForTesting();
     queryClient.clear();
     wsStreamClientRef.value = null;
+    chatRecordsRef.value = [];
+    tileNavigationMock.openTileInTab.mockClear();
   });
 
   it("(b) GHES/unknown-host cache-only PR shows Not live, refresh sends exactly one client frame with zero new subscribe calls, and a cache-only re-emit updates content without a new subscribe", async () => {
@@ -588,14 +622,10 @@ describe("PrDetailBody", () => {
     );
     await screen.findByTestId("pr-detail-body");
 
-    // The tab strip's own offsetParent chain is the column, so its class list
-    // is a proxy for "which container am I in". Files and Checks used to opt
-    // into a full-bleed container and shift the whole document sideways.
-    const columnClasses = (): string => {
-      const column =
-        screen.getByTestId("pr-detail-tabs").parentElement?.parentElement;
-      return column?.className ?? "";
-    };
+    // Files and Checks used to opt into a full-bleed container and shift the
+    // whole document sideways on every tab switch.
+    const columnClasses = (): string =>
+      screen.getByTestId("pr-detail-column").className;
     const overview = columnClasses();
     expect(overview).toContain("max-w-3xl");
 
@@ -604,22 +634,77 @@ describe("PrDetailBody", () => {
       expect(columnClasses()).toBe(overview);
     }
 
-    // The summary is one shape now, wherever it lands - the capsule variant
-    // existed only to ride the tab strip on the full-bleed tabs.
-    expect(
-      screen.getByTestId("pr-detail-summary").getAttribute("data-variant"),
-    ).toBeNull();
+    // jsdom does not evaluate container queries, so the card renders here
+    // whatever the threshold is. What IS checkable is the threshold itself -
+    // and that is the thing that broke twice. It was derived from the column
+    // width alone (1520, then 1400) and both times landed at or above the
+    // ~1400px a maximised window with the PR panel open actually measures, so
+    // the card never appeared once. This ceiling is not arithmetic; it is the
+    // observation, and it is what the arithmetic has to come in under.
+    const gutter = screen.getByTestId("pr-detail-card-gutter");
+    const threshold = /@min-\[(\d+)px\]/.exec(gutter.className)?.[1] ?? null;
+    expect(threshold).not.toBeNull();
+    expect(Number(threshold)).toBeLessThanOrEqual(1300);
+  });
 
-    // The card and the inline summary are the SAME switch seen from both
-    // sides. jsdom does not evaluate container queries, so both render here -
-    // what is checkable is that they are gated on one threshold. Drifting them
-    // apart is what produces the two failure modes that have no visible cause:
-    // neither showing (the bug reported against the 1520px build) or both.
-    const breakpointOf = (element: Element): string | null =>
-      /@min-\[(\d+)px\]/.exec(element.className)?.[1] ?? null;
-    const cardAt = breakpointOf(screen.getByTestId("pr-detail-card-gutter"));
-    const stripAt = breakpointOf(screen.getByTestId("pr-detail-summary-slot"));
-    expect(cardAt).not.toBeNull();
-    expect(stripAt).toBe(cardAt);
+  it("Fix in chat reveals the chat it wrote the quote into, so a correct send cannot look like a dead button", async () => {
+    chatRecordsRef.value = [
+      { id: "chat-7", title: "Technical Support Inquiry", updatedAt: 5_000 },
+    ];
+    renderBody({
+      epicId: "epic-6",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 13,
+      isActive: true,
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-6",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 13,
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    session.emitFrame(
+      buildPrDetailFrame({
+        core: { base: { owner: "acme", repo: "widgets", prNumber: 13 } },
+        checks: {
+          contexts: [
+            {
+              name: "pre-commit",
+              status: "completed",
+              conclusion: "failure",
+              detailsUrl: "https://ci/pre-commit",
+            },
+          ],
+        },
+      }),
+    );
+    await screen.findByTestId("pr-detail-queue");
+
+    const fix = screen.getByTestId("pr-detail-queue-send");
+    // The reported symptom was "the button is disabled". It never was - it
+    // wrote to a composer draft the reader could not see.
+    expect(fix.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(fix);
+    expect(tileNavigationMock.openTileInTab).toHaveBeenCalledTimes(1);
+    const [tabId, node] = tileNavigationMock.openTileInTab.mock.calls[0];
+    expect(tabId).toBe("tab-1");
+    expect(node.id).toBe("chat-7");
+    expect(node.type).toBe("chat");
+
+    // The passive quote glyphs must NOT navigate - they are for stacking
+    // context before you go, and yanking the tab away mid-collection is its
+    // own bug.
+    fireEvent.click(screen.getByTestId("pr-detail-description-quote"));
+    expect(tileNavigationMock.openTileInTab).toHaveBeenCalledTimes(1);
   });
 });

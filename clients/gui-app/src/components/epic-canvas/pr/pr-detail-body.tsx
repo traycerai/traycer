@@ -1,11 +1,15 @@
 import { useCallback, type ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
+import { v4 as uuidv4 } from "uuid";
 import type {
   PrActivityItem,
   PrChangedFile,
   PrSourceStatus,
 } from "@traycer/protocol/host/pr-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
   usePrDetailSubscription,
@@ -24,6 +28,7 @@ import {
   buildPrFileQuote,
   buildPrOverviewQuote,
   sendPrQuoteToTarget,
+  type PrQuoteTarget,
 } from "@/lib/pr/pr-quote";
 import { cn } from "@/lib/utils";
 import { PrDetailHeader } from "@/components/epic-canvas/pr/pr-detail-header";
@@ -34,7 +39,7 @@ import {
   PrDetailDescriptionCard,
 } from "@/components/epic-canvas/pr/pr-detail-conversation";
 import { PrDetailQueue } from "@/components/epic-canvas/pr/pr-detail-queue";
-import { PrDetailSummaryStrip } from "@/components/epic-canvas/pr/pr-detail-summary-strip";
+import { PrQuoteTargetPicker } from "@/components/epic-canvas/pr/pr-quote-target-picker";
 import { PrDetailTabStrip } from "@/components/epic-canvas/pr/pr-detail-tab-strip";
 import {
   PrDetailChecks,
@@ -62,19 +67,27 @@ const PR_DETAIL_COLUMN = "mx-auto w-full max-w-3xl px-6";
 /**
  * Container width at which the column's right gutter is wide enough to hold
  * the context card WITHOUT the column giving up any width:
- * 768px column + 2 × (256px card + 24px inset + 24px clearance) = 1376px.
+ * 768px column + 2 × (224px card + 16px inset + 24px clearance) = 1296px.
  *
  * Expressed as a container query, not a pane or tab count. "One tab open" is
  * only a proxy for "the gutter is wide enough", and the proxy leaks - the left
  * sidebar collapsing widens the tile without changing tab count, a two-pane
  * split can still leave one pane very wide, and a single tab on a small laptop
  * has no gutter at all. Measuring the container gets every one of those right.
+ *
+ * THE MARGIN IS THE POINT. This threshold was set twice from the arithmetic
+ * alone - 1520, then 1400 - and both times it landed within ~10px of the real
+ * tile width on a maximised window with the PR panel open (~1400px), so the
+ * card never appeared once. A bound that is merely correct is not enough when
+ * the quantity it bounds is a window: it has to clear the common case by
+ * enough that scrollbar width and sub-pixel rounding cannot decide the outcome.
+ * 1300 leaves ~100px of headroom below that measurement.
  */
-const CARD_AT_WIDE = "hidden @min-[1400px]:block";
-const STRIP_BELOW_WIDE = "@min-[1400px]:hidden";
+const CARD_AT_WIDE = "hidden @min-[1300px]:block";
 
 export function PrDetailBody(props: {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly githubHost: string;
   readonly owner: string;
   readonly repo: string;
@@ -160,6 +173,7 @@ export function PrDetailBody(props: {
       <PrDetailLoaded
         data={subscription.data}
         githubHost={props.githubHost}
+        viewTabId={props.viewTabId}
         refreshing={refresh.refreshing}
         onRefresh={refresh.trigger}
       />
@@ -186,10 +200,13 @@ export function PrDetailBody(props: {
 function PrDetailLoaded(props: {
   readonly data: PrDetailSubscriptionData;
   readonly githubHost: string;
+  readonly viewTabId: string;
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
 }): ReactNode {
   const { core, checks, activity, files, commits } = props.data;
+  const tileNavigation = useEpicTileNavigation();
+  const hostId = useTabHostId();
   const viewKey = prDetailViewKey({
     githubHost: props.githubHost,
     owner: core.base.owner,
@@ -210,6 +227,34 @@ function PrDetailLoaded(props: {
     [openExternalLink],
   );
 
+  /**
+   * "Fix in chat" reported as a dead button, and it was not disabled - it wrote
+   * the quote into the target's composer draft and left the reader looking at
+   * the PR. If that chat's tab is not the visible one, a correct send and a
+   * no-op are indistinguishable.
+   *
+   * So the imperative affordance FINISHES the gesture: it reveals the chat it
+   * just wrote to, composer focused, quote in place, one keystroke from sent.
+   * The passive `⌁` glyphs (description, a comment, a file row) deliberately do
+   * NOT - those are for stacking context before you go, and yanking the tab out
+   * from under someone collecting three quotes would be its own bug.
+   */
+  const revealTarget = useCallback(
+    (next: PrQuoteTarget): void => {
+      tileNavigation.openTileInTab(
+        props.viewTabId,
+        makeOpenableNodeRef({
+          id: next.id,
+          instanceId: uuidv4(),
+          type: next.kind === "chat" ? "chat" : "terminal-agent",
+          name: next.title,
+          hostId,
+        }),
+      );
+    },
+    [tileNavigation, props.viewTabId, hostId],
+  );
+
   const sendQueueItem = useCallback(
     (item: PrAttentionItem): void => {
       if (target === null) return;
@@ -221,6 +266,7 @@ function PrDetailLoaded(props: {
         );
         if (context !== undefined) {
           sendPrQuoteToTarget(target, buildPrCheckQuote(core, context));
+          revealTarget(target);
           return;
         }
       }
@@ -233,8 +279,9 @@ function PrDetailLoaded(props: {
           ? buildPrOverviewQuote(core)
           : buildPrActivityQuote(core, source),
       );
+      revealTarget(target);
     },
-    [target, checks.contexts, activity.items, core],
+    [target, checks.contexts, activity.items, core, revealTarget],
   );
 
   const sendFile = useCallback(
@@ -256,7 +303,8 @@ function PrDetailLoaded(props: {
   const sendOverview = useCallback((): void => {
     if (target === null) return;
     sendPrQuoteToTarget(target, buildPrOverviewQuote(core));
-  }, [target, core]);
+    revealTarget(target);
+  }, [target, core, revealTarget]);
 
   const sendDescription = useCallback((): void => {
     if (target === null) return;
@@ -270,44 +318,41 @@ function PrDetailLoaded(props: {
     // grown-or-shrunk child resolves to exactly one viewport, which would pin
     // the card to the first screen and let it scroll away after that.
     <div className="relative flex min-w-0 shrink-0 flex-col">
-      <div className={cn("flex min-w-0 flex-col gap-5 pt-8", PR_DETAIL_COLUMN)}>
+      <div
+        className={cn("flex min-w-0 flex-col gap-5 pt-8", PR_DETAIL_COLUMN)}
+        data-testid="pr-detail-column"
+      >
         <PrDetailHeader
           core={core}
           notLive={props.data.liveness === "cache-only"}
           observedAt={oldestObservedAt(props.data)}
           refreshing={props.refreshing}
           onRefresh={props.onRefresh}
-        />
-        <div className="flex min-w-0 flex-col gap-3">
-          <PrDetailTabStrip
-            tab={tab}
-            onSelectTab={(next) => setTab(viewKey, next)}
-            counts={{
-              feedback: activity.items.length,
-              files: files.totalCount ?? files.files.length,
-              checks: checks.contexts.length,
-              commits: commits.totalCount ?? commits.commits.length,
-            }}
-            blocking={{
-              feedback: queue.items.filter(
-                (item) => item.kind === "changes-requested",
-              ).length,
-              checks: queue.checkCounts.failing,
-            }}
-          />
-          <div
-            className={STRIP_BELOW_WIDE}
-            data-testid="pr-detail-summary-slot"
-          >
-            <PrDetailSummaryStrip
-              core={core}
-              queue={queue}
+          targetPicker={
+            <PrQuoteTargetPicker
               target={target}
               targets={quote.targets}
               onSelectTarget={quote.selectTarget}
+              variant="compact"
             />
-          </div>
-        </div>
+          }
+        />
+        <PrDetailTabStrip
+          tab={tab}
+          onSelectTab={(next) => setTab(viewKey, next)}
+          counts={{
+            feedback: activity.items.length,
+            files: files.totalCount ?? files.files.length,
+            checks: checks.contexts.length,
+            commits: commits.totalCount ?? commits.commits.length,
+          }}
+          blocking={{
+            feedback: queue.items.filter(
+              (item) => item.kind === "changes-requested",
+            ).length,
+            checks: queue.checkCounts.failing,
+          }}
+        />
         <div className="min-w-0 pb-10">
           {tab === "overview" ? (
             <div className="flex min-w-0 flex-col gap-4">
@@ -341,7 +386,6 @@ function PrDetailLoaded(props: {
           ) : null}
           {tab === "checks" ? (
             <PrDetailChecks
-              core={core}
               checks={checks}
               counts={queue.checkCounts}
               onOpenDetails={openDetails}
@@ -357,7 +401,7 @@ function PrDetailLoaded(props: {
         </div>
       </div>
       <div
-        className={cn("absolute inset-y-0 right-6 w-64", CARD_AT_WIDE)}
+        className={cn("absolute inset-y-0 right-4 w-56", CARD_AT_WIDE)}
         data-testid="pr-detail-card-gutter"
       >
         <PrDetailCard

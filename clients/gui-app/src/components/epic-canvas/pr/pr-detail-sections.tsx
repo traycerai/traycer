@@ -2,18 +2,15 @@ import type { ReactNode } from "react";
 import {
   ArrowRight,
   Check,
-  Clock,
   ExternalLink,
   Minus,
   Plus,
   TextQuote,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import type {
   PrChangedFile,
   PrChecksSection,
-  PrDetailCore,
   PrFilesSection,
 } from "@traycer/protocol/host/pr-schemas";
 import type { PrCheckCounts } from "@/lib/pr/pr-attention-queue";
@@ -21,11 +18,9 @@ import {
   formatPrChecksValue,
   PR_DIFF_ADDED_CLASS,
   PR_DIFF_REMOVED_CLASS,
-  PR_TONE_CHIP_CLASS,
   PR_TONE_FILL_CLASS,
   PR_TONE_TEXT_CLASS,
   prChecksTone,
-  prReviewDecisionTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
 import {
   formatPrCheckStatusLabel,
@@ -207,107 +202,80 @@ function PrFileQuoteButton(props: {
 
 // ---- Checks ---------------------------------------------------------------- //
 
-const CHECKS_HEADLINE: Record<
-  "ok" | "fail" | "pending" | "none",
-  { readonly title: string; readonly Icon: LucideIcon }
-> = {
-  ok: { title: "All checks have passed", Icon: Check },
-  fail: { title: "Some checks were not successful", Icon: X },
-  pending: { title: "Some checks haven't finished", Icon: Clock },
-  none: { title: "No checks reported", Icon: Clock },
-};
-
 /**
- * The Checks tab: one health card carrying the rollup and review decision,
- * then the per-check list. Replaces GitHub's merge box, which is shaped around
- * the merge BUTTON - the one thing a read-only view has no business implying
- * it can do.
+ * The Checks tab: the per-check list, and nothing above it.
+ *
+ * There was a headline card here - "Some checks were not successful", with the
+ * failing count and the review decision - sitting directly on top of a list
+ * whose first row was the failing check, in the same red. A summary is only
+ * worth its space when it says something the thing below it doesn't; this one
+ * restated the first row and the count of it. The counts moved into the list's
+ * own header rail, which is where Files already carries its diffstat.
+ *
+ * (It also replaced GitHub's merge box, which is shaped around the merge
+ * BUTTON - the one thing a read-only view has no business implying it can do.)
  */
 export function PrDetailChecks(props: {
-  readonly core: PrDetailCore;
   readonly checks: PrChecksSection;
   readonly counts: PrCheckCounts;
   readonly onOpenDetails: (url: string) => void;
 }): ReactNode {
+  if (props.checks.contexts.length === 0) {
+    return (
+      <p
+        className="rounded-xl border border-dashed border-border/60 py-10 text-center text-ui-sm text-muted-foreground/70"
+        data-testid="pr-detail-checks-empty"
+      >
+        No checks reported for this pull request.
+      </p>
+    );
+  }
   const tone = prChecksTone(props.counts);
-  const headline = CHECKS_HEADLINE[tone];
 
   return (
-    <div className="flex min-w-0 flex-col gap-3" data-testid="pr-detail-checks">
-      <div
-        className={cn(
-          "flex min-w-0 items-center gap-3 rounded-xl border px-3 py-3",
-          tone === "ok" && "border-success/25 bg-success/5",
-          tone === "fail" && "border-destructive/30 bg-destructive/5",
-          tone === "pending" && "border-warning/25 bg-warning/5",
-          tone === "none" && "border-border/60",
-        )}
-      >
-        <headline.Icon
-          className={cn("size-5 shrink-0", PR_TONE_TEXT_CLASS[tone])}
-          aria-hidden
-        />
-        <div className="min-w-0 flex-1">
-          <p className="text-ui-sm font-medium text-foreground">
-            {headline.title}
-          </p>
-          <p className="text-ui-xs text-muted-foreground">
-            {formatPrChecksValue(props.counts)}
-            {props.checks.isTruncated ? " · showing the first 50" : ""}
-          </p>
-        </div>
-        {props.core.reviewDecision !== null ? (
-          <span
-            className={cn(
-              "shrink-0 rounded-full border px-2 py-0.5 text-ui-xs",
-              PR_TONE_CHIP_CLASS[
-                prReviewDecisionTone(props.core.reviewDecision)
-              ],
-            )}
-          >
-            {REVIEW_DECISION_LABEL[props.core.reviewDecision]}
-          </span>
-        ) : null}
+    <div
+      className="min-w-0 overflow-hidden rounded-xl border border-border/60 bg-canvas"
+      data-testid="pr-detail-checks"
+    >
+      <div className="flex min-w-0 items-center gap-2 border-b border-border/50 bg-muted/25 px-3 py-2 text-ui-xs text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate">
+          {props.checks.contexts.length} check
+          {props.checks.contexts.length === 1 ? "" : "s"}
+          {props.checks.isTruncated ? " · showing the first 50" : ""}
+        </span>
+        <span className={cn("shrink-0", PR_TONE_TEXT_CLASS[tone])}>
+          {formatPrChecksValue(props.counts)}
+        </span>
       </div>
-      {props.checks.contexts.length === 0 ? null : (
-        <ul className="min-w-0 divide-y divide-border/40 overflow-hidden rounded-xl border border-border/60 bg-canvas">
-          {props.checks.contexts.map((context) => {
-            const contextTone = prCheckContextDotTone(context);
-            return (
-              <li
-                key={context.name}
-                className="flex min-w-0 items-center gap-2 px-3 py-2 text-ui-xs"
-              >
-                <PrCheckToneGlyph tone={contextTone} />
-                <span className="min-w-0 flex-1 truncate font-mono text-foreground">
-                  {context.name}
-                </span>
-                <span
-                  className={cn("shrink-0", PR_TONE_TEXT_CLASS[contextTone])}
-                >
-                  {formatPrCheckStatusLabel(context)}
-                </span>
-                {context.detailsUrl !== null ? (
-                  <PrCheckDetailsButton
-                    name={context.name}
-                    url={context.detailsUrl}
-                    onOpenDetails={props.onOpenDetails}
-                  />
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      <ul className="min-w-0 divide-y divide-border/40">
+        {props.checks.contexts.map((context) => {
+          const contextTone = prCheckContextDotTone(context);
+          return (
+            <li
+              key={context.name}
+              className="flex min-w-0 items-center gap-2 px-3 py-2 text-ui-xs"
+            >
+              <PrCheckToneGlyph tone={contextTone} />
+              <span className="min-w-0 flex-1 truncate font-mono text-foreground">
+                {context.name}
+              </span>
+              <span className={cn("shrink-0", PR_TONE_TEXT_CLASS[contextTone])}>
+                {formatPrCheckStatusLabel(context)}
+              </span>
+              {context.detailsUrl !== null ? (
+                <PrCheckDetailsButton
+                  name={context.name}
+                  url={context.detailsUrl}
+                  onOpenDetails={props.onOpenDetails}
+                />
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
-
-const REVIEW_DECISION_LABEL = {
-  approved: "Approved",
-  changes_requested: "Changes requested",
-  review_required: "Review required",
-} as const;
 
 function PrCheckToneGlyph(props: {
   readonly tone: "ok" | "fail" | "pending" | "none";

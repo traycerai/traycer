@@ -9,10 +9,10 @@ interface PrTabDefinition {
 
 const TABS: readonly PrTabDefinition[] = [
   { id: "overview", label: "Overview" },
-  { id: "feedback", label: "Feedback" },
-  { id: "files", label: "Files" },
-  { id: "checks", label: "Checks" },
   { id: "commits", label: "Commits" },
+  { id: "feedback", label: "Feedback" },
+  { id: "checks", label: "Checks" },
+  { id: "files", label: "Files" },
 ];
 
 export interface PrDetailTabCounts {

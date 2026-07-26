@@ -8,6 +8,7 @@ import { PrDetailDeadTileBanner } from "./dead-tile-banner";
 interface PrDetailTileProps {
   readonly node: PrDetailTileRef;
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly isActive: boolean;
 }
 
@@ -34,6 +35,7 @@ export function PrDetailTile(props: PrDetailTileProps): ReactNode {
   return (
     <PrDetailBody
       epicId={props.epicId}
+      viewTabId={props.viewTabId}
       githubHost={props.node.githubHost}
       owner={props.node.owner}
       repo={props.node.repo}
