@@ -4744,10 +4744,11 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   "epic.subscribe": {
     1: {
-      // @1.1 adds the additive `artifactRoomDirty` frame. @1.0 stays installed
-      // and FROZEN: a renderer that negotiated it never receives the new kind,
-      // and the resolver gates emission on the negotiated version rather than
-      // assuming the peer will tolerate an unknown frame.
+      // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and
+      // `rootDirty`. @1.0 stays installed and FROZEN: a renderer that
+      // negotiated it never receives the new kinds, and the resolver gates
+      // emission on the negotiated version rather than assuming the peer will
+      // tolerate an unknown frame.
       latestMinor: 1,
       versions: {
         0: {

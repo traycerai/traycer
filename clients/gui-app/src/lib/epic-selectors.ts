@@ -46,6 +46,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
 import {
   deriveEpicSyncPillState,
+  type EpicHostDirtyState,
   type EpicSyncPillState,
 } from "@/lib/epic-sync-pill-state";
 import { useEpicStore } from "@/hooks/use-epic-store";
@@ -139,15 +140,25 @@ export function useEpicConnectionStatus(): StreamConnectionStatus {
 }
 
 /**
- * `true` when the host holds artifact-room work its cloud connection has not
- * acknowledged. Memoized on the record identity, which the store only replaces
- * on a real transition, so the steady stream of unrelated store writes does not
- * re-scan it.
+ * Host dirtiness is known only after this subscription cycle's atomic @1.1
+ * snapshot. A clean-looking map before then (or under a negotiated @1.0 host)
+ * is unknown rather than evidence that the cloud has acknowledged everything.
  */
-const selectHasDirtyArtifactRooms = createSelector(
+const selectHostDirtyState = createSelector(
+  (s: OpenEpicState) => s.hasDirtySnapshotForOpenCycle,
+  (s: OpenEpicState) => s.rootDirty,
   (s: OpenEpicState) => s.artifactRoomDirtyByArtifactRoomId,
-  (dirtyByArtifactRoomId): boolean =>
-    Object.values(dirtyByArtifactRoomId).some((dirty) => dirty),
+  (
+    hasDirtySnapshotForOpenCycle,
+    rootDirty,
+    dirtyByArtifactRoomId,
+  ): EpicHostDirtyState => {
+    if (!hasDirtySnapshotForOpenCycle || rootDirty === null) return "unknown";
+    if (rootDirty) return "dirty";
+    return Object.values(dirtyByArtifactRoomId).some((dirty) => dirty)
+      ? "dirty"
+      : "clean";
+  },
 );
 
 /**
@@ -164,7 +175,8 @@ export function useEpicSyncPillState(): EpicSyncPillState {
     deriveEpicSyncPillState({
       hostTransportStatus: s.hostTransportStatus,
       cloudSyncStatus: s.cloudSyncStatus,
-      hasDirtyArtifactRooms: selectHasDirtyArtifactRooms(s),
+      hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
+      hostDirtyState: selectHostDirtyState(s),
       hasUnsyncedLocalChanges: s.isDirty,
       hasConnectedOnce: s.hasConnectedOnce,
     }),

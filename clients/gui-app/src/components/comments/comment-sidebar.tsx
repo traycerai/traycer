@@ -76,8 +76,11 @@ export function CommentSidebar(props: CommentSidebarProps) {
   // threads through an outage; the read that renders nothing is the COLD one
   // (opening comments, switching artifacts, after cache eviction) while the
   // host's collab provider is null, which `epic.listCommentThreads` answers
-  // with an error for the whole duration of every reconnect.
-  const isUnavailable = query.isError && query.data === undefined;
+  // with an error for the whole duration of every reconnect. A cold query
+  // that is disabled because no host client is ready is unknown for the same
+  // reason: it has never produced a snapshot.
+  const isUnavailable =
+    query.data === undefined && query.fetchStatus !== "fetching";
 
   const handleExpandedChange = useCallback(
     (threadId: string, next: boolean) => {
@@ -157,7 +160,10 @@ interface SidebarBodyProps {
 function SidebarBody(props: SidebarBodyProps) {
   if (props.isLoading) {
     return (
-      <div className="flex items-center justify-center py-8">
+      <div
+        data-slot="comment-sidebar-loading"
+        className="flex items-center justify-center py-8"
+      >
         <AgentSpinningDots
           className={undefined}
           testId={undefined}

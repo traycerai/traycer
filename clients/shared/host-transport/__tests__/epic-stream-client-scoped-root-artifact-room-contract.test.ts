@@ -169,6 +169,14 @@ interface Recorder {
     readonly artifactRoomId: string;
     readonly dirty: boolean;
   }>;
+  readonly rootDirtyFrames: boolean[];
+  readonly dirtySnapshots: Array<{
+    readonly rootDirty: boolean;
+    readonly rooms: Array<{
+      readonly artifactRoomId: string;
+      readonly dirty: boolean;
+    }>;
+  }>;
   readonly statusEvents: number;
 }
 
@@ -202,6 +210,14 @@ function makeRecorder(): Recorder {
   const artifactRoomDirtyFrames: Array<{
     readonly artifactRoomId: string;
     readonly dirty: boolean;
+  }> = [];
+  const rootDirtyFrames: boolean[] = [];
+  const dirtySnapshots: Array<{
+    readonly rootDirty: boolean;
+    readonly rooms: Array<{
+      readonly artifactRoomId: string;
+      readonly dirty: boolean;
+    }>;
   }> = [];
   let statusEvents = 0;
   const callbacks: EpicStreamCallbacks = {
@@ -252,6 +268,12 @@ function makeRecorder(): Recorder {
     onArtifactRoomDirty: (artifactRoomId, dirty) => {
       artifactRoomDirtyFrames.push({ artifactRoomId, dirty });
     },
+    onRootDirty: (dirty) => {
+      rootDirtyFrames.push(dirty);
+    },
+    onDirtySnapshot: (rootDirty, rooms) => {
+      dirtySnapshots.push({ rootDirty, rooms: [...rooms] });
+    },
     onMigrationStarted: () => {
       // not exercised by this test; satisfies the contract type
     },
@@ -281,6 +303,8 @@ function makeRecorder(): Recorder {
     artifactRoomAwarenessFrames,
     artifactRoomStates,
     artifactRoomDirtyFrames,
+    rootDirtyFrames,
+    dirtySnapshots,
     get statusEvents(): number {
       return statusEvents;
     },
@@ -512,6 +536,47 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     // Root/other artifactRoom callbacks must not be touched by this frame.
     expect(recorder.snapshots).toHaveLength(0);
     expect(recorder.artifactRoomStates).toHaveLength(0);
+    client.close();
+  });
+
+  it("routes atomic dirtiness snapshots and later root deltas without inferring completion from delta order", () => {
+    const { factory, sockets } = makeFactory();
+    const recorder = makeRecorder();
+    const client = new EpicStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      callbacks: recorder.callbacks,
+    });
+    completeHandshake(sockets[0]);
+
+    sockets[0].fireText({
+      kind: "dirtySnapshot",
+      epicId: "epic-1",
+      rootDirty: true,
+      rooms: [
+        { artifactRoomId: "artifact-room-0", dirty: true },
+        { artifactRoomId: "artifact-room-1", dirty: false },
+      ],
+      hasBinaryPayload: false,
+    });
+    sockets[0].fireText({
+      kind: "rootDirty",
+      epicId: "epic-1",
+      dirty: false,
+      hasBinaryPayload: false,
+    });
+
+    expect(recorder.dirtySnapshots).toEqual([
+      {
+        rootDirty: true,
+        rooms: [
+          { artifactRoomId: "artifact-room-0", dirty: true },
+          { artifactRoomId: "artifact-room-1", dirty: false },
+        ],
+      },
+    ]);
+    expect(recorder.rootDirtyFrames).toEqual([false]);
+    expect(recorder.artifactRoomDirtyFrames).toEqual([]);
     client.close();
   });
 

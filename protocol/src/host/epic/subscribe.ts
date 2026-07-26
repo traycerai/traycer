@@ -36,11 +36,17 @@
  * - `artifactRoomAwareness` - awareness update for a artifact-room doc.
  * - `artifactRoomState`     - unavailable/retrying/ready state for a artifactRoom. Text-only.
  *                    Drives the GUI's per-artifact body availability UI.
- * - `artifactRoomDirty`     - **@1.1 only** - the room holds local work the cloud
- *                    has not acknowledged. Text-only. Orthogonal to
- *                    `artifactRoomState`: availability answers "is the body
- *                    materialized and usable", this answers "is there
- *                    unsynced work in it".
+ * - `dirtySnapshot`         - **@1.1 only** - atomic per-subscription dirtiness
+ *                    snapshot: `rootDirty` plus every live room's dirty
+ *                    boolean (including clean rooms). Receipt of this one
+ *                    frame *is* snapshot completion. Emitted once per
+ *                    subscribe / resubscribe cycle.
+ * - `artifactRoomDirty`     - **@1.1 only** - transition delta for one room
+ *                    after the cycle's `dirtySnapshot`. Text-only.
+ * - `rootDirty`             - **@1.1 only** - transition delta for the root
+ *                    doc after the cycle's `dirtySnapshot`. Same composition
+ *                    as per-room dirty (unsynced provider ∨ unflushed buffer
+ *                    ∨ retained pending row).
  *
  * Client frames:
  *
@@ -356,11 +362,16 @@ export const epicSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
  * single websocket (`shardKey = epicId`), so per-room offline is degenerate.
  * Offline is an epic-level fact and stays on the `cloudSyncStatus` frame.
  *
- * ABSENCE MEANS `false`. The host emits this only on a transition, and only to
- * a peer that negotiated >= @1.1, so a renderer must treat "no frame seen for
- * this room" as clean. That is what makes an old host (which never emits it)
- * degrade correctly against a new client: the pill falls back to exactly the
- * inputs it had before this frame existed.
+ * Transition delta after the cycle's {@link epicSubscribeDirtySnapshotServerFrameSchema}.
+ * Within a negotiated `@1.1` session, **absence means clean only after that
+ * cycle's `dirtySnapshot` has been received**. Pre-snapshot silence is not
+ * clean (A1 / finding 10): under-reporting dirtiness is the dangerous
+ * direction for the sync pill.
+ *
+ * Absence is NOT correct degradation against a pre-@1.1 host that never emits
+ * these frames: that host may still hold unacknowledged bytes. A @1.1 client
+ * against an old host must treat dirtiness as **unknown**, not clean. Gate on
+ * negotiated version / frame support instead.
  */
 const epicSubscribeArtifactRoomDirtyServerFrameSchema = z.object({
   kind: z.literal("artifactRoomDirty"),
@@ -370,15 +381,52 @@ const epicSubscribeArtifactRoomDirtyServerFrameSchema = z.object({
   hasBinaryPayload: z.literal(false),
 });
 
-// ─── `epic.subscribe@1.1` - additive: per-artifact-room dirty ─────────────
+/**
+ * Root-doc transition delta after the cycle's `dirtySnapshot`. Same three-term
+ * composition as per-room dirtiness (provider unsynced ∨ unflushed buffer ∨
+ * retained pending row).
+ */
+const epicSubscribeRootDirtyServerFrameSchema = z.object({
+  kind: z.literal("rootDirty"),
+  epicId: z.string(),
+  dirty: z.boolean(),
+  hasBinaryPayload: z.literal(false),
+});
+
+/**
+ * Atomic per-subscription dirtiness snapshot for `@1.1`.
+ *
+ * Emitted **once per subscribe / resubscribe cycle**. Enumerates root dirty
+ * plus every live room (including clean ones). Receipt of this single frame
+ * *is* snapshot completion — no sentinel frame and no ordering contract on
+ * N separate per-room frames. After this, transitions use
+ * `artifactRoomDirty` / `rootDirty` deltas.
+ */
+const epicSubscribeDirtySnapshotServerFrameSchema = z.object({
+  kind: z.literal("dirtySnapshot"),
+  epicId: z.string(),
+  rootDirty: z.boolean(),
+  rooms: z.array(
+    z.object({
+      artifactRoomId: z.string().min(1),
+      dirty: z.boolean(),
+    }),
+  ),
+  hasBinaryPayload: z.literal(false),
+});
+
+// ─── `epic.subscribe@1.1` - additive: dirtySnapshot + dirty deltas ────────
 //
-// Adds the `artifactRoomDirty` frame. @1.0 stays installed and FROZEN: a
-// renderer that negotiated it never receives the new kind, and the resolver
-// gates on the negotiated version rather than assuming the peer will tolerate
-// an unknown frame.
+// Adds `dirtySnapshot`, `artifactRoomDirty`, and `rootDirty`. @1.0 stays
+// installed and FROZEN: a renderer that negotiated it never receives the new
+// kinds, and the resolver gates on the negotiated version rather than assuming
+// the peer will tolerate an unknown frame. Both minors share the same V10 base
+// array so the frozen set cannot drift.
 export const epicSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
   ...epicSubscribeSharedServerFrameSchemasV10,
+  epicSubscribeDirtySnapshotServerFrameSchema,
   epicSubscribeArtifactRoomDirtyServerFrameSchema,
+  epicSubscribeRootDirtyServerFrameSchema,
 ]);
 
 /** The latest installed shape. Host code builds frames against this. */

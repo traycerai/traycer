@@ -49,7 +49,12 @@ describe("<EpicConnectionPill />", () => {
   });
 
   it("renders the synced state with muted italic copy and green dot", () => {
+    vi.useFakeTimers();
     renderPill("synced");
+
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
 
     expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
       "All changes synced",
@@ -156,6 +161,22 @@ describe("<EpicConnectionPill />", () => {
     await expectTooltip(SYNCING_TOOLTIP);
   });
 
+  it("renders neutral Connected without a synced or durability assertion", () => {
+    renderPill("connected");
+
+    expect(screen.getByText("Connected")).not.toBeNull();
+    expect(screen.queryByText("All changes synced")).toBeNull();
+    expect(
+      screen.getByTestId("epic-connection-pill").textContent,
+    ).not.toContain("saved locally");
+    expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
+      "animate-ping",
+    );
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("connected");
+  });
+
   it("renders offlineChangesSavedLocally with its label, tooltip, and no spinner", async () => {
     renderPill("offlineChangesSavedLocally");
 
@@ -182,10 +203,16 @@ describe("<EpicConnectionPill />", () => {
   });
 
   describe("settle behavior (750ms hold before claiming synced)", () => {
-    it("first mount with a derived synced verdict renders All changes synced immediately, with no timer advance", () => {
+    it("first mount with a derived synced verdict waits through the settle delay", () => {
       vi.useFakeTimers();
       renderPill("synced");
 
+      expect(screen.getByText("Syncing…")).not.toBeNull();
+      expect(screen.queryByText("All changes synced")).toBeNull();
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
       expect(screen.getByText("All changes synced")).not.toBeNull();
     });
 
@@ -263,12 +290,17 @@ describe("<EpicConnectionPill />", () => {
 
     it.each<EpicSyncPillState>([
       "syncing",
+      "connected",
       "offline",
       "offlineChangesSavedLocally",
     ])(
       "one-directional guard: from a displayed synced, a derived %s shows immediately with no timer advance at all",
       (nextState) => {
+        vi.useFakeTimers();
         const { rerender } = renderPill("synced");
+        act(() => {
+          vi.advanceTimersByTime(750);
+        });
         expect(screen.getByText("All changes synced")).not.toBeNull();
 
         mocks.useEpicSyncPillState.mockReturnValue(nextState);

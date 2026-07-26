@@ -14,9 +14,9 @@ import { cn } from "@/lib/utils";
  * the renderer↔host stream status alone - and that is why it read "All changes
  * synced" through the incident where an Epic's artifact bodies existed nowhere
  * but the authoring host. The claim now comes from
- * {@link EpicSyncPillState}, which weighs the host↔cloud link and both
- * dirtiness legs as well, and resolves every ambiguous case toward "not
- * synced".
+ * {@link EpicSyncPillState}, which weighs the host↔cloud link, a fresh cloud
+ * observation, and both dirtiness legs as well, and resolves every ambiguous
+ * case toward "not synced".
  *
  * Transient disconnects keep edits buffered (in the host's durable store while
  * only the cloud link is down, in the per-Epic store while the host itself is
@@ -84,7 +84,10 @@ const SYNCED_SETTLE_MS = 750;
 function useSettledSyncPillState(
   derived: EpicSyncPillState,
 ): EpicSyncPillState {
-  const [maySaySynced, setMaySaySynced] = useState(derived === "synced");
+  // A first render may happen before the current subscription has established
+  // all of its durability facts. Start conservatively and make even an
+  // initially-derived `synced` verdict earn the same settle interval.
+  const [maySaySynced, setMaySaySynced] = useState(false);
 
   // Render-phase adjustment rather than an effect: React re-runs the render
   // before committing, so losing `synced` never paints even one frame of the
@@ -192,6 +195,20 @@ function indicatorFor(state: EpicSyncPillState): PillIndicator {
           "The cloud connection is down. Your changes are saved on this device and sync when it is back.",
         ariaLabel:
           "Offline. Changes are saved on this device and sync when the connection is back.",
+      };
+    // The stream is up but this cycle has not supplied enough evidence for a
+    // cloud/durability claim. Keep the copy factual and intentionally avoid
+    // guessing why (old host, reconnect, or pending first status are all
+    // possible).
+    case "connected":
+      return {
+        containerClassName: QUIET_CONTAINER_CLASS,
+        dotClassName: "bg-muted-foreground",
+        label: "Connected",
+        showAgentSpinner: false,
+        pulse: null,
+        tooltip: null,
+        ariaLabel: "Connected",
       };
     // The three link states below make NO durability claim. While the
     // renderer↔host stream is down the only copy of an unsent edit is in this

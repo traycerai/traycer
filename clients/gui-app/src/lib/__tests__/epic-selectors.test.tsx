@@ -134,13 +134,16 @@ describe("useEpicSyncPillState", () => {
     handle.store.setState({
       hostTransportStatus: "open",
       cloudSyncStatus: "connected",
+      hasFreshCloudSyncStatus: true,
       hasConnectedOnce: true,
       isDirty: false,
+      rootDirty: false,
+      hasDirtySnapshotForOpenCycle: true,
       artifactRoomDirtyByArtifactRoomId: {},
     });
   }
 
-  it("treats an artifact-room record absent from the map as clean, not unknown", () => {
+  it("treats an artifact-room record absent from a received snapshot as clean", () => {
     const handle = createHandle("epic-dirty-absent");
     healthyBaseline(handle);
 
@@ -149,6 +152,22 @@ describe("useEpicSyncPillState", () => {
     });
 
     expect(result.current).toBe("synced");
+  });
+
+  it("treats an empty pre-snapshot map as unknown, never synced", () => {
+    const handle = createHandle("epic-dirty-unknown");
+    healthyBaseline(handle);
+    handle.store.setState({
+      rootDirty: null,
+      hasDirtySnapshotForOpenCycle: false,
+      artifactRoomDirtyByArtifactRoomId: {},
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("connected");
   });
 
   it("treats an explicit false record the same as an absent one", () => {
@@ -196,6 +215,24 @@ describe("useEpicSyncPillState", () => {
       handle.store.setState({
         artifactRoomDirtyByArtifactRoomId: { "room-a": false },
       });
+    });
+
+    expect(result.current).toBe("synced");
+  });
+
+  it("includes the root doc in host dirtiness", () => {
+    const handle = createHandle("epic-root-dirty");
+    healthyBaseline(handle);
+    handle.store.setState({ rootDirty: true });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("syncing");
+
+    act(() => {
+      handle.store.setState({ rootDirty: false });
     });
 
     expect(result.current).toBe("synced");

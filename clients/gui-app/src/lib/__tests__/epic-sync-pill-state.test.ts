@@ -3,6 +3,7 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
 import {
   deriveEpicSyncPillState,
+  type EpicHostDirtyState,
   type EpicSyncPillInputs,
   type EpicSyncPillState,
 } from "@/lib/epic-sync-pill-state";
@@ -10,7 +11,8 @@ import {
 const HEALTHY_INPUTS: EpicSyncPillInputs = {
   hostTransportStatus: "open",
   cloudSyncStatus: "connected",
-  hasDirtyArtifactRooms: false,
+  hasFreshCloudSyncStatus: true,
+  hostDirtyState: "clean",
   hasUnsyncedLocalChanges: false,
   hasConnectedOnce: true,
 };
@@ -26,20 +28,28 @@ const CLOUD_SYNC_STATUSES: readonly EpicCloudSyncStatus[] = [
   "reconnecting",
   "disconnected",
 ];
+const HOST_DIRTY_STATES: readonly EpicHostDirtyState[] = [
+  "unknown",
+  "clean",
+  "dirty",
+];
 const BOOLEANS: readonly boolean[] = [false, true];
 
 function allCombinations(): readonly EpicSyncPillInputs[] {
   return HOST_TRANSPORT_STATUSES.flatMap((hostTransportStatus) =>
     CLOUD_SYNC_STATUSES.flatMap((cloudSyncStatus) =>
-      BOOLEANS.flatMap((hasDirtyArtifactRooms) =>
-        BOOLEANS.flatMap((hasUnsyncedLocalChanges) =>
-          BOOLEANS.map((hasConnectedOnce): EpicSyncPillInputs => ({
-            hostTransportStatus,
-            cloudSyncStatus,
-            hasDirtyArtifactRooms,
-            hasUnsyncedLocalChanges,
-            hasConnectedOnce,
-          })),
+      BOOLEANS.flatMap((hasFreshCloudSyncStatus) =>
+        HOST_DIRTY_STATES.flatMap((hostDirtyState) =>
+          BOOLEANS.flatMap((hasUnsyncedLocalChanges) =>
+            BOOLEANS.map((hasConnectedOnce): EpicSyncPillInputs => ({
+              hostTransportStatus,
+              cloudSyncStatus,
+              hasFreshCloudSyncStatus,
+              hostDirtyState,
+              hasUnsyncedLocalChanges,
+              hasConnectedOnce,
+            })),
+          ),
         ),
       ),
     ),
@@ -48,7 +58,6 @@ function allCombinations(): readonly EpicSyncPillInputs[] {
 
 const DURABILITY_CLAIMS: ReadonlySet<EpicSyncPillState> = new Set([
   "synced",
-  "syncing",
   "offlineChangesSavedLocally",
 ]);
 
@@ -57,15 +66,15 @@ describe("deriveEpicSyncPillState", () => {
     expect(deriveEpicSyncPillState(HEALTHY_INPUTS)).toBe("synced");
   });
 
-  it("RCA case: dirty artifact rooms alone forces syncing even though every other leg reads healthy — this is the state that used to read 'All changes synced' while 49 artifact bodies existed nowhere but the host", () => {
+  it("RCA case: known host-dirty work alone forces syncing even though every other leg reads healthy", () => {
     const result = deriveEpicSyncPillState({
       ...HEALTHY_INPUTS,
-      hasDirtyArtifactRooms: true,
+      hostDirtyState: "dirty",
     });
     expect(result).toBe("syncing");
   });
 
-  it("unsynced local changes alone forces syncing", () => {
+  it("unsynced local changes alone force syncing", () => {
     const result = deriveEpicSyncPillState({
       ...HEALTHY_INPUTS,
       hasUnsyncedLocalChanges: true,
@@ -73,25 +82,51 @@ describe("deriveEpicSyncPillState", () => {
     expect(result).toBe("syncing");
   });
 
-  it("cloud disconnected with outstanding work reads offlineChangesSavedLocally", () => {
+  it("cloud disconnected with known host-durable work reads offlineChangesSavedLocally", () => {
     const result = deriveEpicSyncPillState({
       ...HEALTHY_INPUTS,
       cloudSyncStatus: "disconnected",
-      hasDirtyArtifactRooms: true,
+      hostDirtyState: "dirty",
     });
     expect(result).toBe("offlineChangesSavedLocally");
   });
 
-  it("cloud reconnecting with outstanding work reads offlineChangesSavedLocally", () => {
+  it("cloud reconnecting with known host-durable work reads offlineChangesSavedLocally", () => {
     const result = deriveEpicSyncPillState({
       ...HEALTHY_INPUTS,
       cloudSyncStatus: "reconnecting",
-      hasUnsyncedLocalChanges: true,
+      hostDirtyState: "dirty",
     });
     expect(result).toBe("offlineChangesSavedLocally");
   });
 
-  it("cloud disconnected with nothing outstanding falls back to reconnecting (link-status report, no durability claim)", () => {
+  it("never calls renderer-only work saved locally while the cloud is down", () => {
+    const result = deriveEpicSyncPillState({
+      ...HEALTHY_INPUTS,
+      cloudSyncStatus: "disconnected",
+      hostDirtyState: "dirty",
+      hasUnsyncedLocalChanges: true,
+    });
+    expect(result).toBe("syncing");
+  });
+
+  it("uses neutral connected while the host-dirty snapshot is unknown", () => {
+    const result = deriveEpicSyncPillState({
+      ...HEALTHY_INPUTS,
+      hostDirtyState: "unknown",
+    });
+    expect(result).toBe("connected");
+  });
+
+  it("uses neutral connected until this open cycle receives a cloud-status frame", () => {
+    const result = deriveEpicSyncPillState({
+      ...HEALTHY_INPUTS,
+      hasFreshCloudSyncStatus: false,
+    });
+    expect(result).toBe("connected");
+  });
+
+  it("cloud disconnected with nothing outstanding falls back to reconnecting", () => {
     const result = deriveEpicSyncPillState({
       ...HEALTHY_INPUTS,
       cloudSyncStatus: "disconnected",
@@ -106,14 +141,6 @@ describe("deriveEpicSyncPillState", () => {
       hasConnectedOnce: false,
     });
     expect(result).toBe("connecting");
-  });
-
-  it("cloud reconnecting with nothing outstanding falls back to reconnecting", () => {
-    const result = deriveEpicSyncPillState({
-      ...HEALTHY_INPUTS,
-      cloudSyncStatus: "reconnecting",
-    });
-    expect(result).toBe("reconnecting");
   });
 
   it("host transport closed reads offline regardless of hasConnectedOnce", () => {
@@ -150,37 +177,21 @@ describe("deriveEpicSyncPillState", () => {
     expect(result).toBe("reconnecting");
   });
 
-  it("host transport reconnecting reads reconnecting when hasConnectedOnce, connecting otherwise", () => {
-    expect(
-      deriveEpicSyncPillState({
-        ...HEALTHY_INPUTS,
-        hostTransportStatus: "reconnecting",
-        hasConnectedOnce: true,
-      }),
-    ).toBe("reconnecting");
-    expect(
-      deriveEpicSyncPillState({
-        ...HEALTHY_INPUTS,
-        hostTransportStatus: "reconnecting",
-        hasConnectedOnce: false,
-      }),
-    ).toBe("connecting");
-  });
-
-  describe("exhaustive invariants over all 96 combinations", () => {
+  describe("exhaustive invariants over all 288 combinations", () => {
     const combos = allCombinations();
-    // Sanity on the matrix itself: 4 * 3 * 2 * 2 * 2 = 96.
-    it("the enumerated matrix has exactly 96 combinations", () => {
-      expect(combos.length).toBe(96);
+
+    it("the enumerated matrix has exactly 288 combinations", () => {
+      expect(combos.length).toBe(288);
     });
 
-    it("synced is returned iff hostTransportStatus is open AND cloudSyncStatus is connected AND both dirty flags are false", () => {
+    it("synced is returned iff transport and cloud status are fresh/connected, host dirtiness is clean, and no renderer-only work exists", () => {
       for (const inputs of combos) {
         const result = deriveEpicSyncPillState(inputs);
         const expectedSynced =
           inputs.hostTransportStatus === "open" &&
           inputs.cloudSyncStatus === "connected" &&
-          !inputs.hasDirtyArtifactRooms &&
+          inputs.hasFreshCloudSyncStatus &&
+          inputs.hostDirtyState === "clean" &&
           !inputs.hasUnsyncedLocalChanges;
         if (expectedSynced) {
           expect(result).toBe("synced");
@@ -190,7 +201,7 @@ describe("deriveEpicSyncPillState", () => {
       }
     });
 
-    it("never claims durability (synced/syncing/offlineChangesSavedLocally) while the host transport is not open", () => {
+    it("never claims durability while the host transport is not open", () => {
       for (const inputs of combos) {
         if (inputs.hostTransportStatus === "open") continue;
         const result = deriveEpicSyncPillState(inputs);
@@ -199,55 +210,29 @@ describe("deriveEpicSyncPillState", () => {
     });
   });
 
-  describe("old-host compatibility (hasDirtyArtifactRooms pinned false)", () => {
-    it("degrades rather than narrows: the three pre-@1.1 inputs alone still reach every pill state", () => {
-      const reached = new Set<EpicSyncPillState>(
-        allCombinations()
-          .filter((inputs) => !inputs.hasDirtyArtifactRooms)
-          .map((inputs) => deriveEpicSyncPillState(inputs)),
-      );
-
-      expect(Array.from(reached).sort()).toEqual([
-        "connecting",
-        "offline",
-        "offlineChangesSavedLocally",
-        "reconnecting",
-        "synced",
-        "syncing",
-      ]);
-    });
-
-    it("reaches syncing from hasUnsyncedLocalChanges alone with everything else healthy", () => {
+  describe("old-host compatibility (host dirtiness stays unknown)", () => {
+    it("never claims synced for a clean-looking @1.0 session", () => {
       const result = deriveEpicSyncPillState({
         hostTransportStatus: "open",
         cloudSyncStatus: "connected",
-        hasDirtyArtifactRooms: false,
+        hasFreshCloudSyncStatus: true,
+        hostDirtyState: "unknown",
+        hasUnsyncedLocalChanges: false,
+        hasConnectedOnce: true,
+      });
+      expect(result).toBe("connected");
+    });
+
+    it("keeps renderer-only work in the non-durability syncing state", () => {
+      const result = deriveEpicSyncPillState({
+        hostTransportStatus: "open",
+        cloudSyncStatus: "disconnected",
+        hasFreshCloudSyncStatus: true,
+        hostDirtyState: "unknown",
         hasUnsyncedLocalChanges: true,
         hasConnectedOnce: true,
       });
       expect(result).toBe("syncing");
-    });
-
-    it("reaches offlineChangesSavedLocally from hasUnsyncedLocalChanges alone when the cloud link is down", () => {
-      const result = deriveEpicSyncPillState({
-        hostTransportStatus: "open",
-        cloudSyncStatus: "disconnected",
-        hasDirtyArtifactRooms: false,
-        hasUnsyncedLocalChanges: true,
-        hasConnectedOnce: true,
-      });
-      expect(result).toBe("offlineChangesSavedLocally");
-    });
-
-    it("reaches synced when every remaining leg is clean", () => {
-      const result = deriveEpicSyncPillState({
-        hostTransportStatus: "open",
-        cloudSyncStatus: "connected",
-        hasDirtyArtifactRooms: false,
-        hasUnsyncedLocalChanges: false,
-        hasConnectedOnce: true,
-      });
-      expect(result).toBe("synced");
     });
   });
 });

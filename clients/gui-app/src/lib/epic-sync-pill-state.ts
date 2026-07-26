@@ -4,15 +4,15 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 /**
  * What the Epic header's sync pill is allowed to claim.
  *
- * Three of these are durability claims (`synced`, `syncing`,
- * `offlineChangesSavedLocally`); the other three describe the GUI↔host link
- * and deliberately claim nothing about durability, because while that link is
- * down the only copy of an unsent edit lives in this window's memory.
+ * `synced` and `offlineChangesSavedLocally` are durability claims. The other
+ * states deliberately claim nothing about durability: before the host has
+ * confirmed an edit, or while the host-durability snapshot is unknown, this
+ * window may be the only place that knows about it.
  */
 export type EpicSyncPillState =
   /** Every leg of the chain has acknowledged everything we know about. */
   | "synced"
-  /** Host reachable, cloud link up, work still outstanding on some leg. */
+  /** Work exists, but this label makes no claim about where it is durable. */
   | "syncing"
   /**
    * Host reachable and holding outstanding work durably, cloud link down.
@@ -21,6 +21,8 @@ export type EpicSyncPillState =
    * link is down and replays them on reconnect.
    */
   | "offlineChangesSavedLocally"
+  /** GUI↔host is open, but cloud or host-durability state is still unknown. */
+  | "connected"
   /** GUI↔host link coming up for the first time on this subscription. */
   | "connecting"
   /** GUI↔host link re-establishing after a prior successful connect. */
@@ -29,7 +31,15 @@ export type EpicSyncPillState =
   | "offline";
 
 /**
- * The four independent legs the pill must weigh, plus the bootstrap qualifier
+ * The host's current cloud-durability knowledge for the root doc and every
+ * artifact room. `unknown` is deliberately distinct from `clean`: a new GUI
+ * connected to an older host, or a new subscription before its atomic
+ * `dirtySnapshot`, has not established that no durable work exists.
+ */
+export type EpicHostDirtyState = "unknown" | "clean" | "dirty";
+
+/**
+ * The five independent legs the pill must weigh, plus the bootstrap qualifier
  * that decides "Connecting…" vs "Reconnecting…" copy.
  *
  * Deliberately NOT `OpenEpicState["connectionStatus"]`: that field is a lossy
@@ -48,31 +58,29 @@ export interface EpicSyncPillInputs {
   readonly hostTransportStatus: StreamConnectionStatus;
   /**
    * Input 2 - the host↔cloud link for this Epic, as the host observes it.
-   * `epicCloudSyncStatusSchema` calls this "the source of truth for whether
-   * 'All changes synced' is safe to show", and until now the pill saw it only
-   * through the blend above.
    */
   readonly cloudSyncStatus: EpicCloudSyncStatus;
   /**
-   * Input 3 - any artifact room for which the host holds work its cloud
-   * connection has not acknowledged (`epic.subscribe@1.1` `artifactRoomDirty`).
-   * This is the leg that was entirely invisible when the pill reported "All
-   * changes synced" over 49 artifact bodies that existed nowhere but the
-   * authoring host.
-   *
-   * A host older than `@1.1` never emits the frame, so this stays `false` and
-   * the derivation degrades to exactly the inputs it had before.
+   * Input 3 - `true` only after a genuine `cloudSyncStatus` frame in this
+   * stream cycle. A display default is never proof that the cloud is connected.
    */
-  readonly hasDirtyArtifactRooms: boolean;
+  readonly hasFreshCloudSyncStatus: boolean;
   /**
-   * Input 4 - the renderer's own replicas (root doc + artifact-room replicas)
+   * Input 4 - cloud-durability state from `epic.subscribe@1.1`'s atomic
+   * `dirtySnapshot` and its subsequent `rootDirty` / `artifactRoomDirty`
+   * deltas. Old hosts and a new cycle before that snapshot both remain
+   * `unknown`; neither may be treated as clean.
+   */
+  readonly hostDirtyState: EpicHostDirtyState;
+  /**
+   * Input 5 - the renderer's own replicas (root doc + artifact-room replicas)
    * diverging from what the host has confirmed. Subsumes the store's
    * `hasDirtyArtifactRoomReplicas()`, which is folded into `isDirty` by
    * `resolvePublicDirtyState`.
    */
   readonly hasUnsyncedLocalChanges: boolean;
   /**
-   * Presentation qualifier on input 1, not a fifth leg: latched by the first
+   * Presentation qualifier on input 1, not a sixth leg: latched by the first
    * genuine cloud `connected` frame so a first-time bootstrap reads
    * "Connecting…" while a drop after a real connect reads "Reconnecting…".
    */
@@ -83,38 +91,36 @@ export interface EpicSyncPillInputs {
  * Single source of the sync pill's claim.
  *
  * The ordering below is the honesty contract, and every ambiguous case
- * resolves toward "not synced":
+ * resolves toward no durability assertion:
  *
  * 1. GUI↔host link down wins over everything. We cannot see the host's cloud
- *    state, and any local edit is renderer-memory-only, so the pill reports
- *    the link and makes no durability claim at all.
- * 2. Link up + cloud up: `synced` requires BOTH dirtiness legs clean. Either
- *    one alone forces `syncing`.
- * 3. Link up + cloud down + anything outstanding: the host has it and will
- *    replay it, which is the one case where "saved locally" is a true
- *    statement. With nothing outstanding there is nothing to save, so the pill
+ *    state, and any local edit is renderer-memory-only.
+ * 2. Renderer-only work is `syncing`, never "saved locally". An `open`
+ *    WebSocket proves neither that the host received the frame nor that it
+ *    persisted it.
+ * 3. An unknown cloud status or host-durability snapshot yields neutral
+ *    `connected`, never `synced`.
+ * 4. Link up + cloud up: `synced` requires a clean host snapshot and no local
+ *    divergence. Host-durable outstanding work reads `syncing`.
+ * 5. Link up + cloud down: only known host-durable work with no renderer-only
+ *    divergence may read "saved locally". With nothing outstanding the pill
  *    falls back to reporting the link.
- *
- * Known and accepted: a healthy connected room mid-save reads clean until the
- * host's ~2s persist debounce writes a pending row, because `artifactRoomDirty`
- * fires on websocket and pending-row transitions rather than per doc update.
- * Input 4 covers the renderer-side leg of that window; the pill deliberately
- * does not flicker on every keystroke.
  */
 export function deriveEpicSyncPillState(
   inputs: EpicSyncPillInputs,
 ): EpicSyncPillState {
-  const hasOutstandingWork =
-    inputs.hasDirtyArtifactRooms || inputs.hasUnsyncedLocalChanges;
-
   if (inputs.hostTransportStatus === "closed") return "offline";
   if (inputs.hostTransportStatus !== "open") {
     return linkComingUpState(inputs.hasConnectedOnce);
   }
-  if (inputs.cloudSyncStatus === "connected") {
-    return hasOutstandingWork ? "syncing" : "synced";
+  if (inputs.hasUnsyncedLocalChanges) return "syncing";
+  if (!inputs.hasFreshCloudSyncStatus || inputs.hostDirtyState === "unknown") {
+    return "connected";
   }
-  return hasOutstandingWork
+  if (inputs.cloudSyncStatus === "connected") {
+    return inputs.hostDirtyState === "dirty" ? "syncing" : "synced";
+  }
+  return inputs.hostDirtyState === "dirty"
     ? "offlineChangesSavedLocally"
     : linkComingUpState(inputs.hasConnectedOnce);
 }

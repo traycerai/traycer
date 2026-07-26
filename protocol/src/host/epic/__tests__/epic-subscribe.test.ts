@@ -437,7 +437,7 @@ describe("epic.subscribe@1.0 artifact-room-scoped client frames", () => {
   });
 });
 
-describe("epic.subscribe artifactRoomDirty version gate (@1.0 frozen, @1.1 additive)", () => {
+describe("epic.subscribe dirtySnapshot + dirty deltas version gate (@1.0 frozen, @1.1 additive)", () => {
   const artifactRoomDirtyFrame = {
     kind: "artifactRoomDirty",
     epicId: "epic-1",
@@ -446,9 +446,39 @@ describe("epic.subscribe artifactRoomDirty version gate (@1.0 frozen, @1.1 addit
     hasBinaryPayload: false,
   };
 
+  const rootDirtyFrame = {
+    kind: "rootDirty",
+    epicId: "epic-1",
+    dirty: true,
+    hasBinaryPayload: false,
+  };
+
+  const dirtySnapshotFrame = {
+    kind: "dirtySnapshot",
+    epicId: "epic-1",
+    rootDirty: true,
+    rooms: [
+      { artifactRoomId: "artifact-room-0", dirty: true },
+      { artifactRoomId: "artifact-room-1", dirty: false },
+    ],
+    hasBinaryPayload: false,
+  };
+
   it("rejects an artifactRoomDirty frame under the frozen @1.0 schema", () => {
     expect(() =>
       epicSubscribeServerFrameSchemaV10.parse(artifactRoomDirtyFrame),
+    ).toThrow();
+  });
+
+  it("rejects a rootDirty frame under the frozen @1.0 schema", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV10.parse(rootDirtyFrame),
+    ).toThrow();
+  });
+
+  it("rejects a dirtySnapshot frame under the frozen @1.0 schema", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV10.parse(dirtySnapshotFrame),
     ).toThrow();
   });
 
@@ -463,11 +493,63 @@ describe("epic.subscribe artifactRoomDirty version gate (@1.0 frozen, @1.1 addit
     }
   });
 
+  it("accepts a rootDirty frame under @1.1", () => {
+    const parsed = epicSubscribeServerFrameSchemaV11.parse(rootDirtyFrame);
+    expect(parsed.kind).toBe("rootDirty");
+    if (parsed.kind === "rootDirty") {
+      expect(parsed.dirty).toBe(true);
+      expect(parsed.epicId).toBe("epic-1");
+    }
+  });
+
+  it("accepts a dirtySnapshot frame under @1.1 with root + rooms", () => {
+    const parsed = epicSubscribeServerFrameSchemaV11.parse(dirtySnapshotFrame);
+    expect(parsed.kind).toBe("dirtySnapshot");
+    if (parsed.kind === "dirtySnapshot") {
+      expect(parsed.rootDirty).toBe(true);
+      expect(parsed.rooms).toEqual([
+        { artifactRoomId: "artifact-room-0", dirty: true },
+        { artifactRoomId: "artifact-room-1", dirty: false },
+      ]);
+    }
+  });
+
+  it("accepts a dirtySnapshot with an empty rooms list (root-only epic)", () => {
+    const parsed = epicSubscribeServerFrameSchemaV11.parse({
+      ...dirtySnapshotFrame,
+      rootDirty: false,
+      rooms: [],
+    });
+    expect(parsed.kind).toBe("dirtySnapshot");
+    if (parsed.kind === "dirtySnapshot") {
+      expect(parsed.rootDirty).toBe(false);
+      expect(parsed.rooms).toEqual([]);
+    }
+  });
+
   it("rejects an artifactRoomDirty frame with a non-boolean dirty value", () => {
     expect(() =>
       epicSubscribeServerFrameSchemaV11.parse({
         ...artifactRoomDirtyFrame,
         dirty: "true",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a rootDirty frame with a non-boolean dirty value", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV11.parse({
+        ...rootDirtyFrame,
+        dirty: "true",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a dirtySnapshot with a non-boolean rootDirty", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV11.parse({
+        ...dirtySnapshotFrame,
+        rootDirty: "true",
       }),
     ).toThrow();
   });

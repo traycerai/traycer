@@ -38,7 +38,8 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
 
 // Read behavior for the next `epic.listCommentThreads` call. Tests swap this
 // mid-flight to model an outage arriving after a successful read.
-let respondToListThreads: () => ListCommentThreadsResponse = () => ({
+let respondToListThreads: () =>
+  ListCommentThreadsResponse | Promise<ListCommentThreadsResponse> = () => ({
   threads: [],
 });
 
@@ -130,6 +131,10 @@ function emptyPanel(): Element | null {
   return document.querySelector('[data-slot="comment-sidebar-empty"]');
 }
 
+function loadingPanel(): Element | null {
+  return document.querySelector('[data-slot="comment-sidebar-loading"]');
+}
+
 // The query client keeps production defaults (one retry, ~1s backoff), so an
 // error verdict needs more than the 1s `waitFor` default.
 const ERROR_SETTLE_TIMEOUT_MS = 8_000;
@@ -142,6 +147,48 @@ function queryStatuses(): ReadonlyArray<string> {
 }
 
 describe("<CommentSidebar /> read failures", () => {
+  it("keeps the spinner visible for an enabled cold query that is actively fetching", async () => {
+    let resolveResponse = (_response: ListCommentThreadsResponse): void => {
+      throw new Error("missing pending response");
+    };
+    respondToListThreads = () =>
+      new Promise<ListCommentThreadsResponse>((resolve) => {
+        resolveResponse = resolve;
+      });
+
+    renderSidebar();
+
+    await waitFor(() => {
+      expect(loadingPanel()).not.toBeNull();
+    });
+    expect(unavailablePanel()).toBeNull();
+    expect(emptyPanel()).toBeNull();
+
+    await act(async () => {
+      resolveResponse({ threads: [] });
+      // Flush the query promise's resolution INSIDE `act`, so the state update
+      // it triggers is covered rather than firing after act has exited (which
+      // React reports as an un-acted update). Also what makes this arrow
+      // genuinely async - `require-await` correctly rejected it without this.
+      await Promise.resolve();
+    });
+    expect(await screen.findByText(/No open comments/)).not.toBeNull();
+  });
+
+  it("says comments could not be loaded when the cold query is disabled without a host client", async () => {
+    hostClientRef.current = null;
+
+    renderSidebar();
+
+    expect(
+      await screen.findByText("Comments couldn't be loaded."),
+    ).not.toBeNull();
+    expect(screen.queryByText(/No open comments/)).toBeNull();
+    expect(screen.queryByText(/No comments on this artifact yet/)).toBeNull();
+    expect(emptyPanel()).toBeNull();
+    expect(unavailablePanel()).not.toBeNull();
+  });
+
   it("says comments could not be LOADED - never that there are none - when the cold read fails", async () => {
     respondToListThreads = unavailableHost;
 
