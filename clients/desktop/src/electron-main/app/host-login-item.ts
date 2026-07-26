@@ -196,10 +196,14 @@ const REGISTER_STATUS_POLL_INTERVAL_MS = 100;
  * to make registration succeed. They are best-effort; step 5 does not
  * depend on any of them. They are also deliberately coupled to the
  * committed cycle: a deferred (`deferred-busy` / `removed-by-user`) cycle
- * touches nothing, so a busy host paused mid-update keeps its intact
- * legacy registration (manifest included - deleting it earlier would leave
- * a running legacy job with no backing file, i.e. no auto-restart after a
- * crash or reboot) until a cycle actually proceeds.
+ * runs none of them, so a busy host paused mid-update keeps its legacy
+ * *job* loaded until a cycle actually proceeds.
+ *
+ * That coupling no longer extends to the manifest FILE:
+ * `retireCompetingCliRegistrationAtLaunch` deletes it on every launch with
+ * no busy check. Deliberate - an orphaned loaded job keeps running on
+ * launchd's in-memory definition, so the only thing lost is its auto-restart
+ * after a crash, and that is precisely the competing host we want gone.
  *
  * The agent-label bootout (step 4) is the load-bearing LWCR step on macOS
  * 26+; the SMAppService unregister → register pair is kept for
@@ -354,27 +358,187 @@ async function registerHostLoginItemUnserialized(
  * no worse than before the cycle ran.
  */
 async function retireLegacyLabelRegistrations(): Promise<void> {
-  const legacyManifest = userLaunchAgentPlistPath(CLI_HOST_LABEL);
-  if (await fileExists(legacyManifest)) {
-    try {
-      await rm(legacyManifest, { force: true });
-      log.info(
-        "[host-login-item] removed legacy CLI LaunchAgent manifest (label split migration)",
-        { legacyManifest },
-      );
-    } catch (err) {
-      log.warn(
-        "[host-login-item] failed to remove legacy CLI LaunchAgent manifest — the old label's agent may auto-start a competing host at next login",
-        { legacyManifest, err },
-      );
-    }
-  }
+  await removeCliLabelManifest();
   await bootoutStaleAgent(CLI_HOST_LABEL);
   const unregistered = trySetLoginItemSettings(false, LEGACY_HOST_SERVICE_NAME);
   log.info("[host-login-item] retired legacy-label SMAppService registration", {
     serviceName: LEGACY_HOST_SERVICE_NAME,
     unregistered,
   });
+}
+
+// Whether the competing CLI manifest is there. Mirrors `ManifestProbe` in the
+// CLI's `service/platforms/macos.ts`, and for the same reason: "we could not
+// read the directory" has to stay distinct from "there is no manifest".
+//
+// Deliberately local rather than folded into `fileExists` - that helper's
+// other callers WANT the swallow. `hasPendingLoginItemRevision` documents a
+// read error as "no pending revision" so an FS hiccup never blocks the ensure
+// fast path, and `hostManagesHostLoginItem` fails safe to "not a host-managed
+// build". Only the retire path treats absent as proof of a clean machine.
+type CliManifestProbe =
+  | { readonly kind: "present" }
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable"; readonly cause: unknown };
+
+async function probeCliLabelManifest(
+  manifest: string,
+): Promise<CliManifestProbe> {
+  try {
+    await access(manifest, constants.F_OK);
+    return { kind: "present" };
+  } catch (cause) {
+    // ENOENT - and only ENOENT - is positive proof there is no manifest.
+    // EACCES on the containing directory means we could not look.
+    const missing =
+      typeof cause === "object" &&
+      cause !== null &&
+      "code" in cause &&
+      cause.code === "ENOENT";
+    return missing ? { kind: "absent" } : { kind: "unreadable", cause };
+  }
+}
+
+/**
+ * Delete `~/Library/LaunchAgents/<cli-label>.plist` - the manifest that would
+ * `RunAtLoad` a second host beside the agent-label one.
+ *
+ * Single implementation shared by the register cycle's step 1 and the
+ * launch-time repair, so the two can never drift on what "retired" means.
+ * The register cycle pairs it with a bootout of the same label; the launch
+ * repair deliberately does not (see
+ * `retireCompetingCliRegistrationAtLaunch`).
+ */
+async function removeCliLabelManifest(): Promise<
+  "removed" | "absent" | "failed"
+> {
+  const manifest = userLaunchAgentPlistPath(CLI_HOST_LABEL);
+  const probe = await probeCliLabelManifest(manifest);
+  if (probe.kind === "absent") return "absent";
+  if (probe.kind === "unreadable") {
+    // NOT `absent`: that is the value the launch repair turns into
+    // `nothing-to-retire` ("this machine is already clean"), and an
+    // unreadable `~/Library/LaunchAgents` proves no such thing. No `rm`
+    // attempt either - `rm(force)` cannot tell "removed" from "was never
+    // there", so on a path we could not even read it would report a removal
+    // that may not have happened. Hedged wording for the same reason: we
+    // cannot see whether a manifest is there at all.
+    log.warn(
+      "[host-login-item] could not read the CLI LaunchAgent manifest, so it was not removed — if one is present it may auto-start a competing host at next login",
+      { manifest, err: probe.cause },
+    );
+    return "failed";
+  }
+  try {
+    await rm(manifest, { force: true });
+  } catch (err) {
+    log.warn(
+      "[host-login-item] failed to remove CLI LaunchAgent manifest — the CLI label may auto-start a competing host at next login",
+      { manifest, err },
+    );
+    return "failed";
+  }
+  log.info("[host-login-item] removed CLI LaunchAgent manifest", { manifest });
+  return "removed";
+}
+
+/**
+ * What `retireCompetingCliRegistrationAtLaunch` did this launch. Returned
+ * (rather than logged and swallowed) so the startup caller can log one line
+ * and tests can assert the gates without reading the logger.
+ *
+ *   - `not-applicable` - not a build/platform where Desktop owns
+ *     registration, or the user removed the host on this device.
+ *   - `agent-not-enabled` - SMAppService is not reporting `enabled`, so we
+ *     have no proof a host would still start at login without the CLI
+ *     registration. Deliberately does nothing (see the doc below).
+ *   - `nothing-to-retire` - positively no competing manifest on disk. Steady
+ *     state, and never inferred from a directory we could not read.
+ *   - `retired` - a competing manifest was found and removed.
+ *   - `retire-failed` - the manifest was not removed: either the removal
+ *     itself failed, or `~/Library/LaunchAgents` was unreadable so we could
+ *     not tell whether one is there. Both leave the relapse possible, which
+ *     is what this value means.
+ */
+export type LaunchCompetingRegistrationRepair =
+  | "not-applicable"
+  | "agent-not-enabled"
+  | "nothing-to-retire"
+  | "retired"
+  | "retire-failed";
+
+/**
+ * Remove a `~/Library/LaunchAgents/<cli-label>.plist` that would start a
+ * SECOND host beside this app's SMAppService agent at the next login.
+ *
+ * Why this exists separately from `retireLegacyLabelRegistrations`, which
+ * does strictly more: that runs ONLY inside a committed register cycle, and
+ * the routine "open the app, host is already healthy" path never runs one.
+ * A machine that acquired a dual registration during the v1.1.7 window
+ * therefore keeps it indefinitely - updating to v1.1.8 does not clear it,
+ * because a desktop auto-update swaps bytes without a register cycle and
+ * the CLI now refuses to touch the plist rather than removing it. Both jobs
+ * are `RunAtLoad`, so every login starts two hosts against one data dir;
+ * they start simultaneously, which is precisely the case the CLI
+ * supervisor's incumbent probe cannot see (no `pid.json` exists yet).
+ *
+ * Two deliberate narrowings versus the register cycle:
+ *
+ *   1. Gated on SMAppService reporting `enabled`. Under `requires-approval`
+ *      the user has disabled the login item and launchd will not spawn the
+ *      agent; removing the CLI plist there would take away the machine's
+ *      only auto-starting host. `not-registered` / `not-found` /
+ *      `not-supported` fail into the same no-op. Same availability bias as
+ *      `findLiveIncumbentHost` in the CLI: never leave a machine with no
+ *      host to prevent a duplicate.
+ *
+ *      ACCEPTED GAP: `enabled` proves the agent is REGISTERED and enabled,
+ *      not that launchd can actually spawn it. An agent wedged by a stale
+ *      BTM Lightweight Code Requirement (the LWCR / `EX_CONFIG` failure
+ *      documented on `registerHostLoginItem` above) also reads `enabled`
+ *      while every spawn is SIGKILLed inside dyld init - and that is the
+ *      same v1.1.7 cohort this repair targets. On such a machine the CLI
+ *      registration may be the only one that works, and this deletes it.
+ *      Accepted rather than gated harder: distinguishing a wedged agent
+ *      needs a real spawn observation this code has no access to at launch,
+ *      and the damage self-heals on the next app launch, whose register
+ *      cycle does the bootout + re-register that clears the LWCR. Revisit
+ *      if the wedge is seen in the field alongside a dual registration.
+ *   2. Removes the manifest but does NOT bootout the running job. Boot-out
+ *      would kill a host that may be serving this session's tabs right now
+ *      - and at launch we have no idea whether the competing host or the
+ *      agent is the one `pid.json` currently names. Deleting the manifest
+ *      is the durable half: the duplicate cannot return at the next login,
+ *      and the machine converges to one host without anything being ripped
+ *      away mid-session. The residual is that a machine already running two
+ *      hosts keeps running two until the next login. The CLI's
+ *      `retireCompetingRegistration` DOES bootout, because it only runs
+ *      inside an explicit `host install` the user asked for.
+ *
+ * Best-effort and idempotent; safe to call on every launch. Serialized
+ * through the same registration lock as the register cycle so the two can
+ * never interleave on the CLI label.
+ */
+export function retireCompetingCliRegistrationAtLaunch(): Promise<LaunchCompetingRegistrationRepair> {
+  return withHostLoginItemRegistrationLock(
+    retireCompetingCliRegistrationUnserialized,
+  );
+}
+
+async function retireCompetingCliRegistrationUnserialized(): Promise<LaunchCompetingRegistrationRepair> {
+  if (!(await hostManagesHostLoginItem())) return "not-applicable";
+  // A host the user removed on this device must not be repaired back into
+  // existence; `unregisterHostLoginItem` deliberately leaves the machine
+  // alone once the sentinel is set.
+  if (await isHostRemovedByUser()) return "not-applicable";
+  if (readHostLoginItemStatus() !== "enabled") return "agent-not-enabled";
+  const outcome = await removeCliLabelManifest();
+  if (outcome === "absent") return "nothing-to-retire";
+  if (outcome === "failed") return "retire-failed";
+  log.info(
+    "[host-login-item] retired competing CLI registration (dual-registration repair)",
+  );
+  return "retired";
 }
 
 /**

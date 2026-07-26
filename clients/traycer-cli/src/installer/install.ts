@@ -15,6 +15,8 @@ import {
 import {
   createDefaultRegistryClient,
   currentHostPlatformKey,
+  releaseDownloadSlot,
+  releaseDownloadSlotOwnership,
 } from "../registry";
 import type { ProgressInfo } from "../runner/output";
 import type { Environment } from "../runner/environment";
@@ -23,6 +25,7 @@ import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { createOwnedTempDir } from "../store/owned-temp";
 import { hostHomeDir, hostInstallDir, ensureHostHomeDir } from "../store/paths";
 import { extractHostSource, resolveHostExecutable } from "./extract";
+import { createExtractHeartbeat } from "./extract-heartbeat";
 import { hashFileSha256 } from "./sha256";
 import {
   invalidateAsideDir,
@@ -212,6 +215,12 @@ export async function stageHostInstallSource(
     await extractHostSource({
       source: staging.archivePath,
       targetDir: staging.stagingDir,
+      onEntry: createExtractHeartbeat({
+        environment: opts.environment,
+        archivePath: staging.archivePath,
+        version: staging.version,
+        onProgress: opts.onProgress,
+      }),
     });
     logger.info("Host install archive extracted", {
       environment: opts.environment,
@@ -255,7 +264,9 @@ export async function stageHostInstallSource(
     // The owner-tokened temp (and its archive, if separate) is
     // exclusively ours until committed - a thrown extract/resolve must
     // not leak it. Mirrors `discardStagedHostInstallSource`'s cleanup
-    // for the "staged but never committed" case.
+    // for the "staged but never committed" case. The archive itself is
+    // NOT consumed: extraction is exactly what failed, so a retry needs
+    // these same verified bytes.
     await cleanupStagingArtifacts(
       {
         environment: opts.environment,
@@ -263,6 +274,7 @@ export async function stageHostInstallSource(
         archiveIsTemporary: staging.archiveIsTemporary,
         stagingDir: staging.stagingDir,
         swapped: false,
+        archiveConsumed: false,
       },
       logger,
     );
@@ -287,6 +299,9 @@ export async function discardStagedHostInstallSource(
       archiveIsTemporary: staged.archiveIsTemporary,
       stagingDir: staged.stagingDir,
       swapped: false,
+      // Declining to commit is not consuming: `--if-idle` finding the host
+      // busy is a retry-later, and that retry re-stages from the archive.
+      archiveConsumed: false,
     },
     logger,
   );
@@ -371,6 +386,10 @@ export async function commitHostInstallSource(
         archiveIsTemporary: opts.staged.archiveIsTemporary,
         stagingDir: opts.staged.stagingDir,
         swapped,
+        // The swap is the moment the archive's contents become the install,
+        // so it is also the moment the archive stops being worth keeping. A
+        // commit that threw before it leaves a retry to re-stage.
+        archiveConsumed: swapped,
       },
       logger,
     );
@@ -390,13 +409,29 @@ async function cleanupStagingArtifacts(
     readonly archiveIsTemporary: boolean;
     readonly stagingDir: string;
     readonly swapped: boolean;
+    // Whether this install is finished with the archive. False on every
+    // path that could still be retried - see the two release calls below.
+    readonly archiveConsumed: boolean;
   },
   logger: ILogger,
 ): Promise<void> {
   if (opts.archiveIsTemporary) {
-    await rm(opts.archivePath, { force: true }).catch((err) => {
-      logger.warn("Host install failed to remove temporary archive", {
+    // Neither branch may be a bare `rm`: a registry-downloaded archive
+    // lives in the shared download cache and carries an ownership claim
+    // that has to come off with it (registry/download-cache.ts).
+    const release = opts.archiveConsumed
+      ? // Installed, so the archive has done its job - drop it and the claim.
+        releaseDownloadSlot
+      : // Staging failed, or the caller chose not to commit. The bytes are
+        // already sha256- and minisign-verified, and a retry re-runs
+        // extraction against this same archive, so discarding them here
+        // forces a fresh ~800MB transfer that cannot yield anything
+        // different. Drop only the claim and let the next run resume it.
+        releaseDownloadSlotOwnership;
+    await release(opts.environment, opts.archivePath).catch((err) => {
+      logger.warn("Host install failed to release temporary archive", {
         environment: opts.environment,
+        archiveConsumed: opts.archiveConsumed,
         errorName: errorFromUnknown(err).name,
         errorMessage: errorFromUnknown(err).message,
       });

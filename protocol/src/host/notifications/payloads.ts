@@ -112,7 +112,9 @@ export type HostNotificationChatStoppedPayload = z.infer<
 
 /**
  * TUI `agent.stopped` payload: the "epic" shape. `agentName` is the
- * terminal-agent name — NOT a chat title; these rows carry no chat binding.
+ * terminal-agent name — NOT a chat title. The row itself is chat-scoped to
+ * `tuiAgentId` (hosts minted these rows without a chat binding before that
+ * change, so entries from older rows may still carry a null `chatId`).
  */
 export const hostNotificationEpicStoppedPayloadSchema = z
   .object({

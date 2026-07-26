@@ -163,13 +163,6 @@ export function NotificationsBell() {
                 className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-background"
               />
             )}
-            {bellState.kind === "unknown" && (
-              <span
-                data-testid="notifications-unknown-indicator"
-                aria-hidden
-                className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-muted-foreground/50 ring-2 ring-background"
-              />
-            )}
           </Button>
         </PopoverTrigger>
       </TooltipWrapper>

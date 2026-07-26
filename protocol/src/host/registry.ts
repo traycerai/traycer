@@ -4,7 +4,11 @@ import {
   defineUpgradePath,
   type DowngradeResult,
 } from "@traycer/protocol/framework/index";
-import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  defineVersionedStreamRpcRegistry,
+  type UncheckedStreamMethodVersionRegistry,
+  type VersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   agentCreateV10,
   agentCreateV20,
@@ -29,15 +33,22 @@ import {
   agentListDowngradeV5ToV2,
   agentListDowngradeV5ToV3,
   agentListDowngradeV5ToV4,
+  agentListDowngradeV6ToV1,
+  agentListDowngradeV6ToV2,
+  agentListDowngradeV6ToV3,
+  agentListDowngradeV6ToV4,
+  agentListDowngradeV6ToV5,
   agentListUpgradeV1ToV2,
   agentListUpgradeV2ToV3,
   agentListUpgradeV3ToV4,
   agentListUpgradeV4ToV5,
+  agentListUpgradeV5ToV6,
   agentListV10,
   agentListV20,
   agentListV30,
   agentListV40,
   agentListV50,
+  agentListV60,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -48,22 +59,44 @@ import {
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentConfigureDowngradeV20ToV10,
+  agentConfigureDowngradeV30ToV10,
+  agentConfigureDowngradeV30ToV20,
   agentConfigureV10,
   agentConfigureV20,
+  agentConfigureV30,
   agentConfigureUpgradeV10ToV20,
+  agentConfigureUpgradeV20ToV30,
   agentGetProviderProfileRateLimitsDowngradeV20ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV30ToV10,
+  agentGetProviderProfileRateLimitsDowngradeV30ToV20,
   agentGetProviderProfileRateLimitsV10,
   agentGetProviderProfileRateLimitsV20,
+  agentGetProviderProfileRateLimitsV30,
   agentGetProviderProfileRateLimitsUpgradeV10ToV20,
+  agentGetProviderProfileRateLimitsUpgradeV20ToV30,
   agentListProviderProfilesDowngradeV20ToV10,
+  agentListProviderProfilesDowngradeV30ToV10,
+  agentListProviderProfilesDowngradeV30ToV20,
   agentListProviderProfilesV10,
   agentListProviderProfilesV20,
+  agentListProviderProfilesV30,
   agentListProviderProfilesUpgradeV10ToV20,
+  agentListProviderProfilesUpgradeV20ToV30,
 } from "@traycer/protocol/host/agent/profiles";
 import {
   agentInboxReadV10,
   agentInboxSubscribeV10,
+  agentInboxSubscribeV11,
 } from "@traycer/protocol/host/agent/inbox";
+import {
+  agentRolesClaimUpgradeV10ToV11,
+  agentRolesClaimV10,
+  agentRolesClaimV11,
+  agentRolesListV10,
+  agentRolesRelinquishUpgradeV10ToV11,
+  agentRolesRelinquishV10,
+  agentRolesRelinquishV11,
+} from "@traycer/protocol/host/agent/roles";
 import {
   agentGuiGetPlanV10,
   agentGuiListCommandsV10,
@@ -77,23 +110,31 @@ import {
   agentGuiListHarnessesDowngradeV5ToV2,
   agentGuiListHarnessesDowngradeV5ToV3,
   agentGuiListHarnessesDowngradeV5ToV4,
+  agentGuiListHarnessesDowngradeV6ToV1,
+  agentGuiListHarnessesDowngradeV6ToV2,
+  agentGuiListHarnessesDowngradeV6ToV3,
+  agentGuiListHarnessesDowngradeV6ToV4,
+  agentGuiListHarnessesDowngradeV6ToV5,
   agentGuiListHarnessesUpgradeV1ToV2,
   agentGuiListHarnessesUpgradeV20ToV21,
   agentGuiListHarnessesUpgradeV2ToV3,
   agentGuiListHarnessesUpgradeV3ToV4,
   agentGuiListHarnessesUpgradeV4ToV5,
+  agentGuiListHarnessesUpgradeV5ToV6,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
   agentGuiListHarnessesV30,
   agentGuiListHarnessesV40,
   agentGuiListHarnessesV50,
+  agentGuiListHarnessesV60,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
   chatSubscribeV12,
   chatSubscribeV13,
   chatSubscribeV14,
+  chatSubscribeV15,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -147,13 +188,16 @@ import {
   epicListCommentThreadsV10,
   epicListTasksV10,
   epicListTasksV11,
+  epicListTasksV12,
   epicListTasksUpgradeV10ToV11,
+  epicListTasksUpgradeV11ToV12,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
   epicMentionStoriesV10,
   epicMentionTicketsV10,
   epicRemoveRepoV10,
+  epicRecordViewedV10,
   epicRenameArtifactV10,
   epicRenameChatV10,
   epicUpdateChatProfileV10,
@@ -167,6 +211,7 @@ import {
   epicResolveArtifactByPathV10,
   epicSearchArtifactsV10,
   epicRevokeCollaboratorV10,
+  epicSetChatArchivedV10,
   epicSetCommentThreadResolvedV10,
   epicSetPinnedV10,
   epicSubscribeV10,
@@ -353,10 +398,12 @@ import {
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
+  providersListResponseSchemaV50,
   downgradeProviderCliStateToV10,
   downgradeProviderCliStateListToV20,
   downgradeProviderCliStateListToV30,
   downgradeProviderCliStateListToV40,
+  downgradeProviderCliStateListToV50,
   upgradeProviderCliStateV10ToV20,
   upgradeProviderCliStateV10ToMutationV20,
   providersRemoveCustomPathRequestSchema,
@@ -1041,7 +1088,104 @@ export const providersListV50 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 5, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
+  // Frozen: `cli-v1.1.8` shipped this line, so it must serve the v5.0 id set
+  // rather than the live one. Before that release it pointed at the canonical
+  // schema, which is exactly how `omp` first tried to ride v5.0.
+  responseSchema: providersListResponseSchemaV50,
+});
+
+export const providersListV60 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 6, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV5ToV6 = defineUpgradePath<
+  typeof providersListV50,
+  typeof providersListV60
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 6, minor: 0 },
+  // Purely additive: a v5.0 response without omp is already a valid v6.0 one.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersListDowngradeV6ToV5 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV50
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop omp so an already-shipped v5.0 client's strict decode never sees it.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV50.parse({
+      providers: downgradeProviderCliStateListToV50(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV6ToV4 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV40
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV40.parse({
+      providers: downgradeProviderCliStateListToV40(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV6ToV3 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV30
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV6ToV2 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV20
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV6ToV1 = defineDowngradePath<
+  typeof providersListV60,
+  typeof providersListV10
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: downgradeProviderStateListForV10(response.providers),
+    }),
+  }),
 });
 
 export const providersListUpgradeV4ToV5 = defineUpgradePath<
@@ -2504,6 +2648,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         4: agentGuiListHarnessesDowngradeV5ToV4,
       },
     },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGuiListHarnessesV60,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV5ToV6,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGuiListHarnessesDowngradeV6ToV1,
+        2: agentGuiListHarnessesDowngradeV6ToV2,
+        3: agentGuiListHarnessesDowngradeV6ToV3,
+        4: agentGuiListHarnessesDowngradeV6ToV4,
+        5: agentGuiListHarnessesDowngradeV6ToV5,
+      },
+    },
   },
   "agent.gui.listModels": {
     1: {
@@ -2787,6 +2947,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         4: agentListDowngradeV5ToV4,
       },
     },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListV60,
+          upgradeFromPreviousVersion: agentListUpgradeV5ToV6,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListDowngradeV6ToV1,
+        2: agentListDowngradeV6ToV2,
+        3: agentListDowngradeV6ToV3,
+        4: agentListDowngradeV6ToV4,
+        5: agentListDowngradeV6ToV5,
+      },
+    },
   },
   "agent.sendMessage": {
     1: {
@@ -2811,6 +2987,62 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Agent role claims. Non-floor, so each declares its missing-peer behavior:
+  // an old host simply does not advertise them and the caller gets
+  // E_HOST_UNSUPPORTED for these calls only. Registered here in the SAME change
+  // that adds the resolvers - advertising a method the host cannot dispatch is
+  // exactly how `agent.tui.listHarnesses` shipped broken.
+  "agent.roles.claim": {
+    1: {
+      // @1.1 adds `deferredToPrompt` on the awareness report. @1.0 stays
+      // installed and FROZEN; a negotiated v1.0 peer gets deferred ids folded
+      // into `unreachable` at host dispatch after canonical v1.1 validation
+      // (not via a preprocess wrapper on the released v1.0 schema).
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: agentRolesClaimV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentRolesClaimV11,
+          upgradeFromPreviousVersion: agentRolesClaimUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "agent.roles.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentRolesListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "agent.roles.relinquish": {
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: agentRolesRelinquishV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentRolesRelinquishV11,
+          upgradeFromPreviousVersion: agentRolesRelinquishUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "agent.inbox.read": {
     1: {
@@ -2850,7 +3082,7 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -2859,6 +3091,10 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: {
           contract: epicListTasksV11,
           upgradeFromPreviousVersion: epicListTasksUpgradeV10ToV11,
+        },
+        2: {
+          contract: epicListTasksV12,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -2870,6 +3106,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: epicSetPinnedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.recordViewed": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicRecordViewedV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -3317,6 +3566,26 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
       downgradePathsFromLatest: {},
     },
+  },
+  // Optional (non-floor) capability: durable host-backed archive toggle for a
+  // chat OR terminal-agent record (single method keyed by id). The
+  // `degrade: unsupported` strategy EXCLUDES it from the released floor and the
+  // released-method-names snapshot - adding it to the floor would be
+  // handshake-fatal for existing clients. Old peers lack it in their optional
+  // manifest; the caller gets E_HOST_UNSUPPORTED for this call only and hides
+  // the archive affordance.
+  "epic.setChatArchived": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicSetChatArchivedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
   },
   "epic.createTuiAgent": {
     1: {
@@ -3907,6 +4176,22 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         4: providersListDowngradeV5ToV4,
       },
     },
+    6: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV60,
+          upgradeFromPreviousVersion: providersListUpgradeV5ToV6,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV6ToV1,
+        2: providersListDowngradeV6ToV2,
+        3: providersListDowngradeV6ToV3,
+        4: providersListDowngradeV6ToV4,
+        5: providersListDowngradeV6ToV5,
+      },
+    },
   },
 
   "providers.setSelection": {
@@ -4319,6 +4604,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: agentListProviderProfilesDowngradeV20ToV10,
       },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentListProviderProfilesV30,
+          upgradeFromPreviousVersion: agentListProviderProfilesUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentListProviderProfilesDowngradeV30ToV10,
+        2: agentListProviderProfilesDowngradeV30ToV20,
+      },
+    },
   },
   "agent.getProviderProfileRateLimits": {
     degrade: { kind: "unsupported" },
@@ -4345,6 +4643,20 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: agentGetProviderProfileRateLimitsDowngradeV20ToV10,
       },
     },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentGetProviderProfileRateLimitsV30,
+          upgradeFromPreviousVersion:
+            agentGetProviderProfileRateLimitsUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentGetProviderProfileRateLimitsDowngradeV30ToV10,
+        2: agentGetProviderProfileRateLimitsDowngradeV30ToV20,
+      },
+    },
   },
   "agent.configure": {
     degrade: { kind: "unsupported" },
@@ -4367,6 +4679,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         },
       },
       downgradePathsFromLatest: { 1: agentConfigureDowngradeV20ToV10 },
+    },
+    3: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentConfigureV30,
+          upgradeFromPreviousVersion: agentConfigureUpgradeV20ToV30,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: agentConfigureDowngradeV30ToV10,
+        2: agentConfigureDowngradeV30ToV20,
+      },
     },
   },
 } as const;
@@ -4402,35 +4727,26 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *    background-items controls as an additive minor instead of a major, to
  *    stay compatible with host-v1.0.0).
  */
-export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
+// Named ahead of `hostStreamRpcRegistry` (mirrors `HOST_RPC_REGISTRY_DEFINITION`
+// above), which still validates every entry against this literal's precise
+// type at the `defineVersionedStreamRpcRegistry` call site below - only the
+// EXPORTED const's declared type is widened (see the comment there).
+//
+// `chat.subscribe` is deliberately declared apart from every other method
+// here, then merged back in via spread into `HOST_STREAM_RPC_REGISTRY_DEFINITION`
+// below: its 6-minor discriminated-union snapshot schema is large enough that
+// referencing `typeof` on a merged const that includes it - from ANY exported
+// type position - hits TS7056 during `.d.ts` emission, even when that
+// position only picks OTHER methods out of the merge. Keeping this const free
+// of `chat.subscribe` means `typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`
+// never has to expand it (see `HostStreamRpcMethodMap` below).
+const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   "epic.subscribe": {
     1: {
       latestMinor: 0,
       versions: {
         0: {
           contract: epicSubscribeV10,
-        },
-      },
-    },
-  },
-  "chat.subscribe": {
-    1: {
-      latestMinor: 4,
-      versions: {
-        0: {
-          contract: chatSubscribeV10,
-        },
-        1: {
-          contract: chatSubscribeV11,
-        },
-        2: {
-          contract: chatSubscribeV12,
-        },
-        3: {
-          contract: chatSubscribeV13,
-        },
-        4: {
-          contract: chatSubscribeV14,
         },
       },
     },
@@ -4544,10 +4860,17 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "agent.inbox.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds the additive `role-awareness` frame. @1.0 stays installed and
+      // FROZEN: a monitor that negotiated it never receives the new kind, and
+      // the resolver gates on the negotiated version rather than assuming the
+      // peer will tolerate an unknown frame.
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentInboxSubscribeV10,
+        },
+        1: {
+          contract: agentInboxSubscribeV11,
         },
       },
     },
@@ -4592,6 +4915,66 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
       },
     },
   },
-});
+} as const;
 
-export type HostStreamRpcRegistry = typeof hostStreamRpcRegistry;
+const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
+  ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
+  "chat.subscribe": {
+    1: {
+      latestMinor: 5,
+      versions: {
+        0: {
+          contract: chatSubscribeV10,
+        },
+        1: {
+          contract: chatSubscribeV11,
+        },
+        2: {
+          contract: chatSubscribeV12,
+        },
+        3: {
+          contract: chatSubscribeV13,
+        },
+        4: {
+          contract: chatSubscribeV14,
+        },
+        5: {
+          contract: chatSubscribeV15,
+        },
+      },
+    },
+  },
+} as const;
+
+// `chat.subscribe`'s value slot is widened to the generic
+// `UncheckedStreamMethodVersionRegistry` shape here rather than reusing
+// `typeof HOST_STREAM_RPC_REGISTRY_DEFINITION` (which includes it): every
+// OTHER streaming method is built from `typeof
+// HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION`, a const that never contains
+// `chat.subscribe`'s 6-minor discriminated-union schema, so `.d.ts` emission
+// never has to print it - `keyof HostStreamRpcRegistry` and `ParamsOf<...>`
+// stay precise for every method except `chat.subscribe`. Its callers (e.g.
+// `ChatStreamClient`) lose compile-time verification of their open-request
+// shape against this registry alone; they still get it from the
+// directly-imported contract const (`chatSubscribeV15`), so this is a
+// narrow, intentional trade-off - confirmed by a full workspace
+// compile+build with this annotation in place.
+type HostStreamRpcMethodMap = typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
+  readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
+};
+
+export type HostStreamRpcRegistry =
+  VersionedStreamRpcRegistry<HostStreamRpcMethodMap>;
+
+// Annotated with `HostStreamRpcRegistry` itself (not `typeof
+// HOST_STREAM_RPC_REGISTRY_DEFINITION`, which is more precise but exceeds
+// TS7056's declaration-emit ceiling once `chat.subscribe` alone carries this
+// many minors): `defineVersionedStreamRpcRegistry` still validates the full
+// precise literal at this call site (nothing here weakens that check), and
+// its precise return type remains assignable to this narrower annotation
+// (the only difference is `chat.subscribe`'s widened value slot, and a
+// branded, more precise value is always assignable into an unbranded,
+// less precise hole) - confirmed by a full workspace compile+build with
+// this annotation in place.
+export const hostStreamRpcRegistry: HostStreamRpcRegistry =
+  defineVersionedStreamRpcRegistry(HOST_STREAM_RPC_REGISTRY_DEFINITION);

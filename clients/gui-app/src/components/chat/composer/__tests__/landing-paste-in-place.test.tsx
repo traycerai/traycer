@@ -490,7 +490,7 @@ function makeLandingEditor(jobs: Array<Promise<void>>): Editor {
     element,
     extensions: buildComposerExtensions({
       pickerStore,
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: { current: () => undefined },
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,
@@ -513,7 +513,7 @@ function makeEditorWithoutIngest(): Editor {
     element,
     extensions: buildComposerExtensions({
       pickerStore: createComposerPickerStore(),
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: { current: () => undefined },
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,

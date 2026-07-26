@@ -118,6 +118,13 @@ function canvasWithPaneActivationHistory(
 }
 
 describe("epic canvas store header tabs", () => {
+  it("uses the user-facing task placeholder for a new untitled tab", () => {
+    const created = useEpicCanvasStore.getState().createEpicFromPrompt("   ");
+
+    expect(created.name).toBe("Untitled task");
+    expect(requireTab(created.tabId).name).toBe("Untitled task");
+  });
+
   it("sanitizes removed Workspaces tile refs from local persisted state", async () => {
     window.localStorage.setItem(
       epicCanvasKey(null),

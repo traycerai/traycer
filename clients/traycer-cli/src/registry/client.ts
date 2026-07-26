@@ -1,10 +1,12 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Environment } from "../runner/environment";
 import type { ProgressInfo } from "../runner/output";
 import { createCliLogger, errorFromUnknown } from "../logger";
-import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
+import {
+  acquireDownloadSlot,
+  releaseDownloadSlot,
+  releaseDownloadSlotOwnership,
+} from "./download-cache";
 import {
   downloadToFile,
   fetchText,
@@ -312,16 +314,39 @@ export async function createRegistryClient(
           exitCode: 1,
         });
       }
-      const tmpDir = await mkdtemp(join(tmpdir(), "traycer-host-dl-"));
+      // The archive path is stable across CLI invocations (keyed by
+      // version + sha256) so a re-spawned CLI resumes the previous
+      // process's partial file instead of starting from zero - the whole
+      // point of traycer#585/#588. `acquireDownloadSlot` owns the
+      // concurrency + sweep policy for that shared location.
+      const slot = await acquireDownloadSlot({
+        environment: opts.environment,
+        version: entry.version,
+        sha256: asset.sha256,
+        urlBasename: archiveBasenameFromUrl(asset.url),
+      });
+      const archivePath = slot.archivePath;
       logger.debug("Registry download started", {
         environment: opts.environment,
+        resumable: slot.resumable,
       });
-      // Track whether we succeeded so the `finally` block can clean up
-      // the tmpdir on failure. On success the caller (installer) is
-      // responsible for moving the archive out and removing the dir.
+      // The `finally` has to tell three outcomes apart, and it needs BOTH
+      // of these to do it. `transferred` says the bytes are complete and
+      // sha256-verified; `failure` says whether what went wrong afterwards
+      // condemns them.
+      //
+      // Only a TRUST failure condemns an archive: a bad signature, or a
+      // keyId that does not match the manifest. Those reproduce on every
+      // retry, so the file must go. Everything else after the transfer -
+      // above all fetching the sub-1KB `.minisig`, which gives up after
+      // four attempts and would fail routinely on the throttled links this
+      // work exists for - is a transport failure, and deleting a fully
+      // verified 700MB archive because a tiny signature fetch flaked is
+      // exactly the "downloads forever, never finishes" loop being fixed.
       let succeeded = false;
+      let transferred = false;
+      let failure: unknown = null;
       try {
-        const archivePath = join(tmpDir, archiveBasenameFromUrl(asset.url));
         const download = await transport.downloadToFile({
           url: asset.url,
           destPath: archivePath,
@@ -331,6 +356,7 @@ export async function createRegistryClient(
           onHeartbeat: (heartbeat) =>
             emitRegistryHeartbeat(opts.onProgress, "archive", heartbeat),
         });
+        transferred = true;
         const signatureText = await transport.fetchText({
           url: asset.signatureUrl,
           onHeartbeat: (heartbeat) =>
@@ -374,25 +400,45 @@ export async function createRegistryClient(
           signatureKeyId: verifyResult.keyId,
           signatureVerifiedAt: new Date().toISOString(),
         };
+      } catch (err) {
+        failure = err;
+        throw err;
       } finally {
-        // On failure, scrub the tmpdir so we don't leak the partial
-        // archive (downloadToFile aborts on size-cap / stream error
-        // without unlinking) or an empty tmpdir. Best-effort: rm errors
-        // are swallowed so they don't mask the original throw - the
-        // pathological case (rm fails on a tmpdir) leaves at worst the
-        // empty dir behind, which the OS cleans up on reboot anyway.
-        if (!succeeded) {
-          await rm(tmpDir, { recursive: true, force: true }).catch((err) => {
-            logger.warn(
-              "Registry failed to clean temporary download directory",
-              {
-                environment: opts.environment,
-                errorName: errorFromUnknown(err).name,
-              },
-            );
-          });
-          logger.warn("Registry cleaned failed download attempt", {
+        // On success the caller owns the verified archive until it has
+        // extracted it, and releases the slot itself.
+        //
+        // Both releases are `.catch`-guarded. Today neither can reject -
+        // download-cache.ts swallows its own fs errors - but that is its
+        // internal detail, and an unguarded await in a `finally` would let a
+        // future change there replace the error being propagated. Callers
+        // route on `REGISTRY_UNAVAILABLE` vs `HOST_VERIFY_FAILED`; losing
+        // that code to a cleanup failure would turn a retryable download
+        // into an unrecognized one.
+        if (!succeeded && transferred && isTrustFailure(failure)) {
+          // Complete bytes that the trust chain rejected. Resuming into
+          // them would just reproduce the same verdict, so drop the file
+          // with the claim.
+          await releaseDownloadSlot(opts.environment, archivePath).catch(
+            () => undefined,
+          );
+          logger.warn("Registry discarded an unverifiable download", {
             environment: opts.environment,
+          });
+        } else if (!succeeded) {
+          // Keep whatever landed on disk and drop only the ownership
+          // claim, so the next invocation resumes it. Covers both a failed
+          // transfer (the case a throttled connection hits over and over)
+          // and a post-transfer transport failure, where the archive is
+          // complete and sha256-verified and only the signature fetch has
+          // yet to succeed - the next run re-verifies it over one 416
+          // round-trip instead of re-downloading it.
+          await releaseDownloadSlotOwnership(
+            opts.environment,
+            archivePath,
+          ).catch(() => undefined);
+          logger.warn("Registry left a resumable download in place", {
+            environment: opts.environment,
+            transferComplete: transferred,
           });
         }
       }
@@ -484,8 +530,13 @@ function emitRegistryHeartbeat(
     stage: `registry-${resource}-${heartbeat.phase}`,
     message: registryHeartbeatMessage(resourceLabel, heartbeat),
     percent: null,
-    bytes: heartbeat.attempt,
-    totalBytes: heartbeat.maxAttempts,
+    // Attempt counters belong in the message, not in the byte fields. A
+    // heartbeat is a liveness tick, not a transfer measurement: putting
+    // `attempt`/`maxAttempts` here made Desktop's progress bar redraw as
+    // "1 byte of 4" every time a retry fired mid-download. All three
+    // numeric fields stay null so the renderer holds the last real values.
+    bytes: null,
+    totalBytes: null,
   });
 }
 
@@ -494,12 +545,28 @@ function registryHeartbeatMessage(
   heartbeat: NetworkHeartbeat,
 ): string {
   if (heartbeat.phase === "attempt") {
-    return `fetching ${resourceLabel} (attempt ${heartbeat.attempt}/${heartbeat.maxAttempts})`;
+    // No denominator when the counter has no ceiling worth quoting - an
+    // archive download is bounded by consecutive stalls, not by attempts,
+    // so "attempt 41/200" would read as a countdown that is not running.
+    const of =
+      heartbeat.maxAttempts === null ? "" : `/${heartbeat.maxAttempts}`;
+    return `fetching ${resourceLabel} (attempt ${heartbeat.attempt}${of})`;
   }
   if (heartbeat.phase === "watchdog") {
     return `fetching ${resourceLabel} stalled; retrying`;
   }
   return `retrying ${resourceLabel} shortly`;
+}
+
+// Whether a post-transfer failure condemns the bytes on disk. The verify
+// chain reports `HOST_VERIFY_FAILED` for everything that makes an archive
+// untrustworthy (a signature that does not check out, a keyId the manifest
+// does not pin); a network failure fetching the signature reports
+// `REGISTRY_UNAVAILABLE` and says nothing about the archive itself.
+function isTrustFailure(err: unknown): boolean {
+  return (
+    err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_VERIFY_FAILED
+  );
 }
 
 function archiveBasenameFromUrl(url: string): string {

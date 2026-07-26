@@ -466,11 +466,23 @@ export interface StreamTraycerCliOptions {
   readonly args: readonly string[];
   readonly onEvent: (event: NdjsonEvent) => void;
   readonly env: Readonly<Record<string, string>> | null;
-  readonly timeoutMs: number;
-  // Fixup C4: killed the moment this fires (SIGKILL, same as the timeout/
-  // stdout-overflow paths below) instead of only flipping `.aborted` on a
-  // controller nothing downstream ever consulted. `null` for callers with
-  // no cancellation surface (every mutation-lane call via `streamBundled` -
+  // INACTIVITY budget, not a wall-clock ceiling: the timer is armed at
+  // spawn and re-armed on every NDJSON event the child emits, so the child
+  // is only killed once it has gone quiet for this long.
+  //
+  // It used to be an absolute cap. That made a first install impossible on
+  // any connection slower than <archive size> / <cap> (traycer#585/#589):
+  // the CLI was SIGKILLed at exactly 10 minutes with bytes still flowing,
+  // and the partial download died with it. The CLI already guarantees a
+  // liveness signal well inside any sane window - a progress event per
+  // chunk, plus watchdog/backoff heartbeats while a transfer is stalled
+  // (`registry/fetch-resource.ts`'s 30s `DOWNLOAD_WATCHDOG_MS`) - so
+  // silence, not duration, is the real evidence that a child is wedged.
+  readonly idleTimeoutMs: number;
+  // Fixup C4: killed the moment this fires (SIGKILL, same as the idle-
+  // timeout path below) instead of only flipping `.aborted` on a controller
+  // nothing downstream ever consulted. `null` for callers with no
+  // cancellation surface (every mutation-lane call via `streamBundled` -
   // only the download lane's `AbortController` ever aborts).
   readonly signal: AbortSignal | null;
 }
@@ -536,7 +548,8 @@ async function streamTraycerCliJsonWithInvocation<T>(
         opts.signal.removeEventListener("abort", onAbort);
       }
     };
-    const timer = setTimeout(() => {
+    let timer: NodeJS.Timeout | null = null;
+    const onIdleTimeout = (): void => {
       if (settled) return;
       // Killing a timed-out child does not mean it has released its files.
       // Keep this stream promise pending until `close`, just like explicit
@@ -544,7 +557,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
       // uninstall while the child is still exiting.
       timeoutError = new TraycerCliError(
         {
-          message: `traycer-cli timed out after ${opts.timeoutMs}ms (${augmentedArgs.join(" ")})`,
+          message: `traycer-cli produced no output for ${opts.idleTimeoutMs}ms (${augmentedArgs.join(" ")})`,
           code: null,
           details: null,
           exitCode: null,
@@ -557,7 +570,21 @@ async function streamTraycerCliJsonWithInvocation<T>(
       } catch {
         // ignore - already exited
       }
-    }, opts.timeoutMs);
+    };
+    // Re-armed by `armIdleTimer` on every NDJSON event below. Deliberately
+    // driven by parsed events rather than raw stdout bytes: in `--json`
+    // mode every line the CLI writes is an event, so a child emitting
+    // anything else is not evidence of progress.
+    const armIdleTimer = (): void => {
+      if (settled || abortError !== null || timeoutError !== null) return;
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(onIdleTimeout, opts.idleTimeoutMs);
+    };
+    const clearIdleTimer = (): void => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    };
+    armIdleTimer();
     // Fixup C4: the ONLY current caller (`runDownloadLane`'s
     // `abortInFlightDownload`) used to flip `AbortController.signal.aborted`
     // with nothing downstream ever wired to it - the spawned CLI subprocess
@@ -568,7 +595,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
     // cannot race a child still holding or promoting files.
     const onAbort = (): void => {
       if (settled || abortError !== null || timeoutError !== null) return;
-      clearTimeout(timer);
+      clearIdleTimer();
       abortError = new TraycerCliError(
         {
           message: `traycer-cli aborted: ${augmentedArgs.join(" ")}`,
@@ -615,6 +642,10 @@ async function streamTraycerCliJsonWithInvocation<T>(
         }
         const event = parseNdjsonEvent(parsed);
         if (event === null) continue;
+        // The child is demonstrably alive and reporting: restart its
+        // inactivity budget. This is what lets a multi-hour download on a
+        // throttled link run to completion.
+        armIdleTimer();
         if (event.type === "progress") {
           opts.onEvent(event);
           continue;
@@ -647,7 +678,7 @@ async function streamTraycerCliJsonWithInvocation<T>(
     child.on("error", (err) => {
       if (settled || abortError !== null || timeoutError !== null) return;
       settled = true;
-      clearTimeout(timer);
+      clearIdleTimer();
       cleanupAbortListener();
       reject(
         new TraycerCliError(
@@ -663,10 +694,15 @@ async function streamTraycerCliJsonWithInvocation<T>(
       );
     });
 
-    child.on("close", (exitCode) => {
+    // `close` reports `(code, signal)`, and a signal-killed child always has
+    // a null code. Ignoring `signal` collapsed every external kill into the
+    // "emitted no terminal result" branch below, which reads as "the CLI ran
+    // fine but stayed silent" - the opposite of what happened, and the reason
+    // flaky `host install` failures were undiagnosable from the message alone.
+    child.on("close", (exitCode, signal) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearIdleTimer();
       cleanupAbortListener();
       if (abortError !== null) {
         reject(abortError);
@@ -683,6 +719,24 @@ async function streamTraycerCliJsonWithInvocation<T>(
               message: terminalError.message,
               code: terminalError.code,
               details: terminalError.details,
+              exitCode,
+              stderrTail,
+            },
+            null,
+          ),
+        );
+        return;
+      }
+      // Checked after the abort/timeout paths above: those kill the child
+      // themselves and already carry a more specific cause, so only a kill
+      // this process did not ask for reaches here.
+      if (signal !== null) {
+        reject(
+          new TraycerCliError(
+            {
+              message: `traycer-cli was killed by ${signal}: ${augmentedArgs.join(" ")}`,
+              code: null,
+              details: null,
               exitCode,
               stderrTail,
             },

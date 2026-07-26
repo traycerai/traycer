@@ -9,6 +9,8 @@ import type {
   CreateChatResponse,
   DeleteChatRequest,
   DeleteChatResponse,
+  SetChatArchivedRequest,
+  SetChatArchivedResponse,
   UpdateChatProfileRequest,
   UpdateChatProfileResponse,
   UpdateChatRunSettingsRequest,
@@ -255,6 +257,70 @@ export function useEpicRenameChat() {
     options: {
       onError: (error) => {
         toastFromHostError(error, "Couldn't rename agent.");
+      },
+    },
+  });
+}
+
+/**
+ * Mutation hook for `epic.setChatArchived` (optional host capability).
+ *
+ * Sets or clears the record's `archivedAt`, which the sidebar reads to hide a
+ * row and its subtree. ONE hook covers chats and terminal-agents: the protocol
+ * registers a single method keyed by record id and the host resolves it across
+ * both the `chats` and `tuiAgents` maps, so a separate TUI variant would be the
+ * same call with the same arguments under a second name.
+ *
+ * Default-host scoped via `useHostClient()`, matching `useEpicRenameChat` /
+ * `useEpicDeleteChat` - the sidebar's other row mutations - so all four agree
+ * on which host owns a row's writes.
+ *
+ * No optimistic write and no cache invalidation, also matching rename: the
+ * archive flag lives in the epic Y.Doc, so the host's write replicates back
+ * through the epic stream and re-projects the tree on its own. There is no
+ * TanStack-cached query derived from `archivedAt` to invalidate.
+ *
+ * `{ updated: false }` is success, not failure - it means the record was
+ * already in the requested state (the RPC is idempotent). Callers must not
+ * read it as "record gone".
+ */
+export function useEpicArchiveChat(): UseMutationResult<
+  SetChatArchivedResponse,
+  HostRpcError,
+  SetChatArchivedRequest
+> {
+  const client = useHostClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.setChatArchived",
+    unknown,
+    SetChatArchivedRequest
+  >({
+    client,
+    method: "epic.setChatArchived",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: epicMutationKeys.setChatArchived(),
+      onError: (error) => {
+        // EVERY failure mode gets the same generic toast, including
+        // `E_HOST_UNSUPPORTED`. The renderer cannot discriminate them anyway:
+        // the wire error envelope is `{ code, message }` only - there is no
+        // status field on `HostRpcError` - and the specific reason travels in
+        // the message, which must not be parsed.
+        //
+        // Archive is USER-INITIATED, so it follows the foreground convention
+        // (`toastFromHostError`) rather than the background one
+        // (`toastFromBackgroundHostError`, the only helper that swallows
+        // `E_HOST_UNSUPPORTED` - it exists for work nobody asked for, where
+        // there is no one to inform). Someone clicked this control and expects
+        // an outcome; staying silent would read as a broken button.
+        //
+        // The capability gate keeps this path cold: the affordance is hidden
+        // unless that host advertised the method, so reaching it means the host
+        // changed under a live session - an anomaly worth surfacing. A missing
+        // record likewise surfaces as an ordinary failure, which is right since
+        // the row is about to leave the tree.
+        toastFromHostError(error, "Couldn't archive agent.");
       },
     },
   });

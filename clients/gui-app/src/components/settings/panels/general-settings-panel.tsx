@@ -40,9 +40,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
+import { modLabel } from "@/lib/keybindings/platform";
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
+const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
 
 interface ClearLocalSnapshotsMutationContext {
   readonly hostId: string | null;
@@ -103,6 +105,12 @@ export function GeneralSettingsPanel() {
   );
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
+  const steerOnModEnterEnabled = useSettingsStore(
+    (s) => s.steerOnModEnterEnabled,
+  );
+  const setSteerOnModEnterEnabled = useSettingsStore(
+    (s) => s.setSteerOnModEnterEnabled,
+  );
 
   return (
     <SettingsPanelShell title="General">
@@ -173,6 +181,20 @@ export function GeneralSettingsPanel() {
               setQuoteReplyEnabled(value);
             }}
             aria-label="Quote reply on text selection"
+          />
+        }
+      />
+      <SettingsRow
+        label={`Steer with ${MOD_ENTER_LABEL}`}
+        description={`While a turn is running on a supported harness, ${MOD_ENTER_LABEL} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`}
+        control={
+          <Switch
+            checked={steerOnModEnterEnabled}
+            onCheckedChange={(value) => {
+              trackGeneralSetting("steerOnModEnterEnabled");
+              setSteerOnModEnterEnabled(value);
+            }}
+            aria-label={`Steer with ${MOD_ENTER_LABEL}`}
           />
         }
       />

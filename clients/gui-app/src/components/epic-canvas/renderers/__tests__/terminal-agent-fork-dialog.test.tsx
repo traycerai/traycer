@@ -475,6 +475,7 @@ function sourceAgentWithTerminalArgs(
     reasoningEffort: "high",
     agentMode: "regular",
     profileId: null,
+    archivedAt: null,
     harnessSessionId: "source-session",
     terminalAgentArgs,
     terminalShellCommand: "claude",

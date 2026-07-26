@@ -27,6 +27,8 @@ import {
   HostController,
 } from "../host/host-controller";
 import { getHostFsLayout, labelForEnvironment } from "../host/host-paths";
+import { readPublishedHostProcessLiveness } from "../host/host-process-liveness";
+import { createHostRecoveryGovernor } from "../host/host-recovery-governor";
 import {
   refreshRegistryUpdateState,
   setActiveEnvironment,
@@ -150,7 +152,10 @@ import {
 import { installHostWakeRecovery } from "./host-wake-recovery";
 import { startHostHealthMonitor } from "../host/host-health-monitor";
 import { startPendingLoginItemRevisionMonitor } from "../host/pending-login-item-revision-monitor";
-import { hostManagesHostLoginItem } from "../app/host-login-item";
+import {
+  hostManagesHostLoginItem,
+  retireCompetingCliRegistrationAtLaunch,
+} from "../app/host-login-item";
 import { DESKTOP_APP_NAME } from "../../config";
 
 // Per-window fresh-snapshot query budget during `before-quit`. Each renderer,
@@ -326,14 +331,24 @@ async function timed(
 // (two documented sync-filesystem exceptions: the GPU preference read in
 // app/gpu-acceleration.ts and the memory-backed /proc write in
 // app/core-dump-guard.ts, which must land before Chromium spawns children).
-function runPreReady(state: BootState): void {
+export function runPreReady(state: BootState): void {
   trimUnusedChromiumFeatures();
   configureV8HeapSize();
   applyHardwareAccelerationPreference();
-  registerAppScheme();
   suppressWslKernelCoreDumps();
+  // `initCrashReporter()` must run before `registerAppScheme()`. When a
+  // Sentry DSN is configured, `SentryElectron.init()` makes its own raw
+  // `protocol.registerSchemesAsPrivileged([sentry-ipc])` call and only
+  // afterwards replaces that method with a Proxy that merges every later
+  // registration into its own. Electron keeps only the last RAW call, so
+  // registering `app` first (before Sentry) gets silently discarded -
+  // `app://renderer` loses its secure/cors/fetch privileges and becomes a
+  // non-secure context, disabling `navigator.clipboard`/`crypto.subtle` in
+  // the renderer. Registering `app` after Sentry lets its Proxy fold it in
+  // alongside `sentry-ipc`. Do not reorder these two calls.
   initCrashReporter();
   installGlobalErrorHandlers();
+  registerAppScheme();
   installProcessGoneListeners();
 
   registerDeepLinkHandling(() => deliverAuthReturnSignal(state));
@@ -694,12 +709,23 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
   // disk still names an unreachable host. Started after bootstrap so the
   // initial 60s readiness wait can't register as an outage.
   void hostReady.then(() => {
+    // One authority for automatic restarts, holding both the liveness gate and
+    // the attempt budget. It re-reads pid.json itself inside `requestRespawn`
+    // so the "never kill a live host" rule can't be bypassed by adding another
+    // caller later.
+    const recoveryGovernor = createHostRecoveryGovernor({
+      now: undefined,
+      readLiveness: () =>
+        readPublishedHostProcessLiveness(services.host.pidMetadataFile),
+    });
     const healthMonitor = startHostHealthMonitor({
       host: services.host,
       intervalMs: undefined,
       probe: undefined,
       readMetadata: undefined,
       respawn: () => respawnIfDown(services.hostController),
+      governor: recoveryGovernor,
+      readLiveness: undefined,
     });
     state.bridge?.disposeFns.push(() => healthMonitor.dispose());
   });
@@ -722,6 +748,22 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
         intervalMs: undefined,
       });
       state.bridge?.disposeFns.push(() => revisionMonitor.dispose());
+    });
+  }
+
+  // macOS-only dual-registration repair, on EVERY launch. A machine that
+  // acquired a competing `~/Library/LaunchAgents/<cli-label>.plist` during
+  // the v1.1.7 window starts two hosts against one data dir at every login,
+  // and nothing else clears it: the register cycle that would
+  // (`retireLegacyLabelRegistrations`) only runs when registration is
+  // actually re-done, which the routine healthy-host launch never does.
+  // Deliberately not gated on `hostReady` - the repair is about what starts
+  // at the NEXT login and must still run on a launch whose host never
+  // becomes ready. All of its own gates live inside; see its doc comment.
+  if (process.platform === "darwin") {
+    void timed("deferred", "competing-registration-repair", async () => {
+      const outcome = await retireCompetingCliRegistrationAtLaunch();
+      log.debug("[host-login-item] launch repair outcome", { outcome });
     });
   }
 

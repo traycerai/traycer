@@ -4,10 +4,10 @@ import { AgentReferenceChip } from "@/components/chat/agent-reference-chip";
 import { CodeBlock } from "@/markdown/components/code-block";
 import { extractText } from "@/markdown/components/extract-react-node-text";
 import { TRAYCER_AGENT_TAG } from "@/markdown/plugins/const";
-import { rehypeTraycerAgentReferences } from "@/markdown/plugins/rehype-traycer-agent-references";
-import { z } from "zod";
-
-const AGENT_ID_SCHEMA = z.uuid();
+import {
+  isUuidReferenceCandidate,
+  rehypeTraycerAgentReferences,
+} from "@/markdown/plugins/rehype-traycer-agent-references";
 
 const AGENT_REFERENCE_REHYPE_PLUGINS = [rehypeTraycerAgentReferences];
 
@@ -23,8 +23,9 @@ const AGENT_REFERENCE_MARKDOWN_COMPONENTS: Record<
 
 /**
  * Renders a markdown string through {@link TraycerMarkdown} with the
- * agent-reference plugin set wired in: `@agent` mentions and bare
- * agent-id code spans resolve to live {@link AgentReferenceChip}s. This is
+ * agent-reference plugin set wired in: complete or uniquely-matching UUID
+ * prefixes for agents and role claims resolve to live
+ * {@link AgentReferenceChip}s. This is
  * the single renderer shared by assistant text segments and the A2A
  * sent/received message cards so all three surface the same formatted
  * markdown (lists, headings, tables, code, agent chips) instead of a raw
@@ -70,7 +71,7 @@ function AgentAwareCodeBlock(props: Record<string, unknown>) {
   const className =
     typeof props.className === "string" ? props.className : undefined;
   const text = extractText(children).trim();
-  if (className === undefined && AGENT_ID_SCHEMA.safeParse(text).success) {
+  if (className === undefined && isUuidReferenceCandidate(text)) {
     return <AgentReferenceChip agentId={text} display="code" />;
   }
   return (

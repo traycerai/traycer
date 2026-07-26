@@ -180,6 +180,7 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
     userId: null,
     hostId: "host-a",
     isTitleEditedByUser: false,
+    archivedAt: null,
     settings,
   };
 }
@@ -200,6 +201,7 @@ function tuiAgent(id: string, harnessId: TuiHarnessId): TuiAgentProjection {
     reasoningEffort: null,
     agentMode: "regular",
     profileId: null,
+    archivedAt: null,
     harnessSessionId: null,
     terminalAgentArgs: null,
     terminalShellCommand: null,

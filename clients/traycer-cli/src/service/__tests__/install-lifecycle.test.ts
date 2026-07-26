@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { ServiceController, ServiceLabel } from "../index";
+import type {
+  CompetingRegistrationRetirement,
+  ServiceController,
+  ServiceLabel,
+} from "../index";
 import {
   createServiceInstallLifecycle,
   type BootstrapServiceOptions,
@@ -11,7 +15,24 @@ const mocks = vi.hoisted(() => ({
   serviceLabelForMock: vi.fn(),
   resolveServiceCliInvocationMock: vi.fn(),
   readRegisteredCliInvocationMock: vi.fn(),
+  cliLoggerWarnMock: vi.fn(),
 }));
+
+// The externally-managed branch reports an unforeseen repair failure through
+// the real CLI logger, which appends to the invoking user's `~/.traycer` log
+// file. Stub it so the suite stays hermetic and that warning is assertable.
+vi.mock("../../logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logger")>();
+  return {
+    ...actual,
+    createCliLogger: () => ({
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: mocks.cliLoggerWarnMock,
+      error: vi.fn(),
+    }),
+  };
+});
 
 vi.mock("../index", () => ({
   createServiceController: mocks.createServiceControllerMock,
@@ -46,6 +67,9 @@ interface ControllerHarness {
   readonly start: Mock<() => Promise<void>>;
   readonly restart: Mock<() => Promise<void>>;
   readonly stop: Mock<() => Promise<void>>;
+  readonly retireCompetingRegistration: Mock<
+    () => Promise<CompetingRegistrationRetirement>
+  >;
 }
 
 function makeController(initialState: HarnessServiceState): ControllerHarness {
@@ -54,6 +78,11 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
   const start = vi.fn(async () => undefined);
   const restart = vi.fn(async () => undefined);
   const stop = vi.fn(async () => undefined);
+  const retireCompetingRegistration = vi.fn(
+    async (): Promise<CompetingRegistrationRetirement> => ({
+      kind: "nothing-to-retire",
+    }),
+  );
   const controller: ServiceController = {
     status: vi.fn(async () => ({
       state: currentState,
@@ -66,6 +95,7 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
     stop,
     start,
     restart,
+    retireCompetingRegistration,
   };
   return {
     controller,
@@ -73,6 +103,7 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
     start,
     restart,
     stop,
+    retireCompetingRegistration,
   };
 }
 
@@ -211,7 +242,7 @@ describe("service install lifecycle re-registration", () => {
     expect(harness.restart).not.toHaveBeenCalled();
   });
 
-  it("leaves an externally-managed (SMAppService-owned) registration completely untouched, even with bootstrap options", async () => {
+  it("leaves an externally-managed (SMAppService-owned) registration itself untouched, even with bootstrap options", async () => {
     // Desktop owns this label. Any stop / manifest rewrite / bootstrap from
     // the CLI would either corrupt the BTM registration or run into
     // installService's SMAppService refusal - the swapped bytes go live at
@@ -235,6 +266,51 @@ describe("service install lifecycle re-registration", () => {
       expect(harness.stop).not.toHaveBeenCalled();
     }
   });
+
+  // The repair half: leaving Desktop's registration alone must NOT mean
+  // leaving a competing CLI-label registration alone. This is the one
+  // routine flow that reaches a machine poisoned during the v1.1.7 window,
+  // and a refusal alone can never clean up what already exists.
+  it("retires a competing CLI registration on the externally-managed path", async () => {
+    const { harness } = await runLifecycle("externally-managed", bootstrap);
+
+    expect(harness.retireCompetingRegistration).toHaveBeenCalledWith(label);
+  });
+
+  // The repair is contractually non-throwing, but the lifecycle must not rely
+  // on that politely holding: an install whose bytes are already swapped in
+  // must never be failed by its own opportunistic cleanup.
+  it("does not fail the install when the competing-registration repair throws", async () => {
+    const harness = makeController("externally-managed");
+    harness.retireCompetingRegistration.mockRejectedValue(
+      new Error("launchctl exploded"),
+    );
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+    });
+    await handle.lifecycle.beforeSwap();
+
+    await expect(handle.lifecycle.afterSwap()).resolves.toBeUndefined();
+    expect(handle.state.postSwapAction).toBe("none");
+    // Caught, but never silent. Every failure the repair anticipates is
+    // logged at its own seam, so the only way into that catch is an
+    // unforeseen throw - exactly the case that escaped the logging.
+    expect(mocks.cliLoggerWarnMock).toHaveBeenCalled();
+  });
+
+  // Every other prior state either registers the CLI label itself or
+  // deliberately leaves the service alone; there is no Desktop-owned agent
+  // to defer to, so a competing registration cannot exist to repair.
+  it.each(["running", "stopped", "not-installed"] as const)(
+    "does not attempt a competing-registration repair from prior state %s",
+    async (priorState) => {
+      const { harness } = await runLifecycle(priorState, bootstrap);
+
+      expect(harness.retireCompetingRegistration).not.toHaveBeenCalled();
+    },
+  );
 
   it.skipIf(process.platform !== "darwin")(
     "host update preserves the registered plist's CLI invocation instead of repointing to freshly resolved binaries",

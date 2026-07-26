@@ -242,6 +242,8 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     linkedRepos: [],
     linkedWorkspaces: [],
     pullRequestNumbers: [],
+    worktreeBranches: [],
+    worktreePaths: [],
     ownership: "mine",
     permissionRole: "owner",
     isPinned: false,
@@ -384,6 +386,19 @@ describe("<EpicsListPanel />", () => {
       );
     });
     expect(screen.queryByTestId("old-epic-route")).toBeNull();
+  });
+
+  it("labels a task that is already open in the tab strip", async () => {
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-from-history", "Open from landing");
+
+    renderPanel("embedded", "/");
+
+    expect(
+      (await screen.findByTestId("task-history-open-epic-from-history"))
+        .textContent,
+    ).toBe("Open");
   });
 
   it("unpins a pinned app history epic from the row control", async () => {

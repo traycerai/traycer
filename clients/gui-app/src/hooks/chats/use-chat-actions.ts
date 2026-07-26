@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type {
   ChatRunSettings,
   ChatActiveTurn,
+  ChatQueueDeliveryPolicy,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/foundation";
@@ -36,6 +37,7 @@ export interface ChatActions {
     content: JsonContent,
     sender: UserMessageSender,
     settings: ChatRunSettings,
+    deliveryPolicy: ChatQueueDeliveryPolicy,
   ) => SentChatMessageAction | null;
   readonly deleteMessageSuffix: (fromMessageId: string) => string | null;
   readonly editUserMessage: (
@@ -121,9 +123,11 @@ function tracked<Result>(
 export function useChatActions(handle: ChatSessionStoreHandle): ChatActions {
   return useMemo<ChatActions>(
     () => ({
-      sendMessage: (content, sender, settings) =>
+      sendMessage: (content, sender, settings, deliveryPolicy) =>
         tracked(
-          handle.store.getState().sendMessage(content, sender, settings),
+          handle.store
+            .getState()
+            .sendMessage(content, sender, settings, deliveryPolicy),
           () => {
             Analytics.getInstance().track(AnalyticsEvent.ChatMessageSent, {
               harness: settings.harnessId,

@@ -156,7 +156,13 @@ interface PreloadBridge {
     registerService(): Promise<unknown>;
   };
   menu: {
+    readonly platform: "darwin" | "win32" | "linux";
     onCommand(handler: (payload: unknown) => void): { dispose: () => void };
+    openTopLevel(
+      menuId: "file" | "edit" | "view" | "window" | "help",
+      anchorX: number,
+      anchorY: number,
+    ): Promise<void>;
   };
   support: {
     getSnapshot(): Promise<unknown>;
@@ -380,6 +386,28 @@ describe("preload new-capability wiring", () => {
     });
 
     expect(bridge.initialRoute).toBe("/epics/epic-a/tab-a");
+  });
+
+  it("forwards Windows top-level menu popup requests with their anchor", async () => {
+    const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
+      [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, ...args) => {
+        calls.push({ channel, args });
+        return Promise.resolve(undefined);
+      },
+      sendSyncFn: undefined,
+    });
+
+    await bridge.menu.openTopLevel("help", 120, 40);
+
+    expect(calls).toContainEqual({
+      channel: RunnerHostInvoke.menuOpenTopLevel,
+      args: ["help", 120, 40],
+    });
   });
 
   it("does not expose the unhandled metadata-only service-status invoke", async () => {
