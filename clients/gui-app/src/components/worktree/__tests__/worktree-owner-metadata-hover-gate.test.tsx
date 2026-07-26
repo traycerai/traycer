@@ -23,6 +23,8 @@ vi.mock("@/components/worktree/worktree-pr-metadata", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
+const refreshSpy = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+
 vi.mock("@/hooks/worktree/use-worktree-owner-metadata-query", () => ({
   useWorktreeOwnerMetadata: () => ({
     binding: null,
@@ -32,7 +34,7 @@ vi.mock("@/hooks/worktree/use-worktree-owner-metadata-query", () => ({
     error: null,
     checkedAt: null,
     isRefreshing: false,
-    refresh: () => Promise.resolve(),
+    refresh: refreshSpy,
   }),
 }));
 
@@ -201,9 +203,9 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
     settleOpenDelay();
 
     expect(cardIsOpen()).toBe(false);
-    // No throw and no refresh surface: the listener went with the card.
+    refreshSpy.mockClear();
     fireEvent.keyDown(window, { key: "r" });
-    expect(screen.queryByTestId("owner-workspace-refresh")).toBeNull();
+    expect(refreshSpy).not.toHaveBeenCalled();
   });
 
   it("keeps the row's own click handler working", () => {

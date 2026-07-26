@@ -187,7 +187,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
     });
 
     expect(screen.getByText("Full access")).toBeTruthy();
-    expect(permissionIconClass()).not.toContain("lucide-lock ");
+    expect(permissionIconClass().split(/\s+/)).not.toContain("lucide-lock");
     expect(permissionIconClass()).toMatch(/open|unlock/);
   });
 
@@ -203,10 +203,8 @@ describe("WorktreeOwnerSettingsHeader", () => {
     expect(screen.queryByText("Work account")).toBeNull();
     // ...but it is still announced, since `AccentDot` itself is aria-hidden.
     expect(
-      screen
-        .getByTestId("owner-settings-harness-mark")
-        .getAttribute("aria-label"),
-    ).toBe("Claude Code, Work account");
+      screen.getByRole("img", { name: "Claude Code, Work account" }),
+    ).toBeTruthy();
     expect(accentDotText()).toBe("W");
   });
 
@@ -218,10 +216,8 @@ describe("WorktreeOwnerSettingsHeader", () => {
     });
 
     expect(
-      screen
-        .getByTestId("owner-settings-harness-mark")
-        .getAttribute("aria-label"),
-    ).toBe("Claude Code, Terminal account");
+      screen.getByRole("img", { name: "Claude Code, Terminal account" }),
+    ).toBeTruthy();
   });
 
   it("omits the dot when the provider has a single profile", () => {
@@ -231,8 +227,7 @@ describe("WorktreeOwnerSettingsHeader", () => {
       profiles: [profile("profile-1", "managed", "Work account")],
     });
 
-    const mark = screen.getByTestId("owner-settings-harness-mark");
-    expect(mark.getAttribute("aria-label")).toBe("Claude Code");
+    expect(screen.getByRole("img", { name: "Claude Code" })).toBeTruthy();
     expect(accentDotText()).toBeNull();
   });
 });

@@ -164,8 +164,8 @@ export function ProviderProfileScopedSection(
     ) ?? orderedProfiles[0];
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile || !isSelectedHostLocal;
-  // `null`, not `undefined`: `TooltipWrapper` degrades to a passthrough Slot on
-  // a null label only, so an `undefined` here renders an empty tooltip box.
+  // `TooltipWrapper` degrades to a passthrough Slot for both `null` and
+  // `undefined` labels; `null` here is just the plainer of the two spellings.
   const addProfileDisabledReason = addProfileDisabled
     ? "Add profiles from a local host with browser sign-in available."
     : null;
@@ -398,7 +398,7 @@ function ProfileSummary({
     <div className="flex min-w-0 flex-1 items-center gap-2 text-ui-xs text-muted-foreground">
       <div className="flex min-w-0 flex-1 items-center gap-1">
         <TooltipWrapper
-          label={email}
+          label={emailRevealed ? email : null}
           side="top"
           sideOffset={undefined}
           align="start"
