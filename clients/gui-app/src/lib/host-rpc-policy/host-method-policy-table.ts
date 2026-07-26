@@ -752,6 +752,17 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A user-initiated "get this provider's managed pack ready" kick. `fifo`
+  // because it mutates host-side scheduling state (clears the cell's backoff,
+  // promotes it to the front of the install queue) and two rapid retry taps
+  // must not be coalesced into one. `poll: null` because the method is a kick,
+  // not a status source - progress is read from `providers.list`, which
+  // already carries `managedInstallState`.
+  "providers.ensurePack": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },
   "speech.getModelStatus": {
     ...LATEST_SCHEDULING,

@@ -378,6 +378,8 @@ import {
   providersSubmitLoginCodeResponseSchema,
   providersTouchLoginRequestSchema,
   providersTouchLoginResponseSchema,
+  providersEnsurePackRequestSchema,
+  providersEnsurePackResponseSchema,
   providersListRequestSchema,
   providersListResponseSchema,
   providersListResponseSchemaV10,
@@ -1733,6 +1735,25 @@ export const providersTouchLoginV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersTouchLoginRequestSchema,
   responseSchema: providersTouchLoginResponseSchema,
+});
+
+/**
+ * Brand-new v1.0 method (outside `RELEASED_FLOOR_METHOD_NAMES` - a new method
+ * NAME is handshake-fatal against a released peer, so it rides the optional-
+ * capability channel with `degrade: { kind: "unsupported" }`, exactly like
+ * `providers.submitLoginCode`/`touchLogin` above).
+ *
+ * Missing-peer behavior: a host that predates the provider pack registry has
+ * no managed packs to ensure, so there is nothing for the client to do about
+ * `E_HOST_UNSUPPORTED` here beyond not offering the retry affordance - which
+ * it already will not, because such a host reports `managedInstallState: null`
+ * and the affordance only exists on the `downloading`/`error` arms.
+ */
+export const providersEnsurePackV10 = defineRpcContract({
+  method: "providers.ensurePack",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersEnsurePackRequestSchema,
+  responseSchema: providersEnsurePackResponseSchema,
 });
 
 export const providersSetEnabledV10 = defineRpcContract({
@@ -4320,6 +4341,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersTouchLoginV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.ensurePack": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersEnsurePackV10,
           upgradeFromPreviousVersion: null,
         },
       },

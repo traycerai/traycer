@@ -4,6 +4,7 @@ import {
   upgradeResponseToVersion,
 } from "@traycer/protocol/framework/index";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
   downgradeProviderCliStateToV10,
   providerAdvisoryKindSchema,
@@ -12,10 +13,14 @@ import {
   providerCliStateSchemaV10,
   providerCliStateSchemaV20,
   providerCliStateSchemaV30,
+  providerManagedInstallErrorReasonSchema,
   providerManagedInstallStateSchema,
   providerMutationCliStateSchemaV20,
   providerMutationCliStateSchemaV21,
   providerVersionVisibilitySchema,
+  providersEnsurePackRequestSchema,
+  providersEnsurePackResponseSchema,
+  providersListResponseSchema,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
@@ -111,6 +116,207 @@ describe("providerManagedInstallStateSchema", () => {
         percent: 142,
       }).success,
     ).toBe(false);
+  });
+
+  // N13: a live sibling host owns the download under a per-cell lease, so this
+  // host can see a transfer is in progress but cannot read the owner's
+  // in-memory byte counter. `absent` would be a lie; `downloading` with no
+  // percent is the honest observer state. If this parse ever fails, the
+  // observing host has no way to report the truth at all.
+  it("accepts downloading with a null percent (live-sibling observer state)", () => {
+    const parsed = providerManagedInstallStateSchema.safeParse({
+      status: "downloading",
+      percent: null,
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data).toEqual({ status: "downloading", percent: null });
+  });
+
+  it("still requires the percent KEY on downloading - null is a value, not an omission", () => {
+    expect(
+      providerManagedInstallStateSchema.safeParse({ status: "downloading" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("accepts the error arm for every modeled reason, with and without a retry time", () => {
+    for (const reason of providerManagedInstallErrorReasonSchema.options) {
+      expect(
+        providerManagedInstallStateSchema.safeParse({
+          status: "error",
+          reason,
+          message: "boom",
+          retryAtMs: 1_700_000_000_000,
+        }).success,
+      ).toBe(true);
+    }
+    // No scheduled automatic retry: the cell is stuck until a user-initiated
+    // `providers.ensurePack`.
+    expect(
+      providerManagedInstallStateSchema.safeParse({
+        status: "error",
+        reason: "verification",
+        message: "digest mismatch",
+        retryAtMs: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects an unmodeled error reason and a partially-populated error arm", () => {
+    expect(
+      providerManagedInstallStateSchema.safeParse({
+        status: "error",
+        reason: "not-a-real-reason",
+        message: "boom",
+        retryAtMs: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      providerManagedInstallStateSchema.safeParse({
+        status: "error",
+        reason: "network",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+// The whole point of the additive union: `providers.list@6.0` is the carrier
+// line, so the new arms must survive an actual v6.0 response parse rather than
+// only the standalone schema's.
+describe("the new arms survive the providers.list@6.0 response parse", () => {
+  it("carries a null-percent download and a full error arm through the live response schema", () => {
+    const parsed = providersListResponseSchema.parse({
+      providers: [
+        {
+          ...providerState("claude-code"),
+          profiles: [],
+          managedInstallState: { status: "downloading", percent: null },
+        },
+        {
+          ...providerState("codex"),
+          profiles: [],
+          managedInstallState: {
+            status: "error",
+            reason: "disk-full",
+            message: "ENOSPC writing pack.tar.zst",
+            retryAtMs: 1_700_000_000_000,
+          },
+        },
+      ],
+    });
+    expect(parsed.providers[0].managedInstallState).toEqual({
+      status: "downloading",
+      percent: null,
+    });
+    expect(parsed.providers[1].managedInstallState).toEqual({
+      status: "error",
+      reason: "disk-full",
+      message: "ENOSPC writing pack.tar.zst",
+      retryAtMs: 1_700_000_000_000,
+    });
+  });
+});
+
+// The accepted residual, asserted rather than merely documented: a client on
+// any RELEASED line never sees the `error` arm at all, because every bridge
+// down to a released target strips `managedInstallState` wholesale. What it
+// renders is the plain `available` fallback - post-T7 a silently-unavailable
+// row with no message. The `.catch(null)` path (below) is the narrower case of
+// a client that negotiates 6.0 but predates this arm.
+describe("old-client behavior on the error arm", () => {
+  const erroredState = providerCliStateSchema.parse({
+    ...providerState("claude-code"),
+    managedInstallState: {
+      status: "error",
+      reason: "network",
+      message: "registry unreachable",
+      retryAtMs: 1_700_000_000_000,
+    },
+  });
+
+  it.each([1, 2, 3, 4, 5] as const)(
+    "v6.0 -> v%i.0 strips the error arm instead of failing the downgrade",
+    (targetMajor) => {
+      const downgraded = downgradeResponseAcrossMajors(
+        hostRpcRegistry["providers.list"],
+        6,
+        targetMajor,
+        { providers: [erroredState] },
+      );
+      expect(downgraded.ok).toBe(true);
+      if (!downgraded.ok) return;
+      expect(downgraded.value.providers[0]).not.toHaveProperty(
+        "managedInstallState",
+      );
+    },
+  );
+
+  it("normalizes an unrecognized arm to null for a 6.0 client that predates it", () => {
+    // Stand-in for the pre-error 6.0 client: its union did not model
+    // `status: "error"`, so `.catch(null)` on the FIELD (not the union) turns
+    // the whole value into null rather than throwing the response away. Same
+    // mechanism, exercised here with a status no version will ever model.
+    const parsed = providerCliStateSchema.parse({
+      ...providerState("codex"),
+      managedInstallState: {
+        status: "error",
+        reason: "network",
+        message: "registry unreachable",
+        retryAtMs: null,
+        // A field a future arm might add, on a status this schema DOES model:
+        // the union is strict on shape, so an unknown extra key is fine but a
+        // wrong-typed known key is not - proving `.catch(null)` is what stands
+        // between a malformed arm and a thrown response.
+        retryAtMs2: "not a number",
+      },
+    });
+    expect(parsed.managedInstallState).toEqual({
+      status: "error",
+      reason: "network",
+      message: "registry unreachable",
+      retryAtMs: null,
+    });
+
+    const malformed = providerCliStateSchema.parse({
+      ...providerState("codex"),
+      managedInstallState: {
+        status: "error",
+        reason: "network",
+        message: "registry unreachable",
+        retryAtMs: "later",
+      },
+    });
+    expect(malformed.managedInstallState).toBeNull();
+  });
+});
+
+describe("providers.ensurePack is an additive optional method", () => {
+  it("is registered, declares unsupported degradation, and stays out of the released floor", () => {
+    const entry = hostRpcRegistry["providers.ensurePack"];
+    expect(entry).toBeDefined();
+    expect(entry.degrade).toEqual({ kind: "unsupported" });
+    expect(RELEASED_FLOOR_METHOD_NAMES).not.toContain("providers.ensurePack");
+  });
+
+  it("accepts a providerId request and a nullable managedInstallState response", () => {
+    expect(
+      providersEnsurePackRequestSchema.safeParse({ providerId: "claude-code" })
+        .success,
+    ).toBe(true);
+    expect(
+      providersEnsurePackRequestSchema.safeParse({ providerId: "not-a-provider" })
+        .success,
+    ).toBe(false);
+    expect(
+      providersEnsurePackResponseSchema.parse({ managedInstallState: null })
+        .managedInstallState,
+    ).toBeNull();
+    expect(
+      providersEnsurePackResponseSchema.parse({
+        managedInstallState: { status: "downloading", percent: null },
+      }).managedInstallState,
+    ).toEqual({ status: "downloading", percent: null });
   });
 });
 

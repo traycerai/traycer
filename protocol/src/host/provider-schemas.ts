@@ -210,10 +210,30 @@ export const providerCliCandidateSchema = z.object({
 export type ProviderCliCandidate = z.infer<typeof providerCliCandidateSchema>;
 
 /**
+ * Why an `error` arm's install is stuck, as a closed vocabulary the renderer
+ * can write copy against. Derived host-side from the typed verification code
+ * (never sniffed from a message), so UI copy and the internal classification
+ * cannot drift: `disk-full` is the ENOSPC/EDQUOT class, `verification` is a
+ * `definitively-invalid` verdict, `network` is a registry/transport failure,
+ * and `unknown` is the honest catch-all for a failure the host could not
+ * classify any further.
+ */
+export const providerManagedInstallErrorReasonSchema = z.enum([
+  "disk-full",
+  "network",
+  "verification",
+  "unknown",
+]);
+export type ProviderManagedInstallErrorReason = z.infer<
+  typeof providerManagedInstallErrorReasonSchema
+>;
+
+/**
  * Install lifecycle of a provider's managed (registry-backed) binary pack.
  * `absent` - never downloaded, or GC'd; `downloading` - fetch in progress,
  * `percent` a best-effort progress estimate; `installed` - present and
- * spawnable. Carried at the provider level (there is exactly one managed
+ * spawnable; `error` - the install failed and is not being retried until
+ * `retryAtMs`. Carried at the provider level (there is exactly one managed
  * candidate per provider) rather than nested on `providerCliCandidateSchema`,
  * which is shared byte-for-byte with the frozen v1.0/v2.0/v3.0 wire shapes -
  * nesting it there would leak a new key into already-released responses (the
@@ -222,6 +242,23 @@ export type ProviderCliCandidate = z.infer<typeof providerCliCandidateSchema>;
  * bundled -> managed rollout - this provider hasn't been cut over yet; the
  * renderer falls back to today's `available`-flag rendering on the bundled
  * candidate in both cases, never inferring one lifecycle from the other.
+ *
+ * `downloading.percent` is NULLABLE, and that is a real state rather than
+ * defensive typing: when a *live sibling host* sharing the same pack store
+ * owns the download (per-cell lease, N13), this host can see that a transfer
+ * is in progress but has no access to the owner's in-memory byte counter.
+ * Reporting `absent` there would be a lie - the pack is being fetched - so the
+ * observer reports `downloading` with no percent and the renderer shows an
+ * indeterminate indicator. Every percent consumer must handle null.
+ *
+ * The `error` arm and the nullable percent are ADDITIVE ON THE UNRELEASED 6.0
+ * LINE. No released tag (`host-v*`/`cli-v*`/`desktop-v*` through 1.1.8) ships
+ * `providers.list@6.0`, which is what makes growing this union legal at all;
+ * the released 5.0 and earlier lines are frozen and their downgrade bridges
+ * strip the field wholesale. Accepted, stated plainly: a client old enough to
+ * negotiate 6.0 but predating the `error` arm normalizes it to `null` through
+ * `managedInstallState`'s `.catch(null)` and renders the plain `available`
+ * fallback - post-T7 that is a silently-unavailable row with no message.
  */
 export const providerManagedInstallStateSchema = z.discriminatedUnion(
   "status",
@@ -229,9 +266,20 @@ export const providerManagedInstallStateSchema = z.discriminatedUnion(
     z.object({ status: z.literal("absent") }),
     z.object({
       status: z.literal("downloading"),
-      percent: z.number().min(0).max(100),
+      percent: z.number().min(0).max(100).nullable(),
     }),
     z.object({ status: z.literal("installed") }),
+    z.object({
+      status: z.literal("error"),
+      reason: providerManagedInstallErrorReasonSchema,
+      // Operator-facing detail behind the reason (the underlying error text).
+      // Never the primary copy - the renderer writes its own from `reason`.
+      message: z.string(),
+      // Epoch ms the host will accept an automatic retry again, or null when
+      // the failure carries no backoff (nothing scheduled; a user-initiated
+      // `providers.ensurePack` is the way forward).
+      retryAtMs: z.number().nullable(),
+    }),
   ],
 );
 export type ProviderManagedInstallState = z.infer<
@@ -1490,6 +1538,39 @@ export const providersTouchLoginResponseSchema = z.object({
 });
 export type ProvidersTouchLoginResponse = z.infer<
   typeof providersTouchLoginResponseSchema
+>;
+
+/**
+ * User-initiated "get this provider's managed pack ready". A NON-BLOCKING
+ * kick: the host promotes the pack to the front of its install queue, clears
+ * the cell's exponential backoff (this is a human pressing retry, not an
+ * automatic poll), and returns the pack's CURRENT state immediately - it never
+ * awaits the download. Poll `providers.list` for progress.
+ *
+ * The user-initiated flag is not on the wire because it is not the client's to
+ * assert: reaching the host through THIS method is what makes a call
+ * user-initiated. `providers.list` and boot convergence take the automatic
+ * arm, which honors backoff and may not quarantine an unverifiable version
+ * dir; only this method's arm may.
+ */
+export const providersEnsurePackRequestSchema = z.object({
+  providerId: providerIdSchema,
+});
+export type ProvidersEnsurePackRequest = z.infer<
+  typeof providersEnsurePackRequestSchema
+>;
+
+/**
+ * The pack's state as of the kick, in the same vocabulary `providers.list`
+ * carries. `null` where that field is null there: the provider has no managed
+ * pack on this host (store not managed, no registry keyring, or a provider the
+ * staged rollout has not cut over), so there was nothing to ensure.
+ */
+export const providersEnsurePackResponseSchema = z.object({
+  managedInstallState: providerManagedInstallStateSchema.nullable(),
+});
+export type ProvidersEnsurePackResponse = z.infer<
+  typeof providersEnsurePackResponseSchema
 >;
 
 export function downgradeProviderAuthV20ToV10(
