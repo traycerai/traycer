@@ -51,6 +51,7 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
 
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const createdHandles: ChatSessionStoreHandle[] = [];
 
 afterEach(() => {
@@ -70,7 +71,9 @@ describe("<ChatProgressIcon />", () => {
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Agent in progress")).not.toBeNull();
+    expect(tooltipTextNear(screen.getByTestId(RUNNING_TEST_ID))).toBe(
+      "Agent in progress",
+    );
   });
 
   it("shows the static chat icon when an unopened chat is not active", () => {
@@ -144,7 +147,9 @@ describe("<ChatProgressIcon />", () => {
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Agent in progress")).not.toBeNull();
+    expect(tooltipTextNear(screen.getByTestId(RUNNING_TEST_ID))).toBe(
+      "Agent in progress",
+    );
   });
 
   it("shows the muted background indicator instead of the turn spinner when only background work runs", () => {
@@ -203,7 +208,9 @@ describe("<ChatProgressIcon />", () => {
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
     expect(screen.queryByTitle("Waiting for your approval")).toBeNull();
-    expect(screen.queryByTitle("Agent in progress")).not.toBeNull();
+    expect(tooltipTextNear(screen.getByTestId(RUNNING_TEST_ID))).toBe(
+      "Agent in progress",
+    );
   });
 
   it("shows the background glyph for an UNOPENED chat the host reports as background-only", () => {

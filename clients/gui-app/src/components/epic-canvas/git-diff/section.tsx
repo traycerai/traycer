@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export interface SectionProps {
   readonly title: string;
   readonly count: number;
@@ -125,15 +126,23 @@ export function Section(props: SectionProps): ReactNode {
               {title}
             </span>
 
-            <span
-              className={cn(
-                "min-w-0 truncate whitespace-nowrap text-ui-xs tabular-nums",
-                isEmpty ? "text-muted-foreground/55" : "text-muted-foreground",
-              )}
-              title={fileCountLabel}
+            <TooltipWrapper
+              label={fileCountLabel}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              {fileCountLabel}
-            </span>
+              <span
+                className={cn(
+                  "min-w-0 truncate whitespace-nowrap text-ui-xs tabular-nums",
+                  isEmpty
+                    ? "text-muted-foreground/55"
+                    : "text-muted-foreground",
+                )}
+              >
+                {fileCountLabel}
+              </span>
+            </TooltipWrapper>
 
             <span aria-hidden className="ml-auto" />
             {summary}

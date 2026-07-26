@@ -23,6 +23,7 @@ import type {
 } from "@/lib/history-search";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface EpicsFilterPopoverProps {
   readonly availableRepos: ReadonlyArray<string>;
   readonly availableWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
@@ -233,9 +234,16 @@ function FilterOption(props: {
         {props.checked ? <Check className="size-3" /> : null}
       </span>
       {props.truncateLabelFromStart ? (
-        <StartTruncatedText className="min-w-0 flex-1" title={props.label}>
-          {props.label}
-        </StartTruncatedText>
+        <TooltipWrapper
+          label={props.label}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <StartTruncatedText className="min-w-0 flex-1">
+            {props.label}
+          </StartTruncatedText>
+        </TooltipWrapper>
       ) : (
         <span className="min-w-0 flex-1 truncate">{props.label}</span>
       )}

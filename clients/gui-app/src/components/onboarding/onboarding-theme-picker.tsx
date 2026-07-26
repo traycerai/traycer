@@ -6,6 +6,7 @@ import {
 } from "@/stores/settings/settings-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const MODES: ReadonlyArray<{ id: ThemeMode; label: string }> = [
   { id: "light", label: "Light" },
   { id: "dark", label: "Dark" },
@@ -64,34 +65,40 @@ export function OnboardingThemePicker() {
         className="flex w-full max-w-[min(90vw,24rem)] flex-wrap gap-2"
       >
         {THEME_PRESETS.map((preset) => (
-          <button
+          <TooltipWrapper
             key={preset.id}
-            type="button"
-            aria-pressed={themePreset === preset.id}
-            aria-label={preset.label}
-            title={preset.label}
-            onClick={() => {
-              if (preset.id === themePreset) return;
-              Analytics.getInstance().track(
-                AnalyticsEvent.OnboardingThemeChanged,
-                { theme: `preset:${preset.id}` },
-              );
-              setThemePreset(preset.id);
-            }}
-            className={cn(
-              "relative size-7 shrink-0 overflow-hidden rounded-full border transition-transform duration-200",
-              themePreset === preset.id
-                ? "scale-110 border-white"
-                : "border-white/25 hover:scale-105 hover:border-white/60",
-            )}
-            style={{ backgroundColor: preset.swatch }}
+            label={preset.label}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <span
-              aria-hidden="true"
-              className="absolute inset-x-0 bottom-0 h-1/3"
-              style={{ backgroundColor: preset.accent }}
-            />
-          </button>
+            <button
+              type="button"
+              aria-pressed={themePreset === preset.id}
+              aria-label={preset.label}
+              onClick={() => {
+                if (preset.id === themePreset) return;
+                Analytics.getInstance().track(
+                  AnalyticsEvent.OnboardingThemeChanged,
+                  { theme: `preset:${preset.id}` },
+                );
+                setThemePreset(preset.id);
+              }}
+              className={cn(
+                "relative size-7 shrink-0 overflow-hidden rounded-full border transition-transform duration-200",
+                themePreset === preset.id
+                  ? "scale-110 border-white"
+                  : "border-white/25 hover:scale-105 hover:border-white/60",
+              )}
+              style={{ backgroundColor: preset.swatch }}
+            >
+              <span
+                aria-hidden="true"
+                className="absolute inset-x-0 bottom-0 h-1/3"
+                style={{ backgroundColor: preset.accent }}
+              />
+            </button>
+          </TooltipWrapper>
         ))}
       </div>
 

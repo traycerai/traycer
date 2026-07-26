@@ -76,10 +76,18 @@ async function installService(
   // Register the host by writing a user-domain LaunchAgent plist:
   // `RunAtLoad` makes it auto-start at login and surface in System Settings →
   // Login Items / "Allow in the Background" (that BTM row is driven by the
-  // registration itself, not by `ProcessType`). `ProcessType: Standard` keeps
-  // the host out of launchd's throttled Background band - it does
+  // registration itself, not by `ProcessType`). `ProcessType: Interactive`
+  // is the only band that runs "with the same resource limitations as apps,
+  // that is to say, none" (launchd.plist(5)) - the host does
   // latency-sensitive RPC work and being CPU/IO-throttled (and pinned to
   // efficiency cores on Apple Silicon) starved the event loop on open.
+  // `Standard` is NOT that band: the man page defines it as "equivalent to
+  // no ProcessType being set", and unset means launchd applies "light
+  // resource limits to the job, throttling its CPU usage and I/O
+  // bandwidth". Measured under `Standard`, the host and every process it
+  // spawns sat at scheduling priority 20 (BASEPRI_UTILITY) while idle,
+  // versus 31 for a normal shell and 47 for a foreground app - so it lost
+  // every CPU race to the GUI it serves.
   const guiTarget = guiDomain();
   const serviceTarget = `${guiTarget}/${options.label.id}`;
   // Refuse to take over a label Desktop already owns via SMAppService.
@@ -1186,7 +1194,7 @@ ${programArgsXml}
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>ProcessType</key>
-  <string>Standard</string>
+  <string>Interactive</string>
   <key>SoftResourceLimits</key>
   <dict>
     <key>NumberOfFiles</key>

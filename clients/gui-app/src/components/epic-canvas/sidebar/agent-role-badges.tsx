@@ -1,6 +1,7 @@
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { Tag } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
 interface AgentRoleBadgesProps {
   readonly claims: readonly RoleClaim[];
@@ -46,19 +47,25 @@ export function AgentRoleBadges(props: AgentRoleBadgesProps) {
       ? `${claims.length} roles`
       : `Role ${singleRole.role}, scope ${singleRole.scope}`;
   return (
-    <Badge
-      variant="outline"
-      className="h-4 shrink-0 gap-0.5 rounded-sm border-current/30 bg-background/60 px-1 text-foreground"
-      data-testid="agent-role-badges"
-      aria-label={roleCountLabel}
-      title={roleCountLabel}
+    <TooltipWrapper
+      label={roleCountLabel}
+      side="top"
+      sideOffset={undefined}
+      align="center"
     >
-      <Tag className="size-2.5" aria-hidden />
-      {singleRole === null ? (
-        <span>{claims.length}</span>
-      ) : (
-        <span className="max-w-[10ch] truncate">{singleRole.role}</span>
-      )}
-    </Badge>
+      <Badge
+        variant="outline"
+        className="h-4 shrink-0 gap-0.5 rounded-sm border-current/30 bg-background/60 px-1 text-foreground"
+        data-testid="agent-role-badges"
+        aria-label={roleCountLabel}
+      >
+        <Tag className="size-2.5" aria-hidden />
+        {singleRole === null ? (
+          <span>{claims.length}</span>
+        ) : (
+          <span className="max-w-[10ch] truncate">{singleRole.role}</span>
+        )}
+      </Badge>
+    </TooltipWrapper>
   );
 }
