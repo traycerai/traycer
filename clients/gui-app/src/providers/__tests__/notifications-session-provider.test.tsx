@@ -1,6 +1,7 @@
 import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -89,6 +90,9 @@ const activateMock = vi.hoisted(() =>
     }) => void
   >(),
 );
+const notificationNavigateMock = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve()),
+);
 const markAsReadMock = vi.hoisted(() => vi.fn<(feedId: string) => void>());
 const lastHostDisplay = vi.hoisted(() => ({
   originHostId: null as string | null,
@@ -102,7 +106,7 @@ const lastHostDisplay = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/notifications/use-notification-activation", () => ({
-  useNotificationActivation: () => ({
+  useNotificationActivationWithNavigate: () => ({
     activate: activateMock,
     pendingFeedId: null,
   }),
@@ -158,7 +162,7 @@ vi.mock("@/lib/notifications/notification-display", async (importActual) => {
   };
 });
 
-import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
+import { NotificationsSessionProvider as RoutedNotificationsSessionProvider } from "@/providers/notifications-session-provider";
 import { __setNotificationsStreamFactoryForTests } from "@/providers/notifications-stream-factory-override";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -181,6 +185,16 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+
+function NotificationsSessionProvider(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <RoutedNotificationsSessionProvider navigate={notificationNavigateMock}>
+      {props.children}
+    </RoutedNotificationsSessionProvider>
+  );
+}
 
 interface ControlledStream {
   closeCount: number;
