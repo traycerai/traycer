@@ -21,18 +21,21 @@ import {
   PROVIDER_AUTH_STATUS_SCHEMA,
   providerIdSchema,
   providerIdSchemaV40,
+  providerIdSchemaV50,
   providerProfileRateLimitStatusSchema,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   mapGrokAvailableToUnavailable,
   providerRateLimitsSchema,
   providerRateLimitsSchemaV40,
+  providerRateLimitsSchemaV50,
 } from "@traycer/protocol/host/rate-limit/schemas";
 import {
   agentFacingHarnessIdSchema,
   concreteProfileSelectionSchema,
   guiHarnessIdSchema,
   guiHarnessIdSchemaV40,
+  guiHarnessIdSchemaV50,
 } from "@traycer/protocol/host/agent/shared";
 
 // ─── `agent.listProviderProfiles@1.0` ─────────────────────────────────────
@@ -89,11 +92,12 @@ export type AgentListProviderProfilesResponse = z.infer<
 /**
  * Frozen `agent.listProviderProfiles@1.0` response, pinned to the pre-Hermes
  * provider id set (`providerIdSchemaV40`) so an already-shipped v1.0 caller's
- * strict decode never sees `hermes`. The v2.0 line adds it via the live,
- * still-growing `agentListProviderProfilesResponseSchema` above, with a
- * v2->v1 downgrade bridge that fails closed (`DOWNGRADE_UNSUPPORTED`) for a
- * Hermes-only provider id instead of silently mis-decoding it. Do NOT widen
- * this schema - extend the latest schema and use the v2 bridge instead.
+ * strict decode never sees a post-v4.0 provider (`hermes`, `omp`). The v2.0
+ * line adds them via the live, still-growing
+ * `agentListProviderProfilesResponseSchema` above, with a v2->v1 downgrade
+ * bridge that fails closed (`DOWNGRADE_UNSUPPORTED`) for a post-v4.0-only
+ * provider id instead of silently mis-decoding it. Do NOT widen this schema -
+ * extend the latest schema and use the v2 bridge instead.
  */
 export const agentListProviderProfilesResponseSchemaV1 = z.object({
   providerId: providerIdSchemaV40,
@@ -110,9 +114,36 @@ export const agentListProviderProfilesV10 = defineRpcContract({
   responseSchema: agentListProviderProfilesResponseSchemaV1,
 });
 
+/**
+ * Frozen `agent.listProviderProfiles@2.0` response, pinned to the pre-omp
+ * provider id set (`providerIdSchemaV50`) so an already-shipped v2.0 caller's
+ * strict decode never sees `omp`.
+ *
+ * This line IS released - the v1.1.8 tags (2026-07-25) shipped it. Until then
+ * it pointed at the live `agentListProviderProfilesResponseSchema`, which is
+ * how `omp` first tried to ride v2.0. The v3.0 line now carries the live
+ * schema, with a v3->v2 downgrade bridge that fails closed
+ * (`DOWNGRADE_UNSUPPORTED`) for a post-v5.0-only provider id. Do NOT widen
+ * this schema - extend the latest schema and use the v3 bridge instead.
+ */
+export const agentListProviderProfilesResponseSchemaV2 = z.object({
+  providerId: providerIdSchemaV50,
+  profiles: z.array(agentProviderProfileSummarySchema),
+});
+export type AgentListProviderProfilesResponseV2 = z.infer<
+  typeof agentListProviderProfilesResponseSchemaV2
+>;
+
 export const agentListProviderProfilesV20 = defineRpcContract({
   method: "agent.listProviderProfiles",
   schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: agentListProviderProfilesRequestSchema,
+  responseSchema: agentListProviderProfilesResponseSchemaV2,
+});
+
+export const agentListProviderProfilesV30 = defineRpcContract({
+  method: "agent.listProviderProfiles",
+  schemaVersion: { major: 3, minor: 0 } as const,
   requestSchema: agentListProviderProfilesRequestSchema,
   responseSchema: agentListProviderProfilesResponseSchema,
 });
@@ -124,7 +155,7 @@ export const agentListProviderProfilesUpgradeV10ToV20 = defineUpgradePath<
   from: { major: 1, minor: 0 },
   to: { major: 2, minor: 0 },
   // Request shape is identical across both majors - only the response's
-  // `providerId` enum grows (Hermes).
+  // `providerId` enum grows (Hermes, omp).
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -139,7 +170,9 @@ export const agentListProviderProfilesDowngradeV20ToV10 = defineDowngradePath<
   downgradeResponse: (response) => {
     // A v1.0 caller only ever configures/lists a pre-hermes provider, so the
     // common case reparses cleanly through the frozen schema. Fails closed
-    // (rather than silently mis-decoding) for a Hermes-only provider id.
+    // (rather than silently mis-decoding) for any provider unrepresentable on
+    // the frozen v1.0 wire (Hermes and omp today) - the message deliberately
+    // names no single provider so it stays honest as the enum grows.
     const parsed =
       agentListProviderProfilesResponseSchemaV1.safeParse(response);
     if (!parsed.success) {
@@ -148,7 +181,75 @@ export const agentListProviderProfilesDowngradeV20ToV10 = defineDowngradePath<
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
           message:
-            "Listing Hermes provider profiles requires a newer Traycer client.",
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesUpgradeV20ToV30 = defineUpgradePath<
+  typeof agentListProviderProfilesV20,
+  typeof agentListProviderProfilesV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
+  // Request shape is identical across both majors - only the response's
+  // `providerId` enum grows (omp).
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListProviderProfilesDowngradeV30ToV20 = defineDowngradePath<
+  typeof agentListProviderProfilesV30,
+  typeof agentListProviderProfilesV20
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // A v2.0 caller only ever lists a pre-omp provider, so the common case
+    // reparses cleanly through the frozen schema. Fails closed (rather than
+    // silently mis-decoding) for any provider unrepresentable on the frozen
+    // v2.0 wire (omp today). Unlike the list-shaped catalog methods, this
+    // response carries exactly one provider - there is nothing to filter out,
+    // so the only honest options are pass-through or refuse.
+    const parsed =
+      agentListProviderProfilesResponseSchemaV2.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV30ToV10 = defineDowngradePath<
+  typeof agentListProviderProfilesV30,
+  typeof agentListProviderProfilesV10
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Same fail-closed rule as the v3->v2 bridge, against the narrower v1.0
+    // enum: anything post-v4.0 (Hermes, omp) is unrepresentable here.
+    const parsed =
+      agentListProviderProfilesResponseSchemaV1.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
         },
       };
     }
@@ -192,12 +293,12 @@ export type AgentGetProviderProfileRateLimitsResponse = z.infer<
  * Frozen `agent.getProviderProfileRateLimits@1.0` response, pinned to the
  * pre-Hermes `rateLimits.provider` enum (`providerRateLimitsSchemaV40`, whose
  * `available: false` arm carries `providerIdSchemaV40`) so an already-shipped
- * v1.0 caller's strict decode never sees `hermes`. The v2.0 line adds it via
- * the live, still-growing `agentGetProviderProfileRateLimitsResponseSchema`
- * above, with a v2->v1 downgrade bridge that fails closed
- * (`DOWNGRADE_UNSUPPORTED`) for a Hermes rate-limit read instead of silently
- * mis-decoding it. Do NOT widen this schema - extend the latest schema and
- * use the v2 bridge instead.
+ * v1.0 caller's strict decode never sees a post-v4.0 provider (`hermes`,
+ * `omp`). The v2.0 line adds them via the live, still-growing
+ * `agentGetProviderProfileRateLimitsResponseSchema` above, with a v2->v1
+ * downgrade bridge that fails closed (`DOWNGRADE_UNSUPPORTED`) for such a
+ * rate-limit read instead of silently mis-decoding it. Do NOT widen this
+ * schema - extend the latest schema and use the v2 bridge instead.
  */
 export const agentGetProviderProfileRateLimitsResponseSchemaV1 = z.object({
   rateLimits: providerRateLimitsSchemaV40,
@@ -214,9 +315,37 @@ export const agentGetProviderProfileRateLimitsV10 = defineRpcContract({
   responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV1,
 });
 
+/**
+ * Frozen `agent.getProviderProfileRateLimits@2.0` response, pinned to the
+ * pre-omp `rateLimits.provider` enum (`providerRateLimitsSchemaV50`, whose
+ * `available: false` arm carries `providerIdSchemaV50`) so an already-shipped
+ * v2.0 caller's strict decode never sees `omp`.
+ *
+ * This line IS released - the v1.1.8 tags (2026-07-25) shipped it. Note the
+ * frozen union here KEEPS the grok available arm (unlike the v1.0 one): grok
+ * rate limits predate those tags, so v2.0 really did ship with it. The v3.0
+ * line carries the live schema, with a v3->v2 downgrade bridge that fails
+ * closed (`DOWNGRADE_UNSUPPORTED`). Do NOT widen this schema - extend the
+ * latest schema and use the v3 bridge instead.
+ */
+export const agentGetProviderProfileRateLimitsResponseSchemaV2 = z.object({
+  rateLimits: providerRateLimitsSchemaV50,
+  usageUpdatedAt: z.number().nullable(),
+});
+export type AgentGetProviderProfileRateLimitsResponseV2 = z.infer<
+  typeof agentGetProviderProfileRateLimitsResponseSchemaV2
+>;
+
 export const agentGetProviderProfileRateLimitsV20 = defineRpcContract({
   method: "agent.getProviderProfileRateLimits",
   schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
+  responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV2,
+});
+
+export const agentGetProviderProfileRateLimitsV30 = defineRpcContract({
+  method: "agent.getProviderProfileRateLimits",
+  schemaVersion: { major: 3, minor: 0 } as const,
   requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
   responseSchema: agentGetProviderProfileRateLimitsResponseSchema,
 });
@@ -229,7 +358,7 @@ export const agentGetProviderProfileRateLimitsUpgradeV10ToV20 =
     from: { major: 1, minor: 0 },
     to: { major: 2, minor: 0 },
     // Request shape is identical across both majors - only the response's
-    // `rateLimits.provider` enum grows (Hermes).
+    // `rateLimits.provider` enum grows (Hermes, omp).
     upgradeRequest: (request) => request,
     upgradeResponse: (response) => response,
   });
@@ -246,14 +375,90 @@ export const agentGetProviderProfileRateLimitsDowngradeV20ToV10 =
       // Grok is representable in the frozen provider enum (it predates Hermes),
       // so a grok-available snapshot degrades to the unavailable
       // `unsupported_provider` shape (via the shared bridge map) - the exact row
-      // a v1.0 host returns for grok today - rather than being dropped. A Hermes
-      // rate-limit read stays unrepresentable on the frozen v1.0 wire and still
-      // fails closed below.
+      // a v1.0 host returns for grok today - rather than being dropped. A
+      // post-v4.0 provider's rate-limit read (Hermes, omp) stays
+      // unrepresentable on the frozen v1.0 wire and still fails closed below.
       const rateLimits = mapGrokAvailableToUnavailable(response.rateLimits);
       // A v1.0 caller only ever reads pre-hermes rate limits, so the common
       // case reparses cleanly through the frozen schema. Fails closed
       // (rather than silently mis-decoding) for any provider unrepresentable
-      // on the frozen v1.0 wire (Hermes today).
+      // on the frozen v1.0 wire (Hermes and omp today).
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse({
+          ...response,
+          rateLimits,
+        });
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading rate limits for this provider requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const agentGetProviderProfileRateLimitsUpgradeV20ToV30 =
+  defineUpgradePath<
+    typeof agentGetProviderProfileRateLimitsV20,
+    typeof agentGetProviderProfileRateLimitsV30
+  >({
+    from: { major: 2, minor: 0 },
+    to: { major: 3, minor: 0 },
+    // Request shape is identical across both majors - only the response's
+    // `rateLimits.provider` enum grows (omp).
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV30ToV20 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV30,
+    typeof agentGetProviderProfileRateLimitsV20
+  >({
+    from: { major: 3, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      // No grok degrade here: the frozen v2.0 union keeps the grok available
+      // arm (grok rate limits predate the v1.1.8 tags), so a grok snapshot
+      // reparses as-is. Only `omp` is unrepresentable, and this response
+      // carries exactly one provider - so fail closed rather than mis-decode.
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse(response);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading rate limits for this provider requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV30ToV10 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV30,
+    typeof agentGetProviderProfileRateLimitsV10
+  >({
+    from: { major: 3, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      // Unlike the v3->v2 bridge this one DOES degrade grok: the frozen v1.0
+      // union predates the grok available arm, so a grok-available snapshot
+      // becomes the `unsupported_provider` row a v1.0 host returns for grok
+      // today (shared map) rather than being dropped. Post-v4.0 providers
+      // (Hermes, omp) stay unrepresentable and still fail closed.
+      const rateLimits = mapGrokAvailableToUnavailable(response.rateLimits);
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse({
           ...response,
@@ -324,12 +529,13 @@ export type AgentConfigureResponse = z.infer<
 /**
  * Frozen `agent.configure@1.0` settings/response, pinned to the pre-Hermes
  * harness id set (`guiHarnessIdSchemaV40`) so an already-shipped v1.0
- * caller's strict decode never sees `harnessId: "hermes"`. The v2.0 line
- * (below) carries it via the live, still-growing `agentConfigureSettingsSchema`
- * / `agentConfigureResponseSchema` above; `agentConfigureDowngradeV20ToV10`'s
- * response bridge fails closed (`DOWNGRADE_UNSUPPORTED`) instead of silently
- * mis-decoding a Hermes-configured agent for a v1.0 caller. Do NOT widen this
- * schema - extend the latest schema and use the existing v2 bridge instead.
+ * caller's strict decode never sees a post-v4.0 `harnessId` (`hermes`,
+ * `omp`). The v2.0 line (below) carries them via the live, still-growing
+ * `agentConfigureSettingsSchema` / `agentConfigureResponseSchema` above;
+ * `agentConfigureDowngradeV20ToV10`'s response bridge fails closed
+ * (`DOWNGRADE_UNSUPPORTED`) instead of silently mis-decoding such an agent for
+ * a v1.0 caller. Do NOT widen this schema - extend the latest schema and use
+ * the existing v2 bridge instead.
  */
 export const agentConfigureSettingsSchemaV1 = z.object({
   harnessId: guiHarnessIdSchemaV40,
@@ -359,9 +565,53 @@ export const agentConfigureV10 = defineRpcContract({
   responseSchema: agentConfigureResponseSchemaV1,
 });
 
+/**
+ * Frozen `agent.configure@2.0` settings/response, pinned to the pre-omp
+ * harness id set (`guiHarnessIdSchemaV50`) so an already-shipped v2.0 caller's
+ * strict decode never sees `harnessId: "omp"`.
+ *
+ * This line IS released - the v1.1.8 tags (2026-07-25) shipped it. The v3.0
+ * line (below) carries the live `agentConfigureSettingsSchema` /
+ * `agentConfigureResponseSchema`; `agentConfigureDowngradeV30ToV20`'s response
+ * bridge fails closed (`DOWNGRADE_UNSUPPORTED`) instead of silently
+ * mis-decoding an omp-configured agent for a v2.0 caller. Do NOT widen this
+ * schema - extend the latest schema and use the v3 bridge instead.
+ *
+ * Only the RESPONSE is frozen. `agentConfigureRequestSchemaV20` keeps the live
+ * harness enum because the request is a client→host slot: a released client
+ * simply never sends `omp`, and widening what the host accepts breaks nobody.
+ */
+export const agentConfigureSettingsSchemaV2 = z.object({
+  harnessId: guiHarnessIdSchemaV50,
+  model: z.string().min(1),
+  profileSelection: concreteProfileSelectionSchema,
+  reasoningEffort: z.string().nullable(),
+  fastMode: z.boolean(),
+  permissionMode: permissionModeSchema,
+  agentMode: agentModeSchema,
+});
+export type AgentConfigureSettingsV2 = z.infer<
+  typeof agentConfigureSettingsSchemaV2
+>;
+
+export const agentConfigureResponseSchemaV2 = z.object({
+  settings: agentConfigureSettingsSchemaV2,
+  warnings: z.array(z.string()),
+});
+export type AgentConfigureResponseV2 = z.infer<
+  typeof agentConfigureResponseSchemaV2
+>;
+
 export const agentConfigureV20 = defineRpcContract({
   method: "agent.configure",
   schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: agentConfigureRequestSchemaV20,
+  responseSchema: agentConfigureResponseSchemaV2,
+});
+
+export const agentConfigureV30 = defineRpcContract({
+  method: "agent.configure",
+  schemaVersion: { major: 3, minor: 0 } as const,
   requestSchema: agentConfigureRequestSchemaV20,
   responseSchema: agentConfigureResponseSchema,
 });
@@ -393,10 +643,12 @@ export const agentConfigureDowngradeV20ToV10 = defineDowngradePath<
   downgradeResponse: (response) => {
     // `settings.harnessId` echoes the configured agent's harness; a v1.0
     // caller only ever configures a pre-hermes harness, so the common case
-    // reparses cleanly through the frozen schema. A Hermes-configured
-    // response (unreachable from a v1.0 REQUEST today, but this bridge must
-    // still hold if that ever changes) cannot be represented on the frozen
-    // v1.0 wire, so this fails closed instead of silently mis-decoding it.
+    // reparses cleanly through the frozen schema. A post-v4.0-harness
+    // response (Hermes or omp - unreachable from a v1.0 REQUEST today, but
+    // this bridge must still hold if that ever changes) cannot be represented
+    // on the frozen v1.0 wire, so this fails closed instead of silently
+    // mis-decoding it. The message names no single harness so it stays honest
+    // as the enum grows.
     const parsed = agentConfigureResponseSchemaV1.safeParse(response);
     if (!parsed.success) {
       return {
@@ -404,7 +656,85 @@ export const agentConfigureDowngradeV20ToV10 = defineDowngradePath<
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
           message:
-            "Configuring a Hermes agent requires a newer Traycer client.",
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureUpgradeV20ToV30 = defineUpgradePath<
+  typeof agentConfigureV20,
+  typeof agentConfigureV30
+>({
+  from: { major: 2, minor: 0 },
+  to: { major: 3, minor: 0 },
+  // Request shape is identical across both majors (v3.0 reuses
+  // `agentConfigureRequestSchemaV20`) - only the response's `harnessId` enum
+  // grows (omp). Both upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentConfigureDowngradeV30ToV20 = defineDowngradePath<
+  typeof agentConfigureV30,
+  typeof agentConfigureV20
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 2, minor: 0 },
+  // Unlike the v2->v1 bridge this request downgrade succeeds: v3.0 added no
+  // request field, so a v3.0 request is already a valid v2.0 one.
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // `settings.harnessId` echoes the configured agent's harness; a v2.0
+    // caller only ever configures a pre-omp harness, so the common case
+    // reparses cleanly through the frozen schema. An omp-configured response
+    // (unreachable from a v2.0 REQUEST today, but this bridge must still hold
+    // if that ever changes) cannot be represented on the frozen v2.0 wire, so
+    // this fails closed instead of silently mis-decoding it.
+    const parsed = agentConfigureResponseSchemaV2.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV30ToV10 = defineDowngradePath<
+  typeof agentConfigureV30,
+  typeof agentConfigureV10
+>({
+  from: { major: 3, minor: 0 },
+  to: { major: 1, minor: 0 },
+  // Same refusal as the v2->v1 bridge: v1.0 has no `permissionMode` field, so
+  // the explicit choice a v2.0+ caller makes cannot be carried to a v1.0 host.
+  downgradeRequest: () => ({
+    ok: false,
+    error: {
+      code: "DOWNGRADE_UNSUPPORTED",
+      message:
+        "Selecting an agent permission mode requires a newer Traycer host. Upgrade the host before configuring this agent.",
+    },
+  }),
+  downgradeResponse: (response) => {
+    // Fails closed for any post-v4.0 harness (Hermes, omp) - see the v2->v1
+    // bridge above for the full reasoning.
+    const parsed = agentConfigureResponseSchemaV1.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
         },
       };
     }

@@ -1,4 +1,11 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +20,7 @@ import {
 } from "vitest";
 import { createRegistryClient } from "../client";
 import type { RegistryTransport } from "../client";
-import { CliError } from "../../runner/errors";
+import { CLI_ERROR_CODES, CliError, cliError } from "../../runner/errors";
 import {
   closeFaultServer,
   sha256,
@@ -40,6 +47,25 @@ vi.mock("../../logger", () => ({
 vi.mock("../manifest-url", () => ({
   resolveManifestUrl: () => ({ url: manifestUrlMock.url }),
 }));
+
+// `downloadAndVerify` now stages the archive in the download cache under
+// the host home (registry/download-cache.ts) instead of a throwaway
+// `mkdtemp`. Redirect just that directory into the suite's own tmp root so
+// a test run never touches the developer's real ~/.traycer.
+vi.mock("../../store/paths", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../store/paths")>(
+      "../../store/paths",
+    );
+  const cacheDir = (): string => join(tmpRoot, "download-cache");
+  return {
+    ...actual,
+    hostDownloadCacheDir: () => cacheDir(),
+    ensureHostDownloadCacheDir: async () => {
+      mkdirSync(cacheDir(), { recursive: true });
+    },
+  };
+});
 
 // Smoke-level test that wires the client end-to-end against a fake
 // transport so we can assert manifest parsing, version resolution,
@@ -333,6 +359,139 @@ describe("registry client", () => {
     expect(progress).toContainEqual({
       stage: "registry-manifest-watchdog",
       message: "fetching manifest stalled; retrying",
+    });
+  });
+
+  it("keeps a verified archive when only the signature fetch fails", async () => {
+    // The bytes are complete and already sha256-verified against the
+    // manifest; the sub-1KB `.minisig` fetch is what failed, and it gives up
+    // after four attempts. Deleting a 700MB verified archive over that
+    // reproduced the reported never-finishes loop on a throttled link.
+    let archivePath = "";
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: {
+        fetchText: async ({ url }) => {
+          if (url.endsWith(".minisig")) {
+            throw cliError({
+              code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
+              message: "signature fetch failed",
+              details: null,
+              exitCode: 1,
+            });
+          }
+          return MANIFEST_BODY;
+        },
+        downloadToFile: async (opts) => {
+          archivePath = opts.destPath;
+          writeFileSync(opts.destPath, Buffer.alloc(opts.expectedSizeBytes));
+          return {
+            downloadedBytes: opts.expectedSizeBytes,
+            sha256: opts.expectedSha256,
+          };
+        },
+      },
+      onProgress: null,
+      requireTrustedKeys: false,
+    });
+    const { entry, asset } = await client.resolveAsset(
+      "latest",
+      "darwin-arm64",
+    );
+
+    await expect(
+      client.downloadAndVerify(entry, asset, () => undefined),
+    ).rejects.toMatchObject({ code: "E_REGISTRY_UNAVAILABLE" });
+
+    expect(existsSync(archivePath)).toBe(true);
+    // The claim comes off so the next invocation can pick the archive up and
+    // re-verify it over a single 416 round-trip.
+    expect(existsSync(`${archivePath}.owner`)).toBe(false);
+  });
+
+  it("discards an archive the trust chain rejected", async () => {
+    // The contrast to the case above: a signature that does not check out
+    // condemns the bytes, and re-running would only reproduce the verdict.
+    let archivePath = "";
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: {
+        fetchText: async ({ url }) =>
+          url.endsWith(".minisig") ? "not-a-signature" : MANIFEST_BODY,
+        downloadToFile: async (opts) => {
+          archivePath = opts.destPath;
+          writeFileSync(opts.destPath, Buffer.alloc(opts.expectedSizeBytes));
+          return {
+            downloadedBytes: opts.expectedSizeBytes,
+            sha256: opts.expectedSha256,
+          };
+        },
+      },
+      onProgress: null,
+      requireTrustedKeys: false,
+    });
+    const { entry, asset } = await client.resolveAsset(
+      "latest",
+      "darwin-arm64",
+    );
+
+    await expect(
+      client.downloadAndVerify(entry, asset, () => undefined),
+    ).rejects.toMatchObject({ code: "E_HOST_VERIFY_FAILED" });
+
+    expect(existsSync(archivePath)).toBe(false);
+    expect(existsSync(`${archivePath}.owner`)).toBe(false);
+  });
+
+  it("quotes an attempt ceiling only when one actually binds", async () => {
+    // `fetchText` gives up after 4 attempts, so "attempt 1/4" is a real
+    // countdown. An archive download is bounded by consecutive stalls
+    // instead - its attempt counter has a runaway guard, not a budget, and
+    // quoting "attempt 1/200" would describe a countdown that is not
+    // running.
+    const progress: Array<{ stage: string; message: string }> = [];
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: {
+        fetchText: async ({ onHeartbeat }) => {
+          onHeartbeat?.({ phase: "attempt", attempt: 1, maxAttempts: 4 });
+          return MANIFEST_BODY;
+        },
+        downloadToFile: async (opts) => {
+          opts.onHeartbeat?.({
+            phase: "attempt",
+            attempt: 41,
+            maxAttempts: null,
+          });
+          writeFileSync(opts.destPath, Buffer.alloc(opts.expectedSizeBytes));
+          return {
+            downloadedBytes: opts.expectedSizeBytes,
+            sha256: opts.expectedSha256,
+          };
+        },
+      },
+      onProgress: (event) => {
+        if (event.message !== null) {
+          progress.push({ stage: event.stage, message: event.message });
+        }
+      },
+      requireTrustedKeys: false,
+    });
+    const { entry, asset } = await client.resolveAsset(
+      "latest",
+      "darwin-arm64",
+    );
+    await expect(
+      client.downloadAndVerify(entry, asset, () => undefined),
+    ).rejects.toThrow();
+
+    expect(progress).toContainEqual({
+      stage: "registry-manifest-attempt",
+      message: "fetching manifest (attempt 1/4)",
+    });
+    expect(progress).toContainEqual({
+      stage: "registry-archive-attempt",
+      message: "fetching host archive (attempt 41)",
     });
   });
 

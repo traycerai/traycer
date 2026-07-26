@@ -140,6 +140,19 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => testState.navigateNested,
 }));
 
+// The artifact panel now hosts a search box; keep its host query inert so these
+// tree-focused tests need no QueryClient. An empty query renders no results.
+vi.mock("@/hooks/epic/use-epic-search-artifacts-query", () => ({
+  useEpicSearchArtifacts: () => ({
+    isSuccess: false,
+    isError: false,
+    isFetching: false,
+    data: undefined,
+    error: null,
+    refetch: () => undefined,
+  }),
+}));
+
 vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
   useEpicExportArtifacts: () => ({ mutate: vi.fn(), isPending: false }),
 }));
@@ -498,6 +511,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => new Set<string>(),
+  useEpicAgentRoleClaims: () => [],
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];

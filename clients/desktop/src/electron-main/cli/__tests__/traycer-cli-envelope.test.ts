@@ -95,7 +95,9 @@ class FakeChild extends EventEmitter {
       if (opts.stderr.length > 0) {
         this.stderr.emit("data", opts.stderr);
       }
-      this.emit("close", opts.exitCode);
+      // Node always passes both `(code, signal)` on `close`; a child that
+      // exited on its own reports a null signal.
+      this.emit("close", opts.exitCode, null);
     });
   }
   kill(signal: NodeJS.Signals): void {
@@ -103,8 +105,8 @@ class FakeChild extends EventEmitter {
     this.killSignal = signal;
   }
 
-  close(exitCode: number | null): void {
-    this.emit("close", exitCode);
+  close(exitCode: number | null, signal: NodeJS.Signals | null): void {
+    this.emit("close", exitCode, signal);
   }
 }
 
@@ -130,8 +132,8 @@ class HangingFakeChild extends EventEmitter {
     this.killSignal = signal;
   }
 
-  close(exitCode: number | null): void {
-    this.emit("close", exitCode);
+  close(exitCode: number | null, signal: NodeJS.Signals | null): void {
+    this.emit("close", exitCode, signal);
   }
 }
 
@@ -430,7 +432,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
       args: ["host", "download", "--automatic"],
       onEvent: () => undefined,
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: null,
     });
 
@@ -482,7 +484,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
         }
       },
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: null,
     });
     expect(capturedArgs).toContain("--json");
@@ -518,7 +520,7 @@ describe("streamTraycerCliJson resolves data, fans progress, and converts error 
         args: ["host", "install", "latest", "--json"],
         onEvent: () => undefined,
         env: null,
-        timeoutMs: 5_000,
+        idleTimeoutMs: 5_000,
         signal: null,
       });
     } catch (err) {
@@ -549,7 +551,7 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
       args: ["host", "download", "--automatic"],
       onEvent: () => undefined,
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: abortController.signal,
     });
 
@@ -581,7 +583,7 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    child.close(null);
+    child.close(null, "SIGKILL");
     await expect(promise).rejects.toThrow();
   });
 
@@ -596,7 +598,7 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
       args: ["host", "download", "--automatic"],
       onEvent: () => undefined,
       env: null,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
       signal: abortController.signal,
     });
     await vi.waitFor(() => {
@@ -604,8 +606,38 @@ describe("streamTraycerCliJson kills the subprocess when its signal aborts", () 
     });
     expect(child.killed).toBe(true);
     expect(child.killSignal).toBe("SIGKILL");
-    child.close(null);
+    child.close(null, "SIGKILL");
     await expect(promise).rejects.toThrow();
+  });
+});
+
+// A kill this process never asked for - systemd stopping the unit, the OOM
+// killer, an operator's `kill` - leaves `code` null on `close`. That used to
+// fall through to the "emitted no terminal result" branch, which reads as a
+// CLI that ran fine and stayed silent, and is why flaky `host install`
+// failures could not be told apart from a genuinely silent CLI.
+describe("streamTraycerCliJson reports an external kill by its signal", () => {
+  it("names the signal instead of reporting a missing terminal result", async () => {
+    const child = new HangingFakeChild();
+    spawnImpl = () => child;
+    const { streamTraycerCliJson } = await import("../traycer-cli");
+
+    const promise = streamTraycerCliJson<unknown>({
+      args: ["host", "install", "--release", "1.1.8-rc.2"],
+      onEvent: () => undefined,
+      env: null,
+      idleTimeoutMs: 5_000,
+      signal: null,
+    });
+    await vi.waitFor(() => {
+      expect(child.stdout.listenerCount("data")).toBeGreaterThan(0);
+    });
+
+    // Nothing in this process killed it: no abort, no timeout.
+    expect(child.killed).toBe(false);
+    child.close(null, "SIGTERM");
+
+    await expect(promise).rejects.toThrow("killed by SIGTERM");
   });
 });
 
@@ -621,7 +653,7 @@ describe("streamTraycerCliJson timeout waits for the child close", () => {
         args: ["host", "download", "--automatic"],
         onEvent: () => undefined,
         env: null,
-        timeoutMs: 5_000,
+        idleTimeoutMs: 5_000,
         signal: null,
       });
 
@@ -641,8 +673,61 @@ describe("streamTraycerCliJson timeout waits for the child close", () => {
       await Promise.resolve();
       expect(settled).toBe(false);
 
-      child.close(null);
-      await expect(promise).rejects.toThrow("timed out");
+      // The idle kill is a SIGKILL, so `close` carries a signal. The
+      // timeout check runs before the signal branch, so this still reports
+      // the idle budget rather than the bare "killed by SIGKILL".
+      child.close(null, "SIGKILL");
+      await expect(promise).rejects.toThrow("produced no output");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // traycer#585/#589: this budget is inactivity, not wall-clock. A 700MB
+  // host download on a throttled link runs far past any fixed ceiling we
+  // would be willing to set, but it never stops reporting - the CLI emits a
+  // progress event per chunk and heartbeats while a transfer is stalled.
+  it("re-arms the idle budget on every event, and only kills a child that goes quiet", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new HangingFakeChild();
+      spawnImpl = () => child;
+      const { streamTraycerCliJson } = await import("../traycer-cli");
+
+      const promise = streamTraycerCliJson<unknown>({
+        args: ["host", "download", "--automatic"],
+        onEvent: () => undefined,
+        env: null,
+        idleTimeoutMs: 5_000,
+        signal: null,
+      });
+
+      // Four reporting rounds - 16s in total, well past the 5s budget.
+      for (let round = 0; round < 4; round += 1) {
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(child.killed).toBe(false);
+        child.stdout.emit(
+          "data",
+          `${JSON.stringify({
+            type: "progress",
+            stage: "download",
+            percent: round * 25,
+            bytes: round * 1_000_000,
+            totalBytes: 4_000_000,
+            message: "downloading host",
+            timestamp: "2026-05-15T00:00:00Z",
+          })}\n`,
+        );
+      }
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(child.killed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.killed).toBe(true);
+      expect(child.killSignal).toBe("SIGKILL");
+
+      child.close(null, "SIGKILL");
+      await expect(promise).rejects.toThrow("produced no output for 5000ms");
     } finally {
       vi.useRealTimers();
     }

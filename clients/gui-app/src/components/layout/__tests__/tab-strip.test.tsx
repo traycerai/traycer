@@ -292,6 +292,7 @@ function registerChatSession(epicId: string, chatId: string): void {
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         streamClientFactory: () => ({
           sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
           close: () => undefined,
         }),
       }),
@@ -995,7 +996,9 @@ describe("<TabStrip />", () => {
       name: "History",
       lastPath: "/epics",
     });
-    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraft(null, undefined);
 
     const router = buildRouter(`/epics/epic-current/${epicTabId}`);
     render(<RouterProvider router={router} />);

@@ -26,6 +26,7 @@ import { devDesktopSlotForEnvironment } from "./dev-desktop-slot";
 //   ~/.traycer/host/install/                 - prod host install dir (atomic-swap target)
 //   ~/.traycer/host/install/install.json     - prod host install record
 //   ~/.traycer/host/staging/                 - prod host staging root (verify-before-replace)
+//   ~/.traycer/host/download-cache/          - prod resumable archive partials (cross-invocation)
 //   ~/.traycer/host/dev/                     - legacy/no-slot dev host runtime root
 //   ~/.traycer/host/dev-runs/<slot>/         - multi-run dev host runtime root
 //   ~/.traycer/host/dev-runs/<slot>/install/install.json - multi-run dev install record
@@ -49,6 +50,18 @@ const HOST_INSTALL_RECORD_FILENAME = "install.json";
 // final install dir.
 const HOST_STAGED_SUBDIR = "staged";
 const HOST_STAGED_RECORD_FILENAME = "staged.json";
+// Where a registry archive is streamed to disk while it downloads. Unlike
+// `install-staging/`, this area is deliberately NOT per-invocation: the
+// archive path is derived from the version + sha256 so a re-spawned CLI
+// finds the previous invocation's partial file and resumes it with a Range
+// request instead of starting from zero (traycer#585/#588 - a 700MB host
+// archive over a throttled link never survives a single process). Contents
+// are owner-tokened and swept by `registry/download-cache.ts`, not by the
+// `install-staging/` temp sweep.
+// Exported so `registry/download-cache.ts` can recognize its own private
+// slot directories structurally (`<...>/download-cache/private-*/`) rather
+// than by directory name alone - see `claimedPathFor` there.
+export const HOST_DOWNLOAD_CACHE_SUBDIR = "download-cache";
 const CLI_LOG_FILENAME = "cli.log";
 const HOST_LOG_FILENAME = "host.log";
 // Single retained generation of the host log. One is enough: it exists so the
@@ -167,6 +180,9 @@ export function hostStagingRoot(environment: Environment): string {
 export function hostInstallRecordPath(environment: Environment): string {
   return join(hostInstallDir(environment), HOST_INSTALL_RECORD_FILENAME);
 }
+export function hostDownloadCacheDir(environment: Environment): string {
+  return join(hostHomeDir(environment), HOST_DOWNLOAD_CACHE_SUBDIR);
+}
 
 // Single-slot staged store - see the `HOST_STAGED_SUBDIR` comment above.
 export function hostStagedDir(environment: Environment): string {
@@ -199,6 +215,21 @@ export async function ensureHostStagingRoot(
   environment: Environment,
 ): Promise<void> {
   await mkdir(hostStagingRoot(environment), { recursive: true });
+}
+
+export async function ensureHostDownloadCacheDir(
+  environment: Environment,
+): Promise<void> {
+  // 0o700: the cache holds a partially-written archive at a PREDICTABLE
+  // path (that predictability is the whole point - it is what lets the next
+  // invocation resume it). Under ~/.traycer it is already user-owned, and
+  // an explicit private mode keeps it that way even if the parent's mode is
+  // later relaxed, so no other local account can pre-create or swap the
+  // file we are about to append to.
+  await mkdir(hostDownloadCacheDir(environment), {
+    recursive: true,
+    mode: 0o700,
+  });
 }
 
 export async function ensureHostHomeDirForStaged(

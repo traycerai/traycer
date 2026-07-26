@@ -67,7 +67,7 @@ describe("landing-composer-store draft binding", () => {
   it("creates the draft synchronously on the first non-empty null-binding edit", () => {
     useLandingComposerStore
       .getState()
-      .setSnapshot(null, content("hello"), null);
+      .setSnapshot(null, content("hello"), null, undefined);
 
     const drafts = useLandingDraftStore.getState().drafts;
     expect(drafts).toHaveLength(1);
@@ -75,10 +75,22 @@ describe("landing-composer-store draft binding", () => {
     expect(useLandingDraftStore.getState().activeDraftId).toBe(drafts[0].id);
   });
 
+  it("creates the draft under a pre-supplied id when createWithId is given", () => {
+    const preMintedId = "pre-minted-draft-id";
+    useLandingComposerStore
+      .getState()
+      .setSnapshot(null, content("hello"), null, preMintedId);
+
+    const drafts = useLandingDraftStore.getState().drafts;
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].id).toBe(preMintedId);
+    expect(useLandingDraftStore.getState().activeDraftId).toBe(preMintedId);
+  });
+
   it("keeps same-tick null-binding snapshots on the one created draft", () => {
     const store = useLandingComposerStore.getState();
-    store.setSnapshot(null, content("first"), null);
-    store.setSnapshot(null, content("first second"), null);
+    store.setSnapshot(null, content("first"), null, undefined);
+    store.setSnapshot(null, content("first second"), null, undefined);
 
     const drafts = useLandingDraftStore.getState().drafts;
     expect(drafts).toHaveLength(1);
@@ -90,7 +102,7 @@ describe("landing-composer-store draft binding", () => {
   it("creates a draft for image-only null-binding edits", () => {
     useLandingComposerStore
       .getState()
-      .setSnapshot(null, imageContent("img-1"), null);
+      .setSnapshot(null, imageContent("img-1"), null, undefined);
 
     const drafts = useLandingDraftStore.getState().drafts;
     expect(drafts).toHaveLength(1);
@@ -99,7 +111,7 @@ describe("landing-composer-store draft binding", () => {
   });
 
   it("seeds currentContent from the bound draft on openDraft", () => {
-    const id = useLandingDraftStore.getState().createDraft(null);
+    const id = useLandingDraftStore.getState().createDraft(null, undefined);
     useLandingDraftStore
       .getState()
       .setDraftContent(id, content("persisted text"), null);
@@ -111,12 +123,12 @@ describe("landing-composer-store draft binding", () => {
   });
 
   it("reopens a bound draft from the remembered full editor content", () => {
-    const draftA = useLandingDraftStore.getState().createDraft(null);
-    const draftB = useLandingDraftStore.getState().createDraft(null);
+    const draftA = useLandingDraftStore.getState().createDraft(null, undefined);
+    const draftB = useLandingDraftStore.getState().createDraft(null, undefined);
     useLandingComposerStore.getState().openDraft(draftA);
     useLandingComposerStore
       .getState()
-      .setSnapshot(draftA, imageContent("img-1"), null);
+      .setSnapshot(draftA, imageContent("img-1"), null, undefined);
 
     // openDraft(draftB) flushes the pending debounced write to draftA, so
     // reopening draftA seeds from its now-persisted full editor content.
@@ -129,15 +141,15 @@ describe("landing-composer-store draft binding", () => {
 
   it("lands a trailing debounced write on the BOUND draft, not the active one", () => {
     vi.useFakeTimers();
-    const draftA = useLandingDraftStore.getState().createDraft(null);
-    const draftB = useLandingDraftStore.getState().createDraft(null);
+    const draftA = useLandingDraftStore.getState().createDraft(null, undefined);
+    const draftB = useLandingDraftStore.getState().createDraft(null, undefined);
     useLandingDraftStore.getState().setActiveDraft(draftA);
     useLandingComposerStore.getState().openDraft(draftA);
 
     // A keystroke schedules the debounced write for draft A...
     useLandingComposerStore
       .getState()
-      .setSnapshot(draftA, content("edit A"), null);
+      .setSnapshot(draftA, content("edit A"), null, undefined);
     // ...then the user switches to draft B before the debounce fires.
     useLandingDraftStore.getState().setActiveDraft(draftB);
     vi.runAllTimers();
@@ -148,12 +160,12 @@ describe("landing-composer-store draft binding", () => {
 
   it("flushes the previous binding's pending write when a new draft opens", () => {
     vi.useFakeTimers();
-    const draftA = useLandingDraftStore.getState().createDraft(null);
-    const draftB = useLandingDraftStore.getState().createDraft(null);
+    const draftA = useLandingDraftStore.getState().createDraft(null, undefined);
+    const draftB = useLandingDraftStore.getState().createDraft(null, undefined);
     useLandingComposerStore.getState().openDraft(draftA);
     useLandingComposerStore
       .getState()
-      .setSnapshot(draftA, content("edit A"), null);
+      .setSnapshot(draftA, content("edit A"), null, undefined);
 
     // Rebinding (the keyed remount's mount path) commits the trailing write
     // immediately so returning to draft A restores the latest content.
@@ -165,11 +177,11 @@ describe("landing-composer-store draft binding", () => {
 
   it("reset cancels a pending write and clears the session", () => {
     vi.useFakeTimers();
-    const draftA = useLandingDraftStore.getState().createDraft(null);
+    const draftA = useLandingDraftStore.getState().createDraft(null, undefined);
     useLandingComposerStore.getState().openDraft(draftA);
     useLandingComposerStore
       .getState()
-      .setSnapshot(draftA, content("typed"), null);
+      .setSnapshot(draftA, content("typed"), null, undefined);
 
     useLandingComposerStore.getState().reset();
     vi.runAllTimers();

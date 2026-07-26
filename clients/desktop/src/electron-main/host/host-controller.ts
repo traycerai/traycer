@@ -77,7 +77,18 @@ import {
 // directly now submits an intent here instead - see the ticket's "Single-
 // writer cutover" for the exhaustive list of call sites this replaces.
 
-const CLI_STREAM_TIMEOUT_MS = 10 * 60_000;
+// How long a streaming CLI child may stay SILENT before it is treated as
+// wedged and killed. Not a ceiling on how long the work may take: the timer
+// re-arms on every NDJSON event (`streamTraycerCliJson`), and the CLI emits
+// progress per downloaded chunk plus watchdog/backoff heartbeats while a
+// transfer is stalled.
+//
+// As an absolute cap this same 10 minutes made the host download
+// unfinishable below ~1.2 MB/s - the CLI was SIGKILLed mid-transfer and the
+// partial went with it (traycer#585/#589). Kept at 10 minutes as an idle
+// budget: comfortably longer than the CLI's own 30s transfer watchdog, so
+// only a child that has genuinely stopped reporting trips it.
+const CLI_STREAM_IDLE_TIMEOUT_MS = 10 * 60_000;
 // Fixup A9: the production desktop-held cli-lock wait/poll - matches the
 // CLI's own `waitMs: 30_000` at every `withCliLock` call site (fixup A8).
 // Exported (not just a local default) so `HostControllerOptions.desktopLockWaitMs`/
@@ -137,6 +148,16 @@ function progressFromNdjson(
     totalBytes: event.totalBytes,
     message: event.message,
   };
+}
+
+// The CLI names its network liveness ticks `registry-<resource>-<phase>`
+// (registry/client.ts, commands/cli-upgrade.ts). They report that a fetch is
+// still alive, not that the work moved to a new stage - see
+// `setMutationProgress`.
+const REGISTRY_LIVENESS_STAGE_PREFIX = "registry-";
+
+function isRegistryLivenessStage(stage: string | null): boolean {
+  return stage !== null && stage.startsWith(REGISTRY_LIVENESS_STAGE_PREFIX);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -797,14 +818,26 @@ export class HostController {
     if (this.mutationStatus === null) return;
     // Mi-1: carry the last concrete percent/bytes/totalBytes forward so a bare
     // heartbeat (an event that omits them) holds the bar instead of blanking
-    // it; stage/message still track the incoming event so a genuine stage
-    // transition is honored. A later event with real numbers overrides.
+    // it; message still tracks the incoming event so the retry text is
+    // visible. A later event with real numbers overrides.
+    //
+    // `stage` is carried forward too, but only for a registry liveness tick.
+    // Those are emitted from INSIDE whatever stage is already running (the
+    // manifest fetch, the archive transfer, the signature fetch) rather than
+    // being stages in their own right, so letting one overwrite `stage` made
+    // the renderer's heading flip away from "Downloading Traycer Host…" and
+    // back on every retry. The progress-aware retry budget turned that from a
+    // rare blip into a constant flicker on exactly the throttled links it
+    // exists for. A genuine stage transition (resolve/download/extract/swap/
+    // …) still lands.
     const prior = this.mutationStatus.progress;
     const merged: MutationProgress =
       prior === null
         ? progress
         : {
-            stage: progress.stage,
+            stage: isRegistryLivenessStage(progress.stage)
+              ? prior.stage
+              : progress.stage,
             percent: progress.percent ?? prior.percent,
             bytes: progress.bytes ?? prior.bytes,
             totalBytes: progress.totalBytes ?? prior.totalBytes,
@@ -864,7 +897,7 @@ export class HostController {
     const result = await streamBundledTraycerCliJson<T>({
       args,
       env: null,
-      timeoutMs: CLI_STREAM_TIMEOUT_MS,
+      idleTimeoutMs: CLI_STREAM_IDLE_TIMEOUT_MS,
       // Every mutation-lane call goes through here - none of them are
       // cancellable (only the download lane's `runDownloadLane`, below, has
       // an `AbortController`).
@@ -1943,7 +1976,7 @@ export class HostController {
         await streamBundledTraycerCliJson<unknown>({
           args,
           env: null,
-          timeoutMs: CLI_STREAM_TIMEOUT_MS,
+          idleTimeoutMs: CLI_STREAM_IDLE_TIMEOUT_MS,
           // Fixup C4: this download's own `AbortController` - `abortInFlightDownload`
           // (only called by `removeTraycer`) now actually kills the spawned CLI
           // subprocess instead of only flipping `.aborted` on a signal nothing

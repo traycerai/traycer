@@ -231,6 +231,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
   useChildIds: () => [],
   useEpicActiveAgentIds: () => new Set<string>(),
+  useEpicAgentRoleClaims: () => [],
   useEpicArtifact: () => null,
   useEpicArtifactRecords: () => [],
   useEpicArtifactStatus: () => null,
@@ -308,6 +309,17 @@ vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
     data: undefined,
     error: new Error("secret-token-should-never-render /Users/hostile/path"),
     isLoading: false,
+  }),
+}));
+
+// The active-query path search is a separate host query; this panel test only
+// exercises the browse/error state, so stub it to an inert idle result.
+vi.mock("@/hooks/workspace/use-workspace-search-paths-query", () => ({
+  useWorkspaceSearchPaths: () => ({
+    data: undefined,
+    isError: false,
+    isLoading: false,
+    isFetching: false,
   }),
 }));
 

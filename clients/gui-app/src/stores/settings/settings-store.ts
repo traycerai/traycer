@@ -115,6 +115,14 @@ export interface SettingsState {
    */
   quoteReplyEnabled: boolean;
   /**
+   * Cmd/Ctrl+Enter mid-turn steering. Opt-out (default ON): when enabled,
+   * pressing Cmd+Enter while a turn is running on a steer-capable harness sends
+   * the composer text as a same-turn steering message that jumps the pending
+   * queue; plain Enter keeps queueing. Disabling it reverts Cmd+Enter to the
+   * plain-Enter submit alias. Idle behavior is identical either way.
+   */
+  steerOnModEnterEnabled: boolean;
+  /**
    * Shared, user-level diff viewer configuration consumed by every git and
    * snapshot diff renderer. Persisted globally so the choice survives restarts
    * and live-updates all mounted viewers. Tile-local state (collapsed files)
@@ -145,6 +153,7 @@ export interface SettingsState {
   setVoiceInputEnabled: (value: boolean) => void;
   setVoiceLanguage: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
+  setSteerOnModEnterEnabled: (value: boolean) => void;
   setDiffViewerPreferences: (preferences: DiffViewerPreferences) => void;
   patchDiffViewerPreferences: (patch: DiffViewerPreferencesPatch) => void;
 }
@@ -178,6 +187,7 @@ type PersistedSettingsState = Pick<
   | "voiceInputEnabled"
   | "voiceLanguage"
   | "quoteReplyEnabled"
+  | "steerOnModEnterEnabled"
   | "diffViewerPreferences"
 >;
 
@@ -244,6 +254,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     voiceInputEnabled: state.voiceInputEnabled,
     voiceLanguage: state.voiceLanguage,
     quoteReplyEnabled: state.quoteReplyEnabled,
+    steerOnModEnterEnabled: state.steerOnModEnterEnabled,
     diffViewerPreferences: state.diffViewerPreferences,
   };
 }
@@ -278,6 +289,7 @@ export const useSettingsStore = create<SettingsState>()(
       voiceInputEnabled: true,
       voiceLanguage: "auto",
       quoteReplyEnabled: true,
+      steerOnModEnterEnabled: true,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: makeSetter(set, "themePreset"),
@@ -343,6 +355,7 @@ export const useSettingsStore = create<SettingsState>()(
       setVoiceInputEnabled: makeSetter(set, "voiceInputEnabled"),
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
+      setSteerOnModEnterEnabled: makeSetter(set, "steerOnModEnterEnabled"),
       setDiffViewerPreferences: makeSetter(set, "diffViewerPreferences"),
       patchDiffViewerPreferences: (patch) => {
         set((s) => ({

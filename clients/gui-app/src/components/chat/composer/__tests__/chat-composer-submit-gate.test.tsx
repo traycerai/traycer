@@ -63,6 +63,10 @@ describe("chat-composer submit gate (path resolution)", () => {
           pickerStore,
           toolbarStore,
           activeTurnStatus: null,
+          steerCapable: false,
+          steerEnabled: true,
+          steerProtocolSupported: true,
+          getActiveTurnForSteer: () => null,
           hasPendingApprovals: false,
           sendDisabled: false,
           workspaceBlocked: false,
@@ -73,11 +77,11 @@ describe("chat-composer submit gate (path resolution)", () => {
       { initialProps: true },
     );
 
-    result.current();
+    result.current.submitDraft("enter");
     expect(onSubmitMessage).not.toHaveBeenCalled();
 
     rerender(false);
-    result.current();
+    result.current.submitDraft("enter");
     expect(onSubmitMessage).toHaveBeenCalledTimes(1);
   });
 

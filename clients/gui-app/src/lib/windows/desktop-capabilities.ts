@@ -4,6 +4,7 @@ import type {
   DesktopGlobalShortcutsBridge,
   DesktopHostControllerStatusBridge,
   DesktopMenuBridge,
+  DesktopMenuPopupBridge,
   DesktopPowerBridge,
   DesktopSupportBridge,
   DesktopZoomBridge,
@@ -14,6 +15,13 @@ export function resolveDesktopMenuBridge(
 ): DesktopMenuBridge | null {
   const value: unknown = Reflect.get(runnerHost, "menu");
   return isDesktopMenuBridge(value) ? value : null;
+}
+
+export function resolveDesktopMenuPopupBridge(
+  runnerHost: IRunnerHost,
+): DesktopMenuPopupBridge | null {
+  const value: unknown = Reflect.get(runnerHost, "menu");
+  return isDesktopMenuPopupBridge(value) ? value : null;
 }
 
 export function resolveDesktopSupportBridge(
@@ -60,6 +68,12 @@ export function resolveDesktopGlobalShortcutsBridge(
 
 function isDesktopMenuBridge(value: unknown): value is DesktopMenuBridge {
   return isRecord(value) && typeof value.onCommand === "function";
+}
+
+function isDesktopMenuPopupBridge(
+  value: unknown,
+): value is DesktopMenuPopupBridge {
+  return isRecord(value) && typeof value.openTopLevel === "function";
 }
 
 function isDesktopSupportBridge(value: unknown): value is DesktopSupportBridge {

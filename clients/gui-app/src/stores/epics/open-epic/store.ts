@@ -29,6 +29,7 @@ import { evaluateReparent, reparentRejectionError } from "@/lib/reparent-rules";
 import { isUnavailableEpicReason } from "@/lib/epics/unavailable-epic";
 import { basePersistOptions, openEpicKey } from "@/lib/persist";
 import type {
+  AgentRolesSlice,
   ArtifactsSlice,
   ArtifactRoomsSlice,
   ChatsSlice,
@@ -267,6 +268,7 @@ export interface OpenEpicState {
   readonly deletedArtifacts: DeletedArtifactsSlice;
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
+  readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
   readonly contentRevByArtifactId: Readonly<Record<string, number>>;
   /**

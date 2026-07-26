@@ -9,7 +9,7 @@ import {
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { cn } from "@/lib/utils";
 
-const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
+export const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
 
 /**
  * Live-activity tier for the running slot. `"turn"` is the agent actually

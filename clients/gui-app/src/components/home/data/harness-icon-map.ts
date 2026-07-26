@@ -11,6 +11,7 @@ import {
   KiroIcon,
   KiloCodeIcon,
   KimiIcon,
+  OmpIcon,
   OpenCodeIcon,
   OpenRouterIcon,
   PiIcon,
@@ -43,4 +44,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   devin: { Icon: DevinIcon, className: "text-foreground" },
   pi: { Icon: PiIcon, className: "text-foreground" },
   hermes: { Icon: HermesIcon, className: "text-foreground" },
+  omp: { Icon: OmpIcon, className: "text-foreground" },
 };

@@ -938,6 +938,14 @@ export const hermesUserMessageAnchorResolvedSchema = z.object({
   hermesSessionId: z.string().nullable(),
 });
 
+export const ompUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("omp"),
+  sessionId: z.string(),
+  // The omp RPC session id assigned for this turn. Null until the session is
+  // resolved; used to resume the same omp session on a later turn.
+  ompSessionId: z.string().nullable(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -960,6 +968,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     devinUserMessageAnchorResolvedSchema,
     piUserMessageAnchorResolvedSchema,
     hermesUserMessageAnchorResolvedSchema,
+    ompUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
