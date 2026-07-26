@@ -1,4 +1,5 @@
 import "../../../__tests__/test-browser-apis";
+import { screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchAction,
@@ -325,6 +326,8 @@ describe("dispatchAction", () => {
     composer.setAttribute("data-chat-composer", "");
     targetLayer.append(composer);
     const targetEditor = appendComposerEditor(composer);
+    targetEditor.setAttribute("role", "textbox");
+    targetEditor.setAttribute("aria-label", "Destination chat composer");
 
     const { router: baseRouter } = buildRouter(
       `/epics/epic-pane-focus/${tabId}`,
@@ -347,7 +350,9 @@ describe("dispatchAction", () => {
       tabId,
       expect.any(Function),
     );
-    expect(document.activeElement).toBe(targetEditor);
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Destination chat composer" }),
+    );
   });
 
   it("does not close hidden epic canvas tabs while a non-detail route is active", () => {

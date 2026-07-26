@@ -1,5 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import {
@@ -828,6 +828,8 @@ describe("useEpicRouteSynchronization", () => {
     composer.setAttribute("data-chat-composer", "");
     const targetEditor = document.createElement("div");
     targetEditor.setAttribute("data-composer-editor", "");
+    targetEditor.setAttribute("role", "textbox");
+    targetEditor.setAttribute("aria-label", "Target chat composer");
     targetEditor.tabIndex = 0;
     composer.appendChild(targetEditor);
     tileEl.appendChild(composer);
@@ -856,7 +858,9 @@ describe("useEpicRouteSynchronization", () => {
       );
 
       await flushFocusRestore();
-      expect(document.activeElement).toBe(targetEditor);
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Target chat composer" }),
+      );
     } finally {
       sourceEditor.remove();
       paneEl.remove();
