@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { Check, Clock, Eye, TextQuote, X } from "lucide-react";
+import { Check, Clock, Eye, X } from "lucide-react";
 import type {
   PrActivitySection,
   PrDetailCore,
@@ -8,7 +8,6 @@ import type {
   PrAttentionQueue,
   PrCheckCounts,
 } from "@/lib/pr/pr-attention-queue";
-import type { PrQuoteTarget } from "@/lib/pr/pr-quote";
 import {
   prReviewerRows,
   type PrReviewerState,
@@ -16,12 +15,16 @@ import {
 import { PrActorAvatar } from "@/components/epic-canvas/pr/pr-detail-avatar";
 import {
   formatPrChecksValue,
+  PR_DIFF_ADDED_CLASS,
+  PR_DIFF_REMOVED_CLASS,
   PR_TONE_FILL_CLASS,
   PR_TONE_TEXT_CLASS,
   prChecksTone,
   prReviewDecisionTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
-import { PrQuoteTargetPicker } from "@/components/epic-canvas/pr/pr-quote-target-picker";
+import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
+import { PrDetailStaleness } from "@/components/epic-canvas/pr/pr-detail-header";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { cn } from "@/lib/utils";
 
 const REVIEWER_STATE: Record<
@@ -74,10 +77,9 @@ export interface PrDetailCardProps {
   readonly core: PrDetailCore;
   readonly activity: PrActivitySection;
   readonly queue: PrAttentionQueue;
-  readonly target: PrQuoteTarget | null;
-  readonly targets: readonly PrQuoteTarget[];
-  readonly onSelectTarget: (target: PrQuoteTarget) => void;
-  readonly onSendPr: () => void;
+  readonly epicId: string;
+  readonly notLive: boolean;
+  readonly observedAt: number | null;
   readonly className: string | undefined;
 }
 
@@ -85,19 +87,26 @@ export interface PrDetailCardProps {
  * The context card: the second column of the detail shell's row, sticky as the
  * document scrolls.
  *
- * It carries ONLY what exists nowhere else - the proportional check meter, the
- * review decision, per-reviewer state, and the send action. State, branches,
- * diffstat and freshness all used to be here too, and all four are in the
- * header, in full, with more room. That duplication is what made the card feel
- * cramped at any width: it was spending its space restating the page.
+ * It carries the facts a reader consults rather than reads: the proportional
+ * check meter, the review decision, per-reviewer state, the size and freshness
+ * of the change, and the chats it came from.
+ *
+ * Those last two moved DOWN here from the header. The header now pins itself
+ * to the top of the scroll, and a pinned bar has to earn every line it spends:
+ * "which PR" and "what is it merging into" are re-read constantly while
+ * scrolling a diff, whereas "+47402 −1646" and "updated just now" are consulted
+ * once. A sticky bar is the wrong home for a fact you look at once; a sidebar
+ * that is always in view is the right one.
  *
  * Below the container-width threshold the card is simply absent, and nothing
  * takes its place. Checks reach the reader through the tab badge and the Checks
- * tab, reviewers through Feedback, and the send target defaults to the PR's own
- * owner chat - so its absence costs convenience, never capability.
+ * tab, reviewers through Feedback, and the diffstat through the Files tab - so
+ * its absence costs convenience, never capability.
  */
 export function PrDetailCard(props: PrDetailCardProps): ReactNode {
   const reviewers = prReviewerRows(props.core, props.activity);
+  // A tile is bound to its host for life (CLAUDE.md, host identity rule 2).
+  const tabHostId = useTabHostId();
   return (
     <div
       data-testid="pr-detail-card"
@@ -106,12 +115,9 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
         props.className,
       )}
     >
-      {/* No state row, no branches, no diffstat, no "updated" - the header
-          carries all four, in full and with more room for them. A card beside
-          the thing it repeats is worse than no card: it doubles the reading
-          without adding a fact, and it was what made 280px feel cramped. What
-          is left is what exists ONLY here: the proportional check meter, the
-          review decision, per-reviewer state, and the send action. */}
+      {/* Still no state row and no branches: the pinned header carries both,
+          and a card beside the thing it repeats doubles the reading without
+          adding a fact. */}
       <PrCardSection heading="Health">
         <PrCardHealth core={props.core} counts={props.queue.checkCounts} />
       </PrCardSection>
@@ -149,39 +155,61 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
           </ul>
         )}
       </PrCardSection>
-      {/* The picker lives WITH the send action, not in the header. In the
-          header it read as a stray dropdown on the title line answering a
-          question nobody had asked; here it is plainly "which chat does this
-          button send to". The header instead shows the PR's linked chats as
-          the same clickable pills the panel row uses - that answers "which
-          conversation produced this?", which is what a reader actually wants
-          from a header. */}
-      <PrCardSection heading="Send to chat">
-        <PrQuoteTargetPicker
-          target={props.target}
-          targets={props.targets}
-          onSelectTarget={props.onSelectTarget}
-          variant="card"
-        />
-        <button
-          type="button"
-          onClick={props.onSendPr}
-          disabled={props.target === null}
-          data-testid="pr-detail-send-pr"
-          className={cn(
-            "mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-primary/35 bg-primary/10 px-2 py-1.5",
-            "text-ui-xs text-primary transition-colors hover:bg-primary/15",
-            "disabled:opacity-50",
-          )}
-        >
-          <TextQuote className="size-3.5 shrink-0" aria-hidden />
-          <span className="min-w-0 truncate">
-            {props.target === null
-              ? "No chat to send to"
-              : `Send PR to “${props.target.title}”`}
-          </span>
-        </button>
+      <PrCardSection heading="Change">
+        <div className="flex flex-col gap-1">
+          {props.core.additions !== null && props.core.deletions !== null ? (
+            <PrCardGauge
+              label="Diff"
+              value={
+                <span className="font-mono">
+                  <span className={PR_DIFF_ADDED_CLASS}>
+                    +{props.core.additions}
+                  </span>{" "}
+                  <span className={PR_DIFF_REMOVED_CLASS}>
+                    −{props.core.deletions}
+                  </span>
+                </span>
+              }
+              valueClassName={undefined}
+            />
+          ) : null}
+          {props.core.commentCount !== null ? (
+            <PrCardGauge
+              label="Comments"
+              value={props.core.commentCount}
+              valueClassName={undefined}
+            />
+          ) : null}
+          {props.observedAt !== null ? (
+            <PrCardGauge
+              label="Updated"
+              value={<PrDetailStaleness observedAt={props.observedAt} />}
+              valueClassName={undefined}
+            />
+          ) : null}
+          {props.notLive ? (
+            <PrCardGauge
+              label="Liveness"
+              value={<span data-testid="pr-detail-not-live">Not live</span>}
+              valueClassName="text-muted-foreground"
+            />
+          ) : null}
+        </div>
       </PrCardSection>
+      {/* The chats this PR came from, as the SAME clickable pills the panel row
+          renders. They answer "which conversation produced this?" - a question
+          a reader returns to, which is why they sit in the always-visible card
+          rather than in a header that scrolls past. */}
+      {props.core.owners.length > 0 ? (
+        <PrCardSection heading="Chats">
+          <PrOwnerBadges
+            owners={props.core.owners}
+            epicId={props.epicId}
+            fallbackHostId={tabHostId}
+            className={undefined}
+          />
+        </PrCardSection>
+      ) : null}
     </div>
   );
 }

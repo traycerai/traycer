@@ -617,6 +617,58 @@ describe("PrDetailBody", () => {
     expect(screen.queryByTestId("pr-detail-commit-item")).toBeNull();
   });
 
+  it("pins the title and the tab strip, and lets the meta lines scroll away", async () => {
+    // Scrolling a 300-file diff, the two things a reader keeps reaching for
+    // are "which PR is this" and "which section" - and only those. The author,
+    // branch flow and freshness lines are read once on open, so spending four
+    // lines of every viewport on them would be the wrong trade.
+    renderBody({
+      epicId: "epic-sticky",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 21,
+      isActive: true,
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-sticky",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 21,
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+    session.emitFrame(
+      buildPrDetailFrame({
+        core: { base: { owner: "acme", repo: "widgets", prNumber: 21 } },
+      }),
+    );
+    await screen.findByTestId("pr-detail-body");
+
+    const bar = screen.getByTestId("pr-detail-sticky-bar");
+    expect(bar.className).toContain("sticky");
+    expect(bar.className).toContain("top-0");
+    // A transparent sticky bar lets content scroll visibly through it.
+    expect(bar.className).toContain("bg-canvas");
+
+    // Every pinned thing lives INSIDE the one bar, so the strip needs no
+    // hard-coded offset for a title that can wrap.
+    expect(bar.contains(screen.getByTestId("pr-detail-tabs"))).toBe(true);
+    // The merge line stays pinned too: the base branch is what every hunk in
+    // the diff below is being compared against.
+    expect(bar.contains(screen.getByTestId("pr-detail-merge-line"))).toBe(true);
+    // ...while the reference lines are not in the bar at all - the diffstat,
+    // comment count and freshness moved into the always-visible context card,
+    // because a pinned bar has to earn every line it spends and those are
+    // consulted once rather than re-read while scrolling.
+    expect(bar.textContent).not.toContain("comment");
+    expect(screen.queryByTestId("pr-detail-header-meta")).toBeNull();
+  });
+
   it("keeps one reading column across every tab, so switching tabs never re-lays-out the document", async () => {
     renderBody({
       epicId: "epic-4",
@@ -710,6 +762,11 @@ describe("PrDetailBody", () => {
           contexts: [
             {
               name: "pre-commit",
+              workflowName: "Run Pre-commit",
+              event: "pull_request",
+              appName: "GitHub Actions",
+              appLogoUrl: null,
+              description: null,
               status: "completed",
               conclusion: "failure",
               detailsUrl: "https://ci/pre-commit",

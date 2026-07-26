@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import type { ReactNode } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type {
   PrActivitySection,
@@ -21,6 +22,26 @@ import { PrDetailConversation } from "@/components/epic-canvas/pr/pr-detail-conv
 vi.mock("@/markdown/traycer-markdown", () => ({
   TraycerMarkdown: (props: { readonly children: string }) => (
     <div data-testid="markdown">{props.children}</div>
+  ),
+}));
+
+/**
+ * The diff renderer mounts the `@pierre/diffs` worker pipeline, which needs a
+ * pool and a theme provider and settles asynchronously. What this file is
+ * about is WHICH patch it is handed and whether the gutter is on, so the
+ * pipeline is stubbed and both are read straight off the props.
+ */
+vi.mock("@/components/diff/diff-content-primitive", () => ({
+  DiffContentFrame: (props: { readonly children: ReactNode }) => (
+    <div data-testid="diff-frame">{props.children}</div>
+  ),
+  DiffContentPrimitive: (props: {
+    readonly patch: string;
+    readonly lineNumbers: boolean;
+  }) => (
+    <pre data-testid="diff-patch" data-line-numbers={props.lineNumbers}>
+      {props.patch}
+    </pre>
   ),
 }));
 
@@ -307,5 +328,119 @@ describe("PrDetailConversation review threads", () => {
 
     fireEvent.click(screen.getByTestId("pr-detail-thread-quote"));
     expect(quoted).toEqual([only]);
+  });
+
+  it("renders the anchoring hunk as a diff, not as a grey block of text", () => {
+    // It used to be a `<pre>` in one flat colour: no gutter, and added,
+    // removed, and context all looked alike, so the reader had to decode the
+    // `+`/`-` prefixes by eye to see what the comment was even about.
+    renderTab({
+      activity: activity([botReview("PRR_1", "Actionable comments posted: 1")]),
+      reviewThreads: threads([
+        thread({
+          id: "t1",
+          reviewId: "PRR_1",
+          isResolved: false,
+          line: 1141,
+          body: "The cap is not enforced offline.",
+          totalCommentCount: 1,
+        }),
+      ]),
+      onQuoteThread: null,
+    });
+
+    const patch = screen.getByTestId("diff-patch");
+    // Wrapped in the file headers the parser needs, carrying the thread's path.
+    expect(patch.textContent).toContain(
+      "diff --git a/src/domain/git/git-service.ts b/src/domain/git/git-service.ts",
+    );
+    expect(patch.textContent).toContain("+  const cap = 5;");
+    // The hunk arrived with its header, so the gutter shows real line numbers.
+    expect(patch.getAttribute("data-line-numbers")).toBe("true");
+  });
+
+  it("hides the gutter when the hunk reached us without its header", () => {
+    const headerless = thread({
+      id: "t1",
+      reviewId: "PRR_1",
+      isResolved: false,
+      line: 1141,
+      body: "Clipped before renumbering was a thing.",
+      totalCommentCount: 1,
+    });
+    renderTab({
+      activity: activity([botReview("PRR_1", "Actionable comments posted: 1")]),
+      reviewThreads: threads([
+        { ...headerless, diffHunk: "+  const cap = 5;" },
+      ]),
+      onQuoteThread: null,
+    });
+
+    expect(
+      screen.getByTestId("diff-patch").getAttribute("data-line-numbers"),
+    ).toBe("false");
+  });
+
+  it("does not mount a diff for a resolved finding nobody has opened", () => {
+    // `<details>` hides its children with CSS, so an uncontrolled one still
+    // mounts every collapsed thread - and each one now mounts a real diff
+    // renderer that parses and highlights its hunk.
+    renderTab({
+      activity: activity([botReview("PRR_1", "Actionable comments posted: 2")]),
+      reviewThreads: threads([
+        thread({
+          id: "t1",
+          reviewId: "PRR_1",
+          isResolved: true,
+          line: 10,
+          body: "Already handled.",
+          totalCommentCount: 1,
+        }),
+        thread({
+          id: "t2",
+          reviewId: "PRR_1",
+          isResolved: true,
+          line: 20,
+          body: "Also handled.",
+          totalCommentCount: 1,
+        }),
+      ]),
+      onQuoteThread: null,
+    });
+
+    expect(screen.queryAllByTestId("diff-patch")).toHaveLength(0);
+    const group = screen.getByTestId("pr-detail-resolved-threads");
+    group.setAttribute("open", "");
+    fireEvent(group, new Event("toggle", { bubbles: false }));
+    expect(screen.queryAllByTestId("diff-patch")).toHaveLength(2);
+  });
+
+  it("sizes every date in a card the same, however deep it sits", () => {
+    // A comment's timestamp used to inherit from its container, so the same
+    // "9 Jul" appeared twice in one card at two different sizes.
+    renderTab({
+      activity: activity([botReview("PRR_1", "Actionable comments posted: 1")]),
+      reviewThreads: threads([
+        thread({
+          id: "t1",
+          reviewId: "PRR_1",
+          isResolved: false,
+          line: 10,
+          body: "A finding.",
+          totalCommentCount: 1,
+        }),
+      ]),
+      onQuoteThread: null,
+    });
+
+    // The review's own stamp and its finding's stamp.
+    const stamps = screen.getAllByTestId("pr-relative-time");
+    expect(stamps.length).toBeGreaterThan(1);
+    for (const stamp of stamps) {
+      // Asserted on the element itself, not on what it inherits: a size that
+      // travels with the component is one no ancestor can forget to set.
+      expect(stamp.className).toContain("text-ui-xs");
+      expect(stamp.className).toContain("text-muted-foreground");
+    }
   });
 });

@@ -239,7 +239,37 @@ export const prCheckConclusionSchema = z.enum([
 export type PrCheckConclusion = z.infer<typeof prCheckConclusionSchema>;
 
 export const prCheckContextSchema = z.object({
+  /**
+   * The JOB name alone (`build`, `pre-commit`) - which is not unique. A repo
+   * running one reusable workflow across five packages reports `build` five
+   * times, and a list keyed on this shows five identical rows. See
+   * {@link prCheckContextSchema.workflowName}.
+   */
   name: z.string(),
+  /**
+   * The workflow the job belongs to (`Run Pre-commit`), or `null` for a check
+   * that did not come from a workflow run at all - a third-party app's check,
+   * or a commit status. Together with `name` and `event` this reconstructs the
+   * identity GitHub displays, and is what makes five `build` rows tellable
+   * apart.
+   */
+  workflowName: z.string().nullable(),
+  /** What triggered the run (`pull_request`). `null` outside a workflow run. */
+  event: z.string().nullable(),
+  /** The app that reported it - "GitHub Actions", "Mintlify", "CodeRabbit". */
+  appName: z.string().nullable(),
+  /**
+   * The reporting app's icon. A check list is scanned, not read: the app mark
+   * is what lets a reader find the one CodeRabbit row among fourteen Actions
+   * rows without parsing any text.
+   */
+  appLogoUrl: z.string().nullable(),
+  /**
+   * The one-line reason a commit status carries ("Review completed",
+   * "Skipping deployment"). Only `StatusContext` has this; a `CheckRun` has no
+   * equivalent field and reports `null`.
+   */
+  description: z.string().nullable(),
   status: prCheckStatusSchema,
   conclusion: prCheckConclusionSchema.nullable(),
   detailsUrl: z.string().nullable(),

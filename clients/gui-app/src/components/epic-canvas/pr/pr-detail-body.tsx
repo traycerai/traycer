@@ -33,7 +33,10 @@ import {
   type PrQuoteTarget,
 } from "@/lib/pr/pr-quote";
 import { cn } from "@/lib/utils";
-import { PrDetailHeader } from "@/components/epic-canvas/pr/pr-detail-header";
+import {
+  PrDetailHeader,
+  PrDetailMergeLine,
+} from "@/components/epic-canvas/pr/pr-detail-header";
 import { PrDetailCard } from "@/components/epic-canvas/pr/pr-detail-card";
 import { PrDetailCommits } from "@/components/epic-canvas/pr/pr-detail-commits";
 import {
@@ -307,12 +310,6 @@ function PrDetailLoaded(props: {
     [target, core],
   );
 
-  const sendOverview = useCallback((): void => {
-    if (target === null) return;
-    sendPrQuoteToTarget(target, buildPrOverviewQuote(core));
-    revealTarget(target);
-  }, [target, core, revealTarget]);
-
   const sendDescription = useCallback((): void => {
     if (target === null) return;
     sendPrQuoteToTarget(target, buildPrDescriptionQuote(core));
@@ -333,36 +330,47 @@ function PrDetailLoaded(props: {
       data-testid="pr-detail-shell"
     >
       <div
-        className="flex min-w-0 flex-1 flex-col gap-5 pt-8"
+        className="flex min-w-0 flex-1 flex-col gap-5"
         data-testid="pr-detail-column"
       >
-        <PrDetailHeader
-          core={core}
-          epicId={props.epicId}
-          notLive={props.data.liveness === "cache-only"}
-          observedAt={oldestObservedAt(props.data)}
-          refreshing={props.refreshing}
-          onRefresh={props.onRefresh}
-        />
-        <PrDetailTabStrip
-          tab={tab}
-          onSelectTab={(next) => setTab(viewKey, next)}
-          counts={{
-            // Inline findings ARE feedback, and on a bot-reviewed PR they are
-            // most of it - counting only the top-level entries reported "1"
-            // for a review carrying five objections.
-            feedback: activity.items.length + reviewThreads.threads.length,
-            files: files.totalCount ?? files.files.length,
-            checks: checks.contexts.length,
-            commits: commits.totalCount ?? commits.commits.length,
-          }}
-          blocking={{
-            feedback: queue.items.filter(
-              (item) => item.kind === "changes-requested",
-            ).length,
-            checks: queue.checkCounts.failing,
-          }}
-        />
+        {/* Title + tabs travel together in ONE sticky bar, so the strip needs
+            no hard-coded offset for the title's height - a wrapping title on a
+            narrow tile would break any number chosen here. `bg-canvas` is
+            load-bearing: a transparent sticky bar lets the diff scroll
+            visibly through it. */}
+        <div
+          className="sticky top-0 z-20 -mx-1 flex min-w-0 flex-col gap-3 bg-canvas px-1 pt-8 pb-3"
+          data-testid="pr-detail-sticky-bar"
+        >
+          <PrDetailHeader
+            core={core}
+            epicId={props.epicId}
+            notLive={props.data.liveness === "cache-only"}
+            observedAt={oldestObservedAt(props.data)}
+            refreshing={props.refreshing}
+            onRefresh={props.onRefresh}
+          />
+          <PrDetailMergeLine core={core} />
+          <PrDetailTabStrip
+            tab={tab}
+            onSelectTab={(next) => setTab(viewKey, next)}
+            counts={{
+              // Inline findings ARE feedback, and on a bot-reviewed PR they are
+              // most of it - counting only the top-level entries reported "1"
+              // for a review carrying five objections.
+              feedback: activity.items.length + reviewThreads.threads.length,
+              files: files.totalCount ?? files.files.length,
+              checks: checks.contexts.length,
+              commits: commits.totalCount ?? commits.commits.length,
+            }}
+            blocking={{
+              feedback: queue.items.filter(
+                (item) => item.kind === "changes-requested",
+              ).length,
+              checks: queue.checkCounts.failing,
+            }}
+          />
+        </div>
         <div className="min-w-0 pb-10">
           {tab === "overview" ? (
             <div className="flex min-w-0 flex-col gap-4">
@@ -421,10 +429,9 @@ function PrDetailLoaded(props: {
           core={core}
           activity={activity}
           queue={queue}
-          target={target}
-          targets={quote.targets}
-          onSelectTarget={quote.selectTarget}
-          onSendPr={sendOverview}
+          epicId={props.epicId}
+          notLive={props.data.liveness === "cache-only"}
+          observedAt={oldestObservedAt(props.data)}
           className="sticky top-8"
         />
       </aside>

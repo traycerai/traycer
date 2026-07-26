@@ -26,6 +26,7 @@ import {
   formatPrCheckStatusLabel,
   prCheckContextDotTone,
 } from "./pr-detail-projection";
+import { formatPrCheckName, prCheckContextKey } from "./pr-check-groups";
 
 export type PrAttentionKind =
   "check-failure" | "changes-requested" | "review-required";
@@ -42,6 +43,12 @@ export interface PrAttentionItem {
    */
   readonly detail: string | null;
   readonly actor: PrActor | null;
+  /**
+   * The reporting app's icon, for a row that has no human behind it. A check
+   * is attributable to GitHub Actions or Mintlify but not to an actor, and a
+   * generic X glyph loses the one mark that makes the row scannable.
+   */
+  readonly iconUrl: string | null;
   readonly detailsUrl: string | null;
   readonly createdAt: number | null;
 }
@@ -123,6 +130,7 @@ function changesRequestedItems(
       title: login,
       detail: firstMeaningfulLine(latest.item.body),
       actor: latest.actor,
+      iconUrl: null,
       detailsUrl: core.prUrl,
       createdAt: latest.item.createdAt,
     });
@@ -142,10 +150,44 @@ type PrActivityItemReview = Extract<
  */
 function firstMeaningfulLine(body: string): string | null {
   for (const rawLine of body.split(/\r\n?|\n/)) {
-    const line = rawLine.trim();
+    const line = stripInlineMarkdown(rawLine.trim());
     if (line.length > 0) return line;
   }
   return null;
+}
+
+/**
+ * Reduces one line of markdown to the text a reader would have seen rendered.
+ *
+ * The queue draws this line as PLAIN TEXT - a one-line summary has no business
+ * mounting a markdown pipeline - but the source is a review body written in
+ * markdown, so the syntax arrived intact. CodeRabbit opens every review with
+ * `**Actionable comments posted: 1**`, which rendered here as literal asterisks
+ * around the only sentence on the card.
+ *
+ * Deliberately shallow: emphasis, inline code, links, headings and quote
+ * markers are the whole of what shows up in a first line. Anything else is
+ * left alone rather than guessed at, since a half-parsed line reads worse than
+ * an unparsed one.
+ */
+export function stripInlineMarkdown(line: string): string {
+  return (
+    line
+      // Leading block markers: `#`, `>`, and list bullets.
+      .replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+)/u, "")
+      // `[text](url)` -> `text`. Runs before emphasis so a bracketed label
+      // holding `*` is not half-stripped first.
+      .replace(/\[([^\]]*)\]\([^)]*\)/gu, "$1")
+      // `**bold**`, `__bold__`, `*em*`, `_em_`, `~~strike~~`.
+      .replace(/(\*\*|__|~~)(.*?)\1/gu, "$2")
+      .replace(
+        /(?<![A-Za-z0-9])[*_](?=\S)(.+?)(?<=\S)[*_](?![A-Za-z0-9])/gu,
+        "$1",
+      )
+      // `` `code` ``
+      .replace(/`([^`]*)`/gu, "$1")
+      .trim()
+  );
 }
 
 /**
@@ -173,18 +215,23 @@ export function derivePrAttentionQueue(args: {
   }
 
   const items: PrAttentionItem[] = [];
-  for (const context of args.checks.contexts) {
-    if (prCheckContextDotTone(context) !== "fail") continue;
+  args.checks.contexts.forEach((context, index) => {
+    if (prCheckContextDotTone(context) !== "fail") return;
     items.push({
-      key: `check:${context.name}`,
+      // Same key and same name as the Checks tab, for the same reason: `name`
+      // is the JOB name, so one reusable workflow reports `build` once per
+      // package. Keyed and titled on that alone, five failing packages
+      // collapsed into five indistinguishable rows sharing a React key.
+      key: `check:${prCheckContextKey(context, index)}`,
       kind: "check-failure",
-      title: context.name,
+      title: formatPrCheckName(context),
       detail: formatPrCheckStatusLabel(context),
       actor: null,
+      iconUrl: context.appLogoUrl,
       detailsUrl: context.detailsUrl,
       createdAt: null,
     });
-  }
+  });
 
   const blocking = changesRequestedItems(args.core, args.activity);
   items.push(...blocking);
@@ -199,6 +246,7 @@ export function derivePrAttentionQueue(args: {
       title: "Review required",
       detail: "An approving review is required before merging.",
       actor: null,
+      iconUrl: null,
       detailsUrl: args.core.prUrl,
       createdAt: null,
     });
@@ -228,6 +276,45 @@ export function derivePrAttentionQueue(args: {
  * Headline for the queue hero. Separate from the items so the calm state and
  * the blocked state are rendered by one component from one derivation.
  */
+export interface PrAttentionRowText {
+  /** The thing that needs doing - the row's own sentence. */
+  readonly headline: string;
+  /** Where it came from: a reviewer's login, or the check's verdict. */
+  readonly meta: string | null;
+  /** A check name is an identifier and reads as one. Prose is not. */
+  readonly isIdentifier: boolean;
+}
+
+/**
+ * Splits one queue item into the two lines a row shows.
+ *
+ * The two kinds put different things in `title`, which is why this is a
+ * projection rather than a field: for a CHECK the title IS the subject
+ * (`pre-commit`) and the body is its verdict, while for a REVIEW the title is
+ * the reviewer and the body is the actual objection. Rendering both the same
+ * way put a login where the work should be and demoted the finding to a
+ * footnote under it.
+ */
+export function prAttentionRowText(item: PrAttentionItem): PrAttentionRowText {
+  if (item.kind === "check-failure") {
+    return {
+      headline: item.title,
+      meta: item.detail,
+      isIdentifier: true,
+    };
+  }
+  if (item.detail === null) {
+    return { headline: item.title, meta: null, isIdentifier: false };
+  }
+  // A review that left a body leads with what it SAID; the login becomes the
+  // attribution under it, which is the order a reader triages in.
+  return {
+    headline: item.detail,
+    meta: item.kind === "changes-requested" ? item.title : null,
+    isIdentifier: false,
+  };
+}
+
 export function formatPrAttentionHeadline(queue: PrAttentionQueue): string {
   const count = queue.items.length;
   if (count === 0) return "Nothing blocking";

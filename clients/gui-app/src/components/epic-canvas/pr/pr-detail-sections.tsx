@@ -1,15 +1,19 @@
-import type { ReactNode } from "react";
+import { useCallback, type ReactNode } from "react";
 import {
   ArrowRight,
-  Check,
-  ExternalLink,
+  CheckCircle2,
+  ChevronRight,
+  CircleSlash,
+  Clock,
   Minus,
   Plus,
   TextQuote,
-  X,
+  XCircle,
+  type LucideIcon,
 } from "lucide-react";
 import type {
   PrChangedFile,
+  PrCheckContext,
   PrChecksSection,
   PrFilesSection,
 } from "@traycer/protocol/host/pr-schemas";
@@ -22,10 +26,14 @@ import {
   PR_TONE_TEXT_CLASS,
   prChecksTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
+import { formatPrCheckStatusLabel } from "@/lib/pr/pr-detail-projection";
 import {
-  formatPrCheckStatusLabel,
-  prCheckContextDotTone,
-} from "@/lib/pr/pr-detail-projection";
+  formatPrCheckName,
+  groupPrChecks,
+  prCheckContextKey,
+  type PrCheckGroup,
+  type PrCheckOutcome,
+} from "@/lib/pr/pr-check-groups";
 import { cn } from "@/lib/utils";
 
 /**
@@ -228,6 +236,7 @@ export function PrDetailChecks(props: {
     );
   }
   const tone = prChecksTone(props.counts);
+  const groups = groupPrChecks(props.checks.contexts);
 
   return (
     <div
@@ -238,81 +247,158 @@ export function PrDetailChecks(props: {
         <span className="min-w-0 flex-1 truncate">
           {props.checks.contexts.length} check
           {props.checks.contexts.length === 1 ? "" : "s"}
-          {props.checks.isTruncated ? " · showing the first 50" : ""}
+          {props.checks.isTruncated ? " \u00b7 showing the first 50" : ""}
         </span>
         <span className={cn("shrink-0", PR_TONE_TEXT_CLASS[tone])}>
           {formatPrChecksValue(props.counts)}
         </span>
       </div>
-      <ul className="min-w-0 divide-y divide-border/40">
-        {props.checks.contexts.map((context) => {
-          const contextTone = prCheckContextDotTone(context);
-          return (
-            <li
-              key={context.name}
-              className="flex min-w-0 items-center gap-2 px-3 py-2 text-ui-xs"
-            >
-              <PrCheckToneGlyph tone={contextTone} />
-              <span className="min-w-0 flex-1 truncate font-mono text-foreground">
-                {context.name}
-              </span>
-              <span className={cn("shrink-0", PR_TONE_TEXT_CLASS[contextTone])}>
-                {formatPrCheckStatusLabel(context)}
-              </span>
-              {context.detailsUrl !== null ? (
-                <PrCheckDetailsButton
-                  name={context.name}
-                  url={context.detailsUrl}
-                  onOpenDetails={props.onOpenDetails}
-                />
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
+      <div className="min-w-0">
+        {groups.map((group) => (
+          <PrCheckGroupSection
+            key={group.outcome}
+            group={group}
+            onOpenDetails={props.onOpenDetails}
+          />
+        ))}
+      </div>
     </div>
   );
 }
 
-function PrCheckToneGlyph(props: {
-  readonly tone: "ok" | "fail" | "pending" | "none";
+/**
+ * One outcome group. Every group starts EXPANDED - the grouping is there to
+ * order and label the rows, not to hide them, and a check you have to click to
+ * see is a check you have to know to look for. The heading still collapses on
+ * demand once a reader has decided a group is not interesting.
+ */
+function PrCheckGroupSection(props: {
+  readonly group: PrCheckGroup;
+  readonly onOpenDetails: (url: string) => void;
 }): ReactNode {
-  if (props.tone === "ok" || props.tone === "fail") {
-    const Icon = props.tone === "ok" ? Check : X;
-    return (
-      <Icon
-        className={cn("size-4 shrink-0", PR_TONE_TEXT_CLASS[props.tone])}
-        aria-hidden
-        data-testid="pr-detail-check-dot"
-      />
-    );
-  }
+  const { group } = props;
   return (
-    <span
-      className={cn(
-        "mx-1 size-2 shrink-0 rounded-full",
-        PR_TONE_FILL_CLASS[props.tone],
-      )}
-      aria-hidden
-      data-testid="pr-detail-check-dot"
-    />
+    <details
+      open
+      className="min-w-0 border-b border-border/40 last:border-b-0"
+      data-testid="pr-detail-check-group"
+      data-outcome={group.outcome}
+    >
+      <summary className="flex min-w-0 cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-ui-xs text-muted-foreground transition-colors hover:text-foreground">
+        <ChevronRight
+          className="size-3.5 shrink-0 transition-transform in-open:rotate-90"
+          aria-hidden
+        />
+        <span className="min-w-0 truncate">{group.heading}</span>
+      </summary>
+      <ul className="min-w-0 divide-y divide-border/40 border-t border-border/40">
+        {group.contexts.map((context, index) => (
+          <PrCheckRow
+            key={prCheckContextKey(context, index)}
+            context={context}
+            outcome={group.outcome}
+            onOpenDetails={props.onOpenDetails}
+          />
+        ))}
+      </ul>
+    </details>
   );
 }
 
-function PrCheckDetailsButton(props: {
-  readonly name: string;
-  readonly url: string;
+const OUTCOME_GLYPH: Record<
+  PrCheckOutcome,
+  {
+    readonly Icon: LucideIcon;
+    readonly tone: "ok" | "fail" | "pending" | "none";
+  }
+> = {
+  failing: { Icon: XCircle, tone: "fail" },
+  pending: { Icon: Clock, tone: "pending" },
+  // Not a check mark. A skipped job did not run, and a green tick over it
+  // claims a pass that never happened - which is what the previous list did.
+  skipped: { Icon: CircleSlash, tone: "none" },
+  successful: { Icon: CheckCircle2, tone: "ok" },
+};
+
+/**
+ * One check.
+ *
+ * The NAME is the link - the whole row's subject is "this check", and the
+ * thing a reader wants to click is the thing they just read. The trailing
+ * icon-button it replaces was a second, smaller target for the same
+ * destination, sitting where the eye had already stopped.
+ */
+function PrCheckRow(props: {
+  readonly context: PrCheckContext;
+  readonly outcome: PrCheckOutcome;
   readonly onOpenDetails: (url: string) => void;
 }): ReactNode {
+  const { context, outcome } = props;
+  const glyph = OUTCOME_GLYPH[outcome];
+  const label = formatPrCheckName(context);
+  const { onOpenDetails } = props;
+  const open = useCallback((): void => {
+    if (context.detailsUrl !== null) onOpenDetails(context.detailsUrl);
+  }, [context.detailsUrl, onOpenDetails]);
+
   return (
-    <button
-      type="button"
-      onClick={() => props.onOpenDetails(props.url)}
-      aria-label={`Open ${props.name} on GitHub`}
-      data-testid="pr-detail-check-details"
-      className="inline-flex shrink-0 items-center rounded p-0.5 text-muted-foreground transition-colors hover:text-primary focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-    >
-      <ExternalLink className="size-3" aria-hidden />
-    </button>
+    <li className="flex min-w-0 items-center gap-2 px-3 py-2 text-ui-xs">
+      <glyph.Icon
+        className={cn("size-4 shrink-0", PR_TONE_TEXT_CLASS[glyph.tone])}
+        aria-hidden
+        data-testid="pr-detail-check-dot"
+      />
+      <PrCheckAppMark context={context} />
+      {context.detailsUrl === null ? (
+        <span
+          className="min-w-0 flex-1 truncate text-foreground"
+          data-testid="pr-detail-check-name"
+        >
+          {label}
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={open}
+          data-testid="pr-detail-check-name"
+          title={label}
+          className="min-w-0 flex-1 truncate text-left text-foreground transition-colors hover:text-primary hover:underline focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {label}
+        </button>
+      )}
+      {context.description !== null && context.description.length > 0 ? (
+        <span className="hidden min-w-0 max-w-[16ch] shrink truncate text-muted-foreground/70 @min-[34rem]:inline">
+          {context.description}
+        </span>
+      ) : null}
+      <span className={cn("shrink-0", PR_TONE_TEXT_CLASS[glyph.tone])}>
+        {formatPrCheckStatusLabel(context)}
+      </span>
+    </li>
+  );
+}
+
+/**
+ * The reporting app's mark, which is how a list of fourteen rows is scanned:
+ * finding the one CodeRabbit row among twelve Actions rows is a glance rather
+ * than a read. Falls back to nothing at all when the app served no icon -
+ * a generic placeholder would add noise without adding a distinction.
+ */
+function PrCheckAppMark(props: {
+  readonly context: PrCheckContext;
+}): ReactNode {
+  const { appLogoUrl, appName } = props.context;
+  if (appLogoUrl === null || appLogoUrl.length === 0) return null;
+  return (
+    <img
+      src={appLogoUrl}
+      alt=""
+      aria-hidden
+      loading="lazy"
+      data-testid="pr-detail-check-app-mark"
+      title={appName ?? undefined}
+      className="size-4 shrink-0 rounded-sm bg-muted/40 object-contain"
+    />
   );
 }

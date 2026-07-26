@@ -1,11 +1,12 @@
-import { type ReactNode } from "react";
+import { useCallback, type ReactNode } from "react";
 import {
   AlertTriangle,
   Check,
   Eye,
-  ExternalLink,
+  Info,
   TextQuote,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import type {
   PrAttentionItem,
@@ -14,6 +15,7 @@ import type {
 import {
   formatPrAttentionHeadline,
   formatPrAttentionSubline,
+  prAttentionRowText,
 } from "@/lib/pr/pr-attention-queue";
 import type { PrQuoteTarget } from "@/lib/pr/pr-quote";
 import {
@@ -60,21 +62,35 @@ export function PrDetailQueue(props: {
         isCalm ? PR_TONE_SURFACE_CLASS.ok : PR_TONE_SURFACE_CLASS.fail,
       )}
     >
-      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 px-3 py-2.5">
-        {isCalm ? (
-          <Check
-            className={cn("size-4 shrink-0 self-center", PR_TONE_TEXT_CLASS.ok)}
-            aria-hidden
-          />
-        ) : null}
-        <h2 className="text-ui-sm font-medium text-foreground">
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-2 px-3 py-2",
+          !isCalm && "border-b border-border/40",
+        )}
+      >
+        <span
+          className={cn(
+            "inline-flex size-5 shrink-0 items-center justify-center rounded-full",
+            isCalm ? "bg-success/15" : "bg-destructive/15",
+          )}
+          aria-hidden
+        >
+          {isCalm ? (
+            <Check className={cn("size-3", PR_TONE_TEXT_CLASS.ok)} />
+          ) : (
+            <AlertTriangle className={cn("size-3", PR_TONE_TEXT_CLASS.fail)} />
+          )}
+        </span>
+        <h2 className="shrink-0 text-ui-sm font-medium text-foreground">
           {formatPrAttentionHeadline(props.queue)}
         </h2>
         {subline !== null ? (
-          <p className="min-w-0 text-ui-xs text-muted-foreground">
-            · {subline}
+          <p className="min-w-0 truncate text-ui-xs text-muted-foreground/80">
+            {subline}
           </p>
         ) : null}
+        <span className="flex-1" aria-hidden />
+        {props.queue.isWindowTruncated ? <PrQueueWindowNote /> : null}
       </div>
       {props.queue.items.map((item) => (
         <PrQueueRow
@@ -85,19 +101,74 @@ export function PrDetailQueue(props: {
           onOpenDetails={props.onOpenDetails}
         />
       ))}
-      {!isCalm && props.queue.isWindowTruncated ? (
-        <p
-          className={cn(
-            "border-t border-border/50 px-3 py-1.5 text-ui-xs",
-            PR_TONE_TEXT_CLASS.pending,
-          )}
-          data-testid="pr-detail-queue-truncated"
-        >
-          Derived from the last 20 activity items and first 50 checks — older
-          feedback may exist on GitHub.
-        </p>
-      ) : null}
     </section>
+  );
+}
+
+/**
+ * The caveat on the queue's own completeness, as an icon rather than a line.
+ *
+ * It used to be a full-width warning-toned row at the foot of the card, which
+ * made the least urgent thing on the page the brightest: the eye landed on a
+ * caveat about the derivation before it reached the thing that actually needs
+ * a decision. The fact still has to be reachable - a queue derived from a
+ * capped window can be wrong by omission - but it belongs where a reader goes
+ * looking for provenance, not in their way.
+ */
+const QUEUE_WINDOW_NOTE =
+  "Derived from the last 20 activity items and first 50 checks — older feedback may exist on GitHub.";
+
+function PrQueueWindowNote(): ReactNode {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center text-muted-foreground/60 transition-colors hover:text-muted-foreground"
+      data-testid="pr-detail-queue-truncated"
+      title={QUEUE_WINDOW_NOTE}
+      aria-label={QUEUE_WINDOW_NOTE}
+      role="img"
+    >
+      <Info className="size-3.5 shrink-0" aria-hidden />
+    </span>
+  );
+}
+
+/**
+ * The row's one identity slot, in order of how much it actually identifies:
+ * the person or bot behind it, then the app that reported it, then the kind's
+ * own mark as a last resort. A check has no actor but is very much
+ * attributable, and the generic glyph threw that away.
+ */
+function PrQueueRowMark(props: {
+  readonly item: PrAttentionItem;
+  readonly tone: "fail" | "pending";
+  readonly Glyph: LucideIcon;
+}): ReactNode {
+  const { item } = props;
+  if (item.actor !== null) {
+    return <PrActorAvatar actor={item.actor} size="sm" className={undefined} />;
+  }
+  if (item.iconUrl !== null) {
+    return (
+      <img
+        src={item.iconUrl}
+        alt=""
+        aria-hidden
+        loading="lazy"
+        data-testid="pr-detail-queue-app-mark"
+        className="size-5 rounded-sm bg-muted/40 object-contain"
+      />
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "inline-flex size-6 items-center justify-center rounded-full",
+        props.tone === "fail" ? "bg-destructive/12" : "bg-warning/12",
+      )}
+      aria-hidden
+    >
+      <props.Glyph className={cn("size-3.5", PR_TONE_TEXT_CLASS[props.tone])} />
+    </span>
   );
 }
 
@@ -107,89 +178,96 @@ function PrQueueRow(props: {
   readonly onSendItem: (item: PrAttentionItem) => void;
   readonly onOpenDetails: (url: string) => void;
 }): ReactNode {
-  const Glyph = KIND_GLYPH[props.item.kind];
-  const tone = props.item.kind === "review-required" ? "pending" : "fail";
+  const { item, onOpenDetails } = props;
+  const Glyph = KIND_GLYPH[item.kind];
+  const tone = item.kind === "review-required" ? "pending" : "fail";
+  const text = prAttentionRowText(item);
+  const openDetails = useCallback((): void => {
+    if (item.detailsUrl !== null) onOpenDetails(item.detailsUrl);
+  }, [item.detailsUrl, onOpenDetails]);
   return (
     <div
-      className="flex min-w-0 items-start gap-2.5 border-t border-border/50 px-3 py-2"
+      className="flex min-w-0 items-center gap-3 px-3 py-2.5 transition-colors not-first:border-t not-first:border-border/30 hover:bg-foreground/[0.02]"
       data-testid="pr-detail-queue-row"
-      data-kind={props.item.kind}
+      data-kind={item.kind}
     >
-      {props.item.actor !== null ? (
-        <PrActorAvatar
-          actor={props.item.actor}
-          size="sm"
-          className="mt-0.5 shrink-0"
-        />
-      ) : (
-        <Glyph
-          className={cn("mt-0.5 size-3.5 shrink-0", PR_TONE_TEXT_CLASS[tone])}
-          aria-hidden
-        />
-      )}
+      {/* One glyph slot, whatever the source: an avatar when a person or bot
+          is behind it, the kind's own mark otherwise. Keeping the slot a fixed
+          size is what lets several rows read as a column rather than a list of
+          differently-indented paragraphs. */}
+      <span className="inline-flex size-6 shrink-0 items-center justify-center">
+        <PrQueueRowMark item={item} tone={tone} Glyph={Glyph} />
+      </span>
+
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-          <span
+        {/* The HEADLINE is what needs doing, not who said it. A check leads
+            with its name, a review with its finding. */}
+        {/* The name IS the link, as on the Checks tab: the row's subject is
+            the thing a reader wants to open, so it should not need a separate
+            target beside it. No url means plain text, never a dead control. */}
+        {item.detailsUrl === null ? (
+          <p
             className={cn(
-              "min-w-0 text-ui-sm text-foreground",
-              props.item.kind === "check-failure" && "font-mono",
+              "min-w-0 truncate text-ui-sm text-foreground",
+              text.isIdentifier && "font-mono",
+            )}
+            title={text.headline}
+            data-testid="pr-detail-queue-headline"
+          >
+            {text.headline}
+          </p>
+        ) : (
+          <button
+            type="button"
+            onClick={openDetails}
+            title={text.headline}
+            data-testid="pr-detail-queue-headline"
+            className={cn(
+              "block min-w-0 max-w-full truncate text-left text-ui-sm text-foreground",
+              "transition-colors hover:text-primary hover:underline",
+              "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+              text.isIdentifier && "font-mono",
             )}
           >
-            {props.item.title}
-          </span>
-          <span className="shrink-0 rounded border border-border/60 px-1 text-ui-xs text-muted-foreground/70">
-            {KIND_SOURCE_LABEL[props.item.kind]}
-          </span>
+            {text.headline}
+          </button>
+        )}
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground/70">
+          <span className="shrink-0">{KIND_SOURCE_LABEL[item.kind]}</span>
+          {text.meta !== null ? (
+            <>
+              <span aria-hidden>·</span>
+              <span className="min-w-0 truncate">{text.meta}</span>
+            </>
+          ) : null}
         </div>
-        {props.item.detail !== null ? (
-          <p className="mt-0.5 line-clamp-2 text-ui-xs break-words text-muted-foreground">
-            {props.item.detail}
-          </p>
-        ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-1">
-        <button
-          type="button"
-          onClick={() => props.onSendItem(props.item)}
-          disabled={props.target === null}
-          data-testid="pr-detail-queue-send"
-          aria-label={
-            props.target === null
-              ? "Choose a chat to send to first"
-              : `Send “${props.item.title}” to ${props.target.title}`
-          }
-          className={cn(
-            "inline-flex items-center gap-1 rounded-md border border-primary/35 bg-primary/10 px-2 py-1",
-            "text-ui-xs text-primary transition-colors hover:bg-primary/15 disabled:opacity-50",
-          )}
-        >
-          <TextQuote className="size-3 shrink-0" aria-hidden />
-          Fix in chat
-        </button>
-        {props.item.detailsUrl !== null ? (
-          <PrQueueDetailsLink
-            url={props.item.detailsUrl}
-            onOpenDetails={props.onOpenDetails}
-          />
-        ) : null}
-      </div>
-    </div>
-  );
-}
 
-function PrQueueDetailsLink(props: {
-  readonly url: string;
-  readonly onOpenDetails: (url: string) => void;
-}): ReactNode {
-  return (
-    <button
-      type="button"
-      onClick={() => props.onOpenDetails(props.url)}
-      aria-label="Open on GitHub"
-      data-testid="pr-detail-queue-details"
-      className="inline-flex items-center rounded-md border border-border/60 px-1.5 py-1 text-muted-foreground transition-colors hover:text-foreground"
-    >
-      <ExternalLink className="size-3" aria-hidden />
-    </button>
+      <button
+        type="button"
+        onClick={() => props.onSendItem(item)}
+        disabled={props.target === null}
+        data-testid="pr-detail-queue-send"
+        aria-label={
+          props.target === null
+            ? "Choose a chat to send to first"
+            : `Send \u201c${text.headline}\u201d to ${props.target.title}`
+        }
+        // Deliberately NOT hover-revealed. Routing a finding into the agent
+        // that wrote the branch is the one thing this view does that GitHub
+        // cannot; hiding it until the pointer lands would make the whole
+        // differentiator invisible to anyone who did not think to look.
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-ui-xs",
+          "border-border/60 text-muted-foreground transition-colors",
+          "hover:border-primary/40 hover:bg-primary/10 hover:text-primary",
+          "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+          "disabled:opacity-40 disabled:hover:border-border/60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
+        )}
+      >
+        <TextQuote className="size-3 shrink-0" aria-hidden />
+        Fix in chat
+      </button>
+    </div>
   );
 }

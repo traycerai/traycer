@@ -10,6 +10,8 @@ import {
   countPrChecks,
   derivePrAttentionQueue,
   formatPrAttentionHeadline,
+  prAttentionRowText,
+  stripInlineMarkdown,
   formatPrAttentionSubline,
 } from "../pr-attention-queue";
 
@@ -62,7 +64,17 @@ function check(
   status: PrCheckContext["status"],
   conclusion: PrCheckContext["conclusion"],
 ): PrCheckContext {
-  return { name, status, conclusion, detailsUrl: `https://ci/${name}` };
+  return {
+    name,
+    workflowName: null,
+    event: null,
+    appName: null,
+    appLogoUrl: null,
+    description: null,
+    status,
+    conclusion,
+    detailsUrl: `https://ci/${name}`,
+  };
 }
 
 function review(args: {
@@ -405,5 +417,97 @@ describe("queue hero copy", () => {
       activity: activity([], false),
     });
     expect(formatPrAttentionSubline(empty)).toBeNull();
+  });
+});
+
+describe("stripInlineMarkdown", () => {
+  it("removes the emphasis markers CodeRabbit wraps its headline in", () => {
+    // The queue draws this line as plain text, so the markdown arrived intact
+    // and rendered as literal asterisks around the only sentence on the card.
+    expect(stripInlineMarkdown("**Actionable comments posted: 1**")).toBe(
+      "Actionable comments posted: 1",
+    );
+  });
+
+  it("handles the other inline forms a first line actually carries", () => {
+    expect(stripInlineMarkdown("__bold__ and _em_ and ~~gone~~")).toBe(
+      "bold and em and gone",
+    );
+    expect(stripInlineMarkdown("`useState` is wrong here")).toBe(
+      "useState is wrong here",
+    );
+    expect(stripInlineMarkdown("See [the docs](https://x.dev/a) for why")).toBe(
+      "See the docs for why",
+    );
+    expect(stripInlineMarkdown("## Summary")).toBe("Summary");
+    expect(stripInlineMarkdown("> quoted objection")).toBe("quoted objection");
+    expect(stripInlineMarkdown("- a bullet")).toBe("a bullet");
+  });
+
+  it("leaves ordinary prose - and intra-word punctuation - alone", () => {
+    expect(stripInlineMarkdown("The cap is not enforced offline.")).toBe(
+      "The cap is not enforced offline.",
+    );
+    // An underscore inside an identifier is not emphasis.
+    expect(stripInlineMarkdown("check build_prod before merging")).toBe(
+      "check build_prod before merging",
+    );
+    // A lone marker with nothing to close it is left as written rather than
+    // half-stripped, which reads worse than not parsing at all.
+    expect(stripInlineMarkdown("2 * 3 is 6")).toBe("2 * 3 is 6");
+  });
+});
+
+describe("prAttentionRowText", () => {
+  const base = {
+    key: "k",
+    detail: null,
+    actor: null,
+    iconUrl: null,
+    detailsUrl: null,
+    createdAt: 1,
+  } as const;
+
+  it("leads a check with its name and follows with its verdict", () => {
+    expect(
+      prAttentionRowText({
+        ...base,
+        kind: "check-failure",
+        title: "pre-commit",
+        detail: "Failure",
+      }),
+    ).toEqual({
+      headline: "pre-commit",
+      meta: "Failure",
+      isIdentifier: true,
+    });
+  });
+
+  it("leads a review with what it SAID, and attributes it underneath", () => {
+    // The two kinds put different things in `title`: for a review it is the
+    // reviewer, so rendering both alike put a login where the work should be.
+    expect(
+      prAttentionRowText({
+        ...base,
+        kind: "changes-requested",
+        title: "coderabbitai",
+        detail: "Actionable comments posted: 1",
+      }),
+    ).toEqual({
+      headline: "Actionable comments posted: 1",
+      meta: "coderabbitai",
+      isIdentifier: false,
+    });
+  });
+
+  it("falls back to the title when a review left no body", () => {
+    expect(
+      prAttentionRowText({
+        ...base,
+        kind: "changes-requested",
+        title: "coderabbitai",
+        detail: null,
+      }),
+    ).toEqual({ headline: "coderabbitai", meta: null, isIdentifier: false });
   });
 });

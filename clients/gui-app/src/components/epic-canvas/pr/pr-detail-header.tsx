@@ -12,12 +12,6 @@ import {
 import type { PrDetailCore, PrState } from "@traycer/protocol/host/pr-schemas";
 import { Button } from "@/components/ui/button";
 import { PrActorAvatar } from "@/components/epic-canvas/pr/pr-detail-avatar";
-import { PrOwnerBadges } from "@/components/epic-canvas/pr/pr-owner-label";
-import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import {
-  PR_DIFF_ADDED_CLASS,
-  PR_DIFF_REMOVED_CLASS,
-} from "@/components/epic-canvas/pr/pr-detail-tone";
 import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
@@ -102,107 +96,72 @@ export function PrDetailHeader(props: {
       ? props.core.title
       : "Untitled pull request";
   const displayState = prDisplayState(props.core);
-  // A tile is bound to its host for life; the reactive active host is off
-  // limits in here (CLAUDE.md, host identity rule 2).
-  const tabHostId = useTabHostId();
 
   return (
-    <div className="flex min-w-0 flex-col gap-3 border-b border-border/50 pb-4">
-      <div className="flex min-w-0 items-start gap-2">
-        <h1 className="min-w-0 flex-1 text-ui-lg leading-snug font-medium break-words text-foreground">
-          <PrDetailIdentityBadge
-            state={displayState}
-            prNumber={props.core.base.prNumber}
-          />{" "}
-          {title}
-        </h1>
-        <div className="flex shrink-0 items-center gap-1">
-          <PrDetailGitHubLink prUrl={props.core.prUrl} />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={props.onRefresh}
-            aria-label="Refresh pull request"
-            disabled={props.refreshing}
-            data-testid="pr-detail-refresh"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <RotateCcw
-              className={cn("size-4", props.refreshing && "animate-spin")}
-            />
-          </Button>
-        </div>
+    <div className="flex min-w-0 items-start gap-2">
+      <h1 className="min-w-0 flex-1 text-ui-lg leading-snug font-medium break-words text-foreground">
+        <PrDetailIdentityBadge
+          state={displayState}
+          prNumber={props.core.base.prNumber}
+        />{" "}
+        {title}
+      </h1>
+      <div className="flex shrink-0 items-center gap-1">
+        <PrDetailGitHubLink prUrl={props.core.prUrl} />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={props.onRefresh}
+          aria-label="Refresh pull request"
+          disabled={props.refreshing}
+          data-testid="pr-detail-refresh"
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <RotateCcw
+            className={cn("size-4", props.refreshing && "animate-spin")}
+          />
+        </Button>
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 text-ui-sm text-muted-foreground">
-        <PrActorAvatar
-          actor={props.core.author}
-          size="sm"
-          className="shrink-0"
-        />
-        <span className="font-medium text-foreground">
-          {formatPrActorName(props.core.author)}
-        </span>
-        <span className="shrink-0">{MERGE_SENTENCE_VERB[displayState]}</span>
-        <PrBranchChip name={props.core.headRefName} />
-        <ArrowRight className="size-3.5 shrink-0" aria-hidden />
-        <PrBranchChip name={props.core.baseRefName} />
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
-        {props.core.additions !== null && props.core.deletions !== null ? (
-          <>
-            <span className="font-mono">
-              <span className={PR_DIFF_ADDED_CLASS}>
-                +{props.core.additions}
-              </span>{" "}
-              <span className={PR_DIFF_REMOVED_CLASS}>
-                −{props.core.deletions}
-              </span>
-            </span>
-            <PrMetaDot />
-          </>
-        ) : null}
-        {props.core.commentCount !== null ? (
-          <>
-            <span>
-              {props.core.commentCount} comment
-              {props.core.commentCount === 1 ? "" : "s"}
-            </span>
-            <PrMetaDot />
-          </>
-        ) : null}
-        {props.observedAt !== null ? (
-          <PrDetailStaleness observedAt={props.observedAt} />
-        ) : null}
-        {props.notLive ? (
-          <span
-            className="rounded-full border border-border/60 px-1.5 py-0.5 text-ui-xs"
-            data-testid="pr-detail-not-live"
-          >
-            Not live
-          </span>
-        ) : null}
-      </div>
-      {/* The chats this PR came from, as the SAME clickable pills the panel row
-          renders. A dropdown here answered a question nobody was asking ("pick
-          a destination") while hiding the one they were ("which conversation
-          produced this?"). Destination selection belongs with the send action,
-          in the card. */}
-      <PrOwnerBadges
-        owners={props.core.owners}
-        epicId={props.epicId}
-        fallbackHostId={tabHostId}
-        className={undefined}
-      />
     </div>
   );
 }
 
-function PrMetaDot(): ReactNode {
+/**
+ * The PR's orientation lines: who, from where to where, how big, how fresh,
+ * and which chats produced it.
+ *
+ * Split from the title row because only the title row is pinned. This block is
+ * read once when the page opens and never again while scrolling a 300-file
+ * diff, so keeping it on screen would spend four lines of every viewport on
+ * facts nobody is re-reading - while the two things a reader DOES keep
+ * reaching for (which PR, which section) are exactly what fits in one bar.
+ */
+/**
+ * Who is merging what into where - pinned alongside the title.
+ *
+ * It answers the second question a reader asks after "which PR", and unlike
+ * the diffstat or the freshness stamp it stays relevant while scrolling: the
+ * base branch is what every hunk in the diff below is being compared against.
+ */
+export function PrDetailMergeLine(props: {
+  readonly core: PrDetailCore;
+}): ReactNode {
+  const displayState = prDisplayState(props.core);
   return (
-    <span className="text-muted-foreground/40" aria-hidden>
-      ·
-    </span>
+    <div
+      className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 text-ui-sm text-muted-foreground"
+      data-testid="pr-detail-merge-line"
+    >
+      <PrActorAvatar actor={props.core.author} size="sm" className="shrink-0" />
+      <span className="font-medium text-foreground">
+        {formatPrActorName(props.core.author)}
+      </span>
+      <span className="shrink-0">{MERGE_SENTENCE_VERB[displayState]}</span>
+      <PrBranchChip name={props.core.headRefName} />
+      <ArrowRight className="size-3.5 shrink-0" aria-hidden />
+      <PrBranchChip name={props.core.baseRefName} />
+    </div>
   );
 }
 
@@ -246,7 +205,10 @@ function PrBranchChip(props: { readonly name: string | null }): ReactNode {
   );
 }
 
-function PrDetailStaleness(props: { readonly observedAt: number }): ReactNode {
+/** Shared with the context card, which now owns the freshness gauge. */
+export function PrDetailStaleness(props: {
+  readonly observedAt: number;
+}): ReactNode {
   const label = useRelativeTimestamp(props.observedAt);
   return (
     <span data-testid="pr-detail-staleness">

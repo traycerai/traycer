@@ -1,4 +1,10 @@
-import { type ReactNode } from "react";
+import {
+  useCallback,
+  useMemo,
+  useState,
+  type ReactNode,
+  type SyntheticEvent,
+} from "react";
 import {
   Check,
   Clock,
@@ -23,6 +29,11 @@ import {
   type PrConversationEntry,
   type PrReviewActivityItem,
 } from "@/lib/pr/pr-conversation";
+import { buildPrReviewHunkPatch } from "@/lib/pr/pr-review-hunk";
+import {
+  DiffContentFrame,
+  DiffContentPrimitive,
+} from "@/components/diff/diff-content-primitive";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import {
   formatPrActorName,
@@ -85,7 +96,11 @@ export function PrDetailDescriptionCard(props: {
         </>
       }
     >
-      <PrCardBody body={body} emptyBody="No description provided." />
+      <PrCardBody
+        body={body}
+        emptyBody="No description provided."
+        density="card"
+      />
     </PrSurfaceCard>
   );
 }
@@ -202,7 +217,7 @@ function PrConversationRow(props: {
           and nothing else - "No content." beneath five real objections would
           be actively wrong. */}
       {item.body.trim().length > 0 || threads.length === 0 ? (
-        <PrCardBody body={item.body} emptyBody="No content." />
+        <PrCardBody body={item.body} emptyBody="No content." density="card" />
       ) : null}
       {threads.length > 0 ? (
         <PrReviewThreadList
@@ -239,22 +254,56 @@ function PrReviewThreadList(props: {
         />
       ))}
       {resolved.length > 0 ? (
-        <details className="min-w-0" data-testid="pr-detail-resolved-threads">
-          <summary className="cursor-pointer list-none text-ui-xs text-muted-foreground/70 transition-colors hover:text-foreground">
-            {resolved.length} resolved
-          </summary>
-          <div className="mt-2 flex min-w-0 flex-col gap-2">
-            {resolved.map((thread) => (
-              <PrReviewThreadCard
-                key={thread.id}
-                thread={thread}
-                onQuoteThread={props.onQuoteThread}
-              />
-            ))}
-          </div>
-        </details>
+        <PrResolvedThreads
+          threads={resolved}
+          onQuoteThread={props.onQuoteThread}
+        />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Resolved findings, mounted only once opened.
+ *
+ * `<details>` hides its children with CSS, so an uncontrolled one would still
+ * mount every collapsed thread - and each thread now mounts a real diff
+ * renderer that parses and highlights its hunk off the main thread. On a bot
+ * pass with fifteen findings that is fifteen highlight jobs for panels nobody
+ * has asked to see.
+ */
+function PrResolvedThreads(props: {
+  readonly threads: readonly PrReviewThread[];
+  readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
+}): ReactNode {
+  const [isOpen, setIsOpen] = useState(false);
+  const handleToggle = useCallback(
+    (event: SyntheticEvent<HTMLDetailsElement>): void => {
+      setIsOpen(event.currentTarget.open);
+    },
+    [],
+  );
+  return (
+    <details
+      className="min-w-0"
+      data-testid="pr-detail-resolved-threads"
+      onToggle={handleToggle}
+    >
+      <summary className="cursor-pointer list-none text-ui-xs text-muted-foreground/70 transition-colors hover:text-foreground">
+        {props.threads.length} resolved
+      </summary>
+      {isOpen ? (
+        <div className="mt-2 flex min-w-0 flex-col gap-2">
+          {props.threads.map((thread) => (
+            <PrReviewThreadCard
+              key={thread.id}
+              thread={thread}
+              onQuoteThread={props.onQuoteThread}
+            />
+          ))}
+        </div>
+      ) : null}
+    </details>
   );
 }
 
@@ -312,35 +361,78 @@ function PrReviewThreadCard(props: {
           }
         />
       </div>
-      {thread.diffHunk !== null ? (
-        <pre className="min-w-0 overflow-x-auto border-b border-border/50 px-2.5 py-1.5 font-mono text-ui-xs leading-snug text-muted-foreground">
-          {thread.diffHunk}
-        </pre>
-      ) : null}
-      <div className="flex min-w-0 flex-col gap-2 px-2.5 py-2">
+      <PrReviewThreadHunk thread={thread} />
+      <div className="flex min-w-0 flex-col divide-y divide-border/40">
         {thread.comments.map((comment) => (
           <div key={comment.id} className="min-w-0">
-            <div className="flex min-w-0 items-center gap-1.5">
+            <div className="flex min-w-0 items-center gap-1.5 px-2.5 pt-2 text-ui-xs text-muted-foreground">
               <PrActorAvatar
                 actor={comment.author}
                 size="sm"
                 className="shrink-0"
               />
-              <span className="min-w-0 truncate text-ui-xs font-medium text-foreground">
+              <span className="min-w-0 truncate font-medium text-foreground">
                 {formatPrActorName(comment.author)}
               </span>
               <span className="flex-1" aria-hidden />
               <PrRelativeTime timestamp={comment.createdAt} />
             </div>
-            <PrCardBody body={comment.body} emptyBody="No content." />
+            <PrCardBody
+              body={comment.body}
+              emptyBody="No content."
+              density="inline"
+            />
           </div>
         ))}
         {hidden > 0 ? (
-          <p className="text-ui-xs text-muted-foreground/70">
+          <p className="px-2.5 py-1.5 text-ui-xs text-muted-foreground/70">
             {hidden} more {hidden === 1 ? "reply" : "replies"} on GitHub.
           </p>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The lines a finding points at, through the app's own diff renderer.
+ *
+ * This used to be a `<pre>` of the raw hunk: no gutter, one flat colour for
+ * added, removed, and context alike, so the reader had to decode `+`/`-`
+ * prefixes by eye to see what the comment was even about. It is a diff, and
+ * every other diff in the app is rendered by the same pipeline - reusing it
+ * costs one adapter and buys tones, syntax highlighting, and line numbers that
+ * agree with the file.
+ */
+function PrReviewThreadHunk(props: {
+  readonly thread: PrReviewThread;
+}): ReactNode {
+  const { thread } = props;
+  const hunk = useMemo(() => buildPrReviewHunkPatch(thread), [thread]);
+  if (hunk === null) return null;
+  return (
+    <div
+      className="min-w-0 border-b border-border/50 bg-card"
+      data-testid="pr-detail-thread-hunk"
+      data-line-numbers={hunk.lineNumbers}
+    >
+      <DiffContentFrame
+        sizing="content"
+        banner={null}
+        scrollContainerRef={null}
+        onScroll={null}
+      >
+        <DiffContentPrimitive
+          patch={hunk.patch}
+          cacheScope={`pr-review-thread:${thread.id}`}
+          mode="unified"
+          wordWrap
+          backgrounds
+          lineNumbers={hunk.lineNumbers}
+          indicatorStyle="bars"
+          fileHeaders={false}
+        />
+      </DiffContentFrame>
     </div>
   );
 }
@@ -433,12 +525,24 @@ function PrSurfaceCard(props: {
   );
 }
 
+/**
+ * `density` is the difference between a card that owns its column and a body
+ * nested two borders deep inside one. The nested case has to line up with a
+ * 2.5-unit header rail above it; card padding there reads as a text block that
+ * drifted right of everything around it.
+ */
 function PrCardBody(props: {
   readonly body: string;
   readonly emptyBody: string;
+  readonly density: "card" | "inline";
 }): ReactNode {
   return (
-    <div className="min-w-0 px-4 py-3.5">
+    <div
+      className={cn(
+        "min-w-0",
+        props.density === "card" ? "px-4 py-3.5" : "px-2.5 pt-1.5 pb-2",
+      )}
+    >
       {props.body.trim().length === 0 ? (
         <p className="text-ui-sm text-muted-foreground/70 italic">
           {props.emptyBody}
@@ -505,9 +609,25 @@ export function PrOlderOnGitHub(props: {
   );
 }
 
+/**
+ * A timestamp carries its own type treatment.
+ *
+ * It used to inherit, which meant every call site had to remember to size and
+ * mute it - and the one that forgot rendered a comment's date at body size in
+ * body colour, so the same "9 Jul" appeared twice in one card at two sizes.
+ * A date is metadata wherever it appears here, so it looks like metadata
+ * wherever it appears.
+ */
 export function PrRelativeTime(props: {
   readonly timestamp: number;
 }): ReactNode {
   const label = useRelativeTimestamp(props.timestamp);
-  return <span className="shrink-0 whitespace-nowrap">{label}</span>;
+  return (
+    <span
+      className="shrink-0 text-ui-xs whitespace-nowrap text-muted-foreground"
+      data-testid="pr-relative-time"
+    >
+      {label}
+    </span>
+  );
 }

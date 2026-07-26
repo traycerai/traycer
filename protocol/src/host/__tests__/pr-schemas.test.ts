@@ -292,6 +292,11 @@ describe("prCheckContextSchema", () => {
     prCheckStatusSchema.options.forEach((status) => {
       const fixture = {
         name: "ci/build",
+        workflowName: null,
+        event: null,
+        appName: null,
+        appLogoUrl: null,
+        description: null,
         status,
         conclusion: null,
         detailsUrl: "https://github.com/traycerai/traycer-internal/actions",
@@ -307,6 +312,11 @@ describe("prCheckContextSchema", () => {
     prCheckConclusionSchema.options.forEach((conclusion) => {
       const fixture = {
         name: "ci/build",
+        workflowName: null,
+        event: null,
+        appName: null,
+        appLogoUrl: null,
+        description: null,
         status: "completed" as const,
         conclusion,
         detailsUrl: null,
@@ -321,6 +331,11 @@ describe("prCheckContextSchema", () => {
   it("parses and reparses a null conclusion (in-progress check) unchanged", () => {
     const fixture = {
       name: "ci/build",
+      workflowName: null,
+      event: null,
+      appName: null,
+      appLogoUrl: null,
+      description: null,
       status: "in_progress" as const,
       conclusion: null,
       detailsUrl: null,
@@ -329,6 +344,52 @@ describe("prCheckContextSchema", () => {
     const parsed2 = prCheckContextSchema.parse(parsed1);
     expect(parsed2).toEqual(parsed1);
     expect(parsed1.conclusion).toBeNull();
+  });
+
+  it("carries the workflow, event and app that separate two jobs named alike", () => {
+    // `name` is the JOB name and is not unique: one reusable workflow reports
+    // `build` once per package. Only `workflowName` tells the rows apart.
+    const base = {
+      name: "build",
+      event: "pull_request",
+      appName: "GitHub Actions",
+      appLogoUrl: "https://avatars/actions.png",
+      description: null,
+      status: "completed" as const,
+      conclusion: "success" as const,
+      detailsUrl: null,
+    };
+    const host = prCheckContextSchema.parse({
+      ...base,
+      workflowName: "Build Host",
+    });
+    const gui = prCheckContextSchema.parse({
+      ...base,
+      workflowName: "Build GUI",
+    });
+    expect(host.name).toBe(gui.name);
+    expect(host.workflowName).not.toBe(gui.workflowName);
+    expect(prCheckContextSchema.parse(host)).toEqual(host);
+  });
+
+  it("keeps every new field nullable - a check outside a workflow has none", () => {
+    // A third-party app's check belongs to no workflow run, and a commit
+    // status has no app record at all.
+    const parsed = prCheckContextSchema.parse({
+      name: "Mintlify Deployment",
+      workflowName: null,
+      event: null,
+      appName: "Mintlify",
+      appLogoUrl: null,
+      description: "Skipping deployment",
+      status: "completed" as const,
+      conclusion: "skipped" as const,
+      detailsUrl: null,
+    });
+    expect(parsed.workflowName).toBeNull();
+    expect(parsed.event).toBeNull();
+    expect(parsed.description).toBe("Skipping deployment");
+    expect(prCheckContextSchema.parse(parsed)).toEqual(parsed);
   });
 });
 
@@ -339,6 +400,11 @@ describe("prChecksSectionSchema", () => {
       contexts: [
         {
           name: "ci/build",
+          workflowName: null,
+          event: null,
+          appName: null,
+          appLogoUrl: null,
+          description: null,
           status: "completed" as const,
           conclusion: "success" as const,
           detailsUrl: null,
@@ -659,7 +725,12 @@ const DETAIL_CHECKS_FIXTURE = {
   observedAt: 1_700_000_000_000,
   contexts: [
     {
-      name: "ci/build",
+      name: "build",
+      workflowName: "Build Host",
+      event: "pull_request",
+      appName: "GitHub Actions",
+      appLogoUrl: "https://avatars/actions.png",
+      description: null,
       status: "completed" as const,
       conclusion: "success" as const,
       detailsUrl: null,

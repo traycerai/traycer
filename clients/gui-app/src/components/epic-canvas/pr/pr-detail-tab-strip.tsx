@@ -34,8 +34,13 @@ export interface PrDetailTabBlocking {
  * Deliberately NOT GitHub's underlined tab row spanning a full-width rule -
  * that rule is the single strongest "this is a GitHub page" signal in the
  * layout, and it also fights the card language every surface below it uses.
- * A contained pill group hugs its own content, sits inside the same column as
- * everything else, and reads as one control rather than page chrome.
+ * A contained pill group sits inside the same column as everything else and
+ * reads as one control rather than page chrome.
+ *
+ * The group spans the column and its tabs share the space evenly. Hugging its
+ * own content left it ending short of every card below it, so the strip read
+ * as a stray element floating above the page rather than as its header - and
+ * the ragged gap after the last tab had no meaning to carry.
  */
 export function PrDetailTabStrip(props: {
   readonly tab: PrDetailTabId;
@@ -48,7 +53,7 @@ export function PrDetailTabStrip(props: {
       role="tablist"
       aria-label="Pull request sections"
       data-testid="pr-detail-tabs"
-      className="flex w-fit max-w-full min-w-0 flex-wrap items-center gap-0.5 rounded-xl border border-border/50 bg-muted/30 p-1"
+      className="flex w-full min-w-0 items-center gap-0.5 rounded-xl border border-border/50 bg-muted/30 p-1"
     >
       {TABS.map((definition) => {
         const count = tabCount(definition.id, props.counts);
@@ -64,18 +69,23 @@ export function PrDetailTabStrip(props: {
             data-state={selected ? "active" : "inactive"}
             onClick={() => props.onSelectTab(definition.id)}
             className={cn(
-              "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-ui-sm transition-colors",
+              // `flex-1` + `basis-0` so every tab gets an equal share of the
+              // row rather than a share proportional to its label: otherwise
+              // "Overview" and "Files" end up visibly different widths and the
+              // control reads as misaligned.
+              "inline-flex min-w-0 flex-1 basis-0 items-center justify-center gap-1.5",
+              "rounded-lg px-2 py-1.5 text-ui-sm transition-colors",
               "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
               selected
                 ? "bg-canvas font-medium text-foreground shadow-sm"
                 : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
             )}
           >
-            {definition.label}
+            <span className="min-w-0 truncate">{definition.label}</span>
             {count !== null ? (
               <span
                 className={cn(
-                  "rounded-full px-1.5 text-ui-xs tabular-nums",
+                  "shrink-0 rounded-full px-1.5 text-ui-xs tabular-nums",
                   blocking > 0
                     ? "bg-destructive/15 text-destructive"
                     : "bg-muted-foreground/10 text-muted-foreground",
