@@ -16,6 +16,7 @@ import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ChatProgressIconProps {
   readonly epicId: string;
   readonly chatId: string;
@@ -134,15 +135,21 @@ function ChatProgressPresentation(props: {
   let idleIcon: ReactNode;
   if (props.isReadOnly) {
     idleIcon = (
-      <span
-        role="status"
-        aria-label="Read-only agent"
-        className={icon.className}
-        style={icon.style}
-        title="Read-only agent"
+      <TooltipWrapper
+        label="Read-only agent"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <MessageSquareLock aria-hidden className="size-3.5" />
-      </span>
+        <span
+          role="status"
+          aria-label="Read-only agent"
+          className={icon.className}
+          style={icon.style}
+        >
+          <MessageSquareLock aria-hidden className="size-3.5" />
+        </span>
+      </TooltipWrapper>
     );
   } else if (props.defaultIcon !== undefined) {
     idleIcon = props.defaultIcon;

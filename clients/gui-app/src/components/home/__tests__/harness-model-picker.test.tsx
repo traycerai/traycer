@@ -468,6 +468,7 @@ import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
   label: "Codex",
@@ -1192,7 +1193,7 @@ describe("<HarnessModelPicker />", () => {
     const claudeTab = screen.getByRole("tab", { name: "Claude" });
 
     expect(codexTab.getAttribute("aria-disabled")).toBe("true");
-    expect(codexTab.getAttribute("title")).toBe(
+    expect(tooltipTextNear(codexTab)).toBe(
       "Provider cannot be changed while forking terminal agent",
     );
     expect(claudeTab.getAttribute("aria-disabled")).toBeNull();
@@ -2244,7 +2245,7 @@ describe("<HarnessModelPicker />", () => {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
     expect(row.disabled).toBe(true);
-    expect(row.title).toBe(
+    expect(tooltipTextNear(row)).toBe(
       "Add profiles from a local host with browser sign-in available.",
     );
     fireEvent.click(row);
@@ -2425,7 +2426,7 @@ describe("<HarnessModelPicker />", () => {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
     expect(row.disabled).toBe(true);
-    expect(row.title).toBe(
+    expect(tooltipTextNear(row)).toBe(
       "Add profiles from a local host with browser sign-in available.",
     );
   });

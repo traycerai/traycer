@@ -2,6 +2,7 @@ import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 // Hard cap on the spinning/disabled state so a hung refetch can't wedge the
 // button; a normal catalog/provider refetch settles in well under a second.
 const REFRESH_TIMEOUT_MS = 10_000;
@@ -33,18 +34,26 @@ export function RefreshIconButton(props: RefreshIconButtonProps) {
   });
 
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={trigger}
-      disabled={refreshing}
-      className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
-        className,
-      )}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
-    </button>
+      <span className="inline-flex">
+        <button
+          type="button"
+          aria-label={label}
+          onClick={trigger}
+          disabled={refreshing}
+          className={cn(
+            "flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
+            className,
+          )}
+        >
+          <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
+        </button>
+      </span>
+    </TooltipWrapper>
   );
 }

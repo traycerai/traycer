@@ -28,6 +28,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
@@ -344,7 +345,7 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
     ).toBeTruthy();
     const installButton = screen.getByRole("button", { name: "Install" });
     expect(installButton.hasAttribute("disabled")).toBe(true);
-    expect(installButton.getAttribute("title")).toBe(
+    expect(tooltipTextNear(installButton)).toBe(
       "Unavailable on this platform.",
     );
   });

@@ -21,6 +21,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import { optimisticQueuedItemId } from "@/stores/chats/optimistic-queue";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 interface TestDndEvent {
   readonly active: {
     readonly data: { readonly current: unknown };
@@ -604,8 +605,10 @@ describe("<QueuedMessagePanel />", () => {
     ).toBeNull();
     // ...but it is labelled as received and can still be reordered.
     expect(
-      within(agentRow).getByTitle(/Response received from/),
-    ).not.toBeNull();
+      tooltipTextNear(
+        within(agentRow).getByTestId("queued-message-sender-badge"),
+      ),
+    ).toMatch(/Response received from/);
     expect(
       within(agentRow).getByTestId("queued-message-drag-handle"),
     ).not.toBeNull();

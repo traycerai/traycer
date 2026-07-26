@@ -39,6 +39,7 @@ import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scr
 import { WorkspaceFileDeadTileBanner } from "./dead-tile-banner";
 import { WorkspaceMarkdownLinkProvider } from "@/components/epic-canvas/workspace-file/workspace-markdown-link-provider";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
 type WorkspaceFileViewMode = "source" | "preview";
@@ -420,26 +421,34 @@ function MarkdownViewModeToggle(props: {
         const active = props.mode === option.mode;
         const disabled = option.mode === "preview" && props.previewDisabled;
         return (
-          <button
+          <TooltipWrapper
             key={option.mode}
-            type="button"
-            aria-pressed={active}
-            disabled={disabled}
-            title={
+            label={
               disabled ? "Preview unavailable - file is too large" : undefined
             }
-            className={cn(
-              "inline-flex h-6 items-center rounded-[3px] px-1.5 text-ui-xs leading-none font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-              disabled &&
-                "cursor-not-allowed opacity-45 hover:text-muted-foreground",
-              active && "bg-muted text-foreground",
-            )}
-            onClick={() => {
-              props.onModeChange(option.mode);
-            }}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            {option.label}
-          </button>
+            <span className="inline-flex">
+              <button
+                type="button"
+                aria-pressed={active}
+                disabled={disabled}
+                className={cn(
+                  "inline-flex h-6 items-center rounded-[3px] px-1.5 text-ui-xs leading-none font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  disabled &&
+                    "cursor-not-allowed opacity-45 hover:text-muted-foreground",
+                  active && "bg-muted text-foreground",
+                )}
+                onClick={() => {
+                  props.onModeChange(option.mode);
+                }}
+              >
+                {option.label}
+              </button>
+            </span>
+          </TooltipWrapper>
         );
       })}
     </div>
