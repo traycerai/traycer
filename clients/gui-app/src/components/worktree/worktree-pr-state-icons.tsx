@@ -10,6 +10,7 @@ import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link
 import { cn } from "@/lib/utils";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import type { WorktreePrReference } from "@/components/worktree/worktree-pr-metadata-model";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   PR_STATE_ICON,
   PR_STATE_TINT_CLASS,
@@ -96,24 +97,30 @@ function WorktreePrStateIcon(props: {
   );
   const Icon = PR_STATE_ICON[props.reference.state];
   return (
-    <span
-      role="link"
-      tabIndex={0}
-      aria-label={props.reference.ariaLabel}
-      title={props.reference.label}
-      data-testid="worktree-pr-state-icon"
-      data-pr-state={props.reference.state}
-      className={cn(
-        "inline-flex shrink-0 cursor-pointer items-center gap-0.5 font-medium",
-        "focus-visible:ring-ring rounded-sm focus-visible:outline-none focus-visible:ring-2",
-        PR_STATE_TINT_CLASS[props.reference.state],
-      )}
-      onClick={openOnClick}
-      onKeyDown={openOnKeyDown}
-      onPointerDown={stopDragActivation}
+    <TooltipWrapper
+      label={props.reference.label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <Icon className="size-3" aria-hidden />
-      <span>#{props.reference.prNumber}</span>
-    </span>
+      <span
+        role="link"
+        tabIndex={0}
+        aria-label={props.reference.ariaLabel}
+        data-testid="worktree-pr-state-icon"
+        data-pr-state={props.reference.state}
+        className={cn(
+          "inline-flex shrink-0 cursor-pointer items-center gap-0.5 font-medium",
+          "focus-visible:ring-ring rounded-sm focus-visible:outline-none focus-visible:ring-2",
+          PR_STATE_TINT_CLASS[props.reference.state],
+        )}
+        onClick={openOnClick}
+        onKeyDown={openOnKeyDown}
+        onPointerDown={stopDragActivation}
+      >
+        <Icon className="size-3" aria-hidden />
+        <span>#{props.reference.prNumber}</span>
+      </span>
+    </TooltipWrapper>
   );
 }

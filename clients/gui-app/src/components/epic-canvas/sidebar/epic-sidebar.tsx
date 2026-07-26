@@ -184,6 +184,7 @@ import {
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useShallow } from "zustand/react/shallow";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS = "@max-[21rem]:hidden";
 
 interface ArtifactReadTarget {
@@ -1536,23 +1537,31 @@ function TreePanelActions(props: TreePanelActionsProps) {
 
   return (
     <div className="flex items-center gap-0.5">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        onClick={collapseAll}
-        aria-label="Collapse all"
-        title="Collapse all"
-        data-testid={`epic-sidebar-collapse-all-${props.panelId}`}
-        disabled={props.collapsed}
-        className={cn(
-          "text-muted-foreground hover:text-foreground",
-          PANEL_HEADER_ACTION_REVEAL_CLASS,
-          COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
-        )}
+      <TooltipWrapper
+        label="Collapse all"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <CopyMinus className="size-4" />
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={collapseAll}
+            aria-label="Collapse all"
+            data-testid={`epic-sidebar-collapse-all-${props.panelId}`}
+            disabled={props.collapsed}
+            className={cn(
+              "text-muted-foreground hover:text-foreground",
+              PANEL_HEADER_ACTION_REVEAL_CLASS,
+              COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
+            )}
+          >
+            <CopyMinus className="size-4" />
+          </Button>
+        </span>
+      </TooltipWrapper>
       {props.panelId === "chats" ? (
         <NewConversationModalAction
           epicId={props.epicId}
@@ -1723,23 +1732,36 @@ function CompactMoreMenuTrigger(props: {
   readonly collapsed: boolean;
 }) {
   return (
-    <DropdownMenuTrigger asChild>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label={props.label}
-        title={props.label}
-        disabled={props.collapsed}
-        className={cn(
-          "hidden text-muted-foreground hover:text-foreground aria-expanded:opacity-100 @max-[21rem]:inline-flex",
-          PANEL_HEADER_ACTION_REVEAL_CLASS,
-        )}
-        data-testid={props.testId}
-      >
-        <MoreHorizontal className="size-4" />
-      </Button>
-    </DropdownMenuTrigger>
+    // Tooltip OUTSIDE the menu trigger, with no span between them: both are
+    // `asChild`, so nesting this way merges the tooltip's and the menu's props
+    // onto the button itself. A guard span in between took delivery of them
+    // instead - which broke this button's own `aria-expanded:opacity-100` (the
+    // attribute landed on the span) and left the always-`inline-flex` span
+    // rendered in the header while its `@max-[21rem]:inline-flex` child stayed
+    // hidden at wider widths.
+    <TooltipWrapper
+      label={props.label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={props.label}
+          disabled={props.collapsed}
+          className={cn(
+            "hidden text-muted-foreground hover:text-foreground aria-expanded:opacity-100 @max-[21rem]:inline-flex",
+            PANEL_HEADER_ACTION_REVEAL_CLASS,
+          )}
+          data-testid={props.testId}
+        >
+          <MoreHorizontal className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+    </TooltipWrapper>
   );
 }
 
@@ -1854,23 +1876,31 @@ function MarkAllArtifactsReadButton(props: {
   }, [markRead, props.epicId, unreadArtifacts]);
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      onClick={handleMarkAllRead}
-      aria-label="Mark all unread artifacts as read"
-      title="Mark all unread artifacts as read"
-      data-testid="epic-sidebar-mark-all-artifacts-read"
-      disabled={props.collapsed || unreadArtifacts.length === 0}
-      className={cn(
-        "text-muted-foreground hover:text-foreground",
-        PANEL_HEADER_ACTION_REVEAL_CLASS,
-        COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
-      )}
+    <TooltipWrapper
+      label="Mark all unread artifacts as read"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <CheckCheck className="size-4" />
-    </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={handleMarkAllRead}
+          aria-label="Mark all unread artifacts as read"
+          data-testid="epic-sidebar-mark-all-artifacts-read"
+          disabled={props.collapsed || unreadArtifacts.length === 0}
+          className={cn(
+            "text-muted-foreground hover:text-foreground",
+            PANEL_HEADER_ACTION_REVEAL_CLASS,
+            COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
+          )}
+        >
+          <CheckCheck className="size-4" />
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -1884,22 +1914,30 @@ function ArtifactSearchButton(props: { readonly collapsed: boolean }) {
   const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
   if (!available) return null;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      onClick={() => openSearch("artifacts", "")}
-      aria-label="Search artifacts"
-      title="Search artifacts"
-      data-testid="epic-sidebar-search-artifacts"
-      disabled={props.collapsed}
-      className={cn(
-        "text-muted-foreground hover:text-foreground @max-[14rem]:hidden",
-        PANEL_HEADER_ACTION_REVEAL_CLASS,
-      )}
+    <TooltipWrapper
+      label="Search artifacts"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <Search className="size-4" />
-    </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => openSearch("artifacts", "")}
+          aria-label="Search artifacts"
+          data-testid="epic-sidebar-search-artifacts"
+          disabled={props.collapsed}
+          className={cn(
+            "text-muted-foreground hover:text-foreground @max-[14rem]:hidden",
+            PANEL_HEADER_ACTION_REVEAL_CLASS,
+          )}
+        >
+          <Search className="size-4" />
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -2011,17 +2049,25 @@ function SidebarBulkSelectionActions() {
       >
         {selection.allVisibleSelected ? "Deselect all" : "Select all"}
       </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Cancel selection"
-        title="Cancel selection"
-        disabled={selection.deletePending}
-        onClick={selection.cancelSelection}
+      <TooltipWrapper
+        label="Cancel selection"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <X className="size-3.5" />
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Cancel selection"
+            disabled={selection.deletePending}
+            onClick={selection.cancelSelection}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </span>
+      </TooltipWrapper>
       {selection.panelId === "artifacts" ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

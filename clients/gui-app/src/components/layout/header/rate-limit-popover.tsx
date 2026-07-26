@@ -839,15 +839,21 @@ function RateLimitRail({
         providers={providers}
         traycerRefreshTarget={traycerRefreshTarget}
       />
-      <button
-        type="button"
-        aria-label="Provider settings"
-        title="Provider settings"
-        onClick={openProviderSettings}
-        className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+      <TooltipWrapper
+        label="Provider settings"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <Settings className="size-4" />
-      </button>
+        <button
+          type="button"
+          aria-label="Provider settings"
+          onClick={openProviderSettings}
+          className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <Settings className="size-4" />
+        </button>
+      </TooltipWrapper>
     </div>
   );
 }
@@ -870,7 +876,6 @@ function RailTab({
         role="tab"
         aria-selected={selected}
         aria-label={label}
-        title={label}
         onClick={onSelect}
         className={cn(
           "flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60",

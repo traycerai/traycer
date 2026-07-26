@@ -5,6 +5,7 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface DictationRecordingBarProps {
   readonly state: VoiceDictationState;
   readonly getStream: () => MediaStream | null;
@@ -65,28 +66,40 @@ function RecordingControls({
       <div className="h-7 min-w-0 flex-1 text-primary">
         <DictationWaveform getStream={getStream} className={undefined} />
       </div>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-7 shrink-0"
-        onClick={onCancel}
-        aria-label="Cancel voice input"
-        title="Cancel (Esc)"
+      <TooltipWrapper
+        label="Cancel (Esc)"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <X className="size-4" />
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        className="h-7 shrink-0 gap-1.5"
-        onClick={onStop}
-        aria-label="Stop and insert transcript"
-        title="Stop and insert"
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-7 shrink-0"
+          onClick={onCancel}
+          aria-label="Cancel voice input"
+        >
+          <X className="size-4" />
+        </Button>
+      </TooltipWrapper>
+      <TooltipWrapper
+        label="Stop and insert"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <Square className="size-3 fill-current" />
-        Stop
-      </Button>
+        <Button
+          type="button"
+          size="sm"
+          className="h-7 shrink-0 gap-1.5"
+          onClick={onStop}
+          aria-label="Stop and insert transcript"
+        >
+          <Square className="size-3 fill-current" />
+          Stop
+        </Button>
+      </TooltipWrapper>
     </>
   );
 }

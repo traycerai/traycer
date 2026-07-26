@@ -72,6 +72,7 @@ import {
   SidebarGroup,
   SidebarGroupContent,
 } from "@/components/ui/sidebar";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { TreeChevron, TreeChevronSpacer } from "@/components/ui/tree-chevron";
 import {
   isChatFilterActive,
@@ -179,7 +180,6 @@ import { SidebarReparentRowDropWrapper } from "@/components/epic-canvas/sidebar/
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
 import { WorktreeOwnerMetadataTooltip } from "@/components/worktree/worktree-owner-metadata";
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -1782,21 +1782,27 @@ function SidebarAgentHarnessIcon(props: {
 }) {
   const TerminalIcon = EPIC_NODE_ICONS.terminal;
   return (
-    <span
-      data-testid={`sidebar-agent-harness-${props.nodeId}`}
-      data-agent-surface="tui"
-      className="relative inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
-      title="TUI terminal agent"
+    <TooltipWrapper
+      label="TUI terminal agent"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <HarnessIcon harnessId={props.harnessId} className="size-3.5" />
-      <TerminalIcon
-        aria-hidden="true"
-        data-testid={`sidebar-agent-surface-${props.nodeId}`}
+      <span
+        data-testid={`sidebar-agent-harness-${props.nodeId}`}
         data-agent-surface="tui"
-        className="pointer-events-none absolute -right-1 -bottom-1.5 size-2 text-muted-foreground"
-        strokeWidth={3}
-      />
-    </span>
+        className="relative inline-flex h-3.5 w-[1.125rem] shrink-0 items-center"
+      >
+        <HarnessIcon harnessId={props.harnessId} className="size-3.5" />
+        <TerminalIcon
+          aria-hidden="true"
+          data-testid={`sidebar-agent-surface-${props.nodeId}`}
+          data-agent-surface="tui"
+          className="pointer-events-none absolute -right-1 -bottom-1.5 size-2 text-muted-foreground"
+          strokeWidth={3}
+        />
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -2281,15 +2287,21 @@ function NestedChatStatusIcon(props: {
 }): ReactNode {
   const title = nestedChatStatusSummary(props.rollup);
   return (
-    <span
-      role="status"
-      aria-label={title}
-      title={title}
-      data-testid={`chat-descendant-status-${props.rollup.kind}-${props.nodeId}`}
-      className="inline-flex size-3.5 shrink-0 items-center justify-center opacity-60"
+    <TooltipWrapper
+      label={title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <NestedChatStatusGlyph kind={props.rollup.kind} />
-    </span>
+      <span
+        role="status"
+        aria-label={title}
+        data-testid={`chat-descendant-status-${props.rollup.kind}-${props.nodeId}`}
+        className="inline-flex size-3.5 shrink-0 items-center justify-center opacity-60"
+      >
+        <NestedChatStatusGlyph kind={props.rollup.kind} />
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -2616,26 +2628,32 @@ function ChatRowArchiveButton(props: {
     ? `Unarchive ${props.nodeName}`
     : `Archive ${props.nodeName}`;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-xs"
-      aria-label={label}
-      title={label}
-      disabled={props.pending}
-      data-testid={`epic-sidebar-archive-${props.nodeId}`}
-      className="absolute right-7 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100"
-      onClick={(event) => {
-        event.stopPropagation();
-        props.onToggle();
-      }}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {props.isArchived ? (
-        <ArchiveRestore className="size-3" />
-      ) : (
-        <Archive className="size-3" />
-      )}
-    </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label={label}
+        disabled={props.pending}
+        data-testid={`epic-sidebar-archive-${props.nodeId}`}
+        className="absolute right-7 top-1/2 -translate-y-1/2 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/tree-item:opacity-100"
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onToggle();
+        }}
+      >
+        {props.isArchived ? (
+          <ArchiveRestore className="size-3" />
+        ) : (
+          <Archive className="size-3" />
+        )}
+      </Button>
+    </TooltipWrapper>
   );
 }
 
