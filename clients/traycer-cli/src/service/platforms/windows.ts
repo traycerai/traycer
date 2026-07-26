@@ -630,7 +630,10 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
   // Normal CPU + Low I/O priority) - the host does latency-sensitive RPC work
   // and its priority class is inherited by every child it spawns (git,
   // provider CLIs), so the throttled band starved the whole app. Windows
-  // counterpart of the macOS LaunchAgent ProcessType Background->Standard fix.
+  // counterpart of the macOS LaunchAgent `ProcessType: Interactive` fix in
+  // platforms/macos.ts (that one landed in two steps - Background->Standard,
+  // then Standard->Interactive once `Standard` turned out to be launchd's
+  // throttled default rather than an unthrottled middle band).
   const action = buildTaskAction(options.label);
   const userId = resolveTaskUserId();
   return `<?xml version="1.0" encoding="UTF-16"?>
