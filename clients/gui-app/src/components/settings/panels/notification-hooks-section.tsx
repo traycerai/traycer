@@ -71,14 +71,13 @@ function renderManager(args: {
     args;
   if (isLoading) {
     return (
-      <div className="flex h-full min-h-0 flex-col">
-        <HooksToolbar
-          count={null}
-          configPath={null}
-          addDisabled
-          onAdd={() => undefined}
-          onRefresh={onRefresh}
-        />
+      <ManagerShell
+        count={null}
+        configPath={null}
+        addDisabled
+        onAdd={() => undefined}
+        onRefresh={onRefresh}
+      >
         <div className="flex min-h-0 flex-1 items-center gap-2 px-4 py-3 text-ui-sm text-muted-foreground">
           <AgentSpinningDots
             className={undefined}
@@ -87,19 +86,18 @@ function renderManager(args: {
           />
           Loading hook status
         </div>
-      </div>
+      </ManagerShell>
     );
   }
   if (errorMessage !== null || data === undefined) {
     return (
-      <div className="flex h-full min-h-0 flex-col">
-        <HooksToolbar
-          count={null}
-          configPath={null}
-          addDisabled
-          onAdd={() => undefined}
-          onRefresh={onRefresh}
-        />
+      <ManagerShell
+        count={null}
+        configPath={null}
+        addDisabled
+        onAdd={() => undefined}
+        onRefresh={onRefresh}
+      >
         <InlineManagerState
           tone={errorMessage === null ? "neutral" : "error"}
           title={
@@ -112,19 +110,18 @@ function renderManager(args: {
             "Reconnect to the current host to view and manage hooks."
           }
         />
-      </div>
+      </ManagerShell>
     );
   }
   if (data.configError !== null) {
     return (
-      <div className="flex h-full min-h-0 flex-col">
-        <HooksToolbar
-          count={data.hooks.length}
-          configPath={data.configPath}
-          addDisabled
-          onAdd={() => undefined}
-          onRefresh={onRefresh}
-        />
+      <ManagerShell
+        count={data.hooks.length}
+        configPath={data.configPath}
+        addDisabled
+        onAdd={() => undefined}
+        onRefresh={onRefresh}
+      >
         {/* The file is unparseable: there is no valid state to edit from, and
             saving would replace whatever the author is mid-way through typing. */}
         <div className="flex min-h-0 flex-1 items-start gap-2 overflow-auto px-4 py-3 text-ui-sm text-destructive">
@@ -134,7 +131,7 @@ function renderManager(args: {
             {data.configError}.
           </span>
         </div>
-      </div>
+      </ManagerShell>
     );
   }
   return (
@@ -145,6 +142,28 @@ function renderManager(args: {
       testHook={testHook}
       saveHooks={saveHooks}
     />
+  );
+}
+
+function ManagerShell(props: {
+  readonly count: number | null;
+  readonly configPath: string | null;
+  readonly addDisabled: boolean;
+  readonly onAdd: () => void;
+  readonly onRefresh: () => void;
+  readonly children: ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <HooksToolbar
+        count={props.count}
+        configPath={props.configPath}
+        addDisabled={props.addDisabled}
+        onAdd={props.onAdd}
+        onRefresh={props.onRefresh}
+      />
+      {props.children}
+    </div>
   );
 }
 
@@ -265,20 +284,19 @@ function HooksEditor(props: {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <HooksToolbar
-        count={props.hooks.length}
-        configPath={props.configPath}
-        addDisabled={props.saveHooks.isPending}
-        onRefresh={props.onRefresh}
-        onAdd={() => {
-          setEditor({ kind: "add" });
-        }}
-      />
+    <ManagerShell
+      count={props.hooks.length}
+      configPath={props.configPath}
+      addDisabled={props.saveHooks.isPending}
+      onRefresh={props.onRefresh}
+      onAdd={() => {
+        setEditor({ kind: "add" });
+      }}
+    >
       <div className="min-h-0 flex-1 overflow-auto">
         {props.hooks.length === 0 ? (
           <div
-            className="flex h-full min-h-32 flex-col items-center justify-center gap-3 px-4 py-6 text-center"
+            className="flex h-full flex-col items-center justify-center gap-3 px-4 py-6 text-center"
             data-testid="notification-hooks-empty-state"
           >
             <div className="space-y-1">
@@ -371,7 +389,7 @@ function HooksEditor(props: {
           }}
         />
       )}
-    </div>
+    </ManagerShell>
   );
 }
 

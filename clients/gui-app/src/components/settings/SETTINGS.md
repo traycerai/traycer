@@ -55,7 +55,7 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
   component.
 - `panels/*.tsx` Route-mounted settings sections.
 - `controls/settings-select.tsx` Shared select wrapper used by settings rows.
-- `src/stores/settings-store.ts` Persisted local settings state.
+- `src/stores/settings/settings-store.ts` Persisted local settings state.
 - `src/providers/settings-density-context.ts` `SettingsDensityContext` /
   `useSettingsDensity()` - `"compact" | "relaxed"`, default `"relaxed"`.
   `settings-modal-content.tsx` provides `"compact"` for the modal overlay

@@ -528,6 +528,71 @@ describe("<DiagnosticsSettingsPanel />", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("preserves the select trigger focus when a row change removes the reminder", async () => {
+    const { setMock } = installLogLevelsBridge({
+      desktopLogLevel: "debug",
+      cliLogLevel: "info",
+      hostLogLevel: "info",
+    });
+    renderPanel(makeHost(null));
+
+    expect(
+      await screen.findByTestId("diagnostics-log-detail-reminder"),
+    ).toBeTruthy();
+
+    const desktopTrigger = await openLogLevelSelect("desktop");
+    await chooseLogLevelOption("Info");
+
+    await waitFor(() => {
+      expect(setMock).toHaveBeenCalledWith("desktop", "info");
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("diagnostics-log-detail-reminder"),
+      ).toBeNull();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(desktopTrigger);
+    });
+  });
+
+  it("does not duplicate the per-scope toast for a single-scope reset failure", async () => {
+    const snapshot: LogLevelsSnapshot = {
+      desktopLogLevel: "debug",
+      cliLogLevel: "info",
+      hostLogLevel: "info",
+    };
+    const setMock = vi.fn(() =>
+      Promise.reject<LogLevelsSnapshot>(new Error("desktop set failed")),
+    );
+    globalWithRunnerHost.runnerHost = {
+      platform: {
+        logLevels: {
+          get: vi.fn(() => Promise.resolve(snapshot)),
+          set: setMock,
+        },
+      },
+    };
+
+    vi.mocked(toast.error).mockClear();
+    renderPanel(makeHost(null));
+
+    fireEvent.click(await screen.findByTestId("diagnostics-reset-log-levels"));
+
+    await waitFor(() => {
+      expect(setMock).toHaveBeenCalledWith("desktop", "info");
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Couldn't update log level",
+        expect.objectContaining({ description: "desktop set failed" }),
+      );
+    });
+    expect(toast.error).not.toHaveBeenCalledWith(
+      "Couldn't reset 1 of 1 log level",
+    );
+  });
+
   it("continues resetting remaining scopes after one set() fails and toasts the aggregate", async () => {
     // Reset-all must attempt EVERY non-default scope even if an earlier one
     // rejects - previously a single outer try/catch stopped the loop early.
@@ -642,16 +707,10 @@ describe("<DiagnosticsSettingsPanel />", () => {
       expect(writeTextMock).toHaveBeenCalledWith("alpha\nbeta");
     });
 
-    const entryRoot = screen
-      .getByTestId("diagnostics-log-toggle-desktop")
-      .closest(".border-b");
-    expect(entryRoot).not.toBeNull();
-    if (entryRoot === null) {
-      throw new Error("Expected log entry root");
-    }
-    fireEvent.click(
-      within(entryRoot as HTMLElement).getByRole("button", { name: "Reveal" }),
-    );
+    const entryRoot = screen.queryByTestId("diagnostics-log-entry-desktop");
+    expect(entryRoot instanceof HTMLElement).toBe(true);
+    if (!(entryRoot instanceof HTMLElement)) return;
+    fireEvent.click(within(entryRoot).getByRole("button", { name: "Reveal" }));
     await waitFor(() => {
       expect(revealLog).toHaveBeenCalledWith("desktop");
     });

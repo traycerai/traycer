@@ -82,6 +82,7 @@ function LogDetailGroup(): ReactNode {
   // disappears" case).
   const groupContentRef = useRef<HTMLDivElement>(null);
   const reminderWasVisibleRef = useRef(false);
+  const reminderHadFocusRef = useRef(false);
 
   const snapshot = levelsQuery.data;
   const nonDefaultScopes = useMemo(() => {
@@ -93,8 +94,15 @@ function LogDetailGroup(): ReactNode {
 
   useEffect(() => {
     const isVisible = nonDefaultScopes.length > 0;
-    if (reminderWasVisibleRef.current && !isVisible) {
+    if (
+      reminderWasVisibleRef.current &&
+      !isVisible &&
+      reminderHadFocusRef.current
+    ) {
       groupContentRef.current?.focus();
+    }
+    if (!isVisible) {
+      reminderHadFocusRef.current = false;
     }
     reminderWasVisibleRef.current = isVisible;
   }, [nonDefaultScopes.length]);
@@ -114,7 +122,7 @@ function LogDetailGroup(): ReactNode {
       }
     }
     setResetPending(false);
-    if (failedCount > 0) {
+    if (failedCount > 0 && scopes.length > 1) {
       toast.error(
         `Couldn't reset ${failedCount} of ${scopes.length} log level${scopes.length === 1 ? "" : "s"}`,
       );
@@ -169,6 +177,9 @@ function LogDetailGroup(): ReactNode {
         {nonDefaultScopes.length > 0 ? (
           <TemporaryDebugReminderRow
             pending={resetPending}
+            onFocusChange={(focused) => {
+              reminderHadFocusRef.current = focused;
+            }}
             onReset={() => {
               void handleResetAll();
             }}
@@ -181,13 +192,24 @@ function LogDetailGroup(): ReactNode {
 
 function TemporaryDebugReminderRow(props: {
   readonly pending: boolean;
+  readonly onFocusChange: (focused: boolean) => void;
   readonly onReset: () => void;
 }): ReactNode {
-  const { pending, onReset } = props;
+  const { pending, onFocusChange, onReset } = props;
   return (
     <div
       className="flex flex-wrap items-center justify-between gap-3 bg-muted/20 px-4 py-2.5 text-ui-xs text-muted-foreground"
       data-testid="diagnostics-log-detail-reminder"
+      onFocusCapture={() => onFocusChange(true)}
+      onBlurCapture={(event) => {
+        const nextFocusedElement = event.relatedTarget;
+        if (
+          !(nextFocusedElement instanceof Node) ||
+          !event.currentTarget.contains(nextFocusedElement)
+        ) {
+          onFocusChange(false);
+        }
+      }}
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <Info className="size-3.5 shrink-0" aria-hidden />
@@ -349,7 +371,10 @@ function DiagnosticsLogEntry(props: {
   }
 
   return (
-    <div className="border-b border-border/40 px-5 py-4 last:border-b-0">
+    <div
+      className="border-b border-border/40 px-5 py-4 last:border-b-0"
+      data-testid={`diagnostics-log-entry-${entry.target}`}
+    >
       <div className="flex items-start justify-between gap-6">
         <button
           type="button"
