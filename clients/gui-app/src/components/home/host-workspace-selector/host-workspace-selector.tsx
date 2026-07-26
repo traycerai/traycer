@@ -73,6 +73,7 @@ import {
 } from "@/lib/worktree/worktree-intent-seeding";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { buildDefaultBranchByPath } from "@/lib/worktree/default-branch-name";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { bindingEntryToFolderIntent } from "@/lib/worktree/binding-to-intent";
 import {
   WorktreeScriptsDialog,
@@ -520,11 +521,16 @@ function HomeWorkspaceRows(props: {
       }),
     [resolvedFolders, summariesByPath],
   );
+  const worktreeBranchPrefix = useSettingsStore((s) => s.worktreeBranchPrefix);
   const defaultBranchByPath = useMemo(
-    () => buildDefaultBranchByPath(gitSummaries, gitSummaries.length > 1),
-    [gitSummaries],
+    () =>
+      buildDefaultBranchByPath(
+        gitSummaries,
+        gitSummaries.length > 1,
+        worktreeBranchPrefix,
+      ),
+    [gitSummaries, worktreeBranchPrefix],
   );
-
   // Seed every freshly-added git folder by precedence: per-epic memory >
   // per-folder memory (validated against disk) > default new worktree off the
   // working tree. A folder the user already touched this session is never
@@ -1509,9 +1515,15 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     () => workspaces.filter((ws) => ws.resolvedAt !== null && ws.isGitRepo),
     [workspaces],
   );
+  const worktreeBranchPrefix = useSettingsStore((s) => s.worktreeBranchPrefix);
   const defaultBranchByPath = useMemo(
-    () => buildDefaultBranchByPath(gitWorkspaces, gitWorkspaces.length > 1),
-    [gitWorkspaces],
+    () =>
+      buildDefaultBranchByPath(
+        gitWorkspaces,
+        gitWorkspaces.length > 1,
+        worktreeBranchPrefix,
+      ),
+    [gitWorkspaces, worktreeBranchPrefix],
   );
   const onBindingCommitted = surface.onBindingCommitted;
   const handleBindingCommitted = useCallback(
