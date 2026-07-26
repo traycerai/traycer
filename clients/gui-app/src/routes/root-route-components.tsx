@@ -7,6 +7,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { WindowsMenuBar } from "@/components/layout/header/windows-menu-bar";
 import { useWindowsMenuBarActive } from "@/components/layout/header/use-windows-menu-bar-active";
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
+import { ChatSessionWakeRetryController } from "@/components/layout/bridges/chat-session-wake-retry-controller";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
@@ -41,11 +42,17 @@ export function RootComponent() {
           readiness (the "Setting up Traycer Host…" screen). The menu command
           listener routes native menu items; the dialog host renders
           host-independent About/Logs dialogs; notification emission drains
-          app-local persisted rows. All only depend on the runner host + auth +
-          local stores, which are available without a ready host. */}
+          app-local persisted rows; the wake-retry bridge revives
+          terminally-closed warm chat sessions (it must live OUTSIDE the gate:
+          a wake pulse arriving while the gate shows its fallback would
+          otherwise find no listener and never be replayed, leaving the warm
+          session dead after the host comes back). All only depend on the
+          runner host + auth + local stores/registries, which are available
+          without a ready host. */}
       <MenuCommandListener />
       <DesktopDialogHost />
       <NotificationEmissionController />
+      <ChatSessionWakeRetryController />
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
           mount timing it had when the gate wrapped the whole RouterProvider -
           these bridges + the page only mount once the host is reachable (or the
