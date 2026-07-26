@@ -281,6 +281,13 @@ export const prActivityItemSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("review"),
+    /**
+     * GitHub's review node id where one is known, so a
+     * {@link prReviewThreadSchema} can name the review that submitted it.
+     * Falls back to the review's url, then to a synthetic key, for facts
+     * persisted before the id was captured - a thread then simply fails to
+     * match and renders un-nested.
+     */
     id: z.string(),
     author: prActorSchema.nullable(),
     body: z.string(),
@@ -300,6 +307,95 @@ export const prActivitySectionSchema = z.object({
   isTruncated: z.boolean(),
 });
 export type PrActivitySection = z.infer<typeof prActivitySectionSchema>;
+
+// ---- review threads (inline comments) ------------------------------------ //
+
+/** Which side of the diff a thread is anchored to. */
+export const prReviewThreadSideSchema = z.enum(["left", "right"]);
+export type PrReviewThreadSide = z.infer<typeof prReviewThreadSideSchema>;
+
+/**
+ * What a thread is attached to. `line` is the ordinary case; `file` is a
+ * comment on the file as a whole, which carries no line at all.
+ */
+export const prReviewThreadSubjectSchema = z.enum(["line", "file"]);
+export type PrReviewThreadSubject = z.infer<typeof prReviewThreadSubjectSchema>;
+
+/** One message in a thread. Threads are replies, so there are usually several. */
+export const prReviewThreadCommentSchema = z.object({
+  id: z.string(),
+  author: prActorSchema.nullable(),
+  body: z.string(),
+  createdAt: z.number(),
+  url: z.string().nullable(),
+});
+export type PrReviewThreadComment = z.infer<typeof prReviewThreadCommentSchema>;
+
+/**
+ * One inline review thread: a place in the diff plus the conversation about it.
+ *
+ * This is where a bot review's actual findings live. A review's `body` is only
+ * its preamble - CodeRabbit's is literally "Actionable comments posted: 5" -
+ * and the five findings are five threads. Carrying reviews without threads
+ * therefore renders the count and hides the content, which is what it did.
+ *
+ * `reviewId` is the join back to the review that submitted it (GitHub's
+ * `PullRequestReviewComment.pullRequestReview.id`). Nullable because a thread
+ * can outlive the 20-review window, and because a fact persisted before this
+ * field existed has no review id to match - both cases render the thread
+ * un-nested rather than dropping it.
+ */
+export const prReviewThreadSchema = z.object({
+  id: z.string(),
+  reviewId: z.string().nullable(),
+  path: z.string(),
+  /**
+   * The line in the CURRENT head. GitHub returns `null` for an outdated
+   * thread - the code it referred to has since moved or gone - which is
+   * exactly when {@link originalLine} is the only anchor left.
+   */
+  line: z.number().int().nullable(),
+  /** The line as of the commit reviewed. Present even when `line` is not. */
+  originalLine: z.number().int().nullable(),
+  side: prReviewThreadSideSchema,
+  subject: prReviewThreadSubjectSchema,
+  isResolved: z.boolean(),
+  isOutdated: z.boolean(),
+  /**
+   * The tail of the diff hunk the thread is anchored to, or `null`.
+   *
+   * Carried ONCE per thread and truncated to its last few lines. GitHub
+   * repeats the full hunk verbatim on every comment in the thread, and for a
+   * comment on a new file that hunk is the entire file: measured over one real
+   * PR it was 2.7x the weight of every comment body combined, and two thirds
+   * of the whole payload.
+   */
+  diffHunk: z.string().nullable(),
+  comments: z.array(prReviewThreadCommentSchema).max(10),
+  /** True count, so a clipped thread can say how many replies it is hiding. */
+  totalCommentCount: z.number().int().nonnegative(),
+});
+export type PrReviewThread = z.infer<typeof prReviewThreadSchema>;
+
+/**
+ * `reviewThreads` section of a detail frame.
+ *
+ * Kept OUT of {@link prActivitySectionSchema} deliberately. That section is a
+ * chronological conversation whose members have no file, no line and no
+ * resolved state; a thread has all three, and one bot review can contribute
+ * twenty of them. Merged in, twenty findings would drown two human comments,
+ * blow the section's own 20-item cap, and force every consumer that walks
+ * `activity.items` (the attention queue, the reviewer roll-up) to learn a
+ * third kind it has no use for.
+ */
+export const prReviewThreadsSectionSchema = z.object({
+  observedAt: z.number().nullable(),
+  threads: z.array(prReviewThreadSchema).max(20),
+  isTruncated: z.boolean(),
+});
+export type PrReviewThreadsSection = z.infer<
+  typeof prReviewThreadsSectionSchema
+>;
 
 /** GraphQL `PullRequestChangedFile.changeType`, lowercased. */
 export const prFileChangeTypeSchema = z.enum([
@@ -401,6 +497,7 @@ const prSubscribeDetailFrameFields = {
   core: prDetailCoreSchema,
   checks: prChecksSectionSchema,
   activity: prActivitySectionSchema,
+  reviewThreads: prReviewThreadsSectionSchema,
   files: prFilesSectionSchema,
   commits: prCommitsSectionSchema,
 } as const;

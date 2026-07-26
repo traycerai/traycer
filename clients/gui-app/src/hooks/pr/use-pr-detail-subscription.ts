@@ -12,6 +12,7 @@ import {
   type PrDetailCore,
   type PrFilesSection,
   type PrLiveness,
+  type PrReviewThreadsSection,
   type PrSourceStatus,
   type PrSubscribeDetailServerFrame,
 } from "@traycer/protocol/host/pr-schemas";
@@ -28,6 +29,7 @@ export interface PrDetailSubscriptionData {
   readonly core: PrDetailCore;
   readonly checks: PrChecksSection;
   readonly activity: PrActivitySection;
+  readonly reviewThreads: PrReviewThreadsSection;
   readonly files: PrFilesSection;
   readonly commits: PrCommitsSection;
 }
@@ -393,6 +395,7 @@ function toSubscriptionData(
     core: frame.core,
     checks: frame.checks,
     activity: frame.activity,
+    reviewThreads: frame.reviewThreads,
     files: frame.files,
     commits: frame.commits,
   };

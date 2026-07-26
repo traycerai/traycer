@@ -1,16 +1,29 @@
 import { type ReactNode } from "react";
-import { Check, Clock, Eye, TextQuote, X, type LucideIcon } from "lucide-react";
+import {
+  Check,
+  Clock,
+  Eye,
+  FileCode,
+  TextQuote,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import type {
   PrActivityItem,
   PrActivitySection,
   PrDetailCore,
   PrReviewState,
+  PrReviewThread,
+  PrReviewThreadsSection,
 } from "@traycer/protocol/host/pr-schemas";
 import {
   groupPrConversation,
+  partitionThreadsByResolution,
+  prReviewThreadAnchor,
   type PrConversationEntry,
   type PrReviewActivityItem,
 } from "@/lib/pr/pr-conversation";
+import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import {
   formatPrActorName,
   formatPrReviewStateLabel,
@@ -84,10 +97,15 @@ export function PrDetailDescriptionCard(props: {
 export function PrDetailConversation(props: {
   readonly core: PrDetailCore;
   readonly activity: PrActivitySection;
+  readonly reviewThreads: PrReviewThreadsSection;
   readonly onQuoteItem: ((item: PrActivityItem) => void) | null;
+  readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
 }): ReactNode {
-  const entries = groupPrConversation(props.activity.items);
-  if (entries.length === 0) {
+  const { entries, orphanThreads } = groupPrConversation(
+    props.activity.items,
+    props.reviewThreads.threads,
+  );
+  if (entries.length === 0 && orphanThreads.length === 0) {
     return (
       <p
         className="rounded-xl border border-dashed border-border/60 py-10 text-center text-ui-sm text-muted-foreground/70"
@@ -107,12 +125,25 @@ export function PrDetailConversation(props: {
           key={entry.key}
           entry={entry}
           onQuoteItem={props.onQuoteItem}
+          onQuoteThread={props.onQuoteThread}
         />
       ))}
+      {orphanThreads.length > 0 ? (
+        <PrOrphanThreads
+          threads={orphanThreads}
+          onQuoteThread={props.onQuoteThread}
+        />
+      ) : null}
       {props.activity.isTruncated && props.core.prUrl !== null ? (
         <PrOlderOnGitHub
           href={props.core.prUrl}
           label="View older activity on GitHub"
+        />
+      ) : null}
+      {props.reviewThreads.isTruncated && props.core.prUrl !== null ? (
+        <PrOlderOnGitHub
+          href={props.core.prUrl}
+          label="View the remaining inline comments on GitHub"
         />
       ) : null}
     </div>
@@ -122,13 +153,14 @@ export function PrDetailConversation(props: {
 function PrConversationRow(props: {
   readonly entry: PrConversationEntry;
   readonly onQuoteItem: ((item: PrActivityItem) => void) | null;
+  readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
 }): ReactNode {
   if (props.entry.kind === "event") {
     return (
       <PrReviewEventRow item={props.entry.item} repeats={props.entry.repeats} />
     );
   }
-  const { item } = props.entry;
+  const { item, threads } = props.entry;
   const verdict = item.kind === "review" ? item.state : null;
   return (
     <PrSurfaceCard
@@ -166,7 +198,176 @@ function PrConversationRow(props: {
         </>
       }
     >
-      <PrCardBody body={item.body} emptyBody="No content." />
+      {/* A review that posted findings but wrote no summary gets its findings
+          and nothing else - "No content." beneath five real objections would
+          be actively wrong. */}
+      {item.body.trim().length > 0 || threads.length === 0 ? (
+        <PrCardBody body={item.body} emptyBody="No content." />
+      ) : null}
+      {threads.length > 0 ? (
+        <PrReviewThreadList
+          threads={threads}
+          onQuoteThread={props.onQuoteThread}
+        />
+      ) : null}
+    </PrSurfaceCard>
+  );
+}
+
+/**
+ * A review's inline findings: open ones in full, resolved ones behind a count.
+ *
+ * The split is the tab's whole premise - Feedback answers "what is blocking
+ * this" - but resolved threads stay one click away rather than vanishing,
+ * because "was this already dealt with?" is the next question a reader asks.
+ */
+function PrReviewThreadList(props: {
+  readonly threads: readonly PrReviewThread[];
+  readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
+}): ReactNode {
+  const { open, resolved } = partitionThreadsByResolution(props.threads);
+  return (
+    <div
+      className="mt-3 flex min-w-0 flex-col gap-2 border-t border-border/50 pt-3"
+      data-testid="pr-detail-review-threads"
+    >
+      {open.map((thread) => (
+        <PrReviewThreadCard
+          key={thread.id}
+          thread={thread}
+          onQuoteThread={props.onQuoteThread}
+        />
+      ))}
+      {resolved.length > 0 ? (
+        <details className="min-w-0" data-testid="pr-detail-resolved-threads">
+          <summary className="cursor-pointer list-none text-ui-xs text-muted-foreground/70 transition-colors hover:text-foreground">
+            {resolved.length} resolved
+          </summary>
+          <div className="mt-2 flex min-w-0 flex-col gap-2">
+            {resolved.map((thread) => (
+              <PrReviewThreadCard
+                key={thread.id}
+                thread={thread}
+                onQuoteThread={props.onQuoteThread}
+              />
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+/** One finding: where it points, the hunk it points at, and the discussion. */
+function PrReviewThreadCard(props: {
+  readonly thread: PrReviewThread;
+  readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
+}): ReactNode {
+  const { thread } = props;
+  const anchor = prReviewThreadAnchor(thread);
+  const hidden = thread.totalCommentCount - thread.comments.length;
+  return (
+    <div
+      className={cn(
+        "min-w-0 rounded-lg border border-border/60 bg-muted/20",
+        thread.isResolved && "opacity-70",
+      )}
+      data-testid="pr-detail-review-thread"
+      data-resolved={thread.isResolved}
+    >
+      <div className="flex min-w-0 items-center gap-2 border-b border-border/50 px-2.5 py-1.5">
+        <FileCode
+          className="size-3.5 shrink-0 text-muted-foreground"
+          aria-hidden
+        />
+        <StartTruncatedText className="min-w-0 flex-1 font-mono text-ui-xs text-foreground">
+          {anchor.label}
+        </StartTruncatedText>
+        {thread.isOutdated ? (
+          <span
+            className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground"
+            title={
+              anchor.isOriginal
+                ? "The line this points at has moved or gone; showing its position in the reviewed commit."
+                : "This thread refers to an earlier version of the file."
+            }
+          >
+            Outdated
+          </span>
+        ) : null}
+        {thread.isResolved ? (
+          <span className="shrink-0 rounded-full border border-transparent bg-muted/60 px-1.5 text-ui-xs text-muted-foreground">
+            Resolved
+          </span>
+        ) : null}
+        <PrQuoteAction
+          label={`Quote the inline comment on ${anchor.label} into the selected chat`}
+          testId="pr-detail-thread-quote"
+          onQuote={
+            props.onQuoteThread === null
+              ? null
+              : () => {
+                  props.onQuoteThread?.(thread);
+                }
+          }
+        />
+      </div>
+      {thread.diffHunk !== null ? (
+        <pre className="min-w-0 overflow-x-auto border-b border-border/50 px-2.5 py-1.5 font-mono text-ui-xs leading-snug text-muted-foreground">
+          {thread.diffHunk}
+        </pre>
+      ) : null}
+      <div className="flex min-w-0 flex-col gap-2 px-2.5 py-2">
+        {thread.comments.map((comment) => (
+          <div key={comment.id} className="min-w-0">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <PrActorAvatar
+                actor={comment.author}
+                size="sm"
+                className="shrink-0"
+              />
+              <span className="min-w-0 truncate text-ui-xs font-medium text-foreground">
+                {formatPrActorName(comment.author)}
+              </span>
+              <span className="flex-1" aria-hidden />
+              <PrRelativeTime timestamp={comment.createdAt} />
+            </div>
+            <PrCardBody body={comment.body} emptyBody="No content." />
+          </div>
+        ))}
+        {hidden > 0 ? (
+          <p className="text-ui-xs text-muted-foreground/70">
+            {hidden} more {hidden === 1 ? "reply" : "replies"} on GitHub.
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Findings whose review is not in this frame - it fell out of the review
+ * window, or the cached fact predates review ids. Grouped rather than dropped:
+ * an unresolved finding is exactly what this tab is for.
+ */
+function PrOrphanThreads(props: {
+  readonly threads: readonly PrReviewThread[];
+  readonly onQuoteThread: ((thread: PrReviewThread) => void) | null;
+}): ReactNode {
+  return (
+    <PrSurfaceCard
+      tone="none"
+      testId="pr-detail-orphan-threads"
+      header={
+        <span className="min-w-0 truncate font-medium text-foreground">
+          Inline comments
+        </span>
+      }
+    >
+      <PrReviewThreadList
+        threads={props.threads}
+        onQuoteThread={props.onQuoteThread}
+      />
     </PrSurfaceCard>
   );
 }

@@ -18,6 +18,7 @@ import type {
   PrChangedFile,
   PrCheckContext,
   PrDetailCore,
+  PrReviewThread,
 } from "@traycer/protocol/host/pr-schemas";
 import {
   appendQuoteToDraft,
@@ -28,6 +29,7 @@ import {
   formatPrCheckStatusLabel,
   formatPrReviewStateLabel,
 } from "./pr-detail-projection";
+import { prReviewThreadAnchor } from "./pr-conversation";
 
 /**
  * A chat or terminal agent a quote can be sent to. `id` is the composer draft
@@ -98,6 +100,34 @@ export function buildPrActivityQuote(
       : `comment ${who}`;
   return buildQuoteBlockquote({
     text: quoteText([`PR ${formatPrSlug(core)}`, kindLine], item.body),
+    fenceLanguage: null,
+  });
+}
+
+/**
+ * Quotes one inline finding.
+ *
+ * The anchor goes in the header rather than the body, because it is the part
+ * an agent needs to act: "fix this" is unactionable without the file and line
+ * it points at. An outdated thread quotes its ORIGINAL line and says so - a
+ * current line number it no longer has would send the agent to the wrong place.
+ */
+export function buildPrReviewThreadQuote(
+  core: PrDetailCore,
+  thread: PrReviewThread,
+): JsonContent {
+  const anchor = prReviewThreadAnchor(thread);
+  const first = thread.comments.at(0);
+  const who = formatPrActorName(first?.author ?? null);
+  return buildQuoteBlockquote({
+    text: quoteText(
+      [
+        `PR ${formatPrSlug(core)}`,
+        `inline comment ${who}`,
+        anchor.isOriginal ? `${anchor.label} (as reviewed)` : anchor.label,
+      ],
+      thread.comments.map((comment) => comment.body).join("\n\n"),
+    ),
     fenceLanguage: null,
   });
 }

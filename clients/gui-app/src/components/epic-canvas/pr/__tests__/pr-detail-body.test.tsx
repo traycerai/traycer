@@ -9,6 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   PrActivitySection,
+  PrReviewThreadsSection,
   PrChecksSection,
   PrCommitsSection,
   PrDetailCore,
@@ -307,6 +308,17 @@ function buildPrCommitsSection(
   };
 }
 
+function buildPrReviewThreadsSection(
+  overrides: Partial<PrReviewThreadsSection>,
+): PrReviewThreadsSection {
+  return {
+    observedAt: 1_000,
+    threads: [],
+    isTruncated: false,
+    ...overrides,
+  };
+}
+
 function buildPrDetailFrame(
   overrides: Partial<{
     readonly kind: "snapshot" | "updated";
@@ -315,6 +327,7 @@ function buildPrDetailFrame(
     readonly core: Partial<PrDetailCore>;
     readonly checks: Partial<PrChecksSection>;
     readonly activity: Partial<PrActivitySection>;
+    readonly reviewThreads: Partial<PrReviewThreadsSection>;
     readonly files: Partial<PrFilesSection>;
     readonly commits: Partial<PrCommitsSection>;
   }>,
@@ -327,6 +340,7 @@ function buildPrDetailFrame(
     core: buildPrDetailCore(overrides.core ?? {}),
     checks: buildPrChecksSection(overrides.checks ?? {}),
     activity: buildPrActivitySection(overrides.activity ?? {}),
+    reviewThreads: buildPrReviewThreadsSection(overrides.reviewThreads ?? {}),
     files: buildPrFilesSection(overrides.files ?? {}),
     commits: buildPrCommitsSection(overrides.commits ?? {}),
   };
@@ -339,6 +353,7 @@ function buildPrDetailSubscriptionData(
     readonly core: Partial<PrDetailCore>;
     readonly checks: Partial<PrChecksSection>;
     readonly activity: Partial<PrActivitySection>;
+    readonly reviewThreads: Partial<PrReviewThreadsSection>;
     readonly files: Partial<PrFilesSection>;
     readonly commits: Partial<PrCommitsSection>;
   }>,
@@ -349,6 +364,7 @@ function buildPrDetailSubscriptionData(
     core: buildPrDetailCore(overrides.core ?? {}),
     checks: buildPrChecksSection(overrides.checks ?? {}),
     activity: buildPrActivitySection(overrides.activity ?? {}),
+    reviewThreads: buildPrReviewThreadsSection(overrides.reviewThreads ?? {}),
     files: buildPrFilesSection(overrides.files ?? {}),
     commits: buildPrCommitsSection(overrides.commits ?? {}),
   };

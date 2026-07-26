@@ -3,6 +3,7 @@ import { AlertCircle } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import type {
   PrActivityItem,
+  PrReviewThread,
   PrChangedFile,
   PrSourceStatus,
 } from "@traycer/protocol/host/pr-schemas";
@@ -23,6 +24,7 @@ import {
 } from "@/lib/pr/pr-attention-queue";
 import {
   buildPrActivityQuote,
+  buildPrReviewThreadQuote,
   buildPrCheckQuote,
   buildPrDescriptionQuote,
   buildPrFileQuote,
@@ -201,7 +203,7 @@ function PrDetailLoaded(props: {
   readonly refreshing: boolean;
   readonly onRefresh: () => void;
 }): ReactNode {
-  const { core, checks, activity, files, commits } = props.data;
+  const { core, checks, activity, reviewThreads, files, commits } = props.data;
   const tileNavigation = useEpicTileNavigation();
   const hostId = useTabHostId();
   const viewKey = prDetailViewKey({
@@ -297,6 +299,14 @@ function PrDetailLoaded(props: {
     [target, core],
   );
 
+  const sendReviewThread = useCallback(
+    (thread: PrReviewThread): void => {
+      if (target === null) return;
+      sendPrQuoteToTarget(target, buildPrReviewThreadQuote(core, thread));
+    },
+    [target, core],
+  );
+
   const sendOverview = useCallback((): void => {
     if (target === null) return;
     sendPrQuoteToTarget(target, buildPrOverviewQuote(core));
@@ -338,7 +348,10 @@ function PrDetailLoaded(props: {
           tab={tab}
           onSelectTab={(next) => setTab(viewKey, next)}
           counts={{
-            feedback: activity.items.length,
+            // Inline findings ARE feedback, and on a bot-reviewed PR they are
+            // most of it - counting only the top-level entries reported "1"
+            // for a review carrying five objections.
+            feedback: activity.items.length + reviewThreads.threads.length,
             files: files.totalCount ?? files.files.length,
             checks: checks.contexts.length,
             commits: commits.totalCount ?? commits.commits.length,
@@ -369,7 +382,9 @@ function PrDetailLoaded(props: {
             <PrDetailConversation
               core={core}
               activity={activity}
+              reviewThreads={reviewThreads}
               onQuoteItem={target === null ? null : sendActivity}
+              onQuoteThread={target === null ? null : sendReviewThread}
             />
           ) : null}
           {tab === "files" ? (

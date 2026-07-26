@@ -12,6 +12,7 @@ import {
   prChecksSectionSchema,
   prActivityItemSchema,
   prActivitySectionSchema,
+  prReviewThreadsSectionSchema,
   prCommitsSectionSchema,
   prDetailCoreSchema,
   prFilesSectionSchema,
@@ -468,6 +469,112 @@ describe("prActivitySectionSchema", () => {
   });
 });
 
+describe("prReviewThreadsSectionSchema", () => {
+  const thread = {
+    id: "PRRT_1",
+    reviewId: "PRR_1",
+    path: "src/domain/git/git-service.ts",
+    line: 1141,
+    originalLine: 1120,
+    side: "right" as const,
+    subject: "line" as const,
+    isResolved: false,
+    isOutdated: false,
+    diffHunk: "@@ -1139,3 +1139,4 @@\n+  const cap = 5;",
+    comments: [
+      {
+        id: "PRRC_1",
+        author: ACTOR_FIXTURE,
+        body: "This cap is not enforced offline.",
+        createdAt: 1_700_000_000_000,
+        url: "https://github.com/acme/widgets/pull/7#discussion_r1",
+      },
+      {
+        id: "PRRC_2",
+        author: null,
+        body: "Confirmed - fixed in 3d2f8a8a.",
+        createdAt: 1_700_000_100_000,
+        url: null,
+      },
+    ],
+    totalCommentCount: 5,
+  };
+
+  it("parses and reparses a populated thread unchanged", () => {
+    const fixture = {
+      observedAt: 1_700_000_000_000,
+      threads: [thread],
+      isTruncated: true,
+    };
+    const parsed1 = prReviewThreadsSectionSchema.parse(fixture);
+    const parsed2 = prReviewThreadsSectionSchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+  });
+
+  it("carries a null line beside a real originalLine - an outdated thread", () => {
+    // GitHub returns `line: null` once the code the thread pointed at has
+    // moved or gone, and `originalLine` is then the only anchor left. A schema
+    // that required `line` would reject exactly the threads most worth reading.
+    const parsed = prReviewThreadsSectionSchema.parse({
+      observedAt: 1_700_000_000_000,
+      threads: [{ ...thread, line: null, isOutdated: true }],
+      isTruncated: false,
+    });
+    expect(parsed.threads[0]?.line).toBeNull();
+    expect(parsed.threads[0]?.originalLine).toBe(1120);
+  });
+
+  it("carries a null reviewId - a thread whose review left the window", () => {
+    const parsed = prReviewThreadsSectionSchema.parse({
+      observedAt: 1_700_000_000_000,
+      threads: [{ ...thread, reviewId: null }],
+      isTruncated: false,
+    });
+    expect(parsed.threads[0]?.reviewId).toBeNull();
+  });
+
+  it("carries a null diffHunk without dropping the thread", () => {
+    const parsed = prReviewThreadsSectionSchema.parse({
+      observedAt: 1_700_000_000_000,
+      threads: [{ ...thread, diffHunk: null }],
+      isTruncated: false,
+    });
+    expect(parsed.threads[0]?.diffHunk).toBeNull();
+    expect(parsed.threads[0]?.comments).toHaveLength(2);
+  });
+
+  it("keeps totalCommentCount independent of the carried comments", () => {
+    // The cap clips replies; the true count is what lets the UI say how many
+    // it is not showing rather than silently pretending there are two.
+    const parsed = prReviewThreadsSectionSchema.parse({
+      observedAt: 1_700_000_000_000,
+      threads: [thread],
+      isTruncated: false,
+    });
+    expect(parsed.threads[0]?.comments).toHaveLength(2);
+    expect(parsed.threads[0]?.totalCommentCount).toBe(5);
+  });
+
+  it("rejects a side or subject outside the closed set", () => {
+    for (const bad of [{ side: "middle" }, { subject: "hunk" }]) {
+      expect(() =>
+        prReviewThreadsSectionSchema.parse({
+          observedAt: null,
+          threads: [{ ...thread, ...bad }],
+          isTruncated: false,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("parses and reparses a never-swept empty section unchanged", () => {
+    const fixture = { observedAt: null, threads: [], isTruncated: false };
+    const parsed1 = prReviewThreadsSectionSchema.parse(fixture);
+    const parsed2 = prReviewThreadsSectionSchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+  });
+});
+
 const DETAIL_CORE_POPULATED_FIXTURE = {
   observedAt: 1_700_000_000_000,
   githubHost: "github.com",
@@ -575,6 +682,35 @@ const DETAIL_ACTIVITY_FIXTURE = {
   isTruncated: false,
 };
 
+const DETAIL_REVIEW_THREADS_FIXTURE = {
+  observedAt: 1_700_000_000_000,
+  threads: [
+    {
+      id: "PRRT_1",
+      reviewId: "PRR_1",
+      path: "src/a.ts",
+      line: 22,
+      originalLine: 22,
+      side: "right" as const,
+      subject: "line" as const,
+      isResolved: false,
+      isOutdated: false,
+      diffHunk: "@@ -20,3 +20,4 @@\n+const cap = 5;",
+      comments: [
+        {
+          id: "PRRC_1",
+          author: ACTOR_FIXTURE,
+          body: "This cap is not enforced offline.",
+          createdAt: 1_700_000_000_000,
+          url: "https://github.com/acme/widgets/pull/7#discussion_r1",
+        },
+      ],
+      totalCommentCount: 1,
+    },
+  ],
+  isTruncated: false,
+};
+
 const DETAIL_FILES_FIXTURE = {
   observedAt: 1_700_000_000_000,
   files: [
@@ -674,6 +810,7 @@ describe("prSubscribeDetailServerFrameSchema", () => {
           core: DETAIL_CORE_POPULATED_FIXTURE,
           checks: DETAIL_CHECKS_FIXTURE,
           activity: DETAIL_ACTIVITY_FIXTURE,
+          reviewThreads: DETAIL_REVIEW_THREADS_FIXTURE,
           files: DETAIL_FILES_FIXTURE,
           commits: DETAIL_COMMITS_FIXTURE,
         };
@@ -694,6 +831,7 @@ describe("prSubscribeDetailServerFrameSchema", () => {
         core: DETAIL_CORE_POPULATED_FIXTURE,
         checks: DETAIL_CHECKS_FIXTURE,
         activity: DETAIL_ACTIVITY_FIXTURE,
+        reviewThreads: DETAIL_REVIEW_THREADS_FIXTURE,
         files: DETAIL_FILES_FIXTURE,
         commits: DETAIL_COMMITS_FIXTURE,
       };
