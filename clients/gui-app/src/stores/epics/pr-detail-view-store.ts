@@ -19,24 +19,10 @@ export const PR_DETAIL_TABS = [
   "feedback",
   "files",
   "checks",
-  "history",
+  "commits",
 ] as const;
 
 export type PrDetailTabId = (typeof PR_DETAIL_TABS)[number];
-
-/**
- * Tabs whose content is a dense, full-bleed surface rather than a reading
- * column. These have no gutter for the context card to float in, so the card
- * degrades to the tab strip's capsule - see `PrDetailSummaryStrip`.
- */
-const FULL_BLEED_TABS: ReadonlySet<PrDetailTabId> = new Set([
-  "files",
-  "checks",
-]);
-
-export function isFullBleedPrDetailTab(tab: PrDetailTabId): boolean {
-  return FULL_BLEED_TABS.has(tab);
-}
 
 export function prDetailViewKey(coordinates: {
   readonly githubHost: string;

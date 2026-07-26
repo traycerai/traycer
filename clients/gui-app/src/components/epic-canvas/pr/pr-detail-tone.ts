@@ -17,6 +17,7 @@
 import type {
   PrDetailCore,
   PrReviewDecision,
+  PrReviewState,
 } from "@traycer/protocol/host/pr-schemas";
 import type { PrCheckCounts } from "@/lib/pr/pr-attention-queue";
 import type { PrChecksDotTone } from "@/lib/pr/pr-list-projection";
@@ -43,6 +44,14 @@ export const PR_TONE_SURFACE_CLASS: Record<PrChecksDotTone, string> = {
   fail: "border-destructive/30 bg-destructive/5",
   pending: "border-warning/25 bg-warning/5",
   none: "border-border/60",
+};
+
+/** Bordered pill for a tone - verdict chips, inline state labels. */
+export const PR_TONE_CHIP_CLASS: Record<PrChecksDotTone, string> = {
+  ok: "border-success/30 bg-success/10 text-success-foreground",
+  fail: "border-destructive/30 bg-destructive/10 text-destructive",
+  pending: "border-warning/30 bg-warning/10 text-warning-foreground",
+  none: "border-border/60 bg-muted/40 text-muted-foreground",
 };
 
 /** Diffstat additions / deletions, the only two-colour pair in the view. */
@@ -73,6 +82,18 @@ export function prReviewDecisionTone(
   if (decision === "approved") return "ok";
   if (decision === "changes_requested") return "fail";
   return "pending";
+}
+
+/**
+ * Tone for one submitted review. `commented` and `dismissed` are deliberately
+ * toneless: neither carries a verdict, and colouring them would make a
+ * drive-by remark read as an outcome.
+ */
+export function prReviewStateTone(state: PrReviewState): PrChecksDotTone {
+  if (state === "approved") return "ok";
+  if (state === "changes_requested") return "fail";
+  if (state === "pending") return "pending";
+  return "none";
 }
 
 /** The checks gauge's one-line value, matched to {@link prChecksTone}. */

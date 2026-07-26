@@ -1,10 +1,8 @@
 import { useCallback, type ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
 import type {
-  PrActivitySection,
+  PrActivityItem,
   PrChangedFile,
-  PrCommitsSection,
-  PrDetailCore,
   PrSourceStatus,
 } from "@traycer/protocol/host/pr-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -30,16 +28,19 @@ import {
 import { cn } from "@/lib/utils";
 import { PrDetailHeader } from "@/components/epic-canvas/pr/pr-detail-header";
 import { PrDetailCard } from "@/components/epic-canvas/pr/pr-detail-card";
+import { PrDetailCommits } from "@/components/epic-canvas/pr/pr-detail-commits";
+import {
+  PrDetailConversation,
+  PrDetailDescriptionCard,
+} from "@/components/epic-canvas/pr/pr-detail-conversation";
 import { PrDetailQueue } from "@/components/epic-canvas/pr/pr-detail-queue";
 import { PrDetailSummaryStrip } from "@/components/epic-canvas/pr/pr-detail-summary-strip";
 import { PrDetailTabStrip } from "@/components/epic-canvas/pr/pr-detail-tab-strip";
 import {
+  PrDetailChecks,
   PrDetailFilesChanged,
-  PrDetailMergeBox,
-  PrDetailTimeline,
 } from "@/components/epic-canvas/pr/pr-detail-sections";
 import {
-  isFullBleedPrDetailTab,
   prDetailViewKey,
   usePrDetailTab,
   usePrDetailViewStore,
@@ -48,9 +49,20 @@ import {
 const PR_DETAIL_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
- * Container width at which the reading column's right gutter is finally wide
- * enough to hold the context card WITHOUT the column giving up any width:
- * `max-w-4xl` (896px) + 2 × (280px card + 24px margin) ≈ 1504px.
+ * The reading column, matched to the chat transcript's own measure
+ * (`max-w-3xl` + `px-6` in `chat-messages.tsx`). Every tab uses it - the
+ * earlier full-bleed treatment for Files and Checks made those two tabs land
+ * with a different left edge, different padding and a summary that jumped from
+ * the gutter into the tab strip, so switching tabs re-laid-out the whole tile.
+ * One column for all five means the header, the tabs and the content share a
+ * single edge no matter which tab is open.
+ */
+const PR_DETAIL_COLUMN = "mx-auto w-full max-w-3xl px-6";
+
+/**
+ * Container width at which the column's right gutter is wide enough to hold
+ * the context card WITHOUT the column giving up any width:
+ * 768px column + 2 × (256px card + 24px inset + 24px clearance) = 1376px.
  *
  * Expressed as a container query, not a pane or tab count. "One tab open" is
  * only a proxy for "the gutter is wide enough", and the proxy leaks - the left
@@ -58,8 +70,8 @@ const PR_DETAIL_REFRESH_TIMEOUT_MS = 10_000;
  * split can still leave one pane very wide, and a single tab on a small laptop
  * has no gutter at all. Measuring the container gets every one of those right.
  */
-const CARD_AT_WIDE = "hidden @min-[1520px]:flex";
-const STRIP_BELOW_WIDE = "@min-[1520px]:hidden";
+const CARD_AT_WIDE = "hidden @min-[1400px]:block";
+const STRIP_BELOW_WIDE = "@min-[1400px]:hidden";
 
 export function PrDetailBody(props: {
   readonly epicId: string;
@@ -165,6 +177,11 @@ export function PrDetailBody(props: {
  * different layouts; overlaying dead space means the column renders identically
  * either way and toggling the card costs no reflow. It also cannot cover a
  * "Fix in chat" button, because the column ends before the gutter starts.
+ *
+ * Inside that gutter the card is `sticky`, not pinned to the top: on a PR with
+ * a long description the reader is several screens down by the time they want
+ * to know what is blocking it, and a card that scrolled away would be visible
+ * exactly when it is least needed.
  */
 function PrDetailLoaded(props: {
   readonly data: PrDetailSubscriptionData;
@@ -184,7 +201,6 @@ function PrDetailLoaded(props: {
   const quote = usePrQuoteTargets({ viewKey, owners: core.owners });
   const openExternalLink = useRunnerOpenExternalLink();
   const queue = derivePrAttentionQueue({ core, checks, activity });
-  const isFullBleed = isFullBleedPrDetailTab(tab);
   const target = quote.target;
 
   const openDetails = useCallback(
@@ -229,6 +245,14 @@ function PrDetailLoaded(props: {
     [target, core],
   );
 
+  const sendActivity = useCallback(
+    (item: PrActivityItem): void => {
+      if (target === null) return;
+      sendPrQuoteToTarget(target, buildPrActivityQuote(core, item));
+    },
+    [target, core],
+  );
+
   const sendOverview = useCallback((): void => {
     if (target === null) return;
     sendPrQuoteToTarget(target, buildPrOverviewQuote(core));
@@ -239,25 +263,14 @@ function PrDetailLoaded(props: {
     sendPrQuoteToTarget(target, buildPrDescriptionQuote(core));
   }, [target, core]);
 
-  const summary = (variant: "capsule" | "strip"): ReactNode => (
-    <PrDetailSummaryStrip
-      core={core}
-      queue={queue}
-      target={target}
-      targets={quote.targets}
-      onSelectTarget={quote.selectTarget}
-      variant={variant}
-    />
-  );
-
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      <div
-        className={cn(
-          "flex min-w-0 flex-col",
-          isFullBleed ? "w-full px-4" : "mx-auto w-full max-w-4xl px-6",
-        )}
-      >
+    // `shrink-0`, NOT `flex-1 min-h-0`: this is the positioning context for the
+    // gutter card, and it has to be as tall as the DOCUMENT for the card's
+    // `sticky` to have anywhere to travel. Inside a scrolling flex column a
+    // grown-or-shrunk child resolves to exactly one viewport, which would pin
+    // the card to the first screen and let it scroll away after that.
+    <div className="relative flex min-w-0 shrink-0 flex-col">
+      <div className={cn("flex min-w-0 flex-col gap-5 pt-8", PR_DETAIL_COLUMN)}>
         <PrDetailHeader
           core={core}
           notLive={props.data.liveness === "cache-only"}
@@ -265,49 +278,56 @@ function PrDetailLoaded(props: {
           refreshing={props.refreshing}
           onRefresh={props.onRefresh}
         />
-        <PrDetailTabStrip
-          tab={tab}
-          onSelectTab={(next) => setTab(viewKey, next)}
-          counts={{
-            feedback: activity.items.length,
-            files: files.totalCount ?? files.files.length,
-            checks: checks.contexts.length,
-            history: commits.totalCount ?? commits.commits.length,
-          }}
-          blocking={{
-            feedback: queue.items.filter(
-              (item) => item.kind === "changes-requested",
-            ).length,
-            checks: queue.checkCounts.failing,
-          }}
-          capsule={isFullBleed ? summary("capsule") : null}
-        />
-        {isFullBleed ? null : (
-          <div className={cn("pb-4", STRIP_BELOW_WIDE)}>{summary("strip")}</div>
-        )}
-        <div className="min-w-0 pb-8">
+        <div className="flex min-w-0 flex-col gap-3">
+          <PrDetailTabStrip
+            tab={tab}
+            onSelectTab={(next) => setTab(viewKey, next)}
+            counts={{
+              feedback: activity.items.length,
+              files: files.totalCount ?? files.files.length,
+              checks: checks.contexts.length,
+              commits: commits.totalCount ?? commits.commits.length,
+            }}
+            blocking={{
+              feedback: queue.items.filter(
+                (item) => item.kind === "changes-requested",
+              ).length,
+              checks: queue.checkCounts.failing,
+            }}
+          />
+          <div
+            className={STRIP_BELOW_WIDE}
+            data-testid="pr-detail-summary-slot"
+          >
+            <PrDetailSummaryStrip
+              core={core}
+              queue={queue}
+              target={target}
+              targets={quote.targets}
+              onSelectTarget={quote.selectTarget}
+            />
+          </div>
+        </div>
+        <div className="min-w-0 pb-10">
           {tab === "overview" ? (
-            <div className="flex min-w-0 flex-col gap-5">
+            <div className="flex min-w-0 flex-col gap-4">
               <PrDetailQueue
                 queue={queue}
                 target={target}
                 onSendItem={sendQueueItem}
                 onOpenDetails={openDetails}
               />
-              <PrDetailDescription
+              <PrDetailDescriptionCard
                 core={core}
-                canSend={target !== null}
-                onSend={sendDescription}
+                onQuote={target === null ? null : sendDescription}
               />
             </div>
           ) : null}
           {tab === "feedback" ? (
-            <PrDetailTimeline
+            <PrDetailConversation
               core={core}
               activity={activity}
-              commits={commits}
-              filter="activity"
-              showDescription={false}
+              onQuoteItem={target === null ? null : sendActivity}
             />
           ) : null}
           {tab === "files" ? (
@@ -320,20 +340,26 @@ function PrDetailLoaded(props: {
             />
           ) : null}
           {tab === "checks" ? (
-            <PrDetailMergeBox core={core} checks={checks} />
-          ) : null}
-          {tab === "history" ? (
-            <PrDetailTimeline
+            <PrDetailChecks
               core={core}
-              activity={activity}
+              checks={checks}
+              counts={queue.checkCounts}
+              onOpenDetails={openDetails}
+            />
+          ) : null}
+          {tab === "commits" ? (
+            <PrDetailCommits
+              core={core}
               commits={commits}
-              filter="commits"
-              showDescription={false}
+              onOpenCommit={openDetails}
             />
           ) : null}
         </div>
       </div>
-      {isFullBleed ? null : (
+      <div
+        className={cn("absolute inset-y-0 right-6 w-64", CARD_AT_WIDE)}
+        data-testid="pr-detail-card-gutter"
+      >
         <PrDetailCard
           core={core}
           checks={checks}
@@ -343,56 +369,10 @@ function PrDetailLoaded(props: {
           targets={quote.targets}
           onSelectTarget={quote.selectTarget}
           onSendPr={sendOverview}
-          className={cn("absolute top-4 right-6 w-[17.5rem]", CARD_AT_WIDE)}
+          className="sticky top-8"
         />
-      )}
-    </div>
-  );
-}
-
-const EMPTY_ACTIVITY: PrActivitySection = {
-  observedAt: null,
-  items: [],
-  isTruncated: false,
-};
-
-const EMPTY_COMMITS: PrCommitsSection = {
-  observedAt: null,
-  commits: [],
-  totalCount: null,
-  isTruncated: false,
-};
-
-function PrDetailDescription(props: {
-  readonly core: PrDetailCore;
-  readonly canSend: boolean;
-  readonly onSend: () => void;
-}): ReactNode {
-  return (
-    <section className="min-w-0" data-testid="pr-detail-description-section">
-      <div className="mb-2 flex items-center gap-2">
-        <h2 className="text-ui-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          Description
-        </h2>
-        <span className="h-px flex-1 bg-border/60" aria-hidden />
-        <button
-          type="button"
-          onClick={props.onSend}
-          disabled={!props.canSend}
-          data-testid="pr-detail-description-quote"
-          className="rounded border border-border/60 px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-        >
-          Quote
-        </button>
       </div>
-      <PrDetailTimeline
-        core={props.core}
-        activity={EMPTY_ACTIVITY}
-        commits={EMPTY_COMMITS}
-        filter="activity"
-        showDescription
-      />
-    </section>
+    </div>
   );
 }
 

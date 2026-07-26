@@ -13,7 +13,7 @@ import { PrQuoteTargetPicker } from "@/components/epic-canvas/pr/pr-quote-target
 import { cn } from "@/lib/utils";
 
 /**
- * The card's degraded forms, for the two width states that have no gutter.
+ * The card's degraded form, for the width state that has no gutter.
  *
  * This is the PRIMARY presentation, not a fallback. The card only exists above
  * a container-width threshold that plenty of real sessions never cross (a split
@@ -21,13 +21,8 @@ import { cn } from "@/lib/utils";
  * see most of the time. Everything load-bearing lives here; the card is its
  * wide-window expansion.
  *
- * - `capsule` sits at the right end of the tab strip on full-bleed tabs
- *   (Files, Checks), where the diff wants every pixel and there is no gutter
- *   to float in. Inline chrome in dead space - never over content.
- * - `strip` is a full-width row under the tabs below the card threshold.
- *
- * What the card carries that neither of these can: reviewer rows and the
- * per-reviewer state. Those stay reachable on the Feedback tab.
+ * What the card carries that this cannot: reviewer rows and the per-reviewer
+ * state. Those stay reachable on the Feedback tab.
  */
 export function PrDetailSummaryStrip(props: {
   readonly core: PrDetailCore;
@@ -35,7 +30,6 @@ export function PrDetailSummaryStrip(props: {
   readonly target: PrQuoteTarget | null;
   readonly targets: readonly PrQuoteTarget[];
   readonly onSelectTarget: (target: PrQuoteTarget) => void;
-  readonly variant: "capsule" | "strip";
 }): ReactNode {
   const isDraft = props.core.state === "open" && props.core.isDraft === true;
   const stateTone = prStateTone(props.core);
@@ -47,13 +41,7 @@ export function PrDetailSummaryStrip(props: {
   return (
     <div
       data-testid="pr-detail-summary"
-      data-variant={props.variant}
-      className={cn(
-        "flex min-w-0 items-center gap-2 text-ui-xs",
-        props.variant === "capsule"
-          ? "rounded-lg border border-border/70 bg-muted/40 px-2 py-1"
-          : "w-full flex-wrap rounded-lg border border-border/70 bg-muted/30 px-2.5 py-1.5",
-      )}
+      className="flex w-full min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border/50 bg-muted/25 px-3 py-2 text-ui-xs"
     >
       <span
         className={cn(

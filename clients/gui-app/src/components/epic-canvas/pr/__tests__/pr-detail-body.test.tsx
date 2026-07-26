@@ -467,7 +467,7 @@ describe("PrDetailBody", () => {
     expect(screen.queryByTestId("pr-detail-loading")).toBeNull();
   });
 
-  it("leads Overview with the attention queue and routes files, commits and comments to their own tabs", async () => {
+  it("leads Overview with the attention queue and routes files, commits and comments to their own tabs, all in one reading column", async () => {
     renderBody({
       epicId: "epic-3",
       githubHost: "github.com",
@@ -544,16 +544,12 @@ describe("PrDetailBody", () => {
     fireEvent.click(screen.getByTestId("pr-detail-tab-files"));
     expect(screen.getByTestId("pr-detail-files")).toBeTruthy();
     expect(screen.getByText("src/app.ts")).toBeTruthy();
-    // Files is full-bleed - no gutter - so the summary rides the tab strip.
-    expect(
-      screen.getByTestId("pr-detail-summary").getAttribute("data-variant"),
-    ).toBe("capsule");
 
-    fireEvent.click(screen.getByTestId("pr-detail-tab-history"));
+    fireEvent.click(screen.getByTestId("pr-detail-tab-commits"));
     const commit = screen.getByTestId("pr-detail-commit-item");
     expect(commit.textContent).toContain("feat: first commit");
     expect(commit.textContent).toContain("abcdef1");
-    // History carries commits only; the comment belongs to Feedback.
+    // Commits carries commits only; the comment belongs to Feedback.
     expect(screen.queryByTestId("pr-detail-activity-item")).toBeNull();
 
     fireEvent.click(screen.getByTestId("pr-detail-tab-feedback"));
@@ -561,5 +557,69 @@ describe("PrDetailBody", () => {
       "later comment",
     );
     expect(screen.queryByTestId("pr-detail-commit-item")).toBeNull();
+  });
+
+  it("keeps one reading column across every tab, so switching tabs never re-lays-out the document", async () => {
+    renderBody({
+      epicId: "epic-4",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 11,
+      isActive: true,
+    });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeDetail", {
+      epicId: "epic-4",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 11,
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    session.emitFrame(
+      buildPrDetailFrame({
+        core: { base: { owner: "acme", repo: "widgets", prNumber: 11 } },
+      }),
+    );
+    await screen.findByTestId("pr-detail-body");
+
+    // The tab strip's own offsetParent chain is the column, so its class list
+    // is a proxy for "which container am I in". Files and Checks used to opt
+    // into a full-bleed container and shift the whole document sideways.
+    const columnClasses = (): string => {
+      const column =
+        screen.getByTestId("pr-detail-tabs").parentElement?.parentElement;
+      return column?.className ?? "";
+    };
+    const overview = columnClasses();
+    expect(overview).toContain("max-w-3xl");
+
+    for (const tab of ["feedback", "files", "checks", "commits"] as const) {
+      fireEvent.click(screen.getByTestId(`pr-detail-tab-${tab}`));
+      expect(columnClasses()).toBe(overview);
+    }
+
+    // The summary is one shape now, wherever it lands - the capsule variant
+    // existed only to ride the tab strip on the full-bleed tabs.
+    expect(
+      screen.getByTestId("pr-detail-summary").getAttribute("data-variant"),
+    ).toBeNull();
+
+    // The card and the inline summary are the SAME switch seen from both
+    // sides. jsdom does not evaluate container queries, so both render here -
+    // what is checkable is that they are gated on one threshold. Drifting them
+    // apart is what produces the two failure modes that have no visible cause:
+    // neither showing (the bug reported against the 1520px build) or both.
+    const breakpointOf = (element: Element): string | null =>
+      /@min-\[(\d+)px\]/.exec(element.className)?.[1] ?? null;
+    const cardAt = breakpointOf(screen.getByTestId("pr-detail-card-gutter"));
+    const stripAt = breakpointOf(screen.getByTestId("pr-detail-summary-slot"));
+    expect(cardAt).not.toBeNull();
+    expect(stripAt).toBe(cardAt);
   });
 });

@@ -10,6 +10,10 @@ import {
 } from "lucide-react";
 import type { PrDetailCore, PrState } from "@traycer/protocol/host/pr-schemas";
 import { Button } from "@/components/ui/button";
+import {
+  PR_DIFF_ADDED_CLASS,
+  PR_DIFF_REMOVED_CLASS,
+} from "@/components/epic-canvas/pr/pr-detail-tone";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { formatPrActorName } from "@/lib/pr/pr-detail-projection";
 import { useRelativeTimestamp } from "@/lib/relative-time";
@@ -18,7 +22,14 @@ import { RunnerHostContext } from "@/providers/runner-host-context";
 
 type PrDisplayState = PrState | "draft";
 
-/** GitHub's filled state pills: green Open, gray Draft, purple Merged, red Closed. */
+/**
+ * State pills in theme tokens, not fixed Tailwind ramps. The nine presets each
+ * redefine `--success` / `--primary` / `--destructive` for their own surfaces,
+ * and a pill that opts out is the only green in the app that is a different
+ * green. Outlined rather than filled: a saturated block at the top of the
+ * document out-shouts the attention queue, which is the thing that should draw
+ * the eye first.
+ */
 const STATE_BADGE: Record<
   PrDisplayState,
   {
@@ -29,22 +40,22 @@ const STATE_BADGE: Record<
 > = {
   open: {
     label: "Open",
-    className: "bg-green-600 dark:bg-green-700",
+    className: "border-success/30 bg-success/10 text-success-foreground",
     Icon: GitPullRequestArrow,
   },
   draft: {
     label: "Draft",
-    className: "bg-muted-foreground/70",
+    className: "border-border/60 bg-muted/50 text-muted-foreground",
     Icon: GitPullRequestDraft,
   },
   merged: {
     label: "Merged",
-    className: "bg-purple-600 dark:bg-purple-700",
+    className: "border-primary/30 bg-primary/10 text-primary",
     Icon: GitMerge,
   },
   closed: {
     label: "Closed",
-    className: "bg-red-600 dark:bg-red-700",
+    className: "border-destructive/30 bg-destructive/10 text-destructive",
     Icon: GitPullRequestClosed,
   },
 };
@@ -80,9 +91,9 @@ export function PrDetailHeader(props: {
   const badge = STATE_BADGE[displayState];
 
   return (
-    <div className="flex min-w-0 flex-col gap-3 border-b border-border/60 pb-4">
+    <div className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 items-start gap-2">
-        <h1 className="min-w-0 flex-1 text-ui-lg leading-snug font-normal break-words text-foreground">
+        <h1 className="min-w-0 flex-1 text-ui-lg leading-snug font-medium break-words text-foreground">
           {title}{" "}
           <span className="whitespace-nowrap text-muted-foreground">
             #{props.core.base.prNumber}
@@ -109,7 +120,7 @@ export function PrDetailHeader(props: {
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
         <span
           className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-ui-sm font-medium text-white",
+            "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-ui-xs font-medium",
             badge.className,
           )}
           data-testid="pr-detail-state-badge"
@@ -130,10 +141,8 @@ export function PrDetailHeader(props: {
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-ui-xs text-muted-foreground">
         {props.core.additions !== null && props.core.deletions !== null ? (
           <span className="font-mono">
-            <span className="text-green-700 dark:text-green-400">
-              +{props.core.additions}
-            </span>{" "}
-            <span className="text-red-700 dark:text-red-400">
+            <span className={PR_DIFF_ADDED_CLASS}>+{props.core.additions}</span>{" "}
+            <span className={PR_DIFF_REMOVED_CLASS}>
               −{props.core.deletions}
             </span>
           </span>

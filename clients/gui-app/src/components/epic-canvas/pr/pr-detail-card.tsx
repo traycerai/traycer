@@ -96,6 +96,10 @@ export interface PrDetailCardProps {
  * it costs no reflow. Because it only exists above the container-width
  * threshold, nothing may live ONLY here - every fact it carries also reaches
  * the reader through `PrDetailSummaryStrip` at narrower widths.
+ *
+ * `bg-canvas` is load-bearing, not decoration: the card sits ON the scrolling
+ * document, so a translucent surface would let the reading column's text run
+ * visibly underneath it as the reader scrolls.
  */
 export function PrDetailCard(props: PrDetailCardProps): ReactNode {
   const reviewers = prReviewerRows(props.core, props.activity);

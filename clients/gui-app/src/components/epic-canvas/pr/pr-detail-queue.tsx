@@ -56,7 +56,7 @@ export function PrDetailQueue(props: {
       data-testid="pr-detail-queue"
       data-calm={isCalm ? "true" : "false"}
       className={cn(
-        "overflow-hidden rounded-lg border",
+        "overflow-hidden rounded-xl border",
         isCalm ? PR_TONE_SURFACE_CLASS.ok : PR_TONE_SURFACE_CLASS.fail,
       )}
     >
