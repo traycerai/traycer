@@ -51,6 +51,7 @@ interface PersistedLeftPanelState {
     readonly sidebarWidthPx: number;
     readonly panelSectionCollapsedByPanelId: Readonly<Record<string, boolean>>;
     readonly panelSectionWeightsByPanelId: Readonly<Record<string, number>>;
+    readonly panelVisibilityOverrideById: Readonly<Record<string, boolean>>;
     readonly chatFilterByEpicId: Readonly<Record<string, ChatFilter>>;
     readonly artifactFilterByEpicId: Readonly<Record<string, ArtifactFilter>>;
   };
@@ -72,6 +73,7 @@ function resetStore(): void {
     panelSectionCollapsedByPanelId: {},
     panelSectionWeightsByPanelId: {},
     commentsPanelRevealedByTabId: {},
+    panelVisibilityOverrideById: {},
     localRootCreatePendingByEpicPanel: {},
     acknowledgedRootCreatePendingByEpicPanel: {},
     chatFilterByEpicId: {},
@@ -240,6 +242,7 @@ describe("useLeftPanelStore", () => {
         sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
         panelSectionCollapsedByPanelId: {},
         panelSectionWeightsByPanelId: {},
+        panelVisibilityOverrideById: {},
         chatFilterByEpicId: {},
         chatShowArchivedByEpicId: {},
         artifactFilterByEpicId: {},
@@ -762,5 +765,95 @@ describe("useLeftPanelStore", () => {
         .getState()
         .getAcknowledgedRootCreatePending("epic-a", "artifacts"),
     ).toBeNull();
+  });
+
+  it("persists panel visibility overrides so they survive a reload", () => {
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual(
+      {},
+    );
+
+    useLeftPanelStore
+      .getState()
+      .setPanelVisibilityOverride("pull-requests", true);
+    useLeftPanelStore.getState().setPanelVisibilityOverride("sharing", false);
+
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual({
+      "pull-requests": true,
+      sharing: false,
+    });
+    expect(
+      readPersistedLeftPanelState().state.panelVisibilityOverrideById,
+    ).toEqual({ "pull-requests": true, sharing: false });
+  });
+
+  it("drops an override rather than storing the rule's own answer", () => {
+    // `null` is how the menu says "this matches the panel's own rule again",
+    // so the entry has to disappear - not flip to `false`.
+    useLeftPanelStore
+      .getState()
+      .setPanelVisibilityOverride("pull-requests", true);
+    useLeftPanelStore
+      .getState()
+      .setPanelVisibilityOverride("pull-requests", null);
+
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual(
+      {},
+    );
+    expect(
+      readPersistedLeftPanelState().state.panelVisibilityOverrideById,
+    ).toEqual({});
+  });
+
+  it("refuses to activate a panel the user explicitly hid", () => {
+    // `collab-tile-body` / `start-comment-draft` switch the sidebar to Comments
+    // on the user's behalf. If Comments is switched off, that must be a no-op
+    // rather than pointing the sidebar at a panel with no rail icon.
+    useLeftPanelStore.getState().setPanelVisibilityOverride("comments", false);
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", true);
+
+    useLeftPanelStore.getState().setActivePanelIdAndExpand("tab-a", "comments");
+
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
+      "chats",
+    );
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
+  });
+
+  it("still activates a panel that is merely absent, not disabled", () => {
+    // Absence is not a user decision: the reveal path turns Comments on in the
+    // same turn, so the switch has to land.
+    useLeftPanelStore.getState().revealCommentsPanel("tab-a");
+    useLeftPanelStore.getState().setActivePanelIdAndExpand("tab-a", "comments");
+
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
+      "comments",
+    );
+  });
+
+  it("clears every override at once", () => {
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
+    useLeftPanelStore.getState().setPanelVisibilityOverride("comments", true);
+
+    useLeftPanelStore.getState().clearPanelVisibilityOverrides();
+
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual(
+      {},
+    );
+  });
+
+  it("keeps slice identity when an override is set to its current value", () => {
+    const before = useLeftPanelStore.getState();
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", null);
+    expect(useLeftPanelStore.getState()).toBe(before);
+
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
+    const afterHide = useLeftPanelStore.getState();
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
+    expect(useLeftPanelStore.getState()).toBe(afterHide);
+
+    useLeftPanelStore.getState().clearPanelVisibilityOverrides();
+    const cleared = useLeftPanelStore.getState();
+    useLeftPanelStore.getState().clearPanelVisibilityOverrides();
+    expect(useLeftPanelStore.getState()).toBe(cleared);
   });
 });

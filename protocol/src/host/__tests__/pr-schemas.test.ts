@@ -19,6 +19,7 @@ import {
   prSubscribeClientFrameSchema,
   prStateSchema,
   prLivenessSchema,
+  prRepoRoleSchema,
   prReviewDecisionSchema,
   prSourceStatusSchema,
   prCheckStatusSchema,
@@ -82,6 +83,8 @@ const LIGHT_ITEM_POPULATED_FIXTURE = {
   commentCount: 4,
   updatedAt: 1_700_000_100_000,
   repoIdentifier: REPO_IDENTIFIER_FIXTURE,
+  repoRole: "superproject" as const,
+  linkGroupKey: "/Users/dev/worktrees/traycer-jolly-fox",
   owners: [OWNER_REF_FIXTURE],
 };
 
@@ -103,6 +106,8 @@ const LIGHT_ITEM_NULL_ENRICHMENT_FIXTURE = {
   commentCount: null,
   updatedAt: null,
   repoIdentifier: REPO_IDENTIFIER_FIXTURE,
+  repoRole: "submodule" as const,
+  linkGroupKey: null,
   owners: [],
 };
 
@@ -135,6 +140,37 @@ describe("prLightItemSchema", () => {
     const parsed2 = prLightItemSchema.parse(parsed1);
     expect(parsed2).toEqual(parsed1);
     expect(parsed1.base).toBeNull();
+  });
+
+  it("parses and reparses every repoRole value unchanged", () => {
+    prRepoRoleSchema.options.forEach((repoRole) => {
+      const fixture = { ...LIGHT_ITEM_POPULATED_FIXTURE, repoRole };
+      const parsed1 = prLightItemSchema.parse(fixture);
+      const parsed2 = prLightItemSchema.parse(parsed1);
+      expect(parsed2).toEqual(parsed1);
+      expect(parsed1.repoRole).toBe(repoRole);
+    });
+  });
+
+  it("rejects a repoRole outside the pair, so a third role cannot arrive unnoticed", () => {
+    const fixture = { ...LIGHT_ITEM_POPULATED_FIXTURE, repoRole: "nested" };
+    expect(() => prLightItemSchema.parse(fixture)).toThrow();
+  });
+
+  it("keeps linkGroupKey nullable so an entry with no stable path still lists", () => {
+    const fixture = { ...LIGHT_ITEM_POPULATED_FIXTURE, linkGroupKey: null };
+    const parsed1 = prLightItemSchema.parse(fixture);
+    const parsed2 = prLightItemSchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+    expect(parsed1.linkGroupKey).toBeNull();
+  });
+
+  it("requires both link fields - an item that omits them is not a valid row", () => {
+    const { repoRole, linkGroupKey, ...withoutLinkFields } =
+      LIGHT_ITEM_POPULATED_FIXTURE;
+    expect(repoRole).toBe("superproject");
+    expect(linkGroupKey).not.toBeNull();
+    expect(() => prLightItemSchema.parse(withoutLinkFields)).toThrow();
   });
 
   it("parses and reparses every state value unchanged", () => {
@@ -572,7 +608,12 @@ describe("prFilesSectionSchema", () => {
     const parsed = prFilesSectionSchema.parse({
       observedAt: null,
       files: [
-        { path: "src/a.ts", additions: null, deletions: null, changeType: null },
+        {
+          path: "src/a.ts",
+          additions: null,
+          deletions: null,
+          changeType: null,
+        },
       ],
       totalCount: null,
       isTruncated: false,
@@ -670,14 +711,20 @@ describe("prSubscribeDetailServerFrameSchema", () => {
 
 describe("prSubscribeClientFrameSchema", () => {
   it("parses and reparses the refresh variant unchanged", () => {
-    const fixture = { kind: "refresh" as const, hasBinaryPayload: false as const };
+    const fixture = {
+      kind: "refresh" as const,
+      hasBinaryPayload: false as const,
+    };
     const parsed1 = prSubscribeClientFrameSchema.parse(fixture);
     const parsed2 = prSubscribeClientFrameSchema.parse(parsed1);
     expect(parsed2).toEqual(parsed1);
   });
 
   it("round-trips the same refresh fixture through both contracts' clientFrameSchema", () => {
-    const fixture = { kind: "refresh" as const, hasBinaryPayload: false as const };
+    const fixture = {
+      kind: "refresh" as const,
+      hasBinaryPayload: false as const,
+    };
 
     const parsedList =
       prSubscribeListForEpicV10.clientFrameSchema.parse(fixture);

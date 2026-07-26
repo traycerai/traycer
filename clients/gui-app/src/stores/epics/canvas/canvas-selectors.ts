@@ -206,6 +206,49 @@ export function useIsActiveEpicArtifact(
 }
 
 /**
+ * Whether `tileId` is the tile showing in `tabId`'s active pane - the
+ * NON-record-backed counterpart to {@link makeSelectIsActiveEpicArtifact}.
+ *
+ * Renderer-only tiles (workspace file, git-diff, PR detail) are deliberately
+ * invisible to `makeSelectActiveEpicArtifactId`, which returns `null` for them
+ * so their synthetic ids never reach the persisted `lastFocusedArtifactId`.
+ * They still need to light up their own list row, and their ids ARE stable
+ * (derived from host + coordinates), so matching on the tile id directly is
+ * safe here in a way that persisting it would not be.
+ *
+ * `null` means "this row has no tile" (an unknown-base PR) and is never active.
+ * Selects a per-row BOOLEAN for the same reason the artifact variant does:
+ * threading the active id to every row re-renders the whole list on every
+ * selection change.
+ */
+export function makeSelectIsActiveTile(
+  tabId: string | undefined,
+  tileId: string | null,
+) {
+  return (state: EpicCanvasStore): boolean => {
+    if (tabId === undefined || tileId === null) return false;
+    const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
+    if (canvas.activePaneId === null) return false;
+    const pane = findPaneById(canvas.root, canvas.activePaneId);
+    if (pane === null || pane.activeTabId === null) return false;
+    const active = canvas.tilesByInstanceId[pane.activeTabId];
+    if (active === undefined) return false;
+    return active.id === tileId;
+  };
+}
+
+export function useIsActiveTile(
+  tabId: string | undefined,
+  tileId: string | null,
+): boolean {
+  const selector = useMemo(
+    () => makeSelectIsActiveTile(tabId, tileId),
+    [tabId, tileId],
+  );
+  return useEpicCanvasStore(selector);
+}
+
+/**
  * Whether `paneId` is the globally-active pane in `tabId`, as a boolean. Every
  * pane view subscribes per-pane via this instead of reading the raw
  * `activePaneId`: with the raw id, opening/switching the active pane changed

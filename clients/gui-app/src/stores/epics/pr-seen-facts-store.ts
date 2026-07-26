@@ -262,3 +262,26 @@ export function selectPrHasChangedDot(hostId: string | null, epicId: string) {
     return selectPrSeenFactsScope(hostId, epicId)(s).hasChanged;
   };
 }
+
+/**
+ * Whether this `(hostId, epicId)` last observed at least one PR - the signal
+ * that decides whether the Pull Requests panel appears in the rail at all.
+ *
+ * `factsByPrKey` is rebuilt from the WHOLE incoming list on every seed and
+ * advance (`buildPrSeenFactsMap`), so a PR that stops being derived from the
+ * epic drops out and the count follows the live list rather than accumulating.
+ * Reading the persisted baseline rather than the live subscription is what
+ * keeps the rail stable across a reload: the panel does not vanish and
+ * reappear while the first background frame is still in flight.
+ *
+ * `seeded` is deliberately NOT required. An unseeded scope has an empty map
+ * and reads `false`, which is the correct default for an epic we have never
+ * observed PRs for.
+ */
+export function selectPrScopeHasItems(hostId: string | null, epicId: string) {
+  return (s: PrSeenFactsStore): boolean => {
+    if (hostId === null) return false;
+    const scope = selectPrSeenFactsScope(hostId, epicId)(s);
+    return Object.keys(scope.factsByPrKey).length > 0;
+  };
+}

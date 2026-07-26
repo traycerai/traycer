@@ -37,34 +37,58 @@ vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => "host1",
 }));
 
-// `PrCard` pulls in the per-Epic Y.doc-backed owner-label chain
+// `PrRow` pulls in the per-Epic Y.doc-backed owner-label chain
 // (`useChatById` / `useEpicTerminalAgent`, which need a live
 // `OpenEpicStoreHandle`) that has nothing to do with the panel wiring under
-// test here. Stub it to a minimal clickable card that still exercises the
-// REAL card-click -> tile-open wiring in `pr-panel-body.tsx`, keeping the WS
+// test here. Stub it to a minimal clickable row that still exercises the
+// REAL row-click -> tile-open wiring in `pr-panel-body.tsx`, keeping the WS
 // transport as the only faked external boundary plus this one unrelated
-// presentational seam.
-vi.mock("@/components/epic-canvas/pr/pr-card", () => ({
-  PrCard: (props: {
-    readonly item: PrLightItem;
-    readonly onOpen: (() => void) | null;
-  }) => {
-    const label =
-      props.item.base !== null
-        ? `${props.item.base.owner}/${props.item.base.repo}#${props.item.base.prNumber}`
-        : (props.item.headRefName ?? "unknown-head");
-    return (
-      <button
-        type="button"
-        data-testid={`mock-pr-card-${label}`}
-        data-openable={props.onOpen !== null ? "true" : "false"}
-        onClick={() => props.onOpen?.()}
-      >
-        {label}
-      </button>
-    );
-  },
-}));
+// presentational seam. Linked (nested submodule) rows render as their own
+// buttons so the panel's nesting decisions stay observable here.
+vi.mock("@/components/epic-canvas/pr/pr-row", () => {
+  const mockLabel = (item: PrLightItem): string =>
+    item.base !== null
+      ? `${item.base.owner}/${item.base.repo}#${item.base.prNumber}`
+      : (item.headRefName ?? "unknown-head");
+  const mockEntry = (
+    entry: {
+      readonly item: PrLightItem;
+      readonly tileId: string | null;
+      readonly onOpen: (() => void) | null;
+    },
+    prefix: string,
+  ) => (
+    <button
+      type="button"
+      key={mockLabel(entry.item)}
+      data-testid={`${prefix}-${mockLabel(entry.item)}`}
+      data-openable={entry.onOpen !== null ? "true" : "false"}
+      data-tile-id={entry.tileId ?? ""}
+      onClick={() => entry.onOpen?.()}
+    >
+      {mockLabel(entry.item)}
+    </button>
+  );
+  return {
+    PrRow: (props: {
+      readonly entry: {
+        readonly item: PrLightItem;
+        readonly tileId: string | null;
+        readonly onOpen: (() => void) | null;
+      };
+      readonly linked: readonly {
+        readonly item: PrLightItem;
+        readonly tileId: string | null;
+        readonly onOpen: (() => void) | null;
+      }[];
+    }) => (
+      <div>
+        {mockEntry(props.entry, "mock-pr-card")}
+        {props.linked.map((entry) => mockEntry(entry, "mock-pr-linked"))}
+      </div>
+    ),
+  };
+});
 
 import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
 
@@ -183,6 +207,8 @@ function buildPrItem(overrides: Partial<PrLightItem>): PrLightItem {
     commentCount: 0,
     updatedAt: 1_000,
     repoIdentifier: { owner: "acme", repo: "widgets" },
+    repoRole: "superproject",
+    linkGroupKey: null,
     owners: [],
     ...overrides,
   };
@@ -272,6 +298,96 @@ describe("PrPanelBody card list", () => {
     ).toBeTruthy();
   });
 
+  it("nests an owned-submodule PR under its superproject row instead of a second repo group", async () => {
+    const epicId = "epic-l1";
+    renderPanel({ epicId, tabId: "tab-l1" });
+    await emitSnapshot(epicId, [
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets", prNumber: 1 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets/pull/1",
+        linkGroupKey: "/w/one",
+      }),
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets-oss", prNumber: 9 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets-oss/pull/9",
+        repoIdentifier: { owner: "acme", repo: "widgets-oss" },
+        repoRole: "submodule",
+        linkGroupKey: "/w/one",
+      }),
+    ]);
+
+    const headers = await screen.findAllByTestId("pr-repo-group-header");
+    expect(headers).toHaveLength(1);
+    expect(headers[0]?.textContent).toContain("acme/widgets");
+    // The header counts top-level rows, so the nested PR must not inflate it.
+    expect(headers[0]?.textContent).toContain("1");
+    expect(screen.getByTestId("mock-pr-card-acme/widgets#1")).toBeTruthy();
+    expect(
+      screen.getByTestId("mock-pr-linked-acme/widgets-oss#9"),
+    ).toBeTruthy();
+  });
+
+  it("a nested submodule row still opens its own pr-detail tile", async () => {
+    const epicId = "epic-l2";
+    renderPanel({ epicId, tabId: "tab-l2" });
+    await emitSnapshot(epicId, [
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets", prNumber: 1 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets/pull/1",
+        linkGroupKey: "/w/one",
+      }),
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets-oss", prNumber: 9 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets-oss/pull/9",
+        repoIdentifier: { owner: "acme", repo: "widgets-oss" },
+        repoRole: "submodule",
+        linkGroupKey: "/w/one",
+      }),
+    ]);
+
+    fireEvent.click(
+      await screen.findByTestId("mock-pr-linked-acme/widgets-oss#9"),
+    );
+
+    const canvasState = useEpicCanvasStore.getState();
+    const tabId = Object.keys(canvasState.tabsById).find(
+      (id) => canvasState.tabsById[id]?.epicId === epicId,
+    );
+    expect(tabId).toBeDefined();
+    if (tabId === undefined) return;
+    const canvas = canvasState.canvasByTabId[tabId];
+    if (canvas?.root?.kind !== "pane") throw new Error("expected a pane");
+    const tile = canvas.tilesByInstanceId[canvas.root.tabInstanceIds[0]];
+    if (tile?.type !== "pr-detail")
+      throw new Error("expected a pr-detail tile");
+    expect(tile.repo).toBe("widgets-oss");
+    expect(tile.prNumber).toBe(9);
+  });
+
+  it("collapsing a repo header hides its rows and keeps the count visible", async () => {
+    const epicId = "epic-c1";
+    renderPanel({ epicId, tabId: "tab-c1" });
+    await emitSnapshot(epicId, [
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets", prNumber: 1 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets/pull/1",
+      }),
+    ]);
+
+    const header = await screen.findByTestId("pr-repo-group-header");
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(header);
+
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("mock-pr-card-acme/widgets#1")).toBeNull();
+    expect(header.textContent).toContain("1");
+  });
+
   it("clicking a fully-identified card opens a pr-detail tile via the real canvas store", async () => {
     const epicId = "epic-d1";
     const item = buildPrItem({
@@ -289,7 +405,7 @@ describe("PrPanelBody card list", () => {
     expect(card.getAttribute("data-openable")).toBe("true");
     fireEvent.click(card);
 
-    const expectedTileId = prDetailTileId({
+    const expectedTileId: string = prDetailTileId({
       hostId: "host1",
       githubHost: "github.com",
       owner: "acme",
@@ -320,6 +436,9 @@ describe("PrPanelBody card list", () => {
     expect(tile.owner).toBe("acme");
     expect(tile.repo).toBe("widgets");
     expect(tile.prNumber).toBe(55);
+    // The row advertises the SAME id it opens - that equality is what lets the
+    // row light up when its tile is the one showing.
+    expect(card.getAttribute("data-tile-id")).toBe(expectedTileId);
   });
 
   it("an unknown-base card is not openable and clicking it opens no tile", async () => {
@@ -331,6 +450,8 @@ describe("PrPanelBody card list", () => {
 
     const card = await screen.findByTestId("mock-pr-card-feature/unknown-base");
     expect(card.getAttribute("data-openable")).toBe("false");
+    // No tile means nothing to highlight against, ever.
+    expect(card.getAttribute("data-tile-id")).toBe("");
     fireEvent.click(card);
 
     const canvasState = useEpicCanvasStore.getState();

@@ -180,6 +180,9 @@ type RootCreatePendingByPanel<T> = Readonly<
 type PanelSectionCollapsedByPanelId = Readonly<
   Partial<Record<LeftPanelId, boolean>>
 >;
+export type PanelVisibilityOverrideById = Readonly<
+  Partial<Record<LeftPanelId, boolean>>
+>;
 type PanelSectionWeightsByPanelId = Readonly<
   Partial<Record<LeftPanelId, number>>
 >;
@@ -192,6 +195,19 @@ interface LeftPanelStore {
   readonly panelSectionCollapsedByPanelId: PanelSectionCollapsedByPanelId;
   readonly panelSectionWeightsByPanelId: PanelSectionWeightsByPanelId;
   readonly commentsPanelRevealedByTabId: Readonly<Record<string, boolean>>;
+  /**
+   * Explicit show/hide chosen from the rail context menu, keyed by panel. An
+   * entry wins over the panel's own availability rule: `true` keeps the icon in
+   * the rail even when the rule would drop it (a PR-less epic, an artifact with
+   * no comments), `false` hides a panel that would otherwise be there. An
+   * absent entry means "follow the rule", which is why the map is sparse rather
+   * than a full record - see `isLeftPanelVisible`.
+   *
+   * Global (not per tab or per epic) because it expresses a durable preference
+   * about the rail's shape, the same way `panelGroups` does: hiding a panel in
+   * one epic should not have to be repeated in the next.
+   */
+  readonly panelVisibilityOverrideById: PanelVisibilityOverrideById;
   readonly localRootCreatePendingByEpicPanel: RootCreatePendingByPanel<LeftPanelRootCreatePending>;
   readonly acknowledgedRootCreatePendingByEpicPanel: RootCreatePendingByPanel<LeftPanelAcknowledgedRootCreatePending>;
   readonly chatFilterByEpicId: Readonly<Record<string, ChatFilter>>;
@@ -243,6 +259,17 @@ interface LeftPanelStore {
 
   readonly isCommentsPanelRevealed: (tabId: string) => boolean;
   readonly revealCommentsPanel: (tabId: string) => void;
+
+  /**
+   * `null` drops the override so the panel goes back to following its own
+   * availability rule. Callers pass `null` whenever the value they are setting
+   * already matches that rule, keeping the persisted map to real preferences.
+   */
+  readonly setPanelVisibilityOverride: (
+    panelId: LeftPanelId,
+    override: boolean | null,
+  ) => void;
+  readonly clearPanelVisibilityOverrides: () => void;
 
   readonly getLocalRootCreatePending: (
     epicId: string,
@@ -322,6 +349,24 @@ function getPersistedPanelSectionCollapsedByPanelId(
       nextPanelState[panelId] = true;
     }
     return nextPanelState;
+  }, {});
+}
+
+/**
+ * Drop entries a newer/older build (or a hand-edited localStorage) could have
+ * left behind: an unknown panel id, or a non-boolean where the override map
+ * only ever holds `true`/`false`.
+ */
+function getPersistedPanelVisibilityOverrides(
+  panelVisibilityOverrideById: PanelVisibilityOverrideById,
+): PanelVisibilityOverrideById {
+  return Object.entries(panelVisibilityOverrideById).reduce<
+    Partial<Record<LeftPanelId, boolean>>
+  >((nextOverrides, [panelId, visible]) => {
+    if (isLeftPanelId(panelId) && typeof visible === "boolean") {
+      nextOverrides[panelId] = visible;
+    }
+    return nextOverrides;
   }, {});
 }
 
@@ -722,6 +767,7 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
       panelSectionCollapsedByPanelId: {},
       panelSectionWeightsByPanelId: {},
       commentsPanelRevealedByTabId: {},
+      panelVisibilityOverrideById: {},
       localRootCreatePendingByEpicPanel: {},
       acknowledgedRootCreatePendingByEpicPanel: {},
       chatFilterByEpicId: {},
@@ -749,6 +795,17 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
 
       setActivePanelIdAndExpand: (tabId, panelId) => {
         set((state) => {
+          // A panel the user explicitly switched off never becomes the active
+          // one. Several call sites switch panels FOR the user - activating a
+          // comment thread, focusing a tab type - and without this they would
+          // point the sidebar at a panel that has no rail icon, leaving the
+          // body to fall back to a different panel than the one asked for.
+          // Only an explicit `false` blocks: a presence-gated panel that is
+          // merely absent is not a user decision, and its own reveal path
+          // (`revealCommentsPanel`) makes it visible in the same turn.
+          if (state.panelVisibilityOverrideById[panelId] === false) {
+            return state;
+          }
           const currentPanelId =
             state.activePanelIdByTabId[tabId] ?? DEFAULT_LEFT_PANEL_ID;
           const currentCollapsed = state.mainCollapsedByTabId[tabId] ?? false;
@@ -930,6 +987,30 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
             },
           };
         });
+      },
+
+      setPanelVisibilityOverride: (panelId, override) => {
+        set((state) => {
+          const current = state.panelVisibilityOverrideById;
+          if (override === null) {
+            if (!Object.hasOwn(current, panelId)) return state;
+            const next = { ...current };
+            delete next[panelId];
+            return { panelVisibilityOverrideById: next };
+          }
+          if (current[panelId] === override) return state;
+          return {
+            panelVisibilityOverrideById: { ...current, [panelId]: override },
+          };
+        });
+      },
+
+      clearPanelVisibilityOverrides: () => {
+        set((state) =>
+          Object.keys(state.panelVisibilityOverrideById).length === 0
+            ? state
+            : { panelVisibilityOverrideById: {} },
+        );
       },
 
       getLocalRootCreatePending: (epicId, panelId) =>
@@ -1207,6 +1288,9 @@ export const useLeftPanelStore = create<LeftPanelStore>()(
             state.panelSectionCollapsedByPanelId,
           ),
         panelSectionWeightsByPanelId: state.panelSectionWeightsByPanelId,
+        panelVisibilityOverrideById: getPersistedPanelVisibilityOverrides(
+          state.panelVisibilityOverrideById,
+        ),
         chatFilterByEpicId: filterActiveByEpic(
           state.chatFilterByEpicId,
           isChatFilterActive,
@@ -1297,6 +1381,10 @@ export function useCommentsPanelRevealed(tabId: string): boolean {
   return useLeftPanelStore(
     (s) => s.commentsPanelRevealedByTabId[tabId] ?? false,
   );
+}
+
+export function usePanelVisibilityOverrides(): PanelVisibilityOverrideById {
+  return useLeftPanelStore((s) => s.panelVisibilityOverrideById);
 }
 
 export function useLocalRootCreatePending(

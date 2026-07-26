@@ -87,6 +87,30 @@ export const prRepoIdentifierSchema = z.object({
 });
 export type PrRepoIdentifier = z.infer<typeof prRepoIdentifierSchema>;
 
+/**
+ * Which side of a worktree binding entry a row was enumerated from: the
+ * entry's own repo (`superproject`) or one of its owned submodule branches
+ * (`submodule`). The GUI nests a `submodule` row under the `superproject` row
+ * it shares a {@link prLinkGroupKeySchema} with, so a paired
+ * internal+OSS-submodule change reads as one piece of work rather than two
+ * unrelated repo groups.
+ *
+ * A repo is only `submodule` RELATIVE TO a binding entry - the same repo bound
+ * directly as its own workspace enumerates as `superproject`. When one PR is
+ * reachable both ways, `superproject` wins so the row keeps its own group.
+ */
+export const prRepoRoleSchema = z.enum(["superproject", "submodule"]);
+export type PrRepoRole = z.infer<typeof prRepoRoleSchema>;
+
+/**
+ * Opaque token shared by every PR enumerated from the SAME worktree binding
+ * entry - the entry's superproject PR and each of its owned-submodule PRs.
+ * Display-hostile by design (it is the entry's local running directory): the
+ * client groups on it and never renders it. `null` when the entry has no
+ * stable local path, which only suppresses nesting - both rows still list.
+ */
+export const prLinkGroupKeySchema = z.string();
+
 export const prOwnerRefSchema = z.object({
   ownerId: z.string(),
   ownerKind: worktreeBindingOwnerKindSchema,
@@ -147,6 +171,8 @@ export const prLightItemSchema = z.object({
   commentCount: z.number().int().nonnegative().nullable(),
   updatedAt: z.number().nullable(),
   repoIdentifier: prRepoIdentifierSchema,
+  repoRole: prRepoRoleSchema,
+  linkGroupKey: prLinkGroupKeySchema.nullable(),
   owners: z.array(prOwnerRefSchema),
 });
 export type PrLightItem = z.infer<typeof prLightItemSchema>;
@@ -373,25 +399,22 @@ const prSubscribeDetailFrameFields = {
   commits: prCommitsSectionSchema,
 } as const;
 
-export const prSubscribeDetailServerFrameSchema = z.discriminatedUnion(
-  "kind",
-  [
-    z.object({
-      kind: z.literal("snapshot"),
-      ...prSubscribeDetailFrameFields,
-    }),
-    z.object({
-      kind: z.literal("updated"),
-      ...prSubscribeDetailFrameFields,
-    }),
-    z.object({
-      kind: z.literal("error"),
-      hasBinaryPayload: z.literal(false),
-      message: z.string(),
-      isFatal: z.boolean(),
-    }),
-  ],
-);
+export const prSubscribeDetailServerFrameSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("snapshot"),
+    ...prSubscribeDetailFrameFields,
+  }),
+  z.object({
+    kind: z.literal("updated"),
+    ...prSubscribeDetailFrameFields,
+  }),
+  z.object({
+    kind: z.literal("error"),
+    hasBinaryPayload: z.literal(false),
+    message: z.string(),
+    isFatal: z.boolean(),
+  }),
+]);
 export type PrSubscribeDetailServerFrame = z.infer<
   typeof prSubscribeDetailServerFrameSchema
 >;

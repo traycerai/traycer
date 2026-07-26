@@ -1,24 +1,30 @@
-import { useMemo, type ReactNode } from "react";
-import { AlertCircle, FolderGit2, GitPullRequest } from "lucide-react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  AlertCircle,
+  ChevronRight,
+  FolderGit2,
+  GitPullRequest,
+} from "lucide-react";
 import type {
   PrLightItem,
   PrSourceStatus,
 } from "@traycer/protocol/host/pr-schemas";
 import type { LeftPanelSlotProps } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
-import { PrCard } from "@/components/epic-canvas/pr/pr-card";
+import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { usePrListSubscription } from "@/hooks/pr/use-pr-list-subscription";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
-import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
+import { makePrDetailTile, prDetailTileId } from "@/lib/pr/pr-detail-tile";
 import {
   formatPrRowTitle,
   formatRepoGroupLabel,
   fullyIdentifiedPrBase,
   groupPrItemsByRepo,
   prListRowKey,
+  type PrRepoGroup,
 } from "@/lib/pr/pr-list-projection";
 import { cn } from "@/lib/utils";
 import {
@@ -36,10 +42,10 @@ import {
  * the body; the section check is still included so the gate is complete and
  * testable if mount semantics change.
  *
- * Layout mirrors the Settings > Worktrees repo listing: a flat repo header
- * (icon + owner/repo + count) over always-expanded PR cards - no accordion,
- * since an epic rarely has more than a handful of PRs. Clicking a card opens
- * the full-view tile.
+ * Layout mirrors the Settings > Worktrees repo listing: a collapsible repo
+ * header (chevron + icon + owner/repo + count) over full-bleed rows separated
+ * by hairlines - no cards, no per-row accordion. Clicking a row opens the
+ * full-view tile.
  *
  * Host switcher: omitted (list follows the app active host). See PrPanelActions.
  */
@@ -66,6 +72,7 @@ export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
   return (
     <PrPanelBodyContent
       epicId={props.epicId}
+      tabId={props.tabId}
       hostId={hostId}
       items={subscription.data?.items ?? []}
       sourceStatus={subscription.data?.sourceStatus ?? null}
@@ -78,6 +85,7 @@ export function PrPanelBody(props: LeftPanelSlotProps): ReactNode {
 
 function PrPanelBodyContent(props: {
   readonly epicId: string;
+  readonly tabId: string;
   readonly hostId: string | null;
   readonly items: readonly PrLightItem[];
   readonly sourceStatus: PrSourceStatus | null;
@@ -87,6 +95,58 @@ function PrPanelBodyContent(props: {
 }): ReactNode {
   const tileNavigation = useEpicTileNavigation();
   const groups = useMemo(() => groupPrItemsByRepo(props.items), [props.items]);
+  const [collapsedRepos, setCollapsedRepos] = useState<ReadonlySet<string>>(
+    new Set<string>(),
+  );
+  const toggleRepo = useCallback((repoLabel: string): void => {
+    setCollapsedRepos((current) => {
+      const next = new Set(current);
+      if (!next.delete(repoLabel)) next.add(repoLabel);
+      return next;
+    });
+  }, []);
+
+  const hostId = props.hostId;
+  const epicId = props.epicId;
+  const openTileInEpic = tileNavigation.openTileInEpic;
+  const buildEntry = useCallback(
+    (item: PrLightItem): PrRowEntry => {
+      const identified = fullyIdentifiedPrBase(item);
+      const tileArgs =
+        hostId === null || identified === null
+          ? null
+          : {
+              hostId,
+              githubHost: identified.githubHost,
+              owner: identified.base.owner,
+              repo: identified.base.repo,
+              prNumber: identified.base.prNumber,
+            };
+      return {
+        key:
+          hostId === null
+            ? formatPrFallbackKey(item)
+            : prListRowKey(item, hostId),
+        item,
+        // Same deterministic id `makePrDetailTile` mints, so the row can ask
+        // the canvas whether ITS tile is the one on screen.
+        tileId: tileArgs === null ? null : prDetailTileId(tileArgs),
+        onOpen:
+          tileArgs === null
+            ? null
+            : () => {
+                openTileInEpic(
+                  epicId,
+                  makePrDetailTile({
+                    ...tileArgs,
+                    name: formatPrRowTitle(item),
+                  }),
+                );
+              },
+      };
+    },
+    [epicId, hostId, openTileInEpic],
+  );
 
   if (props.isPending && !props.hasCachedData) {
     return (
@@ -122,7 +182,7 @@ function PrPanelBodyContent(props: {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col gap-2 overflow-y-auto px-2 py-1.5"
+      className="flex h-full min-h-0 flex-col divide-y divide-border/40 overflow-y-auto"
       data-testid="pr-panel-body"
       data-source-status={props.sourceStatus ?? "none"}
     >
@@ -146,48 +206,79 @@ function PrPanelBodyContent(props: {
         />
       ) : null}
       {groups.map((group) => (
-        <div
+        <PrRepoGroupSection
           key={formatRepoGroupLabel(group.repoIdentifier)}
-          className="flex min-w-0 flex-col gap-1.5"
-          data-testid="pr-repo-group"
-        >
-          <div
-            className="flex min-w-0 items-center gap-1.5 px-1 pt-0.5 text-ui-xs text-muted-foreground"
-            data-testid="pr-repo-group-header"
-          >
-            <FolderGit2 className="size-3.5 shrink-0" aria-hidden />
-            <span className="min-w-0 flex-1 truncate">
-              {formatRepoGroupLabel(group.repoIdentifier)}
-            </span>
-            <span className="shrink-0">{group.items.length}</span>
-          </div>
-          {group.items.map((item) => {
-            const rowKey =
-              props.hostId === null
-                ? formatPrFallbackKey(item)
-                : prListRowKey(item, props.hostId);
-            const identified = fullyIdentifiedPrBase(item);
-            const hostId = props.hostId;
-            const onOpen =
-              hostId === null || identified === null
-                ? null
-                : () => {
-                    tileNavigation.openTileInEpic(
-                      props.epicId,
-                      makePrDetailTile({
-                        hostId,
-                        githubHost: identified.githubHost,
-                        owner: identified.base.owner,
-                        repo: identified.base.repo,
-                        prNumber: identified.base.prNumber,
-                        name: formatPrRowTitle(item),
-                      }),
-                    );
-                  };
-            return <PrCard key={rowKey} item={item} onOpen={onOpen} />;
+          epicId={props.epicId}
+          tabId={props.tabId}
+          group={group}
+          collapsed={collapsedRepos.has(
+            formatRepoGroupLabel(group.repoIdentifier),
+          )}
+          onToggle={toggleRepo}
+          buildEntry={buildEntry}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One repo's rows under a collapsible header. Rows are full-bleed and split by
+ * hairlines (`divide-y`) rather than boxed, so the eye tracks one column of
+ * titles down the panel instead of re-entering a card border per PR.
+ */
+function PrRepoGroupSection(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly group: PrRepoGroup;
+  readonly collapsed: boolean;
+  readonly onToggle: (repoLabel: string) => void;
+  readonly buildEntry: (item: PrLightItem) => PrRowEntry;
+}): ReactNode {
+  const label = formatRepoGroupLabel(props.group.repoIdentifier);
+  const { onToggle } = props;
+  const handleToggle = useCallback((): void => {
+    onToggle(label);
+  }, [onToggle, label]);
+  return (
+    <div className="flex min-w-0 flex-col" data-testid="pr-repo-group">
+      <button
+        type="button"
+        aria-expanded={!props.collapsed}
+        aria-label={`${props.collapsed ? "Expand" : "Collapse"} ${label}`}
+        onClick={handleToggle}
+        className="flex w-full min-w-0 items-center gap-1.5 border-b border-border/40 px-3 py-1.5 text-left text-ui-xs text-muted-foreground transition-colors hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none"
+        data-testid="pr-repo-group-header"
+      >
+        <ChevronRight
+          className={cn(
+            "size-3.5 shrink-0 transition-transform",
+            !props.collapsed && "rotate-90",
+          )}
+          aria-hidden
+        />
+        <FolderGit2 className="size-3.5 shrink-0" aria-hidden />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <span className="shrink-0 tabular-nums">
+          {props.group.nodes.length}
+        </span>
+      </button>
+      {props.collapsed ? null : (
+        <div className="flex min-w-0 flex-col divide-y divide-border/25">
+          {props.group.nodes.map((node) => {
+            const entry = props.buildEntry(node.item);
+            return (
+              <PrRow
+                key={entry.key}
+                entry={entry}
+                linked={node.linked.map(props.buildEntry)}
+                epicId={props.epicId}
+                tabId={props.tabId}
+              />
+            );
           })}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -249,7 +340,7 @@ function PrStatusBanner(props: {
       role="status"
       data-testid={props.testId}
       className={cn(
-        "rounded-md border px-2.5 py-2 text-ui-xs",
+        "m-2 rounded-md border px-2.5 py-2 text-ui-xs",
         props.tone === "warning" &&
           "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-100",
         props.tone === "error" &&

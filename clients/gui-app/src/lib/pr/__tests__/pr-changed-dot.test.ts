@@ -28,6 +28,8 @@ const DEFAULT_ITEM: PrLightItem = {
   commentCount: 1,
   updatedAt: 1_000,
   repoIdentifier: { owner: "acme", repo: "app" },
+  repoRole: "superproject",
+  linkGroupKey: null,
   owners: [],
 };
 

@@ -3,6 +3,7 @@ import {
   defaultPrSeenFactsScopeState,
   prSeenFactsScopeKey,
   selectPrHasChangedDot,
+  selectPrScopeHasItems,
   selectPrSeenFactsScope,
   usePrSeenFactsStore,
   type PrSeenFactsScopeState,
@@ -96,5 +97,45 @@ describe("usePrSeenFactsStore", () => {
     )(usePrSeenFactsStore.getState());
     expect(scope.factsByPrKey).toEqual(next);
     expect(scope.hasChanged).toBe(false);
+  });
+
+  describe("selectPrScopeHasItems", () => {
+    it("is false for a scope that has never been observed", () => {
+      expect(
+        selectPrScopeHasItems(HOST_A, EPIC)(usePrSeenFactsStore.getState()),
+      ).toBe(false);
+    });
+
+    it("is false with no host", () => {
+      usePrSeenFactsStore.getState().seedBaseline(HOST_A, EPIC, sampleFacts);
+      expect(
+        selectPrScopeHasItems(null, EPIC)(usePrSeenFactsStore.getState()),
+      ).toBe(false);
+    });
+
+    it("is true once a PR has been seen for the scope", () => {
+      usePrSeenFactsStore.getState().seedBaseline(HOST_A, EPIC, sampleFacts);
+      expect(
+        selectPrScopeHasItems(HOST_A, EPIC)(usePrSeenFactsStore.getState()),
+      ).toBe(true);
+    });
+
+    it("does not leak across hosts", () => {
+      usePrSeenFactsStore.getState().seedBaseline(HOST_A, EPIC, sampleFacts);
+      expect(
+        selectPrScopeHasItems(HOST_B, EPIC)(usePrSeenFactsStore.getState()),
+      ).toBe(false);
+    });
+
+    it("goes back to false when the epic's last PR stops being derived", () => {
+      // The baseline is rebuilt from the whole list on every advance, so a PR
+      // that leaves the epic drops out - the panel must hide again rather
+      // than stay in the rail on a stale count.
+      usePrSeenFactsStore.getState().seedBaseline(HOST_A, EPIC, sampleFacts);
+      usePrSeenFactsStore.getState().advanceBaseline(HOST_A, EPIC, {});
+      expect(
+        selectPrScopeHasItems(HOST_A, EPIC)(usePrSeenFactsStore.getState()),
+      ).toBe(false);
+    });
   });
 });
