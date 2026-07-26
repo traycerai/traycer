@@ -52,6 +52,7 @@ import {
 } from "./landing-draft-helpers";
 import {
   findWindowIdForOpenChat,
+  findWindowIdForOpenTab,
   parseNotificationClickTarget,
 } from "./notification-target";
 import { registerAuthIpc } from "./auth-ipc";
@@ -493,23 +494,33 @@ export class RunnerIpcBridge {
 
   /**
    * Routes a native-notification click. When the click carries a chat/
-   * terminal-agent target that is already open in some live window, focuses
-   * that exact window - `NotificationFocusBridge` there brings the tile to
-   * the foreground itself. Otherwise falls back to owned-or-MRU delivery, as
-   * for any other epic-scoped event.
+   * terminal-agent target, or a terminal-route tab target, that is already
+   * open in some live window, focuses that exact window -
+   * `NotificationFocusBridge` there brings the tile to the foreground
+   * itself. Otherwise falls back to owned-or-MRU delivery, as for any other
+   * epic-scoped event.
    */
   deliverNotificationClick(payload: unknown): void {
     const target = parseNotificationClickTarget(payload);
     const openWindowId =
-      target.epicId === null || target.chatId === null
+      target.epicId === null
         ? null
-        : findWindowIdForOpenChat(
-            this.windowRegistry,
-            this.perWindowState,
-            target.epicId,
-            target.chatId,
-            target.originHostId,
-          );
+        : target.chatId !== null
+          ? findWindowIdForOpenChat(
+              this.windowRegistry,
+              this.perWindowState,
+              target.epicId,
+              target.chatId,
+              target.originHostId,
+            )
+          : target.tabId !== null
+            ? findWindowIdForOpenTab(
+                this.windowRegistry,
+                this.perWindowState,
+                target.epicId,
+                target.tabId,
+              )
+            : null;
     if (openWindowId !== null) {
       this.focusAndDeliver(
         openWindowId,

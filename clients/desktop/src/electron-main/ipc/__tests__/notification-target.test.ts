@@ -5,6 +5,7 @@ import type {
 } from "../../../ipc-contracts/window-types";
 import {
   findWindowIdForOpenChat,
+  findWindowIdForOpenTab,
   parseNotificationClickTarget,
   type NotificationTargetPerWindowState,
   type NotificationTargetWindowRegistry,
@@ -15,6 +16,7 @@ const VALID_FEED = { source: "host", id: "row-1" } as const;
 const ALL_NULL_TARGET = {
   epicId: null,
   chatId: null,
+  tabId: null,
   originHostId: null,
 } as const;
 
@@ -107,6 +109,7 @@ describe("parseNotificationClickTarget", () => {
     ).toEqual({
       epicId: "epic-1",
       chatId: "chat-1",
+      tabId: null,
       originHostId: "host-1",
     });
   });
@@ -127,6 +130,7 @@ describe("parseNotificationClickTarget", () => {
     ).toEqual({
       epicId: "epic-1",
       chatId: null,
+      tabId: null,
       originHostId: "host-1",
     });
   });
@@ -142,6 +146,7 @@ describe("parseNotificationClickTarget", () => {
     ).toEqual({
       epicId: "epic-legacy",
       chatId: "chat-legacy",
+      tabId: null,
       originHostId: null,
     });
   });
@@ -244,6 +249,7 @@ describe("parseNotificationClickTarget", () => {
     ).toEqual({
       epicId: null,
       chatId: null,
+      tabId: null,
       originHostId: "host-1",
     });
   });
@@ -260,6 +266,7 @@ describe("parseNotificationClickTarget", () => {
     ).toEqual({
       epicId: null,
       chatId: null,
+      tabId: null,
       originHostId: "host-1",
     });
   });
@@ -276,6 +283,7 @@ describe("parseNotificationClickTarget", () => {
     ).toEqual({
       epicId: null,
       chatId: null,
+      tabId: null,
       originHostId: null,
     });
     expect(
@@ -289,20 +297,116 @@ describe("parseNotificationClickTarget", () => {
     ).toEqual({
       epicId: "epic-1",
       chatId: null,
+      tabId: null,
       originHostId: null,
     });
   });
 
-  it("returns null chatId for legacy non-chat routes", () => {
+  it("returns null chatId/tabId for legacy non-target routes (epic/artifact)", () => {
     expect(
       parseNotificationClickTarget({
-        kind: "approval",
+        kind: "artifact",
         epicId: "epic-1",
         chatId: "ignored",
       }),
     ).toEqual({
       epicId: "epic-1",
       chatId: null,
+      tabId: null,
+      originHostId: null,
+    });
+  });
+
+  it("preserves chatId for legacy approval/interview routes, same as chat", () => {
+    expect(
+      parseNotificationClickTarget({
+        kind: "approval",
+        epicId: "epic-1",
+        chatId: "chat-1",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      tabId: null,
+      originHostId: null,
+    });
+    expect(
+      parseNotificationClickTarget({
+        kind: "interview",
+        epicId: "epic-1",
+        chatId: "chat-1",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      tabId: null,
+      originHostId: null,
+    });
+  });
+
+  it("preserves chatId for approval/interview routes nested in a V1 envelope", () => {
+    expect(
+      parseNotificationClickTarget({
+        kind: "notificationActivation",
+        version: 1,
+        route: { kind: "approval", epicId: "epic-1", chatId: "chat-1" },
+        feed: VALID_FEED,
+        originHostId: "host-1",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      tabId: null,
+      originHostId: "host-1",
+    });
+    expect(
+      parseNotificationClickTarget({
+        kind: "notificationActivation",
+        version: 1,
+        route: { kind: "interview", epicId: "epic-1", chatId: "chat-1" },
+        feed: VALID_FEED,
+        originHostId: "host-1",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      tabId: null,
+      originHostId: "host-1",
+    });
+  });
+
+  it("extracts tabId (not chatId) for terminal routes", () => {
+    expect(
+      parseNotificationClickTarget({
+        kind: "notificationActivation",
+        version: 1,
+        route: {
+          kind: "terminal",
+          epicId: "epic-1",
+          tabId: "tab-1",
+          terminalId: "term-1",
+          paneId: "pane-1",
+          tileInstanceId: "tile-1",
+        },
+        feed: VALID_FEED,
+        originHostId: "host-1",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      chatId: null,
+      tabId: "tab-1",
+      originHostId: "host-1",
+    });
+    expect(
+      parseNotificationClickTarget({
+        kind: "terminal",
+        epicId: "epic-1",
+        tabId: "tab-1",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      chatId: null,
+      tabId: "tab-1",
       originHostId: null,
     });
   });
@@ -572,5 +676,72 @@ describe("findWindowIdForOpenChat", () => {
     expect(
       findWindowIdForOpenChat(registry, state, "epic-1", "chat-1", null),
     ).toBe("window-first");
+  });
+});
+
+describe("findWindowIdForOpenTab", () => {
+  function snapshotWithTab(tabId: string, epicId: string): PerWindowSnapshot {
+    return {
+      epicTabs: [{ id: tabId, epicId, name: "Epic" }],
+      activeTabId: tabId,
+      canvasByTabId: {},
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    };
+  }
+
+  it("returns the non-MRU window that already has the tab open", () => {
+    const registry = new FakeRegistry(["window-mru", "window-open"]);
+    const state = new FakePerWindowState([
+      ["window-mru", emptySnapshot()],
+      ["window-open", snapshotWithTab("tab-1", "epic-1")],
+    ]);
+    expect(findWindowIdForOpenTab(registry, state, "epic-1", "tab-1")).toBe(
+      "window-open",
+    );
+  });
+
+  it("returns null when the tab is not open anywhere", () => {
+    const registry = new FakeRegistry(["window-a"]);
+    const state = new FakePerWindowState([
+      ["window-a", snapshotWithTab("other-tab", "epic-1")],
+    ]);
+    expect(
+      findWindowIdForOpenTab(registry, state, "epic-1", "tab-1"),
+    ).toBeNull();
+  });
+
+  it("returns null when the tab id matches but the epicId differs", () => {
+    const registry = new FakeRegistry(["window-a"]);
+    const state = new FakePerWindowState([
+      ["window-a", snapshotWithTab("tab-1", "epic-other")],
+    ]);
+    expect(
+      findWindowIdForOpenTab(registry, state, "epic-1", "tab-1"),
+    ).toBeNull();
+  });
+
+  it("skips registry windowIds that have no snapshot entry", () => {
+    const registry = new FakeRegistry(["dead-window", "window-open"]);
+    const state = new FakePerWindowState([
+      ["window-open", snapshotWithTab("tab-1", "epic-1")],
+    ]);
+    expect(() =>
+      findWindowIdForOpenTab(registry, state, "epic-1", "tab-1"),
+    ).not.toThrow();
+    expect(findWindowIdForOpenTab(registry, state, "epic-1", "tab-1")).toBe(
+      "window-open",
+    );
+  });
+
+  it("returns the first matching window in registry order", () => {
+    const registry = new FakeRegistry(["window-first", "window-second"]);
+    const state = new FakePerWindowState([
+      ["window-first", snapshotWithTab("tab-1", "epic-1")],
+      ["window-second", snapshotWithTab("tab-1", "epic-1")],
+    ]);
+    expect(findWindowIdForOpenTab(registry, state, "epic-1", "tab-1")).toBe(
+      "window-first",
+    );
   });
 });

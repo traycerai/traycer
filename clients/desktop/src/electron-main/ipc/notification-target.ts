@@ -46,9 +46,19 @@ const KNOWN_ROUTE_KINDS = new Set([
  * `notification-activation-envelope.ts`. */
 const KNOWN_FEED_SOURCES = new Set(["host", "app-local", "global"]);
 
+/**
+ * Route kinds that resolve to a chat/terminal-agent tile via `chatId`.
+ * `approval` and `interview` both route through the renderer's
+ * `routeEpicChatNotification` exactly like `chat` (see `routeNotification` in
+ * gui-app's `notifications/payload.ts`), so they need the same chat-tile
+ * targeting.
+ */
+const CHAT_TARGET_ROUTE_KINDS = new Set(["chat", "approval", "interview"]);
+
 export interface NotificationClickTarget {
   readonly epicId: string | null;
   readonly chatId: string | null;
+  readonly tabId: string | null;
   readonly originHostId: string | null;
 }
 
@@ -88,25 +98,37 @@ function isValidFeed(value: unknown): boolean {
 }
 
 /**
- * Reads `epicId` off a recognized-kind route object, and `chatId` too when
- * the route is chat-kind. An unrecognized `kind` (a future route shape, or a
- * stray envelope-shaped object) never yields fields - the renderer's own
- * `parseNotificationPayload` switch has the same closed set of cases.
- * `session` routes carry no `epicId` in their schema (`isNotificationPayloadRoutable`
- * never routes them), so they always yield null fields.
+ * Reads `epicId` off a recognized-kind route object, plus whichever of
+ * `chatId` (chat/approval/interview) or `tabId` (terminal) identifies the
+ * exact tile/tab for that route kind. An unrecognized `kind` (a future route
+ * shape, or a stray envelope-shaped object) never yields fields - the
+ * renderer's own `parseNotificationPayload` switch has the same closed set of
+ * cases. `session` routes carry no `epicId` in their schema
+ * (`isNotificationPayloadRoutable` never routes them), so they always yield
+ * null fields. `epic` and `artifact` routes have no exact-tile identity to
+ * target, so they always yield null `chatId`/`tabId` and fall back to
+ * owned-or-MRU.
  */
 function readRouteFields(route: unknown): {
   readonly epicId: string | null;
   readonly chatId: string | null;
+  readonly tabId: string | null;
 } {
-  if (!isRecord(route)) return { epicId: null, chatId: null };
+  if (!isRecord(route)) return { epicId: null, chatId: null, tabId: null };
   if (typeof route.kind !== "string" || !KNOWN_ROUTE_KINDS.has(route.kind)) {
-    return { epicId: null, chatId: null };
+    return { epicId: null, chatId: null, tabId: null };
   }
-  if (route.kind === "session") return { epicId: null, chatId: null };
+  if (route.kind === "session") {
+    return { epicId: null, chatId: null, tabId: null };
+  }
   const epicId = readString(route.epicId);
-  if (route.kind !== "chat") return { epicId, chatId: null };
-  return { epicId, chatId: readString(route.chatId) };
+  if (route.kind === "terminal") {
+    return { epicId, chatId: null, tabId: readString(route.tabId) };
+  }
+  if (!CHAT_TARGET_ROUTE_KINDS.has(route.kind)) {
+    return { epicId, chatId: null, tabId: null };
+  }
+  return { epicId, chatId: readString(route.chatId), tabId: null };
 }
 
 /**
@@ -124,7 +146,7 @@ export function parseNotificationClickTarget(
   payload: unknown,
 ): NotificationClickTarget {
   if (!isRecord(payload)) {
-    return { epicId: null, chatId: null, originHostId: null };
+    return { epicId: null, chatId: null, tabId: null, originHostId: null };
   }
   if (payload.kind === ACTIVATION_ENVELOPE_KIND) {
     const originHostId = payload.originHostId;
@@ -133,13 +155,13 @@ export function parseNotificationClickTarget(
       !isValidFeed(payload.feed) ||
       !isValidOriginHostId(originHostId)
     ) {
-      return { epicId: null, chatId: null, originHostId: null };
+      return { epicId: null, chatId: null, tabId: null, originHostId: null };
     }
-    const { epicId, chatId } = readRouteFields(payload.route);
-    return { epicId, chatId, originHostId };
+    const { epicId, chatId, tabId } = readRouteFields(payload.route);
+    return { epicId, chatId, tabId, originHostId };
   }
-  const { epicId, chatId } = readRouteFields(payload);
-  return { epicId, chatId, originHostId: null };
+  const { epicId, chatId, tabId } = readRouteFields(payload);
+  return { epicId, chatId, tabId, originHostId: null };
 }
 
 function isJsonRecord(
@@ -208,6 +230,31 @@ export function findWindowIdForOpenChat(
       .map((tab) => tab.id);
     const hasMatch = matchingTabIds.some((tabId) =>
       canvasHasChatTile(snapshot.canvasByTabId[tabId], chatId, originHostId),
+    );
+    if (hasMatch) return record.windowId;
+  }
+  return null;
+}
+
+/**
+ * Scans every live window's per-window snapshot for the exact epic tab a
+ * terminal notification names (`route.tabId`). Terminal routes carry a tab
+ * identity directly rather than a chat-tile id (see `routeTerminalNotification`
+ * in gui-app's `notifications/payload.ts`), so this matches on `epicTabs`
+ * instead of scanning canvas tiles. Returns the first matching windowId, or
+ * null when that tab is not open anywhere - the caller falls back to
+ * owned-or-MRU delivery in that case.
+ */
+export function findWindowIdForOpenTab(
+  windowRegistry: NotificationTargetWindowRegistry,
+  perWindowState: NotificationTargetPerWindowState,
+  epicId: string,
+  tabId: string,
+): string | null {
+  for (const record of windowRegistry.records()) {
+    const snapshot = perWindowState.get(record.windowId);
+    const hasMatch = snapshot.epicTabs.some(
+      (tab) => tab.id === tabId && tab.epicId === epicId,
     );
     if (hasMatch) return record.windowId;
   }
