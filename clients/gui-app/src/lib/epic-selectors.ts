@@ -29,6 +29,7 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type {
   GuiHarnessId,
   TuiHarnessId,
@@ -119,6 +120,7 @@ const EMPTY_NODES_AS_ARTIFACTS: ReadonlyArray<ArtifactProjection> =
   Object.freeze([]);
 const EMPTY_TREE_ID_ARRAY: readonly string[] = EMPTY_ARRAY;
 const EMPTY_TREE_ID_SET: ReadonlySet<string> = new Set<string>();
+const EMPTY_ROLE_CLAIMS: readonly RoleClaim[] = Object.freeze([]);
 
 export { EMPTY_TREE_ID_ARRAY, EMPTY_TREE_ID_SET };
 
@@ -1044,6 +1046,20 @@ export function useEpicTreeNode(id: string): TreeNode | null {
     if (Object.hasOwn(s.tree.nodeById, id)) return s.tree.nodeById[id];
     return null;
   });
+}
+
+export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
+  return useEpicStore((s) =>
+    Object.hasOwn(s.agentRoles.byAgentId, agentId)
+      ? s.agentRoles.byAgentId[agentId]
+      : EMPTY_ROLE_CLAIMS,
+  );
+}
+
+export function useEpicAgentRoleClaimsByAgentId(): Readonly<
+  Record<string, readonly RoleClaim[]>
+> {
+  return useEpicStore((s) => s.agentRoles.byAgentId);
 }
 
 /**

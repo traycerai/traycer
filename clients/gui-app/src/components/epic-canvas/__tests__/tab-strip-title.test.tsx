@@ -31,6 +31,7 @@ import type { SplitDirection } from "@/stores/epics/canvas/types";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
 }));
@@ -271,7 +272,7 @@ describe("TabStrip title", () => {
         screen.getByTestId(`chat-tab-spinner-activity-${CHAT_ID}`),
       ).toBeTruthy();
     });
-    expect(screen.getByTitle("Agent in progress")).toBeTruthy();
+    expect(anyTooltipHasText("Agent in progress")).toBe(true);
     expect(
       screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
     ).toBeNull();

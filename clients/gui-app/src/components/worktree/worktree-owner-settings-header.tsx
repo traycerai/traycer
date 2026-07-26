@@ -1,8 +1,17 @@
 import { Fragment, type ReactNode } from "react";
-import { Lock } from "lucide-react";
-import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderProfile,
+  ProviderId as WireProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { AccentDot } from "@/components/providers/accent-dot";
+import {
+  findPermissionOption,
+  type PermissionMode,
+  type ProviderId,
+} from "@/components/home/data/landing-options";
 import { useCompactRelativeTime } from "@/lib/relative-time";
 import {
   deriveOwnerSettingsHeader,
@@ -66,8 +75,11 @@ export function WorktreeOwnerSettingsHeader(props: {
     subscribed: hasSubject,
   });
 
-  const profileId = chatSettings?.profileId ?? null;
-  const profileNeeded = profileId !== null;
+  // Every CHAT needs the provider list, not just profile-bearing ones: a null
+  // `profileId` is the AMBIENT profile and now earns its own accent dot, so a
+  // subscription gated on `profileId !== null` left ambient chats unable to
+  // re-render when the list landed in cache after mount.
+  const profileNeeded = isChat;
   const hostClient = useHostClientForHostId(props.hostId);
   // Profile label is a PURE CACHE READ: `enabled: false` never fires a request,
   // so the profile row costs no RPC of its own. It resolves only when the chat
@@ -84,7 +96,10 @@ export function WorktreeOwnerSettingsHeader(props: {
     tuiHarnessId: tuiAgent?.harnessId ?? null,
     tuiModel: tuiAgent?.model ?? null,
     harnesses: catalog.harnesses,
-    profiles: listedProfiles(providersList.data?.providers ?? null),
+    profiles: harnessProfiles(
+      providersList.data?.providers ?? null,
+      chatSettings?.harnessId ?? null,
+    ),
   });
   if (view === null) return null;
   return (
@@ -95,14 +110,32 @@ export function WorktreeOwnerSettingsHeader(props: {
   );
 }
 
-/** Flattens every provider's profiles, or the shared empty list when cold. */
-function listedProfiles(
+/**
+ * The chat harness's OWN profiles, or the shared empty list when the provider
+ * cache is cold. Scoped rather than flattened across every provider: the accent
+ * dot is gated on "this provider has 2+ accounts", and a flattened list crosses
+ * that gate as soon as ANY two providers each have one - which would badge a
+ * single-account provider on the strength of an unrelated one.
+ *
+ * The two id spaces are NOT interchangeable despite both being spelled
+ * `ProviderId`: the GUI harness id is `claude` where the wire provider id is
+ * `claude-code`, so this goes through `guiHarnessIdToProviderId` rather than
+ * comparing the two directly (which type-checks nowhere and would silently
+ * match zero providers if it did).
+ */
+function harnessProfiles(
   providers: ReadonlyArray<{
+    readonly providerId: WireProviderId;
     readonly profiles: ReadonlyArray<ProviderProfile>;
   }> | null,
+  harnessId: ProviderId | null,
 ): ReadonlyArray<ProviderProfile> {
-  if (providers === null) return EMPTY_PROFILES;
-  return providers.flatMap((provider) => provider.profiles);
+  if (providers === null || harnessId === null) return EMPTY_PROFILES;
+  const providerId = guiHarnessIdToProviderId(harnessId);
+  if (providerId === null) return EMPTY_PROFILES;
+  const provider =
+    providers.find((candidate) => candidate.providerId === providerId) ?? null;
+  return provider === null ? EMPTY_PROFILES : provider.profiles;
 }
 
 /** Both record kinds carry `updatedAt`; read whichever this owner is. */
@@ -118,15 +151,28 @@ function ownerUpdatedAt(
 
 /**
  * The run settings as ONE dense line: provider mark, model, reasoning, then the
- * permission mode behind a lock. Field labels ("Provider", "Model", …) are
- * deliberately gone - each value is self-identifying, and the label column was
- * costing four stacked rows to say what one line says. The harness NAME is
+ * permission mode behind its own icon. Field labels ("Provider", "Model", …)
+ * are deliberately gone - each value is self-identifying, and the label column
+ * was costing four stacked rows to say what one line says. The harness NAME is
  * dropped too: its brand mark already identifies it, and repeating the word
  * next to the icon was the same redundancy in miniature.
  *
- * `flex-wrap` rather than a hard single line: a long model + profile pair on a
- * narrow card wraps instead of overflowing or forcing a truncation that would
- * hide the permission mode - the one value here with a safety consequence.
+ * The PROFILE is dropped from the line for the same reason, but one step
+ * further: it rides the harness mark as a corner dot instead of a trailing word
+ * (`OwnerSettingsHarnessMark`). As text it was the one unbounded value here -
+ * a user-chosen account name - and a long one wrapped the row in two, pushing
+ * the permission mode onto a second line.
+ *
+ * ONE LINE, always. This row does not wrap - the card grows to fit it instead
+ * (see the container in `worktree-owner-metadata.tsx`, which sizes itself from
+ * this row between a 24rem floor and a viewport-capped ceiling). Wrapping was
+ * the previous behaviour and it read badly: the line broke between two values
+ * that belong together and pushed the permission mode - the one value here with
+ * a safety consequence - onto a second row.
+ *
+ * At the ceiling the MODEL gives way first: it carries `min-w-0 truncate`, so
+ * an unbounded model name ellipsizes while reasoning and the permission mode,
+ * both short and bounded, stay whole.
  */
 function OwnerSettingsHeaderRows(props: {
   readonly view: OwnerSettingsHeaderView;
@@ -144,8 +190,12 @@ function OwnerSettingsHeaderRows(props: {
       : {
           key: "model",
           node: (
+            // The only segment allowed to shrink. Model names are the
+            // unbounded value on this line ("Claude Opus 4.7 (1M context)"),
+            // so at the card's ceiling this ellipsizes and the short, bounded
+            // segments beside it survive intact.
             <span
-              className="truncate font-medium"
+              className="min-w-0 truncate font-medium"
               data-testid="owner-settings-model"
             >
               {view.modelLabel}
@@ -157,8 +207,14 @@ function OwnerSettingsHeaderRows(props: {
       : {
           key: "reasoning",
           node: (
+            // Second to give way, after the model. NOT `shrink-0`: this label
+            // comes from the harness catalog (`supportedReasoningEfforts[].label`),
+            // i.e. provider-supplied text we do not bound. If every segment but
+            // the model were unshrinkable, a verbose one could push the row past
+            // the card's ceiling and - since the card is `overflow-hidden` - clip
+            // the permission mode off the right edge with no ellipsis at all.
             <span
-              className="truncate text-muted-foreground"
+              className="min-w-0 truncate text-muted-foreground"
               data-testid="owner-settings-reasoning"
             >
               {view.reasoningLabel}
@@ -170,7 +226,7 @@ function OwnerSettingsHeaderRows(props: {
           key: "fast-mode",
           node: (
             <span
-              className="text-muted-foreground"
+              className="shrink-0 text-muted-foreground"
               data-testid="owner-settings-fast-mode"
             >
               Fast
@@ -178,32 +234,11 @@ function OwnerSettingsHeaderRows(props: {
           ),
         }
       : null,
-    view.permissionLabel === null
+    view.permissionMode === null
       ? null
       : {
           key: "permissions",
-          node: (
-            <span
-              className="flex min-w-0 items-center gap-1 text-muted-foreground"
-              data-testid="owner-settings-permissions"
-            >
-              <Lock className="size-3 shrink-0" />
-              <span className="truncate">{view.permissionLabel}</span>
-            </span>
-          ),
-        },
-    view.profileLabel === null
-      ? null
-      : {
-          key: "profile",
-          node: (
-            <span
-              className="truncate text-muted-foreground"
-              data-testid="owner-settings-profile"
-            >
-              {view.profileLabel}
-            </span>
-          ),
+          node: <OwnerSettingsPermission mode={view.permissionMode} />,
         },
   ];
   const segments = allSegments.filter(
@@ -211,10 +246,10 @@ function OwnerSettingsHeaderRows(props: {
   );
   return (
     <span
-      className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border/70 px-3 py-2 text-ui-xs"
+      className="flex flex-nowrap items-center gap-2 whitespace-nowrap border-b border-border/70 px-3 py-2 text-ui-xs"
       data-testid="owner-settings-header"
     >
-      <HarnessIcon harnessId={view.harnessId} className="size-3.5 shrink-0" />
+      <OwnerSettingsHarnessMark view={view} />
       {segments.map((segment, index) => (
         <Fragment key={segment.key}>
           {index === 0 ? null : (
@@ -233,11 +268,81 @@ function OwnerSettingsHeaderRows(props: {
         </Fragment>
       ))}
       {props.updatedAt === null ? null : (
-        // `ml-auto` pins it to the far right of the line. Placed last so that
-        // when the row wraps on a narrow card the time trails the settings
-        // rather than stranding them under it.
+        // `ml-auto` pins it to the far right whenever the line is shorter than
+        // the card's floor width; at the ceiling the auto margin collapses and
+        // it simply trails the settings across a `gap-2`.
         <OwnerSettingsUpdatedAt updatedAt={props.updatedAt} />
       )}
+    </span>
+  );
+}
+
+/**
+ * Harness brand mark carrying the profile as a corner dot - the composer
+ * model-picker trigger's exact pairing (`harness-model-trigger.tsx`), down to
+ * the `size-4` mark and the `compact` corner dot, so the same account reads as
+ * the same mark whether you are picking it or auditing it.
+ *
+ * Named here rather than left as a bare icon because `AccentDot` is
+ * `aria-hidden` by construction and its own contract requires callers to pair
+ * it with a name. With the profile's text segment gone, this label is the only
+ * place the account is announced at all - so it carries the harness and the
+ * profile together, which is also the first time this row named its harness to
+ * a screen reader.
+ */
+function OwnerSettingsHarnessMark(props: {
+  readonly view: OwnerSettingsHeaderView;
+}): ReactNode {
+  const { view } = props;
+  const accentDot = view.profileAccentDot;
+  return (
+    <span
+      role="img"
+      aria-label={
+        accentDot === null
+          ? view.harnessName
+          : `${view.harnessName}, ${accentDot.label}`
+      }
+      className="relative flex shrink-0 items-center"
+      data-testid="owner-settings-harness-mark"
+    >
+      <HarnessIcon harnessId={view.harnessId} className="size-4 shrink-0" />
+      {accentDot === null ? null : (
+        <AccentDot
+          profileId={accentDot.profileId}
+          accentColor={accentDot.accentColor}
+          label={accentDot.label}
+          variant="corner"
+          size="compact"
+          className={undefined}
+        />
+      )}
+    </span>
+  );
+}
+
+/**
+ * Permission mode with the icon the rest of the app already uses for it -
+ * `ShieldCheck` / `FileCheck2` / `UnlockKeyhole`, resolved through the shared
+ * `findPermissionOption` table rather than chosen here.
+ *
+ * This row previously hardcoded a closed padlock for ALL THREE modes, so the
+ * least restricted one - "Full access" - was the one that read as locked down.
+ * Taking the icon from the same lookup as the label is what makes that
+ * inversion unrepresentable rather than merely fixed.
+ */
+function OwnerSettingsPermission(props: {
+  readonly mode: PermissionMode;
+}): ReactNode {
+  const option = findPermissionOption(props.mode);
+  const Icon = option.icon;
+  return (
+    <span
+      className="flex shrink-0 items-center gap-1 text-muted-foreground"
+      data-testid="owner-settings-permissions"
+    >
+      <Icon aria-hidden className="size-3 shrink-0" />
+      <span>{option.label}</span>
     </span>
   );
 }

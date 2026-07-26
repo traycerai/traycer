@@ -74,6 +74,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
 
 import { ProfileDropdown } from "../profile-dropdown";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 function profile(
   profileId: string,
   kind: ProviderProfile["kind"],
@@ -333,7 +334,7 @@ describe("<ProfileDropdown />", () => {
       throw new Error("Expected create row mock to render as a button.");
     }
     expect(row.disabled).toBe(true);
-    expect(row.getAttribute("title")).toBe("Local sign-in required.");
+    expect(tooltipTextNear(row)).toBe("Local sign-in required.");
     fireEvent.click(row);
     expect(onCreateProfile).not.toHaveBeenCalled();
   });

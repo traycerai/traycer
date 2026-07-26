@@ -5,6 +5,7 @@ import { AgentStopButton } from "@/components/chat/agent-stop-button";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  * A row's `surface` is UI copy ("gui"/"tui"); opening a tile needs the
  * record-backed node kind. The two map 1:1 (the inverse of `surfaceOf` in
@@ -114,20 +115,26 @@ export function AgentStopList(props: {
           key={agent.id}
           className="group flex min-w-0 items-center gap-2 rounded-md pl-5 pr-2 hover:bg-muted/40"
         >
-          <button
-            type="button"
-            onClick={() => openAgent(agent)}
-            title={`Open ${agent.title}`}
-            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+          <TooltipWrapper
+            label={`Open ${agent.title}`}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <ActivityDot active={agent.active} />
-            <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
-              {agent.title}
-            </span>
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
-              {agent.surface}
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={() => openAgent(agent)}
+              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              <ActivityDot active={agent.active} />
+              <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
+                {agent.title}
+              </span>
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+                {agent.surface}
+              </span>
+            </button>
+          </TooltipWrapper>
           <StopAffordance revealOnHover={compact}>
             <AgentStopButton
               epicId={props.epicId}

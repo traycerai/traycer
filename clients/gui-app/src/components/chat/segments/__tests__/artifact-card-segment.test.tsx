@@ -7,6 +7,7 @@ import { commitResolvedCanvasDrop } from "@/components/epic-canvas/dnd/root-dnd-
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 type TestArtifactProjection = {
   readonly id: string;
   readonly kind: EpicArtifactKind;
@@ -350,7 +351,7 @@ describe("<ArtifactCardSegment />", () => {
     expect(screen.getByText("−")).toBeTruthy();
     const title = screen.getByText("Removed Spec");
     expect(title.className).toContain("line-through");
-    expect(title.getAttribute("title")).toBe("This artifact was deleted.");
+    expect(tooltipTextNear(title)).toBe("This artifact was deleted.");
     expect(screen.queryByText("deleted")).toBeNull();
     // A tombstone has no body - it cannot be opened.
     expect(screen.queryByRole("button", { name: /Open/ })).toBeNull();
@@ -372,7 +373,7 @@ describe("<ArtifactCardSegment />", () => {
     expect(screen.getByText("−")).toBeTruthy();
     const title = screen.getByText("Fallback Deleted Spec");
     expect(title.className).toContain("line-through");
-    expect(title.getAttribute("title")).toBe("This artifact was deleted.");
+    expect(tooltipTextNear(title)).toBe("This artifact was deleted.");
     expect(screen.queryByRole("button", { name: /Open/ })).toBeNull();
   });
 
@@ -393,7 +394,7 @@ describe("<ArtifactCardSegment />", () => {
     expect(screen.queryByText("−")).toBeNull();
     const title = screen.getByText("Deleted Before Tombstone");
     expect(title.className).toContain("line-through");
-    expect(title.getAttribute("title")).toBe("This artifact was deleted.");
+    expect(tooltipTextNear(title)).toBe("This artifact was deleted.");
     expect(screen.queryByText("deleted")).toBeNull();
     expect(screen.queryByRole("button", { name: /Open/ })).toBeNull();
   });
@@ -416,7 +417,7 @@ describe("<ArtifactCardSegment />", () => {
     expect(screen.queryByText("−")).toBeNull();
     const title = screen.getByText("Missing Created Spec");
     expect(title.className).toContain("line-through");
-    expect(title.getAttribute("title")).toBe("This artifact was deleted.");
+    expect(tooltipTextNear(title)).toBe("This artifact was deleted.");
     expect(screen.queryByText("deleted")).toBeNull();
     expect(screen.queryByRole("button", { name: /Open/ })).toBeNull();
   });
