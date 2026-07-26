@@ -4,6 +4,7 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { cn } from "@/lib/utils";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const COPIED_RESET_MS = 1600;
 
 const handleCopyError = (): void => {
@@ -35,23 +36,29 @@ export function AgentMessageCopyButton(props: {
   const handleCopy = useCallback(() => copy(value), [copy, value]);
 
   return (
-    <button
-      type="button"
-      onClick={handleCopy}
-      aria-label={copied ? "Copied" : "Copy message"}
-      title={copied ? "Copied" : "Copy message"}
-      className={cn(
-        "absolute top-2 right-2 z-10 flex size-7 items-center justify-center",
-        "cursor-pointer rounded-md border border-border bg-muted text-muted-foreground shadow-md",
-        "transition-colors hover:bg-accent hover:text-foreground",
-        "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
-      )}
+    <TooltipWrapper
+      label={copied ? "Copied" : "Copy message"}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {copied ? (
-        <Check className="size-3.5" aria-hidden />
-      ) : (
-        <Copy className="size-3.5" aria-hidden />
-      )}
-    </button>
+      <button
+        type="button"
+        onClick={handleCopy}
+        aria-label={copied ? "Copied" : "Copy message"}
+        className={cn(
+          "absolute top-2 right-2 z-10 flex size-7 items-center justify-center",
+          "cursor-pointer rounded-md border border-border bg-muted text-muted-foreground shadow-md",
+          "transition-colors hover:bg-accent hover:text-foreground",
+          "focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+        )}
+      >
+        {copied ? (
+          <Check className="size-3.5" aria-hidden />
+        ) : (
+          <Copy className="size-3.5" aria-hidden />
+        )}
+      </button>
+    </TooltipWrapper>
   );
 }

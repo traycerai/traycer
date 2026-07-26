@@ -103,15 +103,21 @@ export function ProviderRail(props: ProviderRailProps) {
         label="Refresh providers & models"
         className="mt-1"
       />
-      <button
-        type="button"
-        aria-label="Provider CLI settings"
-        title="Provider CLI settings"
-        onClick={onOpenProviderSettings}
-        className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+      <TooltipWrapper
+        label="Provider CLI settings"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <Settings className="size-4" />
-      </button>
+        <button
+          type="button"
+          aria-label="Provider CLI settings"
+          onClick={onOpenProviderSettings}
+          className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <Settings className="size-4" />
+        </button>
+      </TooltipWrapper>
     </div>
   );
 }
@@ -144,12 +150,11 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
   const degradedDescriptionId = useId();
   const harness = entry.harness;
   return (
+    // One wrapper, not two: `railButtonTitle` already resolves the locked
+    // reason, the "checking availability…" state and the plain harness label,
+    // so a second wrapper for the locked case put two tooltips on one trigger.
     <TooltipWrapper
-      label={
-        disabled && !harness.availabilityPending
-          ? LOCKED_PROVIDER_TOOLTIP
-          : null
-      }
+      label={railButtonTitle(entry, disabled)}
       side="right"
       sideOffset={6}
       align={undefined}
@@ -169,7 +174,6 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
             ? degradedDescriptionId
             : undefined
         }
-        title={railButtonTitle(entry, disabled)}
         tabIndex={disabled ? -1 : undefined}
         data-active={active}
         data-degraded={entry.degraded ? true : undefined}

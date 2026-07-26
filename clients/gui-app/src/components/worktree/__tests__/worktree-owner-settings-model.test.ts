@@ -105,7 +105,10 @@ describe("deriveOwnerSettingsHeader", () => {
           serviceTier: "fast",
           profileId,
         },
-        profiles: [providerProfile(profileId, "managed", "Work account")],
+        profiles: [
+          providerProfile("ambient", "ambient", "Terminal account"),
+          providerProfile(profileId, "managed", "Work account"),
+        ],
       }),
     );
 
@@ -115,9 +118,59 @@ describe("deriveOwnerSettingsHeader", () => {
       modelLabel: "Claude Sonnet 4.5",
       reasoningLabel: "High",
       fastMode: true,
-      profileLabel: "Work account",
-      permissionLabel: "Supervised",
+      profileAccentDot: {
+        profileId,
+        accentColor: null,
+        label: "Work account",
+      },
+      permissionMode: "supervised",
     });
+  });
+
+  it.each([
+    { permissionMode: "supervised" as const },
+    { permissionMode: "auto_accept_edits" as const },
+    { permissionMode: "full_access" as const },
+  ])("passes permissionMode %j through verbatim", ({ permissionMode }) => {
+    // The mode, not a label: the header resolves BOTH its label and its icon
+    // from `findPermissionOption`, which is what stops "Full access" from
+    // rendering behind a closed padlock again.
+    const view = deriveOwnerSettingsHeader(
+      baseInput({
+        chatSettings: { ...BASE_CHAT_SETTINGS, permissionMode },
+      }),
+    );
+
+    expect(view?.permissionMode).toBe(permissionMode);
+  });
+
+  it("badges the ambient profile when the provider has two or more", () => {
+    // `profileId: null` is AMBIENT, not "no profile" - it resolves against the
+    // ambient row's `profileCommitId()` of null and earns its own mark.
+    const view = deriveOwnerSettingsHeader(
+      baseInput({
+        chatSettings: { ...BASE_CHAT_SETTINGS, profileId: null },
+        profiles: [
+          providerProfile("ambient", "ambient", "Terminal account"),
+          providerProfile("profile-1", "managed", "Work account"),
+        ],
+      }),
+    );
+
+    expect(view?.profileAccentDot?.label).toBe("Terminal account");
+  });
+
+  it("omits the accent dot when the provider has a single profile", () => {
+    // Progressive disclosure: a dot that is always there distinguishes nothing.
+    const profileId = "profile-1";
+    const view = deriveOwnerSettingsHeader(
+      baseInput({
+        chatSettings: { ...BASE_CHAT_SETTINGS, profileId },
+        profiles: [providerProfile(profileId, "managed", "Work account")],
+      }),
+    );
+
+    expect(view?.profileAccentDot).toBeNull();
   });
 
   it("falls back to raw slugs when the catalog is empty", () => {
@@ -129,29 +182,31 @@ describe("deriveOwnerSettingsHeader", () => {
     expect(view?.reasoningLabel).toBe(BASE_CHAT_SETTINGS.reasoningEffort);
   });
 
-  it("omits the profile row when the profile id isn't in the profiles list", () => {
-    // Unresolved (cold provider cache / removed profile): omitted, same as the
-    // ambient `profileId: null` case below — a raw profileId is opaque and
-    // unlike harness/model slugs isn't readable on its own.
+  it("omits the accent dot when the profile id isn't in the profiles list", () => {
+    // Unresolved (cold provider cache / removed profile): omitted rather than
+    // guessing a color from an opaque host-generated id.
     const view = deriveOwnerSettingsHeader(
       baseInput({
         chatSettings: { ...BASE_CHAT_SETTINGS, profileId: "unknown-profile" },
-        profiles: [providerProfile("other-profile", "managed", "Other")],
+        profiles: [
+          providerProfile("other-profile", "managed", "Other"),
+          providerProfile("third-profile", "managed", "Third"),
+        ],
       }),
     );
 
-    expect(view?.profileLabel).toBeNull();
+    expect(view?.profileAccentDot).toBeNull();
   });
 
-  it("omits the profile row when profileId is null", () => {
-    // Ambient: there is no profile to resolve in the first place.
+  it("omits the accent dot when the provider cache is cold", () => {
     const view = deriveOwnerSettingsHeader(
       baseInput({
         chatSettings: { ...BASE_CHAT_SETTINGS, profileId: null },
+        profiles: [],
       }),
     );
 
-    expect(view?.profileLabel).toBeNull();
+    expect(view?.profileAccentDot).toBeNull();
   });
 
   it.each([{ serviceTier: null }, { serviceTier: "" }])(
@@ -196,8 +251,8 @@ describe("deriveOwnerSettingsHeader", () => {
       modelLabel: "Claude Sonnet 4.5",
       reasoningLabel: null,
       fastMode: false,
-      profileLabel: null,
-      permissionLabel: null,
+      profileAccentDot: null,
+      permissionMode: null,
     });
   });
 

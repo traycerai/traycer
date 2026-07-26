@@ -59,10 +59,17 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
   return (
     <DropdownMenu>
       <NarrowOnlyTooltip label={label}>
+        {/* No tooltip of its own: `NarrowOnlyTooltip` above already renders one
+            (it IS a `TooltipWrapper`), and the label is VISIBLE on this pill
+            until the composer goes narrow - which is exactly when that wrapper
+            takes over. A second wrapper here put two tooltips carrying the same
+            text on one trigger, and its guard span sat between
+            `DropdownMenuTrigger asChild` and the button, so Radix's menu props
+            - `aria-haspopup`, `aria-expanded`, `data-state`, the ref - landed
+            on a generic span instead of the focusable control. */}
         <DropdownMenuTrigger asChild>
           <ToolbarPillButton
             aria-label={label}
-            title={label}
             disabled={disabled}
             className="max-w-[min(32cqw,13rem)] disabled:cursor-not-allowed disabled:opacity-50"
           >

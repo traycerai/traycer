@@ -42,6 +42,7 @@ import type { DesktopWindowsBridge } from "@/lib/windows/types";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
@@ -650,7 +651,7 @@ describe("<EpicsListPanel />", () => {
     expect(
       await screen.findByTestId("epics-list-row-activity-epic-from-history"),
     ).toBeDefined();
-    expect(screen.queryByTitle("Task activity in progress")).not.toBeNull();
+    expect(anyTooltipHasText("Task activity in progress")).toBe(true);
   });
 
   it("shows the background activity status on history rows", async () => {
@@ -663,9 +664,7 @@ describe("<EpicsListPanel />", () => {
     expect(backgroundIcon.getAttribute("class")).toContain(
       "lucide-message-square-clock",
     );
-    expect(
-      screen.queryByTitle("Background activity — agent idle"),
-    ).not.toBeNull();
+    expect(anyTooltipHasText("Background activity — agent idle")).toBe(true);
   });
 
   it("selects a history row from the outside checkbox without opening the epic", async () => {

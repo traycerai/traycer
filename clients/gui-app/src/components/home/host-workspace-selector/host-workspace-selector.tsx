@@ -110,6 +110,7 @@ import { toast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { trackUserInitiatedWorktreeWrite } from "@/lib/worktree/user-worktree-analytics";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  *
  *
@@ -857,22 +858,33 @@ function HostOnlySelect(props: {
       onValueChange={props.onSelect}
       disabled={disabled}
     >
-      <SelectTrigger
-        size="sm"
-        aria-label="Host"
-        title={disabled ? "Terminal host is fixed" : undefined}
-        data-testid="composer-host-trigger"
-        className="h-7 w-full min-w-0 max-w-full justify-start gap-1.5 overflow-hidden border-transparent bg-transparent px-1.5 text-ui-sm text-muted-foreground opacity-70 transition-[background-color,opacity] hover:bg-accent/50 hover:opacity-100 focus-visible:opacity-100 disabled:opacity-70 data-[state=open]:rounded-b-none dark:bg-transparent dark:hover:bg-accent/50 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1 *:data-[slot=select-value]:overflow-hidden *:data-[slot=select-value]:truncate"
+      <TooltipWrapper
+        label={disabled ? "Terminal host is fixed" : undefined}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <SelectValue placeholder={props.hostLabel} />
-        {props.loading ? (
-          <AgentSpinningDots
-            className="text-current/70"
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-      </SelectTrigger>
+        {/* `flex w-full min-w-0`, NOT `inline-flex`: the trigger below is
+            `w-full`, and a shrink-to-fit guard would make that resolve against
+            the guard rather than the selector's cell, collapsing the control. */}
+        <span className="flex w-full min-w-0">
+          <SelectTrigger
+            size="sm"
+            aria-label="Host"
+            data-testid="composer-host-trigger"
+            className="h-7 w-full min-w-0 max-w-full justify-start gap-1.5 overflow-hidden border-transparent bg-transparent px-1.5 text-ui-sm text-muted-foreground opacity-70 transition-[background-color,opacity] hover:bg-accent/50 hover:opacity-100 focus-visible:opacity-100 disabled:opacity-70 data-[state=open]:rounded-b-none dark:bg-transparent dark:hover:bg-accent/50 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1 *:data-[slot=select-value]:overflow-hidden *:data-[slot=select-value]:truncate"
+          >
+            <SelectValue placeholder={props.hostLabel} />
+            {props.loading ? (
+              <AgentSpinningDots
+                className="text-current/70"
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+          </SelectTrigger>
+        </span>
+      </TooltipWrapper>
       <SelectContent
         data-testid="composer-host-popover"
         sideOffset={0}

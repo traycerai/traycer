@@ -1768,35 +1768,43 @@ function WorktreeSelectAllToggle(props: {
   else if (indeterminate) indicator = <Minus className="size-3" />;
   const label = "Select all visible worktrees";
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={ariaChecked}
-      aria-label={label}
-      title={label}
-      data-testid="worktrees-select-all"
-      disabled={props.selectableCount === 0}
-      onClick={props.onToggle}
-      className={cn(
-        "flex h-7 shrink-0 items-center gap-1.5 rounded-sm border px-2 text-ui-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
-        allSelected || indeterminate
-          ? "border-border bg-muted text-foreground"
-          : "border-border bg-background text-foreground hover:border-foreground hover:bg-muted",
-      )}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <span
-        aria-hidden
-        className={cn(
-          "flex size-3.5 items-center justify-center rounded-[0.1875rem] border",
-          allSelected || indeterminate
-            ? "border-foreground/70 bg-foreground text-background"
-            : "border-muted-foreground/50",
-        )}
-      >
-        {indicator}
+      <span className="inline-flex">
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={ariaChecked}
+          aria-label={label}
+          data-testid="worktrees-select-all"
+          disabled={props.selectableCount === 0}
+          onClick={props.onToggle}
+          className={cn(
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-sm border px-2 text-ui-xs font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-40",
+            allSelected || indeterminate
+              ? "border-border bg-muted text-foreground"
+              : "border-border bg-background text-foreground hover:border-foreground hover:bg-muted",
+          )}
+        >
+          <span
+            aria-hidden
+            className={cn(
+              "flex size-3.5 items-center justify-center rounded-[0.1875rem] border",
+              allSelected || indeterminate
+                ? "border-foreground/70 bg-foreground text-background"
+                : "border-muted-foreground/50",
+            )}
+          >
+            {indicator}
+          </span>
+          <span>Select all</span>
+        </button>
       </span>
-      <span>Select all</span>
-    </button>
+    </TooltipWrapper>
   );
 }
 
@@ -1963,13 +1971,17 @@ function WorktreeBulkDeleteDialog(props: {
             </div>
             <ul className="max-h-[min(30vh,12rem)] overflow-y-auto border-t border-border/60 px-5 py-2">
               {summary.paths.map((path) => (
-                <li
+                <TooltipWrapper
                   key={path}
-                  className="truncate py-0.5 text-ui-xs text-muted-foreground"
-                  title={path}
+                  label={path}
+                  side="top"
+                  sideOffset={undefined}
+                  align={undefined}
                 >
-                  {path}
-                </li>
+                  <li className="truncate py-0.5 text-ui-xs text-muted-foreground">
+                    {path}
+                  </li>
+                </TooltipWrapper>
               ))}
             </ul>
             <div className="flex justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-3">
@@ -2729,17 +2741,23 @@ function WorktreeTaskAssociation(props: {
             variant="outline"
             className="max-w-[min(60vw,16rem)] cursor-pointer font-normal hover:bg-muted hover:text-muted-foreground"
           >
-            <button
-              type="button"
-              title={item.title}
-              aria-label={`Open Task ${item.title}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                props.onOpenTask(item.epicId);
-              }}
+            <TooltipWrapper
+              label={item.title}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <span className="truncate">{item.title}</span>
-            </button>
+              <button
+                type="button"
+                aria-label={`Open Task ${item.title}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onOpenTask(item.epicId);
+                }}
+              >
+                <span className="truncate">{item.title}</span>
+              </button>
+            </TooltipWrapper>
           </Badge>
           <TaskMergeRollupBadge
             rollup={props.taskRollupByEpicId.get(item.epicId) ?? null}
@@ -2777,18 +2795,24 @@ function TaskMergeRollupBadge(props: {
   if (rollup === null || rollup.status === "none") return null;
   const fullyMerged = rollup.status === "merged";
   return (
-    <span
-      className="text-ui-xs text-muted-foreground"
-      data-testid="task-merge-rollup"
-      data-rollup-status={rollup.status}
-      title={
+    <TooltipWrapper
+      label={
         fullyMerged
           ? "Every branch this Task owns has a merged PR"
           : `${rollup.merged} of ${rollup.total} owned branches merged`
       }
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      Task {taskMergeRollupLabel(rollup)}
-    </span>
+      <span
+        className="text-ui-xs text-muted-foreground"
+        data-testid="task-merge-rollup"
+        data-rollup-status={rollup.status}
+      >
+        Task {taskMergeRollupLabel(rollup)}
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -2813,22 +2837,28 @@ function WorktreesRepoExpansionControl(props: {
 }): ReactNode {
   const label = props.allCollapsed ? "Expand all" : "Collapse all";
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      aria-label={label}
-      title={label}
-      data-testid="worktrees-toggle-all-repos"
-      className="text-muted-foreground hover:text-foreground"
-      onClick={props.onToggle}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {props.allCollapsed ? (
-        <CopyPlus className="size-4" />
-      ) : (
-        <CopyMinus className="size-4" />
-      )}
-    </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={label}
+        data-testid="worktrees-toggle-all-repos"
+        className="text-muted-foreground hover:text-foreground"
+        onClick={props.onToggle}
+      >
+        {props.allCollapsed ? (
+          <CopyPlus className="size-4" />
+        ) : (
+          <CopyMinus className="size-4" />
+        )}
+      </Button>
+    </TooltipWrapper>
   );
 }
 
@@ -2947,18 +2977,29 @@ function WorktreeRowActions(props: {
             <FileSliders className="size-3.5" aria-hidden />
             {props.scriptsLabel}
           </DropdownMenuItem>
-          <DropdownMenuItem
-            data-testid="worktree-row-delete"
-            variant="destructive"
-            aria-label={deleteLabel}
-            title={deleteLabel}
-            disabled={deleteDisabled}
-            onSelect={props.onDelete}
-            className="gap-2 px-2 py-2"
+          <TooltipWrapper
+            label={deleteLabel}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <Trash2 className="size-3.5" aria-hidden />
-            Delete worktree
-          </DropdownMenuItem>
+            {/* `flex w-full`, not `inline-flex`: the guard becomes the menu
+                content's layout child, and a shrink-to-fit one would narrow the
+                row to its text. */}
+            <span className="flex w-full">
+              <DropdownMenuItem
+                data-testid="worktree-row-delete"
+                variant="destructive"
+                aria-label={deleteLabel}
+                disabled={deleteDisabled}
+                onSelect={props.onDelete}
+                className="gap-2 px-2 py-2"
+              >
+                <Trash2 className="size-3.5" aria-hidden />
+                Delete worktree
+              </DropdownMenuItem>
+            </span>
+          </TooltipWrapper>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

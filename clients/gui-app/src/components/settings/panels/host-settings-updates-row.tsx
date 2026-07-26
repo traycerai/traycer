@@ -1,6 +1,7 @@
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
   formatCheckedAtTooltip,
   updatesDescription,
@@ -167,22 +168,30 @@ function UpdatesControl(props: {
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       <span className="text-ui-sm text-emerald-500">Up to date</span>
-      <Button
-        variant="ghost"
-        size="sm"
-        disabled={registryFetching}
-        onClick={onRefresh}
-        title={tooltipLabel}
+      <TooltipWrapper
+        label={tooltipLabel}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        {registryFetching ? (
-          <AgentSpinningDots
-            className="mr-2 size-3"
-            testId={undefined}
-            variant={undefined}
-          />
-        ) : null}
-        Check now
-      </Button>
+        <span className="inline-flex">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={registryFetching}
+            onClick={onRefresh}
+          >
+            {registryFetching ? (
+              <AgentSpinningDots
+                className="mr-2 size-3"
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+            Check now
+          </Button>
+        </span>
+      </TooltipWrapper>
     </div>
   );
 }

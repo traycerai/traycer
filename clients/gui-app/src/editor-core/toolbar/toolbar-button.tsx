@@ -1,5 +1,6 @@
 import type { ComponentPropsWithoutRef, ReactNode, Ref } from "react";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export interface ToolbarButtonProps extends Omit<
   ComponentPropsWithoutRef<"button">,
   "children" | "title"
@@ -20,17 +21,25 @@ export interface ToolbarButtonProps extends Omit<
 export function ToolbarButton(props: ToolbarButtonProps) {
   const { icon, label, active, disabled, type, className, ...rest } = props;
   return (
-    <button
-      type={type ?? "button"}
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      data-active={active ? "true" : "false"}
-      disabled={disabled}
-      className={className}
-      {...rest}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {icon}
-    </button>
+      <span className="inline-flex">
+        <button
+          type={type ?? "button"}
+          aria-label={label}
+          aria-pressed={active}
+          data-active={active ? "true" : "false"}
+          disabled={disabled}
+          className={className}
+          {...rest}
+        >
+          {icon}
+        </button>
+      </span>
+    </TooltipWrapper>
   );
 }
