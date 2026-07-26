@@ -106,31 +106,43 @@ describe("buildDefaultBranchByPath", () => {
     });
   });
 
-  it("truncates the composed name to 80 characters", () => {
+  it("falls back to the default prefix when the configured prefix is over max length", () => {
+    // Over-max prefixes are invalid now and must not flow into composition.
     const longPrefix = "x".repeat(100);
     const result = buildDefaultBranchByPath([summary({})], false, longPrefix);
-    const name = result["/repos/app"] ?? "";
 
-    expect(name.length).toBe(80);
-    expect(name).toBe(`${longPrefix}swift-otter`.slice(0, 80));
+    expect(result).toEqual({
+      "/repos/app": "traycer/swift-otter",
+    });
   });
 
-  it("truncates multi-workspace composed names to 80 characters", () => {
+  it("falls back to the default prefix for multi-workspace when the configured prefix is over max length", () => {
     const longPrefix = "p".repeat(70);
     const result = buildDefaultBranchByPath(
       [summary({ repoIdentifier: { owner: "acme", repo: "long-repo-name" } })],
       true,
       longPrefix,
     );
-    const name = result["/repos/app"] ?? "";
-    const full = `${longPrefix}long-repo-name-swift-otter`;
 
-    expect(name.length).toBe(80);
-    expect(name).toBe(full.slice(0, 80));
+    expect(result).toEqual({
+      "/repos/app": "traycer/long-repo-name-swift-otter",
+    });
   });
 
-  // Validator caps prefixes at 40 chars; suffix material is always [a-z0-9-].
-  // So slice(0, 80) always lands inside that suffix and never ends on / or .
+  it("falls back to the default prefix for other invalid values", () => {
+    // Leading dash is also invalid; same choke-point fallback applies.
+    const result = buildDefaultBranchByPath([summary({})], false, "-wip/");
+
+    expect(result).toEqual({
+      "/repos/app": "traycer/swift-otter",
+    });
+  });
+
+  // A max-length (40-char) prefix + a max-length (40-char) repo slug can
+  // together exceed 80, so the cutoff can land in the repo-slug material, not
+  // just the random suffix. That is still safe: both the repo slug
+  // (slugify-branch-seed) and the suffix (random-friendly-name) are
+  // ASCII-sanitized to [a-z0-9-], so slice(0, 80) never ends on / or .
   it("keeps multi-workspace truncation safe under a max-length prefix", () => {
     const prefix = "p".repeat(40);
     const result = buildDefaultBranchByPath(

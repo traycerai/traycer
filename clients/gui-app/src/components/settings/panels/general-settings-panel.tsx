@@ -127,6 +127,7 @@ export function GeneralSettingsPanel() {
           title="Chat & composer"
           tone="default"
           dataTestId={undefined}
+          fill={false}
         >
           <VoiceSettingsSection />
           <SettingsRow
@@ -177,6 +178,7 @@ export function GeneralSettingsPanel() {
           title="Running agents"
           tone="default"
           dataTestId={undefined}
+          fill={false}
         >
           <SettingsRow
             label="Prevent sleep while running"
@@ -226,6 +228,7 @@ export function GeneralSettingsPanel() {
           title="Setup & migration"
           tone="default"
           dataTestId={undefined}
+          fill={false}
         >
           <SettingsRow
             label="Product tour"
@@ -295,6 +298,7 @@ function DangerZoneSection() {
         title="Danger Zone"
         tone="danger"
         dataTestId="settings-danger-zone"
+        fill={false}
       >
         <SettingsFileEditSnapshotsSection />
         <SettingsLocalAppStateSection />

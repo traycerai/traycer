@@ -166,6 +166,27 @@ describe("WorktreeBranchPrefixSection", () => {
     expectQuietChrome();
   });
 
+  it("wires aria-describedby to the error alert only while invalid", () => {
+    render(<WorktreeBranchPrefixSection />);
+    const input = getPrefixInput();
+
+    // Valid/empty draft: no describedby and no alert.
+    expect(input.getAttribute("aria-describedby")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    typePrefix(input, "bad prefix");
+
+    const error = screen.getByRole("alert");
+    expect(error.textContent).toBe("Prefix can't contain spaces.");
+    expect(error.id.length).toBeGreaterThan(0);
+    expect(input.getAttribute("aria-describedby")).toBe(error.id);
+
+    // Back to a valid draft: describedby and alert both clear.
+    typePrefix(input, "feat-");
+    expect(input.getAttribute("aria-describedby")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("keeps the invalid draft visible without reverting on blur", () => {
     useSettingsStore.setState({ worktreeBranchPrefix: "traycer/" });
     render(<WorktreeBranchPrefixSection />);
@@ -275,6 +296,78 @@ describe("WorktreeBranchPrefixSection", () => {
         name: `Reset to "${DEFAULT_WORKTREE_BRANCH_PREFIX}"`,
       }),
     ).toBeTruthy();
+  });
+
+  it("shows the reset button for an invalid in-progress draft while saved is still the default", () => {
+    // Reset is driven by the ACTIVE DRAFT, not the committed store value, so
+    // a pending invalid edit still has a way back to the default.
+    render(<WorktreeBranchPrefixSection />);
+    const input = getPrefixInput();
+
+    expect(
+      screen.queryByRole("button", {
+        name: `Reset to "${DEFAULT_WORKTREE_BRANCH_PREFIX}"`,
+      }),
+    ).toBeNull();
+
+    typePrefix(input, "-wip/");
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+    const reset = screen.getByRole("button", {
+      name: `Reset to "${DEFAULT_WORKTREE_BRANCH_PREFIX}"`,
+    });
+    fireEvent.click(reset);
+
+    expect(input.value).toBe(DEFAULT_WORKTREE_BRANCH_PREFIX);
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+    expect(
+      screen.queryByRole("button", {
+        name: `Reset to "${DEFAULT_WORKTREE_BRANCH_PREFIX}"`,
+      }),
+    ).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("restores focus to the prefix input after reset unmounts the button", () => {
+    useSettingsStore.setState({ worktreeBranchPrefix: "custom/" });
+    render(<WorktreeBranchPrefixSection />);
+    const input = getPrefixInput();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Reset to "${DEFAULT_WORKTREE_BRANCH_PREFIX}"`,
+      }),
+    );
+
+    // Reset button unmounts once the draft is the default - focus must land
+    // on the still-mounted input, not drop to <body>.
+    expect(document.activeElement).toBe(input);
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("uses a fluid wrap-friendly control row (not a fixed w-44 input)", () => {
+    // jsdom does no layout - assert the class contract only.
+    render(<WorktreeBranchPrefixSection />);
+    const input = getPrefixInput();
+
+    // Control cluster is the Input's direct parent; outer row is one level up.
+    const controlCluster = input.parentElement;
+    expect(controlCluster instanceof HTMLElement).toBe(true);
+    if (!(controlCluster instanceof HTMLElement)) return;
+    expect(controlCluster.className).toContain("max-w-full");
+    expect(controlCluster.className).toContain("flex-wrap");
+
+    const outerRow = controlCluster.parentElement;
+    expect(outerRow instanceof HTMLElement).toBe(true);
+    if (!(outerRow instanceof HTMLElement)) return;
+    expect(outerRow.className).toContain("flex-wrap");
+
+    expect(input.className).toContain("w-[min(45vw,11rem)]");
+    expect(input.className).not.toContain("w-44");
   });
 
   it("resets the draft and store to the default immediately on reset click", () => {
@@ -418,6 +511,10 @@ describe("WorktreeBranchPrefixSection", () => {
     // any trimmed commit, because raw draft never equaled the trimmed store.
     // hasLocalEdit must clear on commit so a later idle external write is adopted
     // (not stuck on Saving…) and a stray focus+blur cannot clobber it.
+    //
+    // Flash fix: an adopted external value that differs from the value just
+    // flashed must clear the "Saved ✓" indicator immediately - it must not
+    // linger over a value it never described.
     render(<WorktreeBranchPrefixSection />);
     const input = getPrefixInput();
 
@@ -433,11 +530,12 @@ describe("WorktreeBranchPrefixSection", () => {
     });
 
     expect(input.value).toBe("external/");
-    // No spinner after idle adopt (the check may still be up from the prior
-    // commit's flash timer - that is the user's own resolved edit, not the
-    // external write). Pure idle-external-no-flash is covered separately.
+    // External adopt of a different value clears both spinner and flash.
     expect(
       screen.queryByTestId("worktree-branch-prefix-saving-spinner"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("worktree-branch-prefix-saved-check"),
     ).toBeNull();
 
     input.focus();

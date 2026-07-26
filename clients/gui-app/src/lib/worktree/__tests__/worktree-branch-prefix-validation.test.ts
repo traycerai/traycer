@@ -115,4 +115,43 @@ describe("worktreeBranchPrefixError", () => {
       "Prefix can't contain consecutive slashes.",
     );
   });
+
+  // Leading `-` is illegal for git refs (`git check-ref-format --branch
+  // "-wip/swift-otter"` exits 128). Dash mid-string or at the end stays fine.
+  it.each([
+    ["-", "lone dash"],
+    ["-wip/", "dash-prefixed slash path"],
+    ["-wip", "dash-prefixed bare token"],
+  ])("rejects leading dash in %s (%s)", (value) => {
+    expect(worktreeBranchPrefixError(value)).toBe(
+      'Prefix can\'t start with "-".',
+    );
+  });
+
+  // Regression: previously accepted, then composed into a ref git rejects.
+  it('rejects "-wip/" (runtime-proven git check-ref-format failure)', () => {
+    expect(worktreeBranchPrefixError("-wip/")).not.toBeNull();
+    expect(worktreeBranchPrefixError("-wip/")).toBe(
+      'Prefix can\'t start with "-".',
+    );
+  });
+
+  // Non-whitespace ASCII controls (whitespace like tab still hits the spaces
+  // message first - covered above). DEL and C0 bytes are the new cases.
+  it.each([
+    ["a\x01b", "SOH 0x01"],
+    ["a\x1bb", "ESC 0x1B"],
+    ["a\x7fb", "DEL 0x7F"],
+  ])("rejects control characters in %s (%s)", (value) => {
+    expect(worktreeBranchPrefixError(value)).toBe(
+      "Prefix can't contain control characters.",
+    );
+  });
+
+  it.each([
+    ["traycer/", "default traycer/ prefix still accepted"],
+    ["feat-", "mid/trailing dash still accepted"],
+  ])("still accepts %s (%s)", (value) => {
+    expect(worktreeBranchPrefixError(value)).toBeNull();
+  });
 });

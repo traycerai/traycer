@@ -28,6 +28,7 @@ import {
   type DiffViewerPreferencesPatch,
 } from "@/lib/diff/diff-viewer-preferences";
 import { type EditorId } from "@traycer/protocol/host";
+import { worktreeBranchPrefixError } from "@/lib/worktree/worktree-branch-prefix-validation";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
@@ -385,6 +386,31 @@ export const useSettingsStore = create<SettingsState>()(
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
       partialize: partializeSettingsState,
+      // Defensive re-derivation of `worktreeBranchPrefix` on every rehydration
+      // (mirrors `workspace-folders-store.ts`'s `merge`): a hand-edited or
+      // otherwise corrupted localStorage value would otherwise rehydrate
+      // verbatim (the default shallow merge takes persisted fields as-is),
+      // flow straight into branch composition, and still mount the editor
+      // showing it as healthy. Every other field keeps the default shallow
+      // merge behavior.
+      merge: (persistedState, currentState) => {
+        const persisted: Record<string, unknown> = isRecord(persistedState)
+          ? persistedState
+          : {};
+        const merged: SettingsState = { ...currentState, ...persisted };
+        return {
+          ...merged,
+          worktreeBranchPrefix:
+            typeof merged.worktreeBranchPrefix === "string" &&
+            worktreeBranchPrefixError(merged.worktreeBranchPrefix) === null
+              ? merged.worktreeBranchPrefix
+              : DEFAULT_WORKTREE_BRANCH_PREFIX,
+        };
+      },
     },
   ),
 );
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}

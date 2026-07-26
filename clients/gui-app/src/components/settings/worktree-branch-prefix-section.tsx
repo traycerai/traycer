@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Check, RotateCcw } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -46,9 +46,20 @@ export function WorktreeBranchPrefixSection(): ReactNode {
   const [hasLocalEdit, setHasLocalEdit] = useState(false);
   // Transient post-save confirmation (Flow 4: spinner while saving, a brief
   // check on success, then quiet chrome) - no permanently reserved status
-  // line. Set only for the current user's own resolved edits/reset, not for
-  // an adopted external write from elsewhere.
+  // line. Set for the current user's own resolved edits/reset; an adopted
+  // EXTERNAL write clears it below (in the render-phase adoption block)
+  // rather than letting it linger over a value it never described - unless
+  // the adoption is just the same commit's own whitespace-trim convergence,
+  // which must keep flashing (see `lastFlashedValue`).
   const [justSaved, setJustSaved] = useState(false);
+  // The value most recently passed to `flashSaved` - lets the render-phase
+  // adoption block (below) tell apart its OWN commit's normalization
+  // convergence (adopted value === what was just flashed - keep the flash)
+  // from a later, genuinely external write arriving while that flash is
+  // still showing (adopted value differs - clear it). State, not a ref: the
+  // render-phase adoption block below reads it while rendering, and refs
+  // can't be read during render.
+  const [lastFlashedValue, setLastFlashedValue] = useState<string | null>(null);
   const draftRef = useRef(draft);
   // `commitIfValid` is a fresh closure every render, but the debounce timer
   // below is scheduled once (in `onChange`) and keeps calling that same
@@ -65,6 +76,12 @@ export function WorktreeBranchPrefixSection(): ReactNode {
   // stable while they edit" applies to the example too - a suffix that
   // re-rolled on every keystroke would be distracting noise, not signal).
   const [previewSuffix] = useState(() => pickFriendlyBranchSuffix());
+  const errorId = useId();
+  // Reset unmounts once the draft returns to the default (see `showReset`
+  // below) - focus the adjacent Input so it doesn't silently drop to
+  // `<body>` (mirrors `host-settings-summary-card.tsx`'s focus-restoration
+  // convention for a control that disappears after the action it triggers).
+  const prefixInputRef = useRef<HTMLInputElement>(null);
 
   // Adjusted during render (React's documented way to sync state off a
   // changing external value) rather than in an Effect, so there's no extra
@@ -72,6 +89,9 @@ export function WorktreeBranchPrefixSection(): ReactNode {
   if (!hasLocalEdit && saved !== draft) {
     setDraft(saved);
     setError(null);
+    if (justSaved && saved !== lastFlashedValue) {
+      setJustSaved(false);
+    }
   }
 
   // Refs can't be written during render (see above) - mirror `draft` into
@@ -112,7 +132,8 @@ export function WorktreeBranchPrefixSection(): ReactNode {
     savedFlashRef.current = null;
   };
 
-  const flashSaved = (): void => {
+  const flashSaved = (value: string): void => {
+    setLastFlashedValue(value);
     clearSavedFlash();
     setJustSaved(true);
     savedFlashRef.current = window.setTimeout(() => {
@@ -143,7 +164,7 @@ export function WorktreeBranchPrefixSection(): ReactNode {
     if (trimmed !== useSettingsStore.getState().worktreeBranchPrefix) {
       setWorktreeBranchPrefix(trimmed);
     }
-    if (hadLocalEdit) flashSaved();
+    if (hadLocalEdit) flashSaved(trimmed);
   };
 
   const flush = (): void => {
@@ -151,7 +172,11 @@ export function WorktreeBranchPrefixSection(): ReactNode {
     commitIfValid(draftRef.current);
   };
 
-  const isDefault = saved === DEFAULT_WORKTREE_BRANCH_PREFIX;
+  // Driven by the ACTIVE DRAFT (not `saved`) so Reset stays available to
+  // cancel a pending or invalid in-progress edit even when nothing has been
+  // committed yet (saved is still the default) - otherwise a draft like
+  // "-wip/" has no way back to the default short of manually clearing it.
+  const showReset = draft !== DEFAULT_WORKTREE_BRANCH_PREFIX;
   const previewPrefix = draft.trim();
   const previewBranch =
     previewPrefix.length > 0
@@ -160,7 +185,7 @@ export function WorktreeBranchPrefixSection(): ReactNode {
 
   return (
     <div className="overflow-hidden rounded-lg border border-border/60 bg-card/40">
-      <div className="flex items-center gap-3.5 px-3.5 py-2.5">
+      <div className="flex flex-wrap items-center gap-3.5 px-3.5 py-2.5">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="text-ui-sm font-medium text-foreground">
@@ -173,9 +198,9 @@ export function WorktreeBranchPrefixSection(): ReactNode {
             <span className="font-medium text-foreground">{previewBranch}</span>
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1.5">
           <div className="flex size-7 shrink-0 items-center justify-center">
-            {!isDefault ? (
+            {showReset ? (
               <TooltipWrapper
                 label={RESET_TOOLTIP}
                 side="top"
@@ -195,7 +220,11 @@ export function WorktreeBranchPrefixSection(): ReactNode {
                     setHasLocalEdit(false);
                     hasLocalEditRef.current = false;
                     setWorktreeBranchPrefix(DEFAULT_WORKTREE_BRANCH_PREFIX);
-                    flashSaved();
+                    flashSaved(DEFAULT_WORKTREE_BRANCH_PREFIX);
+                    // The button itself unmounts once `showReset` goes false
+                    // (draft is now the default) - move focus to the
+                    // still-mounted Input rather than let it drop to <body>.
+                    prefixInputRef.current?.focus();
                   }}
                 >
                   <RotateCcw className="size-3.5" />
@@ -204,11 +233,13 @@ export function WorktreeBranchPrefixSection(): ReactNode {
             ) : null}
           </div>
           <Input
+            ref={prefixInputRef}
             value={draft}
             aria-label="Branch prefix"
             aria-invalid={error !== null}
+            aria-describedby={error !== null ? errorId : undefined}
             placeholder="traycer/"
-            className="h-8 w-44 font-mono text-ui-sm"
+            className="h-8 w-[min(45vw,11rem)] font-mono text-ui-sm"
             onChange={(event) => {
               const next = event.target.value;
               draftRef.current = next;
@@ -240,7 +271,11 @@ export function WorktreeBranchPrefixSection(): ReactNode {
         </div>
       </div>
       {error !== null ? (
-        <p className="border-t border-border/40 px-3.5 py-2 text-ui-xs text-destructive">
+        <p
+          id={errorId}
+          role="alert"
+          className="border-t border-border/40 px-3.5 py-2 text-ui-xs text-destructive"
+        >
           {error}
         </p>
       ) : null}

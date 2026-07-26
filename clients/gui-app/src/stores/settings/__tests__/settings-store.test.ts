@@ -461,6 +461,91 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("feat-");
   });
 
+  it("rehydrates an invalid persisted worktree branch prefix to the default", async () => {
+    // Leading-dash and control-char values must not rehydrate verbatim.
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: "-wip/" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+  });
+
+  it("rehydrates a control-character worktree branch prefix to the default", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: "a\x01b" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+  });
+
+  it("rehydrates a non-string worktree branch prefix to the default", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: 42 },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+  });
+
+  it("rehydrates a null worktree branch prefix to the default", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: null },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+  });
+
+  it("still shallow-merges unrelated persisted fields through the custom merge", async () => {
+    // Custom merge only special-cases worktreeBranchPrefix; other fields must
+    // still rehydrate via the normal shallow spread path.
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: {
+          worktreeBranchPrefix: "feat-",
+          quoteReplyEnabled: false,
+        },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("feat-");
+    expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
+  });
+
   it("rehydrates old settings without worktreeBranchPrefix to the default", async () => {
     window.localStorage.setItem(
       "traycer-gui-app:settings",

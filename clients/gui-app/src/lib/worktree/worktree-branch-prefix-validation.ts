@@ -1,12 +1,20 @@
 const ILLEGAL_CHARACTERS_PATTERN = /[~^:?*[\\]/;
+// Intentional: matches git's own "no ASCII control characters" ref-name rule
+// (bytes below 0x20, plus DEL).
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARACTERS_PATTERN = /[\x00-\x1f\x7f]/;
 
-// The composed branch name is `${prefix}${suffix}` (or
-// `${prefix}${repoSlug}-${suffix}`), sliced to 80 chars; the suffix material
-// is always `[a-z0-9-]` (see `random-friendly-name.ts` / `slugify-branch-seed.ts`).
-// Capping the prefix here at less than half the 80-char budget guarantees the
-// slice always lands inside that suffix material, so truncation can never cut
-// a composed name down to an illegal or empty ref - no post-composition repair
-// needed.
+// The composed branch name is `${prefix}${suffix}` (single workspace) or
+// `${prefix}${repoSlug}-${suffix}` (multi-workspace), sliced to 80 chars. The
+// prefix is capped at 40 chars below, but `repoSlug` (`slugify-branch-seed.ts`)
+// is ALSO capped at 40 chars - a max-length prefix plus a max-length slug
+// already exceeds 80 on its own, so the slice can land inside the repo-slug
+// material, not just the random suffix. That is still safe: both the repo
+// slug and the suffix (`random-friendly-name.ts`) are ASCII-sanitized to
+// `[a-z0-9-]`, so every character reachable at the cutoff - suffix or repo
+// slug - comes from that safe set. Truncation can therefore never cut a
+// composed name down to an illegal or empty ref (a lone trailing `-` is a
+// valid ref character), so no post-composition repair is needed.
 const MAX_LENGTH = 40;
 
 /**
@@ -19,11 +27,15 @@ export function worktreeBranchPrefixError(value: string): string | null {
     return `Prefix is too long (max ${MAX_LENGTH} characters).`;
   }
   if (/\s/.test(value)) return "Prefix can't contain spaces.";
+  if (CONTROL_CHARACTERS_PATTERN.test(value)) {
+    return "Prefix can't contain control characters.";
+  }
   if (ILLEGAL_CHARACTERS_PATTERN.test(value)) {
     return "Prefix can't contain ~ ^ : ? * [ or \\.";
   }
   if (value.includes("..")) return 'Prefix can\'t contain "..".';
   if (value.includes("@{")) return 'Prefix can\'t contain "@{".';
+  if (value.startsWith("-")) return 'Prefix can\'t start with "-".';
   if (value.startsWith("/")) return 'Prefix can\'t start with "/".';
   if (value.includes("//")) return "Prefix can't contain consecutive slashes.";
   for (const component of value.split("/")) {
