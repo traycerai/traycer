@@ -6,7 +6,10 @@ import {
 } from "@/components/home/data/landing-options";
 import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  DEFAULT_WORKTREE_BRANCH_PREFIX,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 
 function resetSettingsStore(): void {
   window.localStorage.clear();
@@ -20,6 +23,7 @@ function resetSettingsStore(): void {
     showNavigatorResourceStats: false,
     pinContextUsageBreakdown: false,
     quoteReplyEnabled: true,
+    worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
   });
 }
@@ -415,5 +419,61 @@ describe("useSettingsStore", () => {
       lineNumbers: false,
       indicatorStyle: "none",
     });
+  });
+
+  it("defaults the worktree branch prefix to traycer/", () => {
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
+    expect(DEFAULT_WORKTREE_BRANCH_PREFIX).toBe("traycer/");
+  });
+
+  it("updates the worktree branch prefix via the setter", () => {
+    useSettingsStore.getState().setWorktreeBranchPrefix("feat-");
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("feat-");
+  });
+
+  it("accepts an empty worktree branch prefix (no prefix)", () => {
+    useSettingsStore.getState().setWorktreeBranchPrefix("");
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("");
+  });
+
+  it("persists the worktree branch prefix", () => {
+    useSettingsStore.getState().setWorktreeBranchPrefix("anurag/");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+
+    expect(persisted ?? "").toContain('"worktreeBranchPrefix":"anurag/"');
+  });
+
+  it("rehydrates a persisted worktree branch prefix", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { worktreeBranchPrefix: "feat-" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe("feat-");
+  });
+
+  it("rehydrates old settings without worktreeBranchPrefix to the default", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:settings",
+      JSON.stringify({
+        state: { artifactIconColorMode: "none" },
+        version: 1,
+      }),
+    );
+
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().worktreeBranchPrefix).toBe(
+      DEFAULT_WORKTREE_BRANCH_PREFIX,
+    );
   });
 });

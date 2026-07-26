@@ -56,6 +56,11 @@ export function inactiveCursorStyleFor(
 export const DEFAULT_UI_FONT_SIZE = 15;
 export const DEFAULT_CODE_FONT_SIZE = 12;
 
+// Default worktree branch prefix, shared with the General panel so its
+// reset-to-default affordance and the store's initial state stay a single
+// source of truth.
+export const DEFAULT_WORKTREE_BRANCH_PREFIX = "traycer/";
+
 export interface SettingsState {
   theme: ThemeMode;
   themePreset: ThemePreset;
@@ -109,6 +114,12 @@ export interface SettingsState {
   /** BCP-47-ish dictation language hint, or "auto". */
   voiceLanguage: string;
   /**
+   * Prefix prepended verbatim to the branch name pre-filled when creating a
+   * new worktree (no separator is auto-appended - the user types it, e.g.
+   * `traycer/`, `anurag/`, `feat-`). Empty string means no prefix.
+   */
+  worktreeBranchPrefix: string;
+  /**
    * Quote-to-composer affordance. Opt-out: enabling it (default) surfaces a
    * quote button when selecting assistant text, inserting the selection into
    * the chat composer as a blockquote.
@@ -152,6 +163,7 @@ export interface SettingsState {
   setDefaultEditor: (id: EditorId | null) => void;
   setVoiceInputEnabled: (value: boolean) => void;
   setVoiceLanguage: (value: string) => void;
+  setWorktreeBranchPrefix: (value: string) => void;
   setQuoteReplyEnabled: (value: boolean) => void;
   setSteerOnModEnterEnabled: (value: boolean) => void;
   setDiffViewerPreferences: (preferences: DiffViewerPreferences) => void;
@@ -186,6 +198,7 @@ type PersistedSettingsState = Pick<
   | "defaultEditor"
   | "voiceInputEnabled"
   | "voiceLanguage"
+  | "worktreeBranchPrefix"
   | "quoteReplyEnabled"
   | "steerOnModEnterEnabled"
   | "diffViewerPreferences"
@@ -253,6 +266,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     defaultEditor: state.defaultEditor,
     voiceInputEnabled: state.voiceInputEnabled,
     voiceLanguage: state.voiceLanguage,
+    worktreeBranchPrefix: state.worktreeBranchPrefix,
     quoteReplyEnabled: state.quoteReplyEnabled,
     steerOnModEnterEnabled: state.steerOnModEnterEnabled,
     diffViewerPreferences: state.diffViewerPreferences,
@@ -288,6 +302,7 @@ export const useSettingsStore = create<SettingsState>()(
       defaultEditor: "vscode",
       voiceInputEnabled: true,
       voiceLanguage: "auto",
+      worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
       quoteReplyEnabled: true,
       steerOnModEnterEnabled: true,
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -354,6 +369,7 @@ export const useSettingsStore = create<SettingsState>()(
       },
       setVoiceInputEnabled: makeSetter(set, "voiceInputEnabled"),
       setVoiceLanguage: makeSetter(set, "voiceLanguage"),
+      setWorktreeBranchPrefix: makeSetter(set, "worktreeBranchPrefix"),
       setQuoteReplyEnabled: makeSetter(set, "quoteReplyEnabled"),
       setSteerOnModEnterEnabled: makeSetter(set, "steerOnModEnterEnabled"),
       setDiffViewerPreferences: makeSetter(set, "diffViewerPreferences"),

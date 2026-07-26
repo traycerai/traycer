@@ -30,7 +30,8 @@ SettingsLayout
         ├── KeybindingsSettingsPanel
         ├── ShellSettingsPanel
         ├── WorktreesSettingsPanel
-        └── HostSettingsPanel
+        ├── HostSettingsPanel
+        └── DiagnosticsSettingsPanel
 ```
 
 Settings is also presented as a **modal** via `settings-modal-content.tsx`,
@@ -42,17 +43,61 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
 
 - `settings-layout.tsx` Owns the two-column shell for the settings route.
 - `settings-sidebar.tsx` Renders navigation from `settings-sections.ts`.
-- `settings-panel-shell.tsx` Shared width, card shell, and panel spacing.
+- `settings-panel-shell.tsx` Shared width, header, and panel spacing - density-
+  aware (see below).
+- `settings-row.tsx` Shared label/description/control row - also density-aware.
+- `settings-group.tsx` A named group of rows: a small, quiet label OUTSIDE a
+  bordered card (never a row-shaped band inside one). Used by General; `tone:
+"danger"` gives Danger Zone its restrained-red card without a separate
+  component.
 - `panels/*.tsx` Route-mounted settings sections.
 - `controls/settings-select.tsx` Shared select wrapper used by settings rows.
 - `src/stores/settings-store.ts` Persisted local settings state.
+- `src/providers/settings-density-context.ts` `SettingsDensityContext` /
+  `useSettingsDensity()` - `"compact" | "relaxed"`, default `"relaxed"`.
+  `settings-modal-content.tsx` provides `"compact"` for the modal overlay
+  (`PromotableModalFrame` hard-caps its content at `80vh`); the promoted-tab
+  route path never provides it, so it stays `"relaxed"` by default. A discrete
+  signal from the two known entry points, not a measured container query -
+  the overlay's height ceiling is architectural, not something that varies
+  continuously with window size. `SettingsPanelShell` and `SettingsRow` read
+  it directly (tighter header/row padding and a smaller title in `compact`);
+  General and Worktrees additionally read it locally for their own bespoke
+  multi-card gaps. Out of scope: the Worktrees toolbar/list rows, which stay
+  unchanged regardless of density.
 
 ## Sections
 
-- `General` App-level preferences: agent turn-completion notifications, prevent
-  sleep while running, pin context usage breakdown (global toggle for the
-  always-visible agent context-window breakdown, default off), voice input,
-  local snapshot storage management, and data migration.
+- `General` App behavior, agent activity, and local data controls, divided
+  into four named groups via `settings-group.tsx`: a small, quiet `<h2>`
+  label sits OUTSIDE its own bordered card, so orientation (the label) and
+  action (the card's rows) read as different things - a group label never
+  looks like another setting row. This replaced an earlier row-shaped
+  section-header-band-inside-one-card layout (`settings-section-header.tsx`,
+  now deleted) after user feedback that the bands blended into the options
+  and ran too tall; a design pass (`general-settings-core-flows` artifact)
+  settled the current shape. Groups are ordered by frequency and risk
+  (most-touched first, destructive last), not alphabetized; row internals,
+  controls, and confirmation flows are unchanged from before either reorg.
+  - **Chat & composer**: Voice input (`voice-settings-section.tsx`), Quote
+    reply on text selection, Steer with Cmd/Ctrl+Enter (toggles the fixed
+    chord's mid-turn-steering semantics - stays out of Keybindings, which is
+    for rebinding), Pin context usage breakdown (global toggle for the
+    always-visible agent context-window breakdown, default off).
+  - **Running agents**: Prevent sleep while running, Show global resources
+    button, Show navigator resource stats (these stay out of Appearance -
+    they change information visibility, not styling).
+  - **Setup & migration**: Product tour (replay onboarding), Data migration
+    (retry moving local SQLite tasks/epics to cloud - stays out of
+    Diagnostics, which is support capture, not user data recovery).
+  - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
+"danger"`, `data-testid="settings-danger-zone"`, kept last): File Edit
+    Snapshots (local pre-edit snapshot storage, size + clear), Local app
+    state (reset tabs/layout/drafts/settings/view prefs + reload), Remove
+    Traycer (conditional on `hostManagement`; becomes "Traycer removed / Quit
+    Traycer" after removal). The zone's distinct restrained-red card/label
+    tone is unchanged from before the reorg, just carried by the shared
+    group component instead of bespoke markup.
 - `Appearance` Theme, global artifact icon color mode, type-color customization,
   and typography controls.
   - **Typography.** Three structurally identical rows - `UI font`, `Code font`,
@@ -373,20 +418,106 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     file no longer exists (flagged `missing`). Env **rename** is client-sequenced
     (`envOverrideSet` new → `envOverrideDelete` old) with an inline unique-key +
     `/^[A-Za-z_][A-Za-z0-9_]*$/` guard.
-- `Worktrees` Host-wide management of the git worktrees Traycer creates under
-  `~/.traycer/worktrees/`, presented as a calm inspection-and-cleanup list, not
-  a delete console. A host selector (default = active host, gated on
-  `useHostReachability`, demoted to quiet toolbar chrome rather than a
-  dominant control) drives a disk-truth list - so orphaned worktrees whose
-  owning agent was deleted still appear - grouped by repo under quiet,
-  collapsible headers (`WorktreeRepoHeader`) that stay visually secondary to
-  row status. The selected host is reached through a **transient per-host
-  client** (`useHostClientFor`) so picking a host never swaps the app-wide
-  active host or reloads the Epic list. Backed by the host
-  `worktree.listAllForHost` / `worktree.deleteByPath` RPCs through
-  `useHostQuery` / `useHostMutation`. Setup/teardown script editing is NOT
-  here - the create-worktree flow owns it, and scripts otherwise live in the
-  committed `.traycer/environment.json`.
+- `Worktrees` Two stacked cards, no section headings: a compact **branch-
+  prefix strip** (client-wide creation default) directly under the page
+  header, then the **worktree inventory** (the pre-existing host-scoped
+  management list, unchanged) taking all remaining height. Earlier this was
+  two `settings-section-header.tsx`-banded sections labelled "New worktrees" /
+  "Existing worktrees" inside one continuous card; a design pass
+  (`general-settings-core-flows` artifact, following user feedback that the
+  worktree list was starved of space in the modal overlay) replaced both
+  headings with a genuinely compact strip and let the inventory own the rest
+  of the pane - each card's own content (the strip's label + "All hosts" tag,
+  the inventory's host/search/filter toolbar) already says what it is, so a
+  redundant heading above either would just repeat that.
+  - **Branch-prefix strip** (`worktree-branch-prefix-section.tsx`, backed by
+    `worktreeBranchPrefix` in `settings-store.ts`, default `"traycer/"`).
+    One control line: a **Branch prefix** label + a quiet **All hosts** scope
+    tag, a live example line below it ("New branches start like
+    **traycer/quiet-otter**"), then reset + a plain text `Input` + inline
+    save feedback, all on the same row. The example previews
+    `${draft.trim()}${suffix}` (an unprefixed suffix when the trimmed draft
+    is empty) using a friendly two-word suffix
+    (`random-friendly-name.ts#pickFriendlyBranchSuffix`) generated ONCE per
+    mount and held stable while typing - only the prefix part changes as the
+    user types, so the suffix itself isn't distracting noise. The input is
+    used verbatim as the prefix for the branch name pre-filled when creating
+    a new worktree - no separator is auto-appended, so the user types it
+    (`traycer/`, `anurag/`, `feat-`); an empty value means no prefix,
+    mirroring `composeDefaultNewBranch`'s existing "empty means skip"
+    precedent. Accessible name is `"Branch prefix"` (renamed from the older
+    `"Worktree branch prefix"` to match the new visible label - the page
+    title already says "Worktrees", so repeating it in every control's name
+    read as redundant under the new design).
+    - **Debounced autosave, mechanics unchanged, presentation reworked.** A
+      valid, changed draft still persists ~500ms after the last keystroke;
+      Enter and blur still flush a pending save immediately. The draft is
+      still the single source of truth while a local edit is in flight -
+      tracked by an explicit flag (not string comparison, which breaks once
+      a trimmed commit can make the raw draft and the saved value diverge by
+      whitespace alone) - and still adopts an idle external write (another
+      window, rehydration) once no local edit is in flight, normalizing to
+      the trimmed value the same way a local commit does. What changed is
+      purely the feedback surface: the old permanently-reserved "Saving… /
+      Saved" status line is gone. A compact `AgentSpinningDots` spinner
+      appears beside the input while a valid save is pending; on a
+      successful write it becomes a brief `Check` (~1.6s, mirrors
+      `SegmentCopyButton`'s `COPIED_RESET_MS` flash convention) then returns
+      to quiet chrome with nothing reserved - the flash fires only for the
+      current user's own resolved edit or the reset button, never for an
+      adopted external write. An invalid draft shows a concise error on a
+      persistent line BELOW the control instead, and only then does the
+      strip's card grow a row to hold it; correcting the value removes the
+      error and resumes autosave. A ghost `RotateCcw` reset button occupies
+      the same reserved `size-7` left gutter as the font-size rows in
+      Appearance, appears once the value differs from the default, and - on
+      click - cancels any pending debounce, writes the default immediately,
+      and flashes the same brief success check. The spinner/check pair is
+      visual-only (icon, `aria-hidden` where applicable), so a visually
+      hidden `sr-only` `role="status" aria-live="polite"` span sits alongside
+      it carrying the same "Saving…" / "Saved" text for assistive tech -
+      mirrors the existing `PrimaryChangeLiveRegion` convention
+      (`host-workspace-selector/primary-change-live-region.tsx`). Both the
+      visual indicator and the live-region text are driven by the same
+      explicit "local edit in flight" flag mentioned above, not by comparing
+      draft/saved values - so a resolved edit that normalizes back to the
+      already-saved value (pure whitespace) still flashes success, while an
+      idle external write or an already-clean field's blur stays quiet.
+    - **Next-use-only** (unchanged): changing the setting does not retrofit a
+      branch name already pre-filled in an open composer/picker - it applies
+      to worktrees configured after the change (newly resolved folders,
+      freshly opened composers, submit-time composition), matching the app's
+      seed-time-snapshot norm elsewhere (`composerMode` draft seeding,
+      `applySeed`). Light client-side validation
+      (`worktree-branch-prefix-validation.ts`) rejects an illegal git ref
+      (spaces, `~ ^ : ? * [ \`, `..`, `@{`, a leading `/`, consecutive `//`),
+      anything over 40 characters, and any slash-separated component that
+      starts with `.` or ends with `.lock`, with an inline error instead of
+      saving - git remains the final authority at branch-creation time. The
+      40-char cap keeps the composed name's `.slice(0, 80)` truncation always
+      landing inside the random-suffix material (`[a-z0-9-]` only), so
+      truncation can never produce an illegal or empty ref and needs no
+      post-composition repair. Threaded into `composeDefaultNewBranch`
+      (`lib/worktree/default-branch-name.ts`) from the two worktree-picker
+      call sites in `host-workspace-selector.tsx` and the cached-default path
+      in `use-landing-composer-actions.ts`; entirely client-local, no host
+      RPC or protocol change.
+  - **Worktree inventory.** Host-wide management of the git worktrees Traycer
+    creates under `~/.traycer/worktrees/`, presented as a calm
+    inspection-and-cleanup list, not a delete console - own bordered card,
+    no heading above it. A host selector
+    (default = active host, gated on `useHostReachability`, demoted to quiet
+    toolbar chrome rather than a dominant control) drives a disk-truth list -
+    so orphaned worktrees whose owning agent was deleted still appear -
+    grouped by repo under quiet, collapsible headers (`WorktreeRepoHeader`)
+    that stay visually secondary to row status. The selected host is reached
+    through a **transient per-host client** (`useHostClientFor`) so picking a
+    host never swaps the app-wide active host or reloads the Epic list (and
+    never affects the branch-prefix default above). Backed by the host
+    `worktree.listAllForHost` / `worktree.deleteByPath` RPCs through
+    `useHostQuery` / `useHostMutation`. Setup/teardown script editing is NOT
+    here - the create-worktree flow owns it, and scripts otherwise live in the
+    committed `.traycer/environment.json`.
   - **Evidence tiers, not a safety verdict.** Each row leads with exactly one
     loud status pill (`WorktreeTierPill`, classification shared with the
     Task-delete dialog and the `traycer-housekeeping` skill via
@@ -481,6 +612,10 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   CLI. The legacy `/settings/service` route now redirects here so any bookmark,
   remembered tab path, or tray command lands on the same pane as the primary
   sidebar entry.
+- `Diagnostics` Per-component log verbosity on this machine (App / CLI /
+  Host, `LogLevelRow`, all default Info) plus a recent-log-tail viewer with
+  copy/open-folder actions (`DiagnosticsLogs`). Desktop-only - the panel
+  shows a plain fallback message where no support bridge exists (web shell).
 
 The default editor (`defaultEditor` in the settings store) has no dedicated
 panel - the Open split button on the Epic header doubles as its picker: clicking

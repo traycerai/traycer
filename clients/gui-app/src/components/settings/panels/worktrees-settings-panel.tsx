@@ -77,6 +77,8 @@ import {
 import { type HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
+import { useSettingsDensity } from "@/providers/settings-density-context";
 import {
   Select,
   SelectContent,
@@ -217,16 +219,22 @@ function useObservedHeight(): {
 }
 
 /**
- * Host-wide worktree management. Lists every git worktree under the selected
- * host's `~/.traycer/worktrees/` creation path (disk-truth, so orphans whose
+ * Two stacked cards, no section headings - the branch-prefix strip's own
+ * label + "All hosts" scope tag and the inventory's own host/search/filter
+ * toolbar already identify what each card is, so a redundant "New
+ * worktrees" / "Existing worktrees" heading above either would just repeat
+ * that. The branch-prefix strip is a client-wide creation default; the
+ * inventory below lists every git worktree under the selected host's
+ * `~/.traycer/worktrees/` creation path (disk-truth, so orphans whose
  * owning chat/agent was deleted still appear) and lets the user delete ones
  * they no longer need.
  *
  * The selected host is reached through transient per-host clients
  * (`useHostClientFor` for listing, `useHostStreamClientFor` for the
  * streamed delete), so picking a host here never swaps the app-wide active
- * host or reloads the Epic list. The host picker + a refresh control sit
- * in a toolbar directly above the worktree cards.
+ * host or reloads the Epic list - and never affects the branch-prefix
+ * default above, which is not host-scoped. The host picker + a refresh
+ * control sit in a toolbar directly above the worktree cards.
  */
 export function WorktreesSettingsPanel(): ReactNode {
   const activeHostId = useReactiveActiveHostId();
@@ -248,22 +256,33 @@ export function WorktreesSettingsPanel(): ReactNode {
   // silently re-subscribe and re-run the delete pipeline. A dropped socket
   // surfaces the failure instead.
   const openStreamTransport = useWorktreeDeleteStreamTransportFactory();
+  const compact = useSettingsDensity() === "compact";
 
   return (
     <SettingsPanelShell
       title="Worktrees"
-      description="Git worktrees Traycer created under ~/.traycer/worktrees on the selected host. Remove ones you no longer need - including orphans whose agent was deleted."
+      description="Set the default branch prefix and manage Traycer-created worktrees."
       fillHeight
-      bodyClassName="relative max-h-[min(85vh,52rem)]"
+      bodyClassName="relative rounded-none border-none bg-transparent"
     >
-      <WorktreesBody
-        client={client}
-        openStreamTransport={openStreamTransport}
-        hostId={effectiveId}
-        hosts={hosts}
-        value={effectiveId}
-        onChange={setSelectedId}
-      />
+      <div
+        className={cn(
+          "flex h-full min-h-0 flex-col",
+          compact ? "gap-2.5" : "gap-3",
+        )}
+      >
+        <WorktreeBranchPrefixSection />
+        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-card/40">
+          <WorktreesBody
+            client={client}
+            openStreamTransport={openStreamTransport}
+            hostId={effectiveId}
+            hosts={hosts}
+            value={effectiveId}
+            onChange={setSelectedId}
+          />
+        </div>
+      </div>
     </SettingsPanelShell>
   );
 }
