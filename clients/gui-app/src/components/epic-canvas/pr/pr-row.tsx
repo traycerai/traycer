@@ -34,7 +34,6 @@ import {
   formatPrStateLabel,
   fullyIdentifiedPrBase,
   prChecksSummary,
-  prLinkedRowIdentityLabel,
   prRowIdentityLabel,
   prRowTitleText,
   type PrChecksDotTone,
@@ -113,7 +112,7 @@ const REVIEW_BADGE: Record<
 };
 
 export interface PrRowEntry {
-  /** Stable list identity (`prListRowKey`), used for both top-level and nested rows. */
+  /** Stable list identity (`prListRowKey`). */
   readonly key: string;
   readonly item: PrLightItem;
   /**
@@ -140,13 +139,14 @@ export interface PrRowEntry {
  * card's idiom), which is why there is no separate "Open" pill competing with
  * the title.
  *
- * `linked` carries the owned-submodule PRs enumerated from the same worktree
- * (see `linkPrItems`); they render as indented sub-rows under a connector rule
- * rather than as a disconnected second repo group.
+ * Every PR gets this row, including an owned-submodule one: it sits in its own
+ * repo group (see `orderRepoGroupKeys`, which places that group directly under
+ * its superproject's) rather than collapsing to a one-line child. A submodule
+ * PR is its own review, with its own checks and its own conversation, so it
+ * gets the same four bands to say so.
  */
 export function PrRow(props: {
   readonly entry: PrRowEntry;
-  readonly linked: readonly PrRowEntry[];
   readonly epicId: string;
   readonly tabId: string;
 }): ReactNode {
@@ -244,9 +244,6 @@ export function PrRow(props: {
           className={undefined}
         />
       </div>
-      {props.linked.length === 0 ? null : (
-        <PrRowLinked entries={props.linked} tabId={props.tabId} />
-      )}
     </div>
   );
 }
@@ -460,101 +457,6 @@ function PrNumberAnchor(props: {
     >
       {props.children}
     </a>
-  );
-}
-
-/**
- * The owned-submodule PRs that shipped with the row above, under a connector
- * rule. Each is a real row of its own - clicking opens ITS detail tile - kept
- * to one line because the parent already carries the shared context (branch,
- * owning chat, when it moved).
- */
-function PrRowLinked(props: {
-  readonly entries: readonly PrRowEntry[];
-  readonly tabId: string;
-}): ReactNode {
-  return (
-    <div
-      className="ml-5 flex min-w-0 flex-col border-l border-border/60 pb-1.5"
-      data-testid="pr-row-linked"
-    >
-      {props.entries.map((entry) => (
-        <PrLinkedRow key={entry.key} entry={entry} tabId={props.tabId} />
-      ))}
-    </div>
-  );
-}
-
-function PrLinkedRow(props: {
-  readonly entry: PrRowEntry;
-  readonly tabId: string;
-}): ReactNode {
-  const item = props.entry.item;
-  const onOpen = props.entry.onOpen;
-  const clickable = onOpen !== null;
-  const isActive = useIsActiveTile(props.tabId, props.entry.tileId);
-  const StateIcon = PR_STATE_ICON[item.state];
-  const title = prRowTitleText(item);
-
-  const handleActivate = useCallback((): void => {
-    onOpen?.();
-  }, [onOpen]);
-
-  const handleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLDivElement>): void => {
-      if (event.target !== event.currentTarget) return;
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        onOpen?.();
-      }
-    },
-    [onOpen],
-  );
-
-  return (
-    <div
-      role={clickable ? "button" : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      aria-label={clickable ? `Open ${formatPrRowTitle(item)}` : undefined}
-      onClick={clickable ? handleActivate : undefined}
-      onKeyDown={clickable ? handleKeyDown : undefined}
-      data-testid="pr-linked-row"
-      data-active={isActive ? "true" : "false"}
-      data-pr-state={item.state}
-      aria-current={isActive ? true : undefined}
-      className={cn(
-        "relative flex min-w-0 items-center gap-1.5 py-1 pr-3 pl-2 text-ui-xs transition-colors",
-        clickable &&
-          "cursor-pointer focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none",
-        // Same treatment as the parent row - see the note there.
-        isActive ? "bg-accent/35" : clickable && "hover:bg-accent/20",
-        item.state === "closed" && "opacity-70",
-      )}
-    >
-      {isActive ? (
-        <DropLine
-          orientation="vertical"
-          glow={false}
-          className="absolute inset-y-0.5 left-0 rounded-l-none rounded-r"
-          testId="pr-linked-row-active-indicator"
-        />
-      ) : null}
-      <StateIcon
-        className={cn("size-3 shrink-0", PR_STATE_TINT_CLASS[item.state])}
-        aria-hidden
-      />
-      <span className="shrink-0 font-mono text-muted-foreground">
-        {prLinkedRowIdentityLabel(item)}
-      </span>
-      {title === null ? null : (
-        <span
-          className="min-w-0 flex-1 truncate text-foreground/80"
-          data-testid="pr-linked-row-title"
-        >
-          {title}
-        </span>
-      )}
-    </div>
   );
 }
 

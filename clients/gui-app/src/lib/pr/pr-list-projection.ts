@@ -10,20 +10,9 @@ import type {
   PrRepoIdentifier,
 } from "@traycer/protocol/host/pr-schemas";
 
-/**
- * One top-level row plus the owned-submodule PRs that shipped with it. The
- * host marks both sides of a worktree binding entry with a shared
- * `linkGroupKey` (see `prLinkGroupKeySchema`); a paired internal+OSS change
- * then reads as ONE piece of work instead of two unrelated repo groups.
- */
-export interface PrListNode {
-  readonly item: PrLightItem;
-  readonly linked: readonly PrLightItem[];
-}
-
 export interface PrRepoGroup {
   readonly repoIdentifier: PrRepoIdentifier;
-  readonly nodes: readonly PrListNode[];
+  readonly items: readonly PrLightItem[];
 }
 
 const STATE_RANK: Record<PrLightItem["state"], number> = {
@@ -59,89 +48,82 @@ export function orderPrItemsWithinGroup(
 }
 
 /**
- * Attaches each owned-submodule PR to the superproject PR it shares a
- * `linkGroupKey` with, and returns the rows that stay top-level.
+ * Group order: an owned submodule's repo lands directly beneath the
+ * superproject repo it shipped with, everything else in first-seen order.
  *
- * A submodule row is only nested when its parent is actually present in the
- * frame - an orphan (parent PR not opened yet, or its repo filtered out)
- * stays a top-level row under its own repo group rather than disappearing.
+ * The pairing comes from the shared `linkGroupKey` the host stamps on both
+ * sides of one worktree binding entry (see `prLinkGroupKeySchema`). It moves
+ * WHERE a group sits and nothing else - a submodule PR keeps its own repo
+ * dropdown and its own full-size row, because it is its own review with its
+ * own checks and its own conversation. Adjacency is enough to say "these
+ * shipped together"; nesting said "this one is a detail of that one", which
+ * is not what a submodule PR is.
+ *
+ * A submodule whose superproject PR is not in the frame (not opened yet, or
+ * its repo filtered out) simply keeps its first-seen position.
  */
-export function linkPrItems(
+function orderRepoGroupKeys(
   items: readonly PrLightItem[],
-): readonly PrListNode[] {
-  const parentIndexByLinkKey = new Map<string, number>();
-  items.forEach((item, index) => {
-    if (item.repoRole !== "superproject" || item.linkGroupKey === null) return;
-    if (parentIndexByLinkKey.has(item.linkGroupKey)) return;
-    parentIndexByLinkKey.set(item.linkGroupKey, index);
-  });
-  const nodes = items.map((item): PrListNode => ({ item, linked: [] }));
-  const nested = new Set<number>();
-  const linkedByParentIndex = new Map<number, PrLightItem[]>();
-  items.forEach((item, index) => {
-    if (item.repoRole !== "submodule" || item.linkGroupKey === null) return;
-    const parentIndex = parentIndexByLinkKey.get(item.linkGroupKey);
-    if (parentIndex === undefined) return;
-    nested.add(index);
-    linkedByParentIndex.set(parentIndex, [
-      ...(linkedByParentIndex.get(parentIndex) ?? []),
-      item,
+  groupKeyOf: (item: PrLightItem) => string,
+): readonly string[] {
+  const firstSeen: string[] = [];
+  for (const item of items) {
+    const key = groupKeyOf(item);
+    if (!firstSeen.includes(key)) firstSeen.push(key);
+  }
+  const superprojectGroupByLinkKey = new Map<string, string>();
+  for (const item of items) {
+    if (item.repoRole !== "superproject" || item.linkGroupKey === null)
+      continue;
+    if (superprojectGroupByLinkKey.has(item.linkGroupKey)) continue;
+    superprojectGroupByLinkKey.set(item.linkGroupKey, groupKeyOf(item));
+  }
+  // Each submodule group is pulled to just after its parent's group. Keyed by
+  // group rather than by item so a repo contributing several submodule PRs
+  // moves once, as a unit.
+  const followersByGroupKey = new Map<string, string[]>();
+  const pulled = new Set<string>();
+  for (const item of items) {
+    if (item.repoRole !== "submodule" || item.linkGroupKey === null) continue;
+    const groupKey = groupKeyOf(item);
+    if (pulled.has(groupKey)) continue;
+    const parentGroupKey = superprojectGroupByLinkKey.get(item.linkGroupKey);
+    if (parentGroupKey === undefined || parentGroupKey === groupKey) continue;
+    pulled.add(groupKey);
+    followersByGroupKey.set(parentGroupKey, [
+      ...(followersByGroupKey.get(parentGroupKey) ?? []),
+      groupKey,
     ]);
-  });
-  return nodes
-    .map((node, index) => {
-      const linked = linkedByParentIndex.get(index);
-      if (linked === undefined) return node;
-      return { item: node.item, linked: orderPrItemsWithinGroup(linked) };
-    })
-    .filter((_node, index) => !nested.has(index));
+  }
+  return firstSeen.flatMap((key) =>
+    pulled.has(key) ? [] : [key, ...(followersByGroupKey.get(key) ?? [])],
+  );
 }
 
 /**
- * Groups by `repoIdentifier` in first-seen order (the host enumerates a
- * repo's internal PR immediately followed by its OSS-submodule twin, so
- * first-seen order already keeps paired PRs adjacent - decision #1). Each
- * group's rows are ordered open → merged → closed.
- *
- * Operates on LINKED nodes, so a nested submodule PR never also lists as its
- * own top-level row, and a repo whose every PR nested elsewhere contributes no
- * group at all.
+ * Groups by `repoIdentifier`. Every PR is a top-level row in its own repo
+ * group - see {@link orderRepoGroupKeys} for how a submodule's group is
+ * placed. Each group's rows are ordered open → merged → closed.
  */
 export function groupPrItemsByRepo(
   items: readonly PrLightItem[],
 ): readonly PrRepoGroup[] {
-  const order: string[] = [];
-  const byKey = new Map<string, PrListNode[]>();
+  const byKey = new Map<string, PrLightItem[]>();
   const identifierByKey = new Map<string, PrRepoIdentifier>();
-  for (const node of linkPrItems(items)) {
-    const key = repoGroupKey(node.item.repoIdentifier);
-    const existing = byKey.get(key);
-    if (existing === undefined) {
-      order.push(key);
-      identifierByKey.set(key, node.item.repoIdentifier);
-      byKey.set(key, [node]);
-    } else {
-      byKey.set(key, [...existing, node]);
-    }
+  for (const item of items) {
+    const key = repoGroupKey(item.repoIdentifier);
+    identifierByKey.set(key, item.repoIdentifier);
+    byKey.set(key, [...(byKey.get(key) ?? []), item]);
   }
-  return order.map((key) => {
-    const nodes = byKey.get(key);
+  return orderRepoGroupKeys(items, (item) =>
+    repoGroupKey(item.repoIdentifier),
+  ).map((key) => {
+    const groupItems = byKey.get(key);
     const repoIdentifier = identifierByKey.get(key);
-    if (nodes === undefined || repoIdentifier === undefined) {
+    if (groupItems === undefined || repoIdentifier === undefined) {
       throw new Error(`pr-list-projection: missing group for key "${key}"`);
     }
-    return { repoIdentifier, nodes: orderPrNodesWithinGroup(nodes) };
-  });
-}
-
-function orderPrNodesWithinGroup(
-  nodes: readonly PrListNode[],
-): readonly PrListNode[] {
-  return [...nodes].sort((left, right) => {
-    const stateDelta =
-      STATE_RANK[left.item.state] - STATE_RANK[right.item.state];
-    if (stateDelta !== 0) return stateDelta;
-    return byMostRecentlyUpdated(left.item, right.item);
+    return { repoIdentifier, items: orderPrItemsWithinGroup(groupItems) };
   });
 }
 
@@ -223,16 +205,6 @@ export function prRowIdentityLabel(item: PrLightItem): string {
 export function prRowTitleText(item: PrLightItem): string | null {
   if (item.title === null || item.title.length === 0) return null;
   return item.title;
-}
-
-/**
- * A nested submodule row's identity: `traycer #675`. The repo name leads
- * because the whole point of the nested row is that it is in a DIFFERENT repo
- * from the parent it sits under - the same vocabulary the worktrees panel's
- * submodule PR chip uses.
- */
-export function prLinkedRowIdentityLabel(item: PrLightItem): string {
-  return `${item.repoIdentifier.repo} ${prRowIdentity(item)}`;
 }
 
 function prRowIdentity(item: PrLightItem): string {

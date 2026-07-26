@@ -2,9 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import {
   groupPrItemsByRepo,
-  linkPrItems,
   prChecksSummary,
-  prLinkedRowIdentityLabel,
 } from "@/lib/pr/pr-list-projection";
 
 const BASE_ITEM: PrLightItem = {
@@ -45,88 +43,93 @@ function submoduleItem(overrides: Partial<PrLightItem>): PrLightItem {
   });
 }
 
-describe("linkPrItems", () => {
-  it("nests an owned-submodule PR under the superproject PR sharing its link group", () => {
-    const nodes = linkPrItems([
-      item({ linkGroupKey: "/w/lucky-badger" }),
-      submoduleItem({ linkGroupKey: "/w/lucky-badger" }),
-    ]);
-
-    expect(nodes).toHaveLength(1);
-    expect(nodes[0]?.item.base?.prNumber).toBe(4226);
-    expect(nodes[0]?.linked.map((linked) => linked.base?.prNumber)).toEqual([
-      675,
-    ]);
-  });
-
-  it("keeps a submodule PR top-level when its superproject PR is absent", () => {
-    const nodes = linkPrItems([submoduleItem({ linkGroupKey: "/w/orphan" })]);
-
-    expect(nodes).toHaveLength(1);
-    expect(nodes[0]?.item.base?.prNumber).toBe(675);
-    expect(nodes[0]?.linked).toEqual([]);
-  });
-
-  it("does not link across different worktrees", () => {
-    const nodes = linkPrItems([
-      item({ linkGroupKey: "/w/one" }),
-      submoduleItem({ linkGroupKey: "/w/two" }),
-    ]);
-
-    expect(nodes).toHaveLength(2);
-    expect(nodes.every((node) => node.linked.length === 0)).toBe(true);
-  });
-
-  it("never links rows whose link group is unknown", () => {
-    const nodes = linkPrItems([
-      item({ linkGroupKey: null }),
-      submoduleItem({ linkGroupKey: null }),
-    ]);
-
-    expect(nodes).toHaveLength(2);
-    expect(nodes.every((node) => node.linked.length === 0)).toBe(true);
-  });
-
-  it("nests every submodule of one worktree under the same parent", () => {
-    const nodes = linkPrItems([
-      item({ linkGroupKey: "/w/multi" }),
-      submoduleItem({ linkGroupKey: "/w/multi" }),
-      submoduleItem({
-        linkGroupKey: "/w/multi",
-        base: { owner: "traycerai", repo: "docs", prNumber: 12 },
-        repoIdentifier: { owner: "traycerai", repo: "docs" },
-      }),
-    ]);
-
-    expect(nodes).toHaveLength(1);
-    expect(nodes[0]?.linked).toHaveLength(2);
-  });
-});
-
 describe("groupPrItemsByRepo", () => {
-  it("drops the repo group of a submodule PR that nested elsewhere", () => {
+  it("gives an owned-submodule PR its own repo group, right under its parent's", () => {
     const groups = groupPrItemsByRepo([
       item({ linkGroupKey: "/w/lucky-badger" }),
       submoduleItem({ linkGroupKey: "/w/lucky-badger" }),
-    ]);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.repoIdentifier.repo).toBe("traycer-internal");
-    // The count the header renders must be the top-level rows, not every PR.
-    expect(groups[0]?.nodes).toHaveLength(1);
-    expect(groups[0]?.nodes[0]?.linked).toHaveLength(1);
-  });
-
-  it("keeps an unlinked submodule PR in its own repo group", () => {
-    const groups = groupPrItemsByRepo([
-      item({ linkGroupKey: "/w/one" }),
-      submoduleItem({ linkGroupKey: "/w/two" }),
     ]);
 
     expect(groups.map((group) => group.repoIdentifier.repo)).toEqual([
       "traycer-internal",
       "traycer",
     ]);
+    // A full row of its own in that group - not folded into the parent's.
+    expect(groups[1]?.items.map((entry) => entry.base?.prNumber)).toEqual([
+      675,
+    ]);
+  });
+
+  it("pulls the submodule group up to its parent past unrelated repos", () => {
+    // First-seen order alone would leave `docs` between the pair; the shared
+    // link group is what makes the two read as one piece of work.
+    const groups = groupPrItemsByRepo([
+      item({ linkGroupKey: "/w/pair" }),
+      item({
+        base: { owner: "traycerai", repo: "docs", prNumber: 12 },
+        repoIdentifier: { owner: "traycerai", repo: "docs" },
+        linkGroupKey: null,
+      }),
+      submoduleItem({ linkGroupKey: "/w/pair" }),
+    ]);
+
+    expect(groups.map((group) => group.repoIdentifier.repo)).toEqual([
+      "traycer-internal",
+      "traycer",
+      "docs",
+    ]);
+  });
+
+  it("leaves a submodule group in place when its superproject PR is absent", () => {
+    const groups = groupPrItemsByRepo([
+      item({
+        base: { owner: "traycerai", repo: "docs", prNumber: 12 },
+        repoIdentifier: { owner: "traycerai", repo: "docs" },
+        linkGroupKey: null,
+      }),
+      submoduleItem({ linkGroupKey: "/w/orphan" }),
+    ]);
+
+    expect(groups.map((group) => group.repoIdentifier.repo)).toEqual([
+      "docs",
+      "traycer",
+    ]);
+    expect(groups[1]?.items).toHaveLength(1);
+  });
+
+  it("does not pair across different worktrees", () => {
+    const groups = groupPrItemsByRepo([
+      item({ linkGroupKey: "/w/one" }),
+      item({
+        base: { owner: "traycerai", repo: "docs", prNumber: 12 },
+        repoIdentifier: { owner: "traycerai", repo: "docs" },
+        linkGroupKey: null,
+      }),
+      submoduleItem({ linkGroupKey: "/w/two" }),
+    ]);
+
+    expect(groups.map((group) => group.repoIdentifier.repo)).toEqual([
+      "traycer-internal",
+      "docs",
+      "traycer",
+    ]);
+  });
+
+  it("moves a repo contributing several submodule PRs exactly once", () => {
+    const groups = groupPrItemsByRepo([
+      item({ linkGroupKey: "/w/multi" }),
+      submoduleItem({ linkGroupKey: "/w/multi" }),
+      submoduleItem({
+        linkGroupKey: "/w/multi",
+        base: { owner: "traycerai", repo: "traycer", prNumber: 676 },
+      }),
+    ]);
+
+    expect(groups.map((group) => group.repoIdentifier.repo)).toEqual([
+      "traycer-internal",
+      "traycer",
+    ]);
+    expect(groups[1]?.items).toHaveLength(2);
   });
 
   it("orders rows open → merged → closed within a group", () => {
@@ -136,7 +139,7 @@ describe("groupPrItemsByRepo", () => {
       item({ state: "open", base: null, headRefName: "open-head" }),
     ]);
 
-    expect(groups[0]?.nodes.map((node) => node.item.state)).toEqual([
+    expect(groups[0]?.items.map((entry) => entry.state)).toEqual([
       "open",
       "merged",
       "closed",
@@ -201,19 +204,5 @@ describe("prChecksSummary", () => {
 
     expect(summary?.tone).toBe("none");
     expect(summary?.label).toBe("4 checks");
-  });
-});
-
-describe("prLinkedRowIdentityLabel", () => {
-  it("leads with the submodule repo the nested PR lives in", () => {
-    expect(prLinkedRowIdentityLabel(submoduleItem({}))).toBe("traycer #675");
-  });
-
-  it("falls back to the head ref when the base is unknown", () => {
-    expect(
-      prLinkedRowIdentityLabel(
-        submoduleItem({ base: null, headRefName: "feature/sub" }),
-      ),
-    ).toBe("traycer feature/sub");
   });
 });

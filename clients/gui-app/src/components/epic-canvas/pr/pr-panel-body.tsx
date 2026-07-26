@@ -45,7 +45,9 @@ import {
  * Layout mirrors the Settings > Worktrees repo listing: a collapsible repo
  * header (chevron + icon + owner/repo + count) over full-bleed rows separated
  * by hairlines - no cards, no per-row accordion. Clicking a row opens the
- * full-view tile.
+ * full-view tile. An owned-submodule PR gets its own repo header and its own
+ * full row, placed directly under the superproject it shipped with (see
+ * `orderRepoGroupKeys`).
  *
  * Host switcher: omitted (list follows the app active host). See PrPanelActions.
  */
@@ -182,7 +184,11 @@ function PrPanelBodyContent(props: {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col divide-y divide-border/40 overflow-y-auto"
+      // Groups are separated by WHITESPACE, not another hairline. With every
+      // repo header and every row sharing one continuous ruled stack, a header
+      // read as just another row and the eye could not find where one repo's
+      // block ended - the gap is what makes a group a block.
+      className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto py-2"
       data-testid="pr-panel-body"
       data-source-status={props.sourceStatus ?? "none"}
     >
@@ -241,13 +247,16 @@ function PrRepoGroupSection(props: {
     onToggle(label);
   }, [onToggle, label]);
   return (
-    <div className="flex min-w-0 flex-col" data-testid="pr-repo-group">
+    <div className="flex min-w-0 flex-col gap-0.5" data-testid="pr-repo-group">
       <button
         type="button"
         aria-expanded={!props.collapsed}
         aria-label={`${props.collapsed ? "Expand" : "Collapse"} ${label}`}
         onClick={handleToggle}
-        className="flex w-full min-w-0 items-center gap-1.5 border-b border-border/40 px-3 py-1.5 text-left text-ui-xs text-muted-foreground transition-colors hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none"
+        // Reads as a section label rather than a row: uppercase + tracking put
+        // it in a different register from the PR titles below it, so the two
+        // are never scanned as the same kind of thing.
+        className="flex w-full min-w-0 items-center gap-1.5 px-3 py-1 text-left text-ui-xs font-medium tracking-wide text-muted-foreground uppercase transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50 focus-visible:outline-none"
         data-testid="pr-repo-group-header"
       >
         <ChevronRight
@@ -258,20 +267,19 @@ function PrRepoGroupSection(props: {
           aria-hidden
         />
         <FolderGit2 className="size-3.5 shrink-0" aria-hidden />
-        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <span className="min-w-0 flex-1 truncate normal-case">{label}</span>
         <span className="shrink-0 tabular-nums">
-          {props.group.nodes.length}
+          {props.group.items.length}
         </span>
       </button>
       {props.collapsed ? null : (
-        <div className="flex min-w-0 flex-col divide-y divide-border/25">
-          {props.group.nodes.map((node) => {
-            const entry = props.buildEntry(node.item);
+        <div className="flex min-w-0 flex-col divide-y divide-border/25 border-y border-border/25">
+          {props.group.items.map((item) => {
+            const entry = props.buildEntry(item);
             return (
               <PrRow
                 key={entry.key}
                 entry={entry}
-                linked={node.linked.map(props.buildEntry)}
                 epicId={props.epicId}
                 tabId={props.tabId}
               />

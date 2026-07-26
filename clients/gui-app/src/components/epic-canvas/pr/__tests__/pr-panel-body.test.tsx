@@ -76,17 +76,7 @@ vi.mock("@/components/epic-canvas/pr/pr-row", () => {
         readonly tileId: string | null;
         readonly onOpen: (() => void) | null;
       };
-      readonly linked: readonly {
-        readonly item: PrLightItem;
-        readonly tileId: string | null;
-        readonly onOpen: (() => void) | null;
-      }[];
-    }) => (
-      <div>
-        {mockEntry(props.entry, "mock-pr-card")}
-        {props.linked.map((entry) => mockEntry(entry, "mock-pr-linked"))}
-      </div>
-    ),
+    }) => <div>{mockEntry(props.entry, "mock-pr-card")}</div>,
   };
 });
 
@@ -298,7 +288,7 @@ describe("PrPanelBody card list", () => {
     ).toBeTruthy();
   });
 
-  it("nests an owned-submodule PR under its superproject row instead of a second repo group", async () => {
+  it("gives an owned-submodule PR its own repo group directly under its superproject's", async () => {
     const epicId = "epic-l1";
     renderPanel({ epicId, tabId: "tab-l1" });
     await emitSnapshot(epicId, [
@@ -318,18 +308,18 @@ describe("PrPanelBody card list", () => {
       }),
     ]);
 
+    // Each side gets its own repo dropdown; the shared link group only decides
+    // that the submodule's lands directly beneath its superproject's.
     const headers = await screen.findAllByTestId("pr-repo-group-header");
-    expect(headers).toHaveLength(1);
-    expect(headers[0]?.textContent).toContain("acme/widgets");
-    // The header counts top-level rows, so the nested PR must not inflate it.
-    expect(headers[0]?.textContent).toContain("1");
+    expect(headers.map((header) => header.textContent)).toEqual([
+      expect.stringContaining("acme/widgets"),
+      expect.stringContaining("acme/widgets-oss"),
+    ]);
     expect(screen.getByTestId("mock-pr-card-acme/widgets#1")).toBeTruthy();
-    expect(
-      screen.getByTestId("mock-pr-linked-acme/widgets-oss#9"),
-    ).toBeTruthy();
+    expect(screen.getByTestId("mock-pr-card-acme/widgets-oss#9")).toBeTruthy();
   });
 
-  it("a nested submodule row still opens its own pr-detail tile", async () => {
+  it("a submodule row opens its own pr-detail tile", async () => {
     const epicId = "epic-l2";
     renderPanel({ epicId, tabId: "tab-l2" });
     await emitSnapshot(epicId, [
@@ -350,7 +340,7 @@ describe("PrPanelBody card list", () => {
     ]);
 
     fireEvent.click(
-      await screen.findByTestId("mock-pr-linked-acme/widgets-oss#9"),
+      await screen.findByTestId("mock-pr-card-acme/widgets-oss#9"),
     );
 
     const canvasState = useEpicCanvasStore.getState();

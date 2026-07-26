@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PrLightItem } from "@traycer/protocol/host/pr-schemas";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -88,10 +88,7 @@ function entry(
   };
 }
 
-function renderRow(
-  overrides: Partial<PrLightItem>,
-  linked: readonly PrRowEntry[],
-) {
+function renderRow(overrides: Partial<PrLightItem>) {
   return render(
     <QueryClientProvider
       client={
@@ -101,7 +98,6 @@ function renderRow(
       <TooltipProvider>
         <PrRow
           entry={entry(overrides, () => {})}
-          linked={linked}
           epicId="epic-1"
           tabId={TAB_ID}
         />
@@ -121,7 +117,7 @@ afterEach(() => {
 
 describe("PrRow band 1: identity badges", () => {
   it("carries state on the number badge rather than a separate state pill", () => {
-    renderRow({ state: "merged" }, []);
+    renderRow({ state: "merged" });
 
     const number = screen.getByTestId("pr-row-number");
     expect(number.getAttribute("data-pr-state")).toBe("merged");
@@ -130,7 +126,7 @@ describe("PrRow band 1: identity badges", () => {
   });
 
   it("makes the number badge itself the GitHub link", () => {
-    renderRow({}, []);
+    renderRow({});
 
     const number = screen.getByTestId("pr-row-number");
     expect(number.tagName).toBe("A");
@@ -140,7 +136,7 @@ describe("PrRow band 1: identity badges", () => {
   });
 
   it("keeps the number badge a plain badge when there is no PR url to open", () => {
-    renderRow({ prUrl: null }, []);
+    renderRow({ prUrl: null });
 
     expect(screen.getByTestId("pr-row-number").tagName).not.toBe("A");
   });
@@ -148,7 +144,7 @@ describe("PrRow band 1: identity badges", () => {
 
 describe("PrRow band 2-4: title, branches, owners", () => {
   it("keeps the PR number out of the title so the title gets the full width", () => {
-    renderRow({}, []);
+    renderRow({});
 
     expect(screen.getByTestId("pr-row-title").textContent).toBe(
       "Remote Host Support",
@@ -157,7 +153,7 @@ describe("PrRow band 2-4: title, branches, owners", () => {
   });
 
   it("reads the branch line as a merge target - base first", () => {
-    renderRow({}, []);
+    renderRow({});
 
     expect(screen.getByTestId("pr-row").textContent).toContain(
       "development ← traycer/remote-host-support",
@@ -165,15 +161,12 @@ describe("PrRow band 2-4: title, branches, owners", () => {
   });
 
   it("hands every owner to the badge row, scoped to this epic", () => {
-    renderRow(
-      {
-        owners: [
-          { ownerId: "chat-1", ownerKind: "chat" },
-          { ownerId: "agent-1", ownerKind: "terminal-agent" },
-        ],
-      },
-      [],
-    );
+    renderRow({
+      owners: [
+        { ownerId: "chat-1", ownerKind: "chat" },
+        { ownerId: "agent-1", ownerKind: "terminal-agent" },
+      ],
+    });
 
     expect(screen.getAllByTestId("pr-owner-badge")).toHaveLength(2);
     expect(
@@ -182,7 +175,7 @@ describe("PrRow band 2-4: title, branches, owners", () => {
   });
 
   it("still labels the row with the full title for assistive tech", () => {
-    renderRow({}, []);
+    renderRow({});
 
     expect(
       screen.getByLabelText("Open #4226 · Remote Host Support"),
@@ -192,10 +185,9 @@ describe("PrRow band 2-4: title, branches, owners", () => {
 
 describe("PrRow status badges", () => {
   it("rolls CI up to one worst-wins chip instead of three bare counters", () => {
-    renderRow(
-      { checksRollup: { success: 10, failure: 1, pending: 3, total: 14 } },
-      [],
-    );
+    renderRow({
+      checksRollup: { success: 10, failure: 1, pending: 3, total: 14 },
+    });
 
     const checks = screen.getByTestId("pr-row-checks");
     expect(checks.getAttribute("data-tone")).toBe("fail");
@@ -206,7 +198,7 @@ describe("PrRow status badges", () => {
   });
 
   it("labels the review decision rather than repeating the checks glyph", () => {
-    renderRow({ reviewDecision: "changes_requested" }, []);
+    renderRow({ reviewDecision: "changes_requested" });
 
     expect(screen.getByTestId("pr-row-review").textContent).toContain(
       "Changes requested",
@@ -218,14 +210,11 @@ describe("PrRow status badges", () => {
   // go at a wider breakpoint than the checks badge, and the number badge - the
   // row's identity and its state - must carry no drop rule at all.
   it("sheds in priority order: review, then checks - never the number or the comment count", () => {
-    renderRow(
-      {
-        reviewDecision: "changes_requested",
-        checksRollup: { success: 0, failure: 1, pending: 0, total: 1 },
-        commentCount: 2,
-      },
-      [],
-    );
+    renderRow({
+      reviewDecision: "changes_requested",
+      checksRollup: { success: 0, failure: 1, pending: 0, total: 1 },
+      commentCount: 2,
+    });
 
     // The comment count stays at every width: blinking out mid-drag reads as a
     // glitch, and it is far cheaper than a badge.
@@ -244,7 +233,7 @@ describe("PrRow status badges", () => {
   });
 
   it("lets the longest badge truncate before it is dropped", () => {
-    renderRow({ reviewDecision: "changes_requested" }, []);
+    renderRow({ reviewDecision: "changes_requested" });
 
     const review = screen.getByTestId("pr-row-review");
     expect(review.className).toContain("shrink");
@@ -253,7 +242,7 @@ describe("PrRow status badges", () => {
   });
 
   it("shows no CI or review badge when a PR has neither", () => {
-    renderRow({}, []);
+    renderRow({});
 
     expect(screen.queryByTestId("pr-row-checks")).toBeNull();
     expect(screen.queryByTestId("pr-row-review")).toBeNull();
@@ -262,7 +251,7 @@ describe("PrRow status badges", () => {
 
 describe("PrRow activity metadata", () => {
   it("keeps the comment count out of the CI badges", () => {
-    renderRow({ commentCount: 2 }, []);
+    renderRow({ commentCount: 2 });
 
     const comments = screen.getByTestId("pr-row-comments");
     expect(comments.textContent).toContain("2");
@@ -270,68 +259,46 @@ describe("PrRow activity metadata", () => {
   });
 
   it("hides a zero comment count", () => {
-    renderRow({ commentCount: 0 }, []);
+    renderRow({ commentCount: 0 });
 
     expect(screen.queryByTestId("pr-row-comments")).toBeNull();
   });
 
   it("marks a cache-only row as not live", () => {
-    renderRow({ liveness: "cache-only" }, []);
+    renderRow({ liveness: "cache-only" });
 
     expect(screen.getByTestId("pr-row-not-live")).toBeTruthy();
   });
 
   it("renders no owner badges for a PR no chat owns", () => {
-    renderRow({}, []);
+    renderRow({});
 
     expect(screen.queryByTestId("pr-owner-badges")).toBeNull();
   });
 });
 
-describe("PrRow linked submodule rows", () => {
-  const linkedEntry = (onOpen: (() => void) | null): PrRowEntry => ({
-    key: "linked",
-    tileId: LINKED_TILE_ID,
-    item: {
-      ...BASE_ITEM,
+describe("PrRow submodule PRs", () => {
+  it("renders a submodule PR with the same full row as any other PR", () => {
+    // No compact child variant any more: a submodule PR is its own review, so
+    // it gets the same four bands - and it reaches the row through its own
+    // repo group (see `groupPrItemsByRepo`), not as somebody's nested detail.
+    renderRow({
       base: { owner: "traycerai", repo: "traycer", prNumber: 675 },
       prUrl: "https://github.com/traycerai/traycer/pull/675",
       repoIdentifier: { owner: "traycerai", repo: "traycer" },
       repoRole: "submodule",
+      linkGroupKey: "/w/pair",
       title: "Protocol bits",
-    },
-    onOpen,
-  });
+      baseRefName: "main",
+    });
 
-  it("renders no connector block when a PR has no linked submodule PRs", () => {
-    renderRow({}, []);
-
-    expect(screen.queryByTestId("pr-row-linked")).toBeNull();
-  });
-
-  it("names the submodule repo on the nested row", () => {
-    renderRow({}, [linkedEntry(() => {})]);
-
-    const linked = screen.getByTestId("pr-linked-row");
-    expect(linked.textContent).toContain("traycer #675");
-    expect(screen.getByTestId("pr-linked-row-title").textContent).toBe(
+    expect(screen.getByTestId("pr-row-number").textContent).toContain("#675");
+    expect(screen.getByTestId("pr-row-title").textContent).toBe(
       "Protocol bits",
     );
-  });
-
-  it("opens the nested PR's own tile, not the parent's", () => {
-    const openLinked = vi.fn();
-    renderRow({}, [linkedEntry(openLinked)]);
-
-    fireEvent.click(screen.getByTestId("pr-linked-row"));
-
-    expect(openLinked).toHaveBeenCalledTimes(1);
-  });
-
-  it("leaves a nested row non-interactive when it has no tile yet", () => {
-    renderRow({}, [linkedEntry(null)]);
-
-    expect(screen.getByTestId("pr-linked-row").getAttribute("role")).toBeNull();
+    expect(screen.getByTestId("pr-row").textContent).toContain("main");
+    expect(screen.queryByTestId("pr-linked-row")).toBeNull();
+    expect(screen.queryByTestId("pr-row-linked")).toBeNull();
   });
 });
 
@@ -455,7 +422,6 @@ describe("PrRow active-tile highlight", () => {
         <TooltipProvider>
           <PrRow
             entry={{ key: "row", item: BASE_ITEM, tileId, onOpen: () => {} }}
-            linked={[]}
             epicId="epic-1"
             tabId={tabId}
           />
