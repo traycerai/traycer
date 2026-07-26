@@ -67,6 +67,7 @@ function renderTooltip(onClick: (() => void) | undefined): HTMLElement {
       epicId="epic-1"
       ownerId="owner-1"
       ownerKind="chat"
+      supplementalContent={null}
     />,
   );
   return screen.getByTestId("row");

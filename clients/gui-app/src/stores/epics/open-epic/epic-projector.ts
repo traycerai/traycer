@@ -21,6 +21,7 @@
  * exactly once per snapshot.
  */
 import * as Y from "yjs";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { StoreApi } from "zustand";
 import type { OpenEpicState } from "./store";
 import {
@@ -40,6 +41,7 @@ import {
   isChatVisibleToUser,
   isTerminalAgentVisibleToUser,
   projectArtifact,
+  projectAgentRolesSlice,
   projectChat,
   projectDeletedArtifact,
   projectFullState,
@@ -52,6 +54,7 @@ import {
   treeNodesEq,
 } from "./projection-helpers";
 import type {
+  AgentRolesSlice,
   ArtifactsSlice,
   ChatProjection,
   ChatsSlice,
@@ -102,6 +105,7 @@ interface ProjectorPatches {
   deletedArtifactsContainerReseeded: boolean;
   chatsContainerReseeded: boolean;
   terminalAgentsContainerReseeded: boolean;
+  roleClaimsChanged: boolean;
 }
 
 function emptyPatches(): ProjectorPatches {
@@ -125,6 +129,7 @@ function emptyPatches(): ProjectorPatches {
     deletedArtifactsContainerReseeded: false,
     chatsContainerReseeded: false,
     terminalAgentsContainerReseeded: false,
+    roleClaimsChanged: false,
   };
 }
 
@@ -153,7 +158,8 @@ function patchFlagsEmpty(p: ProjectorPatches): boolean {
     !p.artifactsContainerReseeded &&
     !p.deletedArtifactsContainerReseeded &&
     !p.chatsContainerReseeded &&
-    !p.terminalAgentsContainerReseeded
+    !p.terminalAgentsContainerReseeded &&
+    !p.roleClaimsChanged
   );
 }
 
@@ -319,6 +325,8 @@ function classifyEpicRoot(
     } else if (key === "tuiAgents") {
       patches.terminalAgentsContainerReseeded = true;
       patches.structuralTreeDirty = true;
+    } else if (key === "roleClaims") {
+      patches.roleClaimsChanged = true;
     }
   }
 }
@@ -478,6 +486,11 @@ function classifyEvent(
 ): void {
   const path = pathOfEvent(event);
 
+  if (path[0] === "roleClaims") {
+    patches.roleClaimsChanged = true;
+    return;
+  }
+
   // Y.Map "epic" root: title / isTitleEditedByUser / artifacts /
   // chats. Container additions are uncommon (lazy `ensureMap`) but
   // handled defensively.
@@ -553,8 +566,66 @@ type MutableProjectedPatch = {
   deletedArtifacts?: DeletedArtifactsSlice;
   chats?: ChatsSlice;
   tuiAgents?: TerminalAgentsSlice;
+  agentRoles?: AgentRolesSlice;
   tree?: TreeSlice;
 };
+
+function roleClaimsEq(
+  left: readonly RoleClaim[],
+  right: readonly RoleClaim[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((claim, index) => {
+    const other = right[index];
+    return (
+      claim.claimId === other.claimId &&
+      claim.agentId === other.agentId &&
+      claim.userId === other.userId &&
+      claim.role === other.role &&
+      claim.scope === other.scope &&
+      claim.claimedAt === other.claimedAt
+    );
+  });
+}
+
+function applyAgentRolesSlice(args: {
+  readonly state: OpenEpicState;
+  readonly doc: Y.Doc;
+  readonly patches: ProjectorPatches;
+  readonly chats: ChatsSlice;
+  readonly tuiAgents: TerminalAgentsSlice;
+  readonly currentUserId: string | null;
+  readonly next: MutableProjectedPatch;
+}): void {
+  const { state, doc, patches, chats, tuiAgents, currentUserId, next } = args;
+  const liveMembershipChanged =
+    chats.allIds !== state.chats.allIds ||
+    tuiAgents.allIds !== state.tuiAgents.allIds;
+  if (!patches.roleClaimsChanged && !liveMembershipChanged) return;
+  const projected = projectAgentRolesSlice(
+    doc,
+    currentUserId,
+    chats,
+    tuiAgents,
+  );
+  const byAgentId: Record<string, readonly RoleClaim[]> = {};
+  const nextAgentIds = Object.keys(projected.byAgentId);
+  let identical =
+    nextAgentIds.length === Object.keys(state.agentRoles.byAgentId).length;
+  for (const agentId of nextAgentIds) {
+    const claims = projected.byAgentId[agentId];
+    if (
+      Object.hasOwn(state.agentRoles.byAgentId, agentId) &&
+      roleClaimsEq(state.agentRoles.byAgentId[agentId], claims)
+    ) {
+      byAgentId[agentId] = state.agentRoles.byAgentId[agentId];
+    } else {
+      byAgentId[agentId] = claims;
+      identical = false;
+    }
+  }
+  if (!identical) next.agentRoles = { byAgentId };
+}
 
 function applyEpicHeader(
   state: OpenEpicState,
@@ -977,6 +1048,15 @@ function applyPatches(
   if (nextTerminalAgents.allIds !== state.tuiAgents.allIds) {
     patches.structuralTreeDirty = true;
   }
+  applyAgentRolesSlice({
+    state,
+    doc,
+    patches,
+    chats: nextChats,
+    tuiAgents: nextTerminalAgents,
+    currentUserId,
+    next,
+  });
   applyTreeSlice({
     state,
     patches,

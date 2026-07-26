@@ -33,7 +33,7 @@ function makeFixture(): {
     element,
     extensions: buildComposerExtensions({
       pickerStore,
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: submitHolder,
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,

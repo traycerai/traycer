@@ -293,6 +293,7 @@ function registerChatSession(epicId: string, chatId: string): void {
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         streamClientFactory: () => ({
           sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
           close: () => undefined,
         }),
       }),

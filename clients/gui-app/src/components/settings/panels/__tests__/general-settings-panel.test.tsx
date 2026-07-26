@@ -18,6 +18,7 @@ import {
   type Mock,
 } from "vitest";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { modLabel } from "@/lib/keybindings/platform";
 import { clearAllPersistedStores } from "@/lib/persist";
 import {
   useMigrationRunStore,
@@ -321,6 +322,20 @@ describe("GeneralSettingsPanel", () => {
     fireEvent.click(toggle);
 
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(false);
+  });
+
+  it("labels the steering chord with the platform modifier", () => {
+    renderPanel();
+
+    const chord = `${modLabel()}+Enter`;
+    expect(
+      screen.getByRole("switch", { name: `Steer with ${chord}` }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        `While a turn is running on a supported harness, ${chord} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`,
+      ),
+    ).toBeTruthy();
   });
 
   it("navigates to replay onboarding without clearing first-run completion", () => {

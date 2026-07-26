@@ -183,6 +183,8 @@ export function useChatSessionHandle(
       return {
         sendAction: (frame) => result.client.sendAction(frame),
         close: result.close,
+        sameTurnSteeringProtocolSupported: () =>
+          result.client.sameTurnSteeringProtocolSupported(),
       };
     };
 

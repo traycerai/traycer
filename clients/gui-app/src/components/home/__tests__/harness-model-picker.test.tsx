@@ -1026,6 +1026,44 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.queryByText("Claude Sonnet 4.6")).toBeNull();
   });
 
+  it("keeps a revalidating provider's rows on screen and its rail entry pickable", async () => {
+    // The host's availability cache lapses every 30 s; the catalog call that
+    // follows re-probes in the background and reports `availabilityPending`
+    // with the last settled verdict intact (`available: true`). That is a
+    // background refresh - the rows the user is looking at must not be
+    // replaced by a spinner, and the rail must stay clickable, or the picker
+    // blanks for the length of the probe.
+    const revalidating = { availabilityPending: true } as const;
+    const codex = codexModels();
+    const claude = claudeModels();
+    queryMock.harnesses = [
+      { ...CODEX_HARNESS, ...revalidating },
+      { ...CLAUDE_HARNESS, ...revalidating },
+    ];
+    queryMock.catalogHarnesses = [
+      catalogHarness({ ...CODEX_HARNESS, ...revalidating }, codex),
+      catalogHarness({ ...CLAUDE_HARNESS, ...revalidating }, claude),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", claude],
+    ]);
+    renderPicker(undefined);
+
+    await openPicker();
+
+    expect(screen.getByRole("option", { name: /GPT-5\.5/ })).not.toBeNull();
+    expect(screen.getByText("GPT-4.1")).not.toBeNull();
+    expect(screen.queryByText("Loading models")).toBeNull();
+    const claudeRail = screen.getByRole("tab", { name: "Claude" });
+    expect(claudeRail.getAttribute("aria-disabled")).toBeNull();
+
+    // ...and switching to the other revalidating provider still commits.
+    fireEvent.click(claudeRail);
+    expect(screen.getByText("Claude Sonnet 4.6")).not.toBeNull();
+    expect(claudeRail.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("shows a deprecated-model badge with its notice as a tooltip", async () => {
     const deprecationNotice =
       "Claude Sonnet 4.6 is deprecated in favor of Claude Sonnet 5 and " +

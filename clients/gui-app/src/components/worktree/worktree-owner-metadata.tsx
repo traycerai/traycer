@@ -58,6 +58,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
   readonly epicId: string;
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
+  readonly supplementalContent: ReactNode | null;
 }): ReactNode {
   const [hoverState, setHoverState] =
     useState<OwnerMetadataHoverState>(CLOSED_HOVER_STATE);
@@ -123,7 +124,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
         // instead, from the old fixed 24rem (now the floor, so a short line
         // still gets a card that reads as a card) up to a viewport-capped
         // ceiling, past which the header ellipsizes rather than growing further.
-        <span
+        <div
           className="block w-fit min-w-[min(92vw,24rem)] max-w-[min(92vw,36rem)]"
           data-testid={`chat-navigator-worktree-hover-${props.ownerId}`}
         >
@@ -148,13 +149,18 @@ export function WorktreeOwnerMetadataTooltip(props: {
               error={metadata.error !== null}
             />
           </span>
+          {props.supplementalContent === null ? null : (
+            <div className="border-t border-border px-3 py-2">
+              {props.supplementalContent}
+            </div>
+          )}
           <OwnerMetadataRefreshFooter
             checkedAt={metadata.checkedAt}
             refreshing={refresh.refreshing}
             canRefresh={canRefresh}
             onRefresh={trigger}
           />
-        </span>
+        </div>
       }
       side="right"
       sideOffset={4}

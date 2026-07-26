@@ -12,6 +12,7 @@ const historyMatchModeSchema = z.enum(["any", "all"]);
 const historyOwnershipSchema = z.enum(["mine", "shared"]);
 const historySortSchema = z.enum([
   "recent",
+  "last-viewed",
   "oldest",
   "title-asc",
   "title-desc",

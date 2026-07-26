@@ -5,6 +5,7 @@ import { Markdown } from "@tiptap/markdown";
 import { Placeholder } from "@tiptap/extensions/placeholder";
 import Link from "@tiptap/extension-link";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 
 import type { ComposerPickerStore } from "../picker/composer-picker-store";
 
@@ -25,8 +26,16 @@ import { ChatCopySerializer } from "./extensions/chat-copy-serializer";
 
 export interface BuildComposerExtensionsArgs {
   readonly pickerStore: ComposerPickerStore;
-  readonly placeholder: string;
-  readonly onSubmit: { readonly current: () => void };
+  /**
+   * Live placeholder source. Read through a stable getter (not a static string)
+   * so the chat composer can swap the placeholder - e.g. to a mid-turn steer
+   * hint - without rebuilding the Tiptap editor (which is created once). The
+   * owner pokes a no-op transaction on change so the decoration re-reads it.
+   */
+  readonly getPlaceholder: () => string;
+  readonly onSubmit: {
+    readonly current: (source: ChatComposerSubmitSource) => void;
+  };
   readonly slashProviderId: GuiHarnessId;
   readonly getHasPastedImageBytes: () => ((hash: string) => boolean) | null;
   readonly getIngestPastedComposerImages: () =>
@@ -71,7 +80,7 @@ export function buildComposerExtensions(
       linkOnPaste: true,
     }),
     Placeholder.configure({
-      placeholder: args.placeholder,
+      placeholder: () => args.getPlaceholder(),
       includeChildren: false,
       emptyEditorClass: "is-editor-empty",
     }),
