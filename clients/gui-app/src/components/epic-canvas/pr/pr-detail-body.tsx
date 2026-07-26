@@ -39,7 +39,6 @@ import {
   PrDetailDescriptionCard,
 } from "@/components/epic-canvas/pr/pr-detail-conversation";
 import { PrDetailQueue } from "@/components/epic-canvas/pr/pr-detail-queue";
-import { PrQuoteTargetPicker } from "@/components/epic-canvas/pr/pr-quote-target-picker";
 import { PrDetailTabStrip } from "@/components/epic-canvas/pr/pr-detail-tab-strip";
 import {
   PrDetailChecks,
@@ -54,36 +53,34 @@ import {
 const PR_DETAIL_REFRESH_TIMEOUT_MS = 10_000;
 
 /**
- * The reading column, matched to the chat transcript's own measure
- * (`max-w-3xl` + `px-6` in `chat-messages.tsx`). Every tab uses it - the
- * earlier full-bleed treatment for Files and Checks made those two tabs land
- * with a different left edge, different padding and a summary that jumped from
- * the gutter into the tab strip, so switching tabs re-laid-out the whole tile.
- * One column for all five means the header, the tabs and the content share a
- * single edge no matter which tab is open.
- */
-const PR_DETAIL_COLUMN = "mx-auto w-full max-w-3xl px-6";
-
-/**
- * Container width at which the column's right gutter is wide enough to hold
- * the context card WITHOUT the column giving up any width:
- * 768px column + 2 × (224px card + 16px inset + 24px clearance) = 1296px.
+ * The shell is a TWO-COLUMN ROW, not a centred column with the card parked
+ * beside it.
  *
- * Expressed as a container query, not a pane or tab count. "One tab open" is
- * only a proxy for "the gutter is wide enough", and the proxy leaks - the left
- * sidebar collapsing widens the tile without changing tab count, a two-pane
- * split can still leave one pane very wide, and a single tab on a small laptop
- * has no gutter at all. Measuring the container gets every one of those right.
+ * Three geometries were tried before this one, and each failed the same way -
+ * by insisting the reading column stay centred in something:
  *
- * THE MARGIN IS THE POINT. This threshold was set twice from the arithmetic
- * alone - 1520, then 1400 - and both times it landed within ~10px of the real
- * tile width on a maximised window with the PR panel open (~1400px), so the
- * card never appeared once. A bound that is merely correct is not enough when
- * the quantity it bounds is a window: it has to clear the common case by
- * enough that scrollbar width and sub-pixel rounding cannot decide the outcome.
- * 1300 leaves ~100px of headroom below that measurement.
+ * 1. Card overlaying a symmetric gutter. Needed BOTH gutters wide enough, so
+ *    the threshold sat near real window widths and the card never appeared.
+ * 2. Same, with the card shrunk to 224px to drag the threshold down. Appeared,
+ *    but too narrow to read - branch names broke mid-word.
+ * 3. Card in a reserved right band, column centred in what was left. The card
+ *    was full width again, but centring in the remainder pushed the column
+ *    RIGHT, opening a ~195px hole between the prose and the card.
+ *
+ * A flex row has none of those failure modes: the column takes the space that
+ * is actually there, the gap is a gap and not a leftover, and the card is a
+ * stretched flex item, so `sticky` works with no absolute positioning at all.
+ * `max-w-3xl` when alone keeps the chat transcript's measure; the wider cap
+ * applies only when the card is in the row beside it.
+ *
+ * Still a container query rather than a pane or tab count: "one tab open" is
+ * only a proxy for "there is room", and the proxy leaks - collapsing the left
+ * sidebar widens the tile without changing tab count, and a two-pane split can
+ * still leave one pane very wide.
  */
-const CARD_AT_WIDE = "hidden @min-[1300px]:block";
+const PR_DETAIL_SHELL_WIDTH = "max-w-3xl @min-[1180px]:max-w-[72rem]";
+const CARD_AT_WIDE = "hidden @min-[1180px]:block";
+const CARD_WIDTH = "w-[18rem]";
 
 export function PrDetailBody(props: {
   readonly epicId: string;
@@ -172,6 +169,7 @@ export function PrDetailBody(props: {
       ) : null}
       <PrDetailLoaded
         data={subscription.data}
+        epicId={props.epicId}
         githubHost={props.githubHost}
         viewTabId={props.viewTabId}
         refreshing={refresh.refreshing}
@@ -199,6 +197,7 @@ export function PrDetailBody(props: {
  */
 function PrDetailLoaded(props: {
   readonly data: PrDetailSubscriptionData;
+  readonly epicId: string;
   readonly githubHost: string;
   readonly viewTabId: string;
   readonly refreshing: boolean;
@@ -312,30 +311,30 @@ function PrDetailLoaded(props: {
   }, [target, core]);
 
   return (
-    // `shrink-0`, NOT `flex-1 min-h-0`: this is the positioning context for the
-    // gutter card, and it has to be as tall as the DOCUMENT for the card's
-    // `sticky` to have anywhere to travel. Inside a scrolling flex column a
-    // grown-or-shrunk child resolves to exactly one viewport, which would pin
-    // the card to the first screen and let it scroll away after that.
-    <div className="relative flex min-w-0 shrink-0 flex-col">
+    // `shrink-0`, NOT `flex-1 min-h-0`: this row has to be as tall as the
+    // DOCUMENT for the card's `sticky` to have anywhere to travel. Inside a
+    // scrolling flex column a grown-or-shrunk child resolves to exactly one
+    // viewport, which would pin the card to the first screen and let it scroll
+    // away after that. The card is a stretched flex ITEM, so it inherits that
+    // full height without any absolute positioning.
+    <div
+      className={cn(
+        "mx-auto flex w-full min-w-0 shrink-0 gap-8 px-6",
+        PR_DETAIL_SHELL_WIDTH,
+      )}
+      data-testid="pr-detail-shell"
+    >
       <div
-        className={cn("flex min-w-0 flex-col gap-5 pt-8", PR_DETAIL_COLUMN)}
+        className="flex min-w-0 flex-1 flex-col gap-5 pt-8"
         data-testid="pr-detail-column"
       >
         <PrDetailHeader
           core={core}
+          epicId={props.epicId}
           notLive={props.data.liveness === "cache-only"}
           observedAt={oldestObservedAt(props.data)}
           refreshing={props.refreshing}
           onRefresh={props.onRefresh}
-          targetPicker={
-            <PrQuoteTargetPicker
-              target={target}
-              targets={quote.targets}
-              onSelectTarget={quote.selectTarget}
-              variant="compact"
-            />
-          }
         />
         <PrDetailTabStrip
           tab={tab}
@@ -400,13 +399,12 @@ function PrDetailLoaded(props: {
           ) : null}
         </div>
       </div>
-      <div
-        className={cn("absolute inset-y-0 right-4 w-56", CARD_AT_WIDE)}
+      <aside
+        className={cn("shrink-0 pt-8", CARD_WIDTH, CARD_AT_WIDE)}
         data-testid="pr-detail-card-gutter"
       >
         <PrDetailCard
           core={core}
-          checks={checks}
           activity={activity}
           queue={queue}
           target={target}
@@ -415,7 +413,7 @@ function PrDetailLoaded(props: {
           onSendPr={sendOverview}
           className="sticky top-8"
         />
-      </div>
+      </aside>
     </div>
   );
 }

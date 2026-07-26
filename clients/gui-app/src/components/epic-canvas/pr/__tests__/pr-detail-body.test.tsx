@@ -624,14 +624,14 @@ describe("PrDetailBody", () => {
 
     // Files and Checks used to opt into a full-bleed container and shift the
     // whole document sideways on every tab switch.
-    const columnClasses = (): string =>
-      screen.getByTestId("pr-detail-column").className;
-    const overview = columnClasses();
+    const shellClasses = (): string =>
+      screen.getByTestId("pr-detail-shell").className;
+    const overview = shellClasses();
     expect(overview).toContain("max-w-3xl");
 
     for (const tab of ["feedback", "files", "checks", "commits"] as const) {
       fireEvent.click(screen.getByTestId(`pr-detail-tab-${tab}`));
-      expect(columnClasses()).toBe(overview);
+      expect(shellClasses()).toBe(overview);
     }
 
     // jsdom does not evaluate container queries, so the card renders here
@@ -641,10 +641,17 @@ describe("PrDetailBody", () => {
     // ~1400px a maximised window with the PR panel open actually measures, so
     // the card never appeared once. This ceiling is not arithmetic; it is the
     // observation, and it is what the arithmetic has to come in under.
-    const gutter = screen.getByTestId("pr-detail-card-gutter");
-    const threshold = /@min-\[(\d+)px\]/.exec(gutter.className)?.[1] ?? null;
+    const card = screen.getByTestId("pr-detail-card-gutter");
+    const threshold = /@min-\[(\d+)px\]/.exec(card.className)?.[1] ?? null;
     expect(threshold).not.toBeNull();
     expect(Number(threshold)).toBeLessThanOrEqual(1300);
+
+    // The card and the shell's wider cap are one switch. If the card appears
+    // without the extra width the row squeezes the prose; if the width appears
+    // without the card the measure just gets too long. Neither throws.
+    const shellThreshold =
+      /@min-\[(\d+)px\]:max-w-/.exec(overview)?.[1] ?? null;
+    expect(shellThreshold).toBe(threshold);
   });
 
   it("Fix in chat reveals the chat it wrote the quote into, so a correct send cannot look like a dead button", async () => {

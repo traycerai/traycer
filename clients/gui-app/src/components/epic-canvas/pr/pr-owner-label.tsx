@@ -2,7 +2,6 @@ import { useCallback, type MouseEvent, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type { PrOwnerRef } from "@traycer/protocol/host/pr-schemas";
 import { Badge } from "@/components/ui/badge";
-import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   useChatById,
@@ -74,6 +73,16 @@ export function PrOwnerLabel(props: {
 export function PrOwnerBadges(props: {
   readonly owners: readonly PrOwnerRef[];
   readonly epicId: string;
+  /**
+   * Host to open a legacy owner on when its own `hostId` predates the field.
+   *
+   * Passed in rather than read here, because the right answer depends on WHERE
+   * this renders. An app-wide surface (the panel) wants the reactive active
+   * host; a canvas tile must use its own bound `useTabHostId()` - per CLAUDE.md
+   * a tab is bound to a host for life and may never consult the reactive
+   * global, or a host swap would silently re-point the tile's links.
+   */
+  readonly fallbackHostId: string | null;
   readonly className: string | undefined;
 }): ReactNode {
   if (props.owners.length === 0) return null;
@@ -90,6 +99,7 @@ export function PrOwnerBadges(props: {
           key={`${owner.ownerKind}:${owner.ownerId}`}
           owner={owner}
           epicId={props.epicId}
+          fallbackHostId={props.fallbackHostId}
         />
       ))}
     </span>
@@ -99,6 +109,7 @@ export function PrOwnerBadges(props: {
 function PrOwnerBadge(props: {
   readonly owner: PrOwnerRef;
   readonly epicId: string;
+  readonly fallbackHostId: string | null;
 }): ReactNode {
   // Both lookup hooks run unconditionally (rules-of-hooks) with the id gated
   // to `null` for the kind that doesn't apply, so only one ever resolves.
@@ -108,13 +119,12 @@ function PrOwnerBadge(props: {
   const tuiAgent = useEpicTerminalAgent(
     props.owner.ownerKind === "terminal-agent" ? props.owner.ownerId : null,
   );
-  // A chat predating the per-node `hostId` field falls back to the app's
-  // active host, exactly as the sidebar's own node opener does - a tile ref
-  // has no null host, and refusing to open would be worse than the fallback
+  // A chat predating the per-node `hostId` field falls back to the host the
+  // CALLER nominated, exactly as the sidebar's own node opener does - a tile
+  // ref has no null host, and refusing to open would be worse than the fallback
   // the rest of the app already relies on.
-  const activeHostId = useReactiveActiveHostId();
   const nodeHostId = useEpicNodeHostId(props.owner.ownerId);
-  const hostId = nodeHostId ?? activeHostId;
+  const hostId = nodeHostId ?? props.fallbackHostId;
   const tileNavigation = useEpicTileNavigation();
   const label = resolvePrOwnerLabel({ owner: props.owner, chat, tuiAgent });
   const { epicId } = props;

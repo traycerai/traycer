@@ -2,7 +2,6 @@ import { type ReactNode } from "react";
 import { Check, Clock, Eye, TextQuote, X } from "lucide-react";
 import type {
   PrActivitySection,
-  PrChecksSection,
   PrDetailCore,
 } from "@traycer/protocol/host/pr-schemas";
 import type {
@@ -17,15 +16,12 @@ import {
 import { PrActorAvatar } from "@/components/epic-canvas/pr/pr-detail-avatar";
 import {
   formatPrChecksValue,
-  PR_DIFF_ADDED_CLASS,
-  PR_DIFF_REMOVED_CLASS,
   PR_TONE_FILL_CLASS,
   PR_TONE_TEXT_CLASS,
   prChecksTone,
   prReviewDecisionTone,
-  prStateTone,
 } from "@/components/epic-canvas/pr/pr-detail-tone";
-import { useRelativeTimestamp } from "@/lib/relative-time";
+import { PrQuoteTargetPicker } from "@/components/epic-canvas/pr/pr-quote-target-picker";
 import { cn } from "@/lib/utils";
 
 const REVIEWER_STATE: Record<
@@ -76,7 +72,6 @@ const REVIEW_DECISION_LABEL = {
 
 export interface PrDetailCardProps {
   readonly core: PrDetailCore;
-  readonly checks: PrChecksSection;
   readonly activity: PrActivitySection;
   readonly queue: PrAttentionQueue;
   readonly target: PrQuoteTarget | null;
@@ -87,39 +82,38 @@ export interface PrDetailCardProps {
 }
 
 /**
- * The context card that floats in the reading column's right gutter.
+ * The context card: the second column of the detail shell's row, sticky as the
+ * document scrolls.
  *
- * It OVERLAYS dead space rather than reserving a band: a measure-limited
- * column centred in a wide tile already leaves the gutter empty, so the
- * column renders identically whether the card is present or not and toggling
- * it costs no reflow. Because it only exists above the container-width
- * threshold, nothing may live ONLY here: state and diffstat are in the header,
- * checks in the tab badge and the Checks tab, reviewers on Feedback, and the
- * quote target in the header's picker. Below the threshold the card is simply
- * absent - there is deliberately no fallback strip, because everything a strip
- * would have said is already on screen.
+ * It carries ONLY what exists nowhere else - the proportional check meter, the
+ * review decision, per-reviewer state, and the send action. State, branches,
+ * diffstat and freshness all used to be here too, and all four are in the
+ * header, in full, with more room. That duplication is what made the card feel
+ * cramped at any width: it was spending its space restating the page.
  *
- * `bg-canvas` is load-bearing, not decoration: the card sits ON the scrolling
- * document, so a translucent surface would let the reading column's text run
- * visibly underneath it as the reader scrolls.
+ * Below the container-width threshold the card is simply absent, and nothing
+ * takes its place. Checks reach the reader through the tab badge and the Checks
+ * tab, reviewers through Feedback, and the send target defaults to the PR's own
+ * owner chat - so its absence costs convenience, never capability.
  */
 export function PrDetailCard(props: PrDetailCardProps): ReactNode {
   const reviewers = prReviewerRows(props.core, props.activity);
   return (
-    <aside
+    <div
       data-testid="pr-detail-card"
       className={cn(
         "flex min-w-0 flex-col rounded-xl border border-border/70 bg-canvas p-3 text-ui-xs shadow-lg",
         props.className,
       )}
     >
-      <PrCardStateRow core={props.core} />
+      {/* No state row, no branches, no diffstat, no "updated" - the header
+          carries all four, in full and with more room for them. A card beside
+          the thing it repeats is worse than no card: it doubles the reading
+          without adding a fact, and it was what made 280px feel cramped. What
+          is left is what exists ONLY here: the proportional check meter, the
+          review decision, per-reviewer state, and the send action. */}
       <PrCardSection heading="Health">
-        <PrCardHealth
-          core={props.core}
-          checks={props.checks}
-          counts={props.queue.checkCounts}
-        />
+        <PrCardHealth core={props.core} counts={props.queue.checkCounts} />
       </PrCardSection>
       <PrCardSection heading="Reviewers">
         {reviewers.length === 0 ? (
@@ -155,18 +149,27 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
           </ul>
         )}
       </PrCardSection>
-      {/* No target PICKER here - the header carries the one picker for the
-          whole tile. A second copy in the card would be the same control in
-          two places, disagreeing about which is authoritative the moment one
-          of them is off-screen. The card keeps the ACTION. */}
+      {/* The picker lives WITH the send action, not in the header. In the
+          header it read as a stray dropdown on the title line answering a
+          question nobody had asked; here it is plainly "which chat does this
+          button send to". The header instead shows the PR's linked chats as
+          the same clickable pills the panel row uses - that answers "which
+          conversation produced this?", which is what a reader actually wants
+          from a header. */}
       <PrCardSection heading="Send to chat">
+        <PrQuoteTargetPicker
+          target={props.target}
+          targets={props.targets}
+          onSelectTarget={props.onSelectTarget}
+          variant="card"
+        />
         <button
           type="button"
           onClick={props.onSendPr}
           disabled={props.target === null}
           data-testid="pr-detail-send-pr"
           className={cn(
-            "inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-primary/35 bg-primary/10 px-2 py-1.5",
+            "mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-primary/35 bg-primary/10 px-2 py-1.5",
             "text-ui-xs text-primary transition-colors hover:bg-primary/15",
             "disabled:opacity-50",
           )}
@@ -179,46 +182,12 @@ export function PrDetailCard(props: PrDetailCardProps): ReactNode {
           </span>
         </button>
       </PrCardSection>
-    </aside>
-  );
-}
-
-function PrCardStateRow(props: { readonly core: PrDetailCore }): ReactNode {
-  const isDraft = props.core.state === "open" && props.core.isDraft === true;
-  const tone = prStateTone(props.core);
-  return (
-    <div className="flex min-w-0 flex-col gap-2 border-b border-border/60 pb-2.5">
-      <div className="flex items-center gap-2">
-        <span
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            PR_TONE_FILL_CLASS[tone],
-          )}
-          aria-hidden
-        />
-        <span className="text-ui-sm font-medium text-foreground">
-          {isDraft
-            ? "Draft"
-            : props.core.state.charAt(0).toUpperCase() +
-              props.core.state.slice(1)}
-        </span>
-      </div>
-      <p className="min-w-0 leading-relaxed text-muted-foreground">
-        <code className="rounded bg-primary/10 px-1 py-0.5 font-mono break-all text-primary">
-          {props.core.headRefName ?? "unknown"}
-        </code>
-        <br />→{" "}
-        <code className="rounded bg-primary/10 px-1 py-0.5 font-mono break-all text-primary">
-          {props.core.baseRefName ?? "unknown"}
-        </code>
-      </p>
     </div>
   );
 }
 
 function PrCardHealth(props: {
   readonly core: PrDetailCore;
-  readonly checks: PrChecksSection;
   readonly counts: PrCheckCounts;
 }): ReactNode {
   const { counts } = props;
@@ -240,33 +209,7 @@ function PrCardHealth(props: {
           }
         />
       ) : null}
-      {props.core.additions !== null && props.core.deletions !== null ? (
-        <PrCardGauge
-          label="Diff"
-          value={
-            <span className="font-mono">
-              <span className={PR_DIFF_ADDED_CLASS}>
-                +{props.core.additions}
-              </span>{" "}
-              <span className={PR_DIFF_REMOVED_CLASS}>
-                −{props.core.deletions}
-              </span>
-            </span>
-          }
-          valueClassName={undefined}
-        />
-      ) : null}
-      {props.checks.observedAt !== null ? (
-        <PrCardUpdatedGauge observedAt={props.checks.observedAt} />
-      ) : null}
     </div>
-  );
-}
-
-function PrCardUpdatedGauge(props: { readonly observedAt: number }): ReactNode {
-  const label = useRelativeTimestamp(props.observedAt);
-  return (
-    <PrCardGauge label="Updated" value={label} valueClassName={undefined} />
   );
 }
 
