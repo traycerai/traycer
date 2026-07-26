@@ -1,6 +1,9 @@
 import "../../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useFileTreeStore } from "../file-tree-store";
+import {
+  fileTreeExpansionScopeKey,
+  useFileTreeStore,
+} from "../file-tree-store";
 
 const PERSIST_KEY = "traycer-gui-app:file-tree";
 
@@ -9,6 +12,8 @@ interface PersistedFileTreeState {
     readonly selectedWorkspaceByEpicAndHost: Readonly<
       Record<string, Readonly<Record<string, string>>>
     >;
+    readonly expandedPathsByScope:
+      Readonly<Record<string, ReadonlyArray<string>>> | undefined;
   };
   readonly version: number;
 }
@@ -20,7 +25,20 @@ function readPersistedState(): PersistedFileTreeState {
 
 function resetStore(): void {
   window.localStorage.clear();
-  useFileTreeStore.setState({ selectedWorkspaceByEpicAndHost: {} });
+  useFileTreeStore.setState({
+    selectedWorkspaceByEpicAndHost: {},
+    expandedPathsByScope: {},
+  });
+}
+
+const SCOPE = ["epic-a", "host-A", "/work/repo"] as const;
+
+function expandedPaths(): ReadonlyArray<string> {
+  return (
+    useFileTreeStore.getState().expandedPathsByScope[
+      fileTreeExpansionScopeKey(...SCOPE)
+    ] ?? []
+  );
 }
 
 describe("useFileTreeStore", () => {
@@ -90,6 +108,72 @@ describe("useFileTreeStore", () => {
     expect(
       useFileTreeStore.getState().selectedWorkspaceByEpicAndHost["epic-a"],
     ).toEqual({ "host-B": "/other" });
+  });
+
+  it("keeps expansion per [epicId, hostId, workspacePath] and normalizes it", () => {
+    useFileTreeStore
+      .getState()
+      .setExpandedPaths(...SCOPE, ["src/lib/", "src/", "src/"]);
+    useFileTreeStore
+      .getState()
+      .setExpandedPaths("epic-a", "host-B", "/work/repo", ["docs/"]);
+
+    expect(expandedPaths()).toEqual(["src/", "src/lib/"]);
+    expect(
+      useFileTreeStore.getState().expandedPathsByScope[
+        fileTreeExpansionScopeKey("epic-a", "host-B", "/work/repo")
+      ],
+    ).toEqual(["docs/"]);
+  });
+
+  it("keeps the stored array identity when the set is unchanged", () => {
+    useFileTreeStore.getState().setExpandedPaths(...SCOPE, ["src/"]);
+    const first = expandedPaths();
+    useFileTreeStore.getState().setExpandedPaths(...SCOPE, ["src/"]);
+
+    expect(expandedPaths()).toBe(first);
+  });
+
+  it("persists expansion and restores it from a prior persisted state", async () => {
+    useFileTreeStore.getState().setExpandedPaths(...SCOPE, ["src/"]);
+    expect(
+      readPersistedState().state.expandedPathsByScope?.[
+        fileTreeExpansionScopeKey(...SCOPE)
+      ],
+    ).toEqual(["src/"]);
+
+    window.localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({
+        state: {
+          expandedPathsByScope: {
+            [fileTreeExpansionScopeKey(...SCOPE)]: ["src/", "src/lib/"],
+          },
+        },
+        version: 1,
+      }),
+    );
+    await useFileTreeStore.persist.rehydrate();
+
+    expect(expandedPaths()).toEqual(["src/", "src/lib/"]);
+  });
+
+  it("prunes a directory together with its expanded descendants", () => {
+    useFileTreeStore
+      .getState()
+      .setExpandedPaths(...SCOPE, ["src/", "src/lib/", "docs/"]);
+
+    useFileTreeStore.getState().pruneExpandedPaths(...SCOPE, ["src/"]);
+
+    expect(expandedPaths()).toEqual(["docs/"]);
+  });
+
+  it("does not prune a sibling that merely shares a name prefix", () => {
+    useFileTreeStore.getState().setExpandedPaths(...SCOPE, ["src-gen/"]);
+
+    useFileTreeStore.getState().pruneExpandedPaths(...SCOPE, ["src/"]);
+
+    expect(expandedPaths()).toEqual(["src-gen/"]);
   });
 
   it("removes the epic entry when its last host selection is cleared", () => {
