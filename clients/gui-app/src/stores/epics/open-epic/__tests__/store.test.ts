@@ -2343,4 +2343,97 @@ describe("createOpenEpicStore", () => {
     opened.dispose();
     hostDoc.destroy();
   });
+
+  describe("sync-pill raw connection legs (hostTransportStatus / cloudSyncStatus / hasConnectedOnce)", () => {
+    it("hasConnectedOnce stays false at construction even though cloudSyncStatus optimistically reads connected", () => {
+      const { factory } = fakeFactory();
+      const opened = createOpenEpicStore({
+        epicId: "epic-legs-construct",
+        streamClientFactory: factory,
+        userId: null,
+        onAuthError: null,
+      });
+
+      const state = opened.store.getState();
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasConnectedOnce).toBe(false);
+      expect(state.hostTransportStatus).toBe("connecting");
+      expect(state.connectionStatus).toBe("connecting");
+
+      opened.dispose();
+    });
+
+    it("publishes the three raw legs in step with connectionStatus across transport open, cloud disconnect, cloud reconnect, and transport drop", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = createOpenEpicStore({
+        epicId: "epic-legs-lifecycle",
+        streamClientFactory: factory,
+        userId: null,
+        onAuthError: null,
+      });
+
+      // Transport comes up for the first time. cloudSyncStatus is still the
+      // optimistic construction-time default ("connected"), so the blend
+      // already reads "open" - but hasConnectedOnce stays false because no
+      // GENUINE cloud "connected" frame has landed yet (only the optimistic
+      // default has been observed).
+      handle().callbacks.onConnectionStatus("open", null);
+      let state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("open");
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasConnectedOnce).toBe(false);
+      expect(state.connectionStatus).toBe("open");
+
+      // Genuine cloud connected frame latches hasConnectedOnce; the blend
+      // stays open.
+      handle().callbacks.onCloudSyncStatus("connected");
+      state = opened.store.getState();
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasConnectedOnce).toBe(true);
+      expect(state.connectionStatus).toBe("open");
+
+      // Cloud link drops - transport stays open, the latch stays set, and
+      // the blend reads reconnecting (a genuine reconnect this time).
+      handle().callbacks.onCloudSyncStatus("disconnected");
+      state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("open");
+      expect(state.cloudSyncStatus).toBe("disconnected");
+      expect(state.hasConnectedOnce).toBe(true);
+      expect(state.connectionStatus).toBe("reconnecting");
+
+      // Transport itself drops - hostTransportStatus tracks it directly and
+      // the blend follows.
+      handle().callbacks.onConnectionStatus("reconnecting", null);
+      state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("reconnecting");
+      expect(state.hasConnectedOnce).toBe(true);
+      expect(state.connectionStatus).toBe("reconnecting");
+
+      opened.dispose();
+    });
+
+    it("requestFreshSnapshot resets all three raw legs to their bootstrap defaults", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = createOpenEpicStore({
+        epicId: "epic-legs-refresh",
+        streamClientFactory: factory,
+        userId: null,
+        onAuthError: null,
+      });
+
+      handle().callbacks.onConnectionStatus("open", null);
+      handle().callbacks.onCloudSyncStatus("connected");
+      expect(opened.store.getState().hasConnectedOnce).toBe(true);
+
+      opened.requestFreshSnapshot();
+
+      const state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("connecting");
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasConnectedOnce).toBe(false);
+      expect(state.connectionStatus).toBe("connecting");
+
+      opened.dispose();
+    });
+  });
 });

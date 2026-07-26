@@ -36,6 +36,11 @@
  * - `artifactRoomAwareness` - awareness update for a artifact-room doc.
  * - `artifactRoomState`     - unavailable/retrying/ready state for a artifactRoom. Text-only.
  *                    Drives the GUI's per-artifact body availability UI.
+ * - `artifactRoomDirty`     - **@1.1 only** - the room holds local work the cloud
+ *                    has not acknowledged. Text-only. Orthogonal to
+ *                    `artifactRoomState`: availability answers "is the body
+ *                    materialized and usable", this answers "is there
+ *                    unsynced work in it".
  *
  * Client frames:
  *
@@ -51,9 +56,7 @@
  * change and would need a new major.
  */
 import { z } from "zod";
-import {
-  defineStreamRpcContract,
-} from "@traycer/protocol/framework/versioned-stream-rpc";
+import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 
 /**
  * Awareness state field under which each host publishes the ids of its
@@ -102,7 +105,9 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 
 const permissionRoleSchema = getRecordSchema(
   commonRecordRegistry,
-  "permission-role", "latest");
+  "permission-role",
+  "latest",
+);
 import {
   earlyMetaEpicSchema,
   snapshotMetaEpicSchema,
@@ -124,7 +129,9 @@ export const epicArtifactRoomAvailabilitySchema = z.enum([
   "unavailable",
   "retrying",
 ]);
-export type EpicArtifactRoomAvailability = z.infer<typeof epicArtifactRoomAvailabilitySchema>;
+export type EpicArtifactRoomAvailability = z.infer<
+  typeof epicArtifactRoomAvailabilitySchema
+>;
 
 /**
  * Coarse phase reported alongside `migrationProgress` frames. The renderer
@@ -156,7 +163,14 @@ export const epicCloudSyncStatusSchema = z.enum([
 ]);
 export type EpicCloudSyncStatus = z.infer<typeof epicCloudSyncStatusSchema>;
 
-export const epicSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
+// ─── Frozen `epic.subscribe@1.0` server-frame set (as shipped) ────────────
+//
+// IMMUTABLE. A renderer that negotiated @1.0 agreed to exactly these frame
+// kinds, so this array must never learn a new one - sending a peer a frame it
+// did not negotiate is the host breaking the contract, not a "graceful"
+// degrade the peer happens to drop. New frames go on a new minor's union
+// below, and the host gates their emission on the NEGOTIATED version.
+const epicSubscribeSharedServerFrameSchemasV10 = [
   z.object({
     kind: z.literal("snapshot"),
     epicId: z.string(),
@@ -317,7 +331,58 @@ export const epicSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     deletedByTraycerUserId: z.string().nullable(),
     hasBinaryPayload: z.literal(false),
   }),
+] as const;
+
+export const epicSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
+  "kind",
+  epicSubscribeSharedServerFrameSchemasV10,
+);
+
+/**
+ * Per-artifact-room sync-state signal: the room holds local work the host's
+ * cloud connection has not acknowledged (unsynced provider updates, an
+ * unflushed in-memory buffer, or a retained durable pending row).
+ *
+ * A SEPARATE dimension from {@link epicArtifactRoomAvailabilitySchema}, and a
+ * separate frame for that reason. Availability answers "is this body
+ * materialized and usable"; this answers "is there work in it the cloud has
+ * not taken". Artifact rooms are local-first - a room stays `ready` across a
+ * websocket drop and keeps accepting edits - so the two dimensions move
+ * independently, and folding `dirty` onto `artifactRoomState` would force the
+ * host to restate an availability it did not re-derive every time dirtiness
+ * flapped.
+ *
+ * NOT per-room offline: every room of an epic is multiplexed onto that epic's
+ * single websocket (`shardKey = epicId`), so per-room offline is degenerate.
+ * Offline is an epic-level fact and stays on the `cloudSyncStatus` frame.
+ *
+ * ABSENCE MEANS `false`. The host emits this only on a transition, and only to
+ * a peer that negotiated >= @1.1, so a renderer must treat "no frame seen for
+ * this room" as clean. That is what makes an old host (which never emits it)
+ * degrade correctly against a new client: the pill falls back to exactly the
+ * inputs it had before this frame existed.
+ */
+const epicSubscribeArtifactRoomDirtyServerFrameSchema = z.object({
+  kind: z.literal("artifactRoomDirty"),
+  epicId: z.string(),
+  artifactRoomId: z.string().min(1),
+  dirty: z.boolean(),
+  hasBinaryPayload: z.literal(false),
+});
+
+// ─── `epic.subscribe@1.1` - additive: per-artifact-room dirty ─────────────
+//
+// Adds the `artifactRoomDirty` frame. @1.0 stays installed and FROZEN: a
+// renderer that negotiated it never receives the new kind, and the resolver
+// gates on the negotiated version rather than assuming the peer will tolerate
+// an unknown frame.
+export const epicSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
+  ...epicSubscribeSharedServerFrameSchemasV10,
+  epicSubscribeArtifactRoomDirtyServerFrameSchema,
 ]);
+
+/** The latest installed shape. Host code builds frames against this. */
+export const epicSubscribeServerFrameSchema = epicSubscribeServerFrameSchemaV11;
 export type EpicSubscribeServerFrame = z.infer<
   typeof epicSubscribeServerFrameSchema
 >;
@@ -369,6 +434,14 @@ export const epicSubscribeV10 = defineStreamRpcContract({
   method: "epic.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: epicSubscribeOpenRequestSchema,
-  serverFrameSchema: epicSubscribeServerFrameSchema,
+  serverFrameSchema: epicSubscribeServerFrameSchemaV10,
+  clientFrameSchema: epicSubscribeClientFrameSchema,
+});
+
+export const epicSubscribeV11 = defineStreamRpcContract({
+  method: "epic.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: epicSubscribeOpenRequestSchema,
+  serverFrameSchema: epicSubscribeServerFrameSchemaV11,
   clientFrameSchema: epicSubscribeClientFrameSchema,
 });

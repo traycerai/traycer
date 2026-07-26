@@ -165,6 +165,10 @@ interface Recorder {
     readonly artifactRoomId: string;
     readonly state: string;
   }>;
+  readonly artifactRoomDirtyFrames: Array<{
+    readonly artifactRoomId: string;
+    readonly dirty: boolean;
+  }>;
   readonly statusEvents: number;
 }
 
@@ -194,6 +198,10 @@ function makeRecorder(): Recorder {
   const artifactRoomStates: Array<{
     readonly artifactRoomId: string;
     readonly state: string;
+  }> = [];
+  const artifactRoomDirtyFrames: Array<{
+    readonly artifactRoomId: string;
+    readonly dirty: boolean;
   }> = [];
   let statusEvents = 0;
   const callbacks: EpicStreamCallbacks = {
@@ -241,6 +249,9 @@ function makeRecorder(): Recorder {
     onArtifactRoomState: (artifactRoomId, state) => {
       artifactRoomStates.push({ artifactRoomId, state });
     },
+    onArtifactRoomDirty: (artifactRoomId, dirty) => {
+      artifactRoomDirtyFrames.push({ artifactRoomId, dirty });
+    },
     onMigrationStarted: () => {
       // not exercised by this test; satisfies the contract type
     },
@@ -269,6 +280,7 @@ function makeRecorder(): Recorder {
     artifactRoomUpdates,
     artifactRoomAwarenessFrames,
     artifactRoomStates,
+    artifactRoomDirtyFrames,
     get statusEvents(): number {
       return statusEvents;
     },
@@ -276,7 +288,7 @@ function makeRecorder(): Recorder {
 }
 
 describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
-  it("subscribes via epic.subscribe@1.0 with epicId only", () => {
+  it("subscribes via epic.subscribe with epicId only, negotiating the client's latest declared minor", () => {
     const { factory, sockets } = makeFactory();
     const recorder = makeRecorder();
     const client = new EpicStreamClient({
@@ -286,10 +298,12 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     });
     completeHandshake(sockets[0]);
 
+    // T5 (artifactRoomDirty) bumped the registry's latestMinor to 1 - the
+    // client now opens at {major:1, minor:1} rather than the pre-T5 {1,0}.
     expect(parseText(sockets[0].textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 1 },
       params: { epicId: "epic-1" },
     });
     client.close();
@@ -463,6 +477,41 @@ describe("EpicStreamClient scoped root/artifact-room contract (B6)", () => {
     // Root callbacks must not be touched by artifactRoom frames.
     expect(recorder.snapshots).toHaveLength(0);
     expect(recorder.updates).toHaveLength(0);
+    client.close();
+  });
+
+  it("routes an inbound artifactRoomDirty frame to onArtifactRoomDirty with the right artifactRoomId/dirty", () => {
+    const { factory, sockets } = makeFactory();
+    const recorder = makeRecorder();
+    const client = new EpicStreamClient({
+      wsStreamClient: makeWsStreamClient(factory),
+      epicId: "epic-1",
+      callbacks: recorder.callbacks,
+    });
+    completeHandshake(sockets[0]);
+
+    sockets[0].fireText({
+      kind: "artifactRoomDirty",
+      epicId: "epic-1",
+      artifactRoomId: "artifact-room-0",
+      dirty: true,
+      hasBinaryPayload: false,
+    });
+    sockets[0].fireText({
+      kind: "artifactRoomDirty",
+      epicId: "epic-1",
+      artifactRoomId: "artifact-room-1",
+      dirty: false,
+      hasBinaryPayload: false,
+    });
+
+    expect(recorder.artifactRoomDirtyFrames).toEqual([
+      { artifactRoomId: "artifact-room-0", dirty: true },
+      { artifactRoomId: "artifact-room-1", dirty: false },
+    ]);
+    // Root/other artifactRoom callbacks must not be touched by this frame.
+    expect(recorder.snapshots).toHaveLength(0);
+    expect(recorder.artifactRoomStates).toHaveLength(0);
     client.close();
   });
 

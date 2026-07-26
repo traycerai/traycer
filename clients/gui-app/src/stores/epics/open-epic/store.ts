@@ -39,7 +39,11 @@ import type {
   TerminalAgentsSlice,
   TreeSlice,
 } from "./types";
-import { EMPTY_ARTIFACT_ROOMS_SLICE, EMPTY_PROJECTED_SLICES } from "./types";
+import {
+  EMPTY_ARTIFACT_ROOM_DIRTY,
+  EMPTY_ARTIFACT_ROOMS_SLICE,
+  EMPTY_PROJECTED_SLICES,
+} from "./types";
 import {
   getArtifactEntry,
   getArtifactsMap,
@@ -278,11 +282,59 @@ export interface OpenEpicState {
    * absent from this slice are implicitly `unavailable`.
    */
   readonly artifactRooms: ArtifactRoomsSlice;
+  /**
+   * Per-artifact-room HOST-side sync state, mirrored from
+   * `epic.subscribe@1.1` `artifactRoomDirty` frames: `true` means the host
+   * holds work for that room its cloud connection has not acknowledged.
+   *
+   * Deliberately separate from `artifactRooms` (availability) - artifact rooms
+   * are local-first, so a room stays `ready` and editable across a cloud drop
+   * while accumulating unsynced bodies. A room absent from this record is
+   * clean: the host emits only on a change, and a host older than @1.1 never
+   * emits at all.
+   *
+   * Also distinct from the `dirtyWatermark*` fields below, which track the
+   * RENDERER's local replica against the host. This is the leg further down
+   * the chain - host against cloud - and it is the one that was missing when
+   * the sync pill claimed "All changes synced" over bodies that existed
+   * nowhere but the host's SQLite.
+   */
+  readonly artifactRoomDirtyByArtifactRoomId: Readonly<Record<string, boolean>>;
 
   // ── Connection / permissions / dirty-tracking ────────────────────────
   readonly snapshotMeta: SnapshotMetaEpic | null;
   readonly permissionRole: PermissionRole | null;
+  /**
+   * VISIBLE connection status: `deriveConnectionStatus(hostTransportStatus,
+   * cloudSyncStatus, hasConnectedOnce)`. Write-gating and "can this surface
+   * act right now" checks read this.
+   *
+   * It is a lossy blend by design - "host unreachable" and "host reachable,
+   * cloud link down" both collapse to `reconnecting`. Anything that needs to
+   * know WHERE unsynced work is sitting must read the three raw fields below
+   * instead; see `@/lib/epic-sync-pill-state`.
+   */
   readonly connectionStatus: StreamConnectionStatus;
+  /**
+   * Raw renderer↔host stream status, unblended. `open` means the host is
+   * reachable and local edits are reaching a process that persists them
+   * durably; anything else means unsent edits are held only in this window's
+   * memory.
+   */
+  readonly hostTransportStatus: StreamConnectionStatus;
+  /**
+   * Host-observed state of the host↔cloud link for this Epic, mirrored from
+   * `epic.subscribe@1.0` `cloudSyncStatus` frames. Optimistically `connected`
+   * until the host's first frame so app-wide readiness gates do not stall on
+   * the cloud link.
+   */
+  readonly cloudSyncStatus: EpicCloudSyncStatus;
+  /**
+   * Latched by the first genuine cloud `connected` frame on this subscription
+   * (never by the optimistic default), and cleared on re-subscribe. Separates a
+   * first-time bootstrap from a real reconnect for display purposes only.
+   */
+  readonly hasConnectedOnce: boolean;
   readonly accessLost: boolean;
   /**
    * Set once when the host emits `epicDeleted` - a remote delete observed
@@ -941,6 +993,24 @@ export function createOpenEpicStore(
           return currentStatus;
         };
 
+        // Publishes the blended status together with the raw legs it was
+        // blended from, so a reader that needs to know WHERE unsynced work is
+        // sitting can never observe the two out of step. Every site that
+        // moves `transportStatus` / `cloudSyncStatus` / `hasConnectedOnce`
+        // must set through this.
+        const connectionStateSlice = (): Pick<
+          OpenEpicState,
+          | "connectionStatus"
+          | "hostTransportStatus"
+          | "cloudSyncStatus"
+          | "hasConnectedOnce"
+        > => ({
+          connectionStatus: currentStatus,
+          hostTransportStatus: transportStatus,
+          cloudSyncStatus,
+          hasConnectedOnce,
+        });
+
         const flushPendingRootUpdates = (): void => {
           if (unsyncedQueue.length === 0) return;
           const role = currentRole ?? get().permissionRole;
@@ -1278,6 +1348,21 @@ export function createOpenEpicStore(
                 };
               });
             },
+            onArtifactRoomDirty: (artifactRoomId, dirty) => {
+              if (disposed || generation !== streamGeneration) return;
+              set((prev) => {
+                const current =
+                  prev.artifactRoomDirtyByArtifactRoomId[artifactRoomId] ??
+                  false;
+                if (current === dirty) return prev;
+                return {
+                  artifactRoomDirtyByArtifactRoomId: {
+                    ...prev.artifactRoomDirtyByArtifactRoomId,
+                    [artifactRoomId]: dirty,
+                  },
+                };
+              });
+            },
             onPermissionChanged: (permissionRole) => {
               if (disposed || generation !== streamGeneration) return;
               if (permissionRole === null) {
@@ -1399,8 +1484,8 @@ export function createOpenEpicStore(
               // room's pre-connect catch-up reads as the bootstrap "connecting"
               // while a drop AFTER a real connect reads as "reconnecting".
               if (status === "connected") hasConnectedOnce = true;
-              const nextStatus = syncCurrentConnectionStatus();
-              set({ connectionStatus: nextStatus });
+              syncCurrentConnectionStatus();
+              set(connectionStateSlice());
               flushPendingWritesAfterReconnect(client);
             },
             onConnectionStatus: (status, reason) => {
@@ -1426,7 +1511,7 @@ export function createOpenEpicStore(
               }
               const nextStatus = syncCurrentConnectionStatus();
               hasFreshRootSnapshotForOpenCycle = false;
-              set({ connectionStatus: nextStatus });
+              set(connectionStateSlice());
               // Convert a fatal close into the modal's error state, but only
               // when a migration had actually started - a fatal close before
               // any `migrationStarted` is a normal connection error owned by
@@ -1502,11 +1587,16 @@ export function createOpenEpicStore(
             doc,
             awareness,
             bindingVersion: state.bindingVersion + 1,
-            connectionStatus: "connecting",
+            ...connectionStateSlice(),
             snapshotLoaded: false,
             snapshotFetchError: null,
             unsyncedQueueSize: 0,
             artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
+            // The host mirrors what it has already emitted PER SUBSCRIPTION,
+            // so a re-subscribe re-emits every still-dirty room and never
+            // re-states a clean one. Carrying a stale `true` across the
+            // reconnect would strand the pill in "Syncing..." forever.
+            artifactRoomDirtyByArtifactRoomId: EMPTY_ARTIFACT_ROOM_DIRTY,
             // Re-subscribing is the moment the migration story restarts -
             // the host will re-emit `migrationStarted` if the new
             // subscription still hits the migration path.
@@ -1740,9 +1830,13 @@ export function createOpenEpicStore(
           bindingVersion: 0,
           ...EMPTY_PROJECTED_SLICES,
           artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
+          artifactRoomDirtyByArtifactRoomId: EMPTY_ARTIFACT_ROOM_DIRTY,
           snapshotMeta: null,
           permissionRole: null,
           connectionStatus: "connecting",
+          hostTransportStatus: "connecting",
+          cloudSyncStatus: "connected",
+          hasConnectedOnce: false,
           accessLost: false,
           epicDeleted: null,
           snapshotLoaded: false,

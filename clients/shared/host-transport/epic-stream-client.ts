@@ -124,6 +124,22 @@ export interface EpicStreamCallbacks {
     state: EpicArtifactRoomAvailability,
   ) => void;
   /**
+   * Per-artifact-room sync state: the host holds work for this room that its
+   * cloud connection has not acknowledged. Orthogonal to
+   * `onArtifactRoomState` - a room stays `ready` and editable across a
+   * websocket drop (artifact rooms are local-first), so availability and
+   * dirtiness move independently.
+   *
+   * Emitted by the host only on `epic.subscribe@1.1` and only on a CHANGE, so
+   * consumers must treat a room they have never heard about as clean. A host
+   * that predates the frame simply never sends it, and the consumer degrades
+   * to exactly the sync inputs it had before.
+   */
+  readonly onArtifactRoomDirty: (
+    artifactRoomId: string,
+    dirty: boolean,
+  ) => void;
+  /**
    * Host-observed Tiptap/cloud room connection state. Distinct from the
    * renderer→host `/stream` lifecycle: the local stream can be open while
    * the host is offline from Tiptap Cloud.
@@ -402,6 +418,10 @@ export class EpicStreamClient {
       }
       case "artifactRoomState": {
         this.callbacks.onArtifactRoomState(frame.artifactRoomId, frame.state);
+        return;
+      }
+      case "artifactRoomDirty": {
+        this.callbacks.onArtifactRoomDirty(frame.artifactRoomId, frame.dirty);
         return;
       }
       case "migrationStarted": {

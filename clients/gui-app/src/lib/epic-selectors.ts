@@ -44,6 +44,10 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
+import {
+  deriveEpicSyncPillState,
+  type EpicSyncPillState,
+} from "@/lib/epic-sync-pill-state";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -132,6 +136,39 @@ export function useEpicSnapshotMeta(): SnapshotMetaEpic | null {
 
 export function useEpicConnectionStatus(): StreamConnectionStatus {
   return useEpicStore((s) => s.connectionStatus);
+}
+
+/**
+ * `true` when the host holds artifact-room work its cloud connection has not
+ * acknowledged. Memoized on the record identity, which the store only replaces
+ * on a real transition, so the steady stream of unrelated store writes does not
+ * re-scan it.
+ */
+const selectHasDirtyArtifactRooms = createSelector(
+  (s: OpenEpicState) => s.artifactRoomDirtyByArtifactRoomId,
+  (dirtyByArtifactRoomId): boolean =>
+    Object.values(dirtyByArtifactRoomId).some((dirty) => dirty),
+);
+
+/**
+ * The sync pill's single source of truth. Weighs all four legs of the
+ * durability chain rather than the lossy blended `connectionStatus` the pill
+ * used to read on its own - see `@/lib/epic-sync-pill-state` for the ordering
+ * contract and why each leg has to be visible separately.
+ *
+ * Returns a plain string union, so an unchanged verdict is `Object.is`-equal
+ * and never re-renders the pill.
+ */
+export function useEpicSyncPillState(): EpicSyncPillState {
+  return useEpicStore((s) =>
+    deriveEpicSyncPillState({
+      hostTransportStatus: s.hostTransportStatus,
+      cloudSyncStatus: s.cloudSyncStatus,
+      hasDirtyArtifactRooms: selectHasDirtyArtifactRooms(s),
+      hasUnsyncedLocalChanges: s.isDirty,
+      hasConnectedOnce: s.hasConnectedOnce,
+    }),
+  );
 }
 
 export function useEpicPermissionRole(): PermissionRole | null {

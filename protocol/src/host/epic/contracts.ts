@@ -86,7 +86,10 @@ import {
   updateEpicRequestSchema,
   updateEpicResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { epicSubscribeV10 } from "@traycer/protocol/host/epic/subscribe";
+import {
+  epicSubscribeV10,
+  epicSubscribeV11,
+} from "@traycer/protocol/host/epic/subscribe";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
 // task-list query. Both request and response preserve the released wire shape.
@@ -492,4 +495,4 @@ export const epicSearchArtifactsV10 = defineRpcContract({
   responseSchema: searchArtifactsResponseSchema,
 });
 
-export { epicSubscribeV10 };
+export { epicSubscribeV10, epicSubscribeV11 };

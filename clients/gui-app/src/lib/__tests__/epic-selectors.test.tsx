@@ -9,6 +9,7 @@ import type {
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
   useEpicChatHarnessId,
+  useEpicSyncPillState,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
 import {
@@ -125,6 +126,79 @@ describe("useEpicChatHarnessId", () => {
     });
 
     expect(result.current).toBeNull();
+  });
+});
+
+describe("useEpicSyncPillState", () => {
+  function healthyBaseline(handle: OpenEpicStoreHandle): void {
+    handle.store.setState({
+      hostTransportStatus: "open",
+      cloudSyncStatus: "connected",
+      hasConnectedOnce: true,
+      isDirty: false,
+      artifactRoomDirtyByArtifactRoomId: {},
+    });
+  }
+
+  it("treats an artifact-room record absent from the map as clean, not unknown", () => {
+    const handle = createHandle("epic-dirty-absent");
+    healthyBaseline(handle);
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("synced");
+  });
+
+  it("treats an explicit false record the same as an absent one", () => {
+    const handle = createHandle("epic-dirty-false");
+    healthyBaseline(handle);
+    handle.store.setState({
+      artifactRoomDirtyByArtifactRoomId: { "room-a": false },
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("synced");
+  });
+
+  it("is dirty when any one room in the map is dirty, not only when all are", () => {
+    const handle = createHandle("epic-dirty-any");
+    healthyBaseline(handle);
+    handle.store.setState({
+      artifactRoomDirtyByArtifactRoomId: { "room-a": false, "room-b": true },
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("syncing");
+  });
+
+  it("flips syncing -> synced live as a room's dirty flag flips true -> false", () => {
+    const handle = createHandle("epic-dirty-transition");
+    healthyBaseline(handle);
+    handle.store.setState({
+      artifactRoomDirtyByArtifactRoomId: { "room-a": true },
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("syncing");
+
+    act(() => {
+      handle.store.setState({
+        artifactRoomDirtyByArtifactRoomId: { "room-a": false },
+      });
+    });
+
+    expect(result.current).toBe("synced");
   });
 });
 
