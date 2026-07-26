@@ -6,9 +6,6 @@ import type {
 
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 
-/** The literal prompt every compaction-capable harness parses as its own command. */
-export const COMPACT_COMMAND_TEXT = "/compact";
-
 /**
  * Whether the user can trigger compaction on this harness, as opposed to the
  * harness only ever compacting on its own.
@@ -56,6 +53,13 @@ function isAuthoritative(item: ChatQueuedItem): boolean {
  * and the message simply stays where it was queued - last rather than first,
  * which is a worse ordering but never a lost or duplicated message.
  *
+ * The reorder can also land after its target has drained (the turn ends and
+ * the host works through the head of the queue between the read below and the
+ * frame arriving). The host's own reorder handler falls back to appending at
+ * the end when `beforeQueueItemId` no longer exists, so in that narrow window
+ * the message can end up behind work queued after the promotion was
+ * requested - bounded and rare, never lost or duplicated.
+ *
  * Returns a cancel function; call it if the surface unmounts first.
  */
 export function promoteQueuedMessageToFront<
@@ -98,14 +102,24 @@ export function promoteQueuedMessageToFront<
       (item) => item.messageId === input.messageId,
     );
     if (index === -1) return false;
-    // Index >= 1 guarantees a distinct item at 0 to insert ahead of.
+    // Index >= 1 guarantees a distinct item at 0 to insert ahead of, right
+    // now - see the reorder-can-land-late note above for what can change
+    // between this read and the frame reaching the host.
     if (index === 0) return true;
     input.reorder(settledItems[index].queueItemId, settledItems[0].queueItemId);
     return true;
   };
 
+  // The store has no `subscribeWithSelector`, so this fires on every state
+  // change - including the rAF-cadence stream-flush delta while a turn is
+  // running. `queue` is only ever replaced wholesale on a real queue
+  // mutation, so a reference check skips `attempt()`'s filter+scan on every
+  // unrelated notification for the (up to 15s) life of the watch.
+  let lastQueue = input.store.getState().queue;
   unsubscribe = input.store.subscribe((state) => {
     if (settled) return;
+    if (state.queue === lastQueue) return;
+    lastQueue = state.queue;
     if (attempt(state)) finish();
   });
   timer = window.setTimeout(finish, QUEUE_PROMOTION_TIMEOUT_MS);

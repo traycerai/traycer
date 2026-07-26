@@ -194,6 +194,34 @@ describe("promoteQueuedMessageToFront", () => {
     expect(reorder).not.toHaveBeenCalled();
   });
 
+  it("does not re-filter the queue when the reference is unchanged", () => {
+    // The watch fires on every store notification, including the rAF-cadence
+    // stream-flush delta while a turn runs - none of which touch `queue`.
+    // This pins the reference-equality gate that keeps those from re-running
+    // attempt()'s filter+scan.
+    const items = [queuedItem(optimisticQueuedItemId("a"), "m-compact")];
+    const filterSpy = vi.spyOn(items, "filter");
+    const q: ChatQueueState = { status: "running", items };
+    const store = makeStore(q);
+    const reorder = vi.fn(() => "ok");
+    promoteQueuedMessageToFront({ store, messageId: "m-compact", reorder });
+    filterSpy.mockClear();
+
+    // Same reference: the gate should skip attempt() entirely.
+    store.push(q);
+    expect(filterSpy).not.toHaveBeenCalled();
+    expect(reorder).not.toHaveBeenCalled();
+
+    // A genuinely new queue reference still gets scanned and reordered.
+    store.push(
+      queue([
+        queuedItem("q-other", "m-other"),
+        queuedItem("q-compact", "m-compact"),
+      ]),
+    );
+    expect(reorder).toHaveBeenCalledExactlyOnceWith("q-compact", "q-other");
+  });
+
   it("can be cancelled by the caller", () => {
     const store = makeStore(
       queue([queuedItem(optimisticQueuedItemId("a"), "m-compact")]),
