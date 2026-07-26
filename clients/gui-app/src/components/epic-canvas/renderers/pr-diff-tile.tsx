@@ -94,7 +94,7 @@ function PrDiffTileLive(props: PrDiffTileProps): ReactNode {
     enabled: props.isActive,
   });
   const core = subscription.data?.core ?? null;
-  const target = core === null ? null : prLocalDiffTarget(core);
+  const target = core === null ? null : prLocalDiffTarget(core, props.epicId);
   const localDiff = usePrLocalDiffQuery({
     target,
     ignoreWhitespace: preferences.ignoreWhitespace,

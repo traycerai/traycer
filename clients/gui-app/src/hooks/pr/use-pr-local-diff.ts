@@ -25,6 +25,7 @@ import { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
  * gets decided ONCE, rather than at four separate call sites.
  */
 export interface PrLocalDiffTarget {
+  readonly epicId: string;
   readonly linkGroupKey: string;
   readonly repoIdentifier: PrDetailCore["repoIdentifier"];
   readonly repoRole: PrDetailCore["repoRole"];
@@ -35,6 +36,7 @@ export interface PrLocalDiffTarget {
 
 export function prLocalDiffTarget(
   core: PrDetailCore,
+  epicId: string,
 ): PrLocalDiffTarget | null {
   if (
     core.linkGroupKey === null ||
@@ -44,6 +46,7 @@ export function prLocalDiffTarget(
     return null;
   }
   return {
+    epicId,
     linkGroupKey: core.linkGroupKey,
     repoIdentifier: core.repoIdentifier,
     repoRole: core.repoRole,
@@ -116,6 +119,7 @@ export function usePrLocalDiffQuery(args: {
             );
           }
           const request: PrGetLocalDiffRequest = {
+            epicId: target.epicId,
             linkGroupKey: target.linkGroupKey,
             repoIdentifier: target.repoIdentifier,
             repoRole: target.repoRole,

@@ -621,6 +621,12 @@ export type PrLocalDiffUnavailableReason = z.infer<
  * and `repoIdentifier` disambiguate WHICH repo under that key is meant, since
  * one key covers a superproject and every submodule it owns.
  *
+ * `epicId` gates this the same way the two `pr.*` streams do: the caller must
+ * hold SOME role on the named epic, and the resolved checkout must itself
+ * belong to that epic. Without it, a caller who merely knows another epic's
+ * `linkGroupKey` (an opaque token, not a secret) could read that epic's local
+ * diff despite having no role on it.
+ *
  * `expectedHeadOid` is GitHub's tip. The host never uses it to select refs -
  * it only reports the local tip back, so the client can say "your checkout is
  * N commits from what GitHub is showing" instead of quietly rendering a diff
@@ -630,6 +636,7 @@ export const prGetLocalDiffRequestSchema = z.object({
   // No `hostId`: like the two `pr.*` streams, and unlike `git.*`, the host it
   // runs on is the only host it could mean - taking one as an argument would
   // invite a caller to believe it selects something.
+  epicId: z.string().min(1),
   linkGroupKey: prLinkGroupKeySchema,
   repoIdentifier: prRepoIdentifierSchema,
   repoRole: prRepoRoleSchema,
