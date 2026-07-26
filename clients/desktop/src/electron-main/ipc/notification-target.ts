@@ -25,11 +25,15 @@ const ACTIVATION_ENVELOPE_KIND = "notificationActivation";
 const ACTIVATION_ENVELOPE_VERSION = 1;
 
 /**
- * Tile kinds a chat notification can resolve to. `terminal-agent` is the
- * legacy/alternate tile type for the same chat content - see
- * `isChatArtifactTileType` in gui-app's `notifications/payload.ts`.
+ * Tile kinds a chat/approval/interview notification's `chatId` can resolve
+ * to. `chat`/`terminal-agent` per `isChatArtifactTileType` in gui-app's
+ * `notifications/payload.ts`; `terminal` too, because
+ * `routeEpicChatNotification` there tries `routeLegacyTerminalNotification`
+ * first - a legacy shape where `chatId` is actually a raw terminal id,
+ * matched against `type === "terminal"` tiles - before falling back to the
+ * chat-artifact lookup.
  */
-const CHAT_TILE_TYPES = new Set(["chat", "terminal-agent"]);
+const CHAT_TILE_TYPES = new Set(["chat", "terminal-agent", "terminal"]);
 
 /** Mirrors `NotificationPayloadKind` in gui-app's `notifications/payload.ts`. */
 const KNOWN_ROUTE_KINDS = new Set([

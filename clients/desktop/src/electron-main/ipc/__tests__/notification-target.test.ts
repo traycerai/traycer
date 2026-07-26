@@ -566,6 +566,25 @@ describe("findWindowIdForOpenChat", () => {
     ).toBe("window-a");
   });
 
+  it("matches a raw terminal tile type, for the legacy chatId-as-terminal-id shape", () => {
+    const registry = new FakeRegistry(["window-a"]);
+    const state = new FakePerWindowState([
+      [
+        "window-a",
+        snapshotWithChat({
+          tabId: "tab-1",
+          epicId: "epic-1",
+          chatId: "terminal-1",
+          tileType: "terminal",
+          hostId: null,
+        }),
+      ],
+    ]);
+    expect(
+      findWindowIdForOpenChat(registry, state, "epic-1", "terminal-1", null),
+    ).toBe("window-a");
+  });
+
   it("returns null without throwing for structurally malformed snapshots", () => {
     const registry = new FakeRegistry([
       "window-missing-canvas-entry",
