@@ -323,22 +323,6 @@ interface HostPathSearchResult {
 }
 
 /**
- * Host-ranked path search for the current filter query, or `null` whenever the
- * panel must keep filtering locally.
- *
- * `null` covers every degrade in one value: no query, the response still in
- * flight, a late reply whose echoed Epic/root no longer matches this panel, a
- * `root_unavailable` outcome (the root is not attached/authorized for this
- * Epic on this host), and a host that predates the method. That last one is
- * latched per (host, workspace): `workspace.searchPaths` is off the released
- * floor, so an old host rejects it CLIENT-side with `E_HOST_UNSUPPORTED` from
- * the negotiated manifest - cheap, but retried per keystroke otherwise, and
- * each new query mints a new cache key with a clean error slate. Latching
- * turns that into one verdict per host+workspace; changing either scope
- * re-probes, since the state is compared against the live scope key rather
- * than reset by an effect.
- */
-/**
  * "This host cannot serve the method, ever" - the signal that latches the
  * panel onto local filtering for this (host, workspace). Two shapes qualify:
  * the clean client-side `E_HOST_UNSUPPORTED` (method absent from the
@@ -367,6 +351,22 @@ interface HostPathSearch {
   readonly hostSearchUnavailable: boolean;
 }
 
+/**
+ * Host-ranked path search for the current filter query, or `null` whenever the
+ * panel must keep filtering locally.
+ *
+ * `null` covers every degrade in one value: no query, the response still in
+ * flight, a late reply whose echoed Epic/root no longer matches this panel, a
+ * `root_unavailable` outcome (the root is not attached/authorized for this
+ * Epic on this host), and a host that predates the method. That last one is
+ * latched per (host, workspace): `workspace.searchPaths` is off the released
+ * floor, so an old host rejects it CLIENT-side with `E_HOST_UNSUPPORTED` from
+ * the negotiated manifest - cheap, but retried per keystroke otherwise, and
+ * each new query mints a new cache key with a clean error slate. Latching
+ * turns that into one verdict per host+workspace; changing either scope
+ * re-probes, since the state is compared against the live scope key rather
+ * than reset by an effect.
+ */
 function useHostPathSearch(args: {
   readonly epicId: string;
   readonly hostId: string | null;
@@ -671,24 +671,6 @@ export function FileTreePanelBodyForWorkspace(props: {
 }
 
 /**
- * Keeps the tree's expansion and the store's expanded-path set in lockstep,
- * and re-seeds Pierre from the store on every path reset.
- *
- * Pierre owns expansion imperatively and rebuilds its store on `resetPaths`,
- * so the durable set has to be handed back on every reset or a live listing
- * frame would collapse the tree the user just opened. In the other direction
- * the store is what the stream's coverage is derived from, so a user
- * expand/collapse has to land there - Pierre exposes no expansion callback, so
- * its change notification is the trigger and the known directory rows are
- * re-read on each tick (a set comparison, and the store write is a no-op when
- * nothing moved).
- *
- * While a filter query is active - either mode - expansion is driven by the
- * filter (the tree adapter expands its own matches; host search expands the
- * ancestors of the ranked results) rather than by the user, so syncing pauses
- * and the stream's coverage stays exactly where browsing left it.
- */
-/**
  * Pierre's `resetPaths` swaps the store but keeps the current search VALUE
  * while never recomputing its match set, and `setSearch` no-ops on an
  * unchanged value - so a filter that is active across a paths reset silently
@@ -707,6 +689,24 @@ function reassertFilterAfterReset(
   model.setSearch(localFilterQuery);
 }
 
+/**
+ * Keeps the tree's expansion and the store's expanded-path set in lockstep,
+ * and re-seeds Pierre from the store on every path reset.
+ *
+ * Pierre owns expansion imperatively and rebuilds its store on `resetPaths`,
+ * so the durable set has to be handed back on every reset or a live listing
+ * frame would collapse the tree the user just opened. In the other direction
+ * the store is what the stream's coverage is derived from, so a user
+ * expand/collapse has to land there - Pierre exposes no expansion callback, so
+ * its change notification is the trigger and the known directory rows are
+ * re-read on each tick (a set comparison, and the store write is a no-op when
+ * nothing moved).
+ *
+ * While a filter query is active - either mode - expansion is driven by the
+ * filter (the tree adapter expands its own matches; host search expands the
+ * ancestors of the ranked results) rather than by the user, so syncing pauses
+ * and the stream's coverage stays exactly where browsing left it.
+ */
 function useWorkspaceFileTreeExpansion(args: {
   readonly model: PierreFileTreeModel;
   readonly epicId: string;

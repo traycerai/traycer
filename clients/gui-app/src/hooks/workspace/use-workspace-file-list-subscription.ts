@@ -217,9 +217,16 @@ export function useWorkspaceFileListSubscription(args: {
     if (shared === undefined) return;
     shared.watchRequests.set(consumerId, new Set(requestedWatchPaths));
     syncCoverage(shared);
+    // `epicId` is not read here, but it IS a dependency: the lifecycle effect
+    // above re-runs on an epic change and its cleanup drops this consumer's
+    // watch request. `requestedWatchPaths` is memoized on the joined path key,
+    // so two epics with the same expanded set keep one identity - without
+    // `epicId` this effect would not re-run and the coverage would stay
+    // dropped until the user toggled a directory.
   }, [
     consumerId,
     enabled,
+    epicId,
     hostId,
     requestedWatchPaths,
     workspacePath,

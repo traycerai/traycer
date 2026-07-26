@@ -314,10 +314,13 @@ vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
   }),
 }));
 
-// The active-query path search is a separate host query; this panel test only
-// exercises the browse/error state, so stub it to an inert idle result.
-// The panel reads the response through this module's real echo guard, so only
-// the request hook is stubbed out (this harness has no host client).
+// The path-search hook is replaced with a real, permanently-disabled TanStack
+// query: this panel test only exercises the browse/error state, and standing up
+// the true hook would need a full `HostClient` (readiness snapshot + change
+// subscription), not this harness's minimal stub. Delegating to `useQuery`
+// yields a COMPLETE idle `UseQueryResult` - status, isPending, refetch and the
+// rest - so the mock cannot drift from the production query contract the way a
+// hand-listed subset would. The module's real echo guard stays in the graph.
 vi.mock(
   "@/hooks/workspace/use-workspace-search-paths-query",
   async (importOriginal) => {
@@ -325,15 +328,17 @@ vi.mock(
       await importOriginal<
         typeof import("@/hooks/workspace/use-workspace-search-paths-query")
       >();
+    const { useQuery } = await import("@tanstack/react-query");
     return {
       ...actual,
-      useWorkspaceSearchPaths: () => ({
-        data: undefined,
-        error: null,
-        isError: false,
-        isLoading: false,
-        isFetching: false,
-      }),
+      useWorkspaceSearchPaths: () =>
+        useQuery({
+          queryKey: ["test", "workspace.searchPaths", "disabled"],
+          // Never invoked (the query is permanently disabled), but it must
+          // resolve to a non-undefined value to satisfy the TanStack lint rule.
+          queryFn: () => Promise.resolve(null),
+          enabled: false,
+        }),
     };
   },
 );

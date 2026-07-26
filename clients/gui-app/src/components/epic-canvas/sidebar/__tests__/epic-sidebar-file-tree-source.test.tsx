@@ -41,6 +41,8 @@ import {
   fileTreeExpansionScopeKey,
   useFileTreeStore,
 } from "@/stores/file-tree/file-tree-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { __resetWorkspaceFileListSubscriptionsForTesting } from "@/hooks/workspace/use-workspace-file-list-subscription";
 
 const HOST_ID = "host-1";
@@ -73,11 +75,6 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return { ...actual, useHostClient: () => hostClientRef.current };
 });
-
-vi.mock("@/stores/settings/settings-store", () => ({
-  useSettingsStore: (selector: (state: unknown) => unknown) =>
-    selector({ diffViewerPreferences: { ignoreWhitespace: false } }),
-}));
 
 vi.mock("@/hooks/git/use-git-list-changed-files-subscription", () => ({
   useGitListChangedFilesSubscription: () => ({
@@ -407,6 +404,15 @@ function renderPanel(client: MockWsStreamClient): void {
 
 describe("sidebar file tree source selection", () => {
   beforeEach(() => {
+    // Real store, seeded: the git-status subscription params are derived from
+    // this preference, so the value has to be deterministic without faking an
+    // internal Zustand store.
+    useSettingsStore.setState({
+      diffViewerPreferences: {
+        ...DEFAULT_DIFF_VIEWER_PREFERENCES,
+        ignoreWhitespace: false,
+      },
+    });
     mockListedPaths = [];
     mockSearchValue = "";
     mockSearchSnapshot = { isOpen: false, value: "", matchingPaths: [] };
@@ -486,6 +492,15 @@ describe("sidebar file tree filter source", () => {
   }
 
   beforeEach(() => {
+    // Real store, seeded: the git-status subscription params are derived from
+    // this preference, so the value has to be deterministic without faking an
+    // internal Zustand store.
+    useSettingsStore.setState({
+      diffViewerPreferences: {
+        ...DEFAULT_DIFF_VIEWER_PREFERENCES,
+        ignoreWhitespace: false,
+      },
+    });
     mockListedPaths = [];
     mockSearchValue = "";
     mockSearchSnapshot = { isOpen: false, value: "", matchingPaths: [] };
