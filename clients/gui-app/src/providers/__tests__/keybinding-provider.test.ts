@@ -24,6 +24,10 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type {
+  NavigateNestedFocus,
+  PrepareNestedFocusTarget,
+} from "@/lib/epic-nested-focus-navigation";
 
 interface NavigateCall {
   readonly kind: "home" | "settings" | "epic" | "section" | "back" | "forward";
@@ -294,7 +298,7 @@ describe("dispatchAction", () => {
     expect(document.activeElement).toBe(selectedEditor);
   });
 
-  it("focuses the committed chat editor after directional group focus", async () => {
+  it("requests primary-editor restoration for directional group focus", () => {
     const tabId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-pane-focus", "Pane Focus");
@@ -317,37 +321,33 @@ describe("dispatchAction", () => {
     appendFocusPane(sourcePaneId, [0, 0, 500, 600]);
     const targetPane = appendPane(targetPaneId, [500, 0, 500, 600]);
     const targetLayer = appendTabLayer(targetPane, "selected-tab", true);
-    const initialComposer = document.createElement("div");
-    initialComposer.setAttribute("data-chat-composer", "");
-    targetLayer.append(initialComposer);
-    appendComposerEditor(initialComposer);
+    const composer = document.createElement("div");
+    composer.setAttribute("data-chat-composer", "");
+    targetLayer.append(composer);
+    const targetEditor = appendComposerEditor(composer);
 
     const { router: baseRouter } = buildRouter(
       `/epics/epic-pane-focus/${tabId}`,
     );
-    let committedEditor: HTMLElement | null = null;
+    const navigateNestedFocusToPrimaryEditor: NavigateNestedFocus = vi.fn(
+      (
+        _epicId: string,
+        _nestedTabId: string,
+        prepare: PrepareNestedFocusTarget,
+      ) => prepare(),
+    );
     const router: KeybindingRouter = {
       ...baseRouter,
-      navigateNestedFocus: (_epicId, _nestedTabId, prepare) => {
-        const target = prepare();
-        window.requestAnimationFrame(() => {
-          targetLayer.replaceChildren();
-          const committedComposer = document.createElement("div");
-          committedComposer.setAttribute("data-chat-composer", "");
-          targetLayer.append(committedComposer);
-          committedEditor = appendComposerEditor(committedComposer);
-        });
-        return target;
-      },
+      navigateNestedFocusToPrimaryEditor,
     };
 
     expect(dispatchAction("group.focus.right", router)).toBe(true);
-    await new Promise<void>((resolve) => {
-      window.requestAnimationFrame(() => resolve());
-    });
-
-    expect(committedEditor).not.toBeNull();
-    expect(document.activeElement).toBe(committedEditor);
+    expect(navigateNestedFocusToPrimaryEditor).toHaveBeenCalledWith(
+      "epic-pane-focus",
+      tabId,
+      expect.any(Function),
+    );
+    expect(document.activeElement).toBe(targetEditor);
   });
 
   it("does not close hidden epic canvas tabs while a non-detail route is active", () => {

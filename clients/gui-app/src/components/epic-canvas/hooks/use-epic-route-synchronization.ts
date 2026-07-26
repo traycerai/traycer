@@ -32,6 +32,11 @@ import {
   resolveNestedFocusTarget,
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
+import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
+
+const PRIMARY_CHAT_COMPOSER_SELECTOR =
+  "[data-chat-composer] [data-composer-editor]";
+const ARTIFACT_EDITOR_SELECTOR = "[data-artifact-editor]";
 
 type NavigateFn = UseNavigateResult<string>;
 
@@ -208,7 +213,10 @@ export function useEpicRouteSynchronization(
     const targetToFocus = resolvedNestedRouteTarget;
     const frame = window.requestAnimationFrame(() => {
       lastRestoredNestedTargetRef.current = targetToFocus;
-      focusNestedRouteTarget(targetToFocus);
+      focusNestedRouteTarget(
+        targetToFocus,
+        consumeNestedRoutePrimaryEditorFocus(epicId, tabId, targetToFocus),
+      );
     });
     return () => {
       window.cancelAnimationFrame(frame);
@@ -489,13 +497,25 @@ function isNestedRouteTargetApplied(
   return areNestedFocusTargetsEqual(currentTarget, routeTarget);
 }
 
-function focusNestedRouteTarget(target: NestedFocusTarget): void {
+function focusNestedRouteTarget(
+  target: NestedFocusTarget,
+  focusPrimaryEditor: boolean,
+): void {
   const element =
     target.tileInstanceId === undefined
       ? findActivePaneElement(target.paneId)
       : findSelectedTileElement(target.tileInstanceId);
   if (element === null) {
     return;
+  }
+  if (focusPrimaryEditor) {
+    const editor =
+      element.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
+      element.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR);
+    if (editor !== null) {
+      editor.focus({ preventScroll: true });
+      return;
+    }
   }
   // The pane / tab container is an ancestor of the tile's editing surface, and
   // this effect re-runs on every canvas mutation (a title rename, for one). If
