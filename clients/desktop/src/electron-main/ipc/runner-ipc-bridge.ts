@@ -1313,7 +1313,7 @@ class NullSupportService implements IpcSupportService {
   submitReport(
     _form: SupportSubmitReportRequest,
   ): Promise<SupportSubmitReportResult> {
-    return Promise.resolve({ reportId: "" });
+    return Promise.resolve({ reportId: null });
   }
 
   tailLog(input: {
