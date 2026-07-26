@@ -3314,6 +3314,44 @@ describe("RunnerIpcBridge", () => {
         (message) => message.channel === RunnerHostEvent.notificationClick,
       ),
     ).toEqual([]);
+
+    // Unowned epic with no open tab → pure MRU fallback.
+    windowOwner.sentMessages.length = 0;
+    windowMru.sentMessages.length = 0;
+    registry.focusById("window-mru");
+    windowOwner.sentMessages.length = 0;
+    windowMru.sentMessages.length = 0;
+    const unownedPayload = {
+      kind: "notificationActivation",
+      version: 1,
+      route: {
+        kind: "terminal",
+        epicId: "unowned-epic",
+        tabId: "tab-x",
+        terminalId: "term-1",
+        paneId: "pane-1",
+        tileInstanceId: "tile-1",
+      },
+      feed: { source: "host", id: "row-unowned" },
+      originHostId: null,
+    };
+    bridge.deliverNotificationClick(unownedPayload);
+    expect(registry.mostRecentlyFocusedId()).toBe("window-mru");
+    expect(
+      windowMru.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([
+      {
+        channel: RunnerHostEvent.notificationClick,
+        payload: unownedPayload,
+      },
+    ]);
+    expect(
+      windowOwner.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([]);
     bridge.dispose();
   });
 });
