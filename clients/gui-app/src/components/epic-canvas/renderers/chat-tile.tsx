@@ -198,6 +198,13 @@ const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 // or double-tap can't fire the compaction twice.
 const COMPACT_ACTION_LOCK_MS = 1500;
 
+/** Per-chat compact-conversation state, keyed by `handle.chatId` - see the comment on `compactConversation`. */
+interface CompactChatState {
+  locked: boolean;
+  lockTimeoutId: number | null;
+  cancelPromotion: (() => void) | null;
+}
+
 interface ChatTileProps {
   node: EpicNodeRef;
   viewTabId: string;
@@ -1428,30 +1435,34 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // effect on the host - `deliveryPolicy` only ever branches on
   // `after_safe_point` - it purely decides, client-side, whether the
   // promotion watcher below needs to be armed at all.
-  const compactPromotionCancelRef = useRef<(() => void) | null>(null);
+  //
+  // `ChatTile` is rendered without a `key` on `node.id` (`tile-render.tsx`,
+  // `tab-group-view.tsx`), so switching this slot to a different chat
+  // repoints `handle` in place rather than remounting. State is keyed by
+  // `handle.chatId` rather than held in one shared ref, so compacting chat B
+  // can never clear chat A's click-lock early or cancel A's pending
+  // promotion - each chat's send against `handle.store` (a durable,
+  // registry-owned store that outlives this tile's display of it,
+  // `useChatSessionHandle`) settles on its own regardless of what this slot
+  // repoints to afterward.
+  const compactStateByChatIdRef = useRef(new Map<string, CompactChatState>());
   useEffect(
     () => () => {
-      compactPromotionCancelRef.current?.();
+      for (const state of compactStateByChatIdRef.current.values()) {
+        if (state.lockTimeoutId !== null) {
+          window.clearTimeout(state.lockTimeoutId);
+        }
+        state.cancelPromotion?.();
+      }
     },
     [],
   );
-  const compactActionLockedRef = useRef(false);
-  // `ChatTile` is rendered without a `key` on `node.id` (`tile-render.tsx`,
-  // `tab-group-view.tsx`), so switching this slot to a different chat repoints
-  // `handle` in place rather than remounting - these refs would otherwise
-  // carry state across chats that never share a click. Only the lock resets:
-  // it is a purely local UI debounce for this tile's own button. The pending
-  // promotion is intentionally left running - it tracks a specific send
-  // against `handle.store`, a durable session store the registry keeps alive
-  // independent of tile display (`useChatSessionHandle`), so an in-flight
-  // promotion for the chat the user just navigated away from should still
-  // settle rather than being abandoned mid-flight.
-  useEffect(() => {
-    compactActionLockedRef.current = false;
-  }, [handle]);
   const compactConversation = useCallback(
     (commandName: string): void => {
-      if (!canSendNextStep || compactActionLockedRef.current) return;
+      if (!canSendNextStep) return;
+      const states = compactStateByChatIdRef.current;
+      const existing = states.get(handle.chatId);
+      if (existing?.locked === true) return;
       const sender = userMessageSenderForProfile(profile);
       if (sender === null) return;
       const content = buildSubmittedChatJSONContent(
@@ -1460,10 +1471,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       // A cheap re-entrancy guard against a double-click firing two real
       // compactions: the optimistic-queue dedupe only suppresses the second
       // row's on-screen echo, not the frame that already went to the host.
-      compactActionLockedRef.current = true;
-      window.setTimeout(() => {
-        compactActionLockedRef.current = false;
+      const lockTimeoutId = window.setTimeout(() => {
+        const current = states.get(handle.chatId);
+        if (current !== undefined) current.locked = false;
       }, COMPACT_ACTION_LOCK_MS);
+      const state: CompactChatState = {
+        locked: true,
+        lockTimeoutId,
+        cancelPromotion: existing?.cancelPromotion ?? null,
+      };
+      states.set(handle.chatId, state);
       const { activeTurn, queue } = handle.store.getState();
       const runNow = activeTurn === null && queue.items.length === 0;
       const sent = chatActions.sendMessage(
@@ -1473,14 +1490,21 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         runNow ? "auto" : "after_turn",
       );
       if (sent === null || runNow) return;
-      compactPromotionCancelRef.current?.();
-      compactPromotionCancelRef.current = promoteQueuedMessageToFront({
+      state.cancelPromotion?.();
+      state.cancelPromotion = promoteQueuedMessageToFront({
         store: handle.store,
         messageId: sent.messageId,
         reorder: chatActions.queueReorder,
       });
     },
-    [canSendNextStep, chatActions, handle.store, nextStepSettings, profile],
+    [
+      canSendNextStep,
+      chatActions,
+      handle.chatId,
+      handle.store,
+      nextStepSettings,
+      profile,
+    ],
   );
   const nextStepActions = useMemo(
     () => ({
