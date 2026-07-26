@@ -44,13 +44,16 @@ import {
 } from "../windows/per-window-state";
 import {
   isMruFallbackMenuCommand,
-  readEpicId,
   readSenderWebContentsId,
 } from "./ipc-parsers";
 import {
   uniqueLandingDrafts,
   uniquePerWindowTabs,
 } from "./landing-draft-helpers";
+import {
+  findWindowIdForOpenChat,
+  parseNotificationClickTarget,
+} from "./notification-target";
 import { registerAuthIpc } from "./auth-ipc";
 import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
@@ -488,9 +491,35 @@ export class RunnerIpcBridge {
     );
   }
 
+  /**
+   * Routes a native-notification click. When the click carries a chat/
+   * terminal-agent target that is already open in some live window, focuses
+   * that exact window - `NotificationFocusBridge` there brings the tile to
+   * the foreground itself. Otherwise falls back to owned-or-MRU delivery, as
+   * for any other epic-scoped event.
+   */
   deliverNotificationClick(payload: unknown): void {
+    const target = parseNotificationClickTarget(payload);
+    const openWindowId =
+      target.epicId === null || target.chatId === null
+        ? null
+        : findWindowIdForOpenChat(
+            this.windowRegistry,
+            this.perWindowState,
+            target.epicId,
+            target.chatId,
+            target.originHostId,
+          );
+    if (openWindowId !== null) {
+      this.focusAndDeliver(
+        openWindowId,
+        RunnerHostEvent.notificationClick,
+        payload,
+      );
+      return;
+    }
     this.deliverToOwnedOrMru(
-      readEpicId(payload),
+      target.epicId,
       RunnerHostEvent.notificationClick,
       payload,
     );
@@ -910,11 +939,19 @@ export class RunnerIpcBridge {
       });
       return;
     }
-    this.windowRegistry.focusById(target.windowId);
-    if (!this.safeSendToWindow(target.windowId, channel, payload)) {
+    this.focusAndDeliver(target.windowId, channel, payload);
+  }
+
+  private focusAndDeliver(
+    windowId: string,
+    channel: string,
+    payload: unknown,
+  ): void {
+    this.windowRegistry.focusById(windowId);
+    if (!this.safeSendToWindow(windowId, channel, payload)) {
       log.warn("[runner-ipc] renderer event delivery failed", {
         channel,
-        windowId: target.windowId,
+        windowId,
       });
     }
   }

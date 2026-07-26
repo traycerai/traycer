@@ -2745,4 +2745,434 @@ describe("RunnerIpcBridge", () => {
     ]);
     bridge.dispose();
   });
+
+  it("routes a chat notification click to the window that already has the chat open, not MRU", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowMru = buildWindow();
+    const windowOpen = buildWindow();
+    // First add open, then MRU so mostRecentlyFocusedId is the empty window.
+    registry.add("window-open", 101, windowOpen);
+    registry.add("window-mru", 202, windowMru);
+    const perWindowState = new PerWindowState(null);
+    perWindowState.update("window-open", {
+      epicTabs: [{ id: "tab-open", epicId: "epic-1", name: "Epic 1" }],
+      activeTabId: "tab-open",
+      canvasByTabId: {
+        "tab-open": {
+          tilesByInstanceId: {
+            "tile-1": {
+              id: "chat-1",
+              type: "chat",
+              hostId: "host-1",
+            },
+          },
+        },
+      },
+    });
+    perWindowState.update("window-mru", {
+      epicTabs: [],
+      activeTabId: null,
+      canvasByTabId: {},
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    registry.focusById("window-mru");
+    windowMru.sentMessages.length = 0;
+    windowOpen.sentMessages.length = 0;
+
+    const payload = {
+      kind: "notificationActivation",
+      version: 1,
+      route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+      feed: { source: "host", id: "row-1" },
+      originHostId: "host-1",
+    };
+    bridge.deliverNotificationClick(payload);
+
+    expect(registry.mostRecentlyFocusedId()).toBe("window-open");
+    expect(
+      windowOpen.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([
+      {
+        channel: RunnerHostEvent.notificationClick,
+        payload,
+      },
+    ]);
+    expect(
+      windowMru.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([]);
+    bridge.dispose();
+  });
+
+  it("falls back to owned-or-MRU when no open chat matches the notification", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowOwner = buildWindow();
+    const windowMru = buildWindow();
+    registry.add("window-owner", 101, windowOwner);
+    registry.add("window-mru", 202, windowMru);
+    const ownership = new EpicWindowOwnership(null);
+    ownership.claim("tab-owned", "epic-owned", "window-owner");
+    const perWindowState = new PerWindowState(null);
+    // Same epic open, but a different chat - selector must not match.
+    perWindowState.update("window-owner", {
+      epicTabs: [{ id: "tab-owned", epicId: "epic-owned", name: "Owned" }],
+      activeTabId: "tab-owned",
+      canvasByTabId: {
+        "tab-owned": {
+          tilesByInstanceId: {
+            "tile-other": { id: "chat-other", type: "chat", hostId: "host-1" },
+          },
+        },
+      },
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership,
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    registry.focusById("window-mru");
+    windowOwner.sentMessages.length = 0;
+    windowMru.sentMessages.length = 0;
+
+    const payload = {
+      kind: "notificationActivation",
+      version: 1,
+      route: { kind: "chat", epicId: "epic-owned", chatId: "chat-missing" },
+      feed: { source: "host", id: "row-1" },
+      originHostId: "host-1",
+    };
+    bridge.deliverNotificationClick(payload);
+
+    expect(registry.mostRecentlyFocusedId()).toBe("window-owner");
+    expect(
+      windowOwner.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([
+      {
+        channel: RunnerHostEvent.notificationClick,
+        payload,
+      },
+    ]);
+    expect(
+      windowMru.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([]);
+
+    // Unowned epic with no open chat → pure MRU fallback.
+    windowOwner.sentMessages.length = 0;
+    windowMru.sentMessages.length = 0;
+    registry.focusById("window-mru");
+    windowOwner.sentMessages.length = 0;
+    windowMru.sentMessages.length = 0;
+    const unownedPayload = {
+      kind: "notificationActivation",
+      version: 1,
+      route: { kind: "chat", epicId: "unowned-epic", chatId: "chat-x" },
+      feed: { source: "host", id: "row-unowned" },
+      originHostId: null,
+    };
+    bridge.deliverNotificationClick(unownedPayload);
+    expect(registry.mostRecentlyFocusedId()).toBe("window-mru");
+    expect(
+      windowMru.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([
+      {
+        channel: RunnerHostEvent.notificationClick,
+        payload: unownedPayload,
+      },
+    ]);
+    expect(
+      windowOwner.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([]);
+    bridge.dispose();
+  });
+
+  it("routes epic-only V1 notification clicks via nested route.epicId owned-or-MRU", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowOwner = buildWindow();
+    const windowMru = buildWindow();
+    registry.add("window-owner", 101, windowOwner);
+    registry.add("window-mru", 202, windowMru);
+    const ownership = new EpicWindowOwnership(null);
+    ownership.claim("tab-owned", "epic-owned", "window-owner");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership,
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    registry.focusById("window-mru");
+    windowOwner.sentMessages.length = 0;
+    windowMru.sentMessages.length = 0;
+
+    // Top-level epicId is intentionally absent - the V1 envelope nests it
+    // under route. Pre-fix readEpicId(payload) would have returned null and
+    // always hit MRU; nested-route-aware routing must reach the owner.
+    const payload = {
+      kind: "notificationActivation",
+      version: 1,
+      route: { kind: "epic", epicId: "epic-owned" },
+      feed: { source: "host", id: "row-1" },
+      originHostId: "host-1",
+    };
+    bridge.deliverNotificationClick(payload);
+
+    expect(registry.mostRecentlyFocusedId()).toBe("window-owner");
+    expect(
+      windowOwner.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([
+      {
+        channel: RunnerHostEvent.notificationClick,
+        payload,
+      },
+    ]);
+    expect(
+      windowMru.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([]);
+    bridge.dispose();
+  });
+
+  it("does not reinterpret unsupported envelope versions as legacy (no epic-owner routing)", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowOwner = buildWindow();
+    const windowMru = buildWindow();
+    registry.add("window-owner", 101, windowOwner);
+    registry.add("window-mru", 202, windowMru);
+    const ownership = new EpicWindowOwnership(null);
+    ownership.claim("tab-owned", "epic-owned", "window-owner");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership,
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    registry.focusById("window-mru");
+    windowOwner.sentMessages.length = 0;
+    windowMru.sentMessages.length = 0;
+
+    // Envelope-shaped + top-level epicId must not fall through to legacy
+    // parsing and hit the owner window. Fail-closed → MRU with null epicId.
+    const payload = {
+      kind: "notificationActivation",
+      version: 2,
+      epicId: "epic-owned",
+      chatId: "chat-1",
+      route: { kind: "chat", epicId: "epic-owned", chatId: "chat-1" },
+      feed: { source: "host", id: "row-1" },
+      originHostId: "host-1",
+    };
+    bridge.deliverNotificationClick(payload);
+
+    expect(registry.mostRecentlyFocusedId()).toBe("window-mru");
+    expect(
+      windowMru.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([
+      {
+        channel: RunnerHostEvent.notificationClick,
+        payload,
+      },
+    ]);
+    expect(
+      windowOwner.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([]);
+    bridge.dispose();
+  });
+
+  it("does not open-window-route when originHostId is non-string (envelope invalid)", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowOpen = buildWindow();
+    const windowMru = buildWindow();
+    registry.add("window-open", 101, windowOpen);
+    registry.add("window-mru", 202, windowMru);
+    const ownership = new EpicWindowOwnership(null);
+    ownership.claim("tab-owned", "epic-1", "window-open");
+    const perWindowState = new PerWindowState(null);
+    perWindowState.update("window-open", {
+      epicTabs: [{ id: "tab-open", epicId: "epic-1", name: "Epic 1" }],
+      activeTabId: "tab-open",
+      canvasByTabId: {
+        "tab-open": {
+          tilesByInstanceId: {
+            "tile-1": { id: "chat-1", type: "chat", hostId: "host-1" },
+          },
+        },
+      },
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership,
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    registry.focusById("window-mru");
+    windowOpen.sentMessages.length = 0;
+    windowMru.sentMessages.length = 0;
+
+    // Invalid originHostId invalidates the whole envelope → all-null target.
+    // Must not degrade to null-origin and match the open chat window, and must
+    // not use nested epicId for ownership either.
+    const payload = {
+      kind: "notificationActivation",
+      version: 1,
+      route: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+      feed: { source: "host", id: "row-1" },
+      originHostId: 42,
+    };
+    bridge.deliverNotificationClick(payload);
+
+    expect(registry.mostRecentlyFocusedId()).toBe("window-mru");
+    expect(
+      windowMru.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([
+      {
+        channel: RunnerHostEvent.notificationClick,
+        payload,
+      },
+    ]);
+    expect(
+      windowOpen.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([]);
+    bridge.dispose();
+  });
+
+  it("still delivers legacy raw notification payloads end-to-end", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowOpen = buildWindow();
+    const windowMru = buildWindow();
+    registry.add("window-open", 101, windowOpen);
+    registry.add("window-mru", 202, windowMru);
+    const perWindowState = new PerWindowState(null);
+    perWindowState.update("window-open", {
+      epicTabs: [{ id: "tab-open", epicId: "epic-legacy", name: "Legacy" }],
+      activeTabId: "tab-open",
+      canvasByTabId: {
+        "tab-open": {
+          tilesByInstanceId: {
+            "tile-1": { id: "chat-legacy", type: "chat" },
+          },
+        },
+      },
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    registry.focusById("window-mru");
+    windowOpen.sentMessages.length = 0;
+    windowMru.sentMessages.length = 0;
+
+    const legacyPayload = {
+      kind: "chat",
+      epicId: "epic-legacy",
+      chatId: "chat-legacy",
+    };
+    bridge.deliverNotificationClick(legacyPayload);
+
+    expect(registry.mostRecentlyFocusedId()).toBe("window-open");
+    expect(
+      windowOpen.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([
+      {
+        channel: RunnerHostEvent.notificationClick,
+        payload: legacyPayload,
+      },
+    ]);
+    expect(
+      windowMru.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.notificationClick,
+      ),
+    ).toEqual([]);
+    bridge.dispose();
+  });
 });
