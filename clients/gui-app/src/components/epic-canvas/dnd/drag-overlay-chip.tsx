@@ -24,11 +24,13 @@ import {
   isDiffTileRef,
   isGitDiffTileRef,
   isPrDetailTileRef,
+  isPrDiffTileRef,
   type BlankTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
   type GitDiffTileRef,
   type PrDetailTileRef,
+  type PrDiffTileRef,
   type SnapshotDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { cn } from "@/lib/utils";
@@ -136,6 +138,9 @@ function EpicCanvasNodeDragOverlay(props: {
   if (isPrDetailTileRef(props.node)) {
     return <PrDetailTileDragOverlay node={props.node} />;
   }
+  if (isPrDiffTileRef(props.node)) {
+    return <PrDiffTileDragOverlay node={props.node} />;
+  }
   if (isBlankTileRef(props.node)) {
     return <BlankTileDragOverlay node={props.node} />;
   }
@@ -155,6 +160,15 @@ function PrDetailTileDragOverlay(props: { readonly node: PrDetailTileRef }) {
   return (
     <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
       <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+    </m.div>
+  );
+}
+
+function PrDiffTileDragOverlay(props: { readonly node: PrDiffTileRef }) {
+  return (
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+      <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate font-medium">{props.node.name}</span>
     </m.div>
   );

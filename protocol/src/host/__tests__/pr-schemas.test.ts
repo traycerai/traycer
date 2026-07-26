@@ -25,10 +25,15 @@ import {
   prCheckStatusSchema,
   prCheckConclusionSchema,
   prReviewStateSchema,
+  prGetLocalDiffRequestSchema,
+  prGetLocalDiffResponseSchema,
+  prLocalDiffFileSchema,
+  DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET,
 } from "@traycer/protocol/host/pr-schemas";
 import {
   prSubscribeListForEpicV10,
   prSubscribeDetailV10,
+  prGetLocalDiffV10,
 } from "@traycer/protocol/host/pr-contracts";
 
 const BASE_COORDINATES_FIXTURE = {
@@ -485,6 +490,8 @@ const DETAIL_CORE_POPULATED_FIXTURE = {
   updatedAt: 1_700_000_100_000,
   mergedAt: null,
   repoIdentifier: REPO_IDENTIFIER_FIXTURE,
+  repoRole: "superproject" as const,
+  linkGroupKey: "/Users/dev/worktrees/traycer-jolly-fox",
   owners: [OWNER_REF_FIXTURE],
 };
 
@@ -736,14 +743,160 @@ describe("prSubscribeClientFrameSchema", () => {
   });
 });
 
+const LOCAL_DIFF_REQUEST_FIXTURE = {
+  linkGroupKey: "/Users/dev/worktrees/traycer-jolly-fox",
+  repoIdentifier: REPO_IDENTIFIER_FIXTURE,
+  repoRole: "superproject" as const,
+  baseRefName: "development",
+  headRefName: "feature/notification-hooks",
+  expectedHeadOid: "a".repeat(40),
+  ignoreWhitespace: false,
+  byteBudget: DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET,
+};
+
+const LOCAL_DIFF_FILE_FIXTURE = {
+  path: "traycer-host/src/domain/git/git-service.ts",
+  previousPath: null,
+  status: "modified" as const,
+  insertions: 157,
+  deletions: 0,
+  isBinary: false,
+  patch: "diff --git a/x b/x\n@@ -1 +1 @@\n-a\n+b",
+};
+
+describe("prGetLocalDiffRequestSchema", () => {
+  it("parses and reparses a populated request unchanged", () => {
+    const parsed1 = prGetLocalDiffRequestSchema.parse(
+      LOCAL_DIFF_REQUEST_FIXTURE,
+    );
+    const parsed2 = prGetLocalDiffRequestSchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+  });
+
+  it("defaults byteBudget so a caller may omit it", () => {
+    const { byteBudget, ...withoutBudget } = LOCAL_DIFF_REQUEST_FIXTURE;
+    expect(byteBudget).toBe(DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET);
+    const parsed = prGetLocalDiffRequestSchema.parse(withoutBudget);
+    expect(parsed.byteBudget).toBe(DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET);
+  });
+
+  it("accepts a null expectedHeadOid - unknown is not stale", () => {
+    const parsed = prGetLocalDiffRequestSchema.parse({
+      ...LOCAL_DIFF_REQUEST_FIXTURE,
+      expectedHeadOid: null,
+    });
+    expect(parsed.expectedHeadOid).toBeNull();
+  });
+
+  it("rejects an empty ref name rather than letting it reach argv", () => {
+    expect(() =>
+      prGetLocalDiffRequestSchema.parse({
+        ...LOCAL_DIFF_REQUEST_FIXTURE,
+        baseRefName: "",
+      }),
+    ).toThrow();
+    expect(() =>
+      prGetLocalDiffRequestSchema.parse({
+        ...LOCAL_DIFF_REQUEST_FIXTURE,
+        headRefName: "",
+      }),
+    ).toThrow();
+  });
+
+  it("carries no hostId - the host it runs on is the only host it could mean", () => {
+    const parsed = prGetLocalDiffRequestSchema.parse({
+      ...LOCAL_DIFF_REQUEST_FIXTURE,
+      hostId: "host-1",
+    });
+    expect(parsed).not.toHaveProperty("hostId");
+  });
+});
+
+describe("prGetLocalDiffResponseSchema", () => {
+  it("parses and reparses a diff response unchanged", () => {
+    const fixture = {
+      kind: "diff" as const,
+      runningDir: "/Users/dev/worktrees/traycer-jolly-fox",
+      resolvedBaseRef: "origin/development",
+      baseOid: "b".repeat(40),
+      mergeBaseOid: "c".repeat(40),
+      localHeadOid: "a".repeat(40),
+      isStale: false,
+      files: [LOCAL_DIFF_FILE_FIXTURE],
+      isTruncated: false,
+    };
+    const parsed1 = prGetLocalDiffResponseSchema.parse(fixture);
+    const parsed2 = prGetLocalDiffResponseSchema.parse(parsed1);
+    expect(parsed2).toEqual(parsed1);
+  });
+
+  it("parses and reparses every unavailable reason unchanged", () => {
+    for (const reason of [
+      "no-local-checkout",
+      "repo-mismatch",
+      "ref-unavailable",
+      "no-merge-base",
+      "git-unavailable",
+    ] as const) {
+      const parsed1 = prGetLocalDiffResponseSchema.parse({
+        kind: "unavailable",
+        reason,
+      });
+      const parsed2 = prGetLocalDiffResponseSchema.parse(parsed1);
+      expect(parsed2).toEqual(parsed1);
+    }
+  });
+
+  it("rejects an unavailable reason outside the closed set", () => {
+    expect(() =>
+      prGetLocalDiffResponseSchema.parse({
+        kind: "unavailable",
+        reason: "something-else",
+      }),
+    ).toThrow();
+  });
+
+  it("keeps a file's patch and counts independently nullable", () => {
+    // A truncated sweep yields `patch: null` with REAL counts; a binary file
+    // yields null counts with a real (empty) patch. Collapsing either pair
+    // would lose the distinction the UI renders differently.
+    const truncated = prLocalDiffFileSchema.parse({
+      ...LOCAL_DIFF_FILE_FIXTURE,
+      patch: null,
+    });
+    expect(truncated.patch).toBeNull();
+    expect(truncated.insertions).toBe(157);
+
+    const binary = prLocalDiffFileSchema.parse({
+      ...LOCAL_DIFF_FILE_FIXTURE,
+      insertions: null,
+      deletions: null,
+      isBinary: true,
+    });
+    expect(binary.isBinary).toBe(true);
+    expect(binary.insertions).toBeNull();
+  });
+
+  it("carries a rename's pre-image path", () => {
+    const renamed = prLocalDiffFileSchema.parse({
+      ...LOCAL_DIFF_FILE_FIXTURE,
+      status: "renamed",
+      previousPath: "old/path.ts",
+    });
+    expect(renamed.previousPath).toBe("old/path.ts");
+  });
+});
+
 describe("pr contract sanity", () => {
   it("has the expected method names and schema versions", () => {
     expect(prSubscribeListForEpicV10.method).toBe("pr.subscribeListForEpic");
     expect(prSubscribeDetailV10.method).toBe("pr.subscribeDetail");
+    expect(prGetLocalDiffV10.method).toBe("pr.getLocalDiff");
     expect(prSubscribeListForEpicV10.schemaVersion).toEqual({
       major: 1,
       minor: 0,
     });
     expect(prSubscribeDetailV10.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(prGetLocalDiffV10.schemaVersion).toEqual({ major: 1, minor: 0 });
   });
 });

@@ -292,6 +292,7 @@ import {
 import {
   prSubscribeListForEpicV10,
   prSubscribeDetailV10,
+  prGetLocalDiffV10,
 } from "@traycer/protocol/host/pr-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
@@ -4609,6 +4610,25 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: agentConfigureDowngradeV30ToV10,
         2: agentConfigureDowngradeV30ToV20,
       },
+    },
+  },
+  // Additive, post-v1.0.0 optional method: a PR's patch read from the local
+  // checkout. A host that predates it simply lacks it and the PR view falls
+  // back to the GitHub-sourced file list (which is all the detail stream ever
+  // carried), so it rides the optional-capability channel
+  // (`degrade: unsupported`) and stays out of the released floor / baseline
+  // surface.
+  "pr.getLocalDiff": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prGetLocalDiffV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
     },
   },
 } as const;

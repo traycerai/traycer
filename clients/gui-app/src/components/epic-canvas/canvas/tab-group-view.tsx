@@ -43,10 +43,12 @@ import {
   isBlankTileRef,
   isDiffTileRef,
   isPrDetailTileRef,
+  isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import {
   TILE_KIND_GIT_DIFF,
   TILE_KIND_PR_DETAIL,
+  TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "@/stores/epics/canvas/tile-kinds";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
@@ -81,6 +83,7 @@ function panelIdForTabType(
   if (tabType === TILE_KIND_SNAPSHOT_DIFF) return "chats";
   if (tabType === WORKSPACE_FILE_TAB_KIND) return "file-tree";
   if (tabType === TILE_KIND_PR_DETAIL) return "pull-requests";
+  if (tabType === TILE_KIND_PR_DIFF) return "pull-requests";
   return "artifacts";
 }
 
@@ -459,6 +462,7 @@ function ActiveTabBody(props: ActiveTabBodyProps) {
     activeTab.type === "terminal" ||
     isDiffTileRef(activeTab) ||
     isPrDetailTileRef(activeTab) ||
+    isPrDiffTileRef(activeTab) ||
     isBlankTileRef(activeTab) ||
     activeTab.type === WORKSPACE_FILE_TAB_KIND
       ? false

@@ -384,6 +384,12 @@ export const prDetailCoreSchema = z.object({
   updatedAt: z.number().nullable(),
   mergedAt: z.number().nullable(),
   repoIdentifier: prRepoIdentifierSchema,
+  // Carried for `pr.getLocalDiff`, which needs to name WHICH checkout and
+  // which repo under it. Both were already on the light item; the detail
+  // stream re-states them so a tile opened straight from a deep link (with no
+  // list frame ever received) can still ask for the local diff.
+  repoRole: prRepoRoleSchema,
+  linkGroupKey: prLinkGroupKeySchema.nullable(),
   owners: z.array(prOwnerRefSchema),
 });
 export type PrDetailCore = z.infer<typeof prDetailCoreSchema>;
@@ -434,4 +440,129 @@ export const prSubscribeClientFrameSchema = z.discriminatedUnion("kind", [
 ]);
 export type PrSubscribeClientFrame = z.infer<
   typeof prSubscribeClientFrameSchema
+>;
+
+// ---- `pr.getLocalDiff` ---------------------------------------------------- //
+
+/**
+ * Default byte cap for one range-diff sweep. Deliberately larger than the
+ * per-file `git.getFileDiff` budget: this is ONE call carrying a whole PR,
+ * and a PR whose full patch exceeds 2MiB is one no reader was going to read
+ * inline anyway - it truncates and points at GitHub.
+ */
+export const DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET = 2 * 1_048_576;
+
+/**
+ * Why a PR has no local diff. Each value is a DIFFERENT sentence to the
+ * reader, which is the whole reason this isn't a boolean: "you have no
+ * checkout of this PR" and "your checkout never fetched the base branch" want
+ * different next actions.
+ */
+export const prLocalDiffUnavailableReasonSchema = z.enum([
+  // The `linkGroupKey` matches no worktree binding on this host, or the
+  // directory it named is gone. Includes the case of a client that made the
+  // key up: keys are only ever honoured when a persisted binding vouches for
+  // them (they are local paths, so an unchecked key would be a read primitive).
+  "no-local-checkout",
+  // A checkout was found but it isn't this PR's repo - a submodule that was
+  // never initialized, or a binding whose remote has since been re-pointed.
+  "repo-mismatch",
+  // The checkout exists but one of the two endpoints isn't in it: an
+  // un-fetched base branch, or a head branch that was deleted after merge.
+  "ref-unavailable",
+  // Endpoints resolve but share no history, so there is no merge base to
+  // diff from - a force-pushed rewrite, or a branch grafted from elsewhere.
+  "no-merge-base",
+  // git itself is unusable here (absent, or the repo is refused as too large).
+  "git-unavailable",
+]);
+export type PrLocalDiffUnavailableReason = z.infer<
+  typeof prLocalDiffUnavailableReasonSchema
+>;
+
+/**
+ * `pr.getLocalDiff` request - a ref-RANGE diff, run by the host against the
+ * local checkout a PR was pushed from.
+ *
+ * `linkGroupKey` is the same opaque token the list/detail streams already
+ * carry (see {@link prLinkGroupKeySchema}); the host resolves it back to a
+ * directory itself rather than accepting a path from the client. `repoRole`
+ * and `repoIdentifier` disambiguate WHICH repo under that key is meant, since
+ * one key covers a superproject and every submodule it owns.
+ *
+ * `expectedHeadOid` is GitHub's tip. The host never uses it to select refs -
+ * it only reports the local tip back, so the client can say "your checkout is
+ * N commits from what GitHub is showing" instead of quietly rendering a diff
+ * of something else.
+ */
+export const prGetLocalDiffRequestSchema = z.object({
+  // No `hostId`: like the two `pr.*` streams, and unlike `git.*`, the host it
+  // runs on is the only host it could mean - taking one as an argument would
+  // invite a caller to believe it selects something.
+  linkGroupKey: prLinkGroupKeySchema,
+  repoIdentifier: prRepoIdentifierSchema,
+  repoRole: prRepoRoleSchema,
+  baseRefName: z.string().min(1),
+  headRefName: z.string().min(1),
+  expectedHeadOid: z.string().nullable(),
+  ignoreWhitespace: z.boolean(),
+  byteBudget: z
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_PR_LOCAL_DIFF_BYTE_BUDGET),
+});
+export type PrGetLocalDiffRequest = z.infer<typeof prGetLocalDiffRequestSchema>;
+
+/**
+ * One file in the range. Metadata comes from `--name-status` + `--numstat`,
+ * which cover EVERY file in the range; `patch` comes from the byte-capped
+ * patch sweep, so it is `null` for files the budget never reached. That split
+ * is deliberate: a truncated response still knows the true file count and
+ * per-file line counts, so the UI can say what it is not showing.
+ */
+export const prLocalDiffFileSchema = z.object({
+  path: z.string(),
+  previousPath: z.string().nullable(),
+  status: prFileChangeTypeSchema,
+  insertions: z.number().int().nonnegative().nullable(),
+  deletions: z.number().int().nonnegative().nullable(),
+  isBinary: z.boolean(),
+  patch: z.string().nullable(),
+});
+export type PrLocalDiffFile = z.infer<typeof prLocalDiffFileSchema>;
+
+/**
+ * `pr.getLocalDiff` response. `unavailable` is a normal outcome, not an error:
+ * most PRs in a list have no checkout on this machine, and the caller renders
+ * the GitHub-sourced file list instead.
+ */
+export const prGetLocalDiffResponseSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("unavailable"),
+    reason: prLocalDiffUnavailableReasonSchema,
+  }),
+  z.object({
+    kind: z.literal("diff"),
+    /** Canonical absolute repo root the diff was taken in. */
+    runningDir: z.string(),
+    /** The ref that actually resolved as base, e.g. `origin/development`. */
+    resolvedBaseRef: z.string(),
+    baseOid: z.string(),
+    mergeBaseOid: z.string(),
+    localHeadOid: z.string(),
+    /**
+     * `localHeadOid !== expectedHeadOid`. Computed host-side so every client
+     * draws the same conclusion from the same two strings; a `null`
+     * `expectedHeadOid` (GitHub never told us) is NOT stale, it is unknown,
+     * and reports `false`.
+     */
+    isStale: z.boolean(),
+    files: z.array(prLocalDiffFileSchema),
+    /** The patch sweep hit `byteBudget`; later `files[].patch` are `null`. */
+    isTruncated: z.boolean(),
+  }),
+]);
+export type PrGetLocalDiffResponse = z.infer<
+  typeof prGetLocalDiffResponseSchema
 >;

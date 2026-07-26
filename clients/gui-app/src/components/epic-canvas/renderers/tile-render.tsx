@@ -24,6 +24,7 @@ import { WorkspaceFileTile } from "./workspace-file-tile";
 import { GitDiffTile } from "./git-diff-tile";
 import { SnapshotDiffTile } from "./snapshot-diff-tile";
 import { PrDetailTile } from "./pr-detail-tile";
+import { PrDiffTile } from "./pr-diff-tile";
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
 
 export interface TileRenderArgs<R extends EpicCanvasTileRef> {
@@ -111,6 +112,14 @@ const TILE_RENDERERS: TileRendererRegistry = {
   ),
   "pr-detail": ({ node, epicId, viewTabId, isActive }) => (
     <PrDetailTile
+      node={node}
+      epicId={epicId}
+      viewTabId={viewTabId}
+      isActive={isActive}
+    />
+  ),
+  "pr-diff": ({ node, epicId, viewTabId, isActive }) => (
+    <PrDiffTile
       node={node}
       epicId={epicId}
       viewTabId={viewTabId}

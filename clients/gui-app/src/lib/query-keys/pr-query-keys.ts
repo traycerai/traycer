@@ -45,4 +45,37 @@ export const prQueryKeys = {
       args.repo,
       args.prNumber,
     ] as const,
+
+  /**
+   * Query key for one PR's LOCAL diff (`pr.getLocalDiff`).
+   *
+   * Keyed by the range, not by the PR: `headRefOid` is in the key so a new
+   * push re-fetches on its own the moment the detail stream reports the new
+   * tip, and `linkGroupKey` is in it because the same PR reached through two
+   * bindings is two different checkouts with two possibly different answers.
+   * No `epicId`: unlike the detail frame, nothing here is epic-flavored - a
+   * range diff of two commits is the same diff whoever asked.
+   */
+  localDiff: (args: {
+    readonly hostId: string;
+    readonly linkGroupKey: string;
+    readonly owner: string;
+    readonly repo: string;
+    readonly baseRefName: string;
+    readonly headRefName: string;
+    readonly headRefOid: string | null;
+    readonly ignoreWhitespace: boolean;
+  }) =>
+    [
+      ...hostQueryKeys.scope(args.hostId),
+      "pr",
+      "localDiff",
+      args.linkGroupKey,
+      args.owner,
+      args.repo,
+      args.baseRefName,
+      args.headRefName,
+      args.headRefOid,
+      args.ignoreWhitespace,
+    ] as const,
 };

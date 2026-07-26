@@ -74,6 +74,12 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
+  // The Files tab reads the local diff over unary RPC. `null` is the
+  // production shape for "no client yet", which the query's own guard turns
+  // into an error and the tab renders as the GitHub file list - the fallback
+  // these tests already assert nothing about. `PrDetailFilesTab` has its own
+  // file for the diff/stale/unavailable states.
+  useHostClient: () => null,
 }));
 
 vi.mock("@/lib/epic-selectors", async (importActual) => ({
@@ -248,6 +254,8 @@ function buildPrDetailCore(overrides: Partial<PrDetailCore>): PrDetailCore {
     updatedAt: 1_000,
     mergedAt: null,
     repoIdentifier: { owner: "acme", repo: "widgets" },
+    repoRole: "superproject",
+    linkGroupKey: "/tmp/worktrees/widgets",
     owners: [],
     ...overrides,
   };

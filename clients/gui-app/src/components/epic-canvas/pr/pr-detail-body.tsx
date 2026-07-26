@@ -40,10 +40,8 @@ import {
 } from "@/components/epic-canvas/pr/pr-detail-conversation";
 import { PrDetailQueue } from "@/components/epic-canvas/pr/pr-detail-queue";
 import { PrDetailTabStrip } from "@/components/epic-canvas/pr/pr-detail-tab-strip";
-import {
-  PrDetailChecks,
-  PrDetailFilesChanged,
-} from "@/components/epic-canvas/pr/pr-detail-sections";
+import { PrDetailChecks } from "@/components/epic-canvas/pr/pr-detail-sections";
+import { PrDetailFilesTab } from "@/components/epic-canvas/pr/pr-detail-files-tab";
 import {
   prDetailViewKey,
   usePrDetailTab,
@@ -375,11 +373,12 @@ function PrDetailLoaded(props: {
             />
           ) : null}
           {tab === "files" ? (
-            <PrDetailFilesChanged
+            <PrDetailFilesTab
+              core={core}
               files={files}
-              prUrl={core.prUrl}
-              additions={core.additions}
-              deletions={core.deletions}
+              epicId={props.epicId}
+              viewTabId={props.viewTabId}
+              hostId={hostId}
               onQuoteFile={target === null ? null : sendFile}
             />
           ) : null}

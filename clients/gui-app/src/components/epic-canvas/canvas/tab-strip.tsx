@@ -58,6 +58,7 @@ import {
   isGitDiffTileRef,
   isOpenableEpicNodeKind,
   isPrDetailTileRef,
+  isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -906,7 +907,7 @@ function TabIcon(props: {
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
 }): ReactNode {
-  if (isDiffTileRef(props.tab)) {
+  if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
   }
   if (isPrDetailTileRef(props.tab)) {

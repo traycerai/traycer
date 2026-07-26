@@ -36,6 +36,8 @@ function core(overrides: Partial<PrDetailCore>): PrDetailCore {
     updatedAt: 1_000,
     mergedAt: null,
     repoIdentifier: { owner: "acme", repo: "widgets" },
+    repoRole: "superproject",
+    linkGroupKey: "/tmp/worktrees/widgets",
     owners: [],
     ...overrides,
   };

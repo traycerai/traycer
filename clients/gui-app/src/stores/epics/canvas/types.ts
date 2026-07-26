@@ -12,6 +12,7 @@ import {
   TILE_KIND_BLANK,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_PR_DETAIL,
+  TILE_KIND_PR_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "./tile-kinds";
 
@@ -286,11 +287,37 @@ export interface PrDetailTileRef {
   readonly prNumber: number;
 }
 
+/**
+ * The PR's own diff, as a full canvas tile - the same shape as
+ * {@link PrDetailTileRef} plus the diff view state, because it is the same
+ * identity viewed a different way.
+ *
+ * Deliberately a PURE PR-coordinate ref: no `runningDir`, no base/head OIDs,
+ * no ref names. All of those are re-derived from `pr.subscribeDetail` at
+ * render time, so a tile reopened a week later diffs the PR as it is NOW
+ * rather than replaying a range that has since been rebased away. It also
+ * means the host - not the client - stays the only thing that ever turns a
+ * `linkGroupKey` into a directory.
+ */
+export interface PrDiffTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_PR_DIFF;
+  readonly name: string;
+  readonly hostId: string;
+  readonly githubHost: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly view: GitDiffTileViewState;
+}
+
 export type EpicCanvasTileRef =
   | EpicNodeRef
   | GitDiffTileRef
   | SnapshotDiffTileRef
   | PrDetailTileRef
+  | PrDiffTileRef
   | BlankTileRef;
 
 export function isBlankTileRef(
@@ -321,6 +348,12 @@ export function isPrDetailTileRef(
   value: EpicCanvasTileRef,
 ): value is PrDetailTileRef {
   return value.type === TILE_KIND_PR_DETAIL;
+}
+
+export function isPrDiffTileRef(
+  value: EpicCanvasTileRef,
+): value is PrDiffTileRef {
+  return value.type === TILE_KIND_PR_DIFF;
 }
 
 export function isDiffTileRef(

@@ -81,11 +81,12 @@ function PrFileChangeGlyph(props: {
 /**
  * The changed-file list: paths, change type and per-file counts.
  *
- * Patch content is deliberately absent from the `pr.subscribeDetail` contract
- * (`prFilesSectionSchema`), so this cannot render the diff itself yet - and it
- * says so in one line rather than leaving the reader to wonder whether the
- * diff failed to load. The link out is the honest escape hatch until the wire
- * carries patches.
+ * Patch content is absent from the `pr.subscribeDetail` contract
+ * (`prFilesSectionSchema`) because GitHub's GraphQL `PullRequestChangedFile`
+ * has no patch field to carry, so this view can never render a diff from the
+ * sweep alone. `pr.getLocalDiff` supplies one from the local checkout when
+ * there is one; this list is what a reader sees when there isn't, and the
+ * `footer` is where that gets explained (see `PrDetailFilesTab`).
  */
 export function PrDetailFilesChanged(props: {
   readonly files: PrFilesSection;
@@ -99,6 +100,13 @@ export function PrDetailFilesChanged(props: {
   readonly deletions: number | null;
   /** `null` when no chat is selected to send to, which disables the row action. */
   readonly onQuoteFile: ((file: PrChangedFile) => void) | null;
+  /** Control on the list's header rail - the "Open diff" tile opener. */
+  readonly headerAction: ReactNode;
+  /**
+   * The line under the list explaining where the diff itself lives. Passed in
+   * rather than built here so this component stays a list and nothing else.
+   */
+  readonly footer: ReactNode;
 }): ReactNode {
   if (props.files.files.length === 0) {
     return (
@@ -133,6 +141,7 @@ export function PrDetailFilesChanged(props: {
             <span className={PR_DIFF_ADDED_CLASS}>+{additions}</span>{" "}
             <span className={PR_DIFF_REMOVED_CLASS}>−{deletions}</span>
           </span>
+          {props.headerAction}
         </div>
         <ul className="divide-y divide-border/40">
           {props.files.files.map((file) => (
@@ -165,19 +174,7 @@ export function PrDetailFilesChanged(props: {
           ))}
         </ul>
       </div>
-      {props.prUrl !== null ? (
-        <p className="px-1 text-ui-xs text-muted-foreground/70">
-          Line-by-line changes are not carried in this view yet.{" "}
-          <a
-            href={`${props.prUrl}/files`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-primary hover:underline"
-          >
-            View the full diff on GitHub
-          </a>
-        </p>
-      ) : null}
+      {props.footer}
     </div>
   );
 }

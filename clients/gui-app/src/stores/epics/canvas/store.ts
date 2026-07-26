@@ -67,6 +67,8 @@ import {
   toggleSnapshotDiffBundleFileCollapsed,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
+  updatePrDiffTileView,
+  togglePrDiffFileCollapsed,
 } from "@/stores/epics/canvas/actions";
 import {
   EMPTY_CANVAS,
@@ -427,12 +429,22 @@ export interface EpicCanvasStore {
     tileId: string,
     view: GitDiffTileViewState,
   ) => void;
+  updatePrDiffTileViewInTab: (
+    tabId: string,
+    tileId: string,
+    view: GitDiffTileViewState,
+  ) => void;
   toggleGitDiffBundleFileCollapsedInTab: (
     tabId: string,
     tileId: string,
     filePath: string,
   ) => void;
   toggleSnapshotDiffBundleFileCollapsedInTab: (
+    tabId: string,
+    tileId: string,
+    filePath: string,
+  ) => void;
+  togglePrDiffFileCollapsedInTab: (
     tabId: string,
     tileId: string,
     filePath: string,
@@ -1653,6 +1665,22 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             updateSnapshotDiffTileView(canvas, tileId, view),
+          ),
+        );
+      },
+
+      updatePrDiffTileViewInTab: (tabId, tileId, view) => {
+        set((state) =>
+          updateTabCanvas(state, tabId, (canvas) =>
+            updatePrDiffTileView(canvas, tileId, view),
+          ),
+        );
+      },
+
+      togglePrDiffFileCollapsedInTab: (tabId, tileId, filePath) => {
+        set((state) =>
+          updateTabCanvas(state, tabId, (canvas) =>
+            togglePrDiffFileCollapsed(canvas, tileId, filePath),
           ),
         );
       },
