@@ -5,11 +5,58 @@
  */
 import type {
   PrActivityItem,
+  PrActivitySection,
   PrActor,
   PrCheckContext,
+  PrDetailCore,
   PrReviewState,
 } from "@traycer/protocol/host/pr-schemas";
 import type { PrChecksDotTone } from "./pr-list-projection";
+
+export type PrReviewerState = PrReviewState | "requested";
+
+export interface PrReviewerRow {
+  readonly actor: PrActor;
+  readonly state: PrReviewerState;
+}
+
+/**
+ * Reviewers with their latest state. Activity is chronological, so a later
+ * review from the same login wins; a pending re-request in `reviewRequests`
+ * then overrides to "requested", since re-requesting retracts the standing
+ * verdict and waits for a fresh one.
+ *
+ * Reconstructed from the ≤20-item activity window, so an older approval can
+ * be pushed off-window by newer comments - callers that claim "no reviews"
+ * must qualify it against `isTruncated` and `core.reviewDecision`.
+ */
+export function prReviewerRows(
+  core: PrDetailCore,
+  activity: PrActivitySection,
+): readonly PrReviewerRow[] {
+  const byLogin = new Map<string, PrReviewerRow>();
+  for (const item of activity.items) {
+    if (item.kind !== "review" || item.author === null) continue;
+    byLogin.set(item.author.login, { actor: item.author, state: item.state });
+  }
+  for (const request of core.reviewRequests) {
+    byLogin.set(request.login, { actor: request, state: "requested" });
+  }
+  return [...byLogin.values()];
+}
+
+/** Unique actors seen on the PR: the author plus everyone in the activity feed. */
+export function prParticipantActors(
+  core: PrDetailCore,
+  activity: PrActivitySection,
+): readonly PrActor[] {
+  const byLogin = new Map<string, PrActor>();
+  if (core.author !== null) byLogin.set(core.author.login, core.author);
+  for (const item of activity.items) {
+    if (item.author !== null) byLogin.set(item.author.login, item.author);
+  }
+  return [...byLogin.values()];
+}
 
 export function prCheckContextDotTone(
   context: PrCheckContext,

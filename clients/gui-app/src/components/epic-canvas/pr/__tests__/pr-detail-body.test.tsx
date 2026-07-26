@@ -80,7 +80,17 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/epic-selectors")>()),
   useChatById: () => null,
   useEpicTerminalAgent: () => null,
+  // The quote-target picker enumerates the epic's chats and terminal agents.
+  // Both selectors reach the same `useOpenEpicHandle()` chain the two above do,
+  // so they are stubbed for the same reason: that per-epic Y.doc is unrelated
+  // to the PR-detail behaviour under test. An empty list is the honest fixture
+  // - these PRs have no owners, so there is nothing to send a quote to.
+  useEpicChatRecords: () => EMPTY_EPIC_RECORDS,
+  useEpicTerminalAgentRecords: () => EMPTY_EPIC_RECORDS,
 }));
+
+/** Stable identity: a fresh `[]` each call would re-run every dependent memo. */
+const EMPTY_EPIC_RECORDS: readonly never[] = [];
 
 import { PrDetailBody } from "@/components/epic-canvas/pr/pr-detail-body";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
@@ -457,7 +467,7 @@ describe("PrDetailBody", () => {
     expect(screen.queryByTestId("pr-detail-loading")).toBeNull();
   });
 
-  it("renders files-changed rows and interleaves commits chronologically before later comments", async () => {
+  it("leads Overview with the attention queue and routes files, commits and comments to their own tabs", async () => {
     renderBody({
       epicId: "epic-3",
       githubHost: "github.com",
@@ -522,18 +532,34 @@ describe("PrDetailBody", () => {
     );
 
     await screen.findByTestId("pr-detail-body");
+
+    // Overview leads with the attention queue, not the description: the first
+    // question a PR has to answer is whether it can land.
+    expect(screen.getByTestId("pr-detail-queue")).toBeTruthy();
+    expect(screen.getByTestId("pr-detail-description-section")).toBeTruthy();
+    // Reference material is behind its tab, so Overview stays one screen.
+    expect(screen.queryByTestId("pr-detail-files")).toBeNull();
+    expect(screen.queryByTestId("pr-detail-commit-item")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("pr-detail-tab-files"));
     expect(screen.getByTestId("pr-detail-files")).toBeTruthy();
     expect(screen.getByText("src/app.ts")).toBeTruthy();
+    // Files is full-bleed - no gutter - so the summary rides the tab strip.
+    expect(
+      screen.getByTestId("pr-detail-summary").getAttribute("data-variant"),
+    ).toBe("capsule");
+
+    fireEvent.click(screen.getByTestId("pr-detail-tab-history"));
     const commit = screen.getByTestId("pr-detail-commit-item");
     expect(commit.textContent).toContain("feat: first commit");
     expect(commit.textContent).toContain("abcdef1");
-    // The commit (committedAt 1_000) precedes the comment (createdAt 2_000).
-    const timeline = screen.getByTestId("pr-detail-timeline");
-    const order = [
-      ...timeline.querySelectorAll(
-        '[data-testid="pr-detail-commit-item"], [data-testid="pr-detail-activity-item"]',
-      ),
-    ].map((element) => element.getAttribute("data-testid"));
-    expect(order).toEqual(["pr-detail-commit-item", "pr-detail-activity-item"]);
+    // History carries commits only; the comment belongs to Feedback.
+    expect(screen.queryByTestId("pr-detail-activity-item")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("pr-detail-tab-feedback"));
+    expect(screen.getByTestId("pr-detail-activity-item").textContent).toContain(
+      "later comment",
+    );
+    expect(screen.queryByTestId("pr-detail-commit-item")).toBeNull();
   });
 });

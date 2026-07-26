@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Minus,
   Plus,
+  TextQuote,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import type {
   PrActivityItem,
   PrActivitySection,
   PrActor,
+  PrChangedFile,
   PrChecksSection,
   PrCommit,
   PrCommitsSection,
@@ -24,6 +26,12 @@ import type {
   PrFilesSection,
   PrReviewState,
 } from "@traycer/protocol/host/pr-schemas";
+import {
+  PR_DIFF_ADDED_CLASS,
+  PR_DIFF_REMOVED_CLASS,
+  PR_TONE_FILL_CLASS,
+  PR_TONE_TEXT_CLASS,
+} from "@/components/epic-canvas/pr/pr-detail-tone";
 import {
   Collapsible,
   CollapsibleContent,
@@ -62,44 +70,84 @@ function timelineEntryTimestamp(entry: PrTimelineEntry): number {
 }
 
 /**
- * GitHub-style conversation timeline: the description as the first comment
- * card, then commits (as micro-events) interleaved chronologically with
- * comments and review events along the connector line, ending with a "view
- * older" link when either feed is truncated.
+ * Which feeds a timeline renders. The tabbed shell slices one chronological
+ * model three ways - Feedback shows discussion, History shows commits, and the
+ * combined form is kept for any surface that wants GitHub's merged view.
  */
+export type PrTimelineFilter = "all" | "activity" | "commits";
+
+/** Only the feed a tab actually shows can make its "view older" link honest. */
+function isTimelineTruncated(
+  filter: PrTimelineFilter,
+  truncated: { readonly activity: boolean; readonly commits: boolean },
+): boolean {
+  if (filter === "commits") return truncated.commits;
+  if (filter === "activity") return truncated.activity;
+  return truncated.activity || truncated.commits;
+}
+
+/**
+ * Chronological feed: comments and review events, commits as micro-events, on
+ * a single connector line, ending with a "view older" link when the relevant
+ * feed is truncated. The description renders as the first comment card only
+ * when `showDescription` is set - the Overview tab owns it otherwise.
+ */
+
 export function PrDetailTimeline(props: {
   readonly core: PrDetailCore;
   readonly activity: PrActivitySection;
   readonly commits: PrCommitsSection;
+  readonly filter: PrTimelineFilter;
+  /** The description is the Overview tab's own concern once tabs exist. */
+  readonly showDescription: boolean;
 }): ReactNode {
   const entries: readonly PrTimelineEntry[] = [
-    ...props.activity.items.map(
-      (item) => ({ kind: "activity", item }) as const,
-    ),
-    ...props.commits.commits.map(
-      (commit) => ({ kind: "commit", commit }) as const,
-    ),
+    ...(props.filter === "commits"
+      ? []
+      : props.activity.items.map(
+          (item) => ({ kind: "activity", item }) as const,
+        )),
+    ...(props.filter === "activity"
+      ? []
+      : props.commits.commits.map(
+          (commit) => ({ kind: "commit", commit }) as const,
+        )),
   ].sort(
     (left, right) =>
       timelineEntryTimestamp(left) - timelineEntryTimestamp(right),
   );
-  const showOlderLink =
-    (props.activity.isTruncated || props.commits.isTruncated) &&
-    props.core.prUrl !== null;
+  const relevantTruncation = isTimelineTruncated(props.filter, {
+    activity: props.activity.isTruncated,
+    commits: props.commits.isTruncated,
+  });
+  const showOlderLink = relevantTruncation && props.core.prUrl !== null;
+
+  if (entries.length === 0 && !props.showDescription) {
+    return (
+      <p
+        className="py-6 text-center text-ui-sm text-muted-foreground/70"
+        data-testid="pr-detail-timeline-empty"
+      >
+        {props.filter === "commits" ? "No commits yet." : "No discussion yet."}
+      </p>
+    );
+  }
 
   return (
     <div
       className="relative flex min-w-0 flex-col gap-4 before:absolute before:top-2 before:bottom-2 before:left-5 before:w-0.5 before:bg-border/70"
       data-testid="pr-detail-timeline"
     >
-      <PrTimelineCardItem
-        actor={props.core.author}
-        headline="commented"
-        timestamp={null}
-        body={props.core.body ?? ""}
-        emptyBody="No description provided."
-        testId="pr-detail-description"
-      />
+      {props.showDescription ? (
+        <PrTimelineCardItem
+          actor={props.core.author}
+          headline="commented"
+          timestamp={null}
+          body={props.core.body ?? ""}
+          emptyBody="No description provided."
+          testId="pr-detail-description"
+        />
+      ) : null}
       {entries.map((entry) =>
         entry.kind === "activity" ? (
           <PrTimelineActivityItem
@@ -266,12 +314,12 @@ const REVIEW_EVENT: Record<
 > = {
   approved: {
     sentence: "approved these changes",
-    iconClass: "bg-green-600 text-white dark:bg-green-700",
+    iconClass: "bg-success text-background",
     Icon: Check,
   },
   changes_requested: {
     sentence: "requested changes",
-    iconClass: "bg-red-600 text-white dark:bg-red-700",
+    iconClass: "bg-destructive text-background",
     Icon: X,
   },
   commented: {
@@ -352,8 +400,8 @@ function PrRelativeTime(props: { readonly timestamp: number }): ReactNode {
 // ---- Files changed --------------------------------------------------------- //
 
 const FILE_GLYPH_CLASS = {
-  added: "text-green-600 dark:text-green-400",
-  deleted: "text-red-600 dark:text-red-400",
+  added: PR_DIFF_ADDED_CLASS,
+  deleted: PR_DIFF_REMOVED_CLASS,
   renamed: "text-muted-foreground",
   copied: "text-muted-foreground",
 } as const;
@@ -388,7 +436,10 @@ function PrFileChangeGlyph(props: {
   // modified / changed / unknown - GitHub's yellow "modified" square.
   return (
     <span
-      className="mx-0.5 size-2.5 shrink-0 rounded-xs bg-amber-500/80"
+      className={cn(
+        "mx-0.5 size-2.5 shrink-0 rounded-xs",
+        PR_TONE_FILL_CLASS.pending,
+      )}
       aria-hidden
     />
   );
@@ -409,6 +460,8 @@ export function PrDetailFilesChanged(props: {
   // PR-wide values are absent (never observed).
   readonly additions: number | null;
   readonly deletions: number | null;
+  /** `null` when no chat is selected to send to, which disables the row action. */
+  readonly onQuoteFile: ((file: PrChangedFile) => void) | null;
 }): ReactNode {
   if (props.files.files.length === 0) return null;
   const shownCount = props.files.files.length;
@@ -423,7 +476,7 @@ export function PrDetailFilesChanged(props: {
   return (
     <Collapsible
       defaultOpen
-      className="mt-5 ml-11 overflow-hidden rounded-md border border-border/70 bg-canvas"
+      className="overflow-hidden rounded-md border border-border/70 bg-canvas"
       data-testid="pr-detail-files"
     >
       <CollapsibleTrigger className="group flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/20">
@@ -433,10 +486,8 @@ export function PrDetailFilesChanged(props: {
         </span>
         <span className="text-ui-xs text-muted-foreground">{totalCount}</span>
         <span className="ml-auto shrink-0 font-mono text-ui-xs">
-          <span className="text-green-700 dark:text-green-400">
-            +{additions}
-          </span>{" "}
-          <span className="text-red-700 dark:text-red-400">−{deletions}</span>
+          <span className={PR_DIFF_ADDED_CLASS}>+{additions}</span>{" "}
+          <span className={PR_DIFF_REMOVED_CLASS}>−{deletions}</span>
         </span>
       </CollapsibleTrigger>
       <CollapsibleContent>
@@ -444,7 +495,7 @@ export function PrDetailFilesChanged(props: {
           {props.files.files.map((file) => (
             <li
               key={file.path}
-              className="flex items-center gap-2 px-3 py-1.5 text-ui-xs"
+              className="group flex items-center gap-2 px-3 py-1.5 text-ui-xs"
               data-testid="pr-detail-file-row"
             >
               <PrFileChangeGlyph changeType={file.changeType} />
@@ -454,14 +505,15 @@ export function PrDetailFilesChanged(props: {
               >
                 {file.path}
               </span>
+              {props.onQuoteFile !== null ? (
+                <PrFileQuoteButton file={file} onQuote={props.onQuoteFile} />
+              ) : null}
               <span className="shrink-0 font-mono text-muted-foreground">
                 {file.additions !== null ? (
-                  <span className="text-green-700 dark:text-green-400">
-                    +{file.additions}
-                  </span>
+                  <span className={PR_DIFF_ADDED_CLASS}>+{file.additions}</span>
                 ) : null}{" "}
                 {file.deletions !== null ? (
-                  <span className="text-red-700 dark:text-red-400">
+                  <span className={PR_DIFF_REMOVED_CLASS}>
                     −{file.deletions}
                   </span>
                 ) : null}
@@ -489,15 +541,33 @@ export function PrDetailFilesChanged(props: {
   );
 }
 
+/** Row-level quote affordance; revealed on hover, always reachable by keyboard. */
+function PrFileQuoteButton(props: {
+  readonly file: PrChangedFile;
+  readonly onQuote: (file: PrChangedFile) => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      onClick={() => props.onQuote(props.file)}
+      aria-label={`Quote ${props.file.path} into the selected chat`}
+      data-testid="pr-detail-file-quote"
+      className="shrink-0 rounded p-0.5 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground hover:text-foreground focus-visible:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      <TextQuote className="size-3" aria-hidden />
+    </button>
+  );
+}
+
 // ---- Merge box ------------------------------------------------------------ //
 
 type PrMergeTone = "ok" | "fail" | "pending" | "merged" | "neutral";
 
 const MERGE_TONE_ICON_CLASS: Record<PrMergeTone, string> = {
-  ok: "bg-green-600 text-white dark:bg-green-700",
-  fail: "bg-red-600 text-white dark:bg-red-700",
-  pending: "bg-amber-500 text-white",
-  merged: "bg-purple-600 text-white dark:bg-purple-700",
+  ok: "bg-success text-background",
+  fail: "bg-destructive text-background",
+  pending: "bg-warning text-background",
+  merged: "bg-primary text-primary-foreground",
   neutral: "bg-muted text-muted-foreground",
 };
 
@@ -518,7 +588,7 @@ export function PrDetailMergeBox(props: {
 
   return (
     <div
-      className="mt-5 ml-11 divide-y divide-border/70 overflow-hidden rounded-md border border-border/70"
+      className="divide-y divide-border/70 overflow-hidden rounded-md border border-border/70"
       data-testid="pr-detail-merge-box"
     >
       {reviewRow !== null ? (
@@ -674,13 +744,13 @@ function checksHeadline(checks: PrChecksSection): PrMergeBoxRowContent {
 }
 
 const CHECK_ROW_ICON_CLASS = {
-  ok: "text-green-600 dark:text-green-400",
-  fail: "text-red-600 dark:text-red-400",
+  ok: PR_TONE_TEXT_CLASS.ok,
+  fail: PR_TONE_TEXT_CLASS.fail,
 } as const;
 
 const CHECK_ROW_DOT_CLASS = {
-  pending: "bg-amber-500 dark:bg-amber-400",
-  none: "bg-muted-foreground/40",
+  pending: PR_TONE_FILL_CLASS.pending,
+  none: PR_TONE_FILL_CLASS.none,
 } as const;
 
 function PrMergeBoxChecks(props: {

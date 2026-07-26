@@ -1,22 +1,65 @@
 import { useCallback, type ReactNode } from "react";
 import { AlertCircle } from "lucide-react";
-import type { PrSourceStatus } from "@traycer/protocol/host/pr-schemas";
+import type {
+  PrActivitySection,
+  PrChangedFile,
+  PrCommitsSection,
+  PrDetailCore,
+  PrSourceStatus,
+} from "@traycer/protocol/host/pr-schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
   usePrDetailSubscription,
   type PrDetailSubscriptionData,
 } from "@/hooks/pr/use-pr-detail-subscription";
+import { usePrQuoteTargets } from "@/hooks/pr/use-pr-quote-targets";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import {
+  derivePrAttentionQueue,
+  type PrAttentionItem,
+} from "@/lib/pr/pr-attention-queue";
+import {
+  buildPrActivityQuote,
+  buildPrCheckQuote,
+  buildPrDescriptionQuote,
+  buildPrFileQuote,
+  buildPrOverviewQuote,
+  sendPrQuoteToTarget,
+} from "@/lib/pr/pr-quote";
 import { cn } from "@/lib/utils";
 import { PrDetailHeader } from "@/components/epic-canvas/pr/pr-detail-header";
+import { PrDetailCard } from "@/components/epic-canvas/pr/pr-detail-card";
+import { PrDetailQueue } from "@/components/epic-canvas/pr/pr-detail-queue";
+import { PrDetailSummaryStrip } from "@/components/epic-canvas/pr/pr-detail-summary-strip";
+import { PrDetailTabStrip } from "@/components/epic-canvas/pr/pr-detail-tab-strip";
 import {
   PrDetailFilesChanged,
   PrDetailMergeBox,
   PrDetailTimeline,
 } from "@/components/epic-canvas/pr/pr-detail-sections";
-import { PrDetailSidebar } from "@/components/epic-canvas/pr/pr-detail-sidebar";
+import {
+  isFullBleedPrDetailTab,
+  prDetailViewKey,
+  usePrDetailTab,
+  usePrDetailViewStore,
+} from "@/stores/epics/pr-detail-view-store";
 
 const PR_DETAIL_REFRESH_TIMEOUT_MS = 10_000;
+
+/**
+ * Container width at which the reading column's right gutter is finally wide
+ * enough to hold the context card WITHOUT the column giving up any width:
+ * `max-w-4xl` (896px) + 2 × (280px card + 24px margin) ≈ 1504px.
+ *
+ * Expressed as a container query, not a pane or tab count. "One tab open" is
+ * only a proxy for "the gutter is wide enough", and the proxy leaks - the left
+ * sidebar collapsing widens the tile without changing tab count, a two-pane
+ * split can still leave one pane very wide, and a single tab on a small laptop
+ * has no gutter at all. Measuring the container gets every one of those right.
+ */
+const CARD_AT_WIDE = "hidden @min-[1520px]:flex";
+const STRIP_BELOW_WIDE = "@min-[1520px]:hidden";
 
 export function PrDetailBody(props: {
   readonly epicId: string;
@@ -81,7 +124,7 @@ export function PrDetailBody(props: {
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col overflow-y-auto"
+      className="@container flex h-full min-h-0 flex-col overflow-y-auto"
       data-testid="pr-detail-body"
       data-source-status={subscription.data.sourceStatus}
     >
@@ -102,40 +145,254 @@ export function PrDetailBody(props: {
           testId="pr-detail-error-notice"
         />
       ) : null}
-      <div className="@container mx-auto flex w-full max-w-5xl flex-col px-6 py-6">
+      <PrDetailLoaded
+        data={subscription.data}
+        githubHost={props.githubHost}
+        refreshing={refresh.refreshing}
+        onRefresh={refresh.trigger}
+      />
+    </div>
+  );
+}
+
+/**
+ * The loaded view: a document (header, tabs, content) inside a centred reading
+ * column, with the context card overlaying the gutter that column already
+ * leaves empty.
+ *
+ * The card OVERLAYS rather than reserves. A reserved band would pad the pane
+ * and shift the column, so the card's presence and absence would produce two
+ * different layouts; overlaying dead space means the column renders identically
+ * either way and toggling the card costs no reflow. It also cannot cover a
+ * "Fix in chat" button, because the column ends before the gutter starts.
+ */
+function PrDetailLoaded(props: {
+  readonly data: PrDetailSubscriptionData;
+  readonly githubHost: string;
+  readonly refreshing: boolean;
+  readonly onRefresh: () => void;
+}): ReactNode {
+  const { core, checks, activity, files, commits } = props.data;
+  const viewKey = prDetailViewKey({
+    githubHost: props.githubHost,
+    owner: core.base.owner,
+    repo: core.base.repo,
+    prNumber: core.base.prNumber,
+  });
+  const tab = usePrDetailTab(viewKey);
+  const setTab = usePrDetailViewStore((state) => state.setTab);
+  const quote = usePrQuoteTargets({ viewKey, owners: core.owners });
+  const openExternalLink = useRunnerOpenExternalLink();
+  const queue = derivePrAttentionQueue({ core, checks, activity });
+  const isFullBleed = isFullBleedPrDetailTab(tab);
+  const target = quote.target;
+
+  const openDetails = useCallback(
+    (url: string): void => {
+      openExternalLink.mutate(url);
+    },
+    [openExternalLink],
+  );
+
+  const sendQueueItem = useCallback(
+    (item: PrAttentionItem): void => {
+      if (target === null) return;
+      // A queue row is a one-line projection, so re-resolve the fact it came
+      // from and quote the FULL body rather than the row's summary.
+      if (item.kind === "check-failure") {
+        const context = checks.contexts.find(
+          (entry) => `check:${entry.name}` === item.key,
+        );
+        if (context !== undefined) {
+          sendPrQuoteToTarget(target, buildPrCheckQuote(core, context));
+          return;
+        }
+      }
+      const source = activity.items.find(
+        (entry) => `review:${entry.id}` === item.key,
+      );
+      sendPrQuoteToTarget(
+        target,
+        source === undefined
+          ? buildPrOverviewQuote(core)
+          : buildPrActivityQuote(core, source),
+      );
+    },
+    [target, checks.contexts, activity.items, core],
+  );
+
+  const sendFile = useCallback(
+    (file: PrChangedFile): void => {
+      if (target === null) return;
+      sendPrQuoteToTarget(target, buildPrFileQuote(core, file));
+    },
+    [target, core],
+  );
+
+  const sendOverview = useCallback((): void => {
+    if (target === null) return;
+    sendPrQuoteToTarget(target, buildPrOverviewQuote(core));
+  }, [target, core]);
+
+  const sendDescription = useCallback((): void => {
+    if (target === null) return;
+    sendPrQuoteToTarget(target, buildPrDescriptionQuote(core));
+  }, [target, core]);
+
+  const summary = (variant: "capsule" | "strip"): ReactNode => (
+    <PrDetailSummaryStrip
+      core={core}
+      queue={queue}
+      target={target}
+      targets={quote.targets}
+      onSelectTarget={quote.selectTarget}
+      variant={variant}
+    />
+  );
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        className={cn(
+          "flex min-w-0 flex-col",
+          isFullBleed ? "w-full px-4" : "mx-auto w-full max-w-4xl px-6",
+        )}
+      >
         <PrDetailHeader
-          core={subscription.data.core}
-          notLive={subscription.data.liveness === "cache-only"}
-          observedAt={oldestObservedAt(subscription.data)}
-          refreshing={refresh.refreshing}
-          onRefresh={refresh.trigger}
+          core={core}
+          notLive={props.data.liveness === "cache-only"}
+          observedAt={oldestObservedAt(props.data)}
+          refreshing={props.refreshing}
+          onRefresh={props.onRefresh}
         />
-        <div className="mt-5 flex min-w-0 flex-col gap-6 @3xl:flex-row">
-          <div className="min-w-0 flex-1">
+        <PrDetailTabStrip
+          tab={tab}
+          onSelectTab={(next) => setTab(viewKey, next)}
+          counts={{
+            feedback: activity.items.length,
+            files: files.totalCount ?? files.files.length,
+            checks: checks.contexts.length,
+            history: commits.totalCount ?? commits.commits.length,
+          }}
+          blocking={{
+            feedback: queue.items.filter(
+              (item) => item.kind === "changes-requested",
+            ).length,
+            checks: queue.checkCounts.failing,
+          }}
+          capsule={isFullBleed ? summary("capsule") : null}
+        />
+        {isFullBleed ? null : (
+          <div className={cn("pb-4", STRIP_BELOW_WIDE)}>{summary("strip")}</div>
+        )}
+        <div className="min-w-0 pb-8">
+          {tab === "overview" ? (
+            <div className="flex min-w-0 flex-col gap-5">
+              <PrDetailQueue
+                queue={queue}
+                target={target}
+                onSendItem={sendQueueItem}
+                onOpenDetails={openDetails}
+              />
+              <PrDetailDescription
+                core={core}
+                canSend={target !== null}
+                onSend={sendDescription}
+              />
+            </div>
+          ) : null}
+          {tab === "feedback" ? (
             <PrDetailTimeline
-              core={subscription.data.core}
-              activity={subscription.data.activity}
-              commits={subscription.data.commits}
+              core={core}
+              activity={activity}
+              commits={commits}
+              filter="activity"
+              showDescription={false}
             />
+          ) : null}
+          {tab === "files" ? (
             <PrDetailFilesChanged
-              files={subscription.data.files}
-              prUrl={subscription.data.core.prUrl}
-              additions={subscription.data.core.additions}
-              deletions={subscription.data.core.deletions}
+              files={files}
+              prUrl={core.prUrl}
+              additions={core.additions}
+              deletions={core.deletions}
+              onQuoteFile={target === null ? null : sendFile}
             />
-            <PrDetailMergeBox
-              core={subscription.data.core}
-              checks={subscription.data.checks}
+          ) : null}
+          {tab === "checks" ? (
+            <PrDetailMergeBox core={core} checks={checks} />
+          ) : null}
+          {tab === "history" ? (
+            <PrDetailTimeline
+              core={core}
+              activity={activity}
+              commits={commits}
+              filter="commits"
+              showDescription={false}
             />
-          </div>
-          <PrDetailSidebar
-            core={subscription.data.core}
-            activity={subscription.data.activity}
-            className="@3xl:w-[clamp(12rem,28%,18rem)] @3xl:shrink-0"
-          />
+          ) : null}
         </div>
       </div>
+      {isFullBleed ? null : (
+        <PrDetailCard
+          core={core}
+          checks={checks}
+          activity={activity}
+          queue={queue}
+          target={target}
+          targets={quote.targets}
+          onSelectTarget={quote.selectTarget}
+          onSendPr={sendOverview}
+          className={cn("absolute top-4 right-6 w-[17.5rem]", CARD_AT_WIDE)}
+        />
+      )}
     </div>
+  );
+}
+
+const EMPTY_ACTIVITY: PrActivitySection = {
+  observedAt: null,
+  items: [],
+  isTruncated: false,
+};
+
+const EMPTY_COMMITS: PrCommitsSection = {
+  observedAt: null,
+  commits: [],
+  totalCount: null,
+  isTruncated: false,
+};
+
+function PrDetailDescription(props: {
+  readonly core: PrDetailCore;
+  readonly canSend: boolean;
+  readonly onSend: () => void;
+}): ReactNode {
+  return (
+    <section className="min-w-0" data-testid="pr-detail-description-section">
+      <div className="mb-2 flex items-center gap-2">
+        <h2 className="text-ui-xs font-semibold tracking-wide text-muted-foreground uppercase">
+          Description
+        </h2>
+        <span className="h-px flex-1 bg-border/60" aria-hidden />
+        <button
+          type="button"
+          onClick={props.onSend}
+          disabled={!props.canSend}
+          data-testid="pr-detail-description-quote"
+          className="rounded border border-border/60 px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+        >
+          Quote
+        </button>
+      </div>
+      <PrDetailTimeline
+        core={props.core}
+        activity={EMPTY_ACTIVITY}
+        commits={EMPTY_COMMITS}
+        filter="activity"
+        showDescription
+      />
+    </section>
   );
 }
 
@@ -230,7 +487,7 @@ function PrDetailStatusBanner(props: {
       className={cn(
         "border-b px-4 py-2 text-ui-xs",
         props.tone === "warning" &&
-          "border-amber-500/30 bg-amber-500/10 text-amber-900 dark:text-amber-100",
+          "border-warning/30 bg-warning/10 text-warning-foreground",
         props.tone === "error" &&
           "border-destructive/30 bg-destructive/10 text-destructive",
       )}
