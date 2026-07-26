@@ -541,7 +541,7 @@ describe("<DiagnosticsSettingsPanel />", () => {
     ).toBeTruthy();
 
     const desktopTrigger = await openLogLevelSelect("desktop");
-    await chooseLogLevelOption("Info");
+    await chooseLogLevelOption("Info (default)");
 
     await waitFor(() => {
       expect(setMock).toHaveBeenCalledWith("desktop", "info");
