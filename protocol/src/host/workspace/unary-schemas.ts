@@ -251,6 +251,12 @@ export type WorkspaceResolvePathsByRepoIdentifiersResponse = z.infer<
   typeof workspaceResolvePathsByRepoIdentifiersResponseSchema
 >;
 
+/**
+ * @deprecated Request of the legacy `workspace.listFileTree` snapshot - see
+ * the deprecation note on `workspaceListFileTreeV10` in `contracts.ts`. Kept
+ * only for the released floor and the old-host fallback; new work uses
+ * `workspace.subscribeFileList` / `workspace.searchPaths`.
+ */
 export const workspaceListFileTreeRequestSchema = z.object({
   workspacePath: z.string(),
   maxFiles: z.number().int().min(1).max(50_000),

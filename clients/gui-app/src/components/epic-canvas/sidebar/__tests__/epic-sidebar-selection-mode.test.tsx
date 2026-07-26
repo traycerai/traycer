@@ -1539,6 +1539,41 @@ describe("chat descendant status rollup", () => {
     ).toBeTruthy();
   });
 
+  it("surfaces a terminal-agent's chat-scoped unread-done: rollup while collapsed, own row indicator when expanded", () => {
+    seedNestedChatTree();
+    testState.tuiHarnessIds = { "agent-child": "codex" };
+    // TUI `agent.stopped` rows are chat-scoped to the agent id, so the
+    // indicator entry lands under the terminal-agent's own id.
+    testState.indicatorChats = {
+      "agent-child": indicator({ unreadDone: true }),
+    };
+
+    const view = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+
+    // Hidden behind the collapsed root, the agent's completion rolls up.
+    expect(
+      screen.getByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeTruthy();
+
+    // Expanded, the agent row wears its own done indicator instead of the
+    // harness brand mark.
+    testState.expandedIds = new Set(["chat-root"]);
+    view.rerender(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
+    );
+    expect(
+      screen.queryByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("terminal-agent-sidebar-done-agent-child"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("sidebar-agent-harness-agent-child"),
+    ).toBeNull();
+  });
+
   it("lets a hidden failure take the slot from a merely-running parent, with a breakdown tooltip", () => {
     seedNestedChatTree();
     testState.activeAgentIds = new Set(["chat-root", "agent-child"]);
@@ -1840,11 +1875,13 @@ describe("chat row leading status icon", () => {
     const view = render(
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
-    // Terminal-agent rows carry no host notification state, so their icon only
-    // ever reaches the tier / idle arms: idle wears the harness brand.
+    // With no notification state for this agent the icon only reaches the
+    // tier / idle arms: idle wears the harness brand.
     const agentRow = screen.getByTestId("epic-sidebar-item-agent-root");
     expect(
-      within(agentRow).queryByTestId("terminal-agent-sidebar-spinner"),
+      within(agentRow).queryByTestId(
+        "terminal-agent-sidebar-activity-agent-root",
+      ),
     ).toBeNull();
     expect(idleTime("agent-root")).toBeTruthy();
 
@@ -1852,7 +1889,9 @@ describe("chat row leading status icon", () => {
     view.rerender(
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
-    expect(screen.getByTestId("terminal-agent-sidebar-spinner")).toBeTruthy();
+    expect(
+      screen.getByTestId("terminal-agent-sidebar-activity-agent-root"),
+    ).toBeTruthy();
 
     // Background-only work reads calm, not busy. Without this split the agent's
     // own row wore the turn spinner while its collapsed parent rendered the
@@ -1863,9 +1902,13 @@ describe("chat row leading status icon", () => {
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
     expect(
-      screen.getByTestId("terminal-agent-sidebar-background"),
+      screen.getByTestId(
+        "terminal-agent-sidebar-background-activity-agent-root",
+      ),
     ).toBeTruthy();
-    expect(screen.queryByTestId("terminal-agent-sidebar-spinner")).toBeNull();
+    expect(
+      screen.queryByTestId("terminal-agent-sidebar-activity-agent-root"),
+    ).toBeNull();
   });
 });
 
@@ -2375,7 +2418,9 @@ describe("sidebar leading identity icon", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    expect(screen.getByTestId("terminal-agent-sidebar-spinner")).not.toBeNull();
+    expect(
+      screen.getByTestId("terminal-agent-sidebar-activity-agent-root"),
+    ).not.toBeNull();
     expect(screen.queryByTestId("sidebar-agent-harness-agent-root")).toBeNull();
     expect(screen.queryByTestId("sidebar-agent-surface-agent-root")).toBeNull();
   });

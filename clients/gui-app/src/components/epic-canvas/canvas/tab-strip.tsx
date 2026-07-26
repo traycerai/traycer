@@ -220,8 +220,14 @@ export function TabStrip(props: TabStripProps) {
   // Narrow per-strip subscription: preview ticks re-render only the strip
   // actually hovered, not every strip on the canvas.
   const dndDropIndicator = useTabStripDropIndex(groupId);
+  // Terminal-agent tabs are chat-scoped notification entities too: a TUI
+  // agent's `agent.stopped` row is keyed by its agent id, and the tab icon
+  // already reads `chats[tab.id]`.
   const chatIds = useMemo(
-    () => tabs.flatMap((tab) => (tab.type === "chat" ? [tab.id] : [])),
+    () =>
+      tabs.flatMap((tab) =>
+        tab.type === "chat" || tab.type === "terminal-agent" ? [tab.id] : [],
+      ),
     [tabs],
   );
   const notificationIndicators = useHostNotificationIndicators({
