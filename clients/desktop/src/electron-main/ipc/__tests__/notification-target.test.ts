@@ -4,6 +4,7 @@ import type {
   PerWindowSnapshot,
 } from "../../../ipc-contracts/window-types";
 import {
+  findWindowIdForOpenArtifact,
   findWindowIdForOpenChat,
   findWindowIdForOpenTab,
   parseNotificationClickTarget,
@@ -17,6 +18,7 @@ const ALL_NULL_TARGET = {
   epicId: null,
   chatId: null,
   tabId: null,
+  artifactId: null,
   originHostId: null,
 } as const;
 
@@ -30,17 +32,17 @@ function emptySnapshot(): PerWindowSnapshot {
   };
 }
 
-function chatTile(
-  chatId: string,
+function tileRef(
+  id: string,
   options: {
     readonly type: string;
     readonly hostId: string | null;
   },
 ): JsonValue {
   if (options.hostId === null) {
-    return { id: chatId, type: options.type };
+    return { id, type: options.type };
   }
-  return { id: chatId, type: options.type, hostId: options.hostId };
+  return { id, type: options.type, hostId: options.hostId };
 }
 
 function canvasWithTiles(
@@ -49,10 +51,10 @@ function canvasWithTiles(
   return { tilesByInstanceId: tiles };
 }
 
-function snapshotWithChat(options: {
+function snapshotWithTile(options: {
   readonly tabId: string;
   readonly epicId: string;
-  readonly chatId: string;
+  readonly tileId: string;
   readonly tileType: string;
   readonly hostId: string | null;
 }): PerWindowSnapshot {
@@ -61,7 +63,7 @@ function snapshotWithChat(options: {
     activeTabId: options.tabId,
     canvasByTabId: {
       [options.tabId]: canvasWithTiles({
-        "tile-1": chatTile(options.chatId, {
+        "tile-1": tileRef(options.tileId, {
           type: options.tileType,
           hostId: options.hostId,
         }),
@@ -110,6 +112,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: "chat-1",
       tabId: null,
+      artifactId: null,
       originHostId: "host-1",
     });
   });
@@ -131,6 +134,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: null,
       tabId: null,
+      artifactId: null,
       originHostId: "host-1",
     });
   });
@@ -147,6 +151,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-legacy",
       chatId: "chat-legacy",
       tabId: null,
+      artifactId: null,
       originHostId: null,
     });
   });
@@ -250,6 +255,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: null,
       chatId: null,
       tabId: null,
+      artifactId: null,
       originHostId: "host-1",
     });
   });
@@ -267,6 +273,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: null,
       chatId: null,
       tabId: null,
+      artifactId: null,
       originHostId: "host-1",
     });
   });
@@ -284,6 +291,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: null,
       chatId: null,
       tabId: null,
+      artifactId: null,
       originHostId: null,
     });
     expect(
@@ -298,14 +306,15 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: null,
       tabId: null,
+      artifactId: null,
       originHostId: null,
     });
   });
 
-  it("returns null chatId/tabId for legacy non-target routes (epic/artifact)", () => {
+  it("returns null chatId/tabId/artifactId for legacy non-target epic routes", () => {
     expect(
       parseNotificationClickTarget({
-        kind: "artifact",
+        kind: "epic",
         epicId: "epic-1",
         chatId: "ignored",
       }),
@@ -313,6 +322,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: null,
       tabId: null,
+      artifactId: null,
       originHostId: null,
     });
   });
@@ -328,6 +338,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: "chat-1",
       tabId: null,
+      artifactId: null,
       originHostId: null,
     });
     expect(
@@ -340,6 +351,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: "chat-1",
       tabId: null,
+      artifactId: null,
       originHostId: null,
     });
   });
@@ -357,6 +369,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: "chat-1",
       tabId: null,
+      artifactId: null,
       originHostId: "host-1",
     });
     expect(
@@ -371,6 +384,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: "chat-1",
       tabId: null,
+      artifactId: null,
       originHostId: "host-1",
     });
   });
@@ -395,6 +409,7 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: null,
       tabId: "tab-1",
+      artifactId: null,
       originHostId: "host-1",
     });
     expect(
@@ -407,6 +422,43 @@ describe("parseNotificationClickTarget", () => {
       epicId: "epic-1",
       chatId: null,
       tabId: "tab-1",
+      artifactId: null,
+      originHostId: null,
+    });
+  });
+
+  it("extracts artifactId (not chatId/tabId) for artifact routes", () => {
+    expect(
+      parseNotificationClickTarget({
+        kind: "notificationActivation",
+        version: 1,
+        route: {
+          kind: "artifact",
+          epicId: "epic-1",
+          artifactId: "artifact-1",
+          threadId: "thread-1",
+        },
+        feed: VALID_FEED,
+        originHostId: "host-1",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      chatId: null,
+      tabId: null,
+      artifactId: "artifact-1",
+      originHostId: "host-1",
+    });
+    expect(
+      parseNotificationClickTarget({
+        kind: "artifact",
+        epicId: "epic-1",
+        artifactId: "artifact-1",
+      }),
+    ).toEqual({
+      epicId: "epic-1",
+      chatId: null,
+      tabId: null,
+      artifactId: "artifact-1",
       originHostId: null,
     });
   });
@@ -419,10 +471,10 @@ describe("findWindowIdForOpenChat", () => {
       ["window-mru", emptySnapshot()],
       [
         "window-open",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "chat-1",
+          tileId: "chat-1",
           tileType: "chat",
           hostId: "host-1",
         }),
@@ -438,10 +490,10 @@ describe("findWindowIdForOpenChat", () => {
     const state = new FakePerWindowState([
       [
         "window-a",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "other-chat",
+          tileId: "other-chat",
           tileType: "chat",
           hostId: null,
         }),
@@ -457,10 +509,10 @@ describe("findWindowIdForOpenChat", () => {
     const state = new FakePerWindowState([
       [
         "window-a",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "chat-other",
+          tileId: "chat-other",
           tileType: "chat",
           hostId: null,
         }),
@@ -471,15 +523,15 @@ describe("findWindowIdForOpenChat", () => {
     ).toBeNull();
   });
 
-  it("returns null when tile id matches but tile type is not chat/terminal-agent", () => {
+  it("returns null when tile id matches but tile type is not chat/terminal-agent/terminal", () => {
     const registry = new FakeRegistry(["window-a"]);
     const state = new FakePerWindowState([
       [
         "window-a",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "chat-1",
+          tileId: "chat-1",
           tileType: "artifact",
           hostId: null,
         }),
@@ -495,10 +547,10 @@ describe("findWindowIdForOpenChat", () => {
     const state = new FakePerWindowState([
       [
         "window-a",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "chat-1",
+          tileId: "chat-1",
           tileType: "chat",
           hostId: "host-other",
         }),
@@ -514,10 +566,10 @@ describe("findWindowIdForOpenChat", () => {
     const state = new FakePerWindowState([
       [
         "window-a",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "chat-1",
+          tileId: "chat-1",
           tileType: "chat",
           hostId: "host-1",
         }),
@@ -533,10 +585,10 @@ describe("findWindowIdForOpenChat", () => {
     const state = new FakePerWindowState([
       [
         "window-a",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "chat-1",
+          tileId: "chat-1",
           tileType: "chat",
           hostId: "host-anything",
         }),
@@ -552,10 +604,10 @@ describe("findWindowIdForOpenChat", () => {
     const state = new FakePerWindowState([
       [
         "window-a",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "chat-1",
+          tileId: "chat-1",
           tileType: "terminal-agent",
           hostId: null,
         }),
@@ -571,10 +623,10 @@ describe("findWindowIdForOpenChat", () => {
     const state = new FakePerWindowState([
       [
         "window-a",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "terminal-1",
+          tileId: "terminal-1",
           tileType: "terminal",
           hostId: null,
         }),
@@ -651,10 +703,10 @@ describe("findWindowIdForOpenChat", () => {
     const state = new FakePerWindowState([
       [
         "window-open",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "chat-1",
+          tileId: "chat-1",
           tileType: "chat",
           hostId: null,
         }),
@@ -673,20 +725,20 @@ describe("findWindowIdForOpenChat", () => {
     const state = new FakePerWindowState([
       [
         "window-first",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-1",
           epicId: "epic-1",
-          chatId: "chat-1",
+          tileId: "chat-1",
           tileType: "chat",
           hostId: null,
         }),
       ],
       [
         "window-second",
-        snapshotWithChat({
+        snapshotWithTile({
           tabId: "tab-2",
           epicId: "epic-1",
-          chatId: "chat-1",
+          tileId: "chat-1",
           tileType: "chat",
           hostId: null,
         }),
@@ -695,6 +747,134 @@ describe("findWindowIdForOpenChat", () => {
     expect(
       findWindowIdForOpenChat(registry, state, "epic-1", "chat-1", null),
     ).toBe("window-first");
+  });
+});
+
+describe("findWindowIdForOpenArtifact", () => {
+  it("returns the non-MRU window that already has the artifact open", () => {
+    const registry = new FakeRegistry(["window-mru", "window-open"]);
+    const state = new FakePerWindowState([
+      ["window-mru", emptySnapshot()],
+      [
+        "window-open",
+        snapshotWithTile({
+          tabId: "tab-1",
+          epicId: "epic-1",
+          tileId: "artifact-1",
+          tileType: "spec",
+          hostId: null,
+        }),
+      ],
+    ]);
+    expect(
+      findWindowIdForOpenArtifact(
+        registry,
+        state,
+        "epic-1",
+        "artifact-1",
+        null,
+      ),
+    ).toBe("window-open");
+  });
+
+  it("matches regardless of tile type, unlike findWindowIdForOpenChat", () => {
+    const registry = new FakeRegistry(["window-a"]);
+    const state = new FakePerWindowState([
+      [
+        "window-a",
+        snapshotWithTile({
+          tabId: "tab-1",
+          epicId: "epic-1",
+          tileId: "artifact-1",
+          tileType: "workspace-file",
+          hostId: null,
+        }),
+      ],
+    ]);
+    expect(
+      findWindowIdForOpenArtifact(
+        registry,
+        state,
+        "epic-1",
+        "artifact-1",
+        null,
+      ),
+    ).toBe("window-a");
+  });
+
+  it("returns null when the artifact is not open anywhere", () => {
+    const registry = new FakeRegistry(["window-a"]);
+    const state = new FakePerWindowState([
+      [
+        "window-a",
+        snapshotWithTile({
+          tabId: "tab-1",
+          epicId: "epic-1",
+          tileId: "other-artifact",
+          tileType: "spec",
+          hostId: null,
+        }),
+      ],
+    ]);
+    expect(
+      findWindowIdForOpenArtifact(
+        registry,
+        state,
+        "epic-1",
+        "artifact-1",
+        null,
+      ),
+    ).toBeNull();
+  });
+
+  it("returns null when originHostId is set and tile hostId differs", () => {
+    const registry = new FakeRegistry(["window-a"]);
+    const state = new FakePerWindowState([
+      [
+        "window-a",
+        snapshotWithTile({
+          tabId: "tab-1",
+          epicId: "epic-1",
+          tileId: "artifact-1",
+          tileType: "spec",
+          hostId: "host-other",
+        }),
+      ],
+    ]);
+    expect(
+      findWindowIdForOpenArtifact(
+        registry,
+        state,
+        "epic-1",
+        "artifact-1",
+        "host-1",
+      ),
+    ).toBeNull();
+  });
+
+  it("matches when originHostId is set and tile hostId agrees", () => {
+    const registry = new FakeRegistry(["window-a"]);
+    const state = new FakePerWindowState([
+      [
+        "window-a",
+        snapshotWithTile({
+          tabId: "tab-1",
+          epicId: "epic-1",
+          tileId: "artifact-1",
+          tileType: "spec",
+          hostId: "host-1",
+        }),
+      ],
+    ]);
+    expect(
+      findWindowIdForOpenArtifact(
+        registry,
+        state,
+        "epic-1",
+        "artifact-1",
+        "host-1",
+      ),
+    ).toBe("window-a");
   });
 });
 

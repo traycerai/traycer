@@ -51,9 +51,11 @@ import {
   uniquePerWindowTabs,
 } from "./landing-draft-helpers";
 import {
+  findWindowIdForOpenArtifact,
   findWindowIdForOpenChat,
   findWindowIdForOpenTab,
   parseNotificationClickTarget,
+  type NotificationClickTarget,
 } from "./notification-target";
 import { registerAuthIpc } from "./auth-ipc";
 import { registerDeviceFlowIpc } from "./device-flow-ipc";
@@ -493,34 +495,55 @@ export class RunnerIpcBridge {
   }
 
   /**
+   * Resolves the live window already holding a notification click's exact
+   * target - chat/terminal-agent/terminal tile (`chatId`), terminal tab
+   * (`tabId`), or artifact tile (`artifactId`) - or null when there is no
+   * epicId or no such target is open anywhere.
+   */
+  private resolveNotificationOpenWindowId(
+    target: NotificationClickTarget,
+  ): string | null {
+    if (target.epicId === null) return null;
+    if (target.chatId !== null) {
+      return findWindowIdForOpenChat(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.chatId,
+        target.originHostId,
+      );
+    }
+    if (target.tabId !== null) {
+      return findWindowIdForOpenTab(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.tabId,
+      );
+    }
+    if (target.artifactId !== null) {
+      return findWindowIdForOpenArtifact(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.artifactId,
+        target.originHostId,
+      );
+    }
+    return null;
+  }
+
+  /**
    * Routes a native-notification click. When the click carries a chat/
-   * terminal-agent target, or a terminal-route tab target, that is already
-   * open in some live window, focuses that exact window -
-   * `NotificationFocusBridge` there brings the tile to the foreground
-   * itself. Otherwise falls back to owned-or-MRU delivery, as for any other
-   * epic-scoped event.
+   * terminal-agent target, a terminal-route tab target, or an artifact
+   * target, that is already open in some live window, focuses that exact
+   * window - `NotificationFocusBridge` there brings the tile to the
+   * foreground itself. Otherwise falls back to owned-or-MRU delivery, as for
+   * any other epic-scoped event.
    */
   deliverNotificationClick(payload: unknown): void {
     const target = parseNotificationClickTarget(payload);
-    const openWindowId =
-      target.epicId === null
-        ? null
-        : target.chatId !== null
-          ? findWindowIdForOpenChat(
-              this.windowRegistry,
-              this.perWindowState,
-              target.epicId,
-              target.chatId,
-              target.originHostId,
-            )
-          : target.tabId !== null
-            ? findWindowIdForOpenTab(
-                this.windowRegistry,
-                this.perWindowState,
-                target.epicId,
-                target.tabId,
-              )
-            : null;
+    const openWindowId = this.resolveNotificationOpenWindowId(target);
     if (openWindowId !== null) {
       this.focusAndDeliver(
         openWindowId,
