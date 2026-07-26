@@ -1436,6 +1436,19 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [],
   );
   const compactActionLockedRef = useRef(false);
+  // `ChatTile` is rendered without a `key` on `node.id` (`tile-render.tsx`,
+  // `tab-group-view.tsx`), so switching this slot to a different chat repoints
+  // `handle` in place rather than remounting - these refs would otherwise
+  // carry state across chats that never share a click. Only the lock resets:
+  // it is a purely local UI debounce for this tile's own button. The pending
+  // promotion is intentionally left running - it tracks a specific send
+  // against `handle.store`, a durable session store the registry keeps alive
+  // independent of tile display (`useChatSessionHandle`), so an in-flight
+  // promotion for the chat the user just navigated away from should still
+  // settle rather than being abandoned mid-flight.
+  useEffect(() => {
+    compactActionLockedRef.current = false;
+  }, [handle]);
   const compactConversation = useCallback(
     (commandName: string): void => {
       if (!canSendNextStep || compactActionLockedRef.current) return;
