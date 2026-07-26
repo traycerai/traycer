@@ -26,6 +26,7 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import {
   ChatMessages,
   type ChatMessageScrollRequest,
@@ -104,6 +105,12 @@ import {
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
+import {
+  COMPACT_COMMAND_TEXT,
+  findManualCompactCommand,
+  promoteQueuedMessageToFront,
+} from "@/lib/chats/compact-conversation";
+import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
 import { ChatDeadTileBanner, ChatHostStartingBanner } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -1398,6 +1405,33 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     [canSendNextStep, chatActions, nextStepSettings, profile],
   );
+  // Runs the harness's own compaction from the context-usage chip. Never
+  // interrupts: with a turn running (or work already queued) `/compact` is
+  // queued and then promoted to the front so it runs next, and only an
+  // otherwise-idle chat compacts outright - queueing there would just park a
+  // one-item queue the user has to release by hand.
+  const compactConversation = useCallback((): void => {
+    if (!canSendNextStep) return;
+    const sender = userMessageSenderForProfile(profile);
+    if (sender === null) return;
+    const content = buildSubmittedChatJSONContent(
+      plainTextPromptContent(COMPACT_COMMAND_TEXT),
+    );
+    const { activeTurn, queue } = handle.store.getState();
+    const runNow = activeTurn === null && queue.items.length === 0;
+    const sent = chatActions.sendMessage(
+      content,
+      sender,
+      nextStepSettings,
+      runNow ? "auto" : "after_turn",
+    );
+    if (sent === null || runNow) return;
+    promoteQueuedMessageToFront({
+      store: handle.store,
+      messageId: sent.messageId,
+      reorder: chatActions.queueReorder,
+    });
+  }, [canSendNextStep, chatActions, handle.store, nextStepSettings, profile]);
   const nextStepActions = useMemo(
     () => ({
       canSend: canSendNextStep,
@@ -1524,8 +1558,23 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
   const usageChip = useMemo(
-    () => <ContextUsageChipForChat handle={handle} />,
-    [handle],
+    () => (
+      <ContextUsageChipForChat
+        handle={handle}
+        harnessId={currentComposerSettings.harnessId}
+        workingDirectories={composerMentionRoots}
+        isActive={isActive}
+        onCompact={canSendNextStep ? compactConversation : null}
+      />
+    ),
+    [
+      canSendNextStep,
+      compactConversation,
+      composerMentionRoots,
+      currentComposerSettings.harnessId,
+      handle,
+      isActive,
+    ],
   );
   // Composer v3 cluster: host select + Workspace rail picker on the left, with
   // the context-usage leaf owning its trailing chip and optional full-width
@@ -1803,9 +1852,32 @@ function findLastAssistantUsage(
 
 function ContextUsageChipForChat(props: {
   readonly handle: ChatSessionStoreHandle;
+  readonly harnessId: GuiHarnessId;
+  readonly workingDirectories: ReadonlyArray<string>;
+  readonly isActive: boolean;
+  readonly onCompact: (() => void) | null;
 }): ReactNode {
   const usage = useStore(props.handle.store, selectContextUsage);
-  return <ContextUsageChip usage={usage} />;
+  const client = useTabHostClient();
+  // Shares the active composer's already-warm command catalog rather than
+  // opening a second subscription: `useKnownSlashCommandNames` fetches the same
+  // query with the same `enabled: isActive` gate, so an active tile pays no
+  // extra RPC and an inactive one still fetches nothing. An inactive tile
+  // therefore shows no compact affordance - it also has no focusable composer
+  // to compact from.
+  const { data: commands } = useSlashCommands("", {
+    hostClient: client,
+    harnessId: props.harnessId,
+    workingDirectories: props.workingDirectories,
+    enabled: props.isActive,
+  });
+  const canCompact = findManualCompactCommand(commands) !== null;
+  return (
+    <ContextUsageChip
+      usage={usage}
+      onCompact={canCompact ? props.onCompact : null}
+    />
+  );
 }
 
 function ChatSessionMessagesSurface(
