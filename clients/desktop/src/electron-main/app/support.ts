@@ -18,6 +18,14 @@ import type {
 } from "../../ipc-contracts/window-types";
 import { buildSupportLinks, TRAYCER_SUPPORT_EMAIL } from "./support-links";
 
+const LOG_TAIL_LINES = 500;
+// Per attachment. Two logs stay well inside Sentry's envelope limits, and the
+// transport gzips before sending, so this is ~50 KB on the wire in practice.
+const LOG_ATTACHMENT_MAX_BYTES = 512_000;
+// The user is watching a spinner, but losing the report costs far more than
+// waiting: 2s was not enough to upload two log attachments on a slow link.
+const SENTRY_FLUSH_TIMEOUT_MS = 10_000;
+
 export interface SupportHostSnapshotProvider {
   getSnapshot(): DesktopLocalHostSnapshot | null;
 }
@@ -100,17 +108,29 @@ export class DesktopSupportService {
   ): Promise<SupportSubmitReportResult> {
     const reportId = generateReportId();
     const snapshot = this.getSnapshot();
-    const [desktopLogContent, hostLogContent] = await Promise.all([
-      readLogTail(resolveDesktopLogPath(), 500),
-      readLogTail(this.hostLayout.logFile, 500),
-    ]);
 
-    // No DSN baked in (dev/staging without sentry) - keep the user-facing
-    // flow working by returning the locally generated id; the GitHub issue
-    // will still open with environment + report id in the body.
+    // No DSN baked in (dev/staging without sentry). Nothing is uploaded, so
+    // there is no report to hand back - returning the locally generated id
+    // here is what put ids into GitHub issues that exist nowhere in Sentry.
     if (!Sentry.isInitialized()) {
-      return { reportId };
+      log.warn("[support] sentry unavailable, report not uploaded", {
+        reportId,
+      });
+      return { reportId: null };
     }
+
+    const [desktopLogContent, hostLogContent] = await Promise.all([
+      readLogTail(
+        resolveDesktopLogPath(),
+        LOG_TAIL_LINES,
+        LOG_ATTACHMENT_MAX_BYTES,
+      ),
+      readLogTail(
+        this.hostLayout.logFile,
+        LOG_TAIL_LINES,
+        LOG_ATTACHMENT_MAX_BYTES,
+      ),
+    ]);
 
     const message = [
       `Title: ${form.title}`,
@@ -151,10 +171,19 @@ export class DesktopSupportService {
       },
     );
 
-    try {
-      await Sentry.flush(2000);
-    } catch (err) {
-      log.error("[support] sentry flush failed", { reportId, err });
+    // `flush` resolves false when the queue did not drain inside the timeout.
+    // The result used to be discarded, which made a timed-out upload
+    // indistinguishable from a delivered one - the report id still reached the
+    // GitHub issue and triage then hunted for a report that never arrived.
+    const flushed = await Sentry.flush(SENTRY_FLUSH_TIMEOUT_MS).catch(
+      (err: unknown) => {
+        log.error("[support] sentry flush failed", { reportId, err });
+        return false;
+      },
+    );
+    if (!flushed) {
+      log.error("[support] report upload did not complete", { reportId });
+      return { reportId: null };
     }
     return { reportId };
   }
@@ -189,10 +218,28 @@ async function ensureLogFile(path: string): Promise<void> {
   await handle.close();
 }
 
-async function readLogTail(path: string, lines: number): Promise<string> {
+async function readLogTail(
+  path: string,
+  lines: number,
+  maxBytes: number,
+): Promise<string> {
   const content = await readFile(path, "utf-8").catch(() => "");
-  const all = content.split("\n");
-  return all.slice(-lines).join("\n");
+  const tail = content.split("\n").slice(-lines).join("\n");
+  return truncateToTrailingBytes(tail, maxBytes);
+}
+
+// A line count is not a size bound: one host log line can carry a multi-KB
+// JSON payload, so 500 lines can run to megabytes. Sentry rejects oversized
+// envelopes, and that rejection surfaces as a delivered event whose attachment
+// silently vanished - exactly the failure mode this file is fixing. Keep the
+// trailing bytes; the tail is where the failure being reported lives.
+function truncateToTrailingBytes(text: string, maxBytes: number): string {
+  const encoded = Buffer.from(text, "utf8");
+  if (encoded.byteLength <= maxBytes) return text;
+  const kept = encoded.subarray(-maxBytes).toString("utf8");
+  // The byte cut can land mid-codepoint or mid-line; drop the partial head.
+  const firstNewline = kept.indexOf("\n");
+  return firstNewline === -1 ? kept : kept.slice(firstNewline + 1);
 }
 
 function generateReportId(): string {
