@@ -1196,7 +1196,9 @@ function registerCommentsCommands(program: Command): void {
   withRunner(
     comments
       .command("list")
-      .description("List artifact comment threads")
+      .description(
+        "List artifact comment threads. Read them after reading an artifact, so human-authored feedback is visible before editing or responding. A thread may quote the artifact text it refers to: anchor=present means that quote is still located in the current artifact, while anchor=missing or anchor=unavailable means the quote is context only - verify it against the artifact before acting on it.",
+      )
       .argument("[artifactPaths...]", "Absolute artifact paths")
       .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
       .option("--status <status>", "Thread status: all, open, or resolved"),
@@ -1213,7 +1215,9 @@ function registerCommentsCommands(program: Command): void {
   withRunner(
     comments
       .command("set-status")
-      .description("Set artifact comment threads to open or resolved")
+      .description(
+        "Set artifact comment threads to open or resolved after addressing or reopening feedback. Prefer telling the user which threads look addressed and letting them decide, unless they have already asked you to resolve threads yourself.",
+      )
       .requiredOption("--artifact <path>", "Absolute artifact path")
       .requiredOption("--status <status>", "Thread status: open or resolved")
       .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
@@ -1376,7 +1380,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--fast",
-        "Request fast mode for supported models. Only available for gui surface.",
+        "Request fast mode for supported models. Only available for gui surface. May consume additional credits - set it only when the user asks for it or the agent selection guide recommends it.",
       )
       .option("--profile <ambient|id>", profileHelp)
       .option(
@@ -1544,7 +1548,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--fast",
-        "Enable fast mode for supported models. Omitting it disables fast mode.",
+        "Enable fast mode for supported models. Omitting it disables fast mode. May consume additional credits - turn it on only when the user asks for it or the agent selection guide recommends it.",
       )
       .option(
         "--permission-mode <mode>",
@@ -1582,7 +1586,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--expect-reply",
-        "Open or reuse a reply thread; the host returns a responseId",
+        "Open or reuse a reply thread; the host returns a responseId. Without it the peer processes your message and never reports back.",
       )
       .option(
         "--response-id <id>",
