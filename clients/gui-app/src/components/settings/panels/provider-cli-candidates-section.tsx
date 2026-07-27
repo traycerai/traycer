@@ -15,6 +15,12 @@ import { useProvidersSetSelection } from "@/hooks/providers/use-providers-set-se
 import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-custom-path-mutation";
 import { useProvidersRemoveCustomPath } from "@/hooks/providers/use-providers-remove-custom-path-mutation";
 import { useProvidersDetectVersion } from "@/hooks/providers/use-providers-detect-version-query";
+import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
+import {
+  providerPackPreparingShortLabel,
+  providerPackRetryable,
+  type ProviderPackPreparing,
+} from "@/components/providers/provider-pack-readiness";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
@@ -175,6 +181,7 @@ export function ProviderCliCandidatesSection({
   }, []);
 
   const setSelection = useProvidersSetSelection();
+  const ensurePack = useProvidersEnsurePack();
   const addCustom = useProvidersAddCustomPath();
   const removeCustom = useProvidersRemoveCustomPath();
   // Debounce so we don't spawn a `<bin> --version` probe on every keystroke.
@@ -247,6 +254,8 @@ export function ProviderCliCandidatesSection({
               selected={isSelected(cliConfig.selected, candidate)}
               busy={setSelection.isPending || removeCustom.isPending}
               onSelect={onSelect}
+              onRetryPack={() => ensurePack.mutate({ providerId })}
+              retryingPack={ensurePack.isPending}
               onRemove={(path) => removeCustom.mutate({ providerId, path })}
             />
           ))}
@@ -321,6 +330,8 @@ function CandidateRow({
   selected,
   busy,
   onSelect,
+  onRetryPack,
+  retryingPack,
   onRemove,
 }: {
   readonly candidate: ProviderCliCandidate;
@@ -331,6 +342,8 @@ function CandidateRow({
   readonly selected: boolean;
   readonly busy: boolean;
   readonly onSelect: (selection: ProviderSelection) => void;
+  readonly onRetryPack: () => void;
+  readonly retryingPack: boolean;
   readonly onRemove: (path: string) => void;
 }): ReactNode {
   const isBundled = candidate.kind === "bundled";
@@ -388,6 +401,8 @@ function CandidateRow({
         <CandidateStatus
           candidate={candidate}
           managedInstallState={isBundled ? managedInstallState : null}
+          onRetry={onRetryPack}
+          retrying={retryingPack}
         />
       </span>
       <span className="flex items-center justify-center py-2.5">
@@ -435,9 +450,13 @@ function bundledPathLabel(
 function CandidateStatus({
   candidate,
   managedInstallState,
+  onRetry,
+  retrying,
 }: {
   readonly candidate: ProviderCliCandidate;
   readonly managedInstallState: ProviderManagedInstallState | null;
+  readonly onRetry: () => void;
+  readonly retrying: boolean;
 }): ReactNode {
   if (candidate.versionPending) {
     return (
@@ -451,9 +470,66 @@ function CandidateStatus({
     return (
       <>
         <MutedAgentSpinner />
+        {/*
+          `percent` is NULLABLE and null is a real state, not defensive typing:
+          a queued pack has seen no bytes, and a pack whose download a live
+          SIBLING host owns is genuinely in progress with no observable byte
+          count on this side. Interpolating it raw rendered the literal
+          `Installing… %`. Routed through the shared label helper rather than
+          re-guarded here, so this surface cannot drift from the picker and the
+          composer - all three now answer "unknown progress" the same way.
+        */}
         <span className="text-ui-xs">
-          Installing… {managedInstallState.percent}%
+          {providerPackPreparingShortLabel({
+            kind: "downloading",
+            percent: managedInstallState.percent,
+            retryAtMs: null,
+            reason: null,
+            // Settings shows the pack's OWN lifecycle, not whether the provider
+            // can run - the fallback story is the row beside it, and the
+            // path-unblock notice above the table. So this label is always the
+            // pack-centric one.
+            fallbackRunnable: false,
+          })}
         </span>
+      </>
+    );
+  }
+  if (managedInstallState?.status === "error") {
+    // The arm that did not exist. A failed managed pack rendered a bare red
+    // "Not installed" with no reason and no way forward - while the recovery
+    // copy everywhere else (the picker tooltip, the host's own RPC error)
+    // points the user AT this screen. Whatever sent them here had to be
+    // readable once they arrived.
+    const preparing: ProviderPackPreparing = {
+      kind: "error",
+      percent: null,
+      retryAtMs: managedInstallState.retryAtMs,
+      reason: managedInstallState.reason,
+      fallbackRunnable: false,
+    };
+    return (
+      <>
+        <span className="truncate text-ui-xs text-destructive">
+          {providerPackPreparingShortLabel(preparing)}
+        </span>
+        {/*
+          The retry respects the SAME allow-list the picker rail does. A
+          `unrepairable` cell is terminal host-side and a `trust-unavailable`
+          host has no install machinery at all, so a button here would reach
+          `providers.ensurePack` and be a guaranteed no-op - offered-then-failed
+          on the one screen a stuck user was told to open.
+        */}
+        {providerPackRetryable(preparing) ? (
+          <button
+            type="button"
+            disabled={retrying}
+            onClick={onRetry}
+            className="shrink-0 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline disabled:opacity-50"
+          >
+            Retry
+          </button>
+        ) : null}
       </>
     );
   }

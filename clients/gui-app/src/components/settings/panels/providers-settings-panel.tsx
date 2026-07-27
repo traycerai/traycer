@@ -51,9 +51,9 @@ import {
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
 import {
-  providerPackBlocksExecution,
-  providerPackPreparingForProvider,
-} from "@/components/providers/provider-pack-readiness";
+  providerCanStartProfileOauth,
+  providerSignInUnavailableHint,
+} from "@/components/providers/provider-signin-availability";
 import { ProviderApiKeySection } from "./provider-api-key-section";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
@@ -591,6 +591,10 @@ function ProviderDetail({
         hostId={hostId}
         isSelectedHostLocal={isSelectedHostLocal}
         canAddProfile={canAddProfile}
+        signInUnavailableHint={providerSignInUnavailableHint(
+          state,
+          isSelectedHostLocal,
+        )}
         startInReauth={shouldStartInReauth}
         failedAttempt={failedProfileAttempt}
         onAddProfile={() => setAddProfileOpen(true)}
@@ -625,34 +629,5 @@ function ProviderDetail({
         />
       ) : null}
     </div>
-  );
-}
-
-/**
- * The login gate. A provider login SPAWNS that provider's CLI, so it needs the
- * managed pack exactly as much as a chat turn does - and unlike a chat turn it
- * has no composer in front of it to explain the wait.
- *
- * Folded into the existing capability gate rather than added as a parallel
- * check, so there is one answer to "can this provider start an OAuth login"
- * and the Sign in affordance cannot disagree with it.
- */
-function providerCanStartProfileOauth(
-  state: ProviderCliState,
-  isSelectedHostLocal: boolean,
-): boolean {
-  const oauthArgs = state.loginCapability?.oauthArgs ?? null;
-  const packPreparing = providerPackPreparingForProvider(state);
-  // Blocking, not merely preparing: a login spawns whatever the resolver
-  // spawns, so a managed pack downloading behind a runnable bundled/PATH/custom
-  // binary takes nothing away. Withholding Sign in there would strand a user
-  // whose CLI works, on a screen that shows them it works.
-  const packBlocks =
-    packPreparing !== null && providerPackBlocksExecution(packPreparing);
-  return (
-    isSelectedHostLocal &&
-    !packBlocks &&
-    oauthArgs !== null &&
-    oauthArgs.length > 0
   );
 }
