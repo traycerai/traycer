@@ -157,14 +157,19 @@ const AMBER_CONTAINER_CLASS =
 
 function indicatorFor(state: EpicSyncPillState): PillIndicator {
   switch (state) {
+    // Icon-only: the steady state is the one users see ~always, so it earns no
+    // permanent copy in the status row - the pulse plus its tooltip say it.
+    // Every OTHER state keeps its label: they are transient or alerting, and
+    // the amber/red ones are precisely the ones that must not be reduced to a
+    // glyph the user has to hover to read.
     case "synced":
       return {
         containerClassName: QUIET_CONTAINER_CLASS,
         dotClassName: "",
-        label: "All changes synced",
+        label: null,
         showAgentSpinner: false,
         pulse: "active",
-        tooltip: null,
+        tooltip: "All changes synced",
         ariaLabel: "All changes synced",
       };
     // Same quiet treatment as `synced` rather than the amber alert styling:

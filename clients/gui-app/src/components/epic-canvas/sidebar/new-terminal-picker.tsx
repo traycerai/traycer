@@ -30,6 +30,7 @@ import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-li
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 interface NewTerminalPickerProps {
@@ -67,9 +68,18 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     epicId: props.epicId,
     enabled: isOpen,
   });
+  // Host-proven-missing rows are hidden here (a deleted worktree can't host a
+  // terminal); the explicit pick is exempt so a worktree deleted while this
+  // popover is open degrades to its disabled badge instead of vanishing.
   const rows = useMemo(
-    () => bindingsQuery.data?.rows ?? [],
-    [bindingsQuery.data?.rows],
+    () =>
+      withoutResolvedMissingRows(
+        bindingsQuery.data?.rows ?? [],
+        explicitRow === null
+          ? null
+          : { hostId: explicitRow.hostId, runningDir: explicitRow.runningDir },
+      ),
+    [bindingsQuery.data?.rows, explicitRow],
   );
   // Explicit pick wins while it stays selectable; otherwise auto-select the
   // default (primary, skipping disabled rows, falling back to the first

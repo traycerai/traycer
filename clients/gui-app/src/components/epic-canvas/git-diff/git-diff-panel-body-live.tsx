@@ -39,6 +39,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
 import { isGitSelectable } from "@/lib/worktree/worktree-git-selectable";
 import { isWorkspaceResolvePending } from "@/lib/worktree/worktree-row-resolve-pending";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { getBasename } from "@/lib/path/cross-platform-path";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
@@ -137,15 +138,26 @@ export function GitDiffPanelBodyLive(
     epicId: props.epicId,
     enabled: true,
   });
-  const rows = useMemo(
-    () => bindingsQuery.data?.rows ?? [],
-    [bindingsQuery.data?.rows],
-  );
-  const gitRows = useMemo(() => rows.filter(isGitSelectable), [rows]);
-
   const selectedRepo = useGitPanelStore(
     (s) => selectGitPanelEpicState(props.epicId)(s).selectedRepo,
   );
+  // Host-proven-missing rows are hidden (no git surface can use them); the
+  // current selection is exempt so a just-deleted selected root routes through
+  // the existing unavailable-roots machinery instead of vanishing.
+  const rows = useMemo(
+    () =>
+      withoutResolvedMissingRows(
+        bindingsQuery.data?.rows ?? [],
+        selectedRepo === null
+          ? null
+          : {
+              hostId: selectedRepo.hostId,
+              runningDir: selectedRepo.rootRunningDir,
+            },
+      ),
+    [bindingsQuery.data?.rows, selectedRepo],
+  );
+  const gitRows = useMemo(() => rows.filter(isGitSelectable), [rows]);
   const setSelectedRepo = useGitPanelStore((s) => s.setSelectedRepo);
   const ignoreWhitespace = useSettingsStore(
     (s) => s.diffViewerPreferences.ignoreWhitespace,
