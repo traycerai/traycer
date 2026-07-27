@@ -13,6 +13,37 @@ function renderPreview(content: JsonContent) {
 }
 
 describe("QueuedMessageContentPreview", () => {
+  it("preserves a non-one ordered-list start", () => {
+    const content: JsonContent = {
+      type: "doc",
+      content: [
+        {
+          type: "orderedList",
+          attrs: { start: 2 },
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Second" }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    renderPreview(content);
+
+    const orderedList = screen.getByRole("list");
+    if (!(orderedList instanceof HTMLOListElement)) {
+      throw new Error("expected an ordered list");
+    }
+    expect(orderedList.start).toBe(2);
+  });
+
   it("renders mention chips inline instead of summary badges", () => {
     const content: JsonContent = {
       type: "doc",
