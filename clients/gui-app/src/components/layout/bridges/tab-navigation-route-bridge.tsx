@@ -85,8 +85,29 @@ export function TabNavigationRouteBridge(): null {
       // bookkeeping replacement, so T3 queues the restored entry as startup
       // work with `preserveStartupFocus = true` instead of an external commit.
       skipRestoredRouteObservationRef.current = true;
-      router.history.replace(restoredRoute);
-      skipRestoredRouteObservationRef.current = false;
+      try {
+        // `ignoreBlocker` is what keeps the skip window honest, not a
+        // convenience: `tryNavigation` is `async`, and on the blocker path it
+        // awaits before running the task that notifies subscribers. `replace`
+        // would then return - resetting the flag below - and the REPLACE
+        // notification would land a microtask later with the flag already
+        // down, so this bookkeeping entry would be observed as an external
+        // commit and lose `preserveStartupFocus`. Skipping blockers takes the
+        // synchronous path, and is right on its own terms too: re-establishing
+        // the route this window already showed at shutdown is not a user
+        // navigation away from anything, so no guard should prompt on it.
+        router.history.replace(restoredRoute, undefined, {
+          ignoreBlocker: true,
+        });
+      } finally {
+        // The synchronous path runs the persistent-history write and the
+        // subscriber notification inside this call, both of which can throw
+        // (a quota-exceeded persist, an observer fault). Resetting anywhere
+        // but a `finally` would latch the flag, and `observe` returns early on
+        // it - route observation and persistence would stay silently dead for
+        // the rest of the session, long after the throw was handled upstream.
+        skipRestoredRouteObservationRef.current = false;
+      }
     }
     // Subscribe before synchronizing so no committed entry can fall into the
     // setup window. This bridge remains mounted outside HostReadyGate.

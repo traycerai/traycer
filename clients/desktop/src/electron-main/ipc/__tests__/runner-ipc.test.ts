@@ -3689,6 +3689,51 @@ describe("RunnerIpcBridge", () => {
     ).toHaveLength(1);
     bridge.dispose();
   });
+
+  it("never forwards a teardown clear to a live window, but still forwards updates", async () => {
+    // `clear` wipes the durable snapshot on window teardown. A window that
+    // dropped out of the registry snapshot while its BrowserWindow is still
+    // alive (a reload / re-registration) would otherwise be handed the empty
+    // snapshot and lose a live draft. The trailing `emitChange` is the novelty
+    // guard: without it this would pass just as well against a bridge that
+    // never subscribed to `change` at all.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const perWindowState = new DeferredPerWindowState();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    windowA.sentMessages.length = 0;
+
+    perWindowState.clear("window-a");
+    expect(
+      windowA.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.perWindowStateChange,
+      ),
+    ).toEqual([]);
+
+    perWindowState.emitChange("window-a");
+    expect(
+      windowA.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.perWindowStateChange,
+      ),
+    ).toHaveLength(1);
+    bridge.dispose();
+  });
 });
 
 /**
@@ -3738,16 +3783,30 @@ class DeferredPerWindowState implements IpcPerWindowState {
   }
 
   emitChange(windowId: string): void {
+    this.announce(windowId, "update");
+  }
+
+  /**
+   * Mirrors the real store, which announces a teardown wipe as
+   * `origin: "clear"` - the one origin the IPC forwarder drops before it can
+   * reach a renderer. Delegating to `emitChange` would make a clear look like
+   * an ordinary update here, so a future test asserting "a clear is never
+   * forwarded" would pass against a double that cannot express a clear.
+   */
+  clear(windowId: string): void {
+    this.announce(windowId, "clear");
+  }
+
+  private announce(
+    windowId: string,
+    origin: PerWindowStateChange["origin"],
+  ): void {
     const change: PerWindowStateChange = {
       windowId,
       snapshot: createEmptyPerWindowSnapshot(),
-      origin: "update",
+      origin,
     };
     this.events.emit("change", change);
-  }
-
-  clear(windowId: string): void {
-    this.emitChange(windowId);
   }
 
   on(event: "change", listener: (change: PerWindowStateChange) => void): void {
