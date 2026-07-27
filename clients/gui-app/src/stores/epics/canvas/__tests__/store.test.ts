@@ -457,6 +457,33 @@ describe("epic canvas store header tabs", () => {
     expect(state.tabsById[tabId]).toBe(beforeCloseTab);
   });
 
+  it("openEpicTabWithId reveals a preserved-but-closed record instead of no-op", () => {
+    // The id handed to this action is routinely a PRESERVED one (callers resolve
+    // it via `resolveTabIdForEpic`, which reads `mostRecentTabIdByEpicId` -
+    // a pointer `closeTab` sets). "Already have the record" must therefore not
+    // be read as "already open": the caller's postcondition is an open tab, and
+    // strip reconciliation drops any layout ref `openTabOrder` does not back.
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-preserved", "Preserved");
+    store.openTileInTab(tabId, SPEC_A);
+    const beforeCloseCanvas = requireCanvas(tabId);
+    store.closeTab(tabId);
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+
+    const reopenedTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(tabId, "epic-preserved", "Ignored");
+
+    const state = useEpicCanvasStore.getState();
+    expect(reopenedTabId).toBe(tabId);
+    expect(state.openTabOrder).toEqual([tabId]);
+    expect(state.activeTabId).toBe(tabId);
+    // Revealing must not resurrect the tab as a blank one: the preserved canvas
+    // and the stored name both survive, so the caller's `name` is ignored.
+    expect(state.canvasByTabId[tabId]).toBe(beforeCloseCanvas);
+    expect(state.tabsById[tabId]?.name).toBe("Preserved");
+  });
+
   it("keeps hidden tabs when desktop projection refreshes the visible strip", () => {
     const store = useEpicCanvasStore.getState();
     const tabId = store.openEpicTab("epic-hidden", "Hidden Epic");
