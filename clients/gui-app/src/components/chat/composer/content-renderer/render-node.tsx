@@ -8,6 +8,7 @@ import {
   stringValue,
   mentionAttachmentFromAttrs,
   mentionPlainTextFromAttrs,
+  numberValue,
   slashCommandPlainTextFromAttrs,
 } from "@/lib/composer/tiptap-json-content";
 import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
@@ -179,6 +180,7 @@ const RENDERERS: Partial<Record<string, NodeRenderer>> = {
         />
       ),
       nodeKey: key,
+      start: numberValue(node.attrs?.start) ?? 1,
     }),
   listItem: (node, key, context) =>
     context.profile.renderListItem({
