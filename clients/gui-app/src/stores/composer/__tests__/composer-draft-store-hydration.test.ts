@@ -89,10 +89,12 @@ describe("composer draft store hydration", () => {
 describe("composer draft store clearDraft", () => {
   it("resets the entry in place with empty content and a bumped resetEpoch (does not delete)", () => {
     const taskId = "task-clear-1";
-    useComposerDraftStore.getState().setSnapshot(taskId, MENTION_DRAFT.content, {
-      from: 1,
-      to: 1,
-    });
+    useComposerDraftStore
+      .getState()
+      .setSnapshot(taskId, MENTION_DRAFT.content, {
+        from: 1,
+        to: 1,
+      });
     const before = useComposerDraftStore.getState().drafts[taskId];
     expect(before).toBeDefined();
     if (before === undefined) return;
