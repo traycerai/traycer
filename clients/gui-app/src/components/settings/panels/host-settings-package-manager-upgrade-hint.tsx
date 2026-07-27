@@ -14,7 +14,7 @@ export function PackageManagerUpgradeHint(
   return (
     <output
       data-testid="settings-host-package-manager-upgrade-hint"
-      className="flex flex-col gap-2 border-b border-amber-500/30 bg-amber-500/10 px-5 py-3 text-ui-sm text-amber-950 dark:text-amber-100"
+      className="flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-5 py-3 text-ui-sm text-amber-950 dark:text-amber-100"
     >
       <div>
         Your {formatPackageManagerSource(hint.source)} install of{" "}

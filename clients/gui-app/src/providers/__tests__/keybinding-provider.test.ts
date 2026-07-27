@@ -1,4 +1,5 @@
 import "../../../__tests__/test-browser-apis";
+import { screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   dispatchAction,
@@ -24,6 +25,10 @@ import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
+import type {
+  NavigateNestedFocus,
+  PrepareNestedFocusTarget,
+} from "@/lib/epic-nested-focus-navigation";
 
 interface NavigateCall {
   readonly kind: "home" | "settings" | "epic" | "section" | "back" | "forward";
@@ -292,6 +297,62 @@ describe("dispatchAction", () => {
 
     expect(dispatchAction("group.focus.right", router)).toBe(true);
     expect(document.activeElement).toBe(selectedEditor);
+  });
+
+  it("requests primary-editor restoration for directional group focus", () => {
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-pane-focus", "Pane Focus");
+    useEpicCanvasStore.getState().openTileInTab(tabId, specRef("spec-a"));
+    const sourcePaneId =
+      useEpicCanvasStore.getState().canvasByTabId[tabId]?.activePaneId ?? null;
+    if (sourcePaneId === null) throw new Error("expected source pane");
+
+    useEpicCanvasStore
+      .getState()
+      .splitPaneWithNode(tabId, sourcePaneId, "right", specRef("spec-b"));
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    const targetPaneId =
+      collectPanes(canvas?.root ?? null).find(
+        (pane) => pane.id !== sourcePaneId,
+      )?.id ?? null;
+    if (targetPaneId === null) throw new Error("expected target pane");
+    useEpicCanvasStore.getState().setActiveTilePane(tabId, sourcePaneId);
+
+    appendFocusPane(sourcePaneId, [0, 0, 500, 600]);
+    const targetPane = appendPane(targetPaneId, [500, 0, 500, 600]);
+    const targetLayer = appendTabLayer(targetPane, "selected-tab", true);
+    const composer = document.createElement("div");
+    composer.setAttribute("data-chat-composer", "");
+    targetLayer.append(composer);
+    const targetEditor = appendComposerEditor(composer);
+    targetEditor.setAttribute("role", "textbox");
+    targetEditor.setAttribute("aria-label", "Destination chat composer");
+
+    const { router: baseRouter } = buildRouter(
+      `/epics/epic-pane-focus/${tabId}`,
+    );
+    const navigateNestedFocusToPrimaryEditor: NavigateNestedFocus = vi.fn(
+      (
+        _epicId: string,
+        _nestedTabId: string,
+        prepare: PrepareNestedFocusTarget,
+      ) => prepare(),
+    );
+    const router: KeybindingRouter = {
+      ...baseRouter,
+      navigateNestedFocusToPrimaryEditor,
+    };
+
+    expect(dispatchAction("group.focus.right", router)).toBe(true);
+    expect(navigateNestedFocusToPrimaryEditor).toHaveBeenCalledWith(
+      "epic-pane-focus",
+      tabId,
+      expect.any(Function),
+    );
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Destination chat composer" }),
+    );
   });
 
   it("does not close hidden epic canvas tabs while a non-detail route is active", () => {

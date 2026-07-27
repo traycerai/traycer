@@ -226,7 +226,12 @@ export interface SupportSubmitReportRequest {
 }
 
 export interface SupportSubmitReportResult {
-  readonly reportId: string;
+  // `null` when the diagnostics upload did not reach Sentry (no DSN baked in,
+  // or the flush timed out). There is then no report for triage to look up, so
+  // the GitHub issue must not advertise one. An id exists if and only if the
+  // upload was confirmed - the invariant is structural, not a parallel flag
+  // that can drift out of sync with the delivery outcome.
+  readonly reportId: string | null;
 }
 
 export interface SupportLogTailResult {

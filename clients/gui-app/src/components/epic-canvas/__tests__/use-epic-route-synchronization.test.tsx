@@ -1,5 +1,5 @@
 import "../../../../__tests__/test-browser-apis";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 import {
@@ -15,6 +15,10 @@ import {
   DEFAULT_LEFT_PANEL_GROUPS,
   useLeftPanelStore,
 } from "@/stores/epics/left-panel-store";
+import {
+  requestNestedRoutePrimaryEditorFocus,
+  resetNestedRouteDomFocusForTests,
+} from "@/lib/nested-route-dom-focus";
 
 interface CanvasStoreSlice {
   readonly renameTab: Mock;
@@ -121,6 +125,7 @@ const THREAD_FOCUS_INTENT: EpicRouteFocusIntent = {
 };
 
 function resetStores(): void {
+  resetNestedRouteDomFocusForTests();
   window.localStorage.clear();
   useLeftPanelStore.setState({
     activePanelIdByTabId: {},
@@ -795,6 +800,69 @@ describe("useEpicRouteSynchronization", () => {
 
       expect(document.activeElement).toBe(editorEl);
     } finally {
+      paneEl.remove();
+    }
+  });
+
+  it("restores a requested primary editor after applying nested pane focus", async () => {
+    testState.nestedFocusEnabled = true;
+    setSinglePaneCanvas(
+      "pane-target",
+      [specTile("chat-target", "tile-target", "Target chat")],
+      "tile-target",
+    );
+
+    const sourceEditor = document.createElement("textarea");
+    document.body.appendChild(sourceEditor);
+    sourceEditor.focus();
+
+    const paneEl = document.createElement("div");
+    paneEl.setAttribute("data-group-id", "pane-target");
+    paneEl.setAttribute("data-active", "true");
+    paneEl.tabIndex = -1;
+    const tileEl = document.createElement("div");
+    tileEl.setAttribute("data-tab-instance-id", "tile-target");
+    tileEl.setAttribute("data-selected", "true");
+    tileEl.tabIndex = -1;
+    const composer = document.createElement("div");
+    composer.setAttribute("data-chat-composer", "");
+    const targetEditor = document.createElement("div");
+    targetEditor.setAttribute("data-composer-editor", "");
+    targetEditor.setAttribute("role", "textbox");
+    targetEditor.setAttribute("aria-label", "Target chat composer");
+    targetEditor.tabIndex = 0;
+    composer.appendChild(targetEditor);
+    tileEl.appendChild(composer);
+    paneEl.appendChild(tileEl);
+    document.body.appendChild(paneEl);
+
+    requestNestedRoutePrimaryEditorFocus(EPIC_ID, TAB_ID, {
+      paneId: "pane-target",
+      tileInstanceId: "tile-target",
+    });
+
+    try {
+      renderHook(
+        (intent: EpicRouteFocusIntent) => useEpicRouteSynchronization(intent),
+        {
+          initialProps: {
+            epicId: EPIC_ID,
+            tabId: TAB_ID,
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            focusPaneId: "pane-target",
+            focusTileInstanceId: "tile-target",
+          },
+        },
+      );
+
+      await flushFocusRestore();
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Target chat composer" }),
+      );
+    } finally {
+      sourceEditor.remove();
       paneEl.remove();
     }
   });

@@ -1637,13 +1637,30 @@ export function createChatSessionStore(
         if (disposed) return;
         closeStreamClient();
         clearBufferedDeltas();
+        const prior = get();
         set({
           connectionStatus: "connecting",
           steerProtocolSupported: false,
           fatalClose: null,
           snapshotLoaded: false,
         });
-        streamClient = createStreamClient();
+        try {
+          streamClient = createStreamClient();
+        } catch (cause) {
+          // The replacement factory can throw (durable-transport wiring throws
+          // on a failed subscription). Without this restore the session would
+          // strand in "connecting" with NO stream client - nothing ever moves
+          // it again, and recovery passes (the wake retry, the tile's retry
+          // affordance) all key off a terminal status. Restore the pre-attempt
+          // terminal state so the next pulse or click can try again, then
+          // rethrow for the caller to report.
+          set({
+            connectionStatus: "closed",
+            fatalClose: prior.fatalClose,
+            snapshotLoaded: prior.snapshotLoaded,
+          });
+          throw cause;
+        }
       },
       refreshMissingWorktreePaths: (update) => {
         if (disposed) return;

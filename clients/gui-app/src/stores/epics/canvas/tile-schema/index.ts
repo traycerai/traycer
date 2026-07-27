@@ -19,6 +19,8 @@ import {
 } from "./artifact-tile";
 import { gitDiffTileSchema } from "./git-diff-tile";
 import { snapshotDiffTileSchema } from "./snapshot-diff-tile";
+import { prDetailTileSchema } from "./pr-detail-tile";
+import { prDiffTileSchema } from "./pr-diff-tile";
 import { blankTileSchema } from "./blank-tile";
 
 export interface TileSchema<R extends EpicCanvasTileRef> {
@@ -42,6 +44,8 @@ const TILE_SCHEMAS: TileSchemaRegistry = {
   "workspace-file": workspaceFileTileSchema,
   "git-diff": gitDiffTileSchema,
   "snapshot-diff": snapshotDiffTileSchema,
+  "pr-detail": prDetailTileSchema,
+  "pr-diff": prDiffTileSchema,
   blank: blankTileSchema,
 };
 
