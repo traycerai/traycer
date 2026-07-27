@@ -15,16 +15,30 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 
+const ACME = { owner: "acme", repo: "app" } as const;
+
 const REMOVED: RemovedWorktreeRefs = {
   worktreePaths: new Set(["/wt/gone"]),
-  branches: new Set(["traycer/gone-branch"]),
+  branches: [{ repoIdentifier: ACME, branch: "traycer/gone-branch" }],
 };
 
 function existingBranchIntent(branchName: string): WorktreeFolderIntent {
   return {
     kind: "worktree",
     workspacePath: "/repo",
-    repoIdentifier: { owner: "acme", repo: "app" },
+    repoIdentifier: ACME,
+    isPrimary: true,
+    branch: { type: "existing", name: branchName },
+    scripts: null,
+  };
+}
+
+/** Same branch NAME, a different repository - must survive the purge. */
+function otherRepoBranchIntent(branchName: string): WorktreeFolderIntent {
+  return {
+    kind: "worktree",
+    workspacePath: "/other-repo",
+    repoIdentifier: { owner: "acme", repo: "other" },
     isPrimary: true,
     branch: { type: "existing", name: branchName },
     scripts: null,
@@ -67,6 +81,26 @@ describe("worktreeFolderIntentReferencesRemoved", () => {
     ).toBe(true);
     expect(
       worktreeFolderIntentReferencesRemoved(importIntent("/wt/gone"), REMOVED),
+    ).toBe(true);
+  });
+
+  it("qualifies branches by repository so a same-named branch elsewhere survives", () => {
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        otherRepoBranchIntent("traycer/gone-branch"),
+        REMOVED,
+      ),
+    ).toBe(false);
+    // An unidentifiable repo on either side can't rule the match out, so the
+    // name comparison stands alone (the conservative direction for a purge).
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        {
+          ...otherRepoBranchIntent("traycer/gone-branch"),
+          repoIdentifier: null,
+        },
+        REMOVED,
+      ),
     ).toBe(true);
   });
 

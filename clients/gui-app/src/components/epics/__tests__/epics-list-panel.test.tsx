@@ -222,6 +222,7 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
     isPending: false,
     mutate: () => {},
   }),
+  useSweepingWorktreePaths: () => new Set<string>(),
 }));
 
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({

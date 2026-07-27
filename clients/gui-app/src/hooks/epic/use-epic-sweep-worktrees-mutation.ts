@@ -1,5 +1,7 @@
+import { useMemo } from "react";
 import {
   useMutation,
+  useMutationState,
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
@@ -12,7 +14,10 @@ import { runWorktreeCleanup } from "@/lib/epics/run-worktree-cleanup";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
-import type { RemovedWorktreeRefs } from "@/lib/worktree/removed-worktree-refs";
+import type {
+  RemovedBranchRepo,
+  RemovedWorktreeRefs,
+} from "@/lib/worktree/removed-worktree-refs";
 
 /**
  * One approved sweep target. `branch` rides along (from the candidate row) so
@@ -22,6 +27,12 @@ import type { RemovedWorktreeRefs } from "@/lib/worktree/removed-worktree-refs";
 export interface SweepTargetWorktree {
   readonly worktreePath: string;
   readonly branch: string | null;
+  /**
+   * Repository the branch belongs to, so the intent purge can qualify the
+   * branch name and leave another repo's same-named branch alone. `null` when
+   * the host could not identify the repo (no parseable origin).
+   */
+  readonly repoIdentifier: RemovedBranchRepo | null;
 }
 
 export interface SweepWorktreesVariables {
@@ -102,16 +113,59 @@ function purgeIntentsForRemovedWorktrees(
   const removedSet = new Set(removedPaths);
   const removed: RemovedWorktreeRefs = {
     worktreePaths: removedSet,
-    branches: new Set(
-      targets.flatMap((target) =>
-        target.branch !== null && removedSet.has(target.worktreePath)
-          ? [target.branch]
-          : [],
-      ),
+    branches: targets.flatMap((target) =>
+      target.branch !== null && removedSet.has(target.worktreePath)
+        ? [{ repoIdentifier: target.repoIdentifier, branch: target.branch }]
+        : [],
     ),
   };
   useWorktreeIntentStagingStore.getState().purgeRemovedWorktreeIntents(removed);
   useWorktreeIntentMemoryStore.getState().purgeRemovedWorktreeIntents(removed);
+}
+
+/**
+ * Worktree paths with an in-flight sweep, read from the mutation cache by the
+ * shared key rather than from one hook instance. The Sweep dialog is mounted
+ * independently per surface (a History row and the task-status strip each
+ * render their own), so a component-local `isPending` would only ever see the
+ * run IT started - reopening from the other surface would happily re-stream
+ * the same paths. Mirrors `usePendingSetPinnedEpicIds`.
+ */
+export function useSweepingWorktreePaths(): ReadonlySet<string> {
+  const pendingVariables = useMutationState({
+    filters: {
+      mutationKey: epicMutationKeys.sweepWorktrees(),
+      status: "pending",
+    },
+    select: (mutation) => mutation.state.variables,
+  });
+  return useMemo(
+    () =>
+      new Set(
+        pendingVariables.flatMap((variables) =>
+          isSweepWorktreesVariables(variables)
+            ? variables.worktrees.map((target) => target.worktreePath)
+            : [],
+        ),
+      ),
+    [pendingVariables],
+  );
+}
+
+function isSweepWorktreesVariables(
+  value: unknown,
+): value is SweepWorktreesVariables {
+  if (value === null || typeof value !== "object") return false;
+  if (!("worktrees" in value)) return false;
+  const { worktrees } = value;
+  if (!Array.isArray(worktrees)) return false;
+  return worktrees.every(isSweepTargetWorktree);
+}
+
+function isSweepTargetWorktree(value: unknown): value is SweepTargetWorktree {
+  if (value === null || typeof value !== "object") return false;
+  if (!("worktreePath" in value)) return false;
+  return typeof value.worktreePath === "string";
 }
 
 function emitSweepSummaryToast(removed: number, failed: number): void {

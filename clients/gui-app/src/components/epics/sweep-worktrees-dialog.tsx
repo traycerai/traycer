@@ -21,12 +21,16 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
 import {
   useEpicSweepWorktreeCandidates,
   type EpicSweepWorktreeRow,
 } from "@/hooks/epic/use-epic-sweep-worktree-candidates-query";
-import { useEpicSweepWorktrees } from "@/hooks/epic/use-epic-sweep-worktrees-mutation";
+import {
+  useEpicSweepWorktrees,
+  useSweepingWorktreePaths,
+} from "@/hooks/epic/use-epic-sweep-worktrees-mutation";
 import { cn } from "@/lib/utils";
 
 interface SweepWorktreesDialogProps {
@@ -84,11 +88,20 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
     setPreviousEpicId(epicId);
     setCheckOverrides(new Map());
   }
+  // Read from the mutation cache, not this instance: the dialog is mounted
+  // per surface (History row and task-status strip each render their own), so
+  // a component-local `isPending` would miss a run started from the other one
+  // and happily re-stream the same paths.
+  const sweepingPaths = useSweepingWorktreePaths();
+  const isRowSweeping = (row: EpicSweepWorktreeRow): boolean =>
+    sweepingPaths.has(row.entry.worktreePath);
   const isRowChecked = (row: EpicSweepWorktreeRow): boolean => {
-    if (row.disabled) return false;
+    if (row.disabled || isRowSweeping(row)) return false;
     return checkOverrides.get(row.entry.worktreePath) ?? row.defaultChecked;
   };
   const checkedRows = rows.filter(isRowChecked);
+  // Only THIS dialog's own run disables the whole form; a sweep of some other
+  // Task's worktrees just removes its own paths from selection above.
   const isSweeping = sweepMutation.isPending;
 
   const handleConfirm = () => {
@@ -101,6 +114,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
       worktrees: checkedRows.map((row) => ({
         worktreePath: row.entry.worktreePath,
         branch: row.entry.branch,
+        repoIdentifier: row.entry.repoIdentifier,
       })),
     });
     onOpenChange(false);
@@ -142,6 +156,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
               isError={isError}
               rows={rows}
               isRowChecked={isRowChecked}
+              isRowSweeping={isRowSweeping}
               interactionDisabled={isSweeping}
               onToggle={(path, checked) => {
                 setCheckOverrides((prev) => {
@@ -194,6 +209,7 @@ function SweepRowList(props: {
   readonly isError: boolean;
   readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
   readonly isRowChecked: (row: EpicSweepWorktreeRow) => boolean;
+  readonly isRowSweeping: (row: EpicSweepWorktreeRow) => boolean;
   readonly interactionDisabled: boolean;
   readonly onToggle: (worktreePath: string, checked: boolean) => void;
 }) {
@@ -228,6 +244,7 @@ function SweepRowList(props: {
           key={row.entry.worktreePath}
           row={row}
           checked={props.isRowChecked(row)}
+          isSweeping={props.isRowSweeping(row)}
           interactionDisabled={props.interactionDisabled}
           onToggle={props.onToggle}
         />
@@ -239,55 +256,74 @@ function SweepRowList(props: {
 function SweepWorktreeRowItem(props: {
   readonly row: EpicSweepWorktreeRow;
   readonly checked: boolean;
+  /** A sweep of this exact path is already streaming (from any surface). */
+  readonly isSweeping: boolean;
   readonly interactionDisabled: boolean;
   readonly onToggle: (worktreePath: string, checked: boolean) => void;
 }) {
-  const { row, checked, interactionDisabled, onToggle } = props;
+  const { row, checked, isSweeping, interactionDisabled, onToggle } = props;
   const entry = row.entry;
   const branch = entry.branch ?? "detached HEAD";
-  const disabled = row.disabled || interactionDisabled;
+  const disabled = row.disabled || interactionDisabled || isSweeping;
   const checkboxId = `sweep-worktree-${entry.worktreePath}`;
+  // The PR pills render external links, so they must NOT sit inside the
+  // <label>: clicking one would toggle the checkbox (and nesting interactive
+  // content in a label is invalid). Only the text half is label-wrapped.
   return (
-    <li className="min-w-0">
-      <label
-        htmlFor={checkboxId}
-        className="flex min-w-0 cursor-pointer items-start gap-3 rounded-md px-2.5 py-2 transition-colors hover:bg-accent/40 has-disabled:cursor-not-allowed has-disabled:opacity-60"
-      >
-        <Checkbox
-          id={checkboxId}
-          checked={checked}
-          disabled={disabled}
-          onCheckedChange={(value) =>
-            onToggle(entry.worktreePath, value === true)
-          }
-          className="mt-0.5"
-          aria-label={`Sweep worktree ${branch}`}
-          data-testid="sweep-worktrees-checkbox"
-        />
-        <span className="min-w-0 flex-1 overflow-hidden">
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm text-foreground">
-            <span className="font-medium wrap-anywhere">{branch}</span>
-            <span className="text-ui-xs text-muted-foreground wrap-anywhere">
-              {entry.repoLabel}
-            </span>
-            <SweepTierPill row={row} />
-            <WorktreePrPills
-              worktrees={[entry]}
-              detailOnHover
-              maximumVisible={2}
-              className="max-w-full overflow-hidden"
-              testId={`sweep-worktrees-prs-${entry.worktreePath}`}
-            />
-          </span>
-          <span
-            className="mt-1 block max-w-full truncate font-mono text-ui-xs text-muted-foreground"
-            title={entry.worktreePath}
+    <li
+      className={cn(
+        "flex min-w-0 items-start gap-3 rounded-md px-2.5 py-2 transition-colors hover:bg-accent/40",
+        disabled && "opacity-60",
+      )}
+    >
+      <Checkbox
+        id={checkboxId}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(value) =>
+          onToggle(entry.worktreePath, value === true)
+        }
+        className="mt-0.5"
+        aria-label={`Sweep worktree ${branch}`}
+        data-testid="sweep-worktrees-checkbox"
+      />
+      <div className="min-w-0 flex-1 overflow-hidden">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm text-foreground">
+          <label
+            htmlFor={checkboxId}
+            className={cn(
+              "font-medium wrap-anywhere",
+              disabled ? "cursor-not-allowed" : "cursor-pointer",
+            )}
           >
+            {branch}
+          </label>
+          <span className="text-ui-xs text-muted-foreground wrap-anywhere">
+            {entry.repoLabel}
+          </span>
+          <SweepTierPill row={row} />
+          <WorktreePrPills
+            worktrees={[entry]}
+            detailOnHover
+            maximumVisible={2}
+            className="max-w-full overflow-hidden"
+            testId={`sweep-worktrees-prs-${entry.worktreePath}`}
+          />
+        </div>
+        {/* The path is truncated to keep rows scannable, so the full value
+            rides a tooltip rather than the native `title` attribute. */}
+        <TooltipWrapper
+          label={entry.worktreePath}
+          side="bottom"
+          sideOffset={undefined}
+          align="start"
+        >
+          <span className="mt-1 block max-w-full truncate font-mono text-ui-xs text-muted-foreground">
             {entry.worktreePath}
           </span>
-          <SweepRowHint row={row} />
-        </span>
-      </label>
+        </TooltipWrapper>
+        <SweepRowHint row={row} />
+      </div>
     </li>
   );
 }

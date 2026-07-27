@@ -396,6 +396,24 @@ export const useWorktreeIntentStagingStore =
                 delete suspendedWorkspacePathsByKey[id];
               } else {
                 intentByKey[id] = { entries };
+                // Drop suspended metadata for the entries that just went away,
+                // exactly as `unstageEntry` does. Left behind, a stale
+                // fail-closed path would block a later restage of the same
+                // workspace.
+                const suspended = suspendedWorkspacePathsByKey[id];
+                if (suspended !== undefined) {
+                  const surviving = new Set(
+                    entries.map((entry) => entry.workspacePath),
+                  );
+                  const remaining = suspended.filter((path) =>
+                    surviving.has(path),
+                  );
+                  if (remaining.length === 0) {
+                    delete suspendedWorkspacePathsByKey[id];
+                  } else if (remaining.length !== suspended.length) {
+                    suspendedWorkspacePathsByKey[id] = remaining;
+                  }
+                }
               }
               // Bumped like every other slot write so a rejected in-flight
               // action can't restore the just-purged selection.
