@@ -43,6 +43,8 @@ const EMPTY_DOC: JsonContent = {
   content: [{ type: "paragraph" }],
 };
 
+const EMPTY_SELECTION = { from: 1, to: 1 } as const;
+
 interface ChatComposerSubmitInput {
   readonly content: JsonContent;
   readonly contentText: string;
@@ -262,7 +264,7 @@ describe("chat-composer submit gate (editor readiness)", () => {
 
     expect(onSubmitMessage).toHaveBeenCalledTimes(1);
     expect(clear).toHaveBeenCalledTimes(1);
-    expect(editor.setContent).toHaveBeenCalledWith(EMPTY_DOC, null);
+    expect(editor.setContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
     expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
       EMPTY_DOC,
     );
@@ -332,7 +334,7 @@ describe("chat-composer submit multi-surface clear", () => {
     expect(clearA).toHaveBeenCalledTimes(1);
     // B never gets clear() - it must learn via the store's resetEpoch broadcast.
     // Old clearDraft deleted the map entry and B.setContent was never called.
-    expect(b.setContent).toHaveBeenCalledWith(EMPTY_DOC, null);
+    expect(b.setContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
     expect(useComposerDraftStore.getState().drafts[taskId]?.content).toEqual(
       EMPTY_DOC,
     );

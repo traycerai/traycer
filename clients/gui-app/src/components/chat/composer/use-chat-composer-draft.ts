@@ -24,6 +24,17 @@ interface UseChatComposerDraftArgs {
   readonly editorReadyTick: number;
 }
 
+const EMPTY_DOCUMENT_SELECTION = { from: 1, to: 1 } as const;
+
+function isCanonicalEmptyDocument(content: JsonContent): boolean {
+  if (content.type !== "doc" || content.content?.length !== 1) return false;
+  const paragraph = content.content[0];
+  return (
+    paragraph.type === "paragraph" &&
+    (paragraph.content === undefined || paragraph.content.length === 0)
+  );
+}
+
 export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
   const setSnapshotInStore = useComposerDraftStore(
     (state) => state.setSnapshot,
@@ -72,7 +83,16 @@ export function useChatComposerDraft(args: UseChatComposerDraftArgs) {
     if (editor === null || !editor.isReady()) return;
     const draft = useComposerDraftStore.getState().drafts[args.taskId];
     if (draft === undefined) return;
-    editor.setContent(draft.content, draft.selection);
+    // `setContent(..., null)` intentionally focuses at the end for external
+    // quote / failed-send restores. A submit-clear is broadcast to every
+    // composer for the task, so focusing each sibling would let the last
+    // effect steal focus from the submitting pane. An explicit valid caret
+    // applies the canonical empty document without invoking that focus path.
+    const selection =
+      draft.selection === null && isCanonicalEmptyDocument(draft.content)
+        ? EMPTY_DOCUMENT_SELECTION
+        : draft.selection;
+    editor.setContent(draft.content, selection);
     appliedResetEpochRef.current = draft.resetEpoch;
   }, [args.editorRef, args.taskId, args.editorReadyTick, draftResetEpoch]);
 
