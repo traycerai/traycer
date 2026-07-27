@@ -540,17 +540,26 @@ describe("<EpicsListPanel />", () => {
     ]);
     renderPanel("embedded", "/");
 
-    expect(await screen.findByTestId("epics-list-row-sweep")).not.toBeNull();
-    expect(screen.queryByTestId("epics-list-row-sweep-disabled")).toBeNull();
+    const sweep = await screen.findByRole("button", {
+      name: /^sweep worktrees for /i,
+    });
+    expect(sweep.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^no worktrees to sweep for /i }),
+    ).toBeNull();
   });
 
   it("keeps a disabled Sweep action on a task with no worktrees", async () => {
     testState.worktreesByEpicId = new Map();
     renderPanel("embedded", "/");
 
-    const disabled = await screen.findByTestId("epics-list-row-sweep-disabled");
+    const disabled = await screen.findByRole("button", {
+      name: /^no worktrees to sweep for /i,
+    });
     expect(disabled.getAttribute("aria-disabled")).toBe("true");
-    expect(screen.queryByTestId("epics-list-row-sweep")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^sweep worktrees for /i }),
+    ).toBeNull();
   });
 
   it("shows task PR pills without replacing the row navigation layer", async () => {

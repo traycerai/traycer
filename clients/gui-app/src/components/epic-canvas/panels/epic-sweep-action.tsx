@@ -90,7 +90,9 @@ function EpicSweepActionBody(props: {
           aria-label={
             hasWorktrees ? "Sweep worktrees" : "No worktrees to sweep"
           }
-          aria-haspopup="dialog"
+          // Only claimed when the button can actually open the dialog -
+          // announcing a popup that cannot appear misdescribes it to AT.
+          aria-haspopup={hasWorktrees ? "dialog" : undefined}
           data-testid="epic-sweep-action"
           className={cn(
             "text-muted-foreground",
