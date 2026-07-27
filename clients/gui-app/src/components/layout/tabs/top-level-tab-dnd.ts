@@ -15,6 +15,7 @@ import type { TabRef } from "@/stores/tabs/types";
 /** These targets are intentionally outside the Epic-canvas DnD vocabulary. */
 export const TOP_LEVEL_EDGE_SPLIT_TARGET = "top-level-edge-split";
 export const TOP_LEVEL_FILLABLE_TARGET = "top-level-fillable-slot";
+export const TOP_LEVEL_STRIP_PAIR_TARGET = "top-level-strip-pair";
 
 export interface TopLevelEdgeSplitTarget {
   readonly kind: typeof TOP_LEVEL_EDGE_SPLIT_TARGET;
@@ -28,8 +29,30 @@ export interface TopLevelFillableTarget {
   readonly side: SplitSideName;
 }
 
+/**
+ * Dropping a tab onto the middle of another tab in the strip pairs the two into
+ * a split. Unlike an edge target this carries no side and does not require the
+ * target to be the active item - the whole point of the gesture is to combine
+ * with a tab you are not currently looking at.
+ */
+export interface TopLevelStripPairTarget {
+  readonly kind: typeof TOP_LEVEL_STRIP_PAIR_TARGET;
+  readonly targetRef: TabRef;
+}
+
 export type TopLevelTabDropTarget =
-  TopLevelEdgeSplitTarget | TopLevelFillableTarget;
+  TopLevelEdgeSplitTarget | TopLevelFillableTarget | TopLevelStripPairTarget;
+
+/** The targets that arm the dwell timer before they may commit. */
+export type TopLevelDwellTarget =
+  TopLevelEdgeSplitTarget | TopLevelStripPairTarget;
+
+export function dwellTargetKey(target: TopLevelDwellTarget): string {
+  const ref = `${target.targetRef.kind}:${target.targetRef.id}`;
+  return target.kind === TOP_LEVEL_EDGE_SPLIT_TARGET
+    ? `${target.kind}:${ref}:${target.side}`
+    : `${target.kind}:${ref}`;
+}
 
 export interface ValidatedTopLevelTabDrop {
   readonly source: TabRef;
@@ -104,7 +127,48 @@ export function resolveValidatedTopLevelTabDrop(
   if (target.kind === TOP_LEVEL_EDGE_SPLIT_TARGET) {
     return edgeTargetIsLive(source, target, layout) ? { source, target } : null;
   }
+  if (target.kind === TOP_LEVEL_STRIP_PAIR_TARGET) {
+    return stripPairTargetIsLive(source, target, layout)
+      ? { source, target }
+      : null;
+  }
   return fillableTargetIsLive(target, layout) ? { source, target } : null;
+}
+
+/**
+ * Both tabs must still be ungrouped strip items: pairing consumes two whole
+ * strip entries, so a target that has since joined a group (or is the source
+ * itself) can no longer take part.
+ */
+function stripPairTargetIsLive(
+  source: TabRef,
+  target: TopLevelStripPairTarget,
+  layout: PersistedTabStripLayout,
+): boolean {
+  if (
+    refsMatch(source, target.targetRef) ||
+    !isEligibleUnlocked(target.targetRef)
+  ) {
+    return false;
+  }
+  // A ref that has joined a group resolves to its `split` item, so this single
+  // check covers both "target vanished" and "target is no longer ungrouped".
+  return findStripItemForRef(layout, target.targetRef)?.kind === "tab";
+}
+
+/**
+ * The strip tab a pair gesture over `stripIndex` would combine with, or null
+ * when that position is not an ungrouped tab. Resolved from the live layout
+ * rather than carried in the drag payload, so a strip that changed mid-drag
+ * cannot authorize a pair against a stale ref.
+ */
+export function stripPairTargetForIndex(
+  stripIndex: number,
+  layout: PersistedTabStripLayout,
+): TopLevelStripPairTarget | null {
+  const item = layout.items.at(stripIndex);
+  if (item === undefined || item.kind !== "tab") return null;
+  return { kind: TOP_LEVEL_STRIP_PAIR_TARGET, targetRef: item.ref };
 }
 
 function edgeTargetIsLive(

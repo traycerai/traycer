@@ -1,7 +1,7 @@
-import { memo, useMemo, type ReactNode } from "react";
+import { memo, useCallback, useMemo, type ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import * as m from "motion/react-m";
-import { Button } from "@/components/ui/button";
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
 import {
   HEADER_TAB_SLOT_DND_TYPE,
   getHeaderStripItemSlotDropId,
@@ -14,9 +14,19 @@ import type {
   HeaderStripItem,
   HeaderStripMember,
 } from "@/stores/tabs/use-header-tabs";
+import type { SplitSide } from "@/stores/tabs/layout";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
-import { TabItem } from "@/components/layout/tabs/tab-strip-item";
+import {
+  SplitMemberChrome,
+  TabChrome,
+  TabItem,
+} from "@/components/layout/tabs/tab-strip-item";
+import {
+  HEADER_TAB_LAYOUT_TRANSITION,
+  TAB_CLASS_BASE,
+} from "@/components/layout/tabs/tab-chrome-tokens";
+import { SplitSlotMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
 
 export interface SplitTabItemProps {
   readonly item: Extract<HeaderStripItem, { readonly kind: "split" }>;
@@ -42,6 +52,13 @@ export interface SplitTabItemProps {
   ) => void;
 }
 
+/**
+ * A split group occupies exactly one ordinary tab's footprint and draws exactly
+ * one tab silhouette around both halves. Earlier this was a rounded bordered
+ * box holding two members that each drew their own chrome, which nested a
+ * second outline inside the first and made a group read as a foreign object in
+ * the strip rather than as a tab.
+ */
 export const SplitTabItem = memo(function SplitTabItem(
   props: SplitTabItemProps,
 ): ReactNode {
@@ -69,62 +86,84 @@ export const SplitTabItem = memo(function SplitTabItem(
       layout="position"
       initial={false}
       animate={{ opacity: isDragging ? 0.36 : 1, scale: isDragging ? 0.96 : 1 }}
-      transition={{ type: "spring", stiffness: 520, damping: 42, mass: 0.72 }}
+      transition={HEADER_TAB_LAYOUT_TRANSITION}
       role="group"
       aria-label="Split tab group"
       data-testid={`split-tab-group-${props.item.id}`}
       data-active={props.isActive ? "true" : "false"}
-      className={cn(
-        "relative flex min-w-[min(42vw,16rem)] max-w-[min(68vw,32rem)] flex-[1_1_20rem] overflow-hidden rounded-md border border-border bg-background",
-        props.isActive && "ring-2 ring-primary/70",
-      )}
+      // Same frame as HeaderTabMotionFrame so a group sits on the strip's
+      // baseline and flexes like any other tab. Only the floor is raised, so
+      // that two halves still fit an icon plus a few characters each once the
+      // strip is crowded.
+      className="relative flex w-56 min-w-[168px] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
     >
-      <SplitMember
-        member={props.item.left}
-        side="left"
-        focused={props.isActive ? props.item.focusedSide === "left" : false}
-        stripItemId={props.item.id}
-        stripIndex={props.stripIndex}
-        memberIndex={props.leftMemberIndex}
-        onClose={props.onClose}
-        onCloseOtherTabs={props.onCloseOtherTabs}
-        onDuplicateTab={props.onDuplicateTab}
-        canCloseOtherTabs={props.canCloseOtherTabs}
-        onOpenInNewWindow={props.onOpenInNewWindow}
-        canOpenInNewWindow={props.canOpenInNewWindow}
-        onSplitCommand={props.onSplitCommand}
-        showDropIndicatorBefore={props.showDropIndicatorBefore}
-        showDropIndicatorAfter={false}
-        taskPinnedStates={props.taskPinnedStates}
-        pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
-        onSetTaskPinned={props.onSetTaskPinned}
-      />
-      <SplitMember
-        member={props.item.right}
-        side="right"
-        focused={props.isActive ? props.item.focusedSide === "right" : false}
-        stripItemId={props.item.id}
-        stripIndex={props.stripIndex}
-        memberIndex={props.rightMemberIndex}
-        onClose={props.onClose}
-        onCloseOtherTabs={props.onCloseOtherTabs}
-        onDuplicateTab={props.onDuplicateTab}
-        canCloseOtherTabs={props.canCloseOtherTabs}
-        onOpenInNewWindow={props.onOpenInNewWindow}
-        canOpenInNewWindow={props.canOpenInNewWindow}
-        onSplitCommand={props.onSplitCommand}
-        showDropIndicatorBefore={false}
-        showDropIndicatorAfter={props.showDropIndicatorAfter}
-        taskPinnedStates={props.taskPinnedStates}
-        pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
-        onSetTaskPinned={props.onSetTaskPinned}
-      />
+      <div className="relative flex h-10 w-full min-w-0 items-center">
+        {/*
+          Only the active silhouette is shared. Hover feedback stays per-half
+          (see SplitMemberChrome) because pointing at one side and lighting up
+          both would misreport which side a click lands on.
+        */}
+        {props.isActive ? <TabChrome isActive /> : null}
+        <SplitMember
+          member={props.item.left}
+          partner={memberTab(props.item.right)}
+          side="left"
+          focused={props.isActive ? props.item.focusedSide === "left" : false}
+          stripItemId={props.item.id}
+          stripIndex={props.stripIndex}
+          memberIndex={props.leftMemberIndex}
+          onClose={props.onClose}
+          onCloseOtherTabs={props.onCloseOtherTabs}
+          onDuplicateTab={props.onDuplicateTab}
+          canCloseOtherTabs={props.canCloseOtherTabs}
+          onOpenInNewWindow={props.onOpenInNewWindow}
+          canOpenInNewWindow={props.canOpenInNewWindow}
+          onSplitCommand={props.onSplitCommand}
+          showDropIndicatorBefore={props.showDropIndicatorBefore}
+          showDropIndicatorAfter={false}
+          taskPinnedStates={props.taskPinnedStates}
+          pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
+          onSetTaskPinned={props.onSetTaskPinned}
+        />
+        <span
+          aria-hidden
+          data-testid={`split-tab-divider-${props.item.id}`}
+          className="relative z-20 my-2 w-px shrink-0 self-stretch bg-border/70"
+        />
+        <SplitMember
+          member={props.item.right}
+          partner={memberTab(props.item.left)}
+          side="right"
+          focused={props.isActive ? props.item.focusedSide === "right" : false}
+          stripItemId={props.item.id}
+          stripIndex={props.stripIndex}
+          memberIndex={props.rightMemberIndex}
+          onClose={props.onClose}
+          onCloseOtherTabs={props.onCloseOtherTabs}
+          onDuplicateTab={props.onDuplicateTab}
+          canCloseOtherTabs={props.canCloseOtherTabs}
+          onOpenInNewWindow={props.onOpenInNewWindow}
+          canOpenInNewWindow={props.canOpenInNewWindow}
+          onSplitCommand={props.onSplitCommand}
+          showDropIndicatorBefore={false}
+          showDropIndicatorAfter={props.showDropIndicatorAfter}
+          taskPinnedStates={props.taskPinnedStates}
+          pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
+          onSetTaskPinned={props.onSetTaskPinned}
+        />
+      </div>
     </m.div>
   );
 });
 
+function memberTab(member: HeaderStripMember): HeaderTab | null {
+  return member.kind === "tab" ? member.tab : null;
+}
+
 interface SplitMemberProps {
   readonly member: HeaderStripMember;
+  /** The other half's tab, used to scope an empty half's own menu. */
+  readonly partner: HeaderTab | null;
   readonly side: "left" | "right";
   readonly focused: boolean;
   readonly stripItemId: string;
@@ -159,53 +198,23 @@ function SplitMember(props: SplitMemberProps): ReactNode {
   );
   if (props.member.kind === "fillable") {
     return (
-      <Button
-        type="button"
-        role="tab"
-        variant="ghost"
-        aria-selected={props.focused}
-        aria-label={
-          props.member.slot.kind === "unavailable"
-            ? props.member.slot.label
-            : "Choose a view for this split side"
-        }
-        data-testid={`split-tab-placeholder-${props.side}`}
-        onClick={() =>
-          tabCommandCoordinator.focusSplitSide({
-            splitId: props.stripItemId,
-            side: props.side,
-          })
-        }
-        onFocus={() =>
-          tabCommandCoordinator.focusSplitSide({
-            splitId: props.stripItemId,
-            side: props.side,
-          })
-        }
-        className={cn(
-          "min-w-0 flex-1 rounded-none border-r border-border px-2 text-ui-xs",
-          props.side === "right" && "border-r-0",
-          props.focused && "bg-accent text-accent-foreground",
-        )}
-      >
-        {props.member.slot.kind === "unavailable"
-          ? props.member.slot.label
-          : "Choose view"}
-      </Button>
+      <SplitFillableMember
+        slot={props.member.slot}
+        side={props.side}
+        focused={props.focused}
+        stripItemId={props.stripItemId}
+        partner={props.partner}
+        onSplitCommand={props.onSplitCommand}
+      />
     );
   }
   return (
-    <div
-      className={cn(
-        "min-w-0 flex-1 border-r border-border",
-        props.side === "right" && "border-r-0",
-        props.focused && "bg-accent/40",
-      )}
-    >
+    <div className="relative flex min-w-0 flex-1">
       <TabItem
         tab={props.member.tab}
         index={props.memberIndex}
         dnd={dnd}
+        chrome="member"
         includeMotionFrame={false}
         isActive={props.focused}
         showSeparatorAfter={false}
@@ -229,6 +238,63 @@ function SplitMember(props: SplitMemberProps): ReactNode {
         }
         onSetTaskPinned={props.onSetTaskPinned}
       />
+    </div>
+  );
+}
+
+function SplitFillableMember(props: {
+  readonly slot: Exclude<SplitSide, { readonly kind: "tab" }>;
+  readonly side: "left" | "right";
+  readonly focused: boolean;
+  readonly stripItemId: string;
+  readonly partner: HeaderTab | null;
+  readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
+}): ReactNode {
+  const { stripItemId, side } = props;
+  const focusSide = useCallback(() => {
+    tabCommandCoordinator.focusSplitSide({ splitId: stripItemId, side });
+  }, [side, stripItemId]);
+  const unavailable = props.slot.kind === "unavailable";
+  const label = unavailable ? props.slot.label : "Choose view";
+  const control = (
+    <div
+      role="tab"
+      tabIndex={0}
+      aria-selected={props.focused}
+      aria-label={unavailable ? label : "Choose a view for this split side"}
+      data-testid={`split-tab-placeholder-${props.side}`}
+      onClick={focusSide}
+      onFocus={focusSide}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        focusSide();
+      }}
+      className={cn(
+        TAB_CLASS_BASE,
+        "cursor-pointer gap-1 px-1.5 text-muted-foreground",
+        "[-webkit-app-region:no-drag]",
+        props.focused && "text-foreground",
+      )}
+    >
+      <SplitMemberChrome focused={props.focused} />
+      <span className="relative z-20 min-w-0 flex-1 truncate text-center italic">
+        {label}
+      </span>
+    </div>
+  );
+  if (props.partner === null) {
+    return <div className="relative flex min-w-0 flex-1">{control}</div>;
+  }
+  return (
+    <div className="relative flex min-w-0 flex-1">
+      <ContextMenu>
+        <ContextMenuTrigger asChild>{control}</ContextMenuTrigger>
+        <SplitSlotMenuContent
+          partner={props.partner}
+          onSplitCommand={props.onSplitCommand}
+        />
+      </ContextMenu>
     </div>
   );
 }

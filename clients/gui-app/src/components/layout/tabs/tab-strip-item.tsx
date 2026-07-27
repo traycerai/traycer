@@ -9,7 +9,7 @@ import {
 import { X } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { AnimatePresence, type Transition } from "motion/react";
+import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
 import {
   useDraggable,
@@ -53,6 +53,11 @@ import {
   leaderDigitFor,
   leaderHint,
 } from "@/components/ui/leader-digit-shortcuts";
+import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  HEADER_TAB_LAYOUT_TRANSITION,
+  TAB_CLASS_BASE,
+} from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
@@ -68,15 +73,7 @@ import {
 } from "@/hooks/epic/use-epic-activity-status";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
-const TAB_CLASS_BASE =
-  "group/tab relative flex h-10 w-full min-w-0 items-center gap-1.5 px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm transition-[color,transform] duration-300 ease-spring";
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
-const HEADER_TAB_LAYOUT_TRANSITION = {
-  type: "spring",
-  stiffness: 520,
-  damping: 42,
-  mass: 0.72,
-} satisfies Transition;
 const LONG_PRESS_CONTEXT_MENU_MS = 500;
 
 interface TabItemProps {
@@ -84,6 +81,13 @@ interface TabItemProps {
   readonly index: number;
   /** `null` makes this a member control inside a group-level reorder frame. */
   readonly dnd: HeaderTabDndConfig | null;
+  /**
+   * `"own"` draws the tab's own chrome silhouette. `"member"` is for the halves
+   * of a split group: the group draws one shared silhouette around both, so a
+   * member drawing its own would nest a second outline inside it. Members get a
+   * flat focus wash and tighter padding instead.
+   */
+  readonly chrome: "own" | "member";
   readonly includeMotionFrame: boolean;
   readonly isActive: boolean;
   readonly showSeparatorAfter: boolean;
@@ -116,6 +120,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     tab,
     index,
     dnd,
+    chrome,
     includeMotionFrame,
     isActive,
     showSeparatorAfter,
@@ -329,6 +334,10 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           onTouchStart={handleTouchStart}
           className={cn(
             TAB_CLASS_BASE,
+            // A split half shares the group's silhouette and only has half the
+            // width, so it trades the tab's generous side padding for enough
+            // room to still show an icon plus a readable title.
+            chrome === "member" && "gap-1 px-1.5",
             tabStateClass(isActive),
             NO_DRAG_CLASS,
             "cursor-pointer",
@@ -338,7 +347,12 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             visible={showDropIndicatorBefore}
             side="left"
           />
-          <TabChrome isActive={isActive} />
+          {chrome === "own" ? (
+            <TabChrome isActive={isActive} />
+          ) : (
+            <SplitMemberChrome focused={isActive} />
+          )}
+          <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
           <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
             <TabLeadingIcon
               icon={tab.icon}
@@ -655,7 +669,7 @@ function HeaderTabSeparator(props: { readonly visible: boolean }) {
   );
 }
 
-function TabChrome(props: { readonly isActive: boolean }) {
+export function TabChrome(props: { readonly isActive: boolean }) {
   if (!props.isActive) {
     return (
       <span
@@ -671,6 +685,46 @@ function TabChrome(props: { readonly isActive: boolean }) {
       borderColor="var(--color-border)"
       coversBaseline
       className="transition-opacity duration-300 ease-spring"
+    />
+  );
+}
+
+/**
+ * Shown on the tab a pair-into-split drop would combine with, once its dwell
+ * has fired. The two panes mirror the content-pane edge-split preview so both
+ * routes into a split announce the same outcome.
+ */
+function StripPairPreview(props: {
+  readonly tabKind: HeaderTabKind;
+  readonly tabId: string;
+}) {
+  const previewing = useTopLevelStripPairPreview(props.tabKind, props.tabId);
+  if (!previewing) return null;
+  return (
+    <span
+      aria-hidden
+      data-testid={`tab-strip-pair-preview-${props.tabKind}-${props.tabId}`}
+      className="pointer-events-none absolute inset-x-1 inset-y-1 z-30 grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-primary/15 ring-2 ring-primary"
+    >
+      <span className="bg-primary/10" />
+      <span className="bg-primary/25" />
+    </span>
+  );
+}
+
+/**
+ * Focus treatment for one half of a split group. Deliberately borderless: the
+ * group already draws the tab silhouette, so the focused side is marked by a
+ * fill inset within it rather than by a second outline.
+ */
+export function SplitMemberChrome(props: { readonly focused: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out",
+        props.focused ? "bg-accent/50" : "group-hover/tab:bg-accent/20",
+      )}
     />
   );
 }

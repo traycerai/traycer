@@ -444,6 +444,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
       tab={props.tab}
       index={props.index}
       dnd={dnd}
+      chrome="own"
       includeMotionFrame
       isActive={visualFlag(props.visualState, 0)}
       showSeparatorAfter={props.showSeparatorAfter}

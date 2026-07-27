@@ -9,7 +9,9 @@ import {
 import {
   resolveUnpairedHeaderEdgeSource,
   resolveValidatedTopLevelTabDrop,
+  stripPairTargetForIndex,
 } from "@/components/layout/tabs/top-level-tab-dnd";
+import { isHeaderStripPairZone } from "@/components/layout/tabs/header-tab-dnd";
 import {
   commitFillableSlotDestination,
   getFillableSlotChoices,
@@ -240,6 +242,156 @@ describe("T9 split interactions", () => {
         activeItemId: "source-item",
       }),
     ).toBeNull();
+  });
+
+  it("pairs only from a tab's centre band, never from its reorder thirds or a trailing slot", () => {
+    const slot = {
+      kind: "header-tab-slot" as const,
+      index: 1,
+      isTrailing: false,
+    };
+    // 200px wide starting at x=100, so the 40% band spans x=160..240.
+    const slotRect = { left: 100, top: 0, width: 200, height: 40 };
+    const zoneAt = (pointerX: number) =>
+      isHeaderStripPairZone({ slot, pointerX, slotRect });
+
+    expect(zoneAt(200)).toBe(true);
+    expect(zoneAt(161)).toBe(true);
+    expect(zoneAt(239)).toBe(true);
+    expect(zoneAt(159)).toBe(false);
+    expect(zoneAt(241)).toBe(false);
+    expect(zoneAt(105)).toBe(false);
+    expect(zoneAt(295)).toBe(false);
+    // Trailing slot covers empty strip space - there is no tab to pair with.
+    expect(
+      isHeaderStripPairZone({
+        slot: { ...slot, isTrailing: true },
+        pointerX: 200,
+        slotRect,
+      }),
+    ).toBe(false);
+    // Without geometry the gesture must fall back to reorder, not pair.
+    expect(isHeaderStripPairZone({ slot, pointerX: 200, slotRect: null })).toBe(
+      false,
+    );
+  });
+
+  it("resolves a pair target from the live strip and refuses split items", () => {
+    const target: TabRef = { kind: "epic", id: "target" };
+    const layout = {
+      version: 2 as const,
+      items: [
+        { kind: "tab" as const, id: "target-item", ref: target },
+        {
+          kind: "split" as const,
+          id: "split-b",
+          left: { kind: "tab" as const, ref: PARTNER },
+          right: { kind: "empty" as const },
+          focusedSide: "left" as const,
+          routeBackingSide: "left" as const,
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "target-item",
+      systemTabs: { history: null, settings: null },
+    };
+
+    expect(stripPairTargetForIndex(0, layout)).toEqual({
+      kind: "top-level-strip-pair",
+      targetRef: target,
+    });
+    // An existing group already owns two strip entries; it cannot absorb a third.
+    expect(stripPairTargetForIndex(1, layout)).toBeNull();
+    expect(stripPairTargetForIndex(7, layout)).toBeNull();
+  });
+
+  it("accepts a pair drop onto a background tab but refuses self, grouped and locked targets", () => {
+    const source: TabRef = { kind: "draft", id: "source" };
+    const target: TabRef = { kind: "epic", id: "target" };
+    const header = {
+      kind: "header-tab" as const,
+      stripItemId: "source-item",
+      tabKind: source.kind,
+      tabId: source.id,
+      index: 0,
+    };
+    const layout = {
+      version: 2 as const,
+      items: [
+        { kind: "tab" as const, id: "source-item", ref: source },
+        { kind: "tab" as const, id: "target-item", ref: target },
+      ],
+      // Deliberately NOT the target: unlike an edge split, pairing is how you
+      // combine with a tab you are not currently looking at.
+      activeItemId: "source-item",
+      systemTabs: { history: null, settings: null },
+    };
+    const pair = {
+      kind: "top-level-strip-pair" as const,
+      targetRef: target,
+    };
+
+    expect(resolveValidatedTopLevelTabDrop(header, pair, layout)).toEqual({
+      source,
+      target: pair,
+    });
+    expect(
+      resolveValidatedTopLevelTabDrop(
+        header,
+        { ...pair, targetRef: source },
+        layout,
+      ),
+    ).toBeNull();
+    expect(
+      resolveValidatedTopLevelTabDrop(header, pair, {
+        ...layout,
+        items: [
+          { kind: "tab" as const, id: "source-item", ref: source },
+          {
+            kind: "split" as const,
+            id: "split-target",
+            left: { kind: "tab" as const, ref: target },
+            right: { kind: "empty" as const },
+            focusedSide: "left" as const,
+            routeBackingSide: "left" as const,
+            leftRatio: 0.5,
+          },
+        ],
+      }),
+    ).toBeNull();
+
+    const unregister = registerTabStructuralLockPredicate(
+      (ref) => ref.kind === target.kind && ref.id === target.id,
+    );
+    expect(resolveValidatedTopLevelTabDrop(header, pair, layout)).toBeNull();
+    unregister();
+  });
+
+  it("treats an edge and a pair target on the same tab as distinct dwell targets", () => {
+    const target: TabRef = { kind: "epic", id: "target" };
+    const timers = fakeTimers();
+    const states: string[] = [];
+    const machine = new EdgeSplitDwellMachine((state) => {
+      states.push(state.kind);
+    }, timers.timers);
+    machine.setTargetValidator(() => true);
+
+    machine.observe({
+      kind: "top-level-edge-split",
+      targetRef: target,
+      side: "left",
+    });
+    // Same tab, different gesture: this must re-arm rather than be swallowed as
+    // "already observing this target".
+    machine.observe({ kind: "top-level-strip-pair", targetRef: target });
+    expect(states).toEqual(["armed", "armed"]);
+    expect(timers.cleared).toHaveLength(1);
+
+    timers.run(2);
+    expect(states).toEqual(["armed", "armed", "preview"]);
+    expect(
+      machine.commit({ kind: "top-level-strip-pair", targetRef: target }),
+    ).toEqual({ kind: "top-level-strip-pair", targetRef: target });
   });
 
   it("shows descriptor catalog Epic and legacy Phase destinations after reusable open refs", () => {

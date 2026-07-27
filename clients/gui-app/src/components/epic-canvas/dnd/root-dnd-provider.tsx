@@ -55,6 +55,7 @@ import {
   type SpringLoadEntry,
 } from "@/components/epic-canvas/dnd/root-dnd-reparent-preview";
 import {
+  isHeaderStripPairZone,
   readHeaderTabDragData,
   readHeaderTabSlotDropData,
   resolveHeaderStripDropIndex,
@@ -66,10 +67,15 @@ import {
   type EdgeSplitDwellState,
 } from "@/components/layout/tabs/edge-split-dwell";
 import {
+  TOP_LEVEL_EDGE_SPLIT_TARGET,
+  TOP_LEVEL_STRIP_PAIR_TARGET,
   readTopLevelTabDropTarget,
   resolveValidatedTopLevelTabDrop,
+  stripPairTargetForIndex,
+  type TopLevelDwellTarget,
   type TopLevelEdgeSplitTarget,
   type TopLevelFillableTarget,
+  type TopLevelStripPairTarget,
 } from "@/components/layout/tabs/top-level-tab-dnd";
 import {
   activatePreparedPairTabIntent,
@@ -246,20 +252,44 @@ function updateHeaderTabSourcePreview(
     edgeDwell.observe(validDrop.target);
     return;
   }
-  edgeDwell.reset();
   const headerSlot =
     over === null ? null : readHeaderTabSlotDropData(over.data.current);
   if (headerSlot === null || point === null) {
+    edgeDwell.reset();
     dndStore.headerStripDropIndexChanged(null);
     return;
   }
+  const slotRect = readOverRect(event);
+  const reorderIndex = resolveHeaderStripDropIndex({
+    slot: headerSlot,
+    pointerX: point.x,
+    slotRect,
+    sourceIndex: headerTab.index,
+  });
+  const pairTarget = isHeaderStripPairZone({
+    slot: headerSlot,
+    pointerX: point.x,
+    slotRect,
+  })
+    ? stripPairTargetForIndex(headerSlot.index, layoutFromTabsStore())
+    : null;
+  if (
+    pairTarget === null ||
+    resolveLiveTopLevelDrop(headerTab, pairTarget) === null
+  ) {
+    edgeDwell.reset();
+    dndStore.headerStripDropIndexChanged(reorderIndex);
+    return;
+  }
+  edgeDwell.setTargetValidator(
+    (candidate) => resolveLiveTopLevelDrop(headerTab, candidate) !== null,
+  );
+  edgeDwell.observe(pairTarget);
+  // The pair only takes over once the dwell actually fires. Until then the
+  // reorder indicator stays up, so crossing a tab's middle en route to a
+  // reorder never leaves the strip with no visible destination.
   dndStore.headerStripDropIndexChanged(
-    resolveHeaderStripDropIndex({
-      slot: headerSlot,
-      pointerX: point.x,
-      slotRect: readOverRect(event),
-      sourceIndex: headerTab.index,
-    }),
+    edgeDwell.getState().kind === "preview" ? null : reorderIndex,
   );
 }
 
@@ -275,7 +305,7 @@ function layoutFromTabsStore() {
 
 function resolveLiveTopLevelDrop(
   headerTab: HeaderTabDragData,
-  target: TopLevelEdgeSplitTarget | TopLevelFillableTarget,
+  target: TopLevelDwellTarget | TopLevelFillableTarget,
 ) {
   return resolveValidatedTopLevelTabDrop(
     headerTab,
@@ -346,6 +376,23 @@ function commitHeaderTabDrop(input: {
     );
     return;
   }
+  // A fired pair dwell wins over the reorder it was hovering: the strip slot is
+  // the droppable under the pointer in both cases, so the dwell state is what
+  // distinguishes "combine with this tab" from "move next to it".
+  const dwell = input.edgeDwell.getState();
+  if (
+    headerTab !== null &&
+    dwell.kind === "preview" &&
+    dwell.target.kind === TOP_LEVEL_STRIP_PAIR_TARGET
+  ) {
+    commitHeaderStripPair(
+      headerTab,
+      dwell.target,
+      input.edgeDwell,
+      input.navigate,
+    );
+    return;
+  }
   if (headerTab !== null && input.headerStripIndex !== null) {
     tabCommandCoordinator.reorderStripItem({
       itemId: headerTab.stripItemId,
@@ -354,14 +401,50 @@ function commitHeaderTabDrop(input: {
   }
 }
 
+/**
+ * Dropping A onto B yields `B | A`: the tab that stayed put keeps the left
+ * side, the dragged one lands where it was released and takes focus.
+ */
+function commitHeaderStripPair(
+  headerTab: HeaderTabDragData,
+  target: TopLevelStripPairTarget,
+  edgeDwell: EdgeSplitDwellMachine,
+  navigate: UseNavigateResult<string>,
+): void {
+  const validDrop = resolveLiveTopLevelDrop(headerTab, target);
+  if (validDrop === null) {
+    edgeDwell.reset();
+    return;
+  }
+  if (edgeDwell.commit(target) === null) return;
+  const sourceRef = validDrop.source;
+  const sourceTab = getHeaderTabs().find(
+    (tab) => tab.kind === sourceRef.kind && tab.id === sourceRef.id,
+  );
+  if (sourceTab === undefined) return;
+  activatePreparedPairTabIntent(
+    navigate,
+    {
+      left: target.targetRef,
+      right: sourceRef,
+      focusedRef: sourceRef,
+      splitId: `split:${uuidv4()}`,
+      leftRatio: 0.5,
+    },
+    tabResolveIntent(sourceTab),
+    undefined,
+  );
+}
+
 function commitHeaderEdgeSplit(
   sourceRef: TabRef,
   target: TopLevelEdgeSplitTarget,
   edgeDwell: EdgeSplitDwellMachine,
   navigate: UseNavigateResult<string>,
 ): void {
-  const committedTarget = edgeDwell.commit(target);
-  if (committedTarget === null) {
+  // `commit` only succeeds for a target equal to this one (same kind, ref and
+  // side), so the already-narrowed `target` describes the committed geometry.
+  if (edgeDwell.commit(target) === null) {
     return;
   }
   const sourceTab = getHeaderTabs().find(
@@ -371,12 +454,8 @@ function commitHeaderEdgeSplit(
   activatePreparedPairTabIntent(
     navigate,
     {
-      left:
-        committedTarget.side === "left" ? sourceRef : committedTarget.targetRef,
-      right:
-        committedTarget.side === "right"
-          ? sourceRef
-          : committedTarget.targetRef,
+      left: target.side === "left" ? sourceRef : target.targetRef,
+      right: target.side === "right" ? sourceRef : target.targetRef,
       focusedRef: sourceRef,
       splitId: `split:${uuidv4()}`,
       leftRatio: 0.5,
@@ -399,11 +478,17 @@ export function RootDndProvider(props: RootDndProviderProps) {
   const edgeDwell = useMemo(
     () =>
       new EdgeSplitDwellMachine((state: EdgeSplitDwellState) => {
-        useEpicDndStore
-          .getState()
-          .topLevelEdgeSplitPreviewChanged(
-            state.kind === "preview" ? state.target : null,
-          );
+        const store = useEpicDndStore.getState();
+        const target = state.kind === "preview" ? state.target : null;
+        const pairTarget =
+          target?.kind === TOP_LEVEL_STRIP_PAIR_TARGET ? target : null;
+        store.topLevelEdgeSplitPreviewChanged(
+          target?.kind === TOP_LEVEL_EDGE_SPLIT_TARGET ? target : null,
+        );
+        store.topLevelStripPairPreviewChanged(pairTarget?.targetRef ?? null);
+        // A fired pair preview owns the strip: drop the reorder line that was
+        // still showing while the dwell was merely armed.
+        if (pairTarget !== null) store.headerStripDropIndexChanged(null);
       }, edgeSplitBrowserTimer),
     [],
   );

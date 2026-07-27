@@ -103,6 +103,7 @@ describe("T9 round-4: SplitSlotChooserContent real render", () => {
       side: "left",
       slot: { kind: "empty" },
       focused: false,
+      dropActive: false,
       catalog: [
         { kind: "phase-migration", phaseId: "phase-1", name: "Legacy Phase" },
       ],
@@ -151,6 +152,7 @@ describe("T9 round-4: SplitSlotChooserContent real render", () => {
       side: "left",
       slot: { kind: "empty" },
       focused: false,
+      dropActive: false,
       catalog: [
         { kind: "phase-migration", phaseId: "phase-1", name: "Legacy Phase" },
       ],
@@ -192,6 +194,7 @@ describe("T9 round-4: SplitSlotChooserContent real render", () => {
       side: "left",
       slot: { kind: "empty" },
       focused: false,
+      dropActive: false,
       catalog: [],
     });
 
@@ -245,6 +248,7 @@ describe("T9 round-4: SplitSlotChooserContent real render", () => {
       side: "left",
       slot: { kind: "empty" },
       focused: false,
+      dropActive: false,
       catalog: [],
     });
 

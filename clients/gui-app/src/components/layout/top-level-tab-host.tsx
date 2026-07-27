@@ -30,10 +30,14 @@ import {
   TOP_LEVEL_FILLABLE_TARGET,
   edgeSplitDropId,
   fillableSlotDropId,
+  resolveValidatedTopLevelTabDrop,
   type TopLevelEdgeSplitTarget,
   type TopLevelFillableTarget,
 } from "@/components/layout/tabs/top-level-tab-dnd";
-import { useTopLevelEdgeSplitPreview } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  useEpicDndStore,
+  useTopLevelEdgeSplitPreview,
+} from "@/components/epic-canvas/dnd/dnd-store";
 import { PhaseMigrationControllerHost } from "@/components/epic-tabs/phase-migration-controller-host";
 import { PhaseMigrationSurface } from "@/components/epic-tabs/phase-migration-surface";
 import { TabSurfaceActivityProvider } from "./tab-surface-activity";
@@ -250,17 +254,22 @@ function FillableSplitSlot(props: {
     splitId: props.splitId,
     side: props.side,
   };
-  const { setNodeRef } = useDroppable({
+  const { setNodeRef, isOver } = useDroppable({
     id: fillableSlotDropId(props.splitId, props.side),
     data: dropData,
   });
+  const dropActive = useFillableSlotDropActive(dropData, isOver);
   return (
     <div
       ref={setNodeRef}
       aria-label="Fillable split slot"
-      className={surfaceClassName(props.placement)}
+      className={cn(
+        surfaceClassName(props.placement),
+        dropActive && "ring-2 ring-inset ring-primary",
+      )}
       data-slot-kind={props.slot.kind}
       data-slot-side={props.side}
+      data-drop-active={dropActive ? "true" : "false"}
       data-testid={`top-level-fillable-slot-${props.side}`}
       style={surfaceStyle(props.placement)}
       onFocusCapture={() => {
@@ -285,10 +294,40 @@ function FillableSplitSlot(props: {
             side={props.side}
             slot={props.slot}
             focused={props.focused}
+            dropActive={dropActive}
           />
         </SurfacePresentationBoundary>
       </TabSurfaceActivityProvider>
     </div>
+  );
+}
+
+/**
+ * Whether releasing the current drag here would actually commit.
+ *
+ * `isOver` on its own is not enough: it reports pure hit geometry, so it would
+ * light the slot up for a drag the live guard will refuse - a tab that is
+ * already a group member, a structurally locked tab, or a suppressed command
+ * ledger - promising a drop that then silently does nothing. Routing through
+ * the same resolver the commit uses keeps the highlight and the outcome in
+ * agreement.
+ */
+function useFillableSlotDropActive(
+  target: TopLevelFillableTarget,
+  isOver: boolean,
+): boolean {
+  const activeHeaderTab = useEpicDndStore((state) => state.activeHeaderTab);
+  const layout = useTabsStore(
+    useShallow((state) => ({
+      version: state.version,
+      items: state.items,
+      activeItemId: state.activeItemId,
+      systemTabs: state.systemTabs,
+    })),
+  );
+  if (!isOver || activeHeaderTab === null) return false;
+  return (
+    resolveValidatedTopLevelTabDrop(activeHeaderTab, target, layout) !== null
   );
 }
 

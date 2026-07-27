@@ -33,6 +33,8 @@ export interface SplitSlotChooserProps {
   readonly side: SplitSideName;
   readonly slot: Exclude<SplitSide, { readonly kind: "tab" }>;
   readonly focused: boolean;
+  /** A header tab is hovering this slot and releasing would commit the drop. */
+  readonly dropActive: boolean;
 }
 
 export function SplitSlotChooser(props: SplitSlotChooserProps) {
@@ -129,19 +131,24 @@ export function SplitSlotChooserContent(
     if (!props.focused) return;
     searchRef.current?.focus();
   }, [props.focused]);
+  const emptyHeadline =
+    props.slot.kind === "unavailable"
+      ? props.slot.label
+      : "Choose a view for this split";
+  const headline = props.dropActive ? "Release to open here" : emptyHeadline;
 
   return (
     <section
       aria-label={`${props.slot.kind === "unavailable" ? "Unavailable" : "Empty"} split view`}
-      className="flex h-full min-h-0 min-w-0 flex-col items-center justify-center gap-3 border border-dashed border-border/80 bg-muted/20 p-[clamp(0.75rem,3vw,2rem)]"
+      className={cn(
+        "flex h-full min-h-0 min-w-0 flex-col items-center justify-center gap-3 border border-dashed border-border/80 bg-muted/20 p-[clamp(0.75rem,3vw,2rem)] transition-colors duration-150 ease-out",
+        props.dropActive && "border-solid border-primary bg-primary/10",
+      )}
+      data-drop-active={props.dropActive ? "true" : "false"}
       data-testid={`split-slot-chooser-${props.side}`}
     >
       <div className="max-w-prose text-center">
-        <p className="text-ui-sm font-medium text-foreground">
-          {props.slot.kind === "unavailable"
-            ? props.slot.label
-            : "Choose a view for this split"}
-        </p>
+        <p className="text-ui-sm font-medium text-foreground">{headline}</p>
         <p className="mt-1 text-ui-xs text-muted-foreground">
           Search open tabs or choose a destination. You can also drop an
           unpaired tab here.

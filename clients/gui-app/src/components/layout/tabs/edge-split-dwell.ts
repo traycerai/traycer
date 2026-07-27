@@ -1,12 +1,15 @@
-import type { TopLevelEdgeSplitTarget } from "@/components/layout/tabs/top-level-tab-dnd";
+import {
+  dwellTargetKey,
+  type TopLevelDwellTarget,
+} from "@/components/layout/tabs/top-level-tab-dnd";
 
 export const EDGE_SPLIT_DWELL_MS = 400;
 
 export type EdgeSplitDwellState =
   | { readonly kind: "idle" }
-  | { readonly kind: "armed"; readonly target: TopLevelEdgeSplitTarget }
-  | { readonly kind: "preview"; readonly target: TopLevelEdgeSplitTarget }
-  | { readonly kind: "commit"; readonly target: TopLevelEdgeSplitTarget };
+  | { readonly kind: "armed"; readonly target: TopLevelDwellTarget }
+  | { readonly kind: "preview"; readonly target: TopLevelDwellTarget }
+  | { readonly kind: "commit"; readonly target: TopLevelDwellTarget };
 
 export interface EdgeSplitTimer {
   readonly set: (callback: () => void, timeout: number) => number;
@@ -26,8 +29,7 @@ export const edgeSplitBrowserTimer: EdgeSplitTimer = {
 export class EdgeSplitDwellMachine {
   private state: EdgeSplitDwellState = { kind: "idle" };
   private timer: number | null = null;
-  private isTargetValid: (target: TopLevelEdgeSplitTarget) => boolean = () =>
-    false;
+  private isTargetValid: (target: TopLevelDwellTarget) => boolean = () => false;
 
   constructor(
     private readonly onStateChanged: (state: EdgeSplitDwellState) => void,
@@ -35,7 +37,7 @@ export class EdgeSplitDwellMachine {
   ) {}
 
   setTargetValidator(
-    validator: (target: TopLevelEdgeSplitTarget) => boolean,
+    validator: (target: TopLevelDwellTarget) => boolean,
   ): void {
     this.isTargetValid = validator;
   }
@@ -44,7 +46,7 @@ export class EdgeSplitDwellMachine {
     return this.state;
   }
 
-  observe(target: TopLevelEdgeSplitTarget | null): void {
+  observe(target: TopLevelDwellTarget | null): void {
     if (target === null || !this.isTargetValid(target)) {
       this.reset();
       return;
@@ -67,9 +69,7 @@ export class EdgeSplitDwellMachine {
     }, EDGE_SPLIT_DWELL_MS);
   }
 
-  commit(
-    target: TopLevelEdgeSplitTarget | null,
-  ): TopLevelEdgeSplitTarget | null {
+  commit(target: TopLevelDwellTarget | null): TopLevelDwellTarget | null {
     if (
       target === null ||
       this.state.kind !== "preview" ||
@@ -109,13 +109,8 @@ export class EdgeSplitDwellMachine {
 }
 
 function sameTarget(
-  left: TopLevelEdgeSplitTarget | null,
-  right: TopLevelEdgeSplitTarget,
+  left: TopLevelDwellTarget | null,
+  right: TopLevelDwellTarget,
 ): boolean {
-  return (
-    left !== null &&
-    left.side === right.side &&
-    left.targetRef.kind === right.targetRef.kind &&
-    left.targetRef.id === right.targetRef.id
-  );
+  return left !== null && dwellTargetKey(left) === dwellTargetKey(right);
 }

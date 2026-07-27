@@ -18,6 +18,7 @@ import {
 } from "@/components/epic-canvas/dnd/dnd";
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
 import type { TopLevelEdgeSplitTarget } from "@/components/layout/tabs/top-level-tab-dnd";
+import type { TabRef } from "@/stores/tabs/types";
 import type {
   DropPosition,
   EpicCanvasTileRef,
@@ -116,6 +117,12 @@ interface EpicDndState {
   /** Preview owned by the independent top-level edge-dwell machine. */
   readonly topLevelEdgeSplitPreview: TopLevelEdgeSplitTarget | null;
   /**
+   * Strip tab the same dwell machine is previewing a pair-into-split against.
+   * Kept separate from the edge preview so a tab chip and a content pane never
+   * both claim to be the drop destination.
+   */
+  readonly topLevelStripPairPreview: TabRef | null;
+  /**
    * Sidebar reparent preview (gesture-scoped, mutually exclusive with the
    * canvas `dropPreview`). `reparentTargetNodeId` is the hovered VALID row
    * target (new parent); `reparentRootPanelId` is the hovered VALID panel
@@ -136,6 +143,7 @@ interface EpicDndState {
   readonly topLevelEdgeSplitPreviewChanged: (
     preview: TopLevelEdgeSplitTarget | null,
   ) => void;
+  readonly topLevelStripPairPreviewChanged: (preview: TabRef | null) => void;
   readonly sidebarReparentPreviewChanged: (preview: {
     readonly targetNodeId: string | null;
     readonly targetViewTabId?: string | null;
@@ -152,6 +160,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   dropPreview: null,
   headerStripDropIndex: null,
   topLevelEdgeSplitPreview: null,
+  topLevelStripPairPreview: null,
   reparentTargetNodeId: null,
   reparentTargetViewTabId: null,
   reparentRootPanelId: null,
@@ -164,6 +173,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       dropPreview: null,
       headerStripDropIndex: null,
       topLevelEdgeSplitPreview: null,
+      topLevelStripPairPreview: null,
       reparentTargetNodeId: null,
       reparentTargetViewTabId: null,
       reparentRootPanelId: null,
@@ -178,6 +188,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       dropPreview: null,
       headerStripDropIndex: null,
       topLevelEdgeSplitPreview: null,
+      topLevelStripPairPreview: null,
       reparentTargetNodeId: null,
       reparentTargetViewTabId: null,
       reparentRootPanelId: null,
@@ -206,6 +217,19 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
     }
     set({ topLevelEdgeSplitPreview: preview });
   },
+  topLevelStripPairPreviewChanged: (preview) => {
+    const current = get().topLevelStripPairPreview;
+    if (
+      current === preview ||
+      (current !== null &&
+        preview !== null &&
+        current.kind === preview.kind &&
+        current.id === preview.id)
+    ) {
+      return;
+    }
+    set({ topLevelStripPairPreview: preview });
+  },
   sidebarReparentPreviewChanged: (preview) => {
     const state = get();
     if (
@@ -232,6 +256,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       state.dropPreview === null &&
       state.headerStripDropIndex === null &&
       state.topLevelEdgeSplitPreview === null &&
+      state.topLevelStripPairPreview === null &&
       state.reparentTargetNodeId === null &&
       state.reparentTargetViewTabId === null &&
       state.reparentRootPanelId === null &&
@@ -246,6 +271,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       dropPreview: null,
       headerStripDropIndex: null,
       topLevelEdgeSplitPreview: null,
+      topLevelStripPairPreview: null,
       reparentTargetNodeId: null,
       reparentTargetViewTabId: null,
       reparentRootPanelId: null,
@@ -324,6 +350,17 @@ export function useTopLevelEdgeSplitPreview(
       preview.targetRef.id === refId
       ? preview.side
       : null;
+  });
+}
+
+/** True for the one strip tab a pair-into-split drop would combine with. */
+export function useTopLevelStripPairPreview(
+  refKind: string,
+  refId: string,
+): boolean {
+  return useEpicDndStore((state) => {
+    const preview = state.topLevelStripPairPreview;
+    return preview !== null && preview.kind === refKind && preview.id === refId;
   });
 }
 
