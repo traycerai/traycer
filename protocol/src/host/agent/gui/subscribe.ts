@@ -378,7 +378,11 @@ const chatQueueStateSchemaPreInReplyTo = z.object({
 export const chatRunStatusSchema = z.enum(["idle", "running", "stopping"]);
 export type ChatRunStatus = z.infer<typeof chatRunStatusSchema>;
 
-export const chatActiveTurnSchema = z.object({
+// Frozen `chat.subscribe@1.0–1.4` active-turn shape (pre-`sameTurnSteeringSupported`).
+// The live shape below extends this with the `1.5` steering-capability field;
+// every released ≤1.4 line binds this frozen copy so the host strips the new
+// field for those subscribers (see `chat-frame-projection.ts`).
+export const chatActiveTurnSchemaPreV15 = z.object({
   turnId: z.string(),
   status: z.enum([
     "starting",
@@ -411,6 +415,15 @@ export const chatActiveTurnSchema = z.object({
   userMessageId: z.string().nullable(),
   startedAt: z.number(),
   updatedAt: z.number(),
+});
+
+export const chatActiveTurnSchema = chatActiveTurnSchemaPreV15.extend({
+  // Whether the running turn's harness supports same-turn steering (`chat.subscribe@1.5`).
+  // The renderer reads this to gate the Cmd+Enter steer behavior and its
+  // discovery hints instead of duplicating the host's capability table. Defaults
+  // to `false` so a ≤1.4 host (or a turn persisted before this field) parses as
+  // "not steer-capable" - a safe, hint-suppressing fallback.
+  sameTurnSteeringSupported: z.boolean().default(false),
 });
 export type ChatActiveTurn = z.infer<typeof chatActiveTurnSchema>;
 
@@ -1020,7 +1033,7 @@ const chatSnapshotSchemaV10 = z.object({
   access: chatAccessSchema,
   queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
@@ -1063,7 +1076,7 @@ const chatSubscribeServerFrameSchemaV10 = z.discriminatedUnion("kind", [
     ...textFrameFields,
     ...chatReferenceFields,
     runStatus: chatRunStatusSchema,
-    activeTurn: chatActiveTurnSchema.nullable(),
+    activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   }),
   z.object({
     kind: z.literal("blockDelta"),
@@ -1325,7 +1338,7 @@ const chatSnapshotSchemaV11 = z.object({
   access: chatAccessSchema,
   queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
@@ -1348,7 +1361,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV11 = z.object({
   ...textFrameFields,
   ...chatReferenceFields,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   backgroundItems: z.array(backgroundItemSchemaV11).optional(),
   turnInProgress: z.boolean().optional(),
 });
@@ -1384,7 +1397,7 @@ const chatSnapshotSchemaV12 = z.object({
   access: chatAccessSchema,
   queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
@@ -1407,7 +1420,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV12 = z.object({
   ...textFrameFields,
   ...chatReferenceFields,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   backgroundItems: z.array(backgroundItemSchemaV12).optional(),
   turnInProgress: z.boolean().optional(),
 });
@@ -1441,7 +1454,7 @@ const chatSnapshotSchemaV13 = z.object({
   access: chatAccessSchema,
   queue: chatQueueStateSchemaPreInReplyTo,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
@@ -1468,7 +1481,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV13 = z.object({
   ...textFrameFields,
   ...chatReferenceFields,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   backgroundItems: z.array(backgroundItemSchemaV13).optional(),
   turnInProgress: z.boolean().optional(),
 });
@@ -1491,18 +1504,18 @@ export const chatSubscribeV13 = defineStreamRpcContract({
 //
 // `1.4` shipped `inReplyTo` on every agent sender (user-message, assistant,
 // queue item, event `actor`, steer) and the `mcp` background-item kind (CLI
-// auto-backgrounded MCP tool calls) - but PRE-`archivedAt`. Pinned here so
-// `1.5` (which adds `archivedAt` to the snapshot's embedded chat) can no
-// longer mutate this released line: the frozen snapshot below has no
-// `archivedAt` key on `chat` at all. Everything else about `1.4` is
-// unaffected by archiving, so `turnStateChanged`, the shared frames, and the
-// client frame all keep reusing the live schemas.
+// auto-backgrounded MCP tool calls) - but PRE-`archivedAt` and
+// PRE-`sameTurnSteeringSupported`. Pinned here so `1.5` can no longer mutate
+// this released line: the frozen snapshot has no `archivedAt` key on `chat`,
+// and `activeTurn` strips the steering-capability field in both the snapshot
+// and `turnStateChanged` frames. The shared frames and client frame are
+// otherwise unchanged.
 const chatSnapshotSchemaV14 = z.object({
   chat: chatSchemaV14,
   access: chatAccessSchema,
   queue: chatQueueStateSchema,
   runStatus: chatRunStatusSchema,
-  activeTurn: chatActiveTurnSchema.nullable(),
+  activeTurn: chatActiveTurnSchemaPreV15.nullable(),
   pendingApprovals: z.array(chatApprovalStateSchema),
   pendingInterviews: z.array(chatPendingInterviewStateSchema),
   worktreeBinding: worktreeBindingSchema.nullable(),
@@ -1520,9 +1533,19 @@ const chatSubscribeSnapshotServerFrameSchemaV14 = z.object({
   snapshot: chatSnapshotSchemaV14,
 });
 
+const chatSubscribeTurnStateChangedServerFrameSchemaV14 = z.object({
+  kind: z.literal("turnStateChanged"),
+  ...textFrameFields,
+  ...chatReferenceFields,
+  runStatus: chatRunStatusSchema,
+  activeTurn: chatActiveTurnSchemaPreV15.nullable(),
+  backgroundItems: z.array(backgroundItemSchema).optional(),
+  turnInProgress: z.boolean().optional(),
+});
+
 const chatSubscribeServerFrameSchemaV14 = z.discriminatedUnion("kind", [
   chatSubscribeSnapshotServerFrameSchemaV14,
-  chatSubscribeTurnStateChangedServerFrameSchema,
+  chatSubscribeTurnStateChangedServerFrameSchemaV14,
   ...chatSubscribeSharedServerFrameSchemas,
 ]);
 
@@ -1534,13 +1557,14 @@ export const chatSubscribeV14 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
 
-// ─── Live `chat.subscribe@1.5` contract (adds `archivedAt`) ─────────────────
+// ─── Live `chat.subscribe@1.5` contract ────────────────────────────────────
 //
-// The live serverFrame's snapshot now carries the chat's `archivedAt` (see
-// `chatSchema.archivedAt`); nothing else changes from `1.4`. Older peers
-// negotiate ≤1.4 and receive the frozen frame above, whose `chat` has no
-// `archivedAt` key - `epic.setChatArchived` (unary) still applies the flag
-// host-side for them, they just cannot see it on this stream.
+// The live snapshot now carries `chat.archivedAt`, and `activeTurn` gains
+// `sameTurnSteeringSupported` so the renderer can gate Cmd+Enter steering
+// without duplicating the harness capability table. Older peers negotiate
+// ≤1.4 and receive the frozen frames above, which strip both additions (see
+// `chat-frame-projection.ts` for the active-turn projection). The client frame
+// is unchanged from `1.4`.
 
 export const chatSubscribeV15 = defineStreamRpcContract({
   method: "chat.subscribe",

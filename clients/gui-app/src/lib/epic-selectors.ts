@@ -29,6 +29,7 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type {
   GuiHarnessId,
   TuiHarnessId,
@@ -43,6 +44,11 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
+import {
+  deriveEpicSyncPillState,
+  type EpicHostDirtyState,
+  type EpicSyncPillState,
+} from "@/lib/epic-sync-pill-state";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -119,6 +125,7 @@ const EMPTY_NODES_AS_ARTIFACTS: ReadonlyArray<ArtifactProjection> =
   Object.freeze([]);
 const EMPTY_TREE_ID_ARRAY: readonly string[] = EMPTY_ARRAY;
 const EMPTY_TREE_ID_SET: ReadonlySet<string> = new Set<string>();
+const EMPTY_ROLE_CLAIMS: readonly RoleClaim[] = Object.freeze([]);
 
 export { EMPTY_TREE_ID_ARRAY, EMPTY_TREE_ID_SET };
 
@@ -130,6 +137,50 @@ export function useEpicSnapshotMeta(): SnapshotMetaEpic | null {
 
 export function useEpicConnectionStatus(): StreamConnectionStatus {
   return useEpicStore((s) => s.connectionStatus);
+}
+
+/**
+ * Host dirtiness is known only after this subscription cycle's atomic @1.1
+ * snapshot. A clean-looking map before then (or under a negotiated @1.0 host)
+ * is unknown rather than evidence that the cloud has acknowledged everything.
+ */
+const selectHostDirtyState = createSelector(
+  (s: OpenEpicState) => s.hasDirtySnapshotForOpenCycle,
+  (s: OpenEpicState) => s.rootDirty,
+  (s: OpenEpicState) => s.artifactRoomDirtyByArtifactRoomId,
+  (
+    hasDirtySnapshotForOpenCycle,
+    rootDirty,
+    dirtyByArtifactRoomId,
+  ): EpicHostDirtyState => {
+    if (!hasDirtySnapshotForOpenCycle || rootDirty === null) return "unknown";
+    if (rootDirty) return "dirty";
+    return Object.values(dirtyByArtifactRoomId).some((dirty) => dirty)
+      ? "dirty"
+      : "clean";
+  },
+);
+
+/**
+ * The sync pill's single source of truth. Weighs all four legs of the
+ * durability chain rather than the lossy blended `connectionStatus` the pill
+ * used to read on its own - see `@/lib/epic-sync-pill-state` for the ordering
+ * contract and why each leg has to be visible separately.
+ *
+ * Returns a plain string union, so an unchanged verdict is `Object.is`-equal
+ * and never re-renders the pill.
+ */
+export function useEpicSyncPillState(): EpicSyncPillState {
+  return useEpicStore((s) =>
+    deriveEpicSyncPillState({
+      hostTransportStatus: s.hostTransportStatus,
+      cloudSyncStatus: s.cloudSyncStatus,
+      hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
+      hostDirtyState: selectHostDirtyState(s),
+      hasUnsyncedLocalChanges: s.isDirty,
+      hasConnectedOnce: s.hasConnectedOnce,
+    }),
+  );
 }
 
 export function useEpicPermissionRole(): PermissionRole | null {
@@ -1044,6 +1095,20 @@ export function useEpicTreeNode(id: string): TreeNode | null {
     if (Object.hasOwn(s.tree.nodeById, id)) return s.tree.nodeById[id];
     return null;
   });
+}
+
+export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
+  return useEpicStore((s) =>
+    Object.hasOwn(s.agentRoles.byAgentId, agentId)
+      ? s.agentRoles.byAgentId[agentId]
+      : EMPTY_ROLE_CLAIMS,
+  );
+}
+
+export function useEpicAgentRoleClaimsByAgentId(): Readonly<
+  Record<string, readonly RoleClaim[]>
+> {
+  return useEpicStore((s) => s.agentRoles.byAgentId);
 }
 
 /**

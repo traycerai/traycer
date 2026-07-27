@@ -8,7 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   domAnimation,
   hasReducedMotionListener,
@@ -280,12 +280,14 @@ describe("buildContextUsageRows", () => {
 
 describe("ContextUsageChip", () => {
   it("renders nothing when usage is null", () => {
-    const { container } = render(<ContextUsageChip usage={null} />);
+    const { container } = render(
+      <ContextUsageChip usage={null} onCompact={null} />,
+    );
     expect(container.firstChild).toBe(null);
   });
 
   it("renders a compact button for a usage with a contextWindow", () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
     const button = screen.getByRole("button", {
       name: /Context window 75% left/,
     });
@@ -313,6 +315,7 @@ describe("ContextUsageChip", () => {
           totalTokens: 51_000,
           contextTokens: 50_000,
         }}
+        onCompact={null}
       />,
     );
     expect(container.firstChild).toBe(null);
@@ -330,6 +333,7 @@ describe("ContextUsageChip", () => {
           cacheReadInputTokens: 100_000,
           contextWindow: 258_000,
         }}
+        onCompact={null}
       />,
     );
     fireEvent.click(
@@ -349,7 +353,7 @@ describe("ContextUsageChip", () => {
   });
 
   it("updates the pinned context usage setting from the popover action", async () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -381,7 +385,7 @@ describe("ContextUsageChip", () => {
   });
 
   it("preserves trigger focus when the popover opens from a pointer action", async () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
 
     const trigger = screen.getByRole("button", {
       name: /Context window 75% left/,
@@ -397,7 +401,7 @@ describe("ContextUsageChip", () => {
   });
 
   it("moves focus to the popover action when the popover opens from keyboard activation", async () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
 
     const trigger = screen.getByRole("button", {
       name: /Context window 75% left/,
@@ -414,7 +418,7 @@ describe("ContextUsageChip", () => {
 
   it("renders the pinned strip when the setting is enabled and reliable usage exists", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
 
     expect(
       screen.queryByRole("button", {
@@ -443,7 +447,7 @@ describe("ContextUsageChip", () => {
   });
 
   it("keeps detailed popover values on the static text path", async () => {
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -470,6 +474,7 @@ describe("ContextUsageChip", () => {
           totalTokens: 51_000,
           contextTokens: 50_000,
         }}
+        onCompact={null}
       />,
     );
 
@@ -479,7 +484,7 @@ describe("ContextUsageChip", () => {
 
   it("unpins from the inline pinned strip action", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
 
     fireEvent.click(
       screen.getByRole("button", {
@@ -498,7 +503,7 @@ describe("ContextUsageChip", () => {
 
   it("moves focus to the restored compact trigger after focused inline unpin", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
 
     const unpinButton = screen.getByRole("button", {
       name: "Unpin context usage breakdown",
@@ -514,7 +519,7 @@ describe("ContextUsageChip", () => {
 
   it("omits noisy cache rows from the pinned strip when cache values are absent", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
 
     const strip = screen.getByTestId("context-usage-pinned-strip");
     expect(within(strip).getByText("Used")).toBeTruthy();
@@ -526,7 +531,9 @@ describe("ContextUsageChip", () => {
 
   it("updates the pinned strip from the same usage value", async () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    const { rerender } = render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    const { rerender } = render(
+      <ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />,
+    );
 
     expect(queryCompactContextTrigger()).toBeNull();
     expect(screen.getByText("50K / 200K used")).toBeTruthy();
@@ -540,6 +547,7 @@ describe("ContextUsageChip", () => {
           contextTokens: 150_000,
           contextWindow: 200_000,
         }}
+        onCompact={null}
       />,
     );
 
@@ -556,7 +564,9 @@ describe("ContextUsageChip", () => {
   it("updates the pinned percent instantly when reduced motion is requested", () => {
     installReducedMotionPreference(true);
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    const { rerender } = render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    const { rerender } = render(
+      <ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />,
+    );
 
     expect(
       screen.getByTestId("context-usage-pinned-percent-value").textContent,
@@ -571,6 +581,7 @@ describe("ContextUsageChip", () => {
           contextTokens: 150_000,
           contextWindow: 200_000,
         }}
+        onCompact={null}
       />,
     );
 
@@ -581,7 +592,7 @@ describe("ContextUsageChip", () => {
 
   it("marks the pinned strip summary and details with container-query collapse classes", () => {
     useSettingsStore.getState().setPinContextUsageBreakdown(true);
-    render(<ContextUsageChip usage={RELIABLE_USAGE} />);
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
 
     expect(
       screen.getByTestId("context-usage-pinned-summary").className,
@@ -589,5 +600,46 @@ describe("ContextUsageChip", () => {
     expect(
       screen.getByTestId("context-usage-pinned-details").className,
     ).toContain("@max-[34rem]:hidden");
+  });
+
+  it("omits the compact action entirely when the harness cannot compact on demand", () => {
+    // Absent, not disabled: a greyed-out control reads as "try again later"
+    // when the truth is that this harness has no manual compaction at all.
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={null} />);
+    expect(screen.queryByTestId("context-usage-compact-action")).toBe(null);
+  });
+
+  it("renders the compact action before the chip and invokes it on click", () => {
+    const onCompact = vi.fn();
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={onCompact} />);
+
+    const action = screen.getByTestId("context-usage-compact-action");
+    const trigger = screen.getByTestId("context-usage-chip");
+    // Leading position, per the composer-dock layout.
+    expect(
+      action.compareDocumentPosition(trigger) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(action);
+    expect(onCompact).toHaveBeenCalledTimes(1);
+  });
+
+  it("trails the usage figures with the compact action in the pinned strip", () => {
+    useSettingsStore.getState().setPinContextUsageBreakdown(true);
+    const onCompact = vi.fn();
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={onCompact} />);
+
+    const strip = screen.getByTestId("context-usage-pinned-strip");
+    const action = within(strip).getByTestId("context-usage-compact-action");
+    const details = within(strip).getByTestId("context-usage-pinned-details");
+    // Pinned, the action sits AFTER the usage data rather than before it.
+    expect(
+      details.compareDocumentPosition(action) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(action);
+    expect(onCompact).toHaveBeenCalledTimes(1);
   });
 });

@@ -144,7 +144,7 @@ export function TraycerMarkdown({
         )}
       >
         {blocks.map((block) =>
-          isStreaming && block.id >= tailStartIndex ? (
+          isStreaming && block.endId >= tailStartIndex ? (
             <div key={block.id} data-md-unstable="" className="contents">
               <MarkdownBlock
                 raw={block.raw}

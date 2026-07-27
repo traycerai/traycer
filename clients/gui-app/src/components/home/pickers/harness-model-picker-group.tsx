@@ -18,6 +18,7 @@ import {
 import { PickerLeaderBadge } from "@/components/home/pickers/harness-model-picker-leader-badge";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import {
+  harnessAvailabilityUnsettled,
   railEntryKey,
   visibleRailEntries,
   type RailEntry,
@@ -106,7 +107,7 @@ export function ProviderRail(props: ProviderRailProps) {
             disabled={
               (lockedHarnessId !== null &&
                 entry.harness.id !== lockedHarnessId) ||
-              entry.harness.availabilityPending
+              harnessAvailabilityUnsettled(entry.harness)
             }
             onEntryChange={onEntryChange}
             onRetryPack={onRetryPack}
@@ -118,15 +119,21 @@ export function ProviderRail(props: ProviderRailProps) {
         label="Refresh providers & models"
         className="mt-1"
       />
-      <button
-        type="button"
-        aria-label="Provider CLI settings"
-        title="Provider CLI settings"
-        onClick={onOpenProviderSettings}
-        className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+      <TooltipWrapper
+        label="Provider CLI settings"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <Settings className="size-4" />
-      </button>
+        <button
+          type="button"
+          aria-label="Provider CLI settings"
+          onClick={onOpenProviderSettings}
+          className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <Settings className="size-4" />
+        </button>
+      </TooltipWrapper>
     </div>
   );
 }
@@ -143,9 +150,11 @@ interface ProviderRailButtonProps {
 // Hover/AT title for a rail tab: surfaces the probe-in-flight state, then the
 // fork-lock reason, then the managed-pack preparing state, else the plain
 // label. A function (not a nested ternary) so it stays lint-clean and the
-// states read top to bottom.
+// states read top to bottom. Only an UNSETTLED probe is announced - a
+// revalidating one is a background refresh the user has no reason to hear
+// about, and it keeps its cached verdict while it runs.
 function railButtonTitle(entry: RailEntry, disabled: boolean): string {
-  if (entry.harness.availabilityPending) {
+  if (harnessAvailabilityUnsettled(entry.harness)) {
     return `${entry.harness.label} — checking availability…`;
   }
   if (disabled) return LOCKED_PROVIDER_TOOLTIP;
@@ -167,7 +176,12 @@ function railButtonTitle(entry: RailEntry, disabled: boolean): string {
 // Accessible name for a rail tab. Mirrors `railButtonTitle`'s precedence so a
 // screen reader and a hover tooltip never describe the tab differently.
 function railButtonAriaLabel(entry: RailEntry): string {
-  if (entry.harness.availabilityPending) {
+  // `harnessAvailabilityUnsettled`, not `availabilityPending`: a revalidating
+  // harness keeps its verdict and stays fully interactive, so announcing it as
+  // "loading…" every 30s would be noise. This helper replaced the inline
+  // expression main narrowed, so the narrowing has to be carried here by hand -
+  // the merge had nothing to conflict with.
+  if (harnessAvailabilityUnsettled(entry.harness)) {
     return `${entry.harness.label} — loading…`;
   }
   if (entry.preparing !== null) {
@@ -186,7 +200,8 @@ function railButtonDescribedBy(
     readonly degradedDescriptionId: string;
   },
 ): string | undefined {
-  if (entry.harness.availabilityPending) return undefined;
+  // Same narrowing as `railButtonAriaLabel`, for the same reason.
+  if (harnessAvailabilityUnsettled(entry.harness)) return undefined;
   if (entry.preparing !== null) return ids.preparingDescriptionId;
   if (entry.degraded) return ids.degradedDescriptionId;
   return undefined;
@@ -250,13 +265,13 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
     }
     onEntryChange(harness.id);
   };
+  const unsettled = harnessAvailabilityUnsettled(harness);
   return (
+    // One wrapper, not two: `railButtonTitle` already resolves the locked
+    // reason, the "checking availability…" state and the plain harness label,
+    // so a second wrapper for the locked case put two tooltips on one trigger.
     <TooltipWrapper
-      label={
-        disabled && !harness.availabilityPending
-          ? LOCKED_PROVIDER_TOOLTIP
-          : null
-      }
+      label={railButtonTitle(entry, disabled)}
       side="right"
       sideOffset={6}
       align={undefined}
@@ -271,7 +286,6 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
           preparingDescriptionId,
           degradedDescriptionId,
         })}
-        title={railButtonTitle(entry, disabled)}
         tabIndex={focusable ? undefined : -1}
         data-active={active}
         data-degraded={entry.degraded ? true : undefined}
@@ -284,7 +298,7 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         })}
         onClick={handleClick}
       >
-        {harness.availabilityPending ? (
+        {unsettled ? (
           <>
             <span className="opacity-25">
               <HarnessIcon harnessId={harness.id} />

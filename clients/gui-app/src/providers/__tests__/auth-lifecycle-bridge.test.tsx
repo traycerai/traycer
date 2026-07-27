@@ -58,6 +58,7 @@ function fakeChatHandle(
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: () => ({
         sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => {
           calls.close += 1;
         },

@@ -182,6 +182,31 @@ export function resetCloudEpicTasksPagesForScope(
 }
 
 /**
+ * Drops only last-viewed pagination tails for one host/user. Recording a view
+ * can move rows across page boundaries for that ordering, but leaves cursors
+ * for every other sort valid.
+ */
+export function resetLastViewedCloudEpicTasksPagesForScope(
+  hostId: string,
+  userId: string,
+): void {
+  const state = useCloudEpicTasksPagesStore.getState();
+  const prefix = `${hostId}|${userId}|`;
+  const identities = new Set([
+    ...Object.keys(state.pagesByIdentity),
+    ...Object.keys(state.generationByIdentity),
+  ]);
+  identities.forEach((identity) => {
+    if (
+      identity.startsWith(prefix) &&
+      identity.includes('"sort":"last-viewed"')
+    ) {
+      state.resetIdentity(identity);
+    }
+  });
+}
+
+/**
  * Flips one epic's `pinned` bit inside every retained "Show more" tail for
  * one host/user - the pages-store half of the optimistic pin patch (the
  * cached first page lives in TanStack Query and is patched by

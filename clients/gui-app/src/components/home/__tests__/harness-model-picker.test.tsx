@@ -481,6 +481,7 @@ import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const CODEX_HARNESS: HarnessOption = {
   id: "codex",
   label: "Codex",
@@ -1045,6 +1046,44 @@ describe("<HarnessModelPicker />", () => {
     expect(screen.queryByText("Claude Sonnet 4.6")).toBeNull();
   });
 
+  it("keeps a revalidating provider's rows on screen and its rail entry pickable", async () => {
+    // The host's availability cache lapses every 30 s; the catalog call that
+    // follows re-probes in the background and reports `availabilityPending`
+    // with the last settled verdict intact (`available: true`). That is a
+    // background refresh - the rows the user is looking at must not be
+    // replaced by a spinner, and the rail must stay clickable, or the picker
+    // blanks for the length of the probe.
+    const revalidating = { availabilityPending: true } as const;
+    const codex = codexModels();
+    const claude = claudeModels();
+    queryMock.harnesses = [
+      { ...CODEX_HARNESS, ...revalidating },
+      { ...CLAUDE_HARNESS, ...revalidating },
+    ];
+    queryMock.catalogHarnesses = [
+      catalogHarness({ ...CODEX_HARNESS, ...revalidating }, codex),
+      catalogHarness({ ...CLAUDE_HARNESS, ...revalidating }, claude),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", claude],
+    ]);
+    renderPicker(undefined);
+
+    await openPicker();
+
+    expect(screen.getByRole("option", { name: /GPT-5\.5/ })).not.toBeNull();
+    expect(screen.getByText("GPT-4.1")).not.toBeNull();
+    expect(screen.queryByText("Loading models")).toBeNull();
+    const claudeRail = screen.getByRole("tab", { name: "Claude" });
+    expect(claudeRail.getAttribute("aria-disabled")).toBeNull();
+
+    // ...and switching to the other revalidating provider still commits.
+    fireEvent.click(claudeRail);
+    expect(screen.getByText("Claude Sonnet 4.6")).not.toBeNull();
+    expect(claudeRail.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("shows a deprecated-model badge with its notice as a tooltip", async () => {
     const deprecationNotice =
       "Claude Sonnet 4.6 is deprecated in favor of Claude Sonnet 5 and " +
@@ -1174,7 +1213,7 @@ describe("<HarnessModelPicker />", () => {
     const claudeTab = screen.getByRole("tab", { name: "Claude" });
 
     expect(codexTab.getAttribute("aria-disabled")).toBe("true");
-    expect(codexTab.getAttribute("title")).toBe(
+    expect(tooltipTextNear(codexTab)).toBe(
       "Provider cannot be changed while forking terminal agent",
     );
     expect(claudeTab.getAttribute("aria-disabled")).toBeNull();
@@ -1534,9 +1573,14 @@ describe("<HarnessModelPicker />", () => {
     expect(claudeTab.getAttribute("aria-disabled")).toBe("true");
     // Not reachable by keyboard either - the retry WAS its only action.
     expect(claudeTab.getAttribute("tabindex")).toBe("-1");
-    // Neither the accessible name nor the hover title may invite the click.
+    // The accessible name may not invite the click.
     expect(claudeTab.getAttribute("aria-label")).not.toMatch(/retry/i);
-    expect(claudeTab.getAttribute("title")).not.toMatch(/retry/i);
+    // The hover copy lives in the tooltip now, not a `title` attribute: a
+    // native `title` beside a Radix tooltip put two on one trigger. Asserting
+    // its ABSENCE rather than its content keeps that fix pinned - and the
+    // retry sentence itself is gated by `providerPackRetryable`, which
+    // `provider-pack-readiness` tests directly.
+    expect(claudeTab.getAttribute("title")).toBeNull();
 
     fireEvent.click(claudeTab);
 
@@ -2378,7 +2422,7 @@ describe("<HarnessModelPicker />", () => {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
     expect(row.disabled).toBe(true);
-    expect(row.title).toBe(
+    expect(tooltipTextNear(row)).toBe(
       "Add profiles from a local host with browser sign-in available.",
     );
     fireEvent.click(row);
@@ -2559,7 +2603,7 @@ describe("<HarnessModelPicker />", () => {
       throw new Error("Expected create-new-profile row to render as a button.");
     }
     expect(row.disabled).toBe(true);
-    expect(row.title).toBe(
+    expect(tooltipTextNear(row)).toBe(
       "Add profiles from a local host with browser sign-in available.",
     );
   });

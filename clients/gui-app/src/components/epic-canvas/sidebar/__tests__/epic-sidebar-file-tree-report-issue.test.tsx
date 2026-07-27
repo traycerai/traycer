@@ -8,6 +8,7 @@ import {
   screen,
 } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
@@ -211,6 +212,7 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
   useChatFilter: () => ({ origin: "all" }),
   useChatSort: () => ({ field: "updated", direction: "desc" }),
   useCommentsPanelRevealed: () => false,
+  usePanelVisibilityOverrides: () => ({}),
   useEpicLeftPanelStore: (selector: (state: unknown) => unknown) =>
     selector({
       clearAcknowledgedRootCreatePending: vi.fn(),
@@ -231,6 +233,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useAncestorIds: () => new Set<string>(),
   useChildIds: () => [],
   useEpicActiveAgentIds: () => new Set<string>(),
+  useEpicAgentRoleClaims: () => [],
   useEpicArtifact: () => null,
   useEpicArtifactRecords: () => [],
   useEpicArtifactStatus: () => null,
@@ -277,6 +280,7 @@ vi.mock("@/stores/epics/artifact-read-state-store", () => ({
 vi.mock("@/stores/settings/settings-store", () => ({
   useSettingsStore: (selector: (state: unknown) => unknown) =>
     selector({
+      diffViewerPreferences: { ignoreWhitespace: false },
       artifactIconColorMode: "none",
       artifactIconColors: {
         chat: undefined,
@@ -311,19 +315,40 @@ vi.mock("@/hooks/workspace/use-list-file-tree-query", () => ({
   }),
 }));
 
-// The active-query path search is a separate host query; this panel test only
-// exercises the browse/error state, so stub it to an inert idle result.
-vi.mock("@/hooks/workspace/use-workspace-search-paths-query", () => ({
-  useWorkspaceSearchPaths: () => ({
-    data: undefined,
-    isError: false,
-    isLoading: false,
-    isFetching: false,
-  }),
-}));
+// The path-search hook is replaced with a real, permanently-disabled TanStack
+// query: this panel test only exercises the browse/error state, and standing up
+// the true hook would need a full `HostClient` (readiness snapshot + change
+// subscription), not this harness's minimal stub. Delegating to `useQuery`
+// yields a COMPLETE idle `UseQueryResult` - status, isPending, refetch and the
+// rest - so the mock cannot drift from the production query contract the way a
+// hand-listed subset would. The module's real echo guard stays in the graph.
+vi.mock(
+  "@/hooks/workspace/use-workspace-search-paths-query",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/workspace/use-workspace-search-paths-query")
+      >();
+    const { useQuery } = await import("@tanstack/react-query");
+    return {
+      ...actual,
+      useWorkspaceSearchPaths: () =>
+        useQuery({
+          queryKey: ["test", "workspace.searchPaths", "disabled"],
+          // Never invoked (the query is permanently disabled), but it must
+          // resolve to a non-undefined value to satisfy the TanStack lint rule.
+          queryFn: () => Promise.resolve(null),
+          enabled: false,
+        }),
+    };
+  },
+);
 
 vi.mock("@pierre/trees/react", () => ({
   FileTree: () => <div data-testid="pierre-file-tree-stub" />,
+  // No filtering in these tests: a static idle snapshot keeps the panel's
+  // zero-match empty state out of the picture.
+  useFileTreeSearch: () => ({ isOpen: false, value: "", matchingPaths: [] }),
   useFileTree: () => ({
     model: {
       setSearch: () => undefined,
@@ -362,9 +387,11 @@ describe("epic sidebar file-tree load failure report action", () => {
 
   it("hides the report action when the support capability is unavailable", () => {
     render(
-      <TooltipProvider>
-        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
-      </TooltipProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+        </TooltipProvider>
+      </QueryClientProvider>,
     );
 
     screen.getByText("Unable to load files.");
@@ -373,9 +400,11 @@ describe("epic sidebar file-tree load failure report action", () => {
 
   it("reports only fixed generic context, never the raw file-tree host error", () => {
     render(
-      <TooltipProvider>
-        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
-      </TooltipProvider>,
+      <QueryClientProvider client={new QueryClient()}>
+        <TooltipProvider>
+          <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />
+        </TooltipProvider>
+      </QueryClientProvider>,
     );
 
     act(() => {

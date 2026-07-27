@@ -368,6 +368,19 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   "agent.getTranscript": { ...LATEST_SCHEDULING, poll: null },
   "agent.inbox.read": { ...LATEST_SCHEDULING, poll: null },
+  // Claiming a role persists responsibility and broadcasts awareness.
+  "agent.roles.claim": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agent.roles.list": { ...LATEST_SCHEDULING, poll: null },
+  // Relinquishing a role removes persisted responsibility and broadcasts awareness.
+  "agent.roles.relinquish": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Stopping an agent terminates its active execution.
   "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Migrating a phase changes the epic's persisted workflow state.
@@ -377,6 +390,12 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "epic.listTasks": { ...LATEST_SCHEDULING, poll: null },
+  // Recording a view updates the user's central task ordering preference.
+  "epic.recordViewed": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Pinning changes a task's persisted ordering preference.
   "epic.setPinned": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "epic.getTaskContexts": { ...LATEST_SCHEDULING, poll: null },
@@ -573,6 +592,10 @@ export const HOST_METHOD_POLL_TABLE = {
   "git.getFileDiff": { ...LATEST_SCHEDULING, poll: null },
   "git.getFileDiffs": { ...LATEST_SCHEDULING, poll: null },
   "git.getCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // A read of the local checkout, requested when the PR Files tab opens.
+  // No poll: the PR detail stream is what notices a new push, and a re-render
+  // off a changed `headRefOid` re-keys the query on its own.
+  "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Killing a terminal terminates a host PTY session.

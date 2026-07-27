@@ -76,6 +76,7 @@ function createHarness(): Harness {
         sendAction: (frame) => {
           sent.push(frame);
         },
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => undefined,
       };
     },

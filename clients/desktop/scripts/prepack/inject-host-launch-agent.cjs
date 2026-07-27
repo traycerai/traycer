@@ -111,6 +111,12 @@ function helperAppPathFor(appPath) {
   );
 }
 
+// Stays in lockstep with `buildPlist` in
+// clients/traycer-cli/src/service/platforms/macos.ts, including
+// `ProcessType: Interactive` - the only launchd band that runs with app-
+// equivalent (i.e. no) resource limits. `Standard` is defined as "equivalent
+// to no ProcessType being set", which means launchd throttles CPU and I/O;
+// see the rationale comment on `installService` in that file.
 function buildLaunchAgentPlist(label, helperBinaryRelativePath) {
   const hostPath = [
     "/opt/homebrew/bin",
@@ -149,7 +155,7 @@ ${programArgsXml}
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>ProcessType</key>
-  <string>Standard</string>
+  <string>Interactive</string>
   <key>SoftResourceLimits</key>
   <dict>
     <key>NumberOfFiles</key>

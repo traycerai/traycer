@@ -6290,6 +6290,54 @@ export const epicSchemaSurfaceBaseline = {
           ],
         },
       },
+      roleClaims: {
+        default: {},
+        type: "object",
+        propertyNames: {
+          type: "string",
+          format: "uuid",
+          pattern:
+            "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+        },
+        additionalProperties: {
+          type: "object",
+          properties: {
+            claimId: {
+              type: "string",
+              format: "uuid",
+              pattern:
+                "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            },
+            agentId: {
+              type: "string",
+              minLength: 1,
+            },
+            userId: {
+              type: "string",
+              minLength: 1,
+            },
+            role: {
+              type: "string",
+            },
+            scope: {
+              type: "string",
+            },
+            claimedAt: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+          },
+          required: [
+            "claimId",
+            "agentId",
+            "userId",
+            "role",
+            "scope",
+            "claimedAt",
+          ],
+        },
+      },
     },
     required: [
       "id",
@@ -12912,6 +12960,55 @@ export const epicSchemaSurfaceBaseline = {
           ],
         },
       },
+      roleClaims: {
+        default: {},
+        type: "object",
+        propertyNames: {
+          type: "string",
+          format: "uuid",
+          pattern:
+            "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+        },
+        additionalProperties: {
+          type: "object",
+          properties: {
+            claimId: {
+              type: "string",
+              format: "uuid",
+              pattern:
+                "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            },
+            agentId: {
+              type: "string",
+              minLength: 1,
+            },
+            userId: {
+              type: "string",
+              minLength: 1,
+            },
+            role: {
+              type: "string",
+            },
+            scope: {
+              type: "string",
+            },
+            claimedAt: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+          },
+          required: [
+            "claimId",
+            "agentId",
+            "userId",
+            "role",
+            "scope",
+            "claimedAt",
+          ],
+          additionalProperties: false,
+        },
+      },
     },
     required: [
       "id",
@@ -12923,6 +13020,7 @@ export const epicSchemaSurfaceBaseline = {
       "artifacts",
       "deletedArtifacts",
       "tuiAgents",
+      "roleClaims",
     ],
     additionalProperties: false,
     $defs: {

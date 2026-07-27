@@ -89,7 +89,8 @@ function knownPresentationContext(known: HostNotificationKnownPayload | null) {
   return {
     agentName,
     title,
-    agentContext: chatTitle !== null && chatTitle !== title ? chatTitle : "Agent",
+    agentContext:
+      chatTitle !== null && chatTitle !== title ? chatTitle : "Agent",
   };
 }
 
@@ -200,6 +201,14 @@ function agentStoppedFailureStatus(
         providerId,
         "Provider connection failed",
         (providerName) => `Connection to ${providerName} failed`,
+      );
+    case "context_exhausted":
+      return "Context limit reached";
+    case "request_rejected":
+      return providerSpecificFailureStatus(
+        providerId,
+        "Provider rejected the request",
+        (providerName) => `${providerName} rejected the request`,
       );
     case "turn_start_timeout":
       return "Provider did not start in time";

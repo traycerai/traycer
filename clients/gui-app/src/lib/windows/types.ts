@@ -305,7 +305,10 @@ export interface DesktopReportIssueForm {
 }
 
 export interface DesktopSubmitReportResult {
-  readonly reportId: string;
+  // `null` when the diagnostics upload never reached Sentry. The issue is
+  // still filed, but without a Support Report row - there is nothing to look
+  // up, and advertising an id that resolves to nothing is the bug being fixed.
+  readonly reportId: string | null;
 }
 
 export interface DesktopSupportBridge {

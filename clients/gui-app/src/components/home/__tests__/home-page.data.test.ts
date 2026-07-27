@@ -6,9 +6,12 @@ import {
   collectHistoryRepos,
   filterHistoryItems,
   groupHistoryItems,
+  historyPullRequestQueryNumber,
+  historyPullRequestSearchEpicIds,
+  historyWorktreeSearchEpicIds,
   prioritizePinnedHistoryItems,
   sortHistoryItems,
-  withHistoryItemPullRequestNumbers,
+  withHistoryItemWorktreeMetadata,
   type HistoryItem,
 } from "@/components/home/data/home-page.data";
 
@@ -27,6 +30,8 @@ function makeItem(
     linkedRepos: overrides.linkedRepos ?? [],
     linkedWorkspaces: overrides.linkedWorkspaces ?? [],
     pullRequestNumbers: overrides.pullRequestNumbers ?? [],
+    worktreeBranches: overrides.worktreeBranches ?? [],
+    worktreePaths: overrides.worktreePaths ?? [],
     ownership: overrides.ownership ?? "mine",
     permissionRole: overrides.permissionRole ?? "owner",
     isPinned: overrides.isPinned ?? false,
@@ -92,6 +97,26 @@ describe("home-page history helpers", () => {
     );
   });
 
+  it("preserves server last-viewed order while keeping pins first", () => {
+    const items = [
+      makeItem({ id: "unseen-new", title: "Unseen new", updatedAtMs: 40 }),
+      makeItem({ id: "viewed-old", title: "Viewed old", updatedAtMs: 30 }),
+      makeItem({ id: "pinned", title: "Pinned", isPinned: true }),
+      makeItem({ id: "viewed-new", title: "Viewed new", updatedAtMs: 10 }),
+      makeItem({ id: "unseen-old", title: "Unseen old", updatedAtMs: 20 }),
+    ];
+
+    expect(
+      sortHistoryItems(items, "last-viewed").map((item) => item.id),
+    ).toEqual([
+      "pinned",
+      "unseen-new",
+      "viewed-old",
+      "viewed-new",
+      "unseen-old",
+    ]);
+  });
+
   it("stably promotes pinned items in relevance-ranked results", () => {
     const items = [
       makeItem({ id: "best", title: "Best match", isPinned: false }),
@@ -127,9 +152,101 @@ describe("home-page history helpers", () => {
     ]);
 
     expect(
-      withHistoryItemPullRequestNumbers(items, worktreesByEpicId)[0]
+      withHistoryItemWorktreeMetadata(items, worktreesByEpicId)[0]
         .pullRequestNumbers,
     ).toEqual(["84", "#84", "PR #84", "85", "#85", "PR #85"]);
+  });
+
+  it("projects distinct branch names and worktree paths for a task", () => {
+    const items = [makeItem({ id: "history-1", title: "History task" })];
+    const worktreesByEpicId = new Map([
+      [
+        "history-1",
+        [
+          worktreeWithPullRequests({
+            prNumber: 84,
+            submodulePrNumbers: [85, null],
+          }),
+          worktreeWithPullRequests({
+            prNumber: 84,
+            submodulePrNumbers: [85],
+          }),
+        ],
+      ],
+    ]);
+
+    const [projected] = withHistoryItemWorktreeMetadata(
+      items,
+      worktreesByEpicId,
+    );
+    expect(projected.worktreeBranches).toEqual([
+      "task-history",
+      "submodule-0",
+      "submodule-1",
+    ]);
+    expect(projected.worktreePaths).toEqual(["/worktrees/84"]);
+  });
+
+  it("collects owner epic ids for branch and worktree-directory queries", () => {
+    const worktrees = [
+      {
+        ...worktreeWithPullRequests({
+          prNumber: null,
+          submodulePrNumbers: [85],
+        }),
+        owners: [worktreeOwner("epic-a"), worktreeOwner("epic-b")],
+      },
+    ];
+
+    // Case-insensitive branch substring.
+    expect(historyWorktreeSearchEpicIds("Task-Hist", worktrees)).toEqual([
+      "epic-a",
+      "epic-b",
+    ]);
+    // Owned-submodule branches are NOT matched on this path: callers feed it
+    // the cheap host index, whose `submodules` is contractually `[]`, so a
+    // fixture that populates them (as this one does) cannot occur in
+    // production. Those branches reach search via `worktreeBranches` instead.
+    expect(historyWorktreeSearchEpicIds("submodule-0", worktrees)).toEqual([]);
+    // Worktree leaf directory name ("/worktrees/none" -> "none").
+    expect(historyWorktreeSearchEpicIds("none", worktrees)).toEqual([
+      "epic-a",
+      "epic-b",
+    ]);
+    // Path-shaped query matches anywhere in the full worktree path.
+    expect(historyWorktreeSearchEpicIds("/worktrees/no", worktrees)).toEqual([
+      "epic-a",
+      "epic-b",
+    ]);
+    // A plain word matching only a path ancestor must NOT union unrelated
+    // tasks into a cloud title search.
+    expect(historyWorktreeSearchEpicIds("worktrees", worktrees)).toEqual([]);
+    expect(historyWorktreeSearchEpicIds("Alpha workbench", worktrees)).toEqual(
+      [],
+    );
+    // Single characters match too broadly to act on.
+    expect(historyWorktreeSearchEpicIds("t", worktrees)).toEqual([]);
+    expect(historyWorktreeSearchEpicIds("task-hist", [])).toEqual([]);
+  });
+
+  it("parses PR-shaped queries and collects owner epic ids by PR number", () => {
+    expect(historyPullRequestQueryNumber("84")).toBe(84);
+    expect(historyPullRequestQueryNumber("#84")).toBe(84);
+    expect(historyPullRequestQueryNumber("PR #84")).toBe(84);
+    expect(historyPullRequestQueryNumber("pr84")).toBe(84);
+    expect(historyPullRequestQueryNumber("84 fix")).toBe(null);
+    expect(historyPullRequestQueryNumber("fix")).toBe(null);
+
+    const worktrees = [
+      {
+        ...worktreeWithPullRequests({ prNumber: 84, submodulePrNumbers: [85] }),
+        owners: [worktreeOwner("epic-a")],
+      },
+    ];
+    expect(historyPullRequestSearchEpicIds(84, worktrees)).toEqual(["epic-a"]);
+    // Submodule PR numbers match too.
+    expect(historyPullRequestSearchEpicIds(85, worktrees)).toEqual(["epic-a"]);
+    expect(historyPullRequestSearchEpicIds(86, worktrees)).toEqual([]);
   });
 
   it("builds history items from cloud task lights and extracts real repo identifiers", () => {
@@ -237,6 +354,10 @@ describe("home-page history helpers", () => {
     });
   });
 });
+
+function worktreeOwner(epicId: string): WorktreeHostEntryV12["owners"][number] {
+  return { epicId, ownerKind: "chat", ownerId: `chat-${epicId}`, updatedAt: 1 };
+}
 
 function worktreeWithPullRequests(args: {
   readonly prNumber: number | null;

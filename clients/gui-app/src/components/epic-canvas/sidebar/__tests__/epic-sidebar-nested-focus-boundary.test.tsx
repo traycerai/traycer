@@ -489,6 +489,7 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
   useChatFilter: () => ({ origin: "all" }),
   useChatSort: () => ({ field: "updated", direction: "desc" }),
   useCommentsPanelRevealed: () => false,
+  usePanelVisibilityOverrides: () => ({}),
   useEpicLeftPanelStore: (selector: (state: unknown) => unknown) =>
     selector({
       clearAcknowledgedRootCreatePending: vi.fn(),
@@ -511,6 +512,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => new Set<string>(),
+  useEpicAgentRoleClaims: () => [],
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];

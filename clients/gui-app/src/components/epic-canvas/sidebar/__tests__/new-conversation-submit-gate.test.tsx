@@ -60,6 +60,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
 });
 
 vi.mock("@/lib/epic-selectors", () => ({
+  useEpicAgentRoleClaims: () => [],
   useEpicPermissionRole: () => "owner",
   useEpicConnectionStatus: () => "open",
   useEpicNodeOwnerKind: () => "chat",

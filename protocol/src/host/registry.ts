@@ -86,7 +86,17 @@ import {
 import {
   agentInboxReadV10,
   agentInboxSubscribeV10,
+  agentInboxSubscribeV11,
 } from "@traycer/protocol/host/agent/inbox";
+import {
+  agentRolesClaimUpgradeV10ToV11,
+  agentRolesClaimV10,
+  agentRolesClaimV11,
+  agentRolesListV10,
+  agentRolesRelinquishUpgradeV10ToV11,
+  agentRolesRelinquishV10,
+  agentRolesRelinquishV11,
+} from "@traycer/protocol/host/agent/roles";
 import {
   agentGuiGetPlanV10,
   agentGuiListCommandsV10,
@@ -178,13 +188,16 @@ import {
   epicListCommentThreadsV10,
   epicListTasksV10,
   epicListTasksV11,
+  epicListTasksV12,
   epicListTasksUpgradeV10ToV11,
+  epicListTasksUpgradeV11ToV12,
   epicMentionEpicsV10,
   epicMentionReviewsV10,
   epicMentionSpecsV10,
   epicMentionStoriesV10,
   epicMentionTicketsV10,
   epicRemoveRepoV10,
+  epicRecordViewedV10,
   epicRenameArtifactV10,
   epicRenameChatV10,
   epicUpdateChatProfileV10,
@@ -202,6 +215,7 @@ import {
   epicSetCommentThreadResolvedV10,
   epicSetPinnedV10,
   epicSubscribeV10,
+  epicSubscribeV11,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
@@ -220,6 +234,7 @@ import {
   workspaceSearchPathsV10,
   workspaceSearchTextV10,
 } from "@traycer/protocol/host/workspace/contracts";
+import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/subscribe";
 import {
   terminalCreateDowngradeV20ToV10,
   terminalCreateV10,
@@ -289,6 +304,11 @@ import {
   gitSubscribeStatusV11,
   gitSubscribeStatusV12,
 } from "@traycer/protocol/host/git-contracts";
+import {
+  prSubscribeListForEpicV10,
+  prSubscribeDetailV10,
+  prGetLocalDiffV10,
+} from "@traycer/protocol/host/pr-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
@@ -3040,6 +3060,62 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // Agent role claims. Non-floor, so each declares its missing-peer behavior:
+  // an old host simply does not advertise them and the caller gets
+  // E_HOST_UNSUPPORTED for these calls only. Registered here in the SAME change
+  // that adds the resolvers - advertising a method the host cannot dispatch is
+  // exactly how `agent.tui.listHarnesses` shipped broken.
+  "agent.roles.claim": {
+    1: {
+      // @1.1 adds `deferredToPrompt` on the awareness report. @1.0 stays
+      // installed and FROZEN; a negotiated v1.0 peer gets deferred ids folded
+      // into `unreachable` at host dispatch after canonical v1.1 validation
+      // (not via a preprocess wrapper on the released v1.0 schema).
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: agentRolesClaimV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentRolesClaimV11,
+          upgradeFromPreviousVersion: agentRolesClaimUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "agent.roles.list": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: agentRolesListV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "agent.roles.relinquish": {
+    1: {
+      latestMinor: 1,
+      versions: {
+        0: {
+          contract: agentRolesRelinquishV10,
+          upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: agentRolesRelinquishV11,
+          upgradeFromPreviousVersion: agentRolesRelinquishUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
   "agent.inbox.read": {
     1: {
       latestMinor: 0,
@@ -3078,7 +3154,7 @@ const HOST_RPC_REGISTRY_DEFINITION = {
   },
   "epic.listTasks": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicListTasksV10,
@@ -3087,6 +3163,10 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: {
           contract: epicListTasksV11,
           upgradeFromPreviousVersion: epicListTasksUpgradeV10ToV11,
+        },
+        2: {
+          contract: epicListTasksV12,
+          upgradeFromPreviousVersion: epicListTasksUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -3098,6 +3178,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: epicSetPinnedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.recordViewed": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicRecordViewedV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -4686,6 +4779,25 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
     },
   },
+  // Additive, post-v1.0.0 optional method: a PR's patch read from the local
+  // checkout. A host that predates it simply lacks it and the PR view falls
+  // back to the GitHub-sourced file list (which is all the detail stream ever
+  // carried), so it rides the optional-capability channel
+  // (`degrade: unsupported`) and stays out of the released floor / baseline
+  // surface.
+  "pr.getLocalDiff": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prGetLocalDiffV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
 } as const;
 
 export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
@@ -4702,7 +4814,8 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.1`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
- * `speech.dictate@1.0`, and
+ * `speech.dictate@1.0`, `pr.subscribeListForEpic@1.0`,
+ * `pr.subscribeDetail@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
  * the same major line must be
  * additive; later majors must carry a real breaking change and ship without a
@@ -4735,10 +4848,18 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   "epic.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and
+      // `rootDirty`. @1.0 stays installed and FROZEN: a renderer that
+      // negotiated it never receives the new kinds, and the resolver gates
+      // emission on the negotiated version rather than assuming the peer will
+      // tolerate an unknown frame.
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicSubscribeV10,
+        },
+        1: {
+          contract: epicSubscribeV11,
         },
       },
     },
@@ -4818,6 +4939,19 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // Additive stream, deliberately absent from every released host: a client
+  // whose open is rejected as an unknown method falls back to the unary
+  // `workspace.listFileTree` snapshot (see the contract's degrade note).
+  "workspace.subscribeFileList": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceSubscribeFileListV10,
+        },
+      },
+    },
+  },
   "resources.subscribe": {
     1: {
       latestMinor: 3,
@@ -4839,10 +4973,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "agent.inbox.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds the additive `role-awareness` frame. @1.0 stays installed and
+      // FROZEN: a monitor that negotiated it never receives the new kind, and
+      // the resolver gates on the negotiated version rather than assuming the
+      // peer will tolerate an unknown frame.
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentInboxSubscribeV10,
+        },
+        1: {
+          contract: agentInboxSubscribeV11,
         },
       },
     },
@@ -4883,6 +5024,26 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: speechDictateV10,
+        },
+      },
+    },
+  },
+  "pr.subscribeListForEpic": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prSubscribeListForEpicV10,
+        },
+      },
+    },
+  },
+  "pr.subscribeDetail": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: prSubscribeDetailV10,
         },
       },
     },

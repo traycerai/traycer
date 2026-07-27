@@ -198,6 +198,22 @@ export function railHarnessDegraded(
   );
 }
 
+/**
+ * True only while the host is probing a harness it has NO settled verdict for -
+ * the one state where the picker must hold the entry inert (spinner, no click,
+ * no ⌘-digit), because nothing is known about it yet.
+ *
+ * A probe that merely revalidates an already-settled harness reports
+ * `availabilityPending` with that verdict intact (`available` stays true - see
+ * `guiHarnessOptionSchema`), and must stay fully interactive: its cached model
+ * list is still the best answer there is, and the host's availability cache
+ * lapses every 30s, so keying the inert state on `availabilityPending` alone
+ * blanked the picker on a routine background refresh.
+ */
+export function harnessAvailabilityUnsettled(harness: HarnessOption): boolean {
+  return harness.availabilityPending && !harness.available;
+}
+
 function railHarnessVisible(
   harness: HarnessOption,
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
@@ -205,7 +221,10 @@ function railHarnessVisible(
 ): boolean {
   return (
     harness.available ||
-    harness.availabilityPending ||
+    harnessAvailabilityUnsettled(harness) ||
+    // A harness whose managed pack is still being prepared has no settled
+    // availability yet either, and must stay in the rail so the user can see it
+    // arriving rather than watch it pop into existence.
     preparingByHarnessId.has(harness.id) ||
     railHarnessDegraded(harness, degradedHarnessIds)
   );

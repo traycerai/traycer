@@ -13,6 +13,7 @@ import { useImageBlobUrl } from "@/lib/attachments/use-image-blob-url";
 import type { ImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attachment-labels";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export interface ImageAttachmentChipProps {
   atom: ComposerImageAtom;
   displayLabel: ImageAttachmentDisplayLabel | undefined;
@@ -49,7 +50,6 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
       <div
         ref={wrapperRef}
         className="group relative size-14 shrink-0 overflow-hidden rounded-md border border-border/70 bg-muted/40"
-        title={label.title}
       >
         <span
           className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
@@ -57,27 +57,37 @@ export function ImageAttachmentChip(props: ImageAttachmentChipProps) {
         >
           {label.badgeLabel}
         </span>
-        <DialogTrigger asChild>
-          <button
-            type="button"
-            aria-label={`Open ${label.ariaLabel}`}
-            className="block size-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {src === null ? (
-              <div
-                className="size-full animate-pulse bg-muted/60"
-                aria-hidden
-              />
-            ) : (
-              <img
-                src={src}
-                alt={alt}
-                className="size-full object-cover"
-                draggable={false}
-              />
-            )}
-          </button>
-        </DialogTrigger>
+        {/* Scoped to the open/zoom trigger, not the chip: the chip also
+              holds the Remove button, and a chip-wide trigger meant focusing
+              Remove surfaced the filename tooltip. */}
+        <TooltipWrapper
+          label={label.title}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <DialogTrigger asChild>
+            <button
+              type="button"
+              aria-label={`Open ${label.ariaLabel}`}
+              className="block size-full cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {src === null ? (
+                <div
+                  className="size-full animate-pulse bg-muted/60"
+                  aria-hidden
+                />
+              ) : (
+                <img
+                  src={src}
+                  alt={alt}
+                  className="size-full object-cover"
+                  draggable={false}
+                />
+              )}
+            </button>
+          </DialogTrigger>
+        </TooltipWrapper>
         <Button
           type="button"
           size="icon"

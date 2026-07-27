@@ -193,7 +193,9 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                       <HostStreamProvider>
                         <WorktreeChangedStreamMount />
                         <AppLocalNotificationsPersistLifecycleBridge>
-                          <NotificationsSessionProvider>
+                          <NotificationsSessionProvider
+                            navigate={props.router.navigate}
+                          >
                             <TraycerAppRuntimeSurface router={props.router} />
                           </NotificationsSessionProvider>
                         </AppLocalNotificationsPersistLifecycleBridge>

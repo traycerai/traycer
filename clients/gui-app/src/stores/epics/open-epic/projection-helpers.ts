@@ -34,9 +34,15 @@ import {
   agentModeSchema,
   chatRunSettingsSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  projectVisibleRoleClaims,
+  roleClaimSchema,
+  type RoleClaim,
+} from "@traycer/protocol/persistence/epic/role-claims";
 import * as Y from "yjs";
 import type {
   ArtifactProjection,
+  AgentRolesSlice,
   ArtifactsSlice,
   ChatProjection,
   ChatsSlice,
@@ -50,7 +56,11 @@ import type {
   TreeSlice,
   TuiAgentProjection,
 } from "./types";
-import { EMPTY_ARRAY, EMPTY_PROJECTED_SLICES } from "./types";
+import {
+  EMPTY_AGENT_ROLES_SLICE,
+  EMPTY_ARRAY,
+  EMPTY_PROJECTED_SLICES,
+} from "./types";
 import { displayTitle } from "@/lib/display-title";
 import { DEFAULT_SORT_MODE, makeNodeComparator } from "@/lib/epic-sort";
 
@@ -87,6 +97,11 @@ export function getChatsMap(doc: Y.Doc): Y.Map<unknown> | null {
 
 export function getTerminalAgentsMap(doc: Y.Doc): Y.Map<unknown> | null {
   const value = getEpicMap(doc).get("tuiAgents");
+  return value instanceof Y.Map ? (value as Y.Map<unknown>) : null;
+}
+
+export function getRoleClaimsMap(doc: Y.Doc): Y.Map<unknown> | null {
+  const value = getEpicMap(doc).get("roleClaims");
   return value instanceof Y.Map ? (value as Y.Map<unknown>) : null;
 }
 
@@ -616,6 +631,44 @@ function projectTerminalAgentsSlice(
   };
 }
 
+function readRoleClaims(doc: Y.Doc): RoleClaim[] {
+  const map = getRoleClaimsMap(doc);
+  if (map === null) return [];
+  const claims: RoleClaim[] = [];
+  for (const [claimId, entry] of map.entries()) {
+    if (!(entry instanceof Y.Map)) continue;
+    const parsed = roleClaimSchema.safeParse(entry.toJSON());
+    if (!parsed.success || parsed.data.claimId !== claimId) continue;
+    claims.push(parsed.data);
+  }
+  return claims;
+}
+
+export function projectAgentRolesSlice(
+  doc: Y.Doc,
+  currentUserId: string | null,
+  chats: ChatsSlice,
+  tuiAgents: TerminalAgentsSlice,
+): AgentRolesSlice {
+  if (currentUserId === null) return EMPTY_AGENT_ROLES_SLICE;
+  const liveAgentIds = new Set([...chats.allIds, ...tuiAgents.allIds]);
+  const visibleClaims = projectVisibleRoleClaims(readRoleClaims(doc), {
+    userId: currentUserId,
+    liveAgentIds,
+  });
+  if (visibleClaims.length === 0) return EMPTY_AGENT_ROLES_SLICE;
+  const claimsByAgentId = new Map<string, RoleClaim[]>();
+  for (const claim of visibleClaims) {
+    const current = claimsByAgentId.get(claim.agentId);
+    if (current === undefined) {
+      claimsByAgentId.set(claim.agentId, [claim]);
+    } else {
+      current.push(claim);
+    }
+  }
+  return { byAgentId: Object.fromEntries(claimsByAgentId) };
+}
+
 function projectEpicHeader(doc: Y.Doc): EpicHeader {
   const epic = getEpicMap(doc);
   return {
@@ -791,6 +844,12 @@ export function projectFullState(
   const deletedArtifacts = projectDeletedArtifactsSlice(doc);
   const chats = projectChatsSlice(doc, currentUserId);
   const tuiAgents = projectTerminalAgentsSlice(doc, currentUserId);
+  const agentRoles = projectAgentRolesSlice(
+    doc,
+    currentUserId,
+    chats,
+    tuiAgents,
+  );
   const tree = projectTreeSlice(artifacts, chats, tuiAgents);
   const contentRevByArtifactId: Record<string, number> = {};
   for (const id of artifacts.allIds) {
@@ -802,6 +861,7 @@ export function projectFullState(
     deletedArtifacts,
     chats,
     tuiAgents,
+    agentRoles,
     tree,
     contentRevByArtifactId,
   };

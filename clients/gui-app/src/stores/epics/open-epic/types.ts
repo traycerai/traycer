@@ -23,6 +23,7 @@ import type {
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingWorkspaceMode } from "@traycer/protocol/host/worktree-schemas";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 
 export type EpicTreeNodeType = "chat" | "terminal-agent" | EpicArtifactKind;
 
@@ -163,6 +164,10 @@ export interface TerminalAgentsSlice {
   readonly allIds: readonly string[];
 }
 
+export interface AgentRolesSlice {
+  readonly byAgentId: Readonly<Record<string, readonly RoleClaim[]>>;
+}
+
 export interface TreeNode {
   readonly id: string;
   readonly parentId: string | null;
@@ -210,6 +215,7 @@ export interface EpicProjectedSlices {
   readonly deletedArtifacts: DeletedArtifactsSlice;
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
+  readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
   readonly contentRevByArtifactId: Readonly<Record<string, number>>;
 }
@@ -220,6 +226,20 @@ export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
   stateByArtifactRoomId: Object.freeze(
     {} as Record<string, EpicArtifactRoomAvailability>,
   ),
+});
+
+/**
+ * Starting value for the per-artifact-room host-dirty mirror. Empty means
+ * "nothing known to be dirty", which is also the correct RESET value on every
+ * re-subscribe: the host tracks what it has emitted per subscription, so a
+ * fresh subscription re-emits `artifactRoomDirty` for whatever is still dirty
+ * and never re-states what is clean.
+ */
+export const EMPTY_ARTIFACT_ROOM_DIRTY: Readonly<Record<string, boolean>> =
+  Object.freeze({} as Record<string, boolean>);
+
+export const EMPTY_AGENT_ROLES_SLICE: AgentRolesSlice = Object.freeze({
+  byAgentId: Object.freeze({} as Record<string, readonly RoleClaim[]>),
 });
 
 export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
@@ -244,6 +264,7 @@ export const EMPTY_PROJECTED_SLICES: EpicProjectedSlices = Object.freeze({
     byId: Object.freeze({} as Record<string, TuiAgentProjection>),
     allIds: EMPTY_ARRAY,
   }),
+  agentRoles: EMPTY_AGENT_ROLES_SLICE,
   tree: Object.freeze({
     rootIds: EMPTY_ARRAY,
     childrenByParent: Object.freeze({} as Record<string, readonly string[]>),

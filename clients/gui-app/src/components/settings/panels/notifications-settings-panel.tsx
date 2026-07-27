@@ -11,7 +11,9 @@ import type {
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -36,6 +38,7 @@ import {
 import { NotificationHooksSection } from "@/components/settings/panels/notification-hooks-section";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cn } from "@/lib/utils";
+import { useSettingsDensity } from "@/providers/settings-density-context";
 
 type NotificationConfig = ResponseOfMethod<
   HostRpcRegistry,
@@ -70,18 +73,6 @@ const SEVERITY_ROWS: ReadonlyArray<{
     id: "done",
     label: "Done",
     description: "Completed or intentionally stopped turns.",
-  },
-];
-
-const CHANNELS: ReadonlyArray<{
-  readonly id: HostNotificationChannelId;
-  readonly label: string;
-  readonly description: string;
-}> = [
-  {
-    id: "renderer",
-    label: "In-app",
-    description: "Host feed, badge, indicators, toast, and chime.",
   },
 ];
 
@@ -123,17 +114,39 @@ function NotificationsSettingsPanelContent(props: {
   readonly testHook: NotificationHooksTestMutation;
   readonly saveHooks: NotificationHooksSaveMutation;
 }) {
+  const compact = useSettingsDensity() === "compact";
   return (
     <SettingsPanelShell
       title="Notifications"
-      description="Choose which host notifications Traycer creates. Disabled severities don't enter the bell feed or trigger notification hooks; collaboration updates remain independent."
+      description="Choose what Traycer surfaces and what automation receives."
+      fillHeight
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
-      {renderNotificationsSettingsContent(props.configQuery, props.setConfig)}
-      <NotificationHooksSection
-        statusQuery={props.hooksStatusQuery}
-        testHook={props.testHook}
-        saveHooks={props.saveHooks}
-      />
+      <div
+        className={cn(
+          "flex h-full min-h-0 flex-col",
+          compact ? "gap-3.5" : "gap-5",
+        )}
+      >
+        <SettingsGroup
+          title="In-app notifications · Current host"
+          tone="default"
+          dataTestId="notifications-severity-policy"
+          fill={false}
+        >
+          {renderNotificationsSettingsContent(
+            props.configQuery,
+            props.setConfig,
+          )}
+        </SettingsGroup>
+        <div className="min-h-0 flex-1">
+          <NotificationHooksSection
+            statusQuery={props.hooksStatusQuery}
+            testHook={props.testHook}
+            saveHooks={props.saveHooks}
+          />
+        </div>
+      </div>
     </SettingsPanelShell>
   );
 }
@@ -174,104 +187,51 @@ function renderNotificationsSettingsContent(
     );
   }
   return (
-    <div className="divide-y divide-border/40">
-      <NotificationMatrix
-        config={data}
-        configIsFetching={isFetching}
-        setConfig={setConfig}
-      />
-    </div>
+    <NotificationSeverityList
+      config={data}
+      configIsFetching={isFetching}
+      setConfig={setConfig}
+    />
   );
 }
 
-function NotificationMatrix(props: {
+function NotificationSeverityList(props: {
   readonly config: NotificationConfig;
   readonly configIsFetching: boolean;
   readonly setConfig: NotificationSetConfigMutation;
 }) {
   return (
-    <section className="space-y-4 px-5 py-5">
-      <SectionHeading
-        title="Host notifications"
-        description="Choose which severities the host generates for the Traycer app. Informational collaboration activity is managed separately."
-        trailing={undefined}
-      />
-      <div className="overflow-x-auto">
-        <div className="grid min-w-full grid-cols-[minmax(0,1.35fr)_repeat(1,minmax(0,1fr))] gap-px overflow-hidden rounded-md border border-border/60 bg-border/60">
-          <div className="bg-muted/40 px-3 py-3 text-ui-xs font-medium uppercase text-muted-foreground">
-            Severity
-          </div>
-          {CHANNELS.map((channel) => (
-            <div key={channel.id} className="bg-muted/40 px-3 py-3 text-center">
-              <div className="text-ui-sm font-medium text-foreground">
-                {channel.label}
-              </div>
-              <p className="mt-1 text-ui-xs text-muted-foreground">
-                {channel.description}
-              </p>
-            </div>
-          ))}
-          {SEVERITY_ROWS.flatMap((severity) => [
-            <div key={`${severity.id}:label`} className="bg-card px-3 py-3">
-              <div className="text-ui-sm font-medium text-foreground">
-                {severity.label}
-              </div>
-              <p className="mt-1 text-ui-xs text-muted-foreground">
-                {severity.description}
-              </p>
-            </div>,
-            ...CHANNELS.map((channel) => (
-              <div
-                key={`${severity.id}:${channel.id}`}
-                className="flex items-center justify-center bg-card px-3 py-3"
-              >
-                <Switch
-                  checked={matrixValue(props.config, severity.id, channel.id)}
-                  disabled={props.setConfig.isPending || props.configIsFetching}
-                  aria-label={`${severity.label} ${channel.label} notifications`}
-                  data-testid={`notifications-matrix-${severity.id}-${channel.id}`}
-                  onCheckedChange={(checked) => {
-                    props.setConfig.mutate(
-                      createMatrixToggleRequest(
-                        props.config,
-                        severity.id,
-                        channel.id,
-                        checked,
-                      ),
-                    );
-                  }}
-                />
-              </div>
-            )),
-          ])}
-        </div>
-      </div>
+    <>
+      {SEVERITY_ROWS.map((severity) => (
+        <SettingsRow
+          key={severity.id}
+          label={severity.label}
+          description={severity.description}
+          control={
+            <Switch
+              checked={matrixValue(props.config, severity.id, "renderer")}
+              disabled={props.setConfig.isPending || props.configIsFetching}
+              aria-label={`${severity.label} In-app notifications`}
+              data-testid={`notifications-severity-${severity.id}`}
+              onCheckedChange={(checked) => {
+                props.setConfig.mutate(
+                  createSeverityToggleRequest(
+                    props.config,
+                    severity.id,
+                    checked,
+                  ),
+                );
+              }}
+            />
+          }
+        />
+      ))}
       {props.setConfig.error === null ? null : (
-        <p className="text-ui-xs text-destructive">
+        <p className="border-t border-border/40 px-4 py-2.5 text-ui-xs text-destructive">
           {props.setConfig.error.message}
         </p>
       )}
-    </section>
-  );
-}
-
-function SectionHeading(props: {
-  readonly title: string;
-  readonly description: string;
-  readonly trailing: ReactNode | undefined;
-}) {
-  return (
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0 space-y-1">
-        <h2 className="text-ui font-semibold text-foreground">{props.title}</h2>
-        <p className="max-w-[72ch] text-ui-sm text-muted-foreground">
-          {props.description}
-        </p>
-      </div>
-      {props.trailing === undefined ? null : (
-        <div className="shrink-0">{props.trailing}</div>
-      )}
-    </div>
+    </>
   );
 }
 
@@ -295,10 +255,9 @@ function InlineState(props: {
   );
 }
 
-function createMatrixToggleRequest(
+function createSeverityToggleRequest(
   config: NotificationConfig,
   severity: HostNotificationSeverity,
-  channelId: HostNotificationChannelId,
   enabled: boolean,
 ): NotificationSetConfigRequest {
   const matrix = completeMatrix(config);
@@ -307,7 +266,7 @@ function createMatrixToggleRequest(
       ...matrix,
       [severity]: {
         ...matrix[severity],
-        [channelId]: enabled,
+        renderer: enabled,
       },
     },
     channels: configChannelsForSet(config),
