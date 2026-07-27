@@ -1,7 +1,12 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { readTabStripLayout } from "@/stores/tabs/store";
+import {
+  findStripItemForRef,
+  flattenStripItemRefs,
+} from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import {
   tabMatchesPath,
@@ -51,8 +56,17 @@ export function useCloseTabFlow(): CloseTabFlow {
   const closeOtherTabs = useCallback(
     (target: HeaderTab) => {
       const skipped: string[] = [];
+      const layout = readTabStripLayout();
+      const targetItem = findStripItemForRef(layout, {
+        kind: target.kind,
+        id: target.id,
+      });
+      if (targetItem === null) return;
+      const preserved = new Set(
+        flattenStripItemRefs(targetItem).map((ref) => `${ref.kind}:${ref.id}`),
+      );
       for (const other of getHeaderTabs()) {
-        if (other.kind === target.kind && other.id === target.id) continue;
+        if (preserved.has(`${other.kind}:${other.id}`)) continue;
         if (tabRequiresCloseConfirm(other)) {
           skipped.push(other.name);
           continue;
@@ -71,22 +85,37 @@ export function useCloseTabFlow(): CloseTabFlow {
           description: "Close those tabs individually to discard their edits.",
         });
       }
-      navigateToTabIntent(navigate, tabResolveIntent(target));
+      navigateToTabIntent(navigate, tabResolveIntent(target), undefined);
     },
     [closeTab, navigate],
   );
 
   const closeActiveTab = useCallback(() => {
+    // Deliberately keyed off the route, NOT `selectHostFocusedRef`. A split
+    // only moves `routeBackingSide` onto the focused side when that side holds
+    // a tab, so focusing the fillable half leaves the two diverged and the
+    // focused ref reading `null` - which is exactly where `createEmptySplit`
+    // starts ("Add tab to new split view" focuses the empty side). Gating on
+    // the focused ref made Cmd+W silently do nothing there. Whenever the
+    // focused side does hold a tab the two agree, so the route-backed tab is
+    // the right target in both cases.
     const active = getHeaderTabs().find((t) =>
       tabMatchesPath(t, activePathname),
     );
     if (active !== undefined) requestCloseTab(active);
   }, [activePathname, requestCloseTab]);
 
-  return {
-    requestCloseTab,
-    closeOtherTabs,
-    closeActiveTab,
-    unsyncedDialog: dialog.dialog,
-  };
+  // Stable identity: consumers list the whole flow in `useCallback` /
+  // `useEffect` deps. A fresh object literal per render gave every derived
+  // handler a new identity, which defeated the memoized strip items and
+  // re-registered the split action handlers on each render.
+  return useMemo(
+    () => ({
+      requestCloseTab,
+      closeOtherTabs,
+      closeActiveTab,
+      unsyncedDialog: dialog.dialog,
+    }),
+    [closeActiveTab, closeOtherTabs, dialog.dialog, requestCloseTab],
+  );
 }

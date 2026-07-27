@@ -14,6 +14,7 @@ import type {
   IpcHostController,
   IpcHostLifecycle,
   IpcManagedWindow,
+  IpcPerWindowState,
   IpcWindowRecord,
   IpcWindowRegistry,
 } from "../runner-ipc-bridge";
@@ -32,9 +33,17 @@ import type {
 } from "../../host/host-controller-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
-import { PerWindowState } from "../../windows/per-window-state";
+import {
+  createEmptyPerWindowSnapshot,
+  PER_WINDOW_STATE_CAPABILITIES,
+  PerWindowState,
+  type PerWindowStateChange,
+} from "../../windows/per-window-state";
 import type {
   DesktopAuthSessionSnapshot,
+  PerWindowSnapshot,
+  PerWindowStateCapabilities,
+  PerWindowStateUpdateAcknowledgement,
   WindowSummary,
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
@@ -619,6 +628,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.ownershipClaim,
         RunnerHostInvoke.ownershipRelease,
         RunnerHostInvoke.perWindowStateGet,
+        RunnerHostInvoke.perWindowStateCapabilities,
         RunnerHostInvoke.perWindowStateUpdate,
         RunnerHostInvoke.perWindowStateClear,
         RunnerHostInvoke.authSessionGet,
@@ -1010,11 +1020,14 @@ describe("RunnerIpcBridge", () => {
       activeTabId: "tab-a",
     });
     expect(perWindowState.get("window-b")).toEqual({
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     expect(ownership.snapshot()).toEqual([
       { tabId: "tab-a", epicId: "epic-a", windowId: "window-a" },
@@ -1198,11 +1211,14 @@ describe("RunnerIpcBridge", () => {
     });
     expect(perWindowState.get("window-a").canvasByTabId).toEqual({});
     expect(perWindowState.get("created-1")).toEqual({
+      revision: 1,
       epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
       activeTabId: "tab-a",
       canvasByTabId: { "tab-a": { root: null, activeTileId: null } },
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     bridge.dispose();
   });
@@ -1258,6 +1274,7 @@ describe("RunnerIpcBridge", () => {
       { tabId: "tab-a", epicId: "epic-a", windowId: "window-a" },
     ]);
     expect(perWindowState.get("window-a")).toEqual({
+      revision: 1,
       epicTabs: [
         { id: "tab-a", epicId: "epic-a", name: "Alpha" },
         { id: "tab-b", epicId: "epic-b", name: "Beta" },
@@ -1266,13 +1283,18 @@ describe("RunnerIpcBridge", () => {
       canvasByTabId: { "tab-a": { root: null, activeTileId: null } },
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     expect(perWindowState.get("created-1")).toEqual({
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     bridge.dispose();
   });
@@ -1928,6 +1950,7 @@ describe("RunnerIpcBridge", () => {
     });
 
     const snapshot = {
+      revision: 1,
       epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
       activeTabId: "tab-a",
       canvasByTabId: { "tab-a": { layout: "left" } },
@@ -1943,14 +1966,19 @@ describe("RunnerIpcBridge", () => {
         },
       ],
       activeLandingDraftId: "draft-a",
+      tabStripLayout: null,
+      activeRoute: null,
     };
     expect(await getHandler(sender(101))).toEqual(snapshot);
     expect(await getHandler(sender(202))).toEqual({
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
     // window-a's OWN update is not echoed back to it (it already holds the
     // state it just sent); other windows never see it either.
@@ -1966,11 +1994,14 @@ describe("RunnerIpcBridge", () => {
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
     const empty = {
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     };
     await clearHandler(sender(101));
     expect(await getHandler(sender(101))).toEqual(empty);
@@ -2705,11 +2736,14 @@ describe("RunnerIpcBridge", () => {
       {
         channel: RunnerHostEvent.perWindowStateChange,
         payload: {
+          revision: 1,
           epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
           activeTabId: "tab-a",
           canvasByTabId: {},
           landingDrafts: [],
           activeLandingDraftId: null,
+          tabStripLayout: null,
+          activeRoute: null,
         },
       },
       {
@@ -3541,4 +3575,245 @@ describe("RunnerIpcBridge", () => {
     ).toEqual([]);
     bridge.dispose();
   });
+
+  it("propagates a failed durable write out of the update handler and still releases echo suppression", async () => {
+    // `perWindowStateUpdate` is `async` and awaits the durable write, so a
+    // rejection has to reach `handleInvoke` rather than being swallowed into a
+    // silent success - the renderer's projection queue decides whether to
+    // retry on exactly that signal. The release matters just as much: it lives
+    // in a `finally`, so a failed write must not leave the window permanently
+    // suppressed and deaf to every later main-initiated change.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const perWindowState = new DeferredPerWindowState();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    windowA.sentMessages.length = 0;
+
+    const updateHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.perWindowStateUpdate,
+    );
+    if (updateHandler === undefined) {
+      throw new Error("perWindowStateUpdate handler missing");
+    }
+
+    const invoked = Promise.resolve(
+      updateHandler(sender(101), { activeTabId: "tab-a" }),
+    );
+    perWindowState.failNext(new Error("disk write rejected"));
+    await expect(invoked).rejects.toThrow("disk write rejected");
+
+    perWindowState.emitChange("window-a");
+    expect(
+      windowA.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.perWindowStateChange,
+      ),
+    ).toHaveLength(1);
+    bridge.dispose();
+  });
+
+  it("keeps a window's echo suppressed until its LAST overlapping update settles", async () => {
+    // The renderer can invoke a second update while the first is still in
+    // flight. Suppression used to be a Set of window ids, which is idempotent:
+    // both updates shared one entry and whichever settled first removed it, so
+    // the second update's own echo was pushed back to the window that authored
+    // it - the exact clobber the suppression exists to prevent.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const perWindowState = new DeferredPerWindowState();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    windowA.sentMessages.length = 0;
+
+    const updateHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.perWindowStateUpdate,
+    );
+    if (updateHandler === undefined) {
+      throw new Error("perWindowStateUpdate handler missing");
+    }
+
+    const first = Promise.resolve(
+      updateHandler(sender(101), { activeTabId: "tab-a" }),
+    );
+    const second = Promise.resolve(
+      updateHandler(sender(101), { activeTabId: "tab-b" }),
+    );
+    perWindowState.settleNext();
+    await first;
+    perWindowState.settleNext();
+    await second;
+
+    expect(
+      windowA.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.perWindowStateChange,
+      ),
+    ).toEqual([]);
+
+    // Once nothing is in flight, a main-initiated change still reaches the
+    // window - the counter must reach zero, not latch on.
+    perWindowState.emitChange("window-a");
+    expect(
+      windowA.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.perWindowStateChange,
+      ),
+    ).toHaveLength(1);
+    bridge.dispose();
+  });
+
+  it("never forwards a teardown clear to a live window, but still forwards updates", async () => {
+    // `clear` wipes the durable snapshot on window teardown. A window that
+    // dropped out of the registry snapshot while its BrowserWindow is still
+    // alive (a reload / re-registration) would otherwise be handed the empty
+    // snapshot and lose a live draft. The trailing `emitChange` is the novelty
+    // guard: without it this would pass just as well against a bridge that
+    // never subscribed to `change` at all.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const perWindowState = new DeferredPerWindowState();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    windowA.sentMessages.length = 0;
+
+    perWindowState.clear("window-a");
+    expect(
+      windowA.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.perWindowStateChange,
+      ),
+    ).toEqual([]);
+
+    perWindowState.emitChange("window-a");
+    expect(
+      windowA.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.perWindowStateChange,
+      ),
+    ).toHaveLength(1);
+    bridge.dispose();
+  });
 });
+
+/**
+ * `IpcPerWindowState` double whose `update` resolves only when the test says
+ * so, letting two updates from one window genuinely overlap. It emits `change`
+ * before resolving, mirroring the real store: the durable write lands, the
+ * change is announced, then the acknowledgement returns.
+ */
+class DeferredPerWindowState implements IpcPerWindowState {
+  private readonly events = new EventEmitter();
+  private readonly pending: Array<{
+    readonly settle: () => void;
+    readonly fail: (error: Error) => void;
+  }> = [];
+
+  get(): PerWindowSnapshot {
+    return createEmptyPerWindowSnapshot();
+  }
+
+  capabilities(): PerWindowStateCapabilities {
+    return PER_WINDOW_STATE_CAPABILITIES;
+  }
+
+  update(windowId: string): Promise<PerWindowStateUpdateAcknowledgement> {
+    return new Promise((resolve, reject) => {
+      this.pending.push({
+        settle: () => {
+          this.emitChange(windowId);
+          resolve({ capabilities: this.capabilities(), revision: 1 });
+        },
+        fail: reject,
+      });
+    });
+  }
+
+  settleNext(): void {
+    const next = this.pending.shift();
+    if (next === undefined) throw new Error("no update in flight");
+    next.settle();
+  }
+
+  /** Fails the oldest in-flight durable write, as a rejected disk write does. */
+  failNext(error: Error): void {
+    const next = this.pending.shift();
+    if (next === undefined) throw new Error("no update in flight");
+    next.fail(error);
+  }
+
+  emitChange(windowId: string): void {
+    this.announce(windowId, "update");
+  }
+
+  /**
+   * Mirrors the real store, which announces a teardown wipe as
+   * `origin: "clear"` - the one origin the IPC forwarder drops before it can
+   * reach a renderer. Delegating to `emitChange` would make a clear look like
+   * an ordinary update here, so a future test asserting "a clear is never
+   * forwarded" would pass against a double that cannot express a clear.
+   */
+  clear(windowId: string): void {
+    this.announce(windowId, "clear");
+  }
+
+  private announce(
+    windowId: string,
+    origin: PerWindowStateChange["origin"],
+  ): void {
+    const change: PerWindowStateChange = {
+      windowId,
+      snapshot: createEmptyPerWindowSnapshot(),
+      origin,
+    };
+    this.events.emit("change", change);
+  }
+
+  on(event: "change", listener: (change: PerWindowStateChange) => void): void {
+    this.events.on(event, listener);
+  }
+
+  off(event: "change", listener: (change: PerWindowStateChange) => void): void {
+    this.events.off(event, listener);
+  }
+}

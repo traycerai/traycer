@@ -34,6 +34,7 @@ describe("useTabCloseCommand", () => {
       name: "Epic X",
       route: `/epics/epic-x/${tabId}`,
       icon: null,
+      canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
     });
@@ -42,9 +43,7 @@ describe("useTabCloseCommand", () => {
   });
 
   it("dispatches a draft close through the draft descriptor", () => {
-    const draftId = useLandingDraftStore
-      .getState()
-      .createDraft(null, undefined);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
     expect(
       useLandingDraftStore.getState().drafts.some((d) => d.id === draftId),
     ).toBe(true);

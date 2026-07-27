@@ -94,7 +94,10 @@ import {
   type HistorySearchController,
 } from "@/hooks/home/use-history-search-state";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { phaseMigrationRoute } from "@/lib/routes";
+import {
+  activateTabIntent,
+  openPhaseMigrationIntent,
+} from "@/lib/tab-navigation";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { openEpicFromList as openEpicFromCommand } from "@/lib/commands/actions/open-epic-from-list";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -397,6 +400,18 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     return Array.from(selectedIds).filter((id) => selectableIdSet.has(id));
   }, [selectableIdSet, selectedIds]);
   const selectedCount = visibleSelectedIds.length;
+  // Delete-eligible and sweepable are different questions: a selection can be
+  // entirely tasks that own no worktrees, and opening Sweep on those shows a
+  // dialog with nothing to sweep. The row control already gates on this
+  // (`useHistoryRowSweep`); the bulk button has to ask the same question, of
+  // the SELECTION rather than of one task, so a mixed selection still sweeps.
+  const canSweepSelected = useMemo(
+    () =>
+      visibleSelectedIds.some(
+        (id) => (worktreesByEpicId.get(id) ?? EMPTY_WORKTREES).length > 0,
+      ),
+    [visibleSelectedIds, worktreesByEpicId],
+  );
   const enterSelectionMode = useCallback(() => {
     setSelectedIds(new Set());
     setSelectionMode(true);
@@ -490,6 +505,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                     selectableItemIds.length > 0 &&
                     selectedCount === selectableItemIds.length,
                   isDeletePending: deleteMutation.isPending,
+                  canSweepSelected,
                   onSelectAll: selectAllVisible,
                   onDeselectAll: deselectAllVisible,
                   onCancel: cancelSelection,
@@ -500,7 +516,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                     // The whole selection goes in as ONE set so a worktree
                     // shared between two selected tasks is judged against the
                     // selection, not one task, and stops reading as "shared".
-                    if (visibleSelectedIds.length === 0) return;
+                    if (!canSweepSelected) return;
                     setSweepEpicIds(visibleSelectedIds);
                   },
                 }
@@ -669,6 +685,8 @@ type PanelSelectionControls =
       readonly selectedCount: number;
       readonly allVisibleSelected: boolean;
       readonly isDeletePending: boolean;
+      /** At least one selected task owns a worktree the dialog could list. */
+      readonly canSweepSelected: boolean;
       readonly onSelectAll: () => void;
       readonly onDeselectAll: () => void;
       readonly onCancel: () => void;
@@ -751,7 +769,7 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
               }
               aria-haspopup="dialog"
               data-testid="epics-list-sweep-selected"
-              disabled={props.selection.selectedCount === 0}
+              disabled={!props.selection.canSweepSelected}
               className="text-muted-foreground hover:text-foreground"
               onClick={props.selection.onSweepSelected}
             >
@@ -1143,7 +1161,24 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const openEpic = useCallback(() => {
     onSelectEpic?.(item.epicId);
     if (isPhase) {
-      void navigate(phaseMigrationRoute(item.epicId));
+      // Route the Phase deep link through the canonical activation boundary so
+      // the controller snapshots first (a rejected navigation restores the prior
+      // tab) instead of a raw navigate over a route builder that mutated source
+      // selection. `migrationSource: "phase"` threads through the epic search.
+      activateTabIntent(
+        navigate,
+        openPhaseMigrationIntent({
+          phaseId: item.epicId,
+          name: item.title,
+          focus: {
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            migrationSource: "phase",
+          },
+        }),
+        undefined,
+      );
       return;
     }
     // Passing the row's title threads it through tab creation so the

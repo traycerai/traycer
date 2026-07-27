@@ -40,6 +40,7 @@ import {
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
 import {
   type NotificationEntry,
@@ -553,6 +554,7 @@ function resolveCallOccurrences(): ReadonlyArray<{
 
 describe("NotificationsPopover", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     hostRequestMock.mockReset();
     hostRequestMock.mockImplementation(defaultHostRequest);
     hostBindingState.current = null;
@@ -582,6 +584,7 @@ describe("NotificationsPopover", () => {
 
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
   });

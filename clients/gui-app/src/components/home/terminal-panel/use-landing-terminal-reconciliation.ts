@@ -58,7 +58,15 @@ interface LandingTerminalReconciliationArgs {
   readonly availability: LandingTerminalAvailability;
   readonly panelOpen: boolean;
   readonly primaryWorkspacePath: string | null;
-  readonly client: HostClient<HostRpcRegistry>;
+  readonly generation: number;
+  /**
+   * The host client this generation must query. `null` is the fail-closed
+   * signal: an opening gesture that could not pin a transient client to its
+   * captured host projects `null` here, and the effect no-ops rather than
+   * falling back to the live default client (which follows runtime host
+   * selection and would reconcile the wrong host).
+   */
+  readonly client: HostClient<HostRpcRegistry> | null;
   readonly killTerminal: (
     variables: LandingTerminalKillVariables,
   ) => Promise<unknown>;
@@ -69,7 +77,10 @@ interface LandingTerminalReconciliationArgs {
    * auto-spawn does not depend on a React state round-trip or read an earlier
    * host's home path. The panel owns auto-spawn and open-gesture retargeting.
    */
-  readonly onSettled: (context: LandingTerminalHostContext) => void;
+  readonly onSettled: (
+    generation: number,
+    context: LandingTerminalHostContext,
+  ) => void;
 }
 
 function landingTerminalListQueryOptions(client: HostClient<HostRpcRegistry>) {
@@ -108,6 +119,7 @@ export function useLandingTerminalReconciliation(
     availability,
     panelOpen,
     primaryWorkspacePath,
+    generation,
     client,
     killTerminal,
     onReconciled,
@@ -118,6 +130,7 @@ export function useLandingTerminalReconciliation(
   const reconciliationRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (client === null) return;
     return client.onChange((event) => {
       if (event.currentHostId !== activeHostId) return;
       if (
@@ -131,7 +144,11 @@ export function useLandingTerminalReconciliation(
   }, [activeHostId, client]);
 
   useEffect(() => {
-    if (activeHostId === null || availability !== "supported") {
+    if (
+      client === null ||
+      activeHostId === null ||
+      availability !== "supported"
+    ) {
       return;
     }
     const reconciliationKey = [
@@ -139,6 +156,7 @@ export function useLandingTerminalReconciliation(
       panelOpen ? "open" : "closed",
       primaryWorkspacePath ?? "no-workspace",
       connectionEpoch,
+      generation,
     ].join("\u0000");
     if (reconciliationRef.current === reconciliationKey) return;
     reconciliationRef.current = reconciliationKey;
@@ -238,7 +256,7 @@ export function useLandingTerminalReconciliation(
       // Publish only after session reconciliation applied and host identity
       // still matches. Auto-spawn gets the same object synchronously.
       onReconciled(hostContext);
-      onSettled(hostContext);
+      onSettled(generation, hostContext);
     })();
 
     return () => {
@@ -254,6 +272,7 @@ export function useLandingTerminalReconciliation(
     availability,
     client,
     connectionEpoch,
+    generation,
     killTerminal,
     onReconciled,
     onSettled,

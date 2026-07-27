@@ -412,4 +412,7 @@ export interface EpicViewTab {
   readonly tabId: string;
   readonly epicId: string;
   readonly name: string;
+  readonly surfaceMode?:
+    | { readonly kind: "epic" }
+    | { readonly kind: "phase-migration"; readonly phaseId: string };
 }

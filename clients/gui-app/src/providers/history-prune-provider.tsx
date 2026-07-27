@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore, type ReactNode } from "react";
 import {
   getHistoryController,
+  isHistoryEntryDead,
   installPruneScheduler,
 } from "@/lib/history-navigation";
 import type { AppRouter } from "@/router";
@@ -58,6 +59,23 @@ export function HistoryPruneProvider(
 
   useEffect(() => {
     if (!hydrated) return;
+    // Sanitize the restored stack before it can service a Back/Forward action.
+    // The scheduler below only reacts to future source mutations; without this
+    // eager pass, a session-restored dead entry could reach T3 and be treated
+    // as an ordinary external route, which would recreate its source tab.
+    const controller = getHistoryController(router.history);
+    const hasInitialDeadEntry =
+      controller !== null &&
+      controller
+        .getEntries()
+        .some(
+          (href, index) =>
+            index !== controller.getIndex() && isHistoryEntryDead(href),
+        );
+    const loading = isRouterLoadInFlight(router);
+    if (hasInitialDeadEntry && !loading) {
+      controller.prune(isHistoryEntryDead);
+    }
     return installPruneScheduler({
       getController: () => getHistoryController(router.history),
       subscribeStores: (onChange) => {
@@ -69,6 +87,10 @@ export function HistoryPruneProvider(
         };
       },
       isLoadInFlight: () => isRouterLoadInFlight(router),
+      // When router hydration is still loading, the eager pass above must not
+      // prune mid-navigation. Seed the scheduler instead; it already retries
+      // frame-by-frame until idle, then performs this same first sanitation.
+      scheduleInitialPrune: hasInitialDeadEntry && loading,
     });
   }, [hydrated, router]);
 

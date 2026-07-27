@@ -59,6 +59,7 @@ import {
   getHistoryController,
 } from "@/lib/persistent-history";
 import { goBack, goForward } from "@/lib/commands/actions/history-navigation";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
   resetSystemTabModalColdLoadForTests,
   useSystemTabModalController,
@@ -1177,6 +1178,9 @@ describe("LocalHostGate structural stability across the /settings bypass boundar
 
 describe("LocalHostGate + system tab modal guard integration", () => {
   beforeEach(() => {
+    // This integration harness builds a reduced root without the permanent
+    // navigation bridge; mirror the post-hydration state supplied by it.
+    __resetTabNavigationControllerForTesting();
     restoreFetch = installAuthFetch();
     resetSystemTabModalColdLoadForTests();
     useSettingsSectionStore.setState({ section: null });
@@ -1185,6 +1189,7 @@ describe("LocalHostGate + system tab modal guard integration", () => {
 
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     useAuthStore.getState().setSignedOut();
     vi.restoreAllMocks();
     restoreFetch();

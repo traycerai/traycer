@@ -28,6 +28,27 @@ export interface PerWindowEpicViewTab {
   readonly id: string;
   readonly epicId: string;
   readonly name: string;
+  /**
+   * Persisted presentation mode for a tab. Older snapshots intentionally omit
+   * this and the renderer restores them as the normal Epic surface.
+   */
+  readonly surfaceMode?:
+    | { readonly kind: "epic" }
+    | { readonly kind: "phase-migration"; readonly phaseId: string };
+}
+
+export type PerWindowStateFeature = "tab-strip-layout-v2" | "active-route-v1";
+
+/** Main-owned feature declaration. Never infer support from bridge presence. */
+export interface PerWindowStateCapabilities {
+  readonly schemaVersion: number;
+  readonly features: readonly PerWindowStateFeature[];
+}
+
+/** Returned only by a main process that durably accepted the patch. */
+export interface PerWindowStateUpdateAcknowledgement {
+  readonly capabilities: PerWindowStateCapabilities;
+  readonly revision: number;
 }
 
 export interface PerWindowLandingDraft {
@@ -47,11 +68,17 @@ export interface PerWindowLandingDraft {
 }
 
 export interface PerWindowSnapshot {
+  /** Monotonic, per-window persisted revision. Legacy snapshots begin at 0. */
+  readonly revision?: number;
   readonly epicTabs: readonly PerWindowEpicViewTab[];
   readonly activeTabId: string | null;
   readonly canvasByTabId: Readonly<Record<string, JsonValue>>;
   readonly landingDrafts: readonly PerWindowLandingDraft[];
   readonly activeLandingDraftId: string | null;
+  /** Opaque renderer-owned JSON for the version-2 tab strip. */
+  readonly tabStripLayout?: JsonValue | null;
+  /** Last accepted app-relative route, paired atomically with tabStripLayout. */
+  readonly activeRoute?: string | null;
 }
 
 export interface PerWindowStatePatch {
@@ -60,6 +87,8 @@ export interface PerWindowStatePatch {
   readonly canvasByTabId?: Readonly<Record<string, JsonValue>>;
   readonly landingDrafts?: readonly PerWindowLandingDraft[];
   readonly activeLandingDraftId?: string | null;
+  readonly tabStripLayout?: JsonValue | null;
+  readonly activeRoute?: string | null;
 }
 
 export type DesktopAuthSessionStatus =

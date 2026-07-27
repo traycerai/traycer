@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type { NavigateOptions } from "@tanstack/react-router";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import type { TAB_KINDS } from "@/stores/tabs/registry";
@@ -36,7 +36,7 @@ export type TabIcon = ComponentType<{ className: string | undefined }>;
 /**
  * Canonical, render-ready tab projected by `useHeaderTabs`. The strip
  * iterates this. Each variant is fully self-contained - all display
- * fields (`name`, `icon`, `canDuplicate`, `canOpenInNewWindow`) are
+ * fields (`name`, `icon`, `canClose`, `canDuplicate`, `canOpenInNewWindow`) are
  * baked in at build time by the kind module's `build()` factory.
  * Behavioral delegation (close, duplicate, navigate) goes through the
  * per-concern dispatch fns (`tabRequestClose`, `tabDuplicate`,
@@ -50,6 +50,7 @@ export type HeaderTab =
       readonly route: string;
       readonly name: string;
       readonly icon: TabIcon | null;
+      readonly canClose: boolean;
       readonly canDuplicate: boolean;
       readonly canOpenInNewWindow: boolean;
     }
@@ -105,11 +106,35 @@ export interface TabKindModule<K extends HeaderTabKind, Source> {
   /**
    * Constructs the fully-populated `HeaderTab` variant for this kind
    * from the source store record. All display fields (`name`, `icon`,
-   * `canDuplicate`, `canOpenInNewWindow`) are baked in here so consumers
+   * `canClose`, `canDuplicate`, `canOpenInNewWindow`) are baked in here so consumers
    * never need to call back into the descriptor for static data.
    */
   readonly build: (source: Source) => Extract<HeaderTab, { kind: K }>;
   readonly descriptor: TabKindDescriptor<K>;
+}
+
+/**
+ * Static surface capabilities which every registered tab kind must declare.
+ * `render` is intentionally a placeholder until the top-level surface host
+ * arrives; declaring it now keeps future kinds from bypassing the contract.
+ */
+export interface TabSurfaceCapabilities {
+  readonly splitEligibility: "eligible" | "ineligible";
+  readonly duplication: "allowed" | "forbidden";
+  readonly singleton: "per-instance" | "per-window";
+  readonly newWindow: "copy" | "move" | "none";
+  readonly readinessScope: "none" | "default-host" | "tab-host";
+  readonly durableState: {
+    readonly owner: "epic-canvas" | "landing-draft" | "tabs-store";
+    readonly eviction: "reconstruct";
+  };
+}
+
+export interface TabSurfaceDescriptor<
+  K extends HeaderTabKind,
+> extends TabSurfaceCapabilities {
+  readonly render: (tab: Extract<HeaderTab, { kind: K }>) => ReactNode;
+  readonly canonicalRoute: (tab: Extract<HeaderTab, { kind: K }>) => string;
 }
 
 /**
@@ -129,6 +154,8 @@ export interface TabKindModule<K extends HeaderTabKind, Source> {
  */
 export interface TabKindDescriptor<K extends HeaderTabKind> {
   readonly kind: K;
+  /** Exhaustive per-kind surface policy consumed by split layout code. */
+  readonly surface: TabSurfaceDescriptor<K>;
   /**
    * Performs duplication and returns the intent to navigate to, or null
    * if duplication is not possible for this tab instance. Only called

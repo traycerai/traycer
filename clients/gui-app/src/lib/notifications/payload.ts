@@ -314,6 +314,7 @@ export function routeNotification(
             migrationSource: undefined,
           },
         }),
+        undefined,
       );
       return;
     case "chat":
@@ -362,6 +363,7 @@ export function routeNotification(
             migrationSource: undefined,
           },
         }),
+        undefined,
       );
       return;
     }
@@ -389,15 +391,23 @@ function routeTerminalNotification(
           migrationSource: undefined,
         },
       }),
+      undefined,
     );
     return;
   }
 
-  const nestedFocus = store.prepareSetActiveTileTabFocusTarget(
-    payload.tabId,
-    payload.paneId,
-    payload.tileInstanceId,
-  );
+  // The payload names the EXACT tab that owns the terminal. Prepare THAT tab's
+  // nested focus and activate it - never resolve by epic, which would pick an
+  // active/MRU same-epic sibling and land on the wrong tab. A retained,
+  // currently-closed tab is reopened by the controller's legacy projection
+  // (`setActiveTab` reinserts it into `openTabOrder`).
+  const nestedFocus = useEpicCanvasStore
+    .getState()
+    .prepareSetActiveTileTabFocusTarget(
+      payload.tabId,
+      payload.paneId,
+      payload.tileInstanceId,
+    );
   navigateToTabIntent(
     navigate,
     existingEpicTabIntentWithNestedFocus({
@@ -411,6 +421,7 @@ function routeTerminalNotification(
       },
       nestedFocus,
     }),
+    undefined,
   );
 }
 
@@ -432,6 +443,7 @@ function routeEpicChatNotification(
         migrationSource: undefined,
       },
     }),
+    undefined,
   );
 }
 
@@ -491,6 +503,7 @@ function routeOpenChatNotification(
         },
         nestedFocus: null,
       }),
+      undefined,
     );
     return true;
   }
@@ -513,6 +526,7 @@ function routeOpenChatNotification(
       },
       nestedFocus,
     }),
+    undefined,
   );
   return true;
 }
