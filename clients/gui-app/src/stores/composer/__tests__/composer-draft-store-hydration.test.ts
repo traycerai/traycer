@@ -51,6 +51,7 @@ const EMPTY_DOC: DraftState["content"] = {
   type: "doc",
   content: [{ type: "paragraph" }],
 };
+const EMPTY_SELECTION: DraftState["selection"] = { from: 1, to: 1 };
 
 describe("composer draft store hydration", () => {
   it("bumps resetEpoch on every persisted draft after hydration so editors push the JSON into Tiptap", async () => {
@@ -109,7 +110,7 @@ describe("composer draft store clearDraft", () => {
     // the epoch change (old clearDraft deleted the key instead).
     expect(taskId in useComposerDraftStore.getState().drafts).toBe(true);
     expect(after.content).toEqual(EMPTY_DOC);
-    expect(after.selection).toBeNull();
+    expect(after.selection).toEqual(EMPTY_SELECTION);
     expect(after.resetEpoch).toBe(before.resetEpoch + 1);
   });
 

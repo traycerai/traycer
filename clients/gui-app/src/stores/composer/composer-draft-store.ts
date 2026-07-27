@@ -41,7 +41,9 @@ interface ComposerDraftStore {
    * removed, so a delete after routine (non-bumping) keystrokes produces no
    * observable change and the sibling's stale Tiptap document never clears.
    * Bumping `resetEpoch` in place is the only way every mounted
-   * `useChatComposerDraft` for this `taskId` reliably observes the clear.
+   * `useChatComposerDraft` for this `taskId` reliably observes the clear. The
+   * explicit empty-document caret applies the reset without invoking
+   * `setContent(..., null)`'s focus-at-end behavior in sibling composers.
    */
   readonly clearDraft: (taskId: string) => void;
 }
@@ -49,6 +51,7 @@ const EMPTY_COMPOSER_CONTENT: JsonContent = {
   type: "doc",
   content: [{ type: "paragraph" }],
 };
+const EMPTY_COMPOSER_SELECTION: DraftSelection = { from: 1, to: 1 };
 
 export const EMPTY_COMPOSER_DRAFT: DraftState = {
   content: EMPTY_COMPOSER_CONTENT,
@@ -102,7 +105,11 @@ export const useComposerDraftStore = create<ComposerDraftStore>()(
         });
       },
       clearDraft: (taskId) => {
-        get().replaceDraft(taskId, EMPTY_COMPOSER_CONTENT, null);
+        get().replaceDraft(
+          taskId,
+          EMPTY_COMPOSER_CONTENT,
+          EMPTY_COMPOSER_SELECTION,
+        );
       },
     }),
     {
