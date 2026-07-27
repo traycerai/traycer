@@ -5,6 +5,8 @@ import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow"
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { executeTabSplitCommand } from "@/stores/tabs/tab-split-commands";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import * as TabNav from "@/lib/tab-navigation";
 
@@ -77,6 +79,34 @@ describe("useCloseTabFlow", () => {
       tabId: a,
       epicId: "epic-a",
     });
+  });
+
+  it("closes the route-backed tab when a split focuses its fillable half", () => {
+    // "Add tab to new split view" lands focus on the EMPTY half, so the split
+    // keeps `focusedSide: "right"` with `routeBackingSide: "left"` - the one
+    // state where the two diverge, because a side that holds no tab can never
+    // back the route. `selectHostFocusedRef` reads null there, so gating the
+    // close on it made Cmd+W silently do nothing right after the split command.
+    const a = useEpicCanvasStore.getState().openEpicTab("epic-a", "Alpha");
+    routerState.pathname = `/epics/epic-a/${a}`;
+
+    expect(executeTabSplitCommand("add", { kind: "epic", id: a })).toBe(true);
+    const split = useTabsStore.getState().items[0];
+    expect(split).toMatchObject({
+      kind: "split",
+      left: { kind: "tab", ref: { kind: "epic", id: a } },
+      right: { kind: "empty" },
+      focusedSide: "right",
+      routeBackingSide: "left",
+    });
+    expect(selectHostFocusedRef(useTabsStore.getState())).toBeNull();
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.closeActiveTab();
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(a);
   });
 
   it("does not call navigateToTabIntent when closing a non-active tab", () => {

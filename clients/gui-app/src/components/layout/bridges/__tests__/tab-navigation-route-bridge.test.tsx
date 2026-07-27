@@ -2,6 +2,11 @@ import { cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
+import {
+  __resetTabNavigationControllerForTesting,
+  tabNavigationController,
+} from "@/lib/tab-navigation";
+import * as DesktopTabsPersistence from "@/stores/tabs/desktop-tabs-persistence";
 
 interface HistoryObserverInput {
   readonly location: {
@@ -19,27 +24,22 @@ interface ReplaceCall {
   readonly ignoreBlocker: boolean;
 }
 
+// Only the history is faked, and only because the notification TIMING is the
+// subject under test: `@tanstack/history`'s `tryNavigation` is `async` and
+// reaches the notifying task without executing an `await` only when blockers
+// are skipped or none are registered. The controller and the persistence
+// module are the real ones.
 const testState = vi.hoisted(() => ({
   subscriber: null as ((input: HistoryObserverInput) => void) | null,
   replaceCalls: [] as Array<ReplaceCall>,
-  restoredRoute: null as string | null,
   blockerRegistered: false,
-  observeLocation: vi.fn(),
-  updateActiveRoute: vi.fn(),
-  synchronizeInitialLocation: vi.fn(),
-  setHydrationReady: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({
     navigate: vi.fn(),
     state: {
-      location: {
-        pathname: "/live",
-        search: {},
-        searchStr: "",
-        state: {},
-      },
+      location: { pathname: "/live", search: {}, searchStr: "", state: {} },
     },
     history: {
       subscribe: (listener: (input: HistoryObserverInput) => void) => {
@@ -59,11 +59,6 @@ vi.mock("@tanstack/react-router", () => ({
             action: { type: "REPLACE" },
           });
         };
-        // Mirrors `@tanstack/history`'s `tryNavigation`, which is an `async`
-        // function: it reaches the task that notifies subscribers WITHOUT
-        // executing an `await` only when blockers are skipped or none are
-        // registered. On the blocker path it awaits the blocker first, so the
-        // notification lands a microtask after `replace` has already returned.
         if (ignoreBlocker || !testState.blockerRegistered) {
           notify();
           return;
@@ -78,52 +73,36 @@ vi.mock("@/providers/windows-bridge-context", () => ({
   useWindowsBridgeHydrated: () => true,
 }));
 
-vi.mock("@/stores/tabs/desktop-tabs-persistence", () => ({
-  consumeDesktopRestoredRoute: () => testState.restoredRoute,
-  updateDesktopTabsActiveRoute: (route: string) => {
-    testState.updateActiveRoute(route);
-  },
-}));
-
-vi.mock("@/lib/tab-navigation", () => ({
-  tabNavigationController: {
-    setNavigator: vi.fn(),
-    setLocationReader: vi.fn(),
-    observeLocation: (...args: Array<unknown>) => {
-      testState.observeLocation(...args);
-    },
-    synchronizeInitialLocation: () => {
-      testState.synchronizeInitialLocation();
-    },
-    setHydrationReady: (...args: Array<unknown>) => {
-      testState.setHydrationReady(...args);
-    },
-  },
-}));
-
 beforeEach(() => {
   testState.subscriber = null;
   testState.replaceCalls = [];
-  testState.restoredRoute = "/restored?tab=1";
   testState.blockerRegistered = false;
-  testState.observeLocation.mockClear();
-  testState.updateActiveRoute.mockClear();
-  testState.synchronizeInitialLocation.mockClear();
-  testState.setHydrationReady.mockClear();
+  __resetTabNavigationControllerForTesting();
 });
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
+  __resetTabNavigationControllerForTesting();
 });
+
+function seedRestoredRoute(route: string | null): void {
+  vi.spyOn(
+    DesktopTabsPersistence,
+    "consumeDesktopRestoredRoute",
+  ).mockReturnValue(route);
+}
 
 describe("TabNavigationRouteBridge restored-route replacement", () => {
   it("keeps the bookkeeping replace unobserved even with a navigation blocker registered", async () => {
     // The skip flag is a synchronous window: raised, `replace` called, lowered.
     // A registered blocker makes `tryNavigation` await before it notifies, so
     // an unguarded replace would deliver REPLACE after the window closed and
-    // the restored entry would be observed as an external commit - losing the
-    // `preserveStartupFocus` handling T3 gives startup work.
+    // the restored entry would reach the controller as an external commit -
+    // losing the `preserveStartupFocus` handling T3 gives startup work.
     testState.blockerRegistered = true;
+    seedRestoredRoute("/restored?tab=1");
+    const observed = vi.spyOn(tabNavigationController, "observeLocation");
 
     render(<TabNavigationRouteBridge />);
     await Promise.resolve();
@@ -132,37 +111,53 @@ describe("TabNavigationRouteBridge restored-route replacement", () => {
     expect(testState.replaceCalls).toEqual([
       { path: "/restored?tab=1", ignoreBlocker: true },
     ]);
-    expect(testState.observeLocation).not.toHaveBeenCalled();
+    expect(observed).not.toHaveBeenCalled();
   });
 
-  it("still observes a genuine post-hydration entry", async () => {
-    // Novelty guard for the assertion above: the subscription has to be live
-    // and observing, or "never observed" would hold against a bridge that
-    // simply never subscribed.
+  it("observes a genuine post-hydration entry with the parsed search shape", async () => {
+    // Novelty guard for the assertion above - the subscription has to be live,
+    // or "never observed" would hold against a bridge that never subscribed.
+    // Also pins the shape contract: history hands the bridge a raw query
+    // STRING, and the controller must receive a parsed object. A lossy
+    // re-serializer here previously dropped every non-string param.
     testState.blockerRegistered = true;
+    seedRestoredRoute(null);
+    const observed = vi.spyOn(tabNavigationController, "observeLocation");
+    const activeRoute = vi.spyOn(
+      DesktopTabsPersistence,
+      "updateDesktopTabsActiveRoute",
+    );
 
     render(<TabNavigationRouteBridge />);
     await Promise.resolve();
-    testState.updateActiveRoute.mockClear();
+    activeRoute.mockClear();
 
     testState.subscriber?.({
-      location: { pathname: "/epics/e1", state: {}, search: "?focusedAt=7" },
+      location: {
+        pathname: "/epics/e1",
+        state: {},
+        search: "?focusedAt=7&tab=b",
+      },
       action: { type: "PUSH" },
     });
 
-    expect(testState.observeLocation).toHaveBeenCalledTimes(1);
-    expect(testState.updateActiveRoute).toHaveBeenCalledWith(
-      "/epics/e1?focusedAt=7",
-    );
+    expect(observed).toHaveBeenCalledTimes(1);
+    expect(observed.mock.calls[0][0]).toEqual({
+      pathname: "/epics/e1",
+      state: {},
+      search: { focusedAt: "7", tab: "b" },
+    });
+    expect(observed.mock.calls[0][1]).toBe("PUSH");
+    // The persisted route keeps the RAW query string, leading `?` included.
+    expect(activeRoute).toHaveBeenCalledWith("/epics/e1?focusedAt=7&tab=b");
   });
 
   it("does not replace at all when nothing was restored", async () => {
-    testState.restoredRoute = null;
+    seedRestoredRoute(null);
 
     render(<TabNavigationRouteBridge />);
     await Promise.resolve();
 
     expect(testState.replaceCalls).toEqual([]);
-    expect(testState.setHydrationReady).toHaveBeenCalled();
   });
 });

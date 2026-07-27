@@ -2,8 +2,7 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { selectHostFocusedRef } from "@/stores/tabs/selectors";
-import { readTabStripLayout, useTabsStore } from "@/stores/tabs/store";
+import { readTabStripLayout } from "@/stores/tabs/store";
 import {
   findStripItemForRef,
   flattenStripItemRefs,
@@ -92,18 +91,18 @@ export function useCloseTabFlow(): CloseTabFlow {
   );
 
   const closeActiveTab = useCallback(() => {
-    const focusedRef = selectHostFocusedRef(useTabsStore.getState());
-    if (focusedRef === null) return;
+    // Deliberately keyed off the route, NOT `selectHostFocusedRef`. A split
+    // only moves `routeBackingSide` onto the focused side when that side holds
+    // a tab, so focusing the fillable half leaves the two diverged and the
+    // focused ref reading `null` - which is exactly where `createEmptySplit`
+    // starts ("Add tab to new split view" focuses the empty side). Gating on
+    // the focused ref made Cmd+W silently do nothing there. Whenever the
+    // focused side does hold a tab the two agree, so the route-backed tab is
+    // the right target in both cases.
     const active = getHeaderTabs().find((t) =>
       tabMatchesPath(t, activePathname),
     );
-    if (
-      active !== undefined &&
-      active.kind === focusedRef.kind &&
-      active.id === focusedRef.id
-    ) {
-      requestCloseTab(active);
-    }
+    if (active !== undefined) requestCloseTab(active);
   }, [activePathname, requestCloseTab]);
 
   // Stable identity: consumers list the whole flow in `useCallback` /
