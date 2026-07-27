@@ -129,6 +129,25 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle" as const,
 }));
 
+// Worktree sweep reaches the host runtime; this suite renders the panel
+// without a <HostRuntimeProvider>, so stub both hooks the way the sibling
+// epics-list-panel suite does.
+vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
+  useEpicSweepWorktreeCandidates: () => ({
+    rows: [],
+    isPending: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
+  useEpicSweepWorktrees: () => ({
+    isPending: false,
+    mutate: () => {},
+  }),
+  useSweepingWorktreePaths: () => new Set<string>(),
+}));
+
 const PHASE_EPIC_ID = "phase-open-target";
 
 function phaseHistoryItem(): HistoryItem {
