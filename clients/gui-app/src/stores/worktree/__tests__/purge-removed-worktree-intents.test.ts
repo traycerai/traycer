@@ -1,0 +1,230 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import type {
+  WorktreeBindingSelectorRowV12,
+  WorktreeFolderIntent,
+} from "@traycer/protocol/host";
+import {
+  worktreeFolderIntentReferencesRemoved,
+  type RemovedWorktreeRefs,
+} from "@/lib/worktree/removed-worktree-refs";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
+import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
+import {
+  useWorktreeIntentStagingStore,
+  worktreeStagingKeyString,
+  type WorktreeStagingKey,
+} from "@/stores/worktree/worktree-intent-staging-store";
+
+const REMOVED: RemovedWorktreeRefs = {
+  worktreePaths: new Set(["/wt/gone"]),
+  branches: new Set(["traycer/gone-branch"]),
+};
+
+function existingBranchIntent(branchName: string): WorktreeFolderIntent {
+  return {
+    kind: "worktree",
+    workspacePath: "/repo",
+    repoIdentifier: { owner: "acme", repo: "app" },
+    isPrimary: true,
+    branch: { type: "existing", name: branchName },
+    scripts: null,
+  };
+}
+
+function importIntent(worktreePath: string): WorktreeFolderIntent {
+  return {
+    kind: "import",
+    workspacePath: "/repo",
+    repoIdentifier: { owner: "acme", repo: "app" },
+    isPrimary: true,
+    worktreePath,
+  };
+}
+
+describe("worktreeFolderIntentReferencesRemoved", () => {
+  it("matches deleted existing-branch checkouts, fork sources, and imports", () => {
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        existingBranchIntent("traycer/gone-branch"),
+        REMOVED,
+      ),
+    ).toBe(true);
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        {
+          ...existingBranchIntent("x"),
+          kind: "worktree",
+          branch: {
+            type: "new",
+            name: "fresh",
+            source: "traycer/gone-branch",
+            carryUncommittedChanges: false,
+          },
+          scripts: null,
+        },
+        REMOVED,
+      ),
+    ).toBe(true);
+    expect(
+      worktreeFolderIntentReferencesRemoved(importIntent("/wt/gone"), REMOVED),
+    ).toBe(true);
+  });
+
+  it("keeps live branches, live imports, new-branch forks, and local intents", () => {
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        existingBranchIntent("main"),
+        REMOVED,
+      ),
+    ).toBe(false);
+    expect(
+      worktreeFolderIntentReferencesRemoved(importIntent("/wt/live"), REMOVED),
+    ).toBe(false);
+    // A NEW branch named like the deleted one recreates it - not stale.
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        {
+          ...existingBranchIntent("x"),
+          kind: "worktree",
+          branch: {
+            type: "new",
+            name: "traycer/gone-branch",
+            source: "main",
+            carryUncommittedChanges: false,
+          },
+          scripts: null,
+        },
+        REMOVED,
+      ),
+    ).toBe(false);
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        {
+          kind: "local",
+          workspacePath: "/repo",
+          repoIdentifier: null,
+          isPrimary: true,
+        },
+        REMOVED,
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("worktree intent purge on sweep completion", () => {
+  beforeEach(() => {
+    useWorktreeIntentMemoryStore.getState().resetForTests();
+    useWorktreeIntentStagingStore.getState().resetForTests();
+  });
+
+  it("drops stale per-folder memory and filters per-epic memory entries", () => {
+    const memory = useWorktreeIntentMemoryStore.getState();
+    memory.setFolderIntent(existingBranchIntent("traycer/gone-branch"), 1);
+    memory.setEpicIntent(
+      "epic-1",
+      {
+        entries: [
+          existingBranchIntent("traycer/gone-branch"),
+          existingBranchIntent("main"),
+        ],
+      },
+      2,
+    );
+    memory.setEpicIntent("epic-2", { entries: [importIntent("/wt/gone")] }, 3);
+
+    useWorktreeIntentMemoryStore
+      .getState()
+      .purgeRemovedWorktreeIntents(REMOVED);
+
+    const next = useWorktreeIntentMemoryStore.getState();
+    expect(next.getFolderIntent("/repo")).toBeNull();
+    // The still-valid entry survives; the stale one is filtered out.
+    expect(next.getEpicIntent("epic-1")).toEqual({
+      entries: [existingBranchIntent("main")],
+    });
+    // An epic intent left empty is dropped wholesale.
+    expect(next.getEpicIntent("epic-2")).toBeNull();
+  });
+
+  it("filters staged entries across slots, clearing emptied slots and bumping revisions", () => {
+    const staging = useWorktreeIntentStagingStore.getState();
+    const staleKey: WorktreeStagingKey = { surface: "landing", draftId: null };
+    const staleId = worktreeStagingKeyString(staleKey);
+    staging.setIntent(staleKey, {
+      entries: [existingBranchIntent("traycer/gone-branch")],
+    });
+    const mixedKey: WorktreeStagingKey = {
+      surface: "landing",
+      draftId: "draft-1",
+    };
+    staging.setIntent(mixedKey, {
+      entries: [importIntent("/wt/gone"), existingBranchIntent("main")],
+    });
+    const revisionBefore =
+      useWorktreeIntentStagingStore.getState().revisionByKey[staleId] ?? 0;
+
+    useWorktreeIntentStagingStore
+      .getState()
+      .purgeRemovedWorktreeIntents(REMOVED);
+
+    const next = useWorktreeIntentStagingStore.getState();
+    // Fully-stale slot cleared like setIntent(null)...
+    expect(next.intentByKey[staleId]).toBeUndefined();
+    // ...and its revision bumped so a rejected in-flight action can't restore
+    // the purged selection.
+    expect(next.revisionByKey[staleId] ?? 0).toBeGreaterThan(revisionBefore);
+    // Mixed slot keeps only the live entry.
+    expect(next.intentByKey[worktreeStagingKeyString(mixedKey)]).toEqual({
+      entries: [existingBranchIntent("main")],
+    });
+  });
+});
+
+describe("withoutResolvedMissingRows", () => {
+  function row(
+    over: Partial<WorktreeBindingSelectorRowV12> & { runningDir: string },
+  ): WorktreeBindingSelectorRowV12 {
+    return {
+      hostId: "host-1",
+      workspacePath: "/repo",
+      worktreePath: over.runningDir,
+      mode: "worktree",
+      isGitRepo: true,
+      repoIdentifier: { owner: "acme", repo: "app" },
+      branch: "feat/x",
+      isPrimary: false,
+      isImported: false,
+      setupState: "succeeded",
+      disabledReason: null,
+      sources: [],
+      isGitResolvePending: false,
+      ...over,
+    };
+  }
+
+  it("hides host-proven-missing rows but keeps pending and live rows", () => {
+    const live = row({ runningDir: "/wt/live" });
+    const missing = row({
+      runningDir: "/wt/gone",
+      disabledReason: "missing_worktree_path",
+    });
+    const stillChecking = row({
+      runningDir: "/wt/checking",
+      disabledReason: "missing_worktree_path",
+      isGitResolvePending: true,
+    });
+    expect(
+      withoutResolvedMissingRows([live, missing, stillChecking], null),
+    ).toEqual([live, stillChecking]);
+  });
+
+  it("keeps a resolved-missing row that is the surface's current selection", () => {
+    const missing = row({
+      runningDir: "/wt/gone",
+      disabledReason: "missing_worktree_path",
+    });
+    expect(withoutResolvedMissingRows([missing], "/wt/gone")).toEqual([
+      missing,
+    ]);
+  });
+});

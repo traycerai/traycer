@@ -35,6 +35,7 @@ import {
   EpicLeftPanelStaticRail,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-rail";
 import { SidebarKeybindingBridge } from "@/components/epic-canvas/sidebar/sidebar-keybinding-bridge";
+import { TaskStatusStrip } from "@/components/epic-canvas/sidebar/task-status-strip";
 import { SnapshotLoadingProvider } from "@/components/epic-canvas/snapshots/snapshot-loading-context";
 import {
   useEpicSnapshotFetchError,
@@ -134,6 +135,7 @@ function EpicSidebarColumnBody(props: EpicSidebarColumnProps): ReactNode {
               />
             )}
           </div>
+          <TaskStatusStrip epicId={epicId} tabId={tabId} />
         </SidebarProvider>
       </div>
       <SidebarWidthResizeHandle hidden={mainCollapsed} />
