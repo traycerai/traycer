@@ -64,6 +64,7 @@ export const RunnerHostInvoke = {
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",
   perWindowStateGet: "runnerHost:windows:perWindowState:get",
+  perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
   perWindowStateClear: "runnerHost:windows:perWindowState:clear",
   authSessionGet: "runnerHost:windows:authSession:get",

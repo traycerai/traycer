@@ -53,6 +53,7 @@ import { SnapshotGate } from "@/components/epic-canvas/snapshots/snapshot-loadin
 import { TerminalsPanelSkeleton } from "@/components/epic-canvas/skeletons/terminals-panel-skeleton";
 import {
   getTerminalTileDragId,
+  getPaneScopedDndId,
   TERMINAL_TILE_DND_TYPE,
   type EpicCanvasTerminalTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -305,7 +306,7 @@ function TerminalRow(props: TerminalRowProps) {
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getTerminalTileDragId(session.sessionId),
+    id: getPaneScopedDndId(tabId, getTerminalTileDragId(session.sessionId)),
     data: dragData,
     disabled: isRenaming,
   });

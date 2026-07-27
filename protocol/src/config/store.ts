@@ -958,12 +958,21 @@ export function applyEnvOverrides(
   base: NodeJS.ProcessEnv,
   overrides: Readonly<Record<string, EnvOverrideValue>>,
 ): NodeJS.ProcessEnv {
+  // The Windows environment block is case-insensitive and Node preserves the
+  // existing key's casing (the real PATH key is spelled `Path`, not `PATH`), so
+  // an override keyed `PATH` must land on the existing `Path` in place rather
+  // than creating a second, colliding key. POSIX stays case-sensitive.
+  const isWindows = osPlatform() === "win32";
   const env: NodeJS.ProcessEnv = { ...base };
   for (const [key, value] of Object.entries(overrides)) {
+    const targetKey = isWindows
+      ? (Object.keys(env).find((k) => k.toLowerCase() === key.toLowerCase()) ??
+        key)
+      : key;
     if (value === null) {
-      delete env[key];
+      delete env[targetKey];
     } else {
-      env[key] = value;
+      env[targetKey] = value;
     }
   }
   return env;

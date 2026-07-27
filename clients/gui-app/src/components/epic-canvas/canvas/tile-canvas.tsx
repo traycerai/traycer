@@ -196,7 +196,7 @@ function EmptyShell(props: EmptyShellProps) {
     id: getEmptyShellDropId(epicId, tabId),
     data: dropData,
   });
-  const active = useEmptyShellDropActive();
+  const active = useEmptyShellDropActive(tabId);
 
   return (
     <div

@@ -35,6 +35,7 @@ import {
   markLandingDraftsAuthoritativeNonEmpty,
   scheduleLandingImageReconcile,
 } from "@/lib/composer/landing-image-gc";
+import { draftRuntimeRegistry } from "./draft-runtime-registry";
 
 /**
  * In-flight "new epic" draft shown in the global tab strip. Multiple drafts
@@ -71,15 +72,10 @@ export interface LandingDraftWorkspaceSnapshot {
 interface LandingDraftStoreState {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly activeDraftId: string | null;
-  /**
-   * Always creates a fresh draft, sets it as active, returns its id.
-   * Pass `id` to create with a pre-minted identity (landing null-draft mount
-   * key stability); pass `undefined` to allocate a new uuid.
-   */
-  createDraft: (
-    settings: ChatRunSettings | null,
-    id: string | undefined,
-  ) => string;
+  /** Always creates a fresh draft, sets it as active, returns its id. */
+  createDraft: (settings: ChatRunSettings | null) => string;
+  /** Coordinator-only stable-id source creation. */
+  createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
   /** Remove a draft by id. If it was the active draft, clears `activeDraftId`;
    *  strip-neighbor navigation in the close-flow handles where the user lands. */
   closeDraft: (id: string) => void;
@@ -329,9 +325,14 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       drafts: [],
       activeDraftId: null,
 
-      createDraft: (settings, id) => {
+      createDraft: (settings) => {
+        return get().createDraftWithId(uuidv4(), settings);
+      },
+
+      createDraftWithId: (id, settings) => {
+        if (get().drafts.some((draft) => draft.id === id)) return id;
         const next: LandingDraftTab = {
-          id: id ?? uuidv4(),
+          id,
           content: EMPTY_LANDING_DRAFT_CONTENT,
           selection: null,
           lastTouchedAt: Date.now(),
@@ -351,6 +352,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         const { drafts, activeDraftId } = get();
         const next = drafts.filter((d) => d.id !== id);
         if (next.length === drafts.length) return;
+        // A close is the runtime cancellation boundary. It flushes this exact
+        // draft's pending writer and aborts only a pre-create attempt; another
+        // visible draft's mirror or submission is never consulted.
+        draftRuntimeRegistry.close(id);
         const nextActive = activeDraftId === id ? null : activeDraftId;
         set({ drafts: next, activeDraftId: nextActive });
         // Closing a draft can orphan its image bytes — reclaim them (debounced).
@@ -499,6 +504,25 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
     },
   ),
 );
+
+// The registry intentionally has no import back into this persisted source.
+// Wiring it after store construction keeps the renderer-local runtime free of
+// store module cycles and makes recovery hydrate only this window's drafts.
+draftRuntimeRegistry.configure({
+  read: (draftId) => {
+    const draft = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === draftId);
+    return draft === undefined
+      ? null
+      : { content: draft.content, selection: draft.selection };
+  },
+  write: (draftId, content, selection) => {
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(draftId, content, selection);
+  },
+});
 /**
  * Render-stable projection of the active draft for the landing-page shell
  * (`HomePage`). Subscribes ONLY to the fields that affect layout/identity - the
@@ -518,10 +542,19 @@ export function useActiveLandingDraftShell(): {
   readonly workspaceFolders: ReadonlyArray<string> | null;
   readonly settings: ChatRunSettings | null;
 } {
+  const activeDraftId = useLandingDraftStore((state) => state.activeDraftId);
+  return useLandingDraftShell(activeDraftId);
+}
+
+/** Stable draft-shell projection for one retained top-level draft surface. */
+export function useLandingDraftShell(draftId: string | null): {
+  readonly draftId: string | null;
+  readonly workspaceFolders: ReadonlyArray<string> | null;
+  readonly settings: ChatRunSettings | null;
+} {
   return useLandingDraftStore(
     useShallow((state) => {
-      const draft =
-        state.drafts.find((d) => d.id === state.activeDraftId) ?? null;
+      const draft = state.drafts.find((d) => d.id === draftId) ?? null;
       return {
         draftId: draft?.id ?? null,
         workspaceFolders: draft?.workspace.folders ?? null,

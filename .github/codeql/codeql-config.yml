@@ -1,0 +1,41 @@
+name: "Traycer CodeQL config"
+
+# Test specs, and the support code that lives beside them, are excluded from
+# analysis. Queries still come from the workflow (`security-extended`); this
+# file only narrows WHAT is scanned, never WHICH rules run.
+#
+# Why: security queries pointed at test code produce findings whose recommended
+# remediation destroys the assertion under test. The case that prompted this
+# was `js/file-system-race` on
+# `clients/desktop/src/electron-main/cli/__tests__/install-bundled-cli.test.ts`.
+# Its recommendation is "use file descriptors instead of file names", but the
+# check there is `lstatSync(path).isSymbolicLink()`, which has no
+# file-descriptor form at all - `open()` follows symlinks, so once you hold an
+# fd, "was this path a symlink" is unanswerable. That path-level property IS
+# the regression under test: the CLI slot is a real copy rather than a symlink
+# into the `.app` bundle. A second row there depends on `stat` FOLLOWING links,
+# because that is exactly where the field report's ENOENT surfaced once the
+# bundle was deleted. Each test also owns a `mkdtemp` directory with no second
+# writer, so the race the query warns about is unreachable by construction.
+#
+# The trade, taken deliberately: a genuine problem in a test file - a hardcoded
+# credential, an injection in a test helper - is no longer flagged. The patterns
+# below are kept narrow to bound that, and two test-only directories are left IN
+# scope on purpose:
+#
+#   clients/shared/test-fixtures/**    A fixture holding a real-looking
+#   clients/shared/host-client/mock/** credential is precisely what should be
+#                                      flagged. Neither has a production
+#                                      importer today, but either could be
+#                                      wired into a dev or demo path later, and
+#                                      a blind spot created now would persist
+#                                      silently.
+#
+# If a future finding here is a false positive rather than a whole class, dismiss
+# that alert with its own reasoning instead of widening these patterns.
+paths-ignore:
+  - "**/__tests__/**"
+  - "**/__integration_tests__/**"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.test.mjs"

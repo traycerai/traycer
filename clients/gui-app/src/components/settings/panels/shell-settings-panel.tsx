@@ -1,14 +1,21 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, RotateCcw } from "lucide-react";
+import { Check, Info, RotateCcw } from "lucide-react";
 import {
   defaultShellArgs,
   isLoginShellFamily,
+  windowsShellCaptionFamily,
 } from "@traycer/protocol/config/shell-family";
 import type {
   TraycerDetectedShell,
   TraycerEnvOverride,
   TraycerShellConfig,
 } from "@traycer-clients/shared/platform/runner-host";
+import { isWindows } from "@/lib/keybindings/platform";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { EffectiveCommandPreview } from "@/components/settings/panels/shell/effective-command-preview";
@@ -34,6 +41,14 @@ const PANEL_DESCRIPTION =
   "How Traycer launches terminals, the host, and provider harnesses. New terminals pick up shell changes immediately; host env changes apply on restart.";
 const SAVED_FLASH_MS = 1600;
 type ShellSaveTarget = "program" | "flags";
+
+// WSL is the one shell selection where the choice silently diverges from what
+// agents see: agent chats stay Windows processes, so tools installed inside
+// WSL never reach them. Every other family behaves as users expect
+// (PowerShell / Git Bash profiles are read into the agent env), so only WSL
+// earns a caption (Windows hosts only) - one quiet line under the picker, with
+// the remedy behind a hover card instead of inline prose.
+const WSL_AGENTS_DOCS_URL = "https://docs.traycer.ai/settings/shell#using-wsl";
 
 /** Final path segment of the resolved shell, used to name its flags. */
 function programName(path: string): string {
@@ -343,6 +358,10 @@ function TerminalShellGroup(props: {
   readonly onRevertFlags: () => void;
 }) {
   const { config } = props;
+  const showWslCaption =
+    config !== undefined &&
+    isWindows() &&
+    windowsShellCaptionFamily(config.path) === "wsl";
   return (
     <SettingsGroup
       title="Terminal shell · New terminals"
@@ -372,7 +391,10 @@ function TerminalShellGroup(props: {
             </div>
             <div
               className={cn(
-                "flex flex-wrap items-center justify-between gap-4 border-t border-border/40",
+                "flex flex-wrap justify-between gap-4 border-t border-border/40",
+                // The WSL caption stacks under the picker in its own column,
+                // so the row top-aligns only while it is shown.
+                showWslCaption ? "items-start" : "items-center",
                 props.compact ? "px-4 py-2.5" : "px-5 py-4",
               )}
             >
@@ -384,24 +406,27 @@ function TerminalShellGroup(props: {
                   Pick a shell, or add any program on this machine.
                 </p>
               </div>
-              <div className="flex max-w-full items-center gap-2">
-                <ShellProgramCombobox
-                  value={config.path}
-                  synthesised={config.synthesised}
-                  shells={props.shells}
-                  disabled={props.pending}
-                  onSelect={props.onSavePath}
-                  onAdd={props.onAddShell}
-                  onRemove={props.onRemoveShell}
-                  onUseSystemDefault={props.onUseSystemDefault}
-                />
-                <TransientSaveIndicator
-                  pending={
-                    props.pending ? props.saveTarget === "program" : false
-                  }
-                  saved={props.savedTarget === "program"}
-                  testId="settings-shell-program-saving-spinner"
-                />
+              <div className="flex max-w-full flex-col items-end gap-1.5">
+                <div className="flex max-w-full items-center gap-2">
+                  <ShellProgramCombobox
+                    value={config.path}
+                    synthesised={config.synthesised}
+                    shells={props.shells}
+                    disabled={props.pending}
+                    onSelect={props.onSavePath}
+                    onAdd={props.onAddShell}
+                    onRemove={props.onRemoveShell}
+                    onUseSystemDefault={props.onUseSystemDefault}
+                  />
+                  <TransientSaveIndicator
+                    pending={
+                      props.pending ? props.saveTarget === "program" : false
+                    }
+                    saved={props.savedTarget === "program"}
+                    testId="settings-shell-program-saving-spinner"
+                  />
+                </div>
+                {showWslCaption ? <WslAgentCaption /> : null}
               </div>
             </div>
             <div
@@ -450,6 +475,57 @@ function TerminalShellGroup(props: {
         )}
       </>
     </SettingsGroup>
+  );
+}
+
+/**
+ * The WSL boundary in one quiet line: terminal tabs open in WSL, but
+ * agent chats stay Windows processes, so WSL-installed tools never reach them.
+ * The full explanation and the remedy (a Traycer host inside WSL) live
+ * in the hover card - reachable because `HoverCard`'s close grace lets the
+ * pointer travel into the card's link. The hover card is pointer-only, so the
+ * Info glyph is itself a focusable anchor to the same docs page - keyboard
+ * users reach the remedy without a mouse.
+ */
+function WslAgentCaption() {
+  return (
+    <HoverCard>
+      <HoverCardTrigger asChild>
+        <span className="inline-flex cursor-default items-center gap-1.5 text-ui-xs text-muted-foreground">
+          <span
+            aria-hidden
+            className="size-1.5 rounded-full bg-[var(--term-ansi-yellow)]"
+          />
+          Agents won&apos;t see tools installed in WSL
+          <a
+            href={WSL_AGENTS_DOCS_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="How to run agents inside WSL"
+            className="rounded transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+          >
+            <Info className="size-3" />
+          </a>
+        </span>
+      </HoverCardTrigger>
+      <HoverCardContent
+        align="end"
+        className="w-[min(90vw,20rem)] space-y-2 text-ui-xs"
+      >
+        <p className="text-muted-foreground">
+          Terminal tabs open in WSL, but agent chats run as Windows processes
+          with the Windows environment.
+        </p>
+        <a
+          href={WSL_AGENTS_DOCS_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-block font-medium text-foreground underline underline-offset-4 hover:opacity-80"
+        >
+          Run agents inside WSL
+        </a>
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 

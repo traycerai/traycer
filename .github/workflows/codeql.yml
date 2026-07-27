@@ -37,6 +37,19 @@ jobs:
           # Default + security-focused queries; the codebase is interpreted, so
           # no build step is needed.
           queries: security-extended
+          # Narrows WHAT is scanned (test specs are excluded), never WHICH rules
+          # run - the config file deliberately carries no `queries` key, so
+          # `security-extended` above still applies.
+          #
+          # If you change either input, check both halves rather than trusting
+          # a green check: the code-scanning analyses API reports
+          # `results_count` (did `paths-ignore` apply) and `rules_count` (did
+          # the query suite survive, or did the config silently displace it).
+          # Deliberately no expected numbers here - `security-extended` grows
+          # with every CodeQL release, so a pinned count would be stale within
+          # weeks and read as a regression. Compare against the previous
+          # analysis on the same ref instead.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3

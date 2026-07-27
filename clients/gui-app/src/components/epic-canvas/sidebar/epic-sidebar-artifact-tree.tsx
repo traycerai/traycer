@@ -145,6 +145,7 @@ import { useEpicStore } from "@/hooks/use-epic-store";
 import { useShallow } from "zustand/react/shallow";
 import {
   getSidebarNodeDragId,
+  getPaneScopedDndId,
   SIDEBAR_NODE_DND_TYPE,
   type EpicCanvasSidebarNodeDragData,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -1566,7 +1567,7 @@ function ArtifactRowButton(props: ArtifactRowButtonProps) {
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getSidebarNodeDragId(nodeId),
+    id: getPaneScopedDndId(viewTabId, getSidebarNodeDragId(nodeId)),
     disabled: selectionMode || openableType === null,
     data: dragData,
   });

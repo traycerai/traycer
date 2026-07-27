@@ -41,6 +41,7 @@ import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-owners
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 const queryClient = new QueryClient({
@@ -209,6 +210,22 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
+  useEpicSweepWorktreeCandidates: () => ({
+    rows: [],
+    isPending: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
+  useEpicSweepWorktrees: () => ({
+    isPending: false,
+    mutate: () => {},
+  }),
+  useSweepingWorktreePaths: () => new Set<string>(),
+}));
+
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({
     isPending: false,
@@ -359,12 +376,17 @@ describe("<EpicsListPanel />", () => {
     testState.fetchNextPage.mockReset();
     testState.activityByEpicId.clear();
     queryClient.clear();
+    // This fixture renders the panel without the application root bridge. The
+    // bridge releases the controller's hydration gate in production, so make
+    // that production precondition explicit here before exercising a row-open.
+    __resetTabNavigationControllerForTesting();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
   });
 
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     setDesktopEpicOwnershipBridge(null);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
@@ -513,6 +535,37 @@ describe("<EpicsListPanel />", () => {
 
     expect(await screen.findByText("Phase somehow pinned")).not.toBeNull();
     expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
+  });
+
+  // The Sweep control keeps its slot in every task row rather than appearing
+  // and disappearing per row: enabled when the task owns worktrees, faded and
+  // non-actionable when it does not.
+  it("renders the row Sweep action when the task owns worktrees", async () => {
+    testState.worktreesByEpicId = new Map([
+      ["epic-from-history", [historyWorktree()]],
+    ]);
+    renderPanel("embedded", "/");
+
+    const sweep = await screen.findByRole("button", {
+      name: /^sweep worktrees for /i,
+    });
+    expect(sweep.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^no worktrees to sweep for /i }),
+    ).toBeNull();
+  });
+
+  it("keeps a disabled Sweep action on a task with no worktrees", async () => {
+    testState.worktreesByEpicId = new Map();
+    renderPanel("embedded", "/");
+
+    const disabled = await screen.findByRole("button", {
+      name: /^no worktrees to sweep for /i,
+    });
+    expect(disabled.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.queryByRole("button", { name: /^sweep worktrees for /i }),
+    ).toBeNull();
   });
 
   it("shows task PR pills without replacing the row navigation layer", async () => {
@@ -738,6 +791,47 @@ describe("<EpicsListPanel />", () => {
         name: /edit title for open from landing/i,
       }),
     ).toBeNull();
+  });
+
+  it("keeps bulk Sweep closed for a selection where no task owns a worktree", async () => {
+    // The row control is already gated this way, so a selection of only
+    // worktree-less tasks must not open a Sweep dialog with nothing in it.
+    testState.items = [historyItem({})];
+    testState.worktreesByEpicId = new Map();
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    expect(
+      screen.getByTestId("epics-list-sweep-selected").matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("opens bulk Sweep as soon as one selected task owns a worktree", async () => {
+    // Mixed selections still sweep: the whole selection is the unit, so the
+    // worktree-less members ride along rather than closing the affordance.
+    testState.items = [
+      historyItem({}),
+      historyItem({
+        id: "history-epic-2",
+        epicId: "epic-two",
+        title: "Second history item",
+      }),
+    ];
+    testState.worktreesByEpicId = new Map([["epic-two", [historyWorktree()]]]);
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    expect(
+      screen.getByTestId("epics-list-sweep-selected").matches(":disabled"),
+    ).toBe(false);
   });
 
   it("selects all visible history rows and cancels selection mode", async () => {

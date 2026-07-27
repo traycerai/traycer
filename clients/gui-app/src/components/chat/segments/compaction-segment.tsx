@@ -52,16 +52,35 @@ function compactionMetricText(
   return metricParts.length === 0 ? "" : ` · ${metricParts.join(" · ")}`;
 }
 
+// "Compacted" is a claim about what happened to the context. When compaction
+// failed nothing was folded, so the bar must not make that claim - it marks the
+// attempt, and the destructive line below carries the reason.
+function terminalCompactionLabel(
+  status: "completed" | "errored",
+  isAuto: boolean,
+): string {
+  if (status === "errored") {
+    return isAuto ? "Auto-compaction failed" : "Compaction failed";
+  }
+  return isAuto ? "Auto-compacted" : "Compacted";
+}
+
 export function CompactionSegment(props: CompactionSegmentProps) {
   const { status, trigger, preTokens, postTokens, durationMs, summary, error } =
     props;
   const isStreaming = status === "streaming";
+  const isErrored = status === "errored";
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = useChatMeasuredBooleanToggle(setExpanded);
 
-  const metricText = compactionMetricText(preTokens, postTokens, durationMs);
+  // A failed compaction has no boundary, so there are no real metrics and no
+  // summary to expand - only the failure and its reason.
+  const metricText = isErrored
+    ? ""
+    : compactionMetricText(preTokens, postTokens, durationMs);
 
-  const hasSummary = !isStreaming && summary !== null && summary.length > 0;
+  const hasSummary =
+    status === "completed" && summary !== null && summary.length > 0;
   const ExpandIcon = expanded ? ChevronDown : ChevronRight;
   // Only `auto` earns a distinct label. A manual compaction is one the user
   // just asked for, so naming it adds nothing; an automatic one interrupted
@@ -82,7 +101,7 @@ export function CompactionSegment(props: CompactionSegmentProps) {
     <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
       <FoldVertical className="size-3.5 shrink-0" aria-hidden />
       <span>
-        {isAuto ? "Auto-compacted" : "Compacted"}
+        {terminalCompactionLabel(isErrored ? "errored" : "completed", isAuto)}
         <span className="text-muted-foreground/80">{metricText}</span>
       </span>
       {hasSummary ? (

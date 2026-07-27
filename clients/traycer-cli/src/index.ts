@@ -65,8 +65,9 @@ import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-an
 import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
 import { buildHostRestartCommand } from "./commands/host-restart";
-import { runHostStart } from "./commands/host-start";
+import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
+import { runHostCapabilities } from "./host/capabilities";
 import { hostStatusCommand } from "./commands/host-status";
 import { hostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
@@ -358,6 +359,34 @@ function registerHostCommands(program: Command): void {
       .option(
         "--cwd <path>",
         "Working directory for the host (defaults to the install directory)",
+      )
+      // Identity binding for journal-authorised reclaim probes. Existing
+      // registrations remain valid without these options; a probe requires
+      // all three and otherwise produces no correlated marker.
+      //
+      // Hidden per the house convention for `"Internal:"` options - and
+      // deliberately so: the emitted service definitions gate on
+      // `host capabilities --has service-label`, never on help text, so
+      // hiding these cannot silently disable the identity binding. Adding
+      // `.hideHelp()` here IS the regression this decoupling exists to
+      // survive; see host/capabilities.ts.
+      .addOption(
+        new Option(
+          "--service-label <label>",
+          "Internal: owning service label",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--transition-id <id>",
+          "Internal: lifecycle transition id",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--probe-nonce <nonce>",
+          "Internal: lifecycle probe nonce",
+        ).hideHelp(),
       ),
   ).action(async (opts) => {
     const logger = createCliLogger(config.environment);
@@ -366,13 +395,50 @@ function registerHostCommands(program: Command): void {
       hasCwdOverride: typeof opts.cwd === "string",
     });
     await runHostStart(
-      {
+      hostStartOptionsFromCommand({
         environment: config.environment,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
-      },
+        serviceLabel:
+          typeof opts.serviceLabel === "string" ? opts.serviceLabel : null,
+        transitionId:
+          typeof opts.transitionId === "string" ? opts.transitionId : null,
+        probeNonce:
+          typeof opts.probeNonce === "string" ? opts.probeNonce : null,
+      }),
       {},
     );
   });
+
+  // The capability contract emitted service definitions probe before they
+  // pass an argument their (possibly N-1) CLI slot may not understand. NOT
+  // routed through `withRunner`: the output is a machine contract read by a
+  // `/bin/sh` script and a VBScript launcher, so it must stay raw stdout +
+  // exit code rather than the NDJSON envelope. Pure and side-effect free -
+  // see host/capabilities.ts.
+  host
+    .command("capabilities")
+    .description("Print the capability tokens this CLI supports")
+    .option("--json", "Print the capability document as JSON")
+    .option(
+      "--has <capability>",
+      "Exit 0 when this CLI supports <capability>, non-zero otherwise",
+    )
+    .action((...actionArgs: unknown[]) => {
+      // `optsWithGlobals()` rather than the local opts bag: `--json` is also
+      // declared globally by `addRunnerFlags(program)`, and commander binds
+      // the token to the root option, leaving the subcommand's copy unset.
+      const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
+      const opts = command.optsWithGlobals() as Record<string, unknown>;
+      const response = runHostCapabilities(
+        typeof opts.has === "string"
+          ? { kind: "has", capability: opts.has }
+          : { kind: "list", json: opts.json === true },
+      );
+      if (response.stdout.length > 0) {
+        process.stdout.write(response.stdout);
+      }
+      process.exitCode = response.exitCode;
+    });
 
   withRunner(
     host
@@ -842,6 +908,61 @@ function registerHostCommands(program: Command): void {
   );
 }
 
+export function hostStartOptionsFromCommand(input: {
+  readonly environment: typeof config.environment;
+  readonly cwd: string | null;
+  readonly serviceLabel: string | null;
+  readonly transitionId: string | null;
+  readonly probeNonce: string | null;
+}): RunHostStartOptions {
+  const probeValues = [
+    input.serviceLabel,
+    input.transitionId,
+    input.probeNonce,
+  ];
+  const probeValueCount = probeValues.filter((value) => value !== null).length;
+  if (probeValueCount === 0) {
+    return { environment: input.environment, cwd: input.cwd };
+  }
+  if (
+    input.serviceLabel !== null &&
+    input.transitionId === null &&
+    input.probeNonce === null
+  ) {
+    return {
+      environment: input.environment,
+      cwd: input.cwd,
+      serviceLabel: input.serviceLabel,
+    };
+  }
+  if (
+    input.serviceLabel === null ||
+    input.transitionId === null ||
+    input.probeNonce === null
+  ) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "host start probe requires --service-label, --transition-id, and --probe-nonce together",
+      details: {
+        serviceLabelProvided: input.serviceLabel !== null,
+        transitionIdProvided: input.transitionId !== null,
+        probeNonceProvided: input.probeNonce !== null,
+      },
+      exitCode: 1,
+    });
+  }
+  return {
+    environment: input.environment,
+    cwd: input.cwd,
+    probe: {
+      serviceLabel: input.serviceLabel,
+      transitionId: input.transitionId,
+      probeNonce: input.probeNonce,
+    },
+  };
+}
+
 function registerServiceCommands(host: Command): void {
   const service = host
     .command("service")
@@ -860,11 +981,16 @@ function registerServiceCommands(host: Command): void {
       .option(
         "--allow-self-invocation",
         "Dev only: register the current (non-packaged) CLI as the service command.",
+      )
+      .option(
+        "--takeover",
+        "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       ),
     (opts) =>
       buildServiceInstallCommand({
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
+        takeover: opts.takeover === true,
       }),
   );
 

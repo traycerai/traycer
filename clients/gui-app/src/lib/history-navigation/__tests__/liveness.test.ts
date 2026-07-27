@@ -266,9 +266,7 @@ describe("isHistoryEntryDead — conservative liveness", () => {
   });
 
   it("keeps a draft href whose id is present in the landing-draft store", () => {
-    const draftId = useLandingDraftStore
-      .getState()
-      .createDraft(null, undefined);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
     expect(isHistoryEntryDead(`/draft/${draftId}`)).toBe(false);
   });
 

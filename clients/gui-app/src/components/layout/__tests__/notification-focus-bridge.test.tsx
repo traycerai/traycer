@@ -77,6 +77,7 @@ import {
 } from "@/stores/notifications/host-notifications-store";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 
 function createTestQueryClient(): QueryClient {
@@ -128,6 +129,7 @@ function seedHostRow(id: string): void {
 
 describe("NotificationFocusBridge", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     vi.useFakeTimers();
     vi.setSystemTime(1_777_768_800_000);
     navigateSpy.mockReset();
@@ -160,6 +162,7 @@ describe("NotificationFocusBridge", () => {
 
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     vi.useRealTimers();
     useNotificationEventsStore.getState().clear();
     useNotificationsPopoverStore.getState().setOpen(false);
@@ -192,6 +195,54 @@ describe("NotificationFocusBridge", () => {
     expect(activate).toHaveBeenCalledTimes(1);
     expect(activate).toHaveBeenCalledWith({
       payload: { kind: "epic", epicId: "epic-1" },
+      receivedAt: 1_777_768_800_000,
+      feedId: null,
+      onResult: null,
+    });
+    expect(markAsRead).not.toHaveBeenCalled();
+  });
+
+  it("routes a legacy artifact payload without opening the center or acknowledging", () => {
+    renderBridge();
+
+    act(() => {
+      useNotificationEventsStore.getState().recordClick({
+        kind: "artifact",
+        epicId: "epic-2",
+        artifactId: "artifact-7",
+        threadId: "thread-3",
+      });
+    });
+
+    expect(useNotificationsPopoverStore.getState().open).toBe(false);
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(activate).toHaveBeenCalledWith({
+      payload: {
+        kind: "artifact",
+        epicId: "epic-2",
+        artifactId: "artifact-7",
+        threadId: "thread-3",
+      },
+      receivedAt: 1_777_768_800_000,
+      feedId: null,
+      onResult: null,
+    });
+    expect(markAsRead).not.toHaveBeenCalled();
+  });
+
+  it("routes a legacy chat payload without opening the center or acknowledging", () => {
+    renderBridge();
+
+    act(() => {
+      useNotificationEventsStore
+        .getState()
+        .recordClick({ kind: "chat", epicId: "epic-9", chatId: "chat-1" });
+    });
+
+    expect(useNotificationsPopoverStore.getState().open).toBe(false);
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(activate).toHaveBeenCalledWith({
+      payload: { kind: "chat", epicId: "epic-9", chatId: "chat-1" },
       receivedAt: 1_777_768_800_000,
       feedId: null,
       onResult: null,

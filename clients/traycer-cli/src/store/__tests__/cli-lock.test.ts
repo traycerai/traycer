@@ -52,6 +52,7 @@ import {
 } from "../cli-lock";
 import {
   __setProcessStartTimeReaderForTest,
+  readProcessStartIdentity,
   readProcessStartTimeMs,
 } from "../process-identity";
 import { CLI_ERROR_CODES } from "../../runner/errors";
@@ -94,6 +95,7 @@ function writeLock(overrides: Partial<CliLockMetadata>): void {
     startedAt: new Date().toISOString(),
     hostname: null,
     token: "original-token",
+    processStartIdentity: null,
     processStartedAtMs: null,
     ...overrides,
   };
@@ -332,11 +334,13 @@ describe("acquireCliLock", () => {
           pid,
           reason: "old-holder",
           startedAt: new Date().toISOString(),
-          // Deliberately wrong - far enough from the real process's
-          // actual start time to exceed the identity-match tolerance,
-          // simulating the OS having recycled this pid onto an unrelated
-          // process since the lock was written.
-          processStartedAtMs: Date.now() - 10 * 60 * 1000,
+          // A well-formed creation stamp from this platform that is
+          // positively NOT the live process's, simulating the OS having
+          // recycled this pid onto an unrelated process since the lock was
+          // written. Derived from the real stamp so the platform tags match -
+          // a cross-platform pair would read as "cannot compare" and would
+          // (correctly) refuse to break, which is a different row.
+          processStartIdentity: `${readProcessStartIdentity(pid) ?? "linux:boot-a 1"} 0`,
         });
         const handle = await acquireCliLock({
           environment: "production",
@@ -654,6 +658,7 @@ describe("release() compare-and-delete", () => {
       hostname: null,
       token: "impostor-token",
       processStartedAtMs: null,
+      processStartIdentity: null,
     };
     writeFileSync(mocks.lockPath, JSON.stringify(impostor));
     await handle.release();

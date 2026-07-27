@@ -183,6 +183,19 @@ function loadPersistedState(windowId: string | null): PersistedState | null {
   }
 }
 
+/**
+ * Reads only this window's persisted cursor for legacy desktop migration.
+ * It deliberately does not construct history or create tabs; callers use it
+ * solely as route proof for the History/Settings singleton import rule.
+ */
+export function readPersistedCurrentRoute(
+  windowId: string | null,
+): string | null {
+  const persisted = loadPersistedState(windowId);
+  if (persisted === null) return null;
+  return persisted.entries[persisted.index] ?? null;
+}
+
 function removePersistedState(storageKey: string): void {
   try {
     window.localStorage.removeItem(storageKey);

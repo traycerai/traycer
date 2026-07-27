@@ -22,6 +22,9 @@ let mockActiveHostId: string | null = "active-host-1";
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => mockActiveHostId,
 }));
+vi.mock("@/components/epic-canvas/view-tab-context", () => ({
+  useEpicViewTabId: () => "tab-for-open-epic",
+}));
 
 const navigate = vi.fn();
 
@@ -85,8 +88,13 @@ const {
   openTilePreviewInEpic: vi.fn(),
   openTilePreviewInTab: vi.fn(),
   resolveTargetTabForEpic: vi.fn(() => "tab-for-open-epic"),
+  // The global/MRU resolver the chip must NOT consult. It resolves a DIFFERENT
+  // tab ("tab-focused-partner") than the chip's owning `useEpicViewTabId`
+  // context ("tab-for-open-epic"), modelling a same-Epic split with a different
+  // pane focused. The drag tests assert the payload carries the owner and that
+  // this spy is never called, so a regression to MRU resolution goes red.
   resolveTabIdForEpic: vi.fn((epicId: string) =>
-    epicId === "epic-open" ? "tab-for-open-epic" : null,
+    epicId === "epic-open" ? "tab-focused-partner" : null,
   ),
   // Capture every `useDraggable` call so tests can assert the emitted payload
   // and the `disabled` gate without wiring a DndContext + pointer simulation.
@@ -369,7 +377,7 @@ describe("same-epic spec/ticket chips are canvas drag sources", () => {
     // Occurrence-unique drag id keyed on `useId()` (C3), not the artifact id.
     expect(call.id.startsWith("chat-artifact:")).toBe(true);
     expect(call.id).not.toBe("chat-artifact:spec-1");
-    expect(resolveTabIdForEpic).toHaveBeenCalledWith(OPEN_EPIC_ID);
+    expect(resolveTabIdForEpic).not.toHaveBeenCalled();
     expect(call.data).toEqual({
       kind: "chat-artifact",
       epicId: OPEN_EPIC_ID,

@@ -2195,6 +2195,7 @@ const WorktreeRow = memo(function WorktreeRow(
       navigateToTabIntent(
         navigate,
         openOrFocusEpicIntent({ epicId, focus: undefined }),
+        undefined,
       );
     },
     [navigate],

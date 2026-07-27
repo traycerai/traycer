@@ -2488,6 +2488,7 @@ describe("WorktreesList v1.2 signals", () => {
         tabId: "tab-epic-1",
         focus: undefined,
       },
+      undefined,
     );
   });
 

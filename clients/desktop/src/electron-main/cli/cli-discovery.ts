@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
 import {
   access,
@@ -12,7 +12,6 @@ import {
   rename,
   rm,
   stat,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir, platform } from "node:os";
@@ -595,15 +594,21 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
  * manifest pointing at it. Used both during first-launch setup and as a
  * silent self-heal step when the installed CLI is missing or corrupt.
  *
- * On POSIX we **symlink** the stable path at the bundled CLI rather than
- * copying it: the stable path (`~/.traycer/cli[/<slot>]/bin/traycer`) is then
- * a space-free, home-relative name the bundle-blind host can put on PATH,
- * while always resolving to the single, version-matched binary inside the
- * .app - no second copy to drift, corrupt, or go stale on app update. The
- * .app's path may contain spaces ("Traycer Staging.app"); that's fine as a
- * symlink target and as a PATH entry, since command resolution doesn't
- * re-split a resolved path. Windows symlinks need privilege we can't assume,
- * so there we fall back to a copy (the home path is space-free anyway).
+ * On every platform the stable path (`~/.traycer/cli[/<slot>]/bin/traycer`)
+ * is now a **copy** of the bundled CLI, not a symlink into the .app.
+ *
+ * It used to be a symlink on POSIX (one binary, nothing to drift or go
+ * stale on app update) - but that made the slot's validity hostage to the
+ * bundle's lifecycle: any bundle remove/replace (uninstall, drag-to-Trash,
+ * an updater's rm+cp window, an app rename) left a DANGLING link that
+ * `ls`/lstat still show while exec fails ENOENT, and the only healer was
+ * the next *successful* app launch - circular exactly when the app is the
+ * broken part (field report: "no such file or directory" on a file the
+ * user can see). A copy cannot dangle; staleness is already handled by the
+ * reconcile version compare, which re-stages on every app update - the
+ * same flow Windows (which always copied) has exercised in the field all
+ * along. The copy is staged beside the slot and renamed over it, so a
+ * crash mid-stage never leaves a truncated binary at the stable name.
  *
  * Returns the stable path, or throws if the bundled CLI isn't present (a
  * packaging bug worth surfacing loudly).
@@ -629,10 +634,27 @@ export async function installBundledCli(opts: {
     await renameCliBinaryAside(stablePath);
     await copyFile(opts.bundledCliPath, stablePath);
   } else {
-    // Clear any prior staged binary/symlink so symlink() doesn't EEXIST and a
-    // stale copy never lingers next to a fresh symlink.
-    await rm(stablePath, { force: true });
-    await symlink(opts.bundledCliPath, stablePath);
+    // Atomic replace: rename() over the slot also swallows a legacy
+    // symlink from the pre-copy era in one step.
+    //
+    // The staging name is per-invocation. A single fixed `.staging` path is
+    // shared mutable state between concurrent installers - an updater or a
+    // relaunch racing the running app resolves to the SAME stable slot - and
+    // interleaving there defeats the whole point of staging: B's copy can be
+    // mid-write when A chmods and renames, so A publishes a truncated binary
+    // onto the stable path. rename() is only atomic with respect to a source
+    // nobody else is writing.
+    const staging = `${stablePath}.staging.${process.pid}.${randomUUID()}`;
+    try {
+      await copyFile(opts.bundledCliPath, staging);
+      await chmod(staging, 0o755);
+      await rename(staging, stablePath);
+    } catch (error) {
+      // A unique name means nothing else can adopt this leftover, so it has
+      // to be swept here or it accumulates beside the slot.
+      await rm(staging, { force: true });
+      throw error;
+    }
   }
   const manifest: CliInstallManifest = {
     version: opts.version,

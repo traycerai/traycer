@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { Environment } from "../runner/environment";
 import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
 import { ensureHostStagingRoot, hostStagingRoot } from "./paths";
+import { isProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import {
   currentProcessIdentityToken,
   verifyProcessIdentity,
@@ -88,6 +89,12 @@ async function readOwnerToken(
   return {
     pid: obj.pid,
     startedAtMs: typeof obj.startedAtMs === "number" ? obj.startedAtMs : null,
+    // Absent on a token written before the field existed, which
+    // `verifyProcessIdentity` reports as "indeterminate" - so an old owned
+    // temp dir is left alone rather than swept out from under a live owner.
+    startIdentity: isProcessStartIdentity(obj.startIdentity)
+      ? obj.startIdentity
+      : null,
   };
 }
 

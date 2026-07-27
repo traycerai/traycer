@@ -442,6 +442,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
       {/* Host list + Folders section (file-tree-style), staged here and read
           back at launch from the same pending staging key. */}
       <ActiveHostWorkspaceControls
+        disabled={false}
         stagingKey={stagingKey}
         layout="stacked"
         workspaceSeed={workspaceSeed?.workspace ?? null}

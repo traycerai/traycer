@@ -36,6 +36,19 @@ function renderPill(state: EpicSyncPillState) {
   return render(pillTree());
 }
 
+/**
+ * Reads the claim off the pill's accessible name. Uses `getByRole` rather
+ * than `queryByTestId` deliberately: a missing pill must FAIL these
+ * assertions, not silently satisfy the negative ones - a rendering
+ * regression would otherwise read as "does not claim synced".
+ */
+function pillClaimsSynced(): boolean {
+  return (
+    screen.getByRole("button").getAttribute("aria-label") ===
+    "All changes synced"
+  );
+}
+
 async function expectTooltip(text: string) {
   fireEvent.focus(screen.getByTestId("epic-connection-pill"));
   expect((await screen.findByRole("tooltip")).textContent).toBe(text);
@@ -48,7 +61,7 @@ describe("<EpicConnectionPill />", () => {
     vi.useRealTimers();
   });
 
-  it("renders the synced state with muted italic copy and green dot", () => {
+  it("renders the synced state icon-only with the claim on the accessible name", () => {
     vi.useFakeTimers();
     renderPill("synced");
 
@@ -56,9 +69,12 @@ describe("<EpicConnectionPill />", () => {
       vi.advanceTimersByTime(750);
     });
 
-    expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
-      "All changes synced",
-    );
+    // Icon-only in the steady state: the claim moved off the visible copy and
+    // onto the accessible name + tooltip, so the status row stays compact.
+    expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+    ).toBe("All changes synced");
     expect(screen.getByTestId("epic-connection-pill").className).toContain(
       "text-muted-foreground",
     );
@@ -74,8 +90,17 @@ describe("<EpicConnectionPill />", () => {
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
     ).toBe("synced");
-    fireEvent.focus(screen.getByTestId("epic-connection-pill"));
-    expect(screen.queryByRole("tooltip")).toBeNull();
+    // The tooltip carries the same claim; it is asserted in the real-timer
+    // test below (a fake-timer clock cannot settle `findByRole`).
+    expect(pillClaimsSynced()).toBe(true);
+  });
+
+  // Real timers: the icon-only steady state must still expose its claim to a
+  // sighted user, and the tooltip is now the only place that copy lives.
+  it("surfaces the synced claim through the tooltip", async () => {
+    renderPill("synced");
+
+    await expectTooltip("All changes synced");
   });
 
   it("renders connecting as the amber bootstrap pill with no tooltip", () => {
@@ -148,7 +173,7 @@ describe("<EpicConnectionPill />", () => {
     renderPill("syncing");
 
     expect(screen.getByText("Syncing…")).not.toBeNull();
-    expect(screen.queryByText("All changes synced")).toBeNull();
+    expect(pillClaimsSynced()).toBe(false);
     expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
       "animate-ping",
     );
@@ -165,7 +190,7 @@ describe("<EpicConnectionPill />", () => {
     renderPill("connected");
 
     expect(screen.getByText("Connected")).not.toBeNull();
-    expect(screen.queryByText("All changes synced")).toBeNull();
+    expect(pillClaimsSynced()).toBe(false);
     expect(
       screen.getByTestId("epic-connection-pill").textContent,
     ).not.toContain("saved locally");
@@ -208,12 +233,12 @@ describe("<EpicConnectionPill />", () => {
       renderPill("synced");
 
       expect(screen.getByText("Syncing…")).not.toBeNull();
-      expect(screen.queryByText("All changes synced")).toBeNull();
+      expect(pillClaimsSynced()).toBe(false);
 
       act(() => {
         vi.advanceTimersByTime(750);
       });
-      expect(screen.getByText("All changes synced")).not.toBeNull();
+      expect(pillClaimsSynced()).toBe(true);
     });
 
     it("flips syncing -> synced only after holding for 750ms, reading Syncing… in between", () => {
@@ -225,13 +250,13 @@ describe("<EpicConnectionPill />", () => {
       rerender(pillTree());
 
       expect(screen.getByText("Syncing…")).not.toBeNull();
-      expect(screen.queryByText("All changes synced")).toBeNull();
+      expect(pillClaimsSynced()).toBe(false);
 
       act(() => {
         vi.advanceTimersByTime(750);
       });
 
-      expect(screen.getByText("All changes synced")).not.toBeNull();
+      expect(pillClaimsSynced()).toBe(true);
     });
 
     it("never renders All changes synced for a synced window shorter than the settle delay", () => {
@@ -244,11 +269,11 @@ describe("<EpicConnectionPill />", () => {
       act(() => {
         vi.advanceTimersByTime(300);
       });
-      expect(screen.queryByText("All changes synced")).toBeNull();
+      expect(pillClaimsSynced()).toBe(false);
 
       mocks.useEpicSyncPillState.mockReturnValue("syncing");
       rerender(pillTree());
-      expect(screen.queryByText("All changes synced")).toBeNull();
+      expect(pillClaimsSynced()).toBe(false);
       expect(screen.getByText("Syncing…")).not.toBeNull();
 
       // The abandoned settle timer from the earlier synced window must not
@@ -256,7 +281,7 @@ describe("<EpicConnectionPill />", () => {
       act(() => {
         vi.advanceTimersByTime(1000);
       });
-      expect(screen.queryByText("All changes synced")).toBeNull();
+      expect(pillClaimsSynced()).toBe(false);
     });
 
     // The display holds "Syncing…" through the settle on purpose - a
@@ -269,23 +294,28 @@ describe("<EpicConnectionPill />", () => {
       const { rerender } = renderPill("syncing");
 
       // Control, so the assertion below can't pass vacuously: a genuinely
-      // syncing verdict DOES mount the tooltip, and Radix's trigger stamps
-      // `data-state` on the pill only when it does.
-      expect(pill().getAttribute("data-state")).not.toBeNull();
+      // syncing verdict shows the syncing tooltip.
+      fireEvent.focus(pill());
+      expect(screen.queryByRole("tooltip")?.textContent).toBe(SYNCING_TOOLTIP);
 
       mocks.useEpicSyncPillState.mockReturnValue("synced");
       rerender(pillTree());
 
+      // The LABEL still holds "Syncing…" (the anti-strobe trade), but the
+      // tooltip must not keep asserting a fact the verdict has already
+      // retracted. Every state now carries a tooltip, so the check is that the
+      // syncing copy is gone - not that the tooltip vanished.
       expect(screen.getByText("Syncing…")).not.toBeNull();
-      expect(pill().getAttribute("data-state")).toBeNull();
       fireEvent.focus(pill());
-      expect(screen.queryByText(SYNCING_TOOLTIP)).toBeNull();
+      expect(screen.queryByRole("tooltip")?.textContent).not.toBe(
+        SYNCING_TOOLTIP,
+      );
 
       // ...and once the hold expires the pill catches up to the verdict.
       act(() => {
         vi.advanceTimersByTime(750);
       });
-      expect(screen.getByText("All changes synced")).not.toBeNull();
+      expect(pillClaimsSynced()).toBe(true);
     });
 
     it.each<EpicSyncPillState>([
@@ -301,12 +331,12 @@ describe("<EpicConnectionPill />", () => {
         act(() => {
           vi.advanceTimersByTime(750);
         });
-        expect(screen.getByText("All changes synced")).not.toBeNull();
+        expect(pillClaimsSynced()).toBe(true);
 
         mocks.useEpicSyncPillState.mockReturnValue(nextState);
         rerender(pillTree());
 
-        expect(screen.queryByText("All changes synced")).toBeNull();
+        expect(pillClaimsSynced()).toBe(false);
         expect(
           screen
             .getByTestId("epic-connection-pill")

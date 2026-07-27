@@ -819,6 +819,7 @@ function TerminalAgentPreLaunchToolbar(
       data-testid="terminal-agent-pre-launch-toolbar"
     >
       <HostWorkspaceSelector
+        disabled={false}
         surface={{
           kind: "terminal-agent",
           hostId: props.hostId,

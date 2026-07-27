@@ -1,0 +1,122 @@
+import { describe, expect, it } from "vitest";
+import {
+  attestTraycerRegistration,
+  isEvictableTraycerIdentity,
+  COMPATIBLE_HOST_START_SCRIPT_PREFIX,
+} from "@traycer-clients/shared/host-lifecycle";
+import { HOST_CAPABILITY_SERVICE_LABEL } from "../../../host/capabilities";
+import { buildCompatibleHostStartScript } from "../host-start-script";
+
+/**
+ * The emitter and the recognizer must agree on one string.
+ *
+ * They did not. `host-start-script.ts` moved the probe from
+ * `host start --help | grep` to `host capabilities --has service-label`;
+ * `host-lifecycle/identity.ts` carried its own copy of the old prefix and was
+ * left behind. `attestTraycerRegistration` therefore stopped recognising the
+ * `/bin/sh -c` program that this very repository writes into the plist.
+ *
+ * The consequence is not cosmetic. With no content tag and no exact
+ * known-label match, the attestation degrades to `indeterminate`, and
+ * `isEvictableTraycerIdentity` refuses to evict on `indeterminate` — so the
+ * repair paths that exist to clear a wedged registration decline to touch a
+ * registration that is unambiguously ours. That is a lockout surviving the
+ * thing built to end it.
+ *
+ * These rows fail if either side moves alone.
+ */
+describe("host-start script / identity attestation lockstep", () => {
+  const labelId = "ai.traycer.host.dev";
+  const programArgumentsFor = (script: string): readonly string[] => [
+    // Exactly `buildPlist`'s shape: the script, then the CLI command and its
+    // leading args, which is why the `host start` tail check cannot see it.
+    "/bin/sh",
+    "-c",
+    script,
+    "/usr/local/bin/traycer",
+    "--environment",
+    "dev",
+  ];
+
+  it("emits a script whose head is the shared prefix, byte for byte", () => {
+    expect(buildCompatibleHostStartScript(labelId)).toContain(
+      COMPATIBLE_HOST_START_SCRIPT_PREFIX,
+    );
+    expect(
+      buildCompatibleHostStartScript(labelId).startsWith(
+        COMPATIBLE_HOST_START_SCRIPT_PREFIX,
+      ),
+    ).toBe(true);
+  });
+
+  it("names the capability token the CLI actually answers to", () => {
+    // The other drift direction: renaming the capability without updating the
+    // prefix would leave the emitted probe asking for a token `host
+    // capabilities` does not know, so every registration falls back to the
+    // legacy `host start` arm and `--service-label` is silently never passed.
+    expect(COMPATIBLE_HOST_START_SCRIPT_PREFIX).toContain(
+      HOST_CAPABILITY_SERVICE_LABEL,
+    );
+  });
+
+  it("attests a registration built by the real emitter, on label shape alone", () => {
+    // `knownLabels: null` and `contentTag: null` is the case that regressed:
+    // the ONLY strong signal available is the program arguments, so a
+    // recognizer that cannot read them produces `indeterminate` and blocks
+    // eviction. Anything weaker than `attested` here is the bug.
+    const attestation = attestTraycerRegistration({
+      labelId,
+      knownLabels: null,
+      programArguments: programArgumentsFor(
+        buildCompatibleHostStartScript(labelId),
+      ),
+      contentTag: null,
+      sourceText: null,
+    });
+
+    expect(attestation.kind).toBe("attested");
+    expect(isEvictableTraycerIdentity(attestation)).toBe(true);
+  });
+
+  it("still attests the pre-capability script every installed machine has on disk", () => {
+    // Registrations are durable — only a reinstall rewrites them. Dropping the
+    // legacy form would un-attest the entire existing install base, which is
+    // the same defect as the drift, aimed at the field instead of at HEAD.
+    const legacyScript = `"$0" "$@" host start --help 2>&1 | /usr/bin/grep -Fq -- '--service-label' && exec "$0" "$@" host start --service-label ${labelId} || exec "$0" "$@" host start`;
+
+    const attestation = attestTraycerRegistration({
+      labelId,
+      knownLabels: null,
+      programArguments: programArgumentsFor(legacyScript),
+      contentTag: null,
+      sourceText: null,
+    });
+
+    expect(attestation.kind).toBe("attested");
+  });
+
+  it("still refuses to evict a foreign script on the same label shape", () => {
+    // The negative control: without it, a recognizer that answered yes to
+    // everything would pass every row above while the eviction gate stopped
+    // discriminating at all.
+    //
+    // The verdict is `indeterminate`, not `not-traycer`, and that is the
+    // designed behaviour rather than a weaker result — a Traycer-shaped label
+    // is an ownership signal, and annex §2.1.2 has ownership deliberately
+    // suppress argument-based refutation so a squatter on our label stays
+    // evictable. Label *shape* alone is then caught by the strong-signal gate.
+    // What must hold either way is the gate itself.
+    const attestation = attestTraycerRegistration({
+      labelId,
+      knownLabels: null,
+      programArguments: programArgumentsFor(
+        '"$0" "$@" definitely not our launcher',
+      ),
+      contentTag: null,
+      sourceText: null,
+    });
+
+    expect(attestation.kind).toBe("indeterminate");
+    expect(isEvictableTraycerIdentity(attestation)).toBe(false);
+  });
+});

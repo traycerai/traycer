@@ -163,6 +163,22 @@ export function finalizeStreamingActionBlocks(
             block.planStatus === "drafting" ? "ready" : block.planStatus,
         };
       }
+      // A compaction still in flight at turn end never reported a boundary, so
+      // it folded nothing. The content fallthrough below would mark it
+      // "completed" and the bar would claim a result it never produced - the
+      // silent version of a failed compaction, with no error line to contradict
+      // it. Compaction is not an action block, so `interrupted`/`superseded` are
+      // not in its schema; `errored` is the honest terminal state. No harness
+      // leaves a compaction running across a turn end (each yields its own
+      // terminal event first), so this only ever fires on a genuine cut-short.
+      if (block.type === "compaction") {
+        return {
+          ...block,
+          status: "errored" as const,
+          error: block.error ?? "Compaction did not finish",
+          timestamp,
+        };
+      }
       // text/reasoning are content, not actions: a partial thought/sentence is
       // not a failure. Always "completed", with `timestamp` advanced to turn-end
       // so a derived duration ("Thought for Xs") spans first delta → turn end.

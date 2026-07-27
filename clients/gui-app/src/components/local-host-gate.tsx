@@ -370,7 +370,7 @@ interface ProvisioningLoadingProps {
   readonly progress: MutationProgress | null;
 }
 
-interface HostProvisioning {
+export interface HostProvisioning {
   readonly isProvisioning: boolean;
   readonly error: Error | null;
   readonly progress: MutationProgress | null;
@@ -391,6 +391,12 @@ interface HostProvisioning {
   // Reinstall escape hatch from the removed surface: clear the removal
   // sentinel, then re-run convergeReady to provision the host again.
   readonly reinstall: () => void;
+}
+
+export interface HostProvisioningLifecycle {
+  readonly localHostState: "unknown" | "ready" | "unavailable";
+  readonly slowStartStage: "loading" | "slow";
+  readonly provisioning: HostProvisioning;
 }
 
 // Fires `convergeReady` once per session when a signed-in local-host shell
@@ -461,17 +467,20 @@ function useHostProvisioning(args: {
   // Retry/forced update: clear any prior error, then re-run convergeReady.
   // Only `onSuccess` transitions the busy-keep latch; an error leaves it
   // untouched (see markBusyKeep).
-  const run = (force: boolean, reason: HostSetupReason): void => {
-    reset();
-    mutate({ force }, hostSetupAnalyticsCallbacks(reason, markBusyKeep));
-  };
+  const run = useCallback(
+    (force: boolean, reason: HostSetupReason): void => {
+      reset();
+      mutate({ force }, hostSetupAnalyticsCallbacks(reason, markBusyKeep));
+    },
+    [markBusyKeep, mutate, reset],
+  );
 
   // Reinstall from the removed surface: clear the persisted removal sentinel
   // (so the desktop's convergeReady stops short-circuiting to the removed
   // outcome), then re-run a normal convergeReady. Optimistically drop the
   // removed latch so the surface flips to the provisioning spinner
   // immediately.
-  const reinstall = (): void => {
+  const reinstall = useCallback((): void => {
     const management = runnerHost.hostManagement;
     if (management === null) return;
     // Optimistically drop the removed latch so the surface flips to the
@@ -495,7 +504,7 @@ function useHostProvisioning(args: {
         });
       },
     );
-  };
+  }, [queryClient, run, runnerHost.hostManagement]);
 
   useEffect(() => {
     if (!canProvision || args.isReady || attemptedRef.current) {
@@ -529,24 +538,78 @@ function useHostProvisioning(args: {
       ? mutationLane.progress
       : null;
 
-  return {
-    // Report provisioning/error whenever this shell manages the host - NOT
-    // gated on `canProvision`, which collapses to false the instant a busy
-    // host is surfaced (its snapshot flips `isReady` true). Gating on
-    // `canProvision` would hide Retry/forced update progress and swallow
-    // their errors. `convergeReady.isPending`/`.error` are only meaningful
-    // after a mutation that already required management, so `hasManagement`
-    // is the correct gate.
-    isProvisioning: hasManagement && convergeReady.isPending,
-    error: hasManagement ? convergeReady.error : null,
-    progress,
-    hostBusy: hasManagement && inBusyKeepFlow,
-    removed: hasManagement && isRemoved,
-    canManageHost: hasManagement,
-    retry: () => run(false, "recovery"),
-    force: () => run(true, "update"),
-    reinstall,
-  };
+  const retry = useCallback(() => run(false, "recovery"), [run]);
+  const force = useCallback(() => run(true, "update"), [run]);
+
+  // Stable identity: this object is threaded through `HostProvisioningLifecycle`
+  // into the readiness controller's memos. Returning a fresh literal (with
+  // fresh `retry`/`force` arrows) invalidated every one of them on each render,
+  // so the readiness context value churned and re-ran all its consumers.
+  return useMemo(
+    () => ({
+      // Report provisioning/error whenever this shell manages the host - NOT
+      // gated on `canProvision`, which collapses to false the instant a busy
+      // host is surfaced (its snapshot flips `isReady` true). Gating on
+      // `canProvision` would hide Retry/forced update progress and swallow
+      // their errors. `convergeReady.isPending`/`.error` are only meaningful
+      // after a mutation that already required management, so `hasManagement`
+      // is the correct gate.
+      isProvisioning: hasManagement && convergeReady.isPending,
+      error: hasManagement ? convergeReady.error : null,
+      progress,
+      hostBusy: hasManagement && inBusyKeepFlow,
+      removed: hasManagement && isRemoved,
+      canManageHost: hasManagement,
+      retry,
+      force,
+      reinstall,
+    }),
+    [
+      convergeReady.error,
+      convergeReady.isPending,
+      force,
+      hasManagement,
+      inBusyKeepFlow,
+      isRemoved,
+      progress,
+      reinstall,
+      retry,
+    ],
+  );
+}
+
+/**
+ * Mounts the legacy local-host provisioning lifecycle without adding another
+ * route gate. The readiness controller owns this component once per shell;
+ * slot boundaries only consume its projected readiness.
+ */
+export function HostProvisioningController(props: {
+  readonly enabled: boolean;
+  readonly isReady: boolean;
+  readonly children: (lifecycle: HostProvisioningLifecycle) => ReactNode;
+}): ReactNode {
+  const runnerHost = useRunnerHost();
+  const { state, stage } = useLocalHostGateState(runnerHost);
+  const provisioning = useHostProvisioning({
+    enabled: props.enabled && state?.kind === "unavailable",
+    isReady: props.isReady,
+  });
+  const localHostState = localHostLifecycleState(state);
+  // Memoized for the same reason as `provisioning` above: the readiness
+  // controller memoizes on this object, so a fresh literal per render made
+  // that memo - and the context value built from it - recompute every time.
+  const lifecycle = useMemo<HostProvisioningLifecycle>(
+    () => ({ localHostState, slowStartStage: stage, provisioning }),
+    [localHostState, provisioning, stage],
+  );
+  return props.children(lifecycle);
+}
+
+function localHostLifecycleState(
+  state: LocalHostState | null,
+): HostProvisioningLifecycle["localHostState"] {
+  if (state === null) return "unknown";
+  return state.kind === "ready" ? "ready" : "unavailable";
 }
 
 // Shared compat verdict for host-backed launch. The provider owns the

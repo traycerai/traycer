@@ -610,10 +610,6 @@ export const HOST_METHOD_POLL_TABLE = {
   "git.getFileDiff": { ...LATEST_SCHEDULING, poll: null },
   "git.getFileDiffs": { ...LATEST_SCHEDULING, poll: null },
   "git.getCapabilities": { ...LATEST_SCHEDULING, poll: null },
-  // A read of the local checkout, requested when the PR Files tab opens.
-  // No poll: the PR detail stream is what notices a new push, and a re-render
-  // off a changed `headRefOid` re-keys the query on its own.
-  "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Killing a terminal terminates a host PTY session.
@@ -835,6 +831,23 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.getProviderProfileRateLimits": { ...LATEST_SCHEDULING, poll: null },
   // Configuring an agent persists its execution settings.
   "agent.configure": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Shutdown claim, commit, and release change admission state and must be
+  // ordered against one another.
+  "lifecycle.claimShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "lifecycle.commitShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "lifecycle.releaseShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
 } satisfies HostMethodPolicyTable;
 
 const hostMethodPolicyTable: HostMethodPolicyTable = HOST_METHOD_POLL_TABLE;

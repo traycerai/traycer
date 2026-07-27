@@ -97,7 +97,9 @@ import type {
   OwnershipClaimResult,
   OwnershipEntry,
   PerWindowSnapshot,
+  PerWindowStateCapabilities,
   PerWindowStatePatch,
+  PerWindowStateUpdateAcknowledgement,
   SupportLogTarget,
   SupportLogTailResult,
   SupportRevealLogResult,
@@ -468,7 +470,10 @@ export interface DesktopWindowsBridge {
   };
   perWindowState: {
     get(): Promise<PerWindowSnapshot>;
-    update(patch: PerWindowStatePatch): Promise<void>;
+    capabilities?(): Promise<PerWindowStateCapabilities>;
+    update(
+      patch: PerWindowStatePatch,
+    ): Promise<PerWindowStateUpdateAcknowledgement | void>;
     clear(): Promise<void>;
     onChange(handler: (snapshot: PerWindowSnapshot) => void): {
       dispose: () => void;

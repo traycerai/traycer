@@ -11,6 +11,7 @@ import type {
   HostProcessLiveness,
   HostRecoveryGovernor,
 } from "./host-recovery-governor";
+import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import type { IpcHostLifecycle } from "../ipc/runner-ipc-bridge";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 
@@ -139,7 +140,7 @@ export interface HostHealthMonitor {
 
 interface PublishedHealthMetadata {
   readonly snapshot: DesktopLocalHostSnapshot;
-  readonly startedAt: string | null;
+  readonly startIdentity: ProcessStartIdentity | null;
 }
 
 function isCurrentPublishedSnapshot(
@@ -157,19 +158,19 @@ export function startHostHealthMonitor(
 ): HostHealthMonitor {
   const probe = deps.probe ?? canReachHostWebsocketUrl;
   const readMetadata = deps.readMetadata ?? readPidMetadata;
-  // Production needs the publication timestamp for A1's process-identity
+  // Production needs the published start identity for A1's process-identity
   // check. Existing test callers can continue supplying a structural reader;
-  // a missing timestamp deliberately falls through A1's indeterminate arm.
+  // a missing identity deliberately falls through A1's indeterminate arm.
   const readPublishedMetadata = async (
     path: string,
   ): Promise<PublishedHealthMetadata | null> => {
     if (deps.readMetadata !== undefined) {
       const snapshot = await readMetadata(path);
-      return snapshot === null ? null : { snapshot, startedAt: null };
+      return snapshot === null ? null : { snapshot, startIdentity: null };
     }
     const state = await readPidMetadataState(path);
     return state.kind === "parsed"
-      ? { snapshot: state.snapshot, startedAt: state.startedAt }
+      ? { snapshot: state.snapshot, startIdentity: state.startIdentity }
       : null;
   };
   const respawn = deps.respawn;
@@ -333,7 +334,7 @@ export function startHostHealthMonitor(
         (await isPublishedHostEndpointReachable(
           published.snapshot.websocketUrl,
           published.snapshot.pid,
-          published.startedAt,
+          published.startIdentity,
           probe,
         ))
       ) {

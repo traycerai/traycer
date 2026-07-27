@@ -67,8 +67,6 @@ import {
   toggleSnapshotDiffBundleFileCollapsed,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
-  updatePrDiffTileView,
-  togglePrDiffFileCollapsed,
 } from "@/stores/epics/canvas/actions";
 import {
   EMPTY_CANVAS,
@@ -97,6 +95,10 @@ import {
   projectTabsForDesktop,
 } from "@/stores/epics/canvas/canvas-desktop-projection";
 import { serializeEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
+import {
+  isTabCloseLocked,
+  isTabStructurallyLocked,
+} from "@/stores/tabs/tab-structural-lock";
 import {
   chatTitleTimers,
   clearAllScheduledTitlePending,
@@ -250,6 +252,18 @@ export interface EpicCanvasStore {
   readonly pendingChatTitles: Readonly<Record<string, PendingTitleEntry>>;
 
   openEpicTab: (epicId: string, name: string | undefined) => string;
+  /** Coordinator-only stable-id source creation. */
+  openEpicTabWithId: (
+    tabId: string,
+    epicId: string,
+    name: string | undefined,
+  ) => string;
+  /** Coordinator-only stable-id source creation for a Phase migration tab. */
+  openPhaseMigrationTabWithId: (
+    tabId: string,
+    phaseId: string,
+    name: string | undefined,
+  ) => string;
   /**
    * Open an epic tab in the header strip WITHOUT activating it - the active
    * tab and current route are left untouched. Reuses an existing tab for the
@@ -429,22 +443,12 @@ export interface EpicCanvasStore {
     tileId: string,
     view: GitDiffTileViewState,
   ) => void;
-  updatePrDiffTileViewInTab: (
-    tabId: string,
-    tileId: string,
-    view: GitDiffTileViewState,
-  ) => void;
   toggleGitDiffBundleFileCollapsedInTab: (
     tabId: string,
     tileId: string,
     filePath: string,
   ) => void;
   toggleSnapshotDiffBundleFileCollapsedInTab: (
-    tabId: string,
-    tileId: string,
-    filePath: string,
-  ) => void;
-  togglePrDiffFileCollapsedInTab: (
     tabId: string,
     tileId: string,
     filePath: string,
@@ -715,6 +719,18 @@ export function resolveTabIdForEpic(
     return recentId;
   }
   return firstTabIdForEpicInState(state, epicId);
+}
+
+export function resolveTabIdForPhaseMigration(
+  state: Pick<EpicCanvasStore, "tabsById">,
+  phaseId: string,
+): string | null {
+  const tab = Object.values(state.tabsById).find(
+    (candidate) =>
+      candidate?.surfaceMode?.kind === "phase-migration" &&
+      candidate.surfaceMode.phaseId === phaseId,
+  );
+  return tab?.tabId ?? null;
 }
 
 function createEpicViewTab(
@@ -1114,6 +1130,41 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         return tab.tabId;
       },
 
+      openEpicTabWithId: (tabId, epicId, name) => {
+        if (get().tabsById[tabId] !== undefined) return tabId;
+        const tab: EpicViewTab = {
+          tabId,
+          epicId,
+          name: name ?? UNTITLED_EPIC_TITLE,
+        };
+        set((state) => ({
+          ...appendedEpicTabState(state, tab),
+          activeTabId: tab.tabId,
+        }));
+        return tab.tabId;
+      },
+
+      openPhaseMigrationTabWithId: (tabId, phaseId, name) => {
+        const existingId = resolveTabIdForPhaseMigration(get(), phaseId);
+        if (existingId !== null) {
+          get().setActiveTab(existingId);
+          return existingId;
+        }
+        const existing = get().tabsById[tabId];
+        if (existing !== undefined) return existing.tabId;
+        const tab: EpicViewTab = {
+          tabId,
+          epicId: phaseId,
+          name: name ?? UNTITLED_EPIC_TITLE,
+          surfaceMode: { kind: "phase-migration", phaseId },
+        };
+        set((state) => ({
+          ...appendedEpicTabState(state, tab),
+          activeTabId: tab.tabId,
+        }));
+        return tab.tabId;
+      },
+
       openEpicTabInBackground: (epicId, name) => {
         const existing = resolveTabIdForEpic(get(), epicId);
         if (existing !== null) {
@@ -1136,6 +1187,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       closeTab: (tabId) => {
+        if (isTabCloseLocked({ kind: "epic", id: tabId })) return;
         set((state) => {
           const tab = state.tabsById[tabId];
           if (tab === undefined) return state;
@@ -1238,6 +1290,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       moveOpenTab: (tabId, targetIndex) => {
+        if (isTabStructurallyLocked({ kind: "epic", id: tabId })) return;
         set((state) => {
           const next = moveId(state.openTabOrder, tabId, targetIndex);
           return next === state.openTabOrder ? state : { openTabOrder: next };
@@ -1245,9 +1298,13 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       duplicateTab: (tabId) => {
+        if (isTabStructurallyLocked({ kind: "epic", id: tabId })) {
+          return null;
+        }
         const state = get();
         const source = state.tabsById[tabId];
         if (source === undefined) return null;
+        if (source.surfaceMode?.kind === "phase-migration") return null;
         const newId = uuidv4();
         const siblingNames = epicTabNames(state.tabsById, source.epicId);
         const sourceCanvas = state.canvasByTabId[tabId] ?? createEmptyCanvas();
@@ -1428,6 +1485,9 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       discardTabState: (tabId) => {
+        if (isTabStructurallyLocked({ kind: "epic", id: tabId })) {
+          return null;
+        }
         const tab = get().tabsById[tabId];
         if (tab === undefined) return null;
         set((state) => {
@@ -1665,22 +1725,6 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             updateSnapshotDiffTileView(canvas, tileId, view),
-          ),
-        );
-      },
-
-      updatePrDiffTileViewInTab: (tabId, tileId, view) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            updatePrDiffTileView(canvas, tileId, view),
-          ),
-        );
-      },
-
-      togglePrDiffFileCollapsedInTab: (tabId, tileId, filePath) => {
-        set((state) =>
-          updateTabCanvas(state, tabId, (canvas) =>
-            togglePrDiffFileCollapsed(canvas, tileId, filePath),
           ),
         );
       },
@@ -2461,7 +2505,6 @@ export {
   makeSelectEpicTab,
   makeSelectIsActiveEpicArtifact,
   makeSelectIsActivePane,
-  makeSelectIsActiveTile,
   makeSelectTabActivation,
   useActiveEpicArtifactId,
   useActiveEpicId,
@@ -2471,7 +2514,6 @@ export {
   useEpicTab,
   useIsActiveEpicArtifact,
   useIsActivePane,
-  useIsActiveTile,
   useOpenEpicTabs,
   usePaneTabRefs,
   useTabActivation,

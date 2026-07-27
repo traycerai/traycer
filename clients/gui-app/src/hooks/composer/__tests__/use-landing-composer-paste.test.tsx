@@ -227,11 +227,13 @@ function LandingPasteHarness(props: {
   readonly fileDrops: IFileDropHost;
   readonly mentionRoots: ReadonlyArray<string>;
 }) {
-  const handlers = useLandingComposerPaste(
-    props.editorRef,
-    props.fileDrops,
-    props.mentionRoots,
-  );
+  const handlers = useLandingComposerPaste({
+    editorRef: props.editorRef,
+    draftId: null,
+    disabled: false,
+    fileDrops: props.fileDrops,
+    mentionRoots: props.mentionRoots,
+  });
   return (
     <div
       data-testid="paste-zone"
@@ -245,6 +247,33 @@ function LandingPasteHarness(props: {
 }
 
 describe("useLandingComposerPaste", () => {
+  it("rejects a new paste while the exact draft submission is pending", async () => {
+    const inserted: ImageAttachmentAttrs[][] = [];
+    const { handle } = makeHandle(inserted, []);
+    const editorRef = { current: handle };
+    const { result } = renderHook(() =>
+      useLandingComposerPaste({
+        editorRef,
+        draftId: "draft-submitting",
+        disabled: true,
+        fileDrops: NOOP_FILE_DROPS,
+        mentionRoots: NO_MENTION_ROOTS,
+      }),
+    );
+
+    act(() => {
+      result.current.attachImageFiles([
+        new File(["late"], "late.png", { type: "image/png" }),
+      ]);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(inserted).toEqual([]);
+    expect(await imageHashKeys()).toEqual([]);
+  });
+
   it("does not report an attachment when a non-null editor is not ready", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const track = vi.spyOn(Analytics.getInstance(), "track");
@@ -258,7 +287,13 @@ describe("useLandingComposerPaste", () => {
       },
     };
     const { result } = renderHook(() =>
-      useLandingComposerPaste(editorRef, NOOP_FILE_DROPS, NO_MENTION_ROOTS),
+      useLandingComposerPaste({
+        editorRef,
+        draftId: null,
+        disabled: false,
+        fileDrops: NOOP_FILE_DROPS,
+        mentionRoots: NO_MENTION_ROOTS,
+      }),
     );
 
     act(() => {
@@ -282,7 +317,13 @@ describe("useLandingComposerPaste", () => {
     const { handle, focusCalls } = makeHandle(inserted, []);
     const editorRef = { current: handle };
     const { result } = renderHook(() =>
-      useLandingComposerPaste(editorRef, NOOP_FILE_DROPS, NO_MENTION_ROOTS),
+      useLandingComposerPaste({
+        editorRef,
+        draftId: null,
+        disabled: false,
+        fileDrops: NOOP_FILE_DROPS,
+        mentionRoots: NO_MENTION_ROOTS,
+      }),
     );
 
     const file = new File(["hello"], "shot.png", { type: "image/png" });
@@ -318,7 +359,13 @@ describe("useLandingComposerPaste", () => {
     const { handle } = makeHandle(inserted, []);
     const editorRef = { current: handle };
     const { result } = renderHook(() =>
-      useLandingComposerPaste(editorRef, NOOP_FILE_DROPS, NO_MENTION_ROOTS),
+      useLandingComposerPaste({
+        editorRef,
+        draftId: null,
+        disabled: false,
+        fileDrops: NOOP_FILE_DROPS,
+        mentionRoots: NO_MENTION_ROOTS,
+      }),
     );
 
     const first = new File(["same"], "a.png", { type: "image/png" });
@@ -349,7 +396,13 @@ describe("useLandingComposerPaste", () => {
     const { handle } = makeHandle(inserted, []);
     const editorRef = { current: handle };
     const { result } = renderHook(() =>
-      useLandingComposerPaste(editorRef, NOOP_FILE_DROPS, NO_MENTION_ROOTS),
+      useLandingComposerPaste({
+        editorRef,
+        draftId: null,
+        disabled: false,
+        fileDrops: NOOP_FILE_DROPS,
+        mentionRoots: NO_MENTION_ROOTS,
+      }),
     );
 
     const png = new File(["img"], "shot.png", { type: "image/png" });
@@ -369,7 +422,13 @@ describe("useLandingComposerPaste", () => {
     const { handle } = makeHandle(inserted, []);
     const editorRef = { current: handle };
     const { result } = renderHook(() =>
-      useLandingComposerPaste(editorRef, NOOP_FILE_DROPS, NO_MENTION_ROOTS),
+      useLandingComposerPaste({
+        editorRef,
+        draftId: null,
+        disabled: false,
+        fileDrops: NOOP_FILE_DROPS,
+        mentionRoots: NO_MENTION_ROOTS,
+      }),
     );
 
     // Force `putImage` (its `sha256Hex`) to reject so the whole ingest rejects —
@@ -411,7 +470,13 @@ describe("useLandingComposerPaste", () => {
     );
 
     const { result, unmount } = renderHook(() =>
-      useLandingComposerPaste(editorRef, NOOP_FILE_DROPS, NO_MENTION_ROOTS),
+      useLandingComposerPaste({
+        editorRef,
+        draftId: null,
+        disabled: false,
+        fileDrops: NOOP_FILE_DROPS,
+        mentionRoots: NO_MENTION_ROOTS,
+      }),
     );
     const file = new File(["hello"], "shot.png", { type: "image/png" });
     act(() => {
@@ -439,7 +504,13 @@ describe("useLandingComposerPaste", () => {
     const { handle } = makeHandle(inserted, []);
     const editorRef = { current: handle };
     const { result } = renderHook(() =>
-      useLandingComposerPaste(editorRef, NOOP_FILE_DROPS, NO_MENTION_ROOTS),
+      useLandingComposerPaste({
+        editorRef,
+        draftId: null,
+        disabled: false,
+        fileDrops: NOOP_FILE_DROPS,
+        mentionRoots: NO_MENTION_ROOTS,
+      }),
     );
 
     const oversized = new File(["x"], "big.png", { type: "image/png" });

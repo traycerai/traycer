@@ -4,6 +4,11 @@ import type { FileHandle } from "node:fs/promises";
 import { hostname as osHostname } from "node:os";
 import { join } from "node:path";
 import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
+import {
+  readProcessStartIdentity,
   readProcessStartTimeMs,
   verifyProcessIdentity,
 } from "./process-identity";
@@ -47,7 +52,18 @@ export interface LockMetadata {
   // is free to recycle a pid onto an unrelated process). `null` when the
   // platform probe failed at write time, or for a lock written by a
   // pre-hardening version - never written by this code otherwise.
+  //
+  // NO LONGER READ when arbitrating: `processStartIdentity` replaced it,
+  // because two wall-clock-derived start times taken either side of a
+  // `CLOCK_REALTIME` step disagree and made a LIVE holder look like a
+  // recycled pid - i.e. breakable. Still written so an older reader of the
+  // same lock file keeps working exactly as it does today.
   readonly processStartedAtMs: number | null;
+  // The holder's kernel creation stamp - the operand arbitration actually
+  // compares. `null` for a lock written before this field existed, which
+  // `verifyProcessIdentity` reports as "indeterminate" and therefore never
+  // breaks.
+  readonly processStartIdentity: ProcessStartIdentity | null;
 }
 
 export interface LockHandle {
@@ -184,6 +200,9 @@ function parseLockMetadata(raw: string): LockMetadata | null {
       typeof obj.processStartedAtMs === "number"
         ? obj.processStartedAtMs
         : null,
+    processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
+      ? obj.processStartIdentity
+      : null,
   };
 }
 
@@ -222,7 +241,10 @@ async function lockFileAgeMs(path: string): Promise<number | null> {
 interface BreakLockPayload {
   readonly pid: number;
   readonly startedAt: string;
+  // Retained for older readers; arbitration reads `processStartIdentity`.
+  // See `LockMetadata` for why.
   readonly processStartedAtMs: number | null;
+  readonly processStartIdentity: ProcessStartIdentity | null;
   readonly token: string;
 }
 
@@ -255,6 +277,9 @@ function parseBreakLockPayload(raw: string): BreakLockPayload | null {
       typeof obj.processStartedAtMs === "number"
         ? obj.processStartedAtMs
         : null,
+    processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
+      ? obj.processStartIdentity
+      : null,
     token: obj.token,
   };
 }
@@ -306,6 +331,7 @@ async function tryRecoverCrashedBreakLock(
     const identity = verifyProcessIdentity({
       pid: payload.pid,
       startedAtMs: payload.processStartedAtMs,
+      startIdentity: payload.processStartIdentity,
     });
     if (identity !== "dead" && identity !== "alive-different") return false;
   }
@@ -328,6 +354,7 @@ async function acquireBreakLock(
     pid: process.pid,
     startedAt: nowIso(),
     processStartedAtMs: readProcessStartTimeMs(process.pid),
+    processStartIdentity: readProcessStartIdentity(process.pid),
     token,
   };
   if ((await createBreakLockFile(breakLockPath, payload)) === "created") {
@@ -561,6 +588,7 @@ async function acquireLockAtPath(
         const identity = verifyProcessIdentity({
           pid: holder.pid,
           startedAtMs: holder.processStartedAtMs,
+          startIdentity: holder.processStartIdentity,
         });
         shouldBreak = identity === "dead" || identity === "alive-different";
       } else {
@@ -615,6 +643,7 @@ function newAcquisitionMetadata(reason: string): LockMetadata {
     hostname: hostnameSafe(),
     token: randomUUID(),
     processStartedAtMs: readProcessStartTimeMs(process.pid),
+    processStartIdentity: readProcessStartIdentity(process.pid),
   };
 }
 

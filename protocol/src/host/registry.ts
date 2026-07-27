@@ -150,6 +150,11 @@ import {
   commentsSetThreadStatusV10,
 } from "@traycer/protocol/host/comments/contracts";
 import { hostStatusV10 } from "@traycer/protocol/host/status/contracts";
+import {
+  lifecycleClaimShutdownV10,
+  lifecycleCommitShutdownV10,
+  lifecycleReleaseShutdownV10,
+} from "@traycer/protocol/host/lifecycle/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -304,11 +309,6 @@ import {
   gitSubscribeStatusV11,
   gitSubscribeStatusV12,
 } from "@traycer/protocol/host/git-contracts";
-import {
-  prSubscribeListForEpicV10,
-  prSubscribeDetailV10,
-  prGetLocalDiffV10,
-} from "@traycer/protocol/host/pr-contracts";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   worktreeCreateRequestSchema,
@@ -2371,6 +2371,51 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: hostStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "lifecycle.claimShutdown": {
+    // Hosts predating the lifecycle layer cannot safely emulate a shutdown
+    // claim, so reconciliation must re-probe and use its legacy-safe path.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: lifecycleClaimShutdownV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "lifecycle.commitShutdown": {
+    // A commit token has authority only on the host that granted it; there is
+    // no meaningful fallback on an older host.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: lifecycleCommitShutdownV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "lifecycle.releaseShutdown": {
+    // Release authority is meaningful only to the host that minted the token;
+    // an older host cannot emulate this recovery arm safely.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: lifecycleReleaseShutdownV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -4790,25 +4835,6 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       },
     },
   },
-  // Additive, post-v1.0.0 optional method: a PR's patch read from the local
-  // checkout. A host that predates it simply lacks it and the PR view falls
-  // back to the GitHub-sourced file list (which is all the detail stream ever
-  // carried), so it rides the optional-capability channel
-  // (`degrade: unsupported`) and stays out of the released floor / baseline
-  // surface.
-  "pr.getLocalDiff": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: prGetLocalDiffV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
 } as const;
 
 export const hostRpcRegistry = defineFloorAwareVersionedRpcRegistry(
@@ -4825,8 +4851,7 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.1`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
- * `speech.dictate@1.0`, `pr.subscribeListForEpic@1.0`,
- * `pr.subscribeDetail@1.0`, and
+ * `speech.dictate@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
  * the same major line must be
  * additive; later majors must carry a real breaking change and ship without a
@@ -5035,26 +5060,6 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: speechDictateV10,
-        },
-      },
-    },
-  },
-  "pr.subscribeListForEpic": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: prSubscribeListForEpicV10,
-        },
-      },
-    },
-  },
-  "pr.subscribeDetail": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: prSubscribeDetailV10,
         },
       },
     },

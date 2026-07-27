@@ -4,14 +4,6 @@ import { repairMarkdown } from "./markdown-repair";
 
 export interface MarkdownBlock {
   id: number;
-  /**
-   * Index of the LAST top-level token this block covers. Equal to `id` for the
-   * common one-token block; larger when a raw-HTML container merged several
-   * tokens (see `blocksFromTokens`). Callers compare this - not `id` - against
-   * `tailStartIndex`, since a merged block is still open while any token it
-   * spans is.
-   */
-  endId: number;
   raw: string;
 }
 
@@ -19,8 +11,8 @@ export interface MarkdownBlocksResult {
   readonly blocks: MarkdownBlock[];
   /**
    * Top-level token index where the re-lexable open tail begins. Non-space
-   * blocks use their first token index as `id`, so callers compare
-   * `block.endId` against this boundary.
+   * blocks use their token index as `id`, so callers compare `block.id` against
+   * this boundary.
    */
   readonly tailStartIndex: number;
 }
@@ -60,113 +52,13 @@ function lexTokens(repaired: string): LexedToken[] {
   }));
 }
 
-// Block-level HTML containers that authors hand-write AROUND markdown, most
-// commonly GitHub's `<details><summary>…</summary>` disclosure. CommonMark ends
-// a raw-HTML block at the first blank line, so `marked` emits the opening tag,
-// the markdown body and the closing tag as SEPARATE top-level tokens. Since
-// every block is rendered through its own `react-markdown` pipeline, an
-// unmerged `<details>` closes at the end of its own block and the body renders
-// as a SIBLING of the disclosure - permanently visible, ignoring the toggle.
-// Merging the span back into one block is what lets `rehype-raw` re-pair them.
-//
-// Deliberately narrow: only containers whose whole point is to wrap block
-// content. Widening this trades correctness for streaming granularity, since a
-// merged span is re-rendered as a single unit.
-const MERGEABLE_HTML_CONTAINERS: ReadonlySet<string> = new Set([
-  "details",
-  "div",
-  "blockquote",
-  "section",
-  "table",
-]);
-
-const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
-const HTML_TAG_PATTERN = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?(\/?)>/g;
-
-/**
- * Strips HTML comments to a fixed point rather than in one pass: a single
- * `.replace()` can uncover a new `<!--…-->` match at the seam it just closed
- * (e.g. nested/overlapping markers), which would leave a comment-born `<tag>`
- * in the string this feeds into the tag scan below.
- */
-function stripHtmlComments(raw: string): string {
-  let stripped = raw;
-  for (;;) {
-    const next = stripped.replace(HTML_COMMENT_PATTERN, "");
-    if (next === stripped) return next;
-    stripped = next;
-  }
-}
-
-/**
- * Net open-container depth contributed by one raw-HTML token: `+1` per opening
- * tag of a mergeable container, `-1` per closing tag. Comments are stripped
- * first so a commented-out tag cannot unbalance the count.
- */
-function htmlContainerDepthDelta(raw: string): number {
-  let delta = 0;
-  const withoutComments = stripHtmlComments(raw);
-  for (const match of withoutComments.matchAll(HTML_TAG_PATTERN)) {
-    const [, closingSlash, tagName, selfClosingSlash] = match;
-    if (!MERGEABLE_HTML_CONTAINERS.has(tagName.toLowerCase())) continue;
-    if (selfClosingSlash === "/") continue;
-    delta += closingSlash === "/" ? -1 : 1;
-  }
-  return delta;
-}
-
-/**
- * The token span an unbalanced raw-HTML container covers, or `null` when the
- * matching close never arrives (a malformed or still-streaming document). We
- * merge ONLY on a proven balance so an unclosed `<div>` can never swallow the
- * rest of the message into one block.
- */
-function findHtmlContainerSpanEnd(
-  tokens: ReadonlyArray<LexedToken>,
-  startIndex: number,
-  startDepth: number,
-): number | null {
-  let depth = startDepth;
-  for (let index = startIndex + 1; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (token.type !== "html") continue;
-    depth += htmlContainerDepthDelta(token.raw);
-    if (depth <= 0) return index;
-  }
-  return null;
-}
-
 function blocksFromTokens(tokens: ReadonlyArray<LexedToken>): MarkdownBlock[] {
   // `id` is the token's position so a block's React key / `MarkdownBlock` memo
   // identity is stable as the message grows - the prefix tokens keep their
   // index, only trailing tokens shift.
-  const blocks: MarkdownBlock[] = [];
-  let index = 0;
-  while (index < tokens.length) {
-    const token = tokens[index];
-    if (token.type === "space") {
-      index += 1;
-      continue;
-    }
-    const depth =
-      token.type === "html" ? htmlContainerDepthDelta(token.raw) : 0;
-    const spanEnd =
-      depth > 0 ? findHtmlContainerSpanEnd(tokens, index, depth) : null;
-    if (spanEnd === null) {
-      blocks.push({ id: index, endId: index, raw: token.raw });
-      index += 1;
-      continue;
-    }
-    // Token raws partition the source exactly, so concatenating the span -
-    // interleaved `space` tokens included - reproduces the original text.
-    let raw = "";
-    for (let scan = index; scan <= spanEnd; scan += 1) {
-      raw += tokens[scan].raw;
-    }
-    blocks.push({ id: index, endId: spanEnd, raw });
-    index = spanEnd + 1;
-  }
-  return blocks;
+  return tokens.flatMap((token, index) =>
+    token.type === "space" ? [] : [{ id: index, raw: token.raw }],
+  );
 }
 
 // Markdown block tokenization is only PARTLY local. Lazy paragraph

@@ -1,5 +1,6 @@
 import type { InstallHostLifecycle } from "../installer";
 import { createCliLogger } from "../logger";
+import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
 import {
   createServiceController,
@@ -42,12 +43,15 @@ import type { Environment } from "../runner/environment";
 export interface ServiceInstallLifecycleState {
   priorState: ServiceState;
   stoppedBeforeSwap: boolean;
-  // Only `install` (manifest rewrite + re-register) or `none` - plain
-  // start/restart after a binary swap was removed deliberately (macOS
-  // kickstart runs launchd's cached definition; see the doc comment above).
-  // Renderer-side consumers keep tolerating the historical
-  // `restart`/`start` strings from older CLIs.
-  postSwapAction: "install" | "none";
+  // `install` (manifest rewrite + re-register) for CLI-owned registrations -
+  // plain start/restart there was removed deliberately (macOS kickstart runs
+  // launchd's cached definition and would leave a regenerated plist stale).
+  // `start` is used ONLY on the Desktop-managed path: the agent label's
+  // definition lives in the app bundle and a host-bytes swap does not
+  // change it, so kickstarting it after a cooperative stop runs the current
+  // definition on the new bytes. Renderer-side consumers keep tolerating
+  // the historical `restart`/`start` strings from older CLIs.
+  postSwapAction: "start" | "install" | "none";
   postSwapError: string | null;
 }
 
@@ -95,6 +99,12 @@ export function createServiceInstallLifecycle(
     postSwapAction: "none",
     postSwapError: null,
   };
+  // True only when beforeSwap's stop was the COOPERATIVE one on a
+  // Desktop-managed host - the only case afterSwap may kickstart the agent
+  // back. Deliberately not keyed on `stoppedBeforeSwap`: Windows' stray-
+  // process stop also sets that, and starting after it would resurrect the
+  // pre-cooperative contract this flag exists to scope.
+  let cooperativeStopBeforeSwap = false;
   const lifecycle: InstallHostLifecycle = {
     beforeSwap: async () => {
       const status = await controller.status(label);
@@ -109,6 +119,41 @@ export function createServiceInstallLifecycle(
       if (status.state === "running" || process.platform === "win32") {
         await controller.stop(label);
         state.stoppedBeforeSwap = true;
+        return;
+      }
+      // Desktop-managed macOS machines report `externally-managed` even
+      // while a host is live underneath. This used to skip the stop
+      // silently - the install printed "stopping service", swapped under
+      // the running host, and the new bytes went live only at Desktop's
+      // next register cycle, which users reasonably read as "the install
+      // fixed it". `controller.stop` now performs a cooperative shutdown
+      // through the host's own lifecycle RPCs, so use it: a busy denial
+      // still aborts (never swap over live work), while an unreachable
+      // host degrades to today's swap-under-live-host behavior - installing
+      // is strictly better than refusing on the machines where the host is
+      // too broken to answer.
+      if (
+        status.state === "externally-managed" &&
+        process.platform === "darwin"
+      ) {
+        try {
+          await controller.stop(label);
+          state.stoppedBeforeSwap = true;
+          cooperativeStopBeforeSwap = true;
+        } catch (cause) {
+          if (
+            cause instanceof CliError &&
+            cause.code === CLI_ERROR_CODES.HOST_BUSY
+          ) {
+            throw cause;
+          }
+          createCliLogger(options.environment).warn(
+            "Cooperative stop of the Desktop-managed host was unavailable; installing under the live host (new bytes go live at Desktop's next register cycle).",
+            {
+              cause: cause instanceof Error ? cause.message : String(cause),
+            },
+          );
+        }
       }
     },
     afterSwap: async () => {
@@ -154,6 +199,24 @@ export function createServiceInstallLifecycle(
               { cause: cause instanceof Error ? cause.message : String(cause) },
             );
           });
+        if (cooperativeStopBeforeSwap) {
+          // We cooperatively stopped the Desktop-managed host to swap;
+          // bring it back on the NEW bytes now instead of leaving the
+          // machine hostless until Desktop's next register cycle. `start`
+          // routes to a kickstart of the agent label - the bundle-owned
+          // definition is unchanged by a host-bytes swap, so this is not
+          // the cached-definition staleness case that forbids
+          // start-after-swap on CLI-owned registrations. A failure must
+          // not abort the completed install - record it and steer to
+          // doctor like every other post-swap error.
+          try {
+            await controller.start(label);
+            state.postSwapAction = "start";
+          } catch (cause) {
+            state.postSwapError =
+              cause instanceof Error ? cause.message : String(cause);
+          }
+        }
         return;
       }
       if (state.priorState === "not-installed") {
