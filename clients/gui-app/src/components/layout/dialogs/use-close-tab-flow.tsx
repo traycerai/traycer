@@ -1,4 +1,4 @@
-import { useCallback, type ReactNode } from "react";
+import { useCallback, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
@@ -112,10 +112,17 @@ export function useCloseTabFlow(): CloseTabFlow {
     }
   }, [activePathname, requestCloseTab]);
 
-  return {
-    requestCloseTab,
-    closeOtherTabs,
-    closeActiveTab,
-    unsyncedDialog: dialog.dialog,
-  };
+  // Stable identity: consumers list the whole flow in `useCallback` /
+  // `useEffect` deps. A fresh object literal per render gave every derived
+  // handler a new identity, which defeated the memoized strip items and
+  // re-registered the split action handlers on each render.
+  return useMemo(
+    () => ({
+      requestCloseTab,
+      closeOtherTabs,
+      closeActiveTab,
+      unsyncedDialog: dialog.dialog,
+    }),
+    [closeActiveTab, closeOtherTabs, dialog.dialog, requestCloseTab],
+  );
 }

@@ -3,6 +3,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
 } from "react";
@@ -21,6 +22,10 @@ import { tabSurfaceDescriptor } from "@/stores/tabs/registry";
 import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import {
+  getTabStructuralLockRevision,
+  subscribeTabStructuralLocks,
+} from "@/stores/tabs/tab-structural-lock";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
 import { SplitDivider } from "@/components/layout/tabs/split-divider";
@@ -324,6 +329,16 @@ function useFillableSlotDropActive(
       activeItemId: state.activeItemId,
       systemTabs: state.systemTabs,
     })),
+  );
+  // `resolveValidatedTopLevelTabDrop` consults the structural-lock registry,
+  // which lives outside both stores above. Without this the highlight would
+  // keep whatever it computed when the pointer arrived, so a lock taken or
+  // released mid-drag left the feedback disagreeing with what the drop does.
+  // Same subscription the split-slot chooser uses.
+  useSyncExternalStore(
+    subscribeTabStructuralLocks,
+    getTabStructuralLockRevision,
+    getTabStructuralLockRevision,
   );
   if (!isOver || activeHeaderTab === null) return false;
   return (

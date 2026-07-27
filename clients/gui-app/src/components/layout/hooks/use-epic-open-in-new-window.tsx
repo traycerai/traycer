@@ -10,6 +10,7 @@ import {
   existingEpicTabIntent,
   navigateToTabIntent,
 } from "@/lib/tab-navigation";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { getDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import {
   epicHasUnsyncedEdits,
@@ -203,7 +204,17 @@ export function useEpicOpenInNewWindowFlow(): EpicNewWindowFlow {
           }),
           undefined,
         );
-      })();
+      })().catch((error: unknown) => {
+        // Fire-and-forget from a click handler: by the time the move IPC can
+        // reject, step 2 has already separated the tab. Without this the
+        // rejection is an unhandled promise and the half-applied move leaves
+        // no trace at all.
+        appLogger.warn("[windows] open epic in new window failed", {
+          epicId: request.epicId,
+          tabId: request.tabId,
+          error: describeLogError(error),
+        });
+      });
     },
     [activePathname, navigate],
   );

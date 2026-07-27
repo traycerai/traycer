@@ -1,6 +1,7 @@
 import { createContext, use } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import type { MutationProgress } from "@traycer-clients/shared/platform/runner-host";
+import type { AuthStatus } from "@/stores/auth/auth-store";
 
 export type HostReadinessScope = "none" | "default-host" | "tab-host";
 
@@ -106,7 +107,7 @@ export function isHostDialable(entry: HostDirectoryEntry | undefined): boolean {
 export function resolveSurfaceReadiness(args: {
   readonly scope: HostReadinessScope;
   readonly tabHostId: string | null;
-  readonly authStatus: string;
+  readonly authStatus: AuthStatus;
   readonly activeHostId: string | null;
   readonly requestContextUserId: string | null;
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;

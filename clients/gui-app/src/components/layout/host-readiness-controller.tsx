@@ -35,7 +35,7 @@ import { useRunnerRequestHostRespawn } from "@/hooks/runner/use-runner-request-h
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { createReportIssueContext } from "@/lib/report-issue-context";
-import { useAuthStore } from "@/stores/auth/auth-store";
+import { useAuthStore, type AuthStatus } from "@/stores/auth/auth-store";
 
 /** A single signed-in owner for host reachability and lifecycle state. */
 export function HostReadinessControllerProvider(props: {
@@ -96,7 +96,7 @@ export function HostReadinessControllerProvider(props: {
 }
 
 function HostReadinessControllerContents(props: {
-  readonly authStatus: string;
+  readonly authStatus: AuthStatus;
   readonly activeHostId: string | null;
   readonly requestContextUserId: string | null;
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
@@ -151,7 +151,20 @@ function HostReadinessControllerContents(props: {
       },
       defaultHostPresentation,
     };
-  }, [defaultHostPresentation, props]);
+    // Depend on the individual fields `readinessFor` closes over, like the
+    // presentation memo above. `props` is a fresh object every render, so
+    // listing it defeated this memo entirely: the context value changed
+    // identity on each render and re-ran every `useSurfaceReadiness` /
+    // `useHostReadinessController` consumer across the surface tree.
+  }, [
+    defaultHostPresentation,
+    props.activeHostId,
+    props.authStatus,
+    props.directoryEntries,
+    props.hasLocalHost,
+    props.hasMobileNoHost,
+    props.requestContextUserId,
+  ]);
 
   return (
     <HostReadinessControllerContext.Provider value={controller}>
