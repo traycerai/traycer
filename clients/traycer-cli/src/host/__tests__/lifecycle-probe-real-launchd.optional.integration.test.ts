@@ -542,6 +542,13 @@ async function withScopedFallbackReadiness(
   const domain = `gui/${uid}`;
   const target = `${domain}/${label}`;
   const plistPath = join(root, "fallback.plist");
+  // launchd gives a job no stdio unless the plist asks for it, so a
+  // supervisor that dies before its first log line leaves NOTHING anywhere:
+  // `host.log` empty, `launchctl print` happily exit 0 on a loaded label, and
+  // the temp root deleted on the way out. That is exactly the state the
+  // hosted runner reported, and it is unclassifiable without these.
+  const supervisorStdoutPath = join(root, "supervisor.out");
+  const supervisorStderrPath = join(root, "supervisor.err");
   const hostScript = join(bin, "fallback-ready-host.ts");
   const hostWrapper = join(bin, "fallback-ready-host.sh");
   const cliEntry = resolve(process.cwd(), "src/index.ts");
@@ -607,6 +614,9 @@ setInterval(() => undefined, 1_000);
 <key>Label</key><string>${label}</string>
 <key>ProgramArguments</key><array><string>${bunPath}</string><string>${cliEntry}</string><string>host</string><string>start</string><string>--service-label</string><string>${label}</string></array>
 <key>EnvironmentVariables</key><dict><key>HOME</key><string>${home}</string><key>PATH</key><string>${process.env.PATH ?? "/usr/bin:/bin"}</string></dict>
+<key>WorkingDirectory</key><string>${process.cwd()}</string>
+<key>StandardOutPath</key><string>${supervisorStdoutPath}</string>
+<key>StandardErrorPath</key><string>${supervisorStderrPath}</string>
 <key>RunAtLoad</key><true/>
 </dict></plist>`,
     "utf8",
@@ -622,6 +632,7 @@ setInterval(() => undefined, 1_000);
       bootstrapLogPath,
       SUPERVISOR_START_BUDGET_MS,
       target,
+      [supervisorStdoutPath, supervisorStderrPath],
     );
     const printed = await runCommand("launchctl", ["print", target]);
     const pidMatch = /^\s*pid\s*=\s*(\d+)\s*$/m.exec(printed.stdout);
@@ -677,6 +688,7 @@ async function waitForSupervisorStart(
   path: string,
   timeoutMs: number,
   target: string,
+  stdioPaths: readonly string[],
 ): Promise<SupervisorStartMarker> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -713,10 +725,18 @@ async function waitForSupervisorStart(
   // fails to bootstrap under a LaunchAgent. The temp root is deleted on the
   // way out, so whatever is not captured now is gone - dump the job state and
   // the log the supervisor was supposed to write into the failure itself.
+  const stdio = await Promise.all(
+    stdioPaths.map(
+      async (stdioPath) => `${stdioPath}:\n${await tailFile(stdioPath, 40)}`,
+    ),
+  );
   throw new Error(
-    `timed out after ${timeoutMs}ms waiting for the supervisor 'starting' marker at ${path}\n` +
-      `launchctl print:\n${await describeJobState(target)}\n` +
+    [
+      `timed out after ${timeoutMs}ms waiting for the supervisor 'starting' marker at ${path}`,
+      `launchctl print:\n${await describeJobState(target)}`,
       `log tail:\n${await tailFile(path, 40)}`,
+      ...stdio,
+    ].join("\n"),
   );
 }
 
