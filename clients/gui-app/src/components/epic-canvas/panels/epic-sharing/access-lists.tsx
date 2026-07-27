@@ -26,6 +26,7 @@ import { computeInitials } from "@/lib/auth/compute-initials";
 import { type AssignableCollaboratorRole } from "@/lib/epic-collaborator-roles";
 import { formatGithubHandle } from "@/lib/epic-invites";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export interface PeopleWithAccessProps {
   readonly loadState: SharingAccessLoadState;
   readonly collaborators: ReadonlyArray<EpicCollaboratorView>;
@@ -281,27 +282,35 @@ function CollaboratorRow(props: {
         onRoleChange={props.onRoleChange}
       />
       {isOwner && collaborator.userId !== null ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={canRevoke ? props.onRevokeRequest : undefined}
-          disabled={!canRevoke || isRevokePending}
-          title={lastOwnerTitle}
-          aria-label={`Remove ${collaborator.displayName}`}
-          className="text-muted-foreground hover:text-destructive disabled:opacity-30"
-          data-testid="collaborator-revoke-button"
+        <TooltipWrapper
+          label={lastOwnerTitle}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {isRevokePending ? (
-            <AgentSpinningDots
-              className="text-muted-foreground"
-              testId="collaborator-revoke-spinner"
-              variant={undefined}
-            />
-          ) : (
-            <Trash2 className="size-3.5" />
-          )}
-        </Button>
+          <span className="inline-flex">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              onClick={canRevoke ? props.onRevokeRequest : undefined}
+              disabled={!canRevoke || isRevokePending}
+              aria-label={`Remove ${collaborator.displayName}`}
+              className="text-muted-foreground hover:text-destructive disabled:opacity-30"
+              data-testid="collaborator-revoke-button"
+            >
+              {isRevokePending ? (
+                <AgentSpinningDots
+                  className="text-muted-foreground"
+                  testId="collaborator-revoke-spinner"
+                  variant={undefined}
+                />
+              ) : (
+                <Trash2 className="size-3.5" />
+              )}
+            </Button>
+          </span>
+        </TooltipWrapper>
       ) : null}
     </li>
   );
@@ -455,6 +464,7 @@ function CollaboratorRoleControl(props: {
   }
   return (
     <RoleBadge
+      tooltip={lastOwnerTitle}
       value={collaborator.role}
       testId={
         isLastOwner ? "collaborator-role-last-owner" : "collaborator-role-badge"
@@ -462,7 +472,6 @@ function CollaboratorRoleControl(props: {
       ariaLabel={
         isLastOwner ? `Change role for ${collaborator.displayName}` : undefined
       }
-      title={lastOwnerTitle}
     />
   );
 }

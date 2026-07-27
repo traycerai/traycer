@@ -30,7 +30,8 @@ SettingsLayout
         ├── KeybindingsSettingsPanel
         ├── ShellSettingsPanel
         ├── WorktreesSettingsPanel
-        └── HostSettingsPanel
+        ├── HostSettingsPanel
+        └── DiagnosticsSettingsPanel
 ```
 
 Settings is also presented as a **modal** via `settings-modal-content.tsx`,
@@ -42,25 +43,87 @@ must be added in BOTH places - the route file under `src/routes/` AND the modal
 
 - `settings-layout.tsx` Owns the two-column shell for the settings route.
 - `settings-sidebar.tsx` Renders navigation from `settings-sections.ts`.
-- `settings-panel-shell.tsx` Shared width, card shell, and panel spacing.
+- `settings-panel-shell.tsx` Shared width, header, and panel spacing - density-
+  aware (see below).
+- `settings-row.tsx` Shared label/description/control row - also density-aware.
+  The label owns the flexible width; controls stay pinned to the trailing edge.
+  If a wide control wraps, it remains right-aligned on its new line instead of
+  falling under the label at the leading edge.
+- `settings-group.tsx` A named group of rows: a small, quiet label OUTSIDE a
+  bordered card (never a row-shaped band inside one). Used by General; `tone:
+"danger"` gives Danger Zone its restrained-red card without a separate
+  component.
 - `panels/*.tsx` Route-mounted settings sections.
 - `controls/settings-select.tsx` Shared select wrapper used by settings rows.
-- `src/stores/settings-store.ts` Persisted local settings state.
+- `src/stores/settings/settings-store.ts` Persisted local settings state.
+- `src/providers/settings-density-context.ts` `SettingsDensityContext` /
+  `useSettingsDensity()` - `"compact" | "relaxed"`, default `"relaxed"`.
+  `settings-modal-content.tsx` provides `"compact"` for the modal overlay
+  (`PromotableModalFrame` hard-caps its content at `80vh`); the promoted-tab
+  route path never provides it, so it stays `"relaxed"` by default. A discrete
+  signal from the two known entry points, not a measured container query -
+  the overlay's height ceiling is architectural, not something that varies
+  continuously with window size. `SettingsPanelShell` and `SettingsRow` read
+  it directly (tighter header/row padding and a smaller title in `compact`);
+  General and Worktrees additionally read it locally for their own bespoke
+  multi-card gaps. Out of scope: the Worktrees toolbar/list rows, which stay
+  unchanged regardless of density.
 
 ## Sections
 
-- `General` App-level preferences: agent turn-completion notifications, prevent
-  sleep while running, pin context usage breakdown (global toggle for the
-  always-visible agent context-window breakdown, default off), voice input,
-  local snapshot storage management, and data migration.
-- `Appearance` Theme, global artifact icon color mode, type-color customization,
-  and typography controls.
-  - **Typography.** Three structurally identical rows - `UI font`, `Code font`,
-    and `Terminal font` - each pair a font picker with its size input stacked
-    directly below (the terminal row uses the nullable size input). Keeping the
-    terminal family + size in one row (rather than two) removes the stray
-    divider that used to split a single conceptual group. Backing state lives in
-    `settings-store.ts`:
+- `General` App behavior, agent activity, and local data controls, divided
+  into four named groups via `settings-group.tsx`: a small, quiet `<h2>`
+  label sits OUTSIDE its own bordered card, so orientation (the label) and
+  action (the card's rows) read as different things - a group label never
+  looks like another setting row. This replaced an earlier row-shaped
+  section-header-band-inside-one-card layout (`settings-section-header.tsx`,
+  now deleted) after user feedback that the bands blended into the options
+  and ran too tall; a design pass (`general-settings-core-flows` artifact)
+  settled the current shape. Groups are ordered by frequency and risk
+  (most-touched first, destructive last), not alphabetized; row internals,
+  controls, and confirmation flows are unchanged from before either reorg.
+  - **Chat & composer**: Voice input (`voice-settings-section.tsx`), Quote
+    reply on text selection, Steer with Cmd/Ctrl+Enter (toggles the fixed
+    chord's mid-turn-steering semantics - stays out of Keybindings, which is
+    for rebinding), Pin context usage breakdown (global toggle for the
+    always-visible agent context-window breakdown, default off).
+  - **Running agents**: Prevent sleep while running, Show global resources
+    button, Show navigator resource stats (these stay out of Appearance -
+    they change information visibility, not styling).
+  - **Setup & migration**: Product tour (replay onboarding), Data migration
+    (retry moving local SQLite tasks/epics to cloud - stays out of
+    Diagnostics, which is support capture, not user data recovery).
+  - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
+"danger"`, `data-testid="settings-danger-zone"`, kept last): File Edit
+    Snapshots (local pre-edit snapshot storage, size + clear), Local app
+    state (reset tabs/layout/drafts/settings/view prefs + reload), Remove
+    Traycer (conditional on `hostManagement`; becomes "Traycer removed / Quit
+    Traycer" after removal). The zone's distinct restrained-red card/label
+    tone is unchanged from before the reorg, just carried by the shared
+    group component instead of bespoke markup.
+- `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
+  specialized in one column: **Theme**, **Interface**, **Typography**,
+  **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
+  bordered card; changes apply live, the surrounding app stays the primary
+  preview. A design pass (`settings-related-panels-core-flows` artifact,
+  extending the compact Settings language past General/Worktrees to five more
+  panels - Appearance, Notifications, Diagnostics, Shell, Host) introduced
+  this grouping; the controls themselves are unchanged except where noted
+  below.
+  - **Theme**: Theme mode (`ThemeModeToggle` - Light/Dark/System,
+    `theme`/`setTheme`) and Preset (`ThemePresetPicker`,
+    `themePreset`/`setThemePreset`) - broad color/surface choices lead.
+  - **Interface**: Zoom (`DesktopZoomSettingsRow` - desktop-only, renders
+    nothing without a zoom bridge; backed by
+    `useRunnerZoomPercentQuery`/`SetMutation`/`ResetMutation` against host/OS
+    state, not a settings-store field) and Use pointer cursors
+    (`pointerCursors` `Switch`, default on).
+  - **Typography.** Two structurally identical rows - `UI font` and
+    `Code font` - each pairing a font picker with its size input stacked
+    directly below. `Terminal font` moved out to its own **Terminal** group
+    below (it pairs with the cursor rows and the live preview, not with UI/Code
+    sizing) - the three fonts still share one storage/resolution model, only
+    the grouping changed. Backing state lives in `settings-store.ts`:
     `uiFontFamily` / `codeFontFamily` / `terminalFontFamily` (`string | null`)
     and `terminalFontSize` (`number | null`) - `null` means "use the default"
     (UI: Figtree, Code: the system mono stack) or, for the two terminal
@@ -106,20 +169,37 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     explicit value starting from what was displayed; a ghost reset button
     clears back to `null`. Kept as a separate component because its reset target
     is `null` (follow code) rather than a fixed default.
-  - **Terminal cursor
-    (`controls/terminal-cursor-style-picker.tsx` + a `Switch`).** Two rows below
-    the terminal font. `Terminal cursor` is a segmented shape picker (iTerm2
-    style - each option draws the actual glyph, block centered) backed by
-    `terminalCursorStyle` (`"block" | "bar" | "underline"`, default `block`);
-    `Blink cursor` is a `Switch` backed by `terminalCursorBlink` (default on).
-    Both are captured in the host's `initialOptionsRef` for first paint and
-    live-synced into `term.options` via `useTerminalAppearanceSync`. On blur the
-    cursor stops blinking (xterm's inactive cursor never blinks) and
-    `cursorInactiveStyle` mirrors the chosen shape via `inactiveCursorStyleFor`,
-    except `block` falls back to a hollow `outline` so an unfocused pane stays
-    visually distinct. The
-    `Terminal preview` row reflects the chosen shape/blink with a CSS-only
-    cursor so the effect is visible without an xterm instance.
+  - **Terminal** (group). `Terminal font` (font picker + the nullable size
+    input, one row) plus `Terminal cursor` and `Blink cursor` sit in a
+    `@container` split with the live preview: one column of rows on the left,
+    `TerminalPreview` on the right (`grid-cols-1 @min-[32rem]:grid-cols-[7fr_5fr]`,
+    a divider border between them above that width, stacked below it) - the
+    preview is part of the group's card, not a separately labelled row (it
+    used to be its own `SettingsRow` with a "Terminal preview" label; that
+    label is gone since the group title and layout already say what it is).
+    - **Terminal cursor
+      (`controls/terminal-cursor-style-picker.tsx` + a `Switch`).**
+      `Terminal cursor` is a segmented shape picker (iTerm2
+      style - each option draws the actual glyph, block centered) backed by
+      `terminalCursorStyle` (`"block" | "bar" | "underline"`, default `block`);
+      `Blink cursor` is a `Switch` backed by `terminalCursorBlink` (default on).
+      Both are captured in the host's `initialOptionsRef` for first paint and
+      live-synced into `term.options` via `useTerminalAppearanceSync`. On blur the
+      cursor stops blinking (xterm's inactive cursor never blinks) and
+      `cursorInactiveStyle` mirrors the chosen shape via `inactiveCursorStyleFor`,
+      except `block` falls back to a hollow `outline` so an unfocused pane stays
+      visually distinct. `TerminalPreview` reflects the chosen shape/blink with a
+      CSS-only cursor (reads the store directly, no xterm instance) so the effect
+      is visible without spawning a real terminal.
+  - **Artifact icons** (group). One row, `Artifact icon colors`
+    (`EpicNodeIconColorPicker`, `controls/node-icon-color-picker.tsx`) - a "Use
+    type colors" `Switch` (`artifactIconColorMode`, `"byType" | "none"`,
+    **default `"byType"`** - the palette is visible out of the box, this is an
+    opt-out toggle, not an opt-in-from-collapsed one) that reveals a 2-column
+    swatch grid (one native color input per `EpicNodeKind`) plus a Reset only
+    while enabled. Turning type colors off hides the grid but keeps
+    `artifactIconColors` in the store untouched, so turning it back on restores
+    the same custom colors instead of resetting them.
   - **Installed-font enumeration.** Desktop-only, following the same chain as
     `systemPreferencesAppearance`: `RunnerHostInvoke.fontsList` IPC channel →
     `listInstalledFonts()` (`electron-main/app/installed-fonts.ts`, backed by
@@ -240,17 +320,45 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     Traycer has no API key field. The enable toggle remains a real gate:
     disabling it hides the Traycer harness from the new-agent picker and blocks
     runs like any other provider.
-- `Notifications` Host-side notification generation controls. The `In-app`
-  column gates durable host-row creation before anything enters the bell feed,
-  unread count, tab indicators, delivery channels, or notification hooks.
-  Collaboration and app-local notifications are independent. Notification
-  hooks are configured separately below the grid and further filter generated
-  rows by severity.
-  Backed by `host.notifications.getConfig` /
-  `host.notifications.setConfig` through host-scoped TanStack Query hooks.
-  The protocol still carries forward-compatible email config, but this panel
-  round-trips it untouched instead of exposing an inactive email delivery
-  surface.
+- `Notifications` Two `SettingsGroup` cards. A design pass
+  (`settings-related-panels-core-flows` artifact) replaced the old one-column
+  severity×channel matrix with a compact policy card, and gave the hooks
+  manager below it the remaining height.
+  - **`"In-app notifications · Current host"`**: three rows, one per severity
+    - `Needs action`, `Failure`, `Done` (`info` has no row) - each a single
+      `Switch` gating durable host-row creation before anything reaches the bell
+      feed, unread count, tab indicators, or notification hooks. Collaboration
+      and app-local notifications stay independent. Backed by
+      `host.notifications.getConfig` / `setConfig` through host-scoped TanStack
+      Query hooks. The wire contract still carries a full severity×channel
+      matrix (including an `email`/SMTP channel that is never surfaced here,
+      round-tripped untouched via a `leaveUnchanged` password sentinel) - this
+      panel only renders and toggles the `renderer` channel; a real multi-
+      channel UI is deliberately deferred, not an oversight (the artifact notes
+      a channel-by-severity matrix "is reserved for a future surface with
+      multiple user-configurable channels").
+  - **`"Notification hooks"`** (`notification-hooks-section.tsx`): a toolbar
+    (hook count, a copy-config-path chip, Refresh, Add hook) over a row list
+    that owns the remaining height (`fillHeight` on the shell +
+    `min-h-0 flex-1` down the tree - only the row list scrolls, the toolbar
+    stays pinned). The config-path chip consumes the toolbar width left after
+    the count and actions, truncating only when that real remaining width is
+    exhausted. The no-hooks state fills and centers within the list viewport.
+    Each row shows name, a Script/HTTP type badge, destination,
+    severity filter (or "Every severity"), latest test result, an inline
+    enabled `Switch`, and inline **Test / Edit / Delete** buttons (not a row
+    action menu) - Delete confirms via `ConfirmDestructiveDialog`. Edit/Add
+    open the pre-existing hook editor dialog (`notification-hook-editor-
+dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
+    States: a loading spinner; a neutral "unavailable, reconnect" message when
+    the host is unreachable; the query's own error message; an empty state
+    with its own "Add hook" plus the toolbar's; and, when the hooks file
+    itself fails to parse, the row list is replaced by the parse error with
+    editing disabled while the config-path copy chip stays available (the
+    invalid file is never overwritten). A running test spins only on the
+    tested row, but the Test button on every OTHER row is also disabled while
+    any one test is in flight (the mutation is global, not per-row) - worth
+    knowing if this ever reads as a bug report.
 - `Agent selection` (section id `agents`, route `/settings/agents` - both kept as
   compatibility identifiers) Editor for the **global** agent selection guide
   (`~/.traycer/agent-selection-guide.md`) - the instructions Traycer agents read
@@ -301,22 +409,45 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     the System default row stays checked). **Nothing is forgotten by changing
     selection** - only the ✕ removes an entry; **Restore default flags** clears a
     shell's deviation (`args: null`) while keeping the entry.
-  - **UI (Direction B - live-preview cards).** Two cards under
-    `panels/shell/`: a _Shell_ card with an `EffectiveCommandPreview`
+  - **UI (Direction B - live-preview cards).** Two `SettingsGroup` cards under
+    `panels/shell/`, each with an external scope label instead of an in-card
+    title (a `settings-related-panels-core-flows` design pass; the underlying
+    combobox/chips/editor components below are byte-for-byte unchanged): a
+    **`"Terminal shell · New terminals"`** card with an `EffectiveCommandPreview`
     (terminal-styled `❯ <path> <args>`, reusing `--term-ansi-*`), a
     `ShellProgramCombobox`, and `ShellFlagChips` (labelled _Startup flags for
     &lt;shell&gt;_, with the "`-i -l` loads your full shell profile" helper only
     when the selected program is a login shell, and a quiet _Restore default
     flags_ action shown only while the visible flags deviate from the family
     default - reverting the SELECTED shell via
-    `useRunnerTraycerShellRevertArgsMutation`); and an _Environment variables_
-    card with the shared inline `EnvOverrideEditor` (host-process scope only -
-    set/unset mode, value edit, key rename, and staged add/remove; per-harness
-    env now lives in Settings → Providers). Existing env rows **auto-save on
-    commit** (env blur/Enter); new env rows apply only when their check button
-    is pressed. Other controls auto-save on commit (row select, add, chip
-    add/remove) and a quiet "Saving… / ✓ Saved" status sits in each card. The
-    footer holds only that save status - there is no reset button.
+    `useRunnerTraycerShellRevertArgsMutation`). **On Windows hosts with WSL
+    selected** (classified by binary via `windowsShellCaptionFamily`, shared
+    with the host resolver) a single quiet line sits directly under the picker
+    in its column - "Agents won't see tools installed in WSL", amber dot +
+    `Info` glyph - with the explanation and the "run the Traycer host inside
+    WSL" remedy link (docs.traycer.ai/settings/shell#using-wsl) in a
+    `HoverCard`; the glyph is itself a focusable anchor to that docs page so
+    keyboard users reach the remedy without the pointer-only hover card. Only
+    WSL earns a caption: PowerShell / Git Bash profile loading and cmd's plain
+    Windows environment are expected behavior, so those selections (and all
+    non-Windows hosts) render nothing, and the picker row top-aligns only
+    while the caption is shown. There is also a **`"Host environment ·
+After restart"`** card with the shared inline `EnvOverrideEditor`
+    (host-process scope only - set/unset mode, value edit, key rename, and
+    staged add/remove; per-harness env lives in Settings → Providers). Existing
+    env rows **auto-save on commit** (env blur/Enter); new env rows apply only
+    when their check button is pressed. Other controls still auto-save on
+    commit (row select, add, chip add/remove) - what changed is the feedback:
+    the old permanently-visible "Saving… / ✓ Saved" text footer is gone,
+    replaced by the same transient icon-only spinner/flash-check pattern as
+    Worktrees' branch-prefix strip (`TransientSaveLiveStatus` /
+    `TransientSaveIndicator`, ~1.6s flash, `sr-only role="status"
+aria-live="polite"` carrying the equivalent text for
+    assistive tech) - three independent instances (shell program, flags, env),
+    each sitting inline in its own row/block rather than one shared card
+    footer, since the old single shared footer is gone along with the in-card
+    titles. **Restore default flags** is still the only reset-like control
+    (relocated into the flags row); there is still no other reset button.
   - **The "system default" concept lives in exactly one place: the picker's
     first row.** It is not repeated as a preview badge, a trigger chip, or a
     footer button (all removed). `EffectiveCommandPreview` shows only the
@@ -373,20 +504,119 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     file no longer exists (flagged `missing`). Env **rename** is client-sequenced
     (`envOverrideSet` new → `envOverrideDelete` old) with an inline unique-key +
     `/^[A-Za-z_][A-Za-z0-9_]*$/` guard.
-- `Worktrees` Host-wide management of the git worktrees Traycer creates under
-  `~/.traycer/worktrees/`, presented as a calm inspection-and-cleanup list, not
-  a delete console. A host selector (default = active host, gated on
-  `useHostReachability`, demoted to quiet toolbar chrome rather than a
-  dominant control) drives a disk-truth list - so orphaned worktrees whose
-  owning agent was deleted still appear - grouped by repo under quiet,
-  collapsible headers (`WorktreeRepoHeader`) that stay visually secondary to
-  row status. The selected host is reached through a **transient per-host
-  client** (`useHostClientFor`) so picking a host never swaps the app-wide
-  active host or reloads the Epic list. Backed by the host
-  `worktree.listAllForHost` / `worktree.deleteByPath` RPCs through
-  `useHostQuery` / `useHostMutation`. Setup/teardown script editing is NOT
-  here - the create-worktree flow owns it, and scripts otherwise live in the
-  committed `.traycer/environment.json`.
+- `Worktrees` Two stacked cards, no section headings: a compact **branch-
+  prefix strip** (client-wide creation default) directly under the page
+  header, then the **worktree inventory** (the pre-existing host-scoped
+  management list, unchanged) taking all remaining height. Earlier this was
+  two `settings-section-header.tsx`-banded sections labelled "New worktrees" /
+  "Existing worktrees" inside one continuous card; a design pass
+  (`general-settings-core-flows` artifact, following user feedback that the
+  worktree list was starved of space in the modal overlay) replaced both
+  headings with a genuinely compact strip and let the inventory own the rest
+  of the pane - each card's own content (the strip's label + "All hosts" tag,
+  the inventory's host/search/filter toolbar) already says what it is, so a
+  redundant heading above either would just repeat that.
+  - **Branch-prefix strip** (`worktree-branch-prefix-section.tsx`, backed by
+    `worktreeBranchPrefix` in `settings-store.ts`, default `"traycer/"`).
+    One control line: a **Branch prefix** label + a quiet **All hosts** scope
+    tag, a live example line below it ("New branches start like
+    **traycer/quiet-otter**"), then reset + a plain text `Input` + inline
+    save feedback, all on the same row. The example previews
+    `${draft.trim()}${suffix}` (an unprefixed suffix when the trimmed draft
+    is empty) using a friendly two-word suffix
+    (`random-friendly-name.ts#pickFriendlyBranchSuffix`) generated ONCE per
+    mount and held stable while typing - only the prefix part changes as the
+    user types, so the suffix itself isn't distracting noise. The input is
+    used verbatim as the prefix for the branch name pre-filled when creating
+    a new worktree - no separator is auto-appended, so the user types it
+    (`traycer/`, `anurag/`, `feat-`); an empty value means no prefix,
+    mirroring `composeDefaultNewBranch`'s existing "empty means skip"
+    precedent. Accessible name is `"Branch prefix"` (renamed from the older
+    `"Worktree branch prefix"` to match the new visible label - the page
+    title already says "Worktrees", so repeating it in every control's name
+    read as redundant under the new design).
+    - **Debounced autosave, mechanics unchanged, presentation reworked.** A
+      valid, changed draft still persists ~500ms after the last keystroke;
+      Enter and blur still flush a pending save immediately. The draft is
+      still the single source of truth while a local edit is in flight -
+      tracked by an explicit flag (not string comparison, which breaks once
+      a trimmed commit can make the raw draft and the saved value diverge by
+      whitespace alone) - and still adopts an idle external write (another
+      window, rehydration) once no local edit is in flight, normalizing to
+      the trimmed value the same way a local commit does. What changed is
+      purely the feedback surface: the old permanently-reserved "Saving… /
+      Saved" status line is gone. A compact `AgentSpinningDots` spinner
+      appears beside the input while a valid save is pending; on a
+      successful write it becomes a brief `Check` (~1.6s, mirrors
+      `SegmentCopyButton`'s `COPIED_RESET_MS` flash convention) then returns
+      to quiet chrome with nothing reserved - the flash fires only for the
+      current user's own resolved edit or the reset button, never for an
+      adopted external write. An invalid draft shows a concise error on a
+      persistent line BELOW the control instead, and only then does the
+      strip's card grow a row to hold it; correcting the value removes the
+      error and resumes autosave. The error text carries a stable id wired to
+      the input's `aria-describedby` (only while an error is showing) and
+      renders with `role="alert"`, so the failure state reaches assistive tech
+      the same instant it reaches the eye. A ghost `RotateCcw` reset button
+      occupies the same reserved `size-7` left gutter as the font-size rows in
+      Appearance, appears whenever the ACTIVE DRAFT differs from the default -
+      not just the saved value, so it stays available to cancel a pending or
+      invalid in-progress edit even before anything has been committed - and
+      on click cancels any pending debounce, writes the default immediately,
+      flashes the same brief success check, and moves focus to the (still
+      mounted) Input so it doesn't drop to `<body>` when the button itself
+      unmounts. The spinner/check pair is
+      visual-only (icon, `aria-hidden` where applicable), so a visually
+      hidden `sr-only` `role="status" aria-live="polite"` span sits alongside
+      it carrying the same "Saving…" / "Saved" text for assistive tech -
+      mirrors the existing `PrimaryChangeLiveRegion` convention
+      (`host-workspace-selector/primary-change-live-region.tsx`). Both the
+      visual indicator and the live-region text are driven by the same
+      explicit "local edit in flight" flag mentioned above, not by comparing
+      draft/saved values - so a resolved edit that normalizes back to the
+      already-saved value (pure whitespace) still flashes success, while an
+      idle external write or an already-clean field's blur stays quiet.
+    - **Next-use-only** (unchanged): changing the setting does not retrofit a
+      branch name already pre-filled in an open composer/picker - it applies
+      to worktrees configured after the change (newly resolved folders,
+      freshly opened composers, submit-time composition), matching the app's
+      seed-time-snapshot norm elsewhere (`composerMode` draft seeding,
+      `applySeed`). Light client-side validation
+      (`worktree-branch-prefix-validation.ts`) rejects an illegal git ref
+      (spaces, ASCII control characters, `~ ^ : ? * [ \`, `..`, `@{`, a
+      leading `-` or `/`, consecutive `//`), anything over 40 characters, and
+      any slash-separated component that starts with `.` or ends with
+      `.lock`, with an inline error instead of saving - git remains the final
+      authority at branch-creation time. Re-validated again at the single
+      composition choke point (`composeDefaultNewBranch`) and during store
+      rehydration, so a hand-edited or corrupted persisted value falls back to
+      the default instead of flowing verbatim into a branch name. The 40-char
+      cap keeps the composed name's `.slice(0, 80)` truncation landing inside
+      material that is always `[a-z0-9-]` - the random suffix, or (for
+      multi-workspace names) the repo slug, which is ALSO capped at 40 chars
+      and can itself be reached by the cut once prefix + slug exceed 80 - so
+      truncation can never produce an illegal or empty ref and needs no
+      post-composition repair. Threaded into `composeDefaultNewBranch`
+      (`lib/worktree/default-branch-name.ts`) from the two worktree-picker
+      call sites in `host-workspace-selector.tsx` and the cached-default path
+      in `use-landing-composer-actions.ts`; entirely client-local, no host
+      RPC or protocol change.
+  - **Worktree inventory.** Host-wide management of the git worktrees Traycer
+    creates under `~/.traycer/worktrees/`, presented as a calm
+    inspection-and-cleanup list, not a delete console - own bordered card,
+    no heading above it. A host selector
+    (default = active host, gated on `useHostReachability`, demoted to quiet
+    toolbar chrome rather than a dominant control) drives a disk-truth list -
+    so orphaned worktrees whose owning agent was deleted still appear -
+    grouped by repo under quiet, collapsible headers (`WorktreeRepoHeader`)
+    that stay visually secondary to row status. The selected host is reached
+    through a **transient per-host client** (`useHostClientFor`) so picking a
+    host never swaps the app-wide active host or reloads the Epic list (and
+    never affects the branch-prefix default above). Backed by the host
+    `worktree.listAllForHost` / `worktree.deleteByPath` RPCs through
+    `useHostQuery` / `useHostMutation`. Setup/teardown script editing is NOT
+    here - the create-worktree flow owns it, and scripts otherwise live in the
+    committed `.traycer/environment.json`.
   - **Evidence tiers, not a safety verdict.** Each row leads with exactly one
     loud status pill (`WorktreeTierPill`, classification shared with the
     Task-delete dialog and the `traycer-housekeeping` skill via
@@ -459,28 +689,96 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     aggregate merge progress across every worktree it owns - deliberately
     plain muted text, not a colored badge, so it never competes with or is
     mistaken for the row's own tier pill.
-- `Host` The active host-management surface for the native-packaging flow.
-  Three top-level rows - **Status** (running / stopped / not-installed, with
-  version + listen URL + pid), **Actions** (Restart, or Install host when
-  not-installed; plus Run doctor which opens a side `Sheet` mounting
-  `HostDoctorCard`), and **Updates** (Update / Check now / Retry depending on
-  `registryCheck` state). Two collapsed disclosures sit below: _Installation
-  details_ (version, source, install date, verification, SHA-256, platform -
-  stacked single-column so it stays readable at narrow widths) and _Advanced_
-  (OS service register / deregister · "Pick a different version" expander
-  showing the available versions list). Status derives from
-  the live `LocalHostSnapshot` stream (`runnerHost.onLocalHostChange`)
-  combined with the cached `installedRecord()` - running iff a snapshot exists,
-  stopped iff installed but no snapshot, not-installed otherwise.
-  `IServiceHost.status()` is deliberately not consulted (it's wedged on some
-  shells). The available versions list inside _Advanced_ surfaces the real
-  registry error message (from `registryState.errorMessage` or the
-  `availableVersions()` rejection) with a Retry button rather than the generic
-  "Couldn't reach the registry" copy. Backed by the CLI-backed
-  `hostManagement` runner-host facet. Hidden on shells without the Traycer
-  CLI. The legacy `/settings/service` route now redirects here so any bookmark,
-  remembered tab path, or tray command lands on the same pane as the primary
-  sidebar entry.
+- `Host` The active host-management surface for the native-packaging flow, now
+  an operational console (`settings-related-panels-core-flows` artifact): a
+  self-identifying **summary card** (`host-settings-summary-card.tsx`) leads
+  the page with no external "Overview" label, followed by one quiet
+  **Installation** group. This replaced the old three top-level rows (Status /
+  Actions / Updates, `host-settings-status-row.tsx` /
+  `-actions-row.tsx` / `-updates-row.tsx`, all deleted); status derivation and
+  the CLI-backed `hostManagement` facet underneath are unchanged.
+  - **Summary card.** One bordered card holding, top to bottom: an optional
+    install/restart/update progress banner and a terminal-outcome banner
+    (retry/dismiss) so in-flight or failed operations render inside the card
+    instead of as unrelated page-level alerts; an identity row (display name,
+    status dot + label, and a `v{version} · {listenUrl} · pid {pid}` meta line
+    built from whichever parts are non-null: version shows whenever a host is
+    installed (both `running` and `stopped`, from the live snapshot or the
+    installed record respectively), while `listenUrl`/`pid` are `running`-only
+    - so a stopped host still shows its installed version, just without a
+      listen URL or pid); a contextual actions cluster;
+      and, as a compact bottom strip of the same card, the update region.
+      Status still derives from the live `LocalHostSnapshot` stream
+      (`runnerHost.onLocalHostChange`) combined with the cached
+      `installedRecord()` - running iff a snapshot exists, stopped iff installed
+      but no snapshot, not-installed otherwise; `IServiceHost.status()` is still
+      deliberately not consulted (wedged on some shells).
+  - **Contextual actions** (`HostSummaryActions`): not-installed shows only a
+    primary **Install host**; otherwise a **Restart** button appears - primary
+    when stopped, secondary once running - alongside an always-present
+    secondary **Run doctor** (opens a side `Sheet` mounting `HostDoctorCard`)
+    and a ghost **Edit name** toggle. Install and Restart are mutually
+    exclusive as the leading button; only Restart's emphasis (not its
+    presence) changes between stopped and running.
+  - **Edit name** is a focused inline-edit state (toggled by "Edit name", not
+    open by default): an `Input` plus **Cancel**, **Reset** (disabled with no
+    custom name set), and **Save** (disabled until the trimmed draft actually
+    differs) - a successful Save or Reset both close the editor back to the
+    summary view.
+  - **Update region**, the card's bottom strip, hidden entirely when not-
+    installed: a ready staged version shows a version label + primary
+    **Update** button; otherwise a download in progress shows a spinner +
+    percent; otherwise an unreachable registry shows **Retry**; otherwise a
+    green "Up to date" plus a ghost **Check now** (tooltip shows last-checked
+    time). The action button gates on `updateReady`/a resolved staged
+    version, never the raw "an update was merely detected" signal, so this
+    region never offers an action for a not-yet-ready update.
+  - **Installation** (`SettingsGroup`, two disclosures, both collapsed by
+    default): _Installation details_ (version, source, install date,
+    verification, SHA-256, platform - stacked single-column so it stays
+    readable at narrow widths) and _Advanced_ (OS service register/deregister
+    · release-candidate-inclusion checkbox · "Pick a different version"
+    expander showing the available versions list, version pin/rollback). The
+    available versions list surfaces the real registry error message (from
+    `registryState.errorMessage` or the `availableVersions()` rejection) with
+    its own Retry, independent of the update region's Retry above - the two
+    error/retry paths are separate and can both be live at once.
+  - Busy-host force/defer confirmation, the restart confirmation dialog, and
+    the legacy `/settings/service` redirect (so any bookmark, remembered tab
+    path, or tray command lands on this same pane) are all unchanged. Hidden
+    on shells without the Traycer CLI.
+- `Diagnostics` A **Log detail** `SettingsGroup` followed by a **Recent logs**
+  viewer that may use the remaining height - a design pass
+  (`settings-related-panels-core-flows` artifact) separated capture controls
+  from the evidence viewer and added a reset reminder; the underlying
+  RPCs/log-tail mechanics are unchanged.
+  - **Log detail.** Three rows - `App log level`, `CLI log level`, `Host log
+level` (`LogLevelRow`, a `Select` over the full `trace/debug/info/warn/
+error` scale, `info` labelled "Info (default)") - all default Info and
+    apply immediately. When any level differs from Info, the group grows a
+    fourth row: a quiet reminder plus a **Reset all to Info** button that
+    resets only the non-default scopes (any level different from Info, not
+    just Warn/Error - Trace/Debug count too; sequentially, not in parallel).
+  - **Recent logs · Last N lines** (`DiagnosticsLogs`): the card is content-
+    sized while its entries are collapsed, grows only as rows/expanded output
+    require, and caps at the remaining panel height; only then does it become
+    the page's primary scroll region. An expanded entry's tail text gets its
+    own small bounded/internal scroll instead of growing the list. Per entry:
+    expand/collapse, **Reveal** (open on disk, always visible), and **Copy**
+    (only once expanded). A tail-read failure shows inline error text plus a
+    report-issue action; the top-level list-load failure shows inline error
+    text with **no** report-issue action - a real asymmetry, not by design.
+  - **Two independent desktop-support gates, each contained to its own
+    group.** `LogDetailGroup` checks `getLogLevelsBridge()` and
+    `RecentLogsSection` separately checks `resolveDesktopSupportBridge()` -
+    neither gates the panel as a whole, and neither disappears when its own
+    bridge is missing. Each renders its OWN group/card with an inline "only
+    available on the desktop app" message in place of its controls, so a shell
+    where the two bridges disagree still shows both group labels, with
+    whichever one lacks its bridge explaining why instead of vanishing or
+    silently going blank. A has-bridge-but-zero-logs response similarly gets
+    an explicit "No log files found." message in the Recent logs card rather
+    than rendering empty.
 
 The default editor (`defaultEditor` in the settings store) has no dedicated
 panel - the Open split button on the Epic header doubles as its picker: clicking

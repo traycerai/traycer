@@ -26,6 +26,7 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import {
   ChatMessages,
   type ChatMessageScrollRequest,
@@ -104,6 +105,11 @@ import {
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { cloneChatOnHostSwitch } from "@/lib/commands/actions/clone-chat-on-host-switch";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
+import {
+  findManualCompactCommand,
+  promoteQueuedMessageToFront,
+} from "@/lib/chats/compact-conversation";
+import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
 import { ChatDeadTileBanner, ChatHostStartingBanner } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -187,6 +193,17 @@ import { SurfaceActivityProvider } from "@/components/home/composer/surface-acti
 
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
+// How long a compact-conversation click stays locked out against a repeat
+// click. Not tied to the send settling - just long enough that a double-click
+// or double-tap can't fire the compaction twice.
+const COMPACT_ACTION_LOCK_MS = 1500;
+
+/** Per-chat compact-conversation state, keyed by `handle.chatId` - see the comment on `compactConversation`. */
+interface CompactChatState {
+  locked: boolean;
+  lockTimeoutId: number | null;
+  cancelPromotion: (() => void) | null;
+}
 
 interface ChatTileProps {
   node: EpicNodeRef;
@@ -946,6 +963,18 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     mentionRoots,
     !isFolderlessWorkspace,
   );
+  // The exact roots the active composer resolves to for slash-command
+  // discovery (`ChatComposerImpl` derives the same value internally from
+  // `composerMentionRoots` + this same fallback flag). The context-usage
+  // chip's own catalog lookup shares this rather than the raw
+  // `composerMentionRoots`, so it lands on the SAME `agent.gui.listCommands`
+  // cache entry the composer already warmed instead of opening a second one
+  // with a different (and, on a folder-fallback chat, narrower) working
+  // directory set.
+  const resolvedComposerMentionRoots = useWorkspaceMentionRoots(
+    composerMentionRoots,
+    !isFolderlessWorkspace,
+  );
   // The composer is runnable when the chat carries its own folder binding OR
   // when the epic has at least one workspace folder (the chat then runs local
   // against it). The workspace selector itself stays owner-scoped to the
@@ -1398,6 +1427,85 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     },
     [canSendNextStep, chatActions, nextStepSettings, profile],
   );
+  // Runs the harness's own compaction from the context-usage chip. Never
+  // interrupts: with a turn running (or work already queued) the compact
+  // command is queued and then promoted to the front so it runs next, and
+  // only an otherwise-idle chat compacts outright - queueing there would just
+  // park a one-item queue the user has to release by hand. `runNow` has no
+  // effect on the host - `deliveryPolicy` only ever branches on
+  // `after_safe_point` - it purely decides, client-side, whether the
+  // promotion watcher below needs to be armed at all.
+  //
+  // `ChatTile` is rendered without a `key` on `node.id` (`tile-render.tsx`,
+  // `tab-group-view.tsx`), so switching this slot to a different chat
+  // repoints `handle` in place rather than remounting. State is keyed by
+  // `handle.chatId` rather than held in one shared ref, so compacting chat B
+  // can never clear chat A's click-lock early or cancel A's pending
+  // promotion - each chat's send against `handle.store` (a durable,
+  // registry-owned store that outlives this tile's display of it,
+  // `useChatSessionHandle`) settles on its own regardless of what this slot
+  // repoints to afterward.
+  const compactStateByChatIdRef = useRef(new Map<string, CompactChatState>());
+  useEffect(
+    () => () => {
+      for (const state of compactStateByChatIdRef.current.values()) {
+        if (state.lockTimeoutId !== null) {
+          window.clearTimeout(state.lockTimeoutId);
+        }
+        state.cancelPromotion?.();
+      }
+    },
+    [],
+  );
+  const compactConversation = useCallback(
+    (commandName: string): void => {
+      if (!canSendNextStep) return;
+      const states = compactStateByChatIdRef.current;
+      const existing = states.get(handle.chatId);
+      if (existing?.locked === true) return;
+      const sender = userMessageSenderForProfile(profile);
+      if (sender === null) return;
+      const content = buildSubmittedChatJSONContent(
+        plainTextPromptContent(`/${commandName}`),
+      );
+      // A cheap re-entrancy guard against a double-click firing two real
+      // compactions: the optimistic-queue dedupe only suppresses the second
+      // row's on-screen echo, not the frame that already went to the host.
+      const lockTimeoutId = window.setTimeout(() => {
+        const current = states.get(handle.chatId);
+        if (current !== undefined) current.locked = false;
+      }, COMPACT_ACTION_LOCK_MS);
+      const state: CompactChatState = {
+        locked: true,
+        lockTimeoutId,
+        cancelPromotion: existing?.cancelPromotion ?? null,
+      };
+      states.set(handle.chatId, state);
+      const { activeTurn, queue } = handle.store.getState();
+      const runNow = activeTurn === null && queue.items.length === 0;
+      const sent = chatActions.sendMessage(
+        content,
+        sender,
+        nextStepSettings,
+        runNow ? "auto" : "after_turn",
+      );
+      if (sent === null || runNow) return;
+      state.cancelPromotion?.();
+      state.cancelPromotion = promoteQueuedMessageToFront({
+        store: handle.store,
+        messageId: sent.messageId,
+        reorder: chatActions.queueReorder,
+      });
+    },
+    [
+      canSendNextStep,
+      chatActions,
+      handle.chatId,
+      handle.store,
+      nextStepSettings,
+      profile,
+    ],
+  );
   const nextStepActions = useMemo(
     () => ({
       canSend: canSendNextStep,
@@ -1524,8 +1632,23 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     ],
   );
   const usageChip = useMemo(
-    () => <ContextUsageChipForChat handle={handle} />,
-    [handle],
+    () => (
+      <ContextUsageChipForChat
+        handle={handle}
+        harnessId={currentComposerSettings.harnessId}
+        workingDirectories={resolvedComposerMentionRoots}
+        isActive={isActive}
+        onCompact={canSendNextStep ? compactConversation : null}
+      />
+    ),
+    [
+      canSendNextStep,
+      compactConversation,
+      resolvedComposerMentionRoots,
+      currentComposerSettings.harnessId,
+      handle,
+      isActive,
+    ],
   );
   // Composer v3 cluster: host select + Workspace rail picker on the left, with
   // the context-usage leaf owning its trailing chip and optional full-width
@@ -1803,9 +1926,36 @@ function findLastAssistantUsage(
 
 function ContextUsageChipForChat(props: {
   readonly handle: ChatSessionStoreHandle;
+  readonly harnessId: GuiHarnessId;
+  readonly workingDirectories: ReadonlyArray<string>;
+  readonly isActive: boolean;
+  readonly onCompact: ((commandName: string) => void) | null;
 }): ReactNode {
   const usage = useStore(props.handle.store, selectContextUsage);
-  return <ContextUsageChip usage={usage} />;
+  const client = useTabHostClient();
+  // `workingDirectories` is the composer's own resolved mention roots
+  // (`resolvedComposerMentionRoots` in the parent), not the raw chat binding -
+  // that's what makes this the SAME `agent.gui.listCommands` cache entry
+  // `useKnownSlashCommandNames` already warms, not just a query sharing its
+  // `enabled: isActive` gate. An active tile therefore pays no extra RPC, and
+  // an inactive one still fetches nothing and shows no compact affordance - it
+  // also has no focusable composer to compact from.
+  const { data: commands } = useSlashCommands("", {
+    hostClient: client,
+    harnessId: props.harnessId,
+    workingDirectories: props.workingDirectories,
+    enabled: props.isActive,
+  });
+  const compactCommand = findManualCompactCommand(commands);
+  const requestCompact = props.onCompact;
+  // The catalog is matched on `providerKind`, not on name (a differently
+  // named compaction command is what this is for), so the literal text this
+  // sends has to come from the matched command rather than a hardcoded guess.
+  const onCompact =
+    compactCommand === null || requestCompact === null
+      ? null
+      : () => requestCompact(compactCommand.name);
+  return <ContextUsageChip usage={usage} onCompact={onCompact} />;
 }
 
 function ChatSessionMessagesSurface(

@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useHostBinding } from "@/lib/host";
 import {
   routeNotification,
+  type NotificationNavigate,
   type NotificationPayload,
 } from "@/lib/notifications";
 
@@ -52,9 +53,23 @@ function isHostFeedId(feedId: string | null): boolean {
  * no-acknowledgment rather than crediting the wrong host's notification.
  */
 export function useNotificationActivation(): NotificationActivationController {
+  return useNotificationActivationWithNavigate(useNavigate());
+}
+
+/**
+ * Binds notification activation to an explicitly owned router.
+ *
+ * The host notification stream intentionally mounts above `RouterProvider`,
+ * so its toast callback cannot use TanStack's ambient router context. The app
+ * passes the per-window router's navigate function through this seam; routed
+ * notification surfaces mounted below `RouterProvider` use the ambient hook
+ * above.
+ */
+export function useNotificationActivationWithNavigate(
+  navigate: NotificationNavigate,
+): NotificationActivationController {
   const binding = useHostBinding();
   const client = binding?.hostClient ?? null;
-  const navigate = useNavigate();
 
   const activate = useCallback(
     (input: NotificationActivationInput) => {

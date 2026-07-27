@@ -42,6 +42,7 @@ import type { DesktopWindowsBridge } from "@/lib/windows/types";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
@@ -206,6 +207,22 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
     candidates: testState.worktreeCandidates,
     isError: false,
   }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
+  useEpicSweepWorktreeCandidates: () => ({
+    rows: [],
+    isPending: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
+  useEpicSweepWorktrees: () => ({
+    isPending: false,
+    mutate: () => {},
+  }),
+  useSweepingWorktreePaths: () => new Set<string>(),
 }));
 
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
@@ -514,6 +531,37 @@ describe("<EpicsListPanel />", () => {
     expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
   });
 
+  // The Sweep control keeps its slot in every task row rather than appearing
+  // and disappearing per row: enabled when the task owns worktrees, faded and
+  // non-actionable when it does not.
+  it("renders the row Sweep action when the task owns worktrees", async () => {
+    testState.worktreesByEpicId = new Map([
+      ["epic-from-history", [historyWorktree()]],
+    ]);
+    renderPanel("embedded", "/");
+
+    const sweep = await screen.findByRole("button", {
+      name: /^sweep worktrees for /i,
+    });
+    expect(sweep.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^no worktrees to sweep for /i }),
+    ).toBeNull();
+  });
+
+  it("keeps a disabled Sweep action on a task with no worktrees", async () => {
+    testState.worktreesByEpicId = new Map();
+    renderPanel("embedded", "/");
+
+    const disabled = await screen.findByRole("button", {
+      name: /^no worktrees to sweep for /i,
+    });
+    expect(disabled.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.queryByRole("button", { name: /^sweep worktrees for /i }),
+    ).toBeNull();
+  });
+
   it("shows task PR pills without replacing the row navigation layer", async () => {
     testState.worktreesByEpicId = new Map([
       ["epic-from-history", [historyWorktree()]],
@@ -665,7 +713,7 @@ describe("<EpicsListPanel />", () => {
     expect(
       await screen.findByTestId("epics-list-row-activity-epic-from-history"),
     ).toBeDefined();
-    expect(screen.queryByTitle("Task activity in progress")).not.toBeNull();
+    expect(anyTooltipHasText("Task activity in progress")).toBe(true);
   });
 
   it("shows the background activity status on history rows", async () => {
@@ -678,9 +726,7 @@ describe("<EpicsListPanel />", () => {
     expect(backgroundIcon.getAttribute("class")).toContain(
       "lucide-message-square-clock",
     );
-    expect(
-      screen.queryByTitle("Background activity — agent idle"),
-    ).not.toBeNull();
+    expect(anyTooltipHasText("Background activity — agent idle")).toBe(true);
   });
 
   it("selects a history row from the outside checkbox without opening the epic", async () => {

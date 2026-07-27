@@ -264,7 +264,7 @@ export function buildPayloadFromEvent(
   }
 }
 
-type NavigateFn = UseNavigateResult<string>;
+export type NotificationNavigate = UseNavigateResult<string>;
 
 /**
  * Pure predicate mirroring `routeNotification`'s no-op branches, without
@@ -297,7 +297,7 @@ export function isNotificationPayloadRoutable(
  * contract in one place so the two surfaces cannot drift.
  */
 export function routeNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: NotificationPayload,
   receivedAt: number,
 ): void {
@@ -371,7 +371,7 @@ export function routeNotification(
 }
 
 function routeTerminalNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: TerminalNotificationPayload,
   receivedAt: number,
 ): void {
@@ -415,7 +415,7 @@ function routeTerminalNotification(
 }
 
 function routeEpicChatNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
 ): void {
@@ -440,7 +440,7 @@ function isChatArtifactTileType(type: string | undefined): boolean {
 }
 
 function routeOpenChatNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
 ): boolean {
@@ -518,7 +518,7 @@ function routeOpenChatNotification(
 }
 
 function routeLegacyTerminalNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
 ): boolean {

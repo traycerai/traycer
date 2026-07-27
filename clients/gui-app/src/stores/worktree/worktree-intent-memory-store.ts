@@ -6,6 +6,10 @@ import {
 } from "@traycer/protocol/host/worktree-schemas";
 import { cappedByUpdatedAt } from "@/lib/bounded-record";
 import { basePersistOptions, worktreeIntentMemoryKey } from "@/lib/persist";
+import {
+  worktreeFolderIntentReferencesRemoved,
+  type RemovedWorktreeRefs,
+} from "@/lib/worktree/removed-worktree-refs";
 
 /**
  * Remembered worktree defaults, persisted to localStorage and bucketed by the
@@ -47,6 +51,14 @@ interface WorktreeIntentMemoryStore {
   ) => void;
   getEpicIntent: (epicId: string) => WorktreeIntent | null;
   clearEpicIntent: (epicIds: ReadonlyArray<string>) => void;
+  /**
+   * Drops remembered intents that reference just-removed worktrees (deleted
+   * branch checkout / fork source, or an import of a removed directory), so a
+   * remembered default can never re-offer a selection that no longer
+   * materializes. Per-folder entries are dropped whole; per-epic intents keep
+   * their still-valid entries and are dropped only once empty.
+   */
+  purgeRemovedWorktreeIntents: (removed: RemovedWorktreeRefs) => void;
   resetForTests: () => void;
 }
 
@@ -106,6 +118,37 @@ export const useWorktreeIntentMemoryStore = create<WorktreeIntentMemoryStore>()(
             changed = true;
           }
           return changed ? { epicIntentByEpicId: next } : state;
+        });
+      },
+      purgeRemovedWorktreeIntents: (removed) => {
+        set((state) => {
+          let changed = false;
+          const folderIntentByPath = { ...state.folderIntentByPath };
+          for (const [path, entry] of Object.entries(folderIntentByPath)) {
+            if (!worktreeFolderIntentReferencesRemoved(entry.intent, removed)) {
+              continue;
+            }
+            delete folderIntentByPath[path];
+            changed = true;
+          }
+          const epicIntentByEpicId = { ...state.epicIntentByEpicId };
+          for (const [epicId, entry] of Object.entries(epicIntentByEpicId)) {
+            const entries = entry.intent.entries.filter(
+              (folder) =>
+                !worktreeFolderIntentReferencesRemoved(folder, removed),
+            );
+            if (entries.length === entry.intent.entries.length) continue;
+            changed = true;
+            if (entries.length === 0) {
+              delete epicIntentByEpicId[epicId];
+            } else {
+              epicIntentByEpicId[epicId] = {
+                intent: { entries },
+                updatedAt: entry.updatedAt,
+              };
+            }
+          }
+          return changed ? { folderIntentByPath, epicIntentByEpicId } : state;
         });
       },
       resetForTests: () => {

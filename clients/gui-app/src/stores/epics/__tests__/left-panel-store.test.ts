@@ -51,6 +51,7 @@ interface PersistedLeftPanelState {
     readonly sidebarWidthPx: number;
     readonly panelSectionCollapsedByPanelId: Readonly<Record<string, boolean>>;
     readonly panelSectionWeightsByPanelId: Readonly<Record<string, number>>;
+    readonly panelVisibilityOverrideById: Readonly<Record<string, boolean>>;
     readonly chatFilterByEpicId: Readonly<Record<string, ChatFilter>>;
     readonly artifactFilterByEpicId: Readonly<Record<string, ArtifactFilter>>;
   };
@@ -72,6 +73,7 @@ function resetStore(): void {
     panelSectionCollapsedByPanelId: {},
     panelSectionWeightsByPanelId: {},
     commentsPanelRevealedByTabId: {},
+    panelVisibilityOverrideById: {},
     localRootCreatePendingByEpicPanel: {},
     acknowledgedRootCreatePendingByEpicPanel: {},
     chatFilterByEpicId: {},
@@ -83,6 +85,21 @@ function resetStore(): void {
 const SPLIT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["chats"] },
   { panelIds: ["artifacts"] },
+  { panelIds: ["terminals"] },
+  { panelIds: ["git-diff"] },
+  { panelIds: ["pull-requests"] },
+  { panelIds: ["file-tree"] },
+  { panelIds: ["sharing"] },
+  { panelIds: ["comments"] },
+];
+
+/**
+ * Exactly what a user who last wrote sidebar state before the Pull Requests
+ * panel shipped has in `localStorage`: every id valid, so the value survives
+ * `readPersistedPanelGroups`, but `pull-requests` absent.
+ */
+const PRE_PULL_REQUESTS_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
+  { panelIds: ["chats", "artifacts"] },
   { panelIds: ["terminals"] },
   { panelIds: ["git-diff"] },
   { panelIds: ["file-tree"] },
@@ -156,6 +173,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -238,6 +256,7 @@ describe("useLeftPanelStore", () => {
         sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
         panelSectionCollapsedByPanelId: {},
         panelSectionWeightsByPanelId: {},
+        panelVisibilityOverrideById: {},
         chatFilterByEpicId: {},
         chatShowArchivedByEpicId: {},
         artifactFilterByEpicId: {},
@@ -339,6 +358,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -351,6 +371,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -363,6 +384,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -379,6 +401,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["comments"] },
@@ -397,6 +420,7 @@ describe("useLeftPanelStore", () => {
         [
           { panelIds: ["chats", "artifacts"] },
           { panelIds: ["git-diff"] },
+          { panelIds: ["pull-requests"] },
           { panelIds: ["file-tree"] },
           { panelIds: ["comments"] },
         ],
@@ -407,6 +431,7 @@ describe("useLeftPanelStore", () => {
     ).toEqual([
       { panelIds: ["chats", "file-tree", "artifacts"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["sharing"] },
@@ -419,6 +444,7 @@ describe("useLeftPanelStore", () => {
         [
           { panelIds: ["chats", "artifacts"] },
           { panelIds: ["git-diff"] },
+          { panelIds: ["pull-requests"] },
           { panelIds: ["file-tree"] },
           { panelIds: ["comments"] },
         ],
@@ -428,6 +454,7 @@ describe("useLeftPanelStore", () => {
       ),
     ).toEqual([
       { panelIds: ["chats", "artifacts", "git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
@@ -448,6 +475,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -468,6 +496,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["chats"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["artifacts"] },
@@ -501,6 +530,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["terminals"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -519,6 +549,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -535,6 +566,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
       { panelIds: ["chats"] },
@@ -555,6 +587,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -571,6 +604,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -588,6 +622,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["comments", "artifacts"] },
       { panelIds: ["terminals"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -612,6 +647,35 @@ describe("useLeftPanelStore", () => {
     expect(hook.result.current).toBe(before);
   });
 
+  // A build that adds a panel id reaches users whose persisted `panelGroups`
+  // predate it, so the stored array can NEVER satisfy the already-normalized
+  // fast path - the missing group has to be appended on every read. The hook
+  // feeds `useSyncExternalStore`, whose `getSnapshot` is called on every
+  // commit with no memoization (zustand v5), so handing back a freshly built
+  // array each time makes React see a changed snapshot forever and re-render
+  // until it throws "Maximum update depth exceeded" (minified error #185).
+  it("keeps the panel groups hook snapshot stable when stored groups predate a new panel id", () => {
+    useLeftPanelStore.setState({ panelGroups: PRE_PULL_REQUESTS_PANEL_GROUPS });
+
+    const hook = renderHook(() => useLeftPanelGroups());
+    const before = hook.result.current;
+
+    act(() => {
+      useLeftPanelStore.getState().setActivePanelId("tab-a", "comments");
+    });
+
+    expect(hook.result.current).toBe(before);
+  });
+
+  it("appends the new panel id to stored groups that predate it", () => {
+    useLeftPanelStore.setState({ panelGroups: PRE_PULL_REQUESTS_PANEL_GROUPS });
+
+    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
+      ...PRE_PULL_REQUESTS_PANEL_GROUPS,
+      { panelIds: ["pull-requests"] },
+    ]);
+  });
+
   it("normalizes duplicate or missing panel ids in stored groups", () => {
     expect(
       moveLeftPanelGroup(
@@ -626,6 +690,7 @@ describe("useLeftPanelStore", () => {
       { panelIds: ["terminals"] },
       { panelIds: ["artifacts"] },
       { panelIds: ["git-diff"] },
+      { panelIds: ["pull-requests"] },
       { panelIds: ["file-tree"] },
       { panelIds: ["sharing"] },
     ]);
@@ -743,5 +808,95 @@ describe("useLeftPanelStore", () => {
         .getState()
         .getAcknowledgedRootCreatePending("epic-a", "artifacts"),
     ).toBeNull();
+  });
+
+  it("persists panel visibility overrides so they survive a reload", () => {
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual(
+      {},
+    );
+
+    useLeftPanelStore
+      .getState()
+      .setPanelVisibilityOverride("pull-requests", true);
+    useLeftPanelStore.getState().setPanelVisibilityOverride("sharing", false);
+
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual({
+      "pull-requests": true,
+      sharing: false,
+    });
+    expect(
+      readPersistedLeftPanelState().state.panelVisibilityOverrideById,
+    ).toEqual({ "pull-requests": true, sharing: false });
+  });
+
+  it("drops an override rather than storing the rule's own answer", () => {
+    // `null` is how the menu says "this matches the panel's own rule again",
+    // so the entry has to disappear - not flip to `false`.
+    useLeftPanelStore
+      .getState()
+      .setPanelVisibilityOverride("pull-requests", true);
+    useLeftPanelStore
+      .getState()
+      .setPanelVisibilityOverride("pull-requests", null);
+
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual(
+      {},
+    );
+    expect(
+      readPersistedLeftPanelState().state.panelVisibilityOverrideById,
+    ).toEqual({});
+  });
+
+  it("refuses to activate a panel the user explicitly hid", () => {
+    // `collab-tile-body` / `start-comment-draft` switch the sidebar to Comments
+    // on the user's behalf. If Comments is switched off, that must be a no-op
+    // rather than pointing the sidebar at a panel with no rail icon.
+    useLeftPanelStore.getState().setPanelVisibilityOverride("comments", false);
+    useLeftPanelStore.getState().setMainCollapsed("tab-a", true);
+
+    useLeftPanelStore.getState().setActivePanelIdAndExpand("tab-a", "comments");
+
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
+      "chats",
+    );
+    expect(useLeftPanelStore.getState().isMainCollapsed("tab-a")).toBe(true);
+  });
+
+  it("still activates a panel that is merely absent, not disabled", () => {
+    // Absence is not a user decision: the reveal path turns Comments on in the
+    // same turn, so the switch has to land.
+    useLeftPanelStore.getState().revealCommentsPanel("tab-a");
+    useLeftPanelStore.getState().setActivePanelIdAndExpand("tab-a", "comments");
+
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
+      "comments",
+    );
+  });
+
+  it("clears every override at once", () => {
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
+    useLeftPanelStore.getState().setPanelVisibilityOverride("comments", true);
+
+    useLeftPanelStore.getState().clearPanelVisibilityOverrides();
+
+    expect(useLeftPanelStore.getState().panelVisibilityOverrideById).toEqual(
+      {},
+    );
+  });
+
+  it("keeps slice identity when an override is set to its current value", () => {
+    const before = useLeftPanelStore.getState();
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", null);
+    expect(useLeftPanelStore.getState()).toBe(before);
+
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
+    const afterHide = useLeftPanelStore.getState();
+    useLeftPanelStore.getState().setPanelVisibilityOverride("chats", false);
+    expect(useLeftPanelStore.getState()).toBe(afterHide);
+
+    useLeftPanelStore.getState().clearPanelVisibilityOverrides();
+    const cleared = useLeftPanelStore.getState();
+    useLeftPanelStore.getState().clearPanelVisibilityOverrides();
+    expect(useLeftPanelStore.getState()).toBe(cleared);
   });
 });

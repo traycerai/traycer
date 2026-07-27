@@ -19,6 +19,7 @@ import {
 import type { Attachment, ImageAttachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface UserMessageAttachmentGalleryProps {
   readonly align: "start" | "end";
   readonly attachments: ReadonlyArray<Attachment>;
@@ -168,20 +169,26 @@ function ImageAttachmentThumb({
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <button
-          type="button"
-          aria-label={triggerAriaLabel}
-          title={label.title}
-          className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
+        <TooltipWrapper
+          label={label.title}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          <span
-            className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
-            data-user-message-image-badge={label.badgeLabel}
+          <button
+            type="button"
+            aria-label={triggerAriaLabel}
+            className="group relative size-12 overflow-hidden rounded-md border border-border/70 bg-muted/40 outline-none transition-colors hover:border-foreground/40 focus-visible:ring-2 focus-visible:ring-ring"
           >
-            {label.badgeLabel}
-          </span>
-          {thumbnail}
-        </button>
+            <span
+              className="pointer-events-none absolute left-0.5 top-0.5 z-10 flex h-4 min-w-4 items-center justify-center rounded-sm border border-border/70 bg-background/90 px-1 text-[0.625rem] font-semibold leading-none text-foreground shadow-sm"
+              data-user-message-image-badge={label.badgeLabel}
+            >
+              {label.badgeLabel}
+            </span>
+            {thumbnail}
+          </button>
+        </TooltipWrapper>
       </DialogTrigger>
       <DialogContent
         className="w-[min(95vw,80rem)] max-w-[min(95vw,80rem)] bg-popover/95 p-2 sm:max-w-[min(95vw,80rem)]"
