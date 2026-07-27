@@ -1029,6 +1029,18 @@ export function createOpenEpicStore(
           hasConnectedOnce,
         });
 
+        /**
+         * Returns the state patch that puts host dirtiness back to UNKNOWN for
+         * a new subscription cycle, and — as a side effect the return type
+         * cannot express — also clears the closure-local
+         * `hasFreshCloudSyncStatus`.
+         *
+         * Both halves have to move together. Cloud freshness lives outside the
+         * store because only the pill reads it, but a retained `true` from the
+         * previous cycle would let the pill claim `synced` off a stale cloud
+         * status the moment this cycle's snapshot arrives. Callers must apply
+         * the returned patch AND accept that reset; do not lift one out.
+         */
         const resetDurabilityProofForOpenCycle = (): Pick<
           OpenEpicState,
           | "artifactRoomDirtyByArtifactRoomId"
@@ -1903,11 +1915,13 @@ export function createOpenEpicStore(
           hasDirtySnapshotForOpenCycle: false,
           snapshotMeta: null,
           permissionRole: null,
-          connectionStatus: "connecting",
-          hostTransportStatus: "connecting",
-          cloudSyncStatus: "connected",
-          hasFreshCloudSyncStatus: false,
-          hasConnectedOnce: false,
+          // Through the helper like every other site, per the invariant above.
+          // Restating the five fields by hand agreed with the bootstrap locals
+          // only by coincidence, and this is the one place that could drift
+          // from them silently - the initial value of `cloudSyncStatus` in
+          // particular is load-bearing, since `deriveConnectionStatus` blends
+          // it into the `connectionStatus` that gates the chat handoff.
+          ...connectionStateSlice(),
           accessLost: false,
           epicDeleted: null,
           snapshotLoaded: false,

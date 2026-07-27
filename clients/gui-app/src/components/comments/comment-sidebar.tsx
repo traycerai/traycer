@@ -245,6 +245,12 @@ function UnavailableState() {
   return (
     <div
       data-slot="comment-sidebar-unavailable"
+      // A status, not an alert: the same quiet register as the visual
+      // treatment. `polite` announces the correction once the reader finishes
+      // its current utterance, rather than interrupting to report a failed
+      // background read.
+      role="status"
+      aria-live="polite"
       className="flex flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border/60 bg-muted/20 px-4 py-8 text-center"
     >
       <MessageSquareWarning className="size-6 text-muted-foreground" />

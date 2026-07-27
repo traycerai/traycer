@@ -123,8 +123,13 @@ function renderSidebar() {
   );
 }
 
+// Queried by role, which is also the assertion that the correction is
+// announced: it is the only `status` region the sidebar renders. The empty and
+// loading panels below stay on `data-slot` deliberately — neither is a live
+// region, and giving static content a `status` role to make it queryable would
+// announce "No open comments" as if something had just changed.
 function unavailablePanel(): Element | null {
-  return document.querySelector('[data-slot="comment-sidebar-unavailable"]');
+  return screen.queryByRole("status");
 }
 
 function emptyPanel(): Element | null {
@@ -206,7 +211,10 @@ describe("<CommentSidebar /> read failures", () => {
     expect(screen.queryByText(/No open comments/)).toBeNull();
     expect(screen.queryByText(/No comments on this artifact yet/)).toBeNull();
     expect(emptyPanel()).toBeNull();
-    expect(unavailablePanel()).not.toBeNull();
+    const panel = unavailablePanel();
+    expect(panel).not.toBeNull();
+    // Announced once the reader finishes, not by interrupting.
+    expect(panel?.getAttribute("aria-live")).toBe("polite");
   });
 
   it("still renders the empty state when the read SUCCEEDS with no threads", async () => {
