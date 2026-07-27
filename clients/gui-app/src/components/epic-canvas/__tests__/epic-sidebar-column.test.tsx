@@ -27,14 +27,6 @@ import {
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 
-// This suite exercises the column's layout/resize mechanics; the task-status
-// strip has its own host-backed data hooks and is stubbed out.
-vi.mock("@/components/epic-canvas/sidebar/task-status-strip", () => ({
-  TaskStatusStrip: (props: { epicId: string; tabId: string }) => (
-    <div data-testid="task-status-strip-stub" data-epic-id={props.epicId} />
-  ),
-}));
-
 vi.mock("@/components/epic-canvas/sidebar/epic-sidebar", () => ({
   EpicLeftPanelHost: (props: { epicId: string; tabId: string }) => (
     <div
