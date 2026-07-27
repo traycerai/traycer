@@ -212,7 +212,6 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
   useChatFilter: () => ({ origin: "all" }),
   useChatSort: () => ({ field: "updated", direction: "desc" }),
   useCommentsPanelRevealed: () => false,
-  usePanelVisibilityOverrides: () => ({}),
   useEpicLeftPanelStore: (selector: (state: unknown) => unknown) =>
     selector({
       clearAcknowledgedRootCreatePending: vi.fn(),
