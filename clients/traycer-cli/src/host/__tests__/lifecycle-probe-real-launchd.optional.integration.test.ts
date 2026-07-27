@@ -552,10 +552,7 @@ async function withScopedFallbackReadiness(
   const hostScript = join(bin, "fallback-ready-host.ts");
   const hostWrapper = join(bin, "fallback-ready-host.sh");
   const cliEntry = resolve(process.cwd(), "src/index.ts");
-  const bunPath =
-    process.env.BUN_INSTALL === undefined
-      ? process.execPath
-      : join(process.env.BUN_INSTALL, "bin", "bun");
+  const bunPath = resolveBunPath();
   const hostRoot = join(home, ".traycer", "host", "dev");
   const installRecordPath = join(hostRoot, "install", "install.json");
   const pidPath = join(hostRoot, "pid.json");
@@ -748,6 +745,47 @@ async function waitForSupervisorStart(
 const SUPERVISOR_START_BUDGET_MS = 60_000;
 const READINESS_BUDGET_MS = 60_000;
 
+/**
+ * The interpreter the scoped LaunchAgents must run, resolved to an absolute
+ * path because launchd gives a job only `/usr/bin:/bin:/usr/sbin:/sbin`.
+ *
+ * This used to fall back to `process.execPath`, which is wrong in the one
+ * environment that matters: these suites run under vitest, and **vitest runs
+ * on Node**, so `process.execPath` is the Node binary. The plists were
+ * therefore launching `node src/index.ts` - Node cannot execute TypeScript
+ * with workspace imports, so the supervisor died before its first line and
+ * the row timed out with an empty log. It passed on developer machines only
+ * because bun's installer exports `BUN_INSTALL`, so the fallback was never
+ * taken there. Green locally, red in CI, and unfalsifiable from the failure
+ * message.
+ *
+ * Now: fail loudly rather than silently launch the wrong interpreter. A
+ * fixture that cannot run the thing it claims to test must say so.
+ */
+function resolveBunPath(): string {
+  const candidates: string[] = [];
+  if (process.env.BUN_INSTALL !== undefined) {
+    candidates.push(join(process.env.BUN_INSTALL, "bin", "bun"));
+  }
+  if (process.execPath.endsWith("/bun")) {
+    candidates.push(process.execPath);
+  }
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (dir.length > 0) candidates.push(join(dir, "bun"));
+  }
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (found === undefined) {
+    throw new Error(
+      "these rows launch the CLI's TypeScript entrypoint under launchd and " +
+        "need a real bun binary, but none was found via BUN_INSTALL, " +
+        `process.execPath (${process.execPath}), or PATH. Install bun or set ` +
+        "BUN_INSTALL; do NOT fall back to the current interpreter - under " +
+        "vitest that is Node, which cannot run the entrypoint at all.",
+    );
+  }
+  return found;
+}
+
 async function describeJobState(target: string): Promise<string> {
   const printed = await runCommand("launchctl", ["print", target]).catch(
     (cause: unknown) => ({
@@ -881,10 +919,7 @@ async function withScopedSupervisorProbe(
   const hostScript = join(bin, "layer0-producer.ts");
   const hostWrapper = join(bin, "host-wrapper.sh");
   const cliEntry = resolve(process.cwd(), "src/index.ts");
-  const bunPath =
-    process.env.BUN_INSTALL === undefined
-      ? process.execPath
-      : join(process.env.BUN_INSTALL, "bin", "bun");
+  const bunPath = resolveBunPath();
   const layer0Module = layer0ModulePath();
   // This source checkout is a dev-slot CLI (`config.environment === "dev"`).
   // Keep every lifecycle byte inside the scoped dev data root rather than
