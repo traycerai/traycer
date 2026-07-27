@@ -91,13 +91,19 @@ export const SplitTabItem = memo(function SplitTabItem(
       aria-label="Split tab group"
       data-testid={`split-tab-group-${props.item.id}`}
       data-active={props.isActive ? "true" : "false"}
-      // Same frame as HeaderTabMotionFrame so a group sits on the strip's
-      // baseline and flexes like any other tab. Only the floor is raised, so
-      // that two halves still fit an icon plus a few characters each once the
-      // strip is crowded.
-      className="relative flex w-56 min-w-[168px] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
+      // HeaderTabMotionFrame's frame at double width: a group holds two titles,
+      // so it earns two tab footprints. Every value here is exactly 2x the
+      // single-tab frame, keeping a group's flex behaviour proportional to an
+      // ordinary tab's instead of a separate rule.
+      className="relative flex w-[28rem] min-w-[240px] max-w-[28rem] flex-[1_1_28rem] items-end [container-type:inline-size]"
     >
-      <div className="relative flex h-10 w-full min-w-0 items-center">
+      {/*
+        The shared silhouette's end caps flare over the outer ~20px, so the
+        halves are inset by a tab's own side padding. Without it the leading
+        half's label and focus wash ride on top of the cap curve and read as
+        overlapping chrome.
+      */}
+      <div className="relative flex h-10 w-full min-w-0 items-center px-[clamp(0.75rem,5%,1.5rem)]">
         {/*
           Only the active silhouette is shared. Hover feedback stays per-half
           (see SplitMemberChrome) because pointing at one side and lighting up
