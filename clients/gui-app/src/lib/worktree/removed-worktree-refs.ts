@@ -28,16 +28,28 @@ export interface RemovedWorktreeRefs {
 }
 
 /**
- * Two repo identities refer to the same repository. A `null` on either side
- * means the repo could not be identified (no parseable origin), so identity
- * cannot be used to RULE OUT a match - the name comparison then stands alone,
- * which is the conservative direction for a purge.
+ * Whether two repo identities may refer to the same repository.
+ *
+ * Both known: they must be equal. A removed `feat/x` in `acme/app` must never
+ * purge a live `feat/x` intent in `acme/other`.
+ *
+ * Both unknown: the branch name is all either side has, so it decides. This is
+ * the local-repo-with-no-parseable-origin case, and it is the one that must
+ * still purge - otherwise a swept worktree in such a repo keeps being offered
+ * as an "existing worktree" in new chats forever, which is the bug this purge
+ * exists to fix.
+ *
+ * One known, one unknown: NO match. An unidentifiable side cannot be shown to
+ * be the same repo as an identified one, and guessing costs a valid user
+ * selection. Erring toward under-purge here is right: the worst case is one
+ * stale remembered default, whereas guessing wrong destroys a good one.
  */
 function repoMatches(
   left: RemovedBranchRepo | null,
   right: RemovedBranchRepo | null,
 ): boolean {
-  if (left === null || right === null) return true;
+  if (left === null && right === null) return true;
+  if (left === null || right === null) return false;
   return left.owner === right.owner && left.repo === right.repo;
 }
 

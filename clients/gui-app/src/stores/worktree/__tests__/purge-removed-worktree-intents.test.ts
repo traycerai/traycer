@@ -91,8 +91,8 @@ describe("worktreeFolderIntentReferencesRemoved", () => {
         REMOVED,
       ),
     ).toBe(false);
-    // An unidentifiable repo on either side can't rule the match out, so the
-    // name comparison stands alone (the conservative direction for a purge).
+    // One side identified, the other not: NOT a match. Guessing here would
+    // destroy a valid selection in a repo we cannot show is the same one.
     expect(
       worktreeFolderIntentReferencesRemoved(
         {
@@ -101,7 +101,34 @@ describe("worktreeFolderIntentReferencesRemoved", () => {
         },
         REMOVED,
       ),
+    ).toBe(false);
+  });
+
+  // Both sides unidentifiable is the local-repo-with-no-origin case: the
+  // branch name is all either side has, and this is exactly the shape that
+  // must still purge - otherwise the swept worktree keeps being offered as an
+  // "existing worktree" in new chats, which is the bug the purge exists for.
+  it("purges on branch name alone when NEITHER side can identify its repo", () => {
+    const removedUnidentified: RemovedWorktreeRefs = {
+      worktreePaths: new Set(),
+      branches: [{ repoIdentifier: null, branch: "traycer/gone-branch" }],
+    };
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        {
+          ...otherRepoBranchIntent("traycer/gone-branch"),
+          repoIdentifier: null,
+        },
+        removedUnidentified,
+      ),
     ).toBe(true);
+    // ...but an identified intent is still safe from an unidentified removal.
+    expect(
+      worktreeFolderIntentReferencesRemoved(
+        existingBranchIntent("traycer/gone-branch"),
+        removedUnidentified,
+      ),
+    ).toBe(false);
   });
 
   it("keeps live branches, live imports, new-branch forks, and local intents", () => {
