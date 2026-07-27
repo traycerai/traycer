@@ -8,6 +8,8 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerRequestHostRespawn } from "@/hooks/runner/use-runner-request-host-respawn-mutation";
 import { useRunnerTraycerHostStatusQuery } from "@/hooks/runner/use-runner-traycer-host-status-query";
+import { BootstrapAttemptDetails } from "@/components/host/bootstrap-attempt-details";
+import { summariseBootstrapAttempts } from "@/components/host/bootstrap-attempt-summary";
 
 export type LocalHostLoadingStage = "loading" | "slow";
 
@@ -108,6 +110,14 @@ export function LocalHostLoadingContent(
   });
   const tail = status.data?.bootstrapLogTail ?? "";
   const progressView = buildProgressView(props.progress);
+  // Only on the slow stage: while a start is progressing normally there is no
+  // failed attempt to explain, and showing spawn diagnostics under a healthy
+  // spinner reads as an error. Recomputed per render rather than memoised -
+  // it is a scan of a short marker list behind a 30s-stale query.
+  const attemptSummary =
+    props.stage === "slow" && status.data !== undefined
+      ? summariseBootstrapAttempts(status.data.bootstrapMarkers)
+      : null;
 
   return (
     <>
@@ -162,6 +172,12 @@ export function LocalHostLoadingContent(
             </span>
           </Button>
         </div>
+      ) : null}
+      {attemptSummary !== null ? (
+        <BootstrapAttemptDetails
+          summary={attemptSummary}
+          bootstrapLogPath={status.data?.bootstrapLogPath ?? null}
+        />
       ) : null}
       {hasCli ? (
         <DetailsDisclosure

@@ -20,6 +20,28 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 const routerState = vi.hoisted(() => ({ pathname: "/" }));
 
+// `traycer host status` is a CLI subprocess read. Stubbing the query rather
+// than a 15-method ITraycerCli keeps the seam at the boundary the component
+// actually consumes. `data: undefined` reproduces a shell with no CLI, where
+// the query is disabled and the diagnostics correctly stay hidden.
+const hostStatus = vi.hoisted(() => ({
+  data: undefined as
+    | {
+        readonly bootstrapMarkers: ReadonlyArray<{
+          readonly timestamp: string;
+          readonly phase: string;
+          readonly fields: Readonly<Partial<Record<string, string>>>;
+        }>;
+        readonly bootstrapLogPath: string;
+        readonly bootstrapLogTail: string;
+      }
+    | undefined,
+}));
+
+vi.mock("@/hooks/runner/use-runner-traycer-host-status-query", () => ({
+  useRunnerTraycerHostStatusQuery: () => hostStatus,
+}));
+
 vi.mock("@tanstack/react-router", () => ({
   useRouterState: ({
     select,
@@ -100,8 +122,16 @@ function renderGate(
   );
 }
 
+const SLOW_PRESENTATION: DefaultHostReadinessPresentation = {
+  ...PRESENTATION,
+  localTarget: true,
+  localHostState: "unavailable",
+  stage: "slow",
+};
+
 beforeEach(() => {
   routerState.pathname = "/";
+  hostStatus.data = undefined;
   useAuthStore.setState({ status: "signed-in" });
 });
 
@@ -203,17 +233,50 @@ describe("<HostReadyGate />", () => {
     // had - so a full-screen block on a host that never came up rendered
     // "This tab's host is unavailable." with NO recovery at all, and copy that
     // called the whole app a tab.
-    renderGate(
-      { kind: "unavailable-host" },
-      {
-        ...PRESENTATION,
-        localTarget: true,
-        localHostState: "unavailable",
-        stage: "slow",
-      },
-    );
+    renderGate({ kind: "unavailable-host" }, SLOW_PRESENTATION);
     expect(screen.getByTestId("local-host-retry")).toBeTruthy();
     expect(screen.queryByText("This tab's host is unavailable.")).toBeNull();
+  });
+
+  it("shows what was tried and where the full log lives", () => {
+    // The bootstrap.log PATH is the one thing that lets a user take a stuck
+    // startup somewhere else. It lived on the old unavailable card and was
+    // orphaned with it. Rendered outside the "Show details" disclosure - a
+    // path you must expand a toggle to discover is a path most never find.
+    hostStatus.data = {
+      bootstrapMarkers: [
+        {
+          timestamp: "t0",
+          phase: "starting",
+          fields: { shell: "/bin/zsh", args: "-i -l -c traycer" },
+        },
+        { timestamp: "t1", phase: "crashed", fields: { code: "1" } },
+      ],
+      bootstrapLogPath: "/Users/me/.traycer/bootstrap.log",
+      bootstrapLogTail: "",
+    };
+    renderGate({ kind: "unavailable-host" }, SLOW_PRESENTATION);
+
+    expect(
+      screen.getByTestId("local-host-bootstrap-log-path").textContent,
+    ).toBe("/Users/me/.traycer/bootstrap.log");
+    const details = screen.getByTestId("local-host-bootstrap-details");
+    expect(details.textContent).toContain("/bin/zsh -i -l -c traycer");
+    expect(details.textContent).toContain("Host crashed with code 1.");
+  });
+
+  it("keeps spawn diagnostics off a healthy start", () => {
+    // Under a normally-progressing spinner there is no failed attempt to
+    // explain, and shell/exit-code detail there reads as an error.
+    hostStatus.data = {
+      bootstrapMarkers: [
+        { timestamp: "t0", phase: "starting", fields: { shell: "/bin/zsh" } },
+      ],
+      bootstrapLogPath: "/Users/me/.traycer/bootstrap.log",
+      bootstrapLogTail: "",
+    };
+    renderGate({ kind: "loading-host" }, PRESENTATION);
+    expect(screen.queryByTestId("local-host-bootstrap-details")).toBeNull();
   });
 
   it("spins the Retry it disables", () => {
