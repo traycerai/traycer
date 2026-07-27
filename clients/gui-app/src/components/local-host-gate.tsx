@@ -85,10 +85,11 @@ function hostSetupAnalyticsCallbacks(
  * during a wedged bootstrap is the user's escape hatch: edit the shell
  * args, restart the host, watch the bootstrap log refill.
  *
- * Consumed by `TraycerAppRouter` to compute the `bypass` prop fed to
- * every gate in the stack (LocalHostGate, MobileHostGate). A single
- * routing-aware computation drives all gates so they agree on whether
- * the current route is host-independent.
+ * Consumed by `DefaultHostReadyGate`, which is now the single gate: one
+ * routing-aware check decides whether the current route is host-independent.
+ * It is also why settings must stay ungated - the gate's own "Configure shell"
+ * action navigates here, so gating it would put the escape hatch behind the
+ * failure it exists to fix.
  */
 export const GATE_BYPASS_PATH_PREFIX = "/settings";
 
@@ -115,10 +116,8 @@ export interface LocalHostGateProps {
   readonly selectedEntry: HostDirectoryEntry | null;
   /**
    * When `true`, the gate always passes children through regardless of
-   * host state. The decision lives in the caller (TraycerAppRouter) so
-   * one routing-aware computation drives every gate in the stack -
-   * `LocalHostGate` and `MobileHostGate` need to agree, otherwise the
-   * inner gate blocks settings even after the outer gate bypassed.
+   * host state. The decision lives in the caller, so one routing-aware
+   * computation drives the gate rather than each layer re-deriving it.
    *
    * Used so users can edit shell config / env overrides while the host
    * is still starting or wedged.
@@ -134,7 +133,8 @@ export interface LocalHostGateProps {
  *     render regardless of host state.
  *   - Shells that do not expose a local-host stream
  *     (`runnerHost.hasLocalHost === false`, e.g. mobile/web) pass through
- *     so the shell-specific UX (`<MobileHostGate />`) can render instead.
+ *     so the shell-specific UX can render instead - now the readiness
+ *     controller's `mobile-no-host` kind.
  *   - Non-local explicit selections (future remote hosts) pass through
  *     without observing the stream.
  *   - For signed-in users on a local-host-capable shell, the gate also
@@ -159,6 +159,16 @@ export interface LocalHostGateProps {
  * contract requires the handler to fire synchronously on subscribe; on a
  * runner that never emits (a future custom host that breaks the contract),
  * the gate stays in `loading` rather than invent a snapshot.
+ *
+ * NOT RENDERED IN PRODUCTION. The split-tab work moved host gating to
+ * `HostReadinessControllerProvider` + `DefaultHostReadyGate`; editing this
+ * component changes nothing a user can see. It is retained ONLY because
+ * `local-host-gate.test.tsx` drives the still-live `useLocalHostGateState` /
+ * `HostProvisioningController` lifecycle through it - provisioning stages,
+ * slow-start promotion, the compatibility probe, force-update and busy-host
+ * paths. Deleting it would delete that coverage, on exactly the machinery
+ * that keeps a user out of a host-startup lockout. Port those tests onto
+ * `HostProvisioningController` + `fallbackContent` first, then remove this.
  */
 export function LocalHostGate(props: LocalHostGateProps) {
   const runnerHost = useRunnerHost();

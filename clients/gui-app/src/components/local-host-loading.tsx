@@ -35,6 +35,14 @@ const BOOTSTRAP_TAIL_POLL_MS = 1500;
  * Full-screen host-boot splash. Owns the outer app chrome (header + centered
  * card) and its own respawn mutation, then delegates everything inside the
  * card to `LocalHostLoadingContent`.
+ *
+ * NOT RENDERED IN PRODUCTION. `DefaultHostReadyGate` now supplies the
+ * full-screen chrome and drives the body through `fallbackContent`, which
+ * covers all eleven readiness kinds WITH their recovery actions - this wrapper
+ * only ever expressed three. It is retained because `local-host-loading.test.tsx`
+ * exercises the still-live `LocalHostLoadingContent` through it (identity badge,
+ * slow-start Retry, download progress, setup copy). Re-point those at
+ * `LocalHostLoadingContent` directly, then remove this.
  */
 export function LocalHostLoading(props: LocalHostLoadingProps): ReactNode {
   const respawn = useRunnerRequestHostRespawn();
