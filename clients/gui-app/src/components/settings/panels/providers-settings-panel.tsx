@@ -50,6 +50,7 @@ import {
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
+import { providerPackPreparingFromInstallState } from "@/components/providers/provider-pack-readiness";
 import { ProviderApiKeySection } from "./provider-api-key-section";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
@@ -615,10 +616,27 @@ function ProviderDetail({
   );
 }
 
+/**
+ * The login gate. A provider login SPAWNS that provider's CLI, so it needs the
+ * managed pack exactly as much as a chat turn does - and unlike a chat turn it
+ * has no composer in front of it to explain the wait.
+ *
+ * Folded into the existing capability gate rather than added as a parallel
+ * check, so there is one answer to "can this provider start an OAuth login"
+ * and the Sign in affordance cannot disagree with it.
+ */
 function providerCanStartProfileOauth(
   state: ProviderCliState,
   isSelectedHostLocal: boolean,
 ): boolean {
   const oauthArgs = state.loginCapability?.oauthArgs ?? null;
-  return isSelectedHostLocal && oauthArgs !== null && oauthArgs.length > 0;
+  const packPreparing = providerPackPreparingFromInstallState(
+    state.managedInstallState,
+  );
+  return (
+    isSelectedHostLocal &&
+    packPreparing === null &&
+    oauthArgs !== null &&
+    oauthArgs.length > 0
+  );
 }

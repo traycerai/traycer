@@ -49,10 +49,16 @@ import {
 import { HarnessModelPickerPanel } from "@/components/home/pickers/harness-model-picker-panel";
 import { useHarnessModelPickerState } from "@/components/home/pickers/harness-model-picker-state";
 import {
+  EMPTY_PREPARING_BY_HARNESS_ID,
   railHarnessDegraded,
   resolveActiveProfileForHarness,
   visibleRailEntries,
 } from "@/components/home/pickers/harness-rail-providers";
+import {
+  providerPackPreparingByHarnessId,
+  type ProviderPackPreparing,
+} from "@/components/providers/provider-pack-readiness";
+import { useProvidersEnsurePackForClient } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import {
   profileCommitId,
   profileDisplayLabel,
@@ -85,6 +91,7 @@ import type {
   ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
+  guiHarnessIdToProviderId,
   providerIdToGuiHarnessId,
   sortGuiHarnessesByProviderOrder,
 } from "@/lib/provider-ordering";
@@ -245,6 +252,40 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         ? EMPTY_DEGRADED_HARNESS_IDS
         : degradedHarnessIdsFromProviderStates(providersQuery.data.providers),
     [providersQuery.data],
+  );
+  // Managed-pack readiness, from the SAME `providers.list` response the rail
+  // already reads for degraded/profile state - no extra query, no extra poll.
+  const preparingByHarnessId = useMemo(
+    () =>
+      providersQuery.data === undefined
+        ? EMPTY_PREPARING_BY_HARNESS_ID
+        : providerPackPreparingByHarnessId(providersQuery.data.providers),
+    [providersQuery.data],
+  );
+  // Client-scoped on purpose: the rail renders the app-wide default host's
+  // providers, and this picker already resolves that client for every other
+  // query it runs. Going through `useHostClient()` instead would bind the
+  // retry to whatever host the surrounding tree happens to provide - a
+  // different host than the row the user clicked.
+  const ensurePack = useProvidersEnsurePackForClient(useDefaultHostClient());
+  const ensurePackMutate = ensurePack.mutate;
+  // A real user gesture on a failed provider tab. This is the ONLY caller, and
+  // it must stay that way: reaching the host through `providers.ensurePack` is
+  // what marks the retry user-initiated, which clears the pack's backoff and
+  // takes the one arm allowed to quarantine an unverifiable version dir.
+  // The rail speaks GUI harness ids (`claude`); the wire speaks provider ids
+  // (`claude-code`). Map explicitly rather than letting the two vocabularies
+  // meet. `guiHarnessIdToProviderId` is total over the harness catalog, so the
+  // null branch is unreachable for any id the rail can render - but it is a
+  // real return value, and inventing an id to satisfy the type would be worse
+  // than doing nothing.
+  const handleRetryPack = useCallback(
+    (harnessId: ProviderId) => {
+      const providerId = guiHarnessIdToProviderId(harnessId);
+      if (providerId === null) return;
+      ensurePackMutate({ providerId });
+    },
+    [ensurePackMutate],
   );
   const profilesByHarnessId = useMemo(
     () =>
@@ -441,17 +482,19 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const resolvedActiveProviderId = useMemo(
     () =>
       lockedHarnessId ??
-      resolveActiveProviderId(
-        catalogHarnesses,
+      resolveActiveProviderId({
+        harnesses: catalogHarnesses,
         activeProviderId,
-        selection.harnessId,
+        selectedProviderId: selection.harnessId,
         degradedHarnessIds,
-      ),
+        preparingByHarnessId,
+      }),
     [
       activeProviderId,
       catalogHarnesses,
       degradedHarnessIds,
       lockedHarnessId,
+      preparingByHarnessId,
       selection.harnessId,
     ],
   );
@@ -532,6 +575,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         harnesses: catalogHarnesses,
         fallbackHarnesses: harnesses,
         degradedHarnessIds,
+        preparingByHarnessId,
         profilesByHarnessId,
         activeProfileIdByHarnessId,
       }),
@@ -540,6 +584,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       catalogHarnesses,
       degradedHarnessIds,
       harnesses,
+      preparingByHarnessId,
       profilesByHarnessId,
     ],
   );
@@ -805,6 +850,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         activeProviderProfiles={activeProviderProfiles}
         lockedHarnessId={lockedHarnessId}
         degradedHarnessIds={degradedHarnessIds}
+        preparingByHarnessId={preparingByHarnessId}
+        onRetryPack={handleRetryPack}
         catalogHarnessesLoading={catalog.harnessesLoading}
         onEntryChange={handleRailEntryChange}
         onProfileChange={handleProfileChange}
@@ -982,14 +1029,27 @@ function profilesByHarnessIdFromProviderStates(
   );
 }
 
-function resolveActiveProviderId(
-  harnesses: ReadonlyArray<HarnessOption>,
-  activeProviderId: ProviderId,
-  selectedProviderId: ProviderId,
-  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
-): ProviderId {
+function resolveActiveProviderId(input: {
+  readonly harnesses: ReadonlyArray<HarnessOption>;
+  readonly activeProviderId: ProviderId;
+  readonly selectedProviderId: ProviderId;
+  readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
+  readonly preparingByHarnessId: ReadonlyMap<GuiHarnessId, ProviderPackPreparing>;
+}): ProviderId {
+  const {
+    harnesses,
+    activeProviderId,
+    selectedProviderId,
+    degradedHarnessIds,
+    preparingByHarnessId,
+  } = input;
+  // A provider whose pack is still being readied is visible but NOT
+  // selectable, so the picker must never auto-land on it - otherwise a first
+  // boot would open onto a provider the user cannot pick and whose model list
+  // is empty.
   const selectable = (harness: HarnessOption): boolean =>
-    harness.available || railHarnessDegraded(harness, degradedHarnessIds);
+    !preparingByHarnessId.has(harness.id) &&
+    (harness.available || railHarnessDegraded(harness, degradedHarnessIds));
   if (
     harnesses.some(
       (harness) => harness.id === activeProviderId && selectable(harness),

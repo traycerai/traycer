@@ -5,7 +5,7 @@ import {
 } from "@/components/ui/agent-spinning-dots";
 import { RefreshIconButton } from "@/components/refresh-icon-button";
 import { Settings } from "lucide-react";
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import type {
   HarnessOption,
   ProviderId,
@@ -23,6 +23,11 @@ import {
   type RailEntry,
 } from "@/components/home/pickers/harness-rail-providers";
 import { AccentDot } from "@/components/providers/accent-dot";
+import {
+  providerPackPreparingLabel,
+  providerPackPreparingShortLabel,
+  type ProviderPackPreparing,
+} from "@/components/providers/provider-pack-readiness";
 import { cn } from "@/lib/utils";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
@@ -40,8 +45,13 @@ interface ProviderRailProps {
   readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
   readonly lockedHarnessId: ProviderId | null;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
+  readonly preparingByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ProviderPackPreparing
+  >;
   readonly pending: boolean;
   readonly onEntryChange: (providerId: ProviderId) => void;
+  readonly onRetryPack: (providerId: ProviderId) => void;
   readonly onOpenProviderSettings: () => void;
   readonly onRefresh: () => Promise<void>;
 }
@@ -55,8 +65,10 @@ export function ProviderRail(props: ProviderRailProps) {
     activeProfileIdByHarnessId,
     lockedHarnessId,
     degradedHarnessIds,
+    preparingByHarnessId,
     pending,
     onEntryChange,
+    onRetryPack,
     onOpenProviderSettings,
     onRefresh,
   } = props;
@@ -64,6 +76,7 @@ export function ProviderRail(props: ProviderRailProps) {
     harnesses,
     fallbackHarnesses,
     degradedHarnessIds,
+    preparingByHarnessId,
     profilesByHarnessId,
     activeProfileIdByHarnessId,
   });
@@ -95,6 +108,7 @@ export function ProviderRail(props: ProviderRailProps) {
               entry.harness.availabilityPending
             }
             onEntryChange={onEntryChange}
+            onRetryPack={onRetryPack}
           />
         ))}
       </div>
@@ -122,27 +136,111 @@ interface ProviderRailButtonProps {
   readonly active: boolean;
   readonly disabled: boolean;
   readonly onEntryChange: (providerId: ProviderId) => void;
+  readonly onRetryPack: (providerId: ProviderId) => void;
 }
 
 // Hover/AT title for a rail tab: surfaces the probe-in-flight state, then the
-// fork-lock reason, else the plain label. A function (not a nested ternary) so
-// it stays lint-clean and the three states read top to bottom.
+// fork-lock reason, then the managed-pack preparing state, else the plain
+// label. A function (not a nested ternary) so it stays lint-clean and the
+// states read top to bottom.
 function railButtonTitle(entry: RailEntry, disabled: boolean): string {
   if (entry.harness.availabilityPending) {
     return `${entry.harness.label} — checking availability…`;
   }
   if (disabled) return LOCKED_PROVIDER_TOOLTIP;
+  if (entry.preparing !== null) {
+    const status = providerPackPreparingLabel(
+      entry.preparing,
+      entry.harness.label,
+    );
+    return entry.preparing.kind === "error"
+      ? `${status} Click to retry.`
+      : status;
+  }
   return entry.harness.label;
+}
+
+// Accessible name for a rail tab. Mirrors `railButtonTitle`'s precedence so a
+// screen reader and a hover tooltip never describe the tab differently.
+function railButtonAriaLabel(entry: RailEntry): string {
+  if (entry.harness.availabilityPending) {
+    return `${entry.harness.label} — loading…`;
+  }
+  if (entry.preparing !== null) {
+    return providerPackPreparingLabel(entry.preparing, entry.harness.label);
+  }
+  return entry.harness.label;
+}
+
+// At most one sr-only description applies. The pack-preparing reason outranks
+// "Setup required": a provider whose bytes have not arrived cannot meaningfully
+// be signed into yet, so leading with the auth prompt would be misdirection.
+function railButtonDescribedBy(
+  entry: RailEntry,
+  ids: {
+    readonly preparingDescriptionId: string;
+    readonly degradedDescriptionId: string;
+  },
+): string | undefined {
+  if (entry.harness.availabilityPending) return undefined;
+  if (entry.preparing !== null) return ids.preparingDescriptionId;
+  if (entry.degraded) return ids.degradedDescriptionId;
+  return undefined;
+}
+
+function railButtonClassName(state: {
+  readonly active: boolean;
+  readonly degraded: boolean;
+  readonly packGated: boolean;
+  readonly packRetryable: boolean;
+}): string {
+  return cn(
+    "relative flex size-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
+    state.active
+      ? "bg-primary/10 text-foreground shadow-sm ring-1 ring-primary/25 hover:bg-primary/15 hover:text-foreground"
+      : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+    state.degraded
+      ? "opacity-60 hover:opacity-80 data-[active=true]:opacity-75"
+      : "",
+    state.packGated ? "opacity-60" : "",
+    state.packRetryable ? "cursor-pointer" : "",
+    "aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground",
+  );
 }
 
 // One rail tab. Split out so each can call the leader hook (hooks can't run in
 // a `.map`). The ⌘-digit badge masks the icon's right edge while the leader is
 // held; switching is pure state (no focus move), so the search box keeps focus.
 function ProviderRailButton(props: ProviderRailButtonProps) {
-  const { entry, index, active, disabled, onEntryChange } = props;
+  const { entry, index, active, disabled, onEntryChange, onRetryPack } = props;
   const leaderModifier = usePickerProviderLeaderForIndex(index);
   const degradedDescriptionId = useId();
+  const preparingDescriptionId = useId();
   const harness = entry.harness;
+  const preparing = entry.preparing;
+  // The settled UX decision, mirroring the dictation mic: a provider whose
+  // managed pack is not ready is GATED and labelled, never selectable and
+  // never silently missing. The host resolver is still the authoritative
+  // backstop - this only stops the user starting a turn that would bounce.
+  const packGated = preparing !== null;
+  // ...with one exception that is a real affordance rather than a leak: a
+  // FAILED pack's tab is clickable, and the click means "retry", not "select".
+  // That keeps the retry a genuine user gesture (which is what earns the
+  // host's user-initiated arm - backoff cleared, queue jumped) without
+  // inventing new chrome inside a 32px tab.
+  const packRetryable = preparing?.kind === "error";
+  const selectable = !disabled && !packGated;
+  // A retryable (failed) tab keeps keyboard focus - the retry IS its action.
+  const focusable = selectable || packRetryable;
+  const handleClick = (): void => {
+    if (disabled) return;
+    // A failed pack's only action is retry; a downloading one has none.
+    if (packGated) {
+      if (packRetryable) onRetryPack(harness.id);
+      return;
+    }
+    onEntryChange(harness.id);
+  };
   return (
     <TooltipWrapper
       label={
@@ -158,35 +256,24 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         type="button"
         role="tab"
         aria-selected={active}
-        aria-disabled={disabled ? true : undefined}
-        aria-label={
-          harness.availabilityPending
-            ? `${harness.label} — loading…`
-            : harness.label
-        }
-        aria-describedby={
-          entry.degraded && !harness.availabilityPending
-            ? degradedDescriptionId
-            : undefined
-        }
+        aria-disabled={selectable ? undefined : true}
+        aria-label={railButtonAriaLabel(entry)}
+        aria-describedby={railButtonDescribedBy(entry, {
+          preparingDescriptionId,
+          degradedDescriptionId,
+        })}
         title={railButtonTitle(entry, disabled)}
-        tabIndex={disabled ? -1 : undefined}
+        tabIndex={focusable ? undefined : -1}
         data-active={active}
         data-degraded={entry.degraded ? true : undefined}
-        className={cn(
-          "relative flex size-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60",
-          active
-            ? "bg-primary/10 text-foreground shadow-sm ring-1 ring-primary/25 hover:bg-primary/15 hover:text-foreground"
-            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
-          entry.degraded
-            ? "opacity-60 hover:opacity-80 data-[active=true]:opacity-75"
-            : "",
-          "aria-disabled:cursor-not-allowed aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground",
-        )}
-        onClick={() => {
-          if (disabled) return;
-          onEntryChange(harness.id);
-        }}
+        data-pack-preparing={preparing === null ? undefined : preparing.kind}
+        className={railButtonClassName({
+          active,
+          degraded: entry.degraded,
+          packGated,
+          packRetryable,
+        })}
+        onClick={handleClick}
       >
         {harness.availabilityPending ? (
           <>
@@ -203,7 +290,11 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
           </>
         ) : (
           <>
-            <HarnessIcon harnessId={harness.id} />
+            <RailButtonIcon entry={entry} />
+            <PreparingDescription
+              id={preparingDescriptionId}
+              preparing={preparing}
+            />
             {entry.accentDot !== null ? (
               <AccentDot
                 profileId={entry.accentDot.profileId}
@@ -220,7 +311,7 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
               </span>
             ) : null}
             <PickerLeaderBadge
-              show={leaderModifier !== null && !disabled}
+              show={leaderModifier !== null && selectable}
               index={index}
               // Degraded providers stay browse-only (the leader digit browses,
               // it does not commit), so the hint must not over-promise "switch".
@@ -233,5 +324,91 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
         )}
       </button>
     </TooltipWrapper>
+  );
+}
+
+function PreparingDescription(props: {
+  readonly id: string;
+  readonly preparing: ProviderPackPreparing | null;
+}): ReactNode {
+  if (props.preparing === null) return null;
+  return (
+    <span id={props.id} className="sr-only">
+      {providerPackPreparingShortLabel(props.preparing)}
+    </span>
+  );
+}
+
+// The tab's glyph: the plain harness icon, or the same icon inside a progress
+// ring while its pack is being readied.
+function RailButtonIcon(props: { readonly entry: RailEntry }): ReactNode {
+  const { harness, preparing } = props.entry;
+  if (preparing === null) return <HarnessIcon harnessId={harness.id} />;
+  return (
+    <PackProgressRing
+      percent={preparing.percent}
+      failed={preparing.kind === "error"}
+    >
+      <HarnessIcon harnessId={harness.id} />
+    </PackProgressRing>
+  );
+}
+
+/**
+ * The harness icon wrapped in a circular progress ring - the dictation mic's
+ * `MicProgressRing`, applied to a provider tab so the two "still being readied"
+ * surfaces read as one system.
+ *
+ * Determinate (the ring fills) when a percent is known; indeterminate (a
+ * spinning arc) when it is not, which is the honest rendering for a queued
+ * pack or one whose download a live sibling host owns. A failed pack gets a
+ * static destructive-toned ring rather than a spinner - a stuck install must
+ * never animate like a progressing one.
+ */
+function PackProgressRing(props: {
+  readonly percent: number | null;
+  readonly failed: boolean;
+  readonly children: ReactNode;
+}) {
+  const radius = 8.5;
+  const circumference = 2 * Math.PI * radius;
+  const determinate = props.percent !== null;
+  const clamped = determinate ? Math.min(1, Math.max(0, props.percent / 100)) : 0;
+  return (
+    <span className="relative inline-flex size-5 items-center justify-center">
+      <svg
+        viewBox="0 0 20 20"
+        className={cn(
+          "absolute inset-0 size-full -rotate-90",
+          !determinate && !props.failed && "animate-spin",
+          props.failed && "text-destructive",
+        )}
+        aria-hidden
+      >
+        <circle
+          cx="10"
+          cy="10"
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeOpacity={0.25}
+          strokeWidth="2"
+        />
+        <circle
+          cx="10"
+          cy="10"
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray={
+            determinate ? circumference : circumference * (props.failed ? 1 : 0.3)
+          }
+          strokeDashoffset={determinate ? circumference * (1 - clamped) : 0}
+        />
+      </svg>
+      <span className="scale-75">{props.children}</span>
+    </span>
   );
 }

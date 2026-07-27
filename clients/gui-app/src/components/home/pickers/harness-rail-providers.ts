@@ -7,6 +7,13 @@ import {
   profileCommitId,
   type ProfileAccentDotInput,
 } from "@/components/providers/provider-profile-model";
+import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
+
+/** Shared empty map so callers that have no provider data don't allocate one. */
+export const EMPTY_PREPARING_BY_HARNESS_ID: ReadonlyMap<
+  GuiHarnessId,
+  ProviderPackPreparing
+> = new Map();
 
 /**
  * One rail entry: a provider-level tab. The rail always renders exactly one
@@ -25,6 +32,10 @@ export interface RailEntry {
    *  selectable profiles (progressive disclosure - see the multi-profile
    *  decision log's "V1 surfaces" row). `null` renders no dot at all. */
   readonly accentDot: ProfileAccentDotInput | null;
+  /** Non-null while this provider's managed pack is downloading or stuck on an
+   *  error. The entry stays VISIBLE and labelled but is not selectable - the
+   *  dictation-mic treatment, not a hidden row. */
+  readonly preparing: ProviderPackPreparing | null;
 }
 
 /** Stable identity for a rail entry - React key + ⌘-digit / active-entry match. */
@@ -70,16 +81,18 @@ function resolveAccentDot(
   return profileAccentDotInput(dotProfile);
 }
 
-function buildRailEntry(
-  harness: HarnessOption,
-  profiles: ReadonlyArray<ProviderProfile>,
-  degradedHarnessIds: ReadonlySet<GuiHarnessId>,
-  activeProfileId: string | null,
-): RailEntry {
+function buildRailEntry(input: {
+  readonly harness: HarnessOption;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
+  readonly activeProfileId: string | null;
+  readonly preparing: ProviderPackPreparing | null;
+}): RailEntry {
   return {
-    harness,
-    degraded: railHarnessDegraded(harness, degradedHarnessIds),
-    accentDot: resolveAccentDot(profiles, activeProfileId),
+    harness: input.harness,
+    degraded: railHarnessDegraded(input.harness, input.degradedHarnessIds),
+    accentDot: resolveAccentDot(input.profiles, input.activeProfileId),
+    preparing: input.preparing,
   };
 }
 
@@ -87,6 +100,10 @@ export interface VisibleRailEntriesInput {
   readonly harnesses: ReadonlyArray<HarnessOption>;
   readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
+  readonly preparingByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ProviderPackPreparing
+  >;
   readonly profilesByHarnessId: ReadonlyMap<
     GuiHarnessId,
     ReadonlyArray<ProviderProfile>
@@ -115,6 +132,7 @@ export function visibleRailEntries(
     harnesses,
     fallbackHarnesses,
     degradedHarnessIds,
+    preparingByHarnessId,
     profilesByHarnessId,
     activeProfileIdByHarnessId,
   } = input;
@@ -122,13 +140,15 @@ export function visibleRailEntries(
     harnesses,
     fallbackHarnesses,
     degradedHarnessIds,
+    preparingByHarnessId,
   ).map((harness) =>
-    buildRailEntry(
+    buildRailEntry({
       harness,
-      profilesByHarnessId.get(harness.id) ?? [],
+      profiles: profilesByHarnessId.get(harness.id) ?? [],
       degradedHarnessIds,
-      activeProfileIdByHarnessId.get(harness.id) ?? null,
-    ),
+      activeProfileId: activeProfileIdByHarnessId.get(harness.id) ?? null,
+      preparing: preparingByHarnessId.get(harness.id) ?? null,
+    }),
   );
 }
 
@@ -139,20 +159,32 @@ export function visibleRailEntries(
  * ready providers, and show the model-list CTA when selected. Shared by
  * `ProviderRail` and the picker's ⌘-digit shortcut so the digits line up with
  * the badges on the SAME ordered list.
+ *
+ * A provider whose managed pack is still downloading also stays visible, and
+ * that is load-bearing rather than cosmetic: on a first boot the host converges
+ * every enabled provider (~1.6 GB), so `downloading` is the COMMON early state.
+ * Hiding those rows would empty the picker on first run and then repopulate it
+ * silently - the user would have no way to tell "not supported" from "arriving
+ * in 30 seconds". They render gated and labelled instead, sorted below the
+ * ready providers alongside the degraded ones.
  */
 export function visibleRailHarnesses(
   harnesses: ReadonlyArray<HarnessOption>,
   fallbackHarnesses: ReadonlyArray<HarnessOption>,
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
+  preparingByHarnessId: ReadonlyMap<GuiHarnessId, ProviderPackPreparing>,
 ): ReadonlyArray<HarnessOption> {
   const source = harnesses.length > 0 ? harnesses : fallbackHarnesses;
   const visible = source.filter((harness) =>
-    railHarnessVisible(harness, degradedHarnessIds),
+    railHarnessVisible(harness, degradedHarnessIds, preparingByHarnessId),
   );
+  const deprioritized = (harness: HarnessOption): number =>
+    Number(
+      railHarnessDegraded(harness, degradedHarnessIds) ||
+        preparingByHarnessId.has(harness.id),
+    );
   return sortGuiHarnessesByProviderOrder(visible).toSorted(
-    (left, right) =>
-      Number(railHarnessDegraded(left, degradedHarnessIds)) -
-      Number(railHarnessDegraded(right, degradedHarnessIds)),
+    (left, right) => deprioritized(left) - deprioritized(right),
   );
 }
 
@@ -169,10 +201,12 @@ export function railHarnessDegraded(
 function railHarnessVisible(
   harness: HarnessOption,
   degradedHarnessIds: ReadonlySet<GuiHarnessId>,
+  preparingByHarnessId: ReadonlyMap<GuiHarnessId, ProviderPackPreparing>,
 ): boolean {
   return (
     harness.available ||
     harness.availabilityPending ||
+    preparingByHarnessId.has(harness.id) ||
     railHarnessDegraded(harness, degradedHarnessIds)
   );
 }

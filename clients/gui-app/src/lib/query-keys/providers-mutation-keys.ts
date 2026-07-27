@@ -13,6 +13,7 @@ export const providersMutationKeys = {
   cancelLogin: () => ["providers.cancelLogin"] as const,
   submitLoginCode: () => ["providers.submitLoginCode"] as const,
   touchLogin: () => ["providers.touchLogin"] as const,
+  ensurePack: () => ["providers.ensurePack"] as const,
   renameProfile: () => ["providers.renameProfile"] as const,
   recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,

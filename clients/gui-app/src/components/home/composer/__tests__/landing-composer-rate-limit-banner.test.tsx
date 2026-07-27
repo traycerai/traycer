@@ -62,6 +62,18 @@ const testState = vi.hoisted<{
   },
 }));
 
+vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
+  // Host-backed readiness hook, stubbed to its fail-open answer - the same
+  // treatment this suite already gives every other host-dependent hook. It
+  // renders `LandingComposer`, which now consults the managed-pack gate.
+  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
+  useProviderPackGateForClient: () => ({
+    blocked: false,
+    hint: null,
+    preparing: null,
+  }),
+}));
+
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
   return {

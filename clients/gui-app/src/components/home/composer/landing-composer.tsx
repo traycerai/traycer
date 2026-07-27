@@ -55,6 +55,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreate } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -418,9 +419,17 @@ export function LandingComposer(props: LandingComposerProps) {
     }
   }, [startPendingImageIngest]);
   const attachmentPending = isAttachmentIngestPending(paste);
+  // Send-time gate for the selected provider's managed binary pack. Folded
+  // into `canSubmit` rather than checked separately at submit, so the button
+  // and its hint can never disagree - the user is told why BEFORE pressing,
+  // which is the whole point of gating the affordance instead of accepting the
+  // turn and failing it. Fails open while `providers.list` is loading; the
+  // host resolver is the authoritative backstop either way.
+  const packGate = useProviderPackGate(harnessId);
   const canSubmit =
     !isSubmitting &&
     !attachmentPending &&
+    !packGate.blocked &&
     workspaceCanStart &&
     hasSubmittableContent;
 
@@ -509,7 +518,9 @@ export function LandingComposer(props: LandingComposerProps) {
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
       attachmentPending={attachmentPending}
-      workspaceDisabledHint={workspaceAvailability.disabledHint}
+      workspaceDisabledHint={
+        packGate.hint ?? workspaceAvailability.disabledHint
+      }
       header={<div className="flex justify-end">{switcher}</div>}
       topBanner={
         rateLimitPrompt.kind === "visible" ? (

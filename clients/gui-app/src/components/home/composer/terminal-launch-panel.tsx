@@ -13,6 +13,13 @@ import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-co
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { TUI_HARNESS_ID_TO_PROVIDER_ID } from "@traycer/protocol/host/provider-schemas";
 import { isTuiHarnessId } from "@/components/home/data/landing-options";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerPackPreparingFromInstallState,
+  providerPackPreparingLabel,
+} from "@/components/providers/provider-pack-readiness";
+import { providerDisplayName } from "@/lib/provider-ordering";
 
 interface TerminalLaunchPanelProps {
   /** Toolbar store shared with the chat composer, so a model/mode picked here
@@ -97,14 +104,26 @@ function TerminalLaunchPanelImpl(props: TerminalLaunchPanelProps) {
   const argsDraft = needsReseed ? savedArgs : argsState.draft;
   const argsTouched = needsReseed ? false : argsState.touched;
 
+  // Managed-pack gate. Derived from the `providers.list` response this panel
+  // already holds, so gating costs no extra query. A terminal agent bypasses
+  // the chat composer entirely, which is exactly why it needs its own gate:
+  // the host resolver would refuse the launch, but the user would only find
+  // out after pressing Start.
+  const packPreparingHint = terminalPackPreparingHint(
+    harnessId,
+    providersQuery.data?.providers,
+  );
+
   // The harness/model picker lists every GUI harness, including ones that can't
   // back a terminal agent. Block Start (rather than silently no-op) unless the
-  // shared selection is runtime-TUI-capable.
+  // shared selection is runtime-TUI-capable, and likewise while its managed
+  // pack is still being readied.
   const launchHint =
     disabledHint ??
     (selectionIsTuiCapable
       ? null
-      : "Select a terminal-capable coding agent to start.");
+      : "Select a terminal-capable coding agent to start.") ??
+    packPreparingHint;
   const startDisabled = pending || launchHint !== null;
 
   const start = useCallback((): void => {
@@ -231,4 +250,28 @@ function StartButton(props: StartButtonProps) {
       <span className="inline-flex">{button}</span>
     </TooltipWrapper>
   );
+}
+
+/**
+ * Managed-pack hint for the selected terminal harness, or null when it is
+ * ready (or is not a terminal harness at all - `selectionIsTuiCapable` owns
+ * that case and reports it more precisely).
+ *
+ * A terminal agent launch bypasses the chat composer entirely, so it needs its
+ * own gate rather than inheriting one: the host resolver would refuse the
+ * launch either way, but without this the user only finds out after pressing
+ * Start.
+ */
+function terminalPackPreparingHint(
+  harnessId: GuiHarnessId,
+  providers: ReadonlyArray<ProviderCliState> | undefined,
+): string | null {
+  if (!isTuiHarnessId(harnessId) || providers === undefined) return null;
+  const providerId = TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
+  const preparing = providerPackPreparingFromInstallState(
+    providers.find((provider) => provider.providerId === providerId)
+      ?.managedInstallState,
+  );
+  if (preparing === null) return null;
+  return providerPackPreparingLabel(preparing, providerDisplayName(providerId));
 }

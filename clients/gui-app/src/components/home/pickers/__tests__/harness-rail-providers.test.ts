@@ -7,8 +7,10 @@ import {
   visibleRailEntries,
 } from "@/components/home/pickers/harness-rail-providers";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
+import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 
 const NO_ACTIVE_PROFILE_OVERRIDES = new Map<GuiHarnessId, string | null>();
+const NO_PREPARING = new Map<GuiHarnessId, ProviderPackPreparing>();
 
 function harness(id: "claude" | "codex"): HarnessOption {
   return {
@@ -56,6 +58,7 @@ describe("visibleRailEntries", () => {
       harnesses: [harness("claude")],
       fallbackHarnesses: [],
       degradedHarnessIds: new Set(),
+      preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map([
         [
           "claude",
@@ -79,6 +82,7 @@ describe("visibleRailEntries", () => {
       harnesses: [harness("codex")],
       fallbackHarnesses: [],
       degradedHarnessIds: new Set(),
+      preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map([
         ["codex", [profile("ambient", "ambient", "Codex Terminal account")]],
       ]),
@@ -90,6 +94,7 @@ describe("visibleRailEntries", () => {
         harness: harness("codex"),
         degraded: false,
         accentDot: null,
+        preparing: null,
       },
     ]);
   });
@@ -99,6 +104,7 @@ describe("visibleRailEntries", () => {
       harnesses: [harness("claude")],
       fallbackHarnesses: [],
       degradedHarnessIds: new Set(),
+      preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map([
         [
           "claude",
@@ -125,6 +131,7 @@ describe("visibleRailEntries", () => {
       harnesses: [harness("claude")],
       fallbackHarnesses: [],
       degradedHarnessIds: new Set(),
+      preparingByHarnessId: NO_PREPARING,
       profilesByHarnessId: new Map([
         [
           "claude",
@@ -142,6 +149,88 @@ describe("visibleRailEntries", () => {
       accentColor: null,
       label: "Claude Terminal account",
     });
+  });
+});
+
+describe("visibleRailEntries: managed-pack readiness", () => {
+  function unavailable(id: "claude" | "codex"): HarnessOption {
+    return { ...harness(id), available: false };
+  }
+  const downloading: ProviderPackPreparing = {
+    kind: "downloading",
+    percent: 42,
+    retryAtMs: null,
+    reason: null,
+  };
+
+  // The load-bearing one. On a first boot the host converges EVERY enabled
+  // provider (~1.6 GB), so a provider that is downloading is also
+  // `available: false` - it has no binary yet. Under the pre-R11 visibility
+  // rule that combination is invisible, which would empty the picker on first
+  // run and then silently repopulate it. The user must see the row and be told
+  // why it is not pickable.
+  it("keeps a downloading provider VISIBLE even though it has no binary yet", () => {
+    const entries = visibleRailEntries({
+      harnesses: [unavailable("claude")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set(),
+      preparingByHarnessId: new Map([["claude", downloading]]),
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].harness.id).toBe("claude");
+    expect(entries[0].preparing).toEqual(downloading);
+  });
+
+  it("carries a null percent through untouched - the live-sibling observer state", () => {
+    const entries = visibleRailEntries({
+      harnesses: [unavailable("claude")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set(),
+      preparingByHarnessId: new Map([
+        [
+          "claude",
+          { kind: "downloading", percent: null, retryAtMs: null, reason: null },
+        ],
+      ]),
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    // Must stay null, never coerced to 0 - a 0% bar and an unknown-progress
+    // spinner say different things, and only one of them is true.
+    expect(entries[0].preparing?.percent).toBeNull();
+  });
+
+  it("sorts a preparing provider below the ready ones", () => {
+    const entries = visibleRailEntries({
+      harnesses: [unavailable("claude"), harness("codex")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set(),
+      preparingByHarnessId: new Map([["claude", downloading]]),
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    expect(entries.map((entry) => entry.harness.id)).toEqual([
+      "codex",
+      "claude",
+    ]);
+  });
+
+  it("leaves a ready provider's entry with preparing: null", () => {
+    const entries = visibleRailEntries({
+      harnesses: [harness("codex")],
+      fallbackHarnesses: [],
+      degradedHarnessIds: new Set(),
+      preparingByHarnessId: new Map([["claude", downloading]]),
+      profilesByHarnessId: new Map(),
+      activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
+    });
+
+    expect(entries[0].preparing).toBeNull();
   });
 });
 
