@@ -49,6 +49,11 @@ jobs:
   macos:
     name: CLI real-launchd rows (macOS)
     runs-on: macos-latest
+    # These rows drive real launchd and wait on readiness. Without a bound, a
+    # wedged `launchctl` sits until the 6-hour default on a 10x-billed macOS
+    # runner, and `cancel-in-progress` means it holds the concurrency group
+    # against every later push while it does.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

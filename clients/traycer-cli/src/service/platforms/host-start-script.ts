@@ -1,4 +1,4 @@
-import { HOST_CAPABILITY_SERVICE_LABEL } from "../../host/capabilities";
+import { COMPATIBLE_HOST_START_SCRIPT_PREFIX as SHARED_COMPATIBLE_HOST_START_SCRIPT_PREFIX } from "@traycer-clients/shared/host-lifecycle";
 
 /**
  * The `/bin/sh -c` program shared by the macOS LaunchAgent plist and the
@@ -17,8 +17,16 @@ import { HOST_CAPABILITY_SERVICE_LABEL } from "../../host/capabilities";
  * Everything up to (and including) the capability token, i.e. the part of the
  * script that is invariant across labels. `readRegisteredCliInvocation` uses
  * it to recognise a plist this module wrote.
+ *
+ * Re-exported, not redefined. The emitter and the shared substrate's
+ * `attestTraycerRegistration` must agree on this string byte-for-byte, and a
+ * local copy is exactly how they came apart before: this file moved to
+ * `host capabilities --has service-label` while `host-lifecycle/identity.ts`
+ * kept matching the old `host start --help | grep` form, so attestation
+ * stopped recognising the plists this file writes. One definition, one place.
  */
-export const COMPATIBLE_HOST_START_SCRIPT_PREFIX = `"$0" "$@" host capabilities --has ${HOST_CAPABILITY_SERVICE_LABEL}`;
+export const COMPATIBLE_HOST_START_SCRIPT_PREFIX =
+  SHARED_COMPATIBLE_HOST_START_SCRIPT_PREFIX;
 
 /**
  * Service definitions update independently of the CLI binary they point at,

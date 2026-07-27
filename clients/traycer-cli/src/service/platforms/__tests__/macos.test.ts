@@ -1608,7 +1608,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "bootout",
         "print",
       ]);
-      expect(calls[2]?.args).toEqual(["bootout", agentTarget]);
+      expect(calls[2]?.args).toEqual(["bootout", "--wait", agentTarget]);
       // The takeover is an ownership change; the audit line is the only
       // record of it a support thread can recover.
       expect(MOCKS.cliLoggerInfo).toHaveBeenCalledWith(
@@ -1814,6 +1814,45 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "print",
       ]);
     });
+
+    /**
+     * The barrier, pinned in the states that need it.
+     *
+     * `--wait` is the difference between "launchd accepted the request" and
+     * "the process is gone". Takeover reaches the bootout with the old host
+     * still running in exactly these three outcomes - only `stopped` waited
+     * for exit - and the evicted host publishes `pid.json` until the very end
+     * of teardown. `service install` then starts the CLI-label host, whose
+     * first act is `findLiveIncumbentHost`: a bare bootout lets it read the
+     * corpse as a live incumbent, decline, and exit 0, and
+     * `KeepAlive{SuccessfulExit: false}` leaves it DOWN until the next login.
+     *
+     * Asserted per outcome rather than once, because the bug is not "the flag
+     * is missing" but "the flag is missing on the path where the host is
+     * still alive" - a single row over `stopped` would pass while every
+     * dangerous arm regressed.
+     */
+    it.each([
+      ["unreachable", { kind: "unreachable", cause: "dial failed" }],
+      ["hung", { kind: "hung", pid: 4242 }],
+      ["no-metadata", { kind: "no-metadata" }],
+    ] as const)(
+      "waits for the evicted host to exit before install can race it (%s)",
+      async (_name, outcome) => {
+        const { calls, controller } = stageTakeoverRunner({
+          cliLabelOwned: false,
+          agentLoadedAfterBootout: false,
+        });
+        MOCKS.requestCooperativeShutdown.mockResolvedValue(outcome);
+
+        await expect(
+          controller.takeoverDesktopRegistration(label),
+        ).resolves.toMatchObject({ kind: "took-over" });
+
+        const bootout = calls.find((c) => c.args[0] === "bootout");
+        expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
+      },
+    );
   });
 
   it("stop/start/restart proceed normally when the agent probe reads not-loaded (CLI-managed machine)", async () => {

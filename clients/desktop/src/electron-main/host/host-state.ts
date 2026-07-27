@@ -200,6 +200,31 @@ export async function readRunningRuntimeVersion(
   layout: HostFsLayout,
   reachabilityProbe: HostEndpointReachabilityProbe,
 ): Promise<string | null> {
+  return (
+    (await readReachableHostIdentity(layout, reachabilityProbe))?.version ??
+    null
+  );
+}
+
+/**
+ * The reachable host's `{ pid, version }`, or `null` when none is reachable.
+ *
+ * Same two checks as {@link readRunningRuntimeVersion} — this is its
+ * implementation — but it keeps the pid, which callers need whenever "a host
+ * is reachable" is not a strong enough question. After a bootout-and-register
+ * cycle, for instance, a reachable host might be the OUTGOING one that
+ * outlived its eviction, and treating that as proof the cycle worked would
+ * report an activation that never happened. The pid is what distinguishes
+ * them.
+ *
+ * Distinct from {@link readRunningHostIdentity}, which is a STRUCTURAL read of
+ * `pid.json` for `host stamp-runtime`'s CAS and deliberately proves no
+ * liveness at all. This one answers "is a host serving right now".
+ */
+export async function readReachableHostIdentity(
+  layout: HostFsLayout,
+  reachabilityProbe: HostEndpointReachabilityProbe,
+): Promise<{ readonly pid: number; readonly version: string | null } | null> {
   const state = await readPidMetadataState(layout.pidMetadataFile);
   if (state.kind !== "parsed") return null;
   const { snapshot, startIdentity } = state;
@@ -209,7 +234,7 @@ export async function readRunningRuntimeVersion(
     startIdentity,
     reachabilityProbe,
   ))
-    ? snapshot.version
+    ? { pid: snapshot.pid, version: snapshot.version }
     : null;
 }
 

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
 import {
   access,
@@ -636,11 +636,25 @@ export async function installBundledCli(opts: {
   } else {
     // Atomic replace: rename() over the slot also swallows a legacy
     // symlink from the pre-copy era in one step.
-    const staging = `${stablePath}.staging`;
-    await rm(staging, { force: true });
-    await copyFile(opts.bundledCliPath, staging);
-    await chmod(staging, 0o755);
-    await rename(staging, stablePath);
+    //
+    // The staging name is per-invocation. A single fixed `.staging` path is
+    // shared mutable state between concurrent installers - an updater or a
+    // relaunch racing the running app resolves to the SAME stable slot - and
+    // interleaving there defeats the whole point of staging: B's copy can be
+    // mid-write when A chmods and renames, so A publishes a truncated binary
+    // onto the stable path. rename() is only atomic with respect to a source
+    // nobody else is writing.
+    const staging = `${stablePath}.staging.${process.pid}.${randomUUID()}`;
+    try {
+      await copyFile(opts.bundledCliPath, staging);
+      await chmod(staging, 0o755);
+      await rename(staging, stablePath);
+    } catch (error) {
+      // A unique name means nothing else can adopt this leftover, so it has
+      // to be swept here or it accumulates beside the slot.
+      await rm(staging, { force: true });
+      throw error;
+    }
   }
   const manifest: CliInstallManifest = {
     version: opts.version,

@@ -5518,6 +5518,57 @@ describe("packaged-mac activation: bounded auto-retry on readiness timeout", () 
     expect(waitForHostReady).toHaveBeenCalledTimes(2);
   });
 
+  /*
+   * The deadline is not proof of failure. A host that binds its endpoint just
+   * after `HOST_READY_TIMEOUT_MS` expires is up and serving, and the retry
+   * leads with `registerHostLoginItem`'s bootout - so retrying regardless
+   * KILLS the recovery this code was waiting for and holds the caller's
+   * mutation lane for another full timeout before anything surfaces.
+   *
+   * The evidence has to be a DIFFERENT process, though: this cycle just
+   * booted a host out, and one that outlived its own eviction is reachable
+   * too. Accepting that would report an activation that never happened, which
+   * is worse than the wasted cycle because it is silent. Both rows below
+   * exist because a guard that only checked reachability would pass the first
+   * and fail the second.
+   */
+  it("accepts a host that came up late instead of cycling it again", async () => {
+    const controller = stagePackagedMacWorld();
+    // The host binds just AFTER the deadline: the wait reports not-ready, and
+    // by the time the retry decision is taken pid.json names a new process.
+    // Written as a side effect of the wait because the ordering is the whole
+    // point - staging the new pid up front would make it the cycle's `prePid`
+    // and the guard would (correctly) reject it.
+    //
+    // `process.ppid` is a different, genuinely live pid;
+    // `isPublishedHostEndpointReachable` probes real liveness, so a synthetic
+    // number would read as dead and the row would prove nothing.
+    vi.mocked(waitForHostReady).mockImplementation(async () => {
+      writePidMetadata("production", { version: "1.7.0", pid: process.ppid });
+      return NOT_READY;
+    });
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("ok");
+    // The point of the guard: no second bootout, no second wait.
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT accept the outgoing host as proof the cycle succeeded", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
+    // pid.json still names the pid that was serving BEFORE the cycle - the
+    // host being evicted, still answering because teardown has not finished.
+    // Reachable, and worth nothing as evidence.
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    expect(waitForHostReady).toHaveBeenCalledTimes(2);
+  });
+
   it("never auto-retries when the login item requires approval - only the user can act there", async () => {
     const controller = stagePackagedMacWorld();
     vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);

@@ -605,6 +605,20 @@ export async function runHostStart(
           deps,
           environment: opts.environment,
         });
+  // `persistChildExit` awaits this inside a try/catch, but ONLY on the `exit`
+  // path. If the child fails asynchronously (`child.once("error", …)`, e.g.
+  // ENOENT) or simply never exits, nothing is ever attached - so a rejected
+  // `writeProbeMarker` (disk full, EACCES on the marker path) surfaces as an
+  // unhandled rejection and can take the supervisor down. Killing the
+  // supervisor because a diagnostic marker could not be written is a strictly
+  // worse outcome than not writing it.
+  //
+  // Marking it handled here rather than replacing the promise: `.catch()`
+  // returns a NEW promise and leaves `probeObservation` itself rejected but
+  // acknowledged, so `persistChildExit` still observes the failure and still
+  // logs it with its own context. Swallowing it into a resolved
+  // `{ marker: null }` would trade the crash for silence.
+  void probeObservation?.catch(() => undefined);
 
   // `spawn()` may report a failure asynchronously (notably ENOENT on some
   // platforms).  It is an EventEmitter error, not an exception from spawn,

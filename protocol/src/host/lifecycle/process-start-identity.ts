@@ -195,14 +195,44 @@ export function compareProcessStartIdentity(
   observed: ProcessStartIdentity | null,
 ): ProcessStartIdentityMatch {
   if (recorded === null || observed === null) return "unknown";
-  if (!isProcessStartIdentity(recorded) || !isProcessStartIdentity(observed)) {
-    return "unknown";
-  }
-  if (
-    recorded.slice(0, recorded.indexOf(":")) !==
-    observed.slice(0, observed.indexOf(":"))
-  ) {
-    return "unknown";
-  }
-  return recorded === observed ? "same" : "different";
+  const left = splitToken(recorded);
+  const right = splitToken(observed);
+  if (left === null || right === null) return "unknown";
+  if (left.tag !== right.tag) return "unknown";
+  return left.payload === right.payload ? "same" : "different";
+}
+
+/**
+ * Split a token into its platform tag and its **canonical** payload, or
+ * `null` if it is not a well-formed token.
+ *
+ * Validation and comparison have to agree on what "the same token" means, and
+ * they did not: {@link isProcessStartIdentity} accepts any payload that
+ * *would* normalize to something non-empty, while the comparison was over raw
+ * bytes. A writer that stored probe output directly instead of going through
+ * `formatToken` therefore produced a token that passed validation yet
+ * compared as `"different"` — and `ps -o lstart=` pads single-digit days, so
+ * `darwin:Sun Jul  6 12:00:00 2026` and `darwin:Sun Jul 6 12:00:00 2026` are
+ * one process differing by one space.
+ *
+ * `"different"` is the single answer that authorises a caller to treat a live
+ * pid as an impostor, so a spurious one is the exact false verdict this
+ * module was written to eliminate — reintroduced through the back door by
+ * formatting rather than by the clock. Normalizing here closes it for every
+ * writer, present and future, instead of relying on each one remembering to
+ * call `formatToken`.
+ *
+ * The tag is compared separately and never normalized into the payload: tags
+ * that disagree mean a record has travelled between machines, which is a
+ * reason to know less, not to conclude a pid was recycled.
+ */
+function splitToken(
+  value: ProcessStartIdentity,
+): { readonly tag: string; readonly payload: string } | null {
+  if (!isProcessStartIdentity(value)) return null;
+  const separator = value.indexOf(":");
+  const payload = normalizePayload(value.slice(separator + 1));
+  return payload === null
+    ? null
+    : { tag: value.slice(0, separator), payload };
 }

@@ -80,9 +80,7 @@ async function withPidMetadataFile(
   }
 }
 
-function buildService(
-  hostLayout: HostFsLayout,
-): InstanceType<typeof DesktopSupportService> {
+function buildService(hostLayout: HostFsLayout): DesktopSupportService {
   const authSession: DesktopAuthSessionSnapshot = {
     status: "signed-out",
     token: null,

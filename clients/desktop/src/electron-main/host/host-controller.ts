@@ -46,6 +46,7 @@ import {
   probeHostBusyVerdict,
   readDesktopHostInstallRecord,
   readDesktopHostStagedRecord,
+  readReachableHostIdentity,
   readRunningHostIdentity,
   readRunningRuntimeVersion,
   type DesktopHostInstallRecord,
@@ -448,7 +449,16 @@ interface AvailableSnapshotShape {
 // reload side effect until the retry is truly exhausted.
 type MacActivationCycleAttempt =
   | MutationOutcome<{ readonly activated: boolean }>
-  | { readonly kind: "retryable-readiness-timeout"; readonly message: string };
+  | {
+      readonly kind: "retryable-readiness-timeout";
+      readonly message: string;
+      // Carried so the retry decision can tell "the host came up late" from
+      // "a host is reachable": `prePid` is who was serving BEFORE this cycle
+      // tore it down, and `expectedRuntimeVersion` is what the cycle had to
+      // produce. Without both, a reachable outgoing host reads as success.
+      readonly prePid: number | null;
+      readonly expectedRuntimeVersion: string | null;
+    };
 
 interface EligibleStage {
   readonly version: string;
@@ -1152,6 +1162,26 @@ export class HostController {
       isConvergeReady,
     );
     if (first.kind !== "retryable-readiness-timeout") return first;
+    // Re-probe before paying for a second DISRUPTIVE cycle.
+    //
+    // `HOST_READY_TIMEOUT_MS` is a deadline, not proof of failure: a host that
+    // bound its endpoint a moment after it expired is up and serving. The
+    // retry leads with `registerHostLoginItem`'s bootout, so retrying
+    // unconditionally tears down the very recovery this code was waiting for,
+    // and then holds the caller's mutation lane for another full timeout
+    // (~120s in total) before any outcome reaches the user. The `force: false`
+    // busy probe inside the cycle does not cover this: "not busy" is not
+    // "not reachable".
+    //
+    // But "a host is reachable" is NOT the question. This cycle booted a host
+    // out; one that survived its own eviction is also reachable, and accepting
+    // it would report an activation that never happened - a strictly worse
+    // failure than the extra cycle, because it is silent. So the late host
+    // must be a DIFFERENT process from the one torn down, and must be running
+    // what the cycle set out to activate. Both, or retry.
+    if (await this.lateActivationSucceeded(first)) {
+      return { kind: "ok", value: { activated: true } };
+    }
     log.warn(
       "[host-controller] readiness timed out after a completed register cycle - auto-retrying the cycle once before surfacing the failure",
     );
@@ -1162,6 +1192,43 @@ export class HostController {
     );
     if (second.kind !== "retryable-readiness-timeout") return second;
     return this.failedAfterServiceCycle(second.message);
+  }
+
+  /**
+   * Did the host come up on its own between the readiness deadline expiring
+   * and now? Answered conservatively: `false` unless every condition holds,
+   * because a wrong `true` publishes a live-host outcome for a host that is
+   * not there.
+   */
+  private async lateActivationSucceeded(timeout: {
+    readonly prePid: number | null;
+    readonly expectedRuntimeVersion: string | null;
+  }): Promise<boolean> {
+    const running = await readReachableHostIdentity(
+      this.layout,
+      this.reachabilityProbe,
+    );
+    if (running === null) return false;
+    // The host we just booted out, still serving. Not evidence of anything
+    // except that the eviction has not finished.
+    if (timeout.prePid !== null && running.pid === timeout.prePid) return false;
+    // Same equality check the in-cycle readiness path applies. A late host
+    // running the wrong runtime is an activation failure, not a slow success.
+    if (
+      timeout.expectedRuntimeVersion !== null &&
+      running.version !== timeout.expectedRuntimeVersion
+    ) {
+      return false;
+    }
+    // Publication gates the success claim on every other live-host path; it
+    // gates this one too. If the snapshot will not derive as reachable we have
+    // not confirmed a live host, so fall through to the retry.
+    if (!(await this.publishReachableHostSnapshot())) return false;
+    log.info(
+      "[host-controller] host became reachable after the readiness deadline - accepting the completed cycle instead of cycling it again",
+      { pid: running.pid, version: running.version },
+    );
+    return true;
   }
 
   private async runLockedMacActivationCycleOnce(
@@ -1325,6 +1392,8 @@ export class HostController {
       return {
         kind: "retryable-readiness-timeout",
         message: `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms (${readiness.reason}) - run \`traycer host doctor\` to recover.`,
+        prePid,
+        expectedRuntimeVersion,
       };
     }
     if (

@@ -21,6 +21,7 @@ export {
   isEvictableTraycerIdentity,
   isTraycerLabelShape,
   traycerLabelIdsForBase,
+  COMPATIBLE_HOST_START_SCRIPT_PREFIX,
   TRAYCER_HOST_CONTENT_TAG,
 } from "./identity";
 

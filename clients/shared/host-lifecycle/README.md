@@ -31,9 +31,14 @@ function, and ESLint keeps this directory independent of those controllers
 | `durable/`    | Versioned decoders (`valid \| absent \| corrupt \| unreadable \| unsupported-version`) |
 | `shared/`     | Reachability, pid.json, CLI-slot, injectable command runner                            |
 | `macos/`      | `launchctl print` split, multi-signal ownership, run-state/LWCR, wedge, login-item     |
-| `windows/`    | schtasks query split, start verdict, kill-plan (no pid.json kill)                      |
 | `linux/`      | unit file / load / enablement / activity / bus / linger — **no** `externally-managed`  |
-| `actuators/`  | serialized last-safe-point revalidation, platform primitive surfaces, D1 attested kill |
+| `transition/` | Journaled substrate transitions: probe marker, journal, governor                       |
+| `activation/` | Journaled install activation: phases, journal                                          |
+| `actuators/`  | Only `MutationResult`, the shape `activation/` builds on — the rest is parked          |
+
+There is no `windows/` directory. It was written before any consumer existed
+and is archived with the rest of the decision layer (see the header note in
+`index.ts`); Windows host lifecycle is handled outside this substrate.
 
 ## Contracts
 

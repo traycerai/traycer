@@ -98,6 +98,25 @@ function lintViolator(relativePath: string, lines: string[]): EslintOutcome {
     { cwd: sandbox, encoding: "utf8", env: process.env },
   );
 
+  // A gate that could not run must not be reported as a gate that passed.
+  //
+  // The positive assertions do already catch a spawn failure on their own -
+  // `status` is null, `messages` is empty, and both `toBe(0)` and the message
+  // regex fail on that. What they do NOT do is say why, so a missing or
+  // non-executable `ESLINT_BIN` (deps not hoisted to the repo root) surfaces
+  // as fifteen confusing assertion diffs instead of one cause. The `git`
+  // sweep at the bottom of this file is the case that genuinely needs this:
+  // it asserts an ABSENCE, so an unspawnable `git` yields empty stdout and
+  // passes vacuously.
+  if (result.error !== undefined) {
+    throw new Error(
+      `eslint failed to launch at ${ESLINT_BIN}: ${result.error.message}`,
+    );
+  }
+  if (result.status === null) {
+    throw new Error(`eslint was terminated by signal ${String(result.signal)}`);
+  }
+
   const stdout = result.stdout ?? "";
   let messages: string[] = [];
   try {
@@ -343,6 +362,12 @@ describe("host-lifecycle read-only import boundary", () => {
       ["status", "--porcelain", "-uall", "host-lifecycle"],
       { cwd: SHARED_ROOT, encoding: "utf8" },
     );
+    // This is the one assertion in the file that checks an ABSENCE, so it is
+    // the one that passes for free when the subprocess never runs: a `git`
+    // that fails to spawn returns empty stdout, which matches nothing. Prove
+    // the probe ran before trusting what it did not find.
+    expect(stray.error).toBeUndefined();
+    expect(stray.status).toBe(0);
     expect(stray.stdout ?? "").not.toMatch(
       /boundary-tmp|violator|static-import/,
     );

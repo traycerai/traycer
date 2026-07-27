@@ -80,7 +80,41 @@ export async function requestCooperativeShutdown(
     hostId: metadata.hostId,
     websocketUrl: metadata.websocketUrl,
   };
+  /**
+   * Best-effort return of a granted claim. Deliberately swallows its own
+   * failure: we are already on an abort path, and the caller's outcome is
+   * about the shutdown, not about the cleanup. A release that cannot be
+   * delivered costs the claim's remaining TTL, which is the same position we
+   * would be in without this call — never worse.
+   */
+  const releaseClaim = async (token: string | null): Promise<void> => {
+    if (token === null) return;
+    try {
+      await callHostRpcAtEndpoint(
+        "lifecycle.releaseShutdown",
+        { token },
+        endpoint,
+      );
+    } catch (releaseError) {
+      logger.debug("Releasing the abandoned shutdown claim failed", {
+        environment,
+        operation,
+        cause:
+          releaseError instanceof Error
+            ? releaseError.message
+            : String(releaseError),
+      });
+    }
+  };
   const transitionId = `cli-${operation}-${randomUUID()}`;
+  // A granted claim closes the host to new work until it is committed,
+  // released, or expires. Every abort path below therefore has to hand the
+  // token back: `CLAIM_TTL_MS` is ~62s, so a transient dial failure between
+  // claim and commit would otherwise leave a HEALTHY host refusing work for a
+  // full minute - a self-inflicted outage produced by the code that exists to
+  // shut down cleanly. `lifecycle.releaseShutdown` is the abort leg of the
+  // contract; not calling it is the bug.
+  let grantedToken: string | null = null;
   try {
     const claimed = await callHostRpcAtEndpoint(
       "lifecycle.claimShutdown",
@@ -90,19 +124,25 @@ export async function requestCooperativeShutdown(
     if ("denied" in claimed) {
       return { kind: "busy" };
     }
+    grantedToken = claimed.granted.token;
     const committed = await callHostRpcAtEndpoint(
       "lifecycle.commitShutdown",
       { token: claimed.granted.token },
       endpoint,
     );
     if ("denied" in committed) {
+      await releaseClaim(grantedToken);
       return {
         kind: "unreachable",
         cause: `commit denied (${committed.denied})`,
       };
     }
+    // Committed: the claim has done its job and must NOT be released - the
+    // host is shutting down on the strength of it.
+    grantedToken = null;
   } catch (error) {
     const cause = error instanceof Error ? error.message : String(error);
+    await releaseClaim(grantedToken);
     logger.warn("Cooperative shutdown RPC failed", {
       environment,
       operation,

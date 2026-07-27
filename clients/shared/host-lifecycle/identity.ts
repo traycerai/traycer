@@ -56,8 +56,39 @@ const HOST_START_WITH_LABEL_TAIL = [
   "start",
   "--service-label",
 ] as const;
-const COMPATIBLE_HOST_START_SCRIPT_PREFIX =
-  '"$0" "$@" host start --help 2>&1 | /usr/bin/grep -Fq --';
+/**
+ * The invariant head of the `/bin/sh -c` program the macOS LaunchAgent plist
+ * and the systemd user unit both run — everything up to and including the
+ * capability token, which is the part that does not vary by label.
+ *
+ * **This is the single source of truth.** `buildCompatibleHostStartScript()`
+ * in `traycer-cli` builds its script from this constant rather than carrying
+ * its own copy, and `identity-host-start-script-lockstep.test.ts` pins the two
+ * together. The reason is a real regression: the emitter moved from
+ * `host start --help | grep` to `host capabilities --has service-label` and
+ * this recognizer was left behind, so `attestTraycerRegistration` stopped
+ * recognizing a plist THIS CODEBASE had just written. With no content-tag and
+ * no exact known-label match the attestation degraded to `indeterminate` —
+ * and `isEvictableTraycerIdentity` refuses to evict on that, which is how a
+ * lockout survives the repair meant to clear it.
+ *
+ * The direction of the dependency is forced: `host-lifecycle/**` is a
+ * read-only substrate and the ESLint boundary forbids it importing the CLI's
+ * service platforms, so the constant lives here and the emitter imports it.
+ */
+export const COMPATIBLE_HOST_START_SCRIPT_PREFIX =
+  '"$0" "$@" host capabilities --has service-label';
+
+/**
+ * The pre-capability form, still on disk on every machine that installed
+ * before the switch. Registrations are durable and are only rewritten by a
+ * reinstall, so dropping this would un-attest every existing install — the
+ * same failure as the drift above, just aimed at the field instead of at
+ * HEAD. Recognized, never emitted.
+ */
+const LEGACY_HOST_START_SCRIPT_PREFIXES = [
+  '"$0" "$@" host start --help 2>&1 | /usr/bin/grep -Fq --',
+] as const;
 
 /**
  * Positive attestation from a LaunchAgent / unit-style command line.
@@ -213,18 +244,32 @@ export function isTraycerLabelShape(labelId: string): boolean {
   );
 }
 
+/**
+ * True for a `/bin/sh -c` program we emit today, or emitted in any earlier
+ * shipped form. Both must answer yes: HEAD's plists and the field's plists
+ * are equally ours.
+ */
+function isCompatibleHostStartScript(script: string): boolean {
+  if (script.startsWith(COMPATIBLE_HOST_START_SCRIPT_PREFIX)) return true;
+  return LEGACY_HOST_START_SCRIPT_PREFIXES.some((prefix) =>
+    script.startsWith(prefix),
+  );
+}
+
 function isHostStartInvocation(
   args: readonly string[],
   labelId: string | null,
 ): boolean {
+  const script = args[2];
   if (
     args.length >= 4 &&
     labelId !== null &&
     args[0] === "/bin/sh" &&
     args[1] === "-c" &&
-    args[2]?.startsWith(COMPATIBLE_HOST_START_SCRIPT_PREFIX) &&
-    args[2].includes("--service-label") &&
-    args[2].includes(labelId)
+    script !== undefined &&
+    isCompatibleHostStartScript(script) &&
+    script.includes("--service-label") &&
+    script.includes(labelId)
   ) {
     return true;
   }

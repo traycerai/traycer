@@ -78,10 +78,48 @@ describe("isProcessStartIdentity", () => {
 });
 
 describe("compareProcessStartIdentity", () => {
-  it("is same only for byte-identical tokens", () => {
+  it("is same for tokens with the same canonical payload", () => {
     expect(
       compareProcessStartIdentity("linux:boot-a 1", "linux:boot-a 1"),
     ).toBe("same");
+  });
+
+  /*
+   * Validation and comparison have to agree on what "the same token" means.
+   * `isProcessStartIdentity` accepts any payload that WOULD normalize to
+   * something non-empty, so a writer storing raw probe output rather than
+   * going through `formatToken` yields a token that is valid but not
+   * canonical. Comparing raw bytes then answered `different` - the one
+   * verdict that authorises treating a live pid as an impostor - for two
+   * readings of one process.
+   *
+   * This is #740's failure mode arriving through formatting instead of
+   * through the clock, so it is pinned at the comparator: the module
+   * documents two independent writers on opposite sides of the OSS/internal
+   * boundary, and correctness cannot depend on both remembering to normalize.
+   */
+  it("is same across non-canonical padding, not different", () => {
+    // `ps -o lstart=` pads single-digit days to a fixed column width.
+    expect(
+      compareProcessStartIdentity(
+        "darwin:Sun Jul  6 12:00:00 2026",
+        "darwin:Sun Jul 6 12:00:00 2026",
+      ),
+    ).toBe("same");
+    // Leading/trailing whitespace from a trimmed-vs-untrimmed read.
+    expect(
+      compareProcessStartIdentity(
+        "linux:boot-a 1",
+        "linux:  boot-a   1  ",
+      ),
+    ).toBe("same");
+    // Canonicalising must not erase a real disagreement.
+    expect(
+      compareProcessStartIdentity(
+        "darwin:Sun Jul  6 12:00:00 2026",
+        "darwin:Sun Jul 7 12:00:00 2026",
+      ),
+    ).toBe("different");
   });
 
   it("is different for a same-platform token that positively disagrees", () => {

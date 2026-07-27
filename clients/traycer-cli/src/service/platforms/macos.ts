@@ -166,10 +166,31 @@ async function takeoverDesktopRegistration(
     );
   }
   const agentTarget = `${guiTarget}/${desktopAgent.agentLabelId}`;
-  await run("launchctl", ["bootout", agentTarget], {
+  // `--wait` is load-bearing here for the same reason it is in
+  // `retireCompetingRegistration` (see the note there): a bare bootout
+  // returns when launchd ACCEPTS the request, not when the process is gone.
+  //
+  // This line is reached precisely in the states where the old host is known
+  // to still be running - `unreachable`, `hung`, `no-metadata`; only the
+  // `stopped` arm above waited for exit - and the evicted host publishes
+  // `pid.json` until the very end of its teardown. `service install` calls
+  // `controller.install` immediately after this returns, and that host's
+  // first act is `findLiveIncumbentHost`. Without the barrier it reads the
+  // corpse as a live incumbent, declines, and exits 0 - which
+  // `KeepAlive{SuccessfulExit: false}` leaves DOWN until the next login.
+  // That is the hostless lockout this command exists to resolve, on exactly
+  // the machines it targets.
+  //
+  // `verifyAgentBootedOut` below does not cover this: it confirms the LABEL
+  // is unloaded, which says nothing about whether the process has exited.
+  //
+  // `tolerateNonZeroExit` stays `true`, unlike the retirement path, because
+  // that positive probe is the gate here - a benign "no such process" exit
+  // must reach it rather than abort a takeover that in fact succeeded.
+  await run("launchctl", ["bootout", "--wait", agentTarget], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: 10_000,
+    timeoutMs: STOP_EXIT_TIMEOUT_MS,
     tolerateNonZeroExit: true,
   });
   // Verification must be POSITIVE. `inspectLaunchdOwnership` collapses every
