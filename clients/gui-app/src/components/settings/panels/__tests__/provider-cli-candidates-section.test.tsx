@@ -6,6 +6,7 @@ import type {
   ProviderManagedInstallState,
   ProviderSelection,
   ProviderVersionVisibility,
+  ProviderAdvisory,
 } from "@traycer/protocol/host/provider-schemas";
 import { ProviderCliCandidatesSection } from "@/components/settings/panels/provider-cli-candidates-section";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -91,6 +92,7 @@ function providerState(args: {
   readonly candidates: readonly ProviderCliCandidate[];
   readonly managedInstallState?: ProviderManagedInstallState | null;
   readonly versionVisibility?: ProviderVersionVisibility | null;
+  readonly advisory?: ProviderAdvisory | null;
 }): ProviderCliState {
   const state: ProviderCliState = {
     providerId: "claude-code",
@@ -123,6 +125,7 @@ function providerState(args: {
     ...(args.versionVisibility !== undefined
       ? { versionVisibility: args.versionVisibility }
       : {}),
+    ...(args.advisory !== undefined ? { advisory: args.advisory } : {}),
   };
 }
 
@@ -414,4 +417,65 @@ describe("ProviderCliCandidatesSection: managed install status cell", () => {
       expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     },
   );
+});
+
+/**
+ * W10. The closure-carve advisory - the only advisory kind a Phase-1 host
+ * populates.
+ *
+ * For `pi` and `opencode` the resolver skips an auto-discovered PATH binary
+ * unconditionally on execute, while observe intents resolve it happily. So the
+ * provider looked available and selectable and the turn threw at send. The
+ * user's way out (explicitly selecting the PATH row) already worked; nothing
+ * told them it existed.
+ */
+describe("ProviderCliCandidatesSection: row-incompatibility advisory", () => {
+  const DETAIL =
+    "This provider is paired with the exact build Traycer ships (1.2.3), so a version found on your PATH is not used automatically. Select that path below to use it anyway.";
+
+  it("renders the advisory the host sent, verbatim", () => {
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: false }),
+        pathCandidate({ available: true }),
+      ],
+      advisory: { kind: "row-incompatibility", detail: DETAIL },
+    });
+    renderSection(state);
+    expect(screen.getByText(DETAIL)).toBeDefined();
+  });
+
+  it("renders nothing when the host sends no advisory", () => {
+    // The overwhelmingly common case - every wire-coupled provider, and every
+    // old host, which leaves the key genuinely absent.
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [pathCandidate({ available: true })],
+    });
+    renderSection(state);
+    expect(screen.queryByText(/paired with the exact build/u)).toBeNull();
+  });
+
+  it("renders nothing for an advisory with no detail", () => {
+    // `detail` is nullable on the wire. A bare kind is a code, not copy, and
+    // showing an empty notice is worse than showing none.
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [pathCandidate({ available: true })],
+      advisory: { kind: "row-incompatibility", detail: null },
+    });
+    renderSection(state);
+    expect(screen.queryByText(/paired with the exact build/u)).toBeNull();
+  });
+
+  it("ignores the dormant Phase-2 kinds rather than rendering a raw code", () => {
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [pathCandidate({ available: true })],
+      advisory: { kind: "yank-rollback", detail: "some phase-2 detail" },
+    });
+    renderSection(state);
+    expect(screen.queryByText("some phase-2 detail")).toBeNull();
+  });
 });

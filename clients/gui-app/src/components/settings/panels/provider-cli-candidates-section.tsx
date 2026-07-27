@@ -93,15 +93,32 @@ function pathUnblockActive(
 function CandidateNotices({
   showPathUnblockNotice,
   versionVisibility,
+  advisory,
 }: {
   readonly showPathUnblockNotice: boolean;
   readonly versionVisibility: ProviderCliState["versionVisibility"];
+  readonly advisory: ProviderCliState["advisory"];
 }): ReactNode {
   // An old host leaves the key genuinely absent, which reads the same here as
   // "no other session is on a different version".
   const differingSessionCount = versionVisibility?.differingSessionCount ?? 0;
   return (
     <>
+      {/*
+        W10. The one advisory kind a Phase-1 host populates: this provider is
+        paired with the exact build Traycer ships, so a version found on PATH is
+        skipped automatically on execute. Without this the provider reported
+        available, rendered ungated and selectable, and the turn then threw
+        `preparing` - offered-then-failed, from a direction no gate was watching.
+        Rendered next to the candidates table on purpose: the fix it names ("use
+        that path anyway") is a row the user is already looking at.
+        Unknown future kinds render nothing rather than a bare code.
+      */}
+      {advisory?.kind === "row-incompatibility" && advisory.detail !== null ? (
+        <p className="mb-2 text-ui-xs text-muted-foreground">
+          {advisory.detail}
+        </p>
+      ) : null}
       {showPathUnblockNotice ? (
         <p className="mb-2 text-ui-xs text-muted-foreground">
           Running from PATH · installing managed copy
@@ -229,6 +246,7 @@ export function ProviderCliCandidatesSection({
       <CandidateNotices
         showPathUnblockNotice={showPathUnblockNotice}
         versionVisibility={state.versionVisibility}
+        advisory={state.advisory ?? null}
       />
       {isEmptyHermesState && !adding ? (
         <HermesInstallNotice />
