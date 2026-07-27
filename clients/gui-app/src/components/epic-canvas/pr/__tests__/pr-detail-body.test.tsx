@@ -733,9 +733,10 @@ describe("PrDetailBody", () => {
 
   it("caps the card's width fluidly instead of forcing a bare fixed width", async () => {
     // `shrink-0` alone made this a hard-coded 18rem regardless of how much
-    // room the flex row actually had. `w-full max-w-[18rem]` keeps the same
-    // 18rem ceiling but lets the item size down to whatever space remains
-    // rather than overflowing it.
+    // room the flex row actually had. `w-full max-w-[min(24vw,18rem)]` lets
+    // the item size down to whatever space remains rather than overflowing
+    // it, and pairs the rem ceiling with a viewport term so the cap is not a
+    // fixed layout dimension.
     renderBody({
       epicId: "epic-width",
       githubHost: "github.com",
@@ -765,8 +766,11 @@ describe("PrDetailBody", () => {
 
     const gutterClasses = screen.getByTestId("pr-detail-card-gutter").className;
     expect(gutterClasses).toContain("w-full");
-    expect(gutterClasses).toContain("max-w-[18rem]");
-    expect(gutterClasses).not.toMatch(/(?<!max-)w-\[18rem\]/);
+    expect(gutterClasses).toContain("max-w-[min(24vw,18rem)]");
+    // The ceiling must stay a MAX, never a fixed width, and must keep its
+    // viewport term rather than regressing to a bare rem cap.
+    expect(gutterClasses).not.toMatch(/(?<!max-)w-\[min\(24vw,18rem\)\]/);
+    expect(gutterClasses).not.toContain("max-w-[18rem]");
   });
 
   it("gives the active tab's content a tabpanel wired back to its tab button", async () => {
@@ -803,7 +807,9 @@ describe("PrDetailBody", () => {
       "pr-detail-tab-trigger-overview",
     );
 
-    fireEvent.click(screen.getByTestId("pr-detail-tab-files"));
+    // Regex, not an exact string: a tab's accessible name also carries its
+    // count badge (e.g. "Files 324"), which is deliberately not aria-hidden.
+    fireEvent.click(screen.getByRole("tab", { name: /Files/ }));
     const filesPanel = screen.getByRole("tabpanel");
     expect(filesPanel.id).toBe("pr-detail-tabpanel-files");
     expect(filesPanel.getAttribute("aria-labelledby")).toBe(

@@ -102,7 +102,9 @@ describe("PrDetailHeader GitHub link", () => {
 
     renderHeader(host);
 
-    const link = screen.getByTestId("pr-detail-github-link");
+    // By role + accessible name: this also pins the anchor semantics the
+    // action depends on, which a test-id query would silently let regress.
+    const link = screen.getByRole("link", { name: /GitHub/i });
     fireEvent.click(link);
     await screen.findByTestId("pr-detail-github-link-dots");
     expect(openExternalLink).toHaveBeenCalledTimes(1);

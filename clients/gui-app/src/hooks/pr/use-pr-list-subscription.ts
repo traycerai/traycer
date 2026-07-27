@@ -229,14 +229,18 @@ export function usePrListSubscription(args: {
 
   const sendRefresh = useCallback(() => {
     // A terminal session's `sendRefresh` is inert; a refresh there means
-    // RECONNECT - re-run the effect to replace the dead entry. A live session
-    // refreshes normally.
-    if (errorEvent !== null) {
+    // RECONNECT - re-run the effect to replace the dead entry. Branching on
+    // `errorEvent` instead would swallow the refresh entirely after a
+    // NONFATAL error: that leaves the session live and `isTerminal` false, so
+    // `retry()` only bumps the nonce, the subscribe effect reuses the very
+    // same entry, and no frame is ever sent. Mirrors
+    // `use-pr-detail-subscription`.
+    if (subscription?.isTerminal === true) {
       retry();
       return;
     }
-    activeSubscriptionFor(wsStreamClient, stableArgs)?.sendRefresh();
-  }, [errorEvent, wsStreamClient, stableArgs]);
+    subscription?.sendRefresh();
+  }, [subscription, retry]);
 
   return {
     data,

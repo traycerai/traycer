@@ -84,9 +84,12 @@ const PR_DETAIL_REFRESH_TIMEOUT_MS = 10_000;
  * sidebar widens the tile without changing tab count, and a two-pane split can
  * still leave one pane very wide.
  */
-const PR_DETAIL_SHELL_WIDTH = "max-w-3xl @min-[1180px]:max-w-[72rem]";
+// Both caps pair their rem ceiling with a viewport term, the `min(Xvw, Yrem)`
+// form used throughout the app, so neither is a fixed layout dimension: the
+// rem is only the upper bound once the viewport is wide enough to afford it.
+const PR_DETAIL_SHELL_WIDTH = "max-w-3xl @min-[1180px]:max-w-[min(92vw,72rem)]";
 const CARD_AT_WIDE = "hidden @min-[1180px]:block";
-const CARD_WIDTH = "w-full max-w-[18rem]";
+const CARD_WIDTH = "w-full max-w-[min(24vw,18rem)]";
 
 export function PrDetailBody(props: {
   readonly epicId: string;

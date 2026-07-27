@@ -316,15 +316,7 @@ export function formatPrBranchSummary(item: {
   readonly headRefName: string | null;
   readonly baseRefName: string | null;
 }): string {
-  const head =
-    item.headRefName !== null && item.headRefName.length > 0
-      ? item.headRefName
-      : "unknown";
-  const base =
-    item.baseRefName !== null && item.baseRefName.length > 0
-      ? item.baseRefName
-      : "unknown";
-  return `${head} → ${base}`;
+  return `${branchOrUnknown(item.headRefName)} → ${branchOrUnknown(item.baseRefName)}`;
 }
 
 export function formatPrStateLabel(state: PrLightItem["state"]): string {

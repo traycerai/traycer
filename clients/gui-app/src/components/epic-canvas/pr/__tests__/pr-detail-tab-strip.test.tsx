@@ -19,6 +19,19 @@ function renderStrip(args: {
 
 afterEach(cleanup);
 
+/**
+ * Each tab paired with a matcher for its accessible name. Regexes rather than
+ * exact strings because a tab's name also carries its count badge (e.g.
+ * "Files 324"), which is deliberately not `aria-hidden`.
+ */
+const TAB_NAMES: readonly (readonly [PrDetailTabId, RegExp])[] = [
+  ["overview", /Overview/],
+  ["commits", /Commits/],
+  ["feedback", /Feedback/],
+  ["checks", /Checks/],
+  ["files", /Files/],
+];
+
 describe("PrDetailTabStrip", () => {
   it("spans its column rather than hugging its own content", () => {
     // Hugging left the strip ending short of every card below it, so it read
@@ -35,8 +48,8 @@ describe("PrDetailTabStrip", () => {
     // "Overview" against "Files" reads as a misaligned control.
     renderStrip({ tab: "overview", onSelectTab: () => undefined });
 
-    for (const id of ["overview", "commits", "feedback", "checks", "files"]) {
-      const tab = screen.getByTestId(`pr-detail-tab-${id}`);
+    for (const [, name] of TAB_NAMES) {
+      const tab = screen.getByRole("tab", { name });
       expect(tab.className).toContain("flex-1");
       expect(tab.className).toContain("basis-0");
     }
@@ -71,15 +84,15 @@ describe("PrDetailTabStrip", () => {
     const picked: PrDetailTabId[] = [];
     renderStrip({ tab: "overview", onSelectTab: (tab) => picked.push(tab) });
 
-    fireEvent.click(screen.getByTestId("pr-detail-tab-files"));
+    fireEvent.click(screen.getByRole("tab", { name: /Files/ }));
     expect(picked).toEqual(["files"]);
   });
 
   it("wires each tab to the panel it controls, both ways", () => {
     renderStrip({ tab: "checks", onSelectTab: () => undefined });
 
-    for (const id of ["overview", "commits", "feedback", "checks", "files"]) {
-      const button = screen.getByTestId(`pr-detail-tab-${id}`);
+    for (const [id, name] of TAB_NAMES) {
+      const button = screen.getByRole("tab", { name });
       const controls = button.getAttribute("aria-controls");
       expect(controls).toBe(`pr-detail-tabpanel-${id}`);
       expect(button.getAttribute("id")).toBe(`pr-detail-tab-trigger-${id}`);
@@ -89,8 +102,8 @@ describe("PrDetailTabStrip", () => {
   it("keeps only the selected tab in the regular tab order (roving tabindex)", () => {
     renderStrip({ tab: "feedback", onSelectTab: () => undefined });
 
-    for (const id of ["overview", "commits", "feedback", "checks", "files"]) {
-      const tab = screen.getByTestId(`pr-detail-tab-${id}`);
+    for (const [id, name] of TAB_NAMES) {
+      const tab = screen.getByRole("tab", { name });
       expect(tab.getAttribute("tabindex")).toBe(id === "feedback" ? "0" : "-1");
     }
   });
@@ -101,7 +114,7 @@ describe("PrDetailTabStrip", () => {
 
     // Fired on the focused TAB, which is where the key actually lands under a
     // roving tabindex - the strip's container is deliberately not focusable.
-    fireEvent.keyDown(screen.getByTestId("pr-detail-tab-files"), {
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Files/ }), {
       key: "ArrowRight",
     });
     expect(picked).toEqual(["overview"]);
@@ -109,7 +122,7 @@ describe("PrDetailTabStrip", () => {
     picked.length = 0;
     cleanup();
     renderStrip({ tab: "overview", onSelectTab: (tab) => picked.push(tab) });
-    fireEvent.keyDown(screen.getByTestId("pr-detail-tab-overview"), {
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Overview/ }), {
       key: "ArrowLeft",
     });
     expect(picked).toEqual(["files"]);
@@ -119,13 +132,13 @@ describe("PrDetailTabStrip", () => {
     const picked: PrDetailTabId[] = [];
     renderStrip({ tab: "checks", onSelectTab: (tab) => picked.push(tab) });
 
-    fireEvent.keyDown(screen.getByTestId("pr-detail-tab-checks"), {
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Checks/ }), {
       key: "End",
     });
     expect(picked).toEqual(["files"]);
 
     picked.length = 0;
-    fireEvent.keyDown(screen.getByTestId("pr-detail-tab-checks"), {
+    fireEvent.keyDown(screen.getByRole("tab", { name: /Checks/ }), {
       key: "Home",
     });
     expect(picked).toEqual(["overview"]);

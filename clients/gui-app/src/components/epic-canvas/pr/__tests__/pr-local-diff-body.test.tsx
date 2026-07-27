@@ -192,7 +192,12 @@ describe("PrLocalDiffBody", () => {
       isError: false,
     });
 
-    fireEvent.click(screen.getByTestId("pr-diff-file"));
+    // The collapse control is a real `<button aria-expanded>`, so drive it by
+    // role and accessible name: that pins the semantics a keyboard/screen
+    // reader user depends on, which a test-id click would let regress.
+    const toggle = screen.getByRole("button", { name: /src\/a\.ts/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(toggle);
 
     expect(tileOnTab(tabId, node.instanceId).view.collapsedFilePaths).toEqual([
       "src/a.ts",

@@ -473,17 +473,22 @@ describe("<EpicLeftPanelRail />", () => {
       usePrSeenFactsStore.getState().markChanged(HOST_ID, EPIC_ID);
       renderRail();
 
-      const button = screen.getByTestId("epic-rail-pull-requests");
-      expect(button.getAttribute("aria-label")).toBe(
-        "Pull Requests, new pull request updates",
-      );
+      // Queried BY the accessible name rather than reading the attribute:
+      // that asserts the computed name a screen reader actually announces,
+      // which is the thing this test exists to protect.
+      expect(
+        screen.getByRole("button", {
+          name: "Pull Requests, new pull request updates",
+        }),
+      ).toBeTruthy();
     });
 
     it("keeps the plain label once there is nothing new", () => {
       renderRail();
 
-      const button = screen.getByTestId("epic-rail-pull-requests");
-      expect(button.getAttribute("aria-label")).toBe("Pull Requests");
+      expect(
+        screen.getByRole("button", { name: "Pull Requests" }),
+      ).toBeTruthy();
     });
   });
 

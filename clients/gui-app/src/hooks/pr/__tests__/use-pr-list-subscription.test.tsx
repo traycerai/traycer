@@ -44,11 +44,16 @@ class MockStreamSession implements IStreamSession {
     this.statusChangeHandler = handler;
   }
 
+  // Captured rather than dropped: a refresh is only observable as a SENT
+  // client frame, so without this a test cannot tell "sent a refresh" apart
+  // from "silently did nothing".
+  sentClientFrames: StreamFrameEnvelope[] = [];
+
   sendClientFrame(
-    _envelope: StreamFrameEnvelope,
+    envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    // No-op for this test.
+    this.sentClientFrames.push(envelope);
   }
 
   requestReconnect(): void {
@@ -215,6 +220,56 @@ describe("usePrListSubscription", () => {
     // Unmounting the last (background) subscriber tears its session down too.
     unmountBackground();
     expect(backgroundSession.closed).toBe(true);
+  });
+
+  it("sends a real refresh frame after a NONFATAL error instead of reconnecting", async () => {
+    // A nonfatal error frame leaves the session live (`isTerminal` stays
+    // false), so a refresh must go out as an actual client frame. Branching
+    // on the error's mere presence would call `retry()`, which only bumps the
+    // nonce - the effect then reuses this same non-terminal session and sends
+    // nothing, silently swallowing the user's refresh.
+    const { result } = renderHook(
+      () =>
+        usePrListSubscription({
+          hostId: "host1",
+          epicId: "epic1",
+          mode: "foreground",
+          enabled: true,
+        }),
+      { wrapper: createWrapper() },
+    );
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+
+    const session = mockWsStreamClient.getSession("pr.subscribeListForEpic", {
+      epicId: "epic1",
+      mode: "foreground",
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+
+    act(() => {
+      session.emitFrame({
+        kind: "error",
+        hasBinaryPayload: false,
+        isFatal: false,
+        message: "one sweep failed",
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.error).not.toBeNull();
+    });
+
+    const framesBefore = session.sentClientFrames.length;
+    const subscribesBefore = mockWsStreamClient.subscribeCallCount;
+    act(() => {
+      result.current.sendRefresh();
+    });
+
+    // A frame went out on the SAME live session - not a reconnect.
+    expect(session.sentClientFrames.length).toBe(framesBefore + 1);
+    expect(mockWsStreamClient.subscribeCallCount).toBe(subscribesBefore);
   });
 
   it("preserves a second, non-retrying consumer's ref count when the first consumer retries a terminal session", async () => {
