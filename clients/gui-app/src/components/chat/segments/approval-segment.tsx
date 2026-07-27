@@ -7,6 +7,7 @@ import { SegmentCard } from "./segment-card";
 import { SegmentRow } from "./segment-row";
 import { ToolInputPanel } from "./tool-input-panel";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ResolvedApprovalSegmentProps {
   toolName: string | null;
   description: string | null;
@@ -131,12 +132,16 @@ function ResolvedApprovalHeader(props: {
         <span aria-hidden className="flex-1" />
       )}
       {!decision.approved && decision.reason !== null ? (
-        <span
-          className="@max-[28rem]:hidden shrink-0 truncate text-ui-xs text-destructive/80"
-          title={decision.reason}
+        <TooltipWrapper
+          label={decision.reason}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {decision.reason}
-        </span>
+          <span className="@max-[28rem]:hidden shrink-0 truncate text-ui-xs text-destructive/80">
+            {decision.reason}
+          </span>
+        </TooltipWrapper>
       ) : null}
     </>
   );

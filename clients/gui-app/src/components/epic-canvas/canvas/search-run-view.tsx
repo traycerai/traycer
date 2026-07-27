@@ -55,6 +55,7 @@ import type {
 import type { CommandContext } from "@/lib/commands/types";
 import type { SearchRunTarget } from "@/lib/commands/sources/open/search-target";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export interface SearchRunViewProps {
   readonly target: SearchRunTarget;
   readonly ctx: CommandContext;
@@ -508,22 +509,28 @@ function OptionToggle({
   children,
 }: OptionToggleProps) {
   return (
-    <button
-      type="button"
-      aria-pressed={active}
-      aria-label={label}
-      title={label}
-      onClick={onToggle}
-      onKeyDown={isolateFromCmdk}
-      className={cn(
-        "flex h-6 min-w-6 items-center justify-center rounded-sm px-1.5 font-mono text-ui-xs transition-colors",
-        active
-          ? "bg-primary/15 text-foreground ring-1 ring-primary/40"
-          : "text-muted-foreground hover:bg-muted/55 hover:text-foreground",
-      )}
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {children}
-    </button>
+      <button
+        type="button"
+        aria-pressed={active}
+        aria-label={label}
+        onClick={onToggle}
+        onKeyDown={isolateFromCmdk}
+        className={cn(
+          "flex h-6 min-w-6 items-center justify-center rounded-sm px-1.5 font-mono text-ui-xs transition-colors",
+          active
+            ? "bg-primary/15 text-foreground ring-1 ring-primary/40"
+            : "text-muted-foreground hover:bg-muted/55 hover:text-foreground",
+        )}
+      >
+        {children}
+      </button>
+    </TooltipWrapper>
   );
 }
 
@@ -536,15 +543,21 @@ interface GlobInputProps {
 
 function GlobInput({ label, placeholder, value, onChange }: GlobInputProps) {
   return (
-    <input
-      type="text"
-      aria-label={label}
-      title={`${label} (comma-separated globs)`}
-      placeholder={placeholder}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      onKeyDown={isolateFromCmdk}
-      className="h-6 min-w-[7rem] flex-1 rounded-sm bg-muted/40 px-1.5 text-ui-xs outline-hidden placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-primary/40"
-    />
+    <TooltipWrapper
+      label={`${label} (comma-separated globs)`}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <input
+        type="text"
+        aria-label={label}
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={isolateFromCmdk}
+        className="h-6 min-w-[7rem] flex-1 rounded-sm bg-muted/40 px-1.5 text-ui-xs outline-hidden placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-primary/40"
+      />
+    </TooltipWrapper>
   );
 }

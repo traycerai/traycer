@@ -87,6 +87,7 @@ import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { buildDefaultBranchByPath } from "@/lib/worktree/default-branch-name";
 import { defaultFolderIntent } from "@/lib/worktree/worktree-intent-seeding";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface LandingComposerSubmitArgs {
   readonly editor: ComposerPromptEditorHandle | null;
@@ -789,6 +790,7 @@ function readCachedDefaultWorktreeIntent(
   const defaultBranchByPath = buildDefaultBranchByPath(
     worktreeDefaults.map((entry) => entry.summary),
     worktreeDefaults.length > 1,
+    useSettingsStore.getState().worktreeBranchPrefix,
   );
   const primaryPath = resolvePrimaryPath(
     workspace.folders,

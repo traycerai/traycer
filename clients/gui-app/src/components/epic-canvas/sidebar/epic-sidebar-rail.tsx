@@ -1,4 +1,10 @@
-import { Fragment, useCallback, useMemo } from "react";
+import {
+  Fragment,
+  useCallback,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   useDraggable,
   useDroppable,
@@ -7,6 +13,14 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { DropLine } from "@/components/ui/drop-line";
 import {
   getLeftPanelRailDragId,
@@ -29,15 +43,25 @@ import {
   useEpicLeftPanelStore,
   useLeftPanelGroups,
   useMainPanelCollapsed,
+  usePanelVisibilityOverrides,
   type LeftPanelGroup,
   type LeftPanelId,
 } from "@/stores/epics/left-panel-store";
 import { useActiveEpicArtifactId } from "@/stores/epics/canvas/store";
 import {
+  isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
+  resolveActiveVisibleGroupIndex,
+  type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { useEpicArtifact } from "@/lib/epic-selectors";
+import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import {
+  selectPrHasChangedDot,
+  selectPrScopeHasItems,
+  usePrSeenFactsStore,
+} from "@/stores/epics/pr-seen-facts-store";
 import { type LucideIcon } from "lucide-react";
 
 export type RailOrientation = "vertical" | "horizontal";
@@ -78,13 +102,11 @@ function getPanelDefinition(panelId: LeftPanelId): LeftPanelMetadataDefinition {
 
 function getVisibleLeftPanelGroups(
   groups: ReadonlyArray<LeftPanelGroup>,
-  commentsPanelRevealed: boolean,
-  hasActiveCommentableArtifact: boolean,
+  context: LeftPanelAvailabilityContext,
 ): ReadonlyArray<VisibleLeftPanelGroup> {
-  const context = { commentsPanelRevealed, hasActiveCommentableArtifact };
   return groups.flatMap((group) => {
     const panelIds = group.panelIds.filter((panelId) =>
-      getPanelDefinition(panelId).isVisible(context),
+      isLeftPanelVisible(getPanelDefinition(panelId), context),
     );
     if (panelIds.length === 0) return [];
     return [
@@ -151,21 +173,51 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
   const collapsed = useMainPanelCollapsed(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
+  const hostId = useReactiveActiveHostId();
+  const hasPullRequests = usePrSeenFactsStore(
+    selectPrScopeHasItems(hostId, epicId),
+  );
+  const visibilityOverrideById = usePanelVisibilityOverrides();
   const setActivePanelIdAndExpand = useEpicLeftPanelStore(
     (s) => s.setActivePanelIdAndExpand,
   );
   const toggleMainCollapsed = useEpicLeftPanelStore(
     (s) => s.toggleMainCollapsed,
   );
-  const visibleGroups = useMemo(
-    () =>
-      getVisibleLeftPanelGroups(
-        panelGroups,
-        commentsPanelRevealed,
-        hasActiveCommentableArtifact,
-      ),
-    [commentsPanelRevealed, hasActiveCommentableArtifact, panelGroups],
+  const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
+    () => ({
+      commentsPanelRevealed,
+      hasActiveCommentableArtifact,
+      hasPullRequests,
+      visibilityOverrideById,
+    }),
+    [
+      commentsPanelRevealed,
+      hasActiveCommentableArtifact,
+      hasPullRequests,
+      visibilityOverrideById,
+    ],
   );
+  const visibleGroups = useMemo(
+    () => getVisibleLeftPanelGroups(panelGroups, availabilityContext),
+    [availabilityContext, panelGroups],
+  );
+  // Which icon lights up. Resolved rather than compared against `activePanelId`
+  // directly so a hidden active panel highlights whatever the body fell back
+  // to, instead of leaving the rail with nothing marked.
+  const activeGroupIndex = resolveActiveVisibleGroupIndex(
+    visibleGroups.map((group) => group.panelIds),
+    activePanelId,
+  );
+  // The icon the pointer was over when the menu opened, or null for empty rail
+  // space. Set on the button's own contextmenu after the rail's capture-phase
+  // reset, so both land in the same render as Radix opening the menu.
+  const [contextPanelId, setContextPanelId] = useState<LeftPanelId | null>(
+    null,
+  );
+  const handleRailContextMenuCapture = useCallback((): void => {
+    setContextPanelId(null);
+  }, []);
   const railListDropData = useMemo<EpicCanvasDropTargetData>(
     () => ({ kind: "left-panel-rail-list" }),
     [],
@@ -200,56 +252,171 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
 
   return (
     <TooltipProvider delayDuration={150}>
-      <div
-        ref={railDropRef}
-        role="toolbar"
-        aria-label="Epic left panels"
-        aria-orientation={orientation}
-        data-testid="epic-sidebar-rail"
-        data-orientation={orientation}
-        className={cn(
-          "relative flex items-center gap-1 bg-background",
-          orientation === "vertical" &&
-            "h-full w-12 shrink-0 flex-col justify-start overflow-y-auto py-2",
-          orientation === "horizontal" &&
-            "h-10 w-full min-w-0 flex-row justify-center overflow-x-auto px-2",
-        )}
-      >
-        {railBoundaryIndex === 0 ? (
-          <RailBoundaryPreview
-            definition={panelSectionDropDefinition}
-            orientation={orientation}
-          />
-        ) : null}
-        {visibleGroups.map((group, groupIndex) => {
-          const groupDropPosition =
-            railPanelDropPreview?.kind === "left-panel-rail" &&
-            railPanelDropPreview.panelId === group.primaryPanel.id
-              ? railPanelDropPreview.position
-              : null;
-          return (
-            <Fragment key={group.primaryPanel.id}>
-              <RailGroupButton
-                panelIds={group.panelIds}
-                primaryPanel={group.primaryPanel}
+      {/*
+        One context menu for the WHOLE rail rather than one per icon. Right-
+        clicking an icon opens it, and so does right-clicking the empty rail -
+        which is the only way back to a panel the user hid, once there is no
+        icon left to aim at. Nesting a second trigger on the button would fire
+        both menus for the same event; the button reports which panel was under
+        the pointer through `contextPanelId` instead.
+      */}
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            ref={railDropRef}
+            onContextMenuCapture={handleRailContextMenuCapture}
+            role="toolbar"
+            aria-label="Epic left panels"
+            aria-orientation={orientation}
+            data-testid="epic-sidebar-rail"
+            data-orientation={orientation}
+            className={cn(
+              "relative flex items-center gap-1 bg-background",
+              orientation === "vertical" &&
+                "h-full w-12 shrink-0 flex-col justify-start overflow-y-auto py-2",
+              orientation === "horizontal" &&
+                "h-10 w-full min-w-0 flex-row justify-center overflow-x-auto px-2",
+            )}
+          >
+            {railBoundaryIndex === 0 ? (
+              <RailBoundaryPreview
+                definition={panelSectionDropDefinition}
                 orientation={orientation}
-                active={group.panelIds.includes(activePanelId) && !collapsed}
-                onClick={() => handleClick(group.panelIds)}
-                dropPosition={
-                  groupDropPosition === "combine" ? "combine" : null
-                }
               />
-              {railBoundaryIndex === groupIndex + 1 ? (
-                <RailBoundaryPreview
-                  definition={panelSectionDropDefinition}
-                  orientation={orientation}
-                />
-              ) : null}
-            </Fragment>
-          );
-        })}
-      </div>
+            ) : null}
+            {visibleGroups.map((group, groupIndex) => {
+              const groupDropPosition =
+                railPanelDropPreview?.kind === "left-panel-rail" &&
+                railPanelDropPreview.panelId === group.primaryPanel.id
+                  ? railPanelDropPreview.position
+                  : null;
+              return (
+                <Fragment key={group.primaryPanel.id}>
+                  <RailGroupButton
+                    epicId={epicId}
+                    panelIds={group.panelIds}
+                    primaryPanel={group.primaryPanel}
+                    orientation={orientation}
+                    active={groupIndex === activeGroupIndex && !collapsed}
+                    onClick={() => handleClick(group.panelIds)}
+                    onContextMenu={setContextPanelId}
+                    dropPosition={
+                      groupDropPosition === "combine" ? "combine" : null
+                    }
+                  />
+                  {railBoundaryIndex === groupIndex + 1 ? (
+                    <RailBoundaryPreview
+                      definition={panelSectionDropDefinition}
+                      orientation={orientation}
+                    />
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </div>
+        </ContextMenuTrigger>
+        <RailContextMenuContent
+          context={availabilityContext}
+          contextPanelId={contextPanelId}
+        />
+      </ContextMenu>
     </TooltipProvider>
+  );
+}
+
+/**
+ * Rail context menu: every panel we have, each with a checkmark for whether it
+ * is in the rail right now. Unchecking hides a panel; checking one reveals it -
+ * including the presence-gated `pull-requests` / `comments`, where an explicit
+ * check keeps the icon there even before the thing that would reveal it exists.
+ *
+ * A choice is stored only when it disagrees with the panel's own rule (see
+ * `setPanelVisibilityOverride`), so checking an already-auto-visible panel
+ * leaves it following that rule rather than pinning today's answer forever.
+ *
+ * The last visible panel cannot be unchecked: the sidebar body always renders
+ * some panel, so an empty rail would leave the two disagreeing with no icon to
+ * click back.
+ */
+function RailContextMenuContent(props: {
+  readonly context: LeftPanelAvailabilityContext;
+  readonly contextPanelId: LeftPanelId | null;
+}): ReactNode {
+  const setOverride = useEpicLeftPanelStore(
+    (s) => s.setPanelVisibilityOverride,
+  );
+  const clearOverrides = useEpicLeftPanelStore(
+    (s) => s.clearPanelVisibilityOverrides,
+  );
+  const { context, contextPanelId } = props;
+  const visibility = LEFT_PANEL_DEFINITIONS.map((definition) => ({
+    definition,
+    visible: isLeftPanelVisible(definition, context),
+    autoVisible: definition.isAutoVisible(context),
+  }));
+  const visibleCount = visibility.filter((entry) => entry.visible).length;
+  const entries = visibility.map((entry) => ({
+    ...entry,
+    // The last one standing stays put; see the note above.
+    locked: entry.visible && visibleCount === 1,
+  }));
+  const hasOverrides = Object.keys(context.visibilityOverrideById).length > 0;
+  const pointedEntry =
+    entries.find((entry) => entry.definition.id === contextPanelId) ?? null;
+
+  return (
+    <ContextMenuContent
+      className="min-w-56"
+      data-testid="epic-rail-context-menu"
+    >
+      {pointedEntry !== null && visibleCount > 1 ? (
+        <>
+          <ContextMenuItem
+            onSelect={() => setOverride(pointedEntry.definition.id, false)}
+            data-testid="epic-rail-hide-pointed-panel"
+          >
+            {`Hide '${pointedEntry.definition.title}'`}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+        </>
+      ) : null}
+      {entries.map((entry) => (
+        <ContextMenuCheckboxItem
+          key={entry.definition.id}
+          checked={entry.visible}
+          disabled={entry.locked}
+          onCheckedChange={(next) =>
+            setOverride(
+              entry.definition.id,
+              next === entry.autoVisible ? null : next,
+            )
+          }
+          data-testid={`epic-rail-toggle-${entry.definition.id}`}
+        >
+          <entry.definition.icon
+            className="text-muted-foreground"
+            aria-hidden
+          />
+          {entry.definition.title}
+          {entry.visible && !entry.autoVisible ? (
+            <span className="ml-auto pl-4 text-ui-xs text-muted-foreground">
+              {entry.definition.forcedOnHint}
+            </span>
+          ) : null}
+        </ContextMenuCheckboxItem>
+      ))}
+      {hasOverrides ? (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            onSelect={clearOverrides}
+            data-testid="epic-rail-reset-panel-visibility"
+          >
+            Reset panel visibility
+          </ContextMenuItem>
+        </>
+      ) : null}
+    </ContextMenuContent>
   );
 }
 
@@ -306,17 +473,31 @@ function RailPanelDropLine(props: { readonly orientation: RailOrientation }) {
 }
 
 interface RailGroupButtonProps {
+  readonly epicId: string;
   readonly panelIds: ReadonlyArray<LeftPanelId>;
   readonly primaryPanel: LeftPanelMetadataDefinition;
   readonly orientation: RailOrientation;
   readonly active: boolean;
   readonly onClick: () => void;
+  /** Reports the panel under the pointer to the rail-wide context menu. */
+  readonly onContextMenu: (panelId: LeftPanelId) => void;
   readonly dropPosition: "combine" | null;
 }
 
 function RailGroupButton(props: RailGroupButtonProps) {
-  const { panelIds, primaryPanel, orientation, active, onClick, dropPosition } =
-    props;
+  const {
+    epicId,
+    panelIds,
+    primaryPanel,
+    orientation,
+    active,
+    onClick,
+    onContextMenu,
+    dropPosition,
+  } = props;
+  const handleContextMenu = useCallback((): void => {
+    onContextMenu(primaryPanel.id);
+  }, [onContextMenu, primaryPanel.id]);
   const dragData = useMemo<EpicCanvasLeftPanelRailDragData>(
     () => ({
       kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -349,6 +530,12 @@ function RailGroupButton(props: RailGroupButtonProps) {
     [dragRef, dropRef],
   );
 
+  const hostId = useReactiveActiveHostId();
+  const prChangedDot = usePrSeenFactsStore(
+    selectPrHasChangedDot(hostId, epicId),
+  );
+  const showChangedDot = panelIds.includes("pull-requests") && prChangedDot;
+
   return (
     <RailButton
       buttonRef={setButtonRef}
@@ -364,6 +551,8 @@ function RailGroupButton(props: RailGroupButtonProps) {
       dropPosition={dropPosition}
       testId={`epic-rail-${primaryPanel.id}`}
       onClick={onClick}
+      onContextMenu={handleContextMenu}
+      showChangedDot={showChangedDot}
     />
   );
 }
@@ -380,6 +569,8 @@ interface RailButtonProps {
   readonly dropPosition: "combine" | null;
   readonly testId: string;
   readonly onClick: () => void;
+  readonly onContextMenu: () => void;
+  readonly showChangedDot: boolean;
 }
 
 function RailButton(props: RailButtonProps) {
@@ -395,6 +586,8 @@ function RailButton(props: RailButtonProps) {
     dropPosition,
     testId,
     onClick,
+    onContextMenu,
+    showChangedDot,
   } = props;
   const Icon = icons[0] ?? getPanelDefinition("chats").icon;
   const activeClass =
@@ -417,10 +610,15 @@ function RailButton(props: RailButtonProps) {
         type="button"
         variant="ghost"
         size="icon-sm"
-        aria-label={label}
+        aria-label={
+          showChangedDot ? `${label}, new pull request updates` : label
+        }
         aria-current={active}
         data-testid={testId}
+        data-pr-changed-dot={showChangedDot ? "true" : "false"}
         onClick={onClick}
+        // Bubbles on to the rail's own trigger, which opens the shared menu.
+        onContextMenu={onContextMenu}
         className={cn(
           "relative size-9 rounded-md text-muted-foreground hover:text-foreground",
           active && activeClass,
@@ -441,6 +639,13 @@ function RailButton(props: RailButtonProps) {
               glow={false}
               className={activeIndicatorClass}
               testId={undefined}
+            />
+          ) : null}
+          {showChangedDot ? (
+            <span
+              aria-hidden
+              data-testid="pr-changed-dot"
+              className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-primary"
             />
           ) : null}
         </span>

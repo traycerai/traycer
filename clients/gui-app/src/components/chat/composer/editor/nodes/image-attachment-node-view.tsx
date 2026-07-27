@@ -7,6 +7,7 @@ import { fallbackImageAttachmentDisplayLabel } from "@/lib/composer/image-attach
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { imageAttachmentDisplayLabelFromDecorations } from "./image-attachment-label-decorations";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const IMAGE_ATTACHMENT_CLASS_NAMES = composerInlineChipClassNames("regular");
 
 function ImageAttachmentNodeViewBase(props: NodeViewProps) {
@@ -20,24 +21,30 @@ function ImageAttachmentNodeViewBase(props: NodeViewProps) {
     });
 
   return (
-    <NodeViewWrapper
-      as="span"
-      aria-label={`Attached ${label.ariaLabel}`}
-      className={IMAGE_ATTACHMENT_CLASS_NAMES.root}
-      contentEditable={false}
-      data-composer-image-atom=""
-      data-composer-image-id={id ?? undefined}
-      data-composer-chip="image-attachment"
-      title={label.title}
+    <TooltipWrapper
+      label={label.title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <ImageIcon
-        className={IMAGE_ATTACHMENT_CLASS_NAMES.mutedIcon}
-        aria-hidden
-      />
-      <span className={IMAGE_ATTACHMENT_CLASS_NAMES.text}>
-        {label.inlineLabel}
-      </span>
-    </NodeViewWrapper>
+      <NodeViewWrapper
+        as="span"
+        aria-label={`Attached ${label.ariaLabel}`}
+        className={IMAGE_ATTACHMENT_CLASS_NAMES.root}
+        contentEditable={false}
+        data-composer-image-atom=""
+        data-composer-image-id={id ?? undefined}
+        data-composer-chip="image-attachment"
+      >
+        <ImageIcon
+          className={IMAGE_ATTACHMENT_CLASS_NAMES.mutedIcon}
+          aria-hidden
+        />
+        <span className={IMAGE_ATTACHMENT_CLASS_NAMES.text}>
+          {label.inlineLabel}
+        </span>
+      </NodeViewWrapper>
+    </TooltipWrapper>
   );
 }
 

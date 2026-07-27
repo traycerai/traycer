@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, type CSSProperties, type Ref } from "react";
-import { Pin, PinOff } from "lucide-react";
+import { FoldVertical, Pin, PinOff } from "lucide-react";
 import {
   animate,
   useMotionValue,
@@ -35,6 +35,16 @@ interface ContextUsageChipProps {
    * percent isn't a finite number.
    */
   readonly usage: TokenUsage | null;
+  /**
+   * Runs the harness's own compaction. `null` when this session can't be
+   * compacted on demand - either the harness has no compaction at all
+   * (amp, droid, cursor) or it only ever compacts automatically (copilot,
+   * which exposes no manual command). The affordance is then absent rather
+   * than disabled: a greyed-out control reads as "temporarily unavailable"
+   * when the truth is "this harness can't do this", the same fail-closed rule
+   * the chip itself follows when a harness reports no context window.
+   */
+  readonly onCompact: (() => void) | null;
 }
 
 type ContextUsageMeterStyle = CSSProperties & {
@@ -46,7 +56,7 @@ const PINNED_NUMBER_TRANSITION = {
   ease: "easeOut",
 } as const;
 
-export function ContextUsageChip({ usage }: ContextUsageChipProps) {
+export function ContextUsageChip({ usage, onCompact }: ContextUsageChipProps) {
   const preserveFocusOnOpenRef = useRef(false);
   const pinBreakdownActionRef = useRef<HTMLButtonElement>(null);
   const compactTriggerRef = useRef<HTMLButtonElement>(null);
@@ -98,6 +108,7 @@ export function ContextUsageChip({ usage }: ContextUsageChipProps) {
         rows={rows}
         effective={effective}
         onUnpin={unpinFromPinnedStrip}
+        onCompact={onCompact}
         actionRef={pinnedUnpinActionRef}
       />
     );
@@ -111,7 +122,8 @@ export function ContextUsageChip({ usage }: ContextUsageChipProps) {
   };
 
   return (
-    <div className="min-w-0 justify-self-end">
+    <div className="flex min-w-0 items-center gap-0.5 justify-self-end">
+      {onCompact === null ? null : <CompactAction onCompact={onCompact} />}
       <Popover>
         <PopoverTrigger asChild>
           <button
@@ -174,6 +186,42 @@ export function ContextUsageChip({ usage }: ContextUsageChipProps) {
   );
 }
 
+interface CompactActionProps {
+  readonly onCompact: () => void;
+}
+
+/**
+ * Triggers the harness's own compaction from the context surface - the one
+ * place that already reports how much window is left, so the remedy sits with
+ * the reading that motivates it. Never starts a turn mid-flight: while one is
+ * running this queues `/compact` ahead of the rest of the queue, and only runs
+ * it outright when there is nothing to wait for. `self-center` because the
+ * pinned strip lays its usage figures out on a shared text baseline, which a
+ * button box would otherwise be dragged onto.
+ */
+function CompactAction({ onCompact }: CompactActionProps) {
+  return (
+    <TooltipWrapper
+      label="Compact conversation"
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Compact conversation"
+        data-testid="context-usage-compact-action"
+        className="shrink-0 self-center text-muted-foreground hover:text-foreground"
+        onClick={onCompact}
+      >
+        <FoldVertical className="size-3.5" aria-hidden />
+      </Button>
+    </TooltipWrapper>
+  );
+}
+
 interface ContextUsageBreakdownProps {
   readonly rows: readonly ContextUsageRow[];
   readonly effective: EffectiveContextUsage;
@@ -230,6 +278,7 @@ interface ContextUsagePinnedStripProps {
   readonly rows: readonly ContextUsageRow[];
   readonly effective: EffectiveContextUsage;
   readonly onUnpin: (restoreFocus: boolean) => void;
+  readonly onCompact: (() => void) | null;
   readonly actionRef: Ref<HTMLButtonElement>;
 }
 
@@ -237,6 +286,7 @@ function ContextUsagePinnedStrip({
   rows,
   effective,
   onUnpin,
+  onCompact,
   actionRef,
 }: ContextUsagePinnedStripProps) {
   const usedSummary = `${formatContextWindowTokens(effective.used)} / ${formatContextWindowTokens(effective.window)} used`;
@@ -276,6 +326,7 @@ function ContextUsagePinnedStrip({
               <PinnedUsageRow key={row.key} row={row} />
             ))}
           </div>
+          {onCompact === null ? null : <CompactAction onCompact={onCompact} />}
         </div>
         <TooltipWrapper
           label="Unpin context usage breakdown"

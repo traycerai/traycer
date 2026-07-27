@@ -19,7 +19,9 @@ import {
   useSidebarReparentRootActive,
 } from "@/components/epic-canvas/dnd/dnd-store";
 import {
+  isLeftPanelVisible,
   LEFT_PANEL_DEFINITIONS,
+  resolveActiveVisibleGroupIndex,
   type LeftPanelAvailabilityContext,
   type LeftPanelMetadataDefinition,
   type LeftPanelSlotProps,
@@ -82,10 +84,15 @@ import {
   useLeftPanelGroups,
   useLeftPanelSectionCollapsed,
   useLocalRootCreatePending,
+  usePanelVisibilityOverrides,
   type LeftPanelGroup,
   type LeftPanelId,
   type RootCreatePanelId,
 } from "@/stores/epics/left-panel-store";
+import {
+  selectPrScopeHasItems,
+  usePrSeenFactsStore,
+} from "@/stores/epics/pr-seen-facts-store";
 import {
   useFileTreeStore,
   useSelectedFileTreeWorkspace,
@@ -146,6 +153,7 @@ import {
   Download,
   FolderOpen,
   ListChecks,
+  MessageSquareText,
   MoreHorizontal,
   Plus,
   Search,
@@ -154,6 +162,8 @@ import {
 } from "lucide-react";
 import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff-panel-body-live";
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
+import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
+import { PrPanelActions } from "@/components/epic-canvas/pr/pr-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -184,6 +194,7 @@ import {
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useShallow } from "zustand/react/shallow";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS = "@max-[21rem]:hidden";
 
 interface ArtifactReadTarget {
@@ -363,6 +374,14 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
     },
     loading: emptyLoadingSlots(GenericLoadingPanelBody),
   },
+  "pull-requests": {
+    live: {
+      Body: PrPanelBody,
+      Actions: PrPanelActions,
+      Subtitle: null,
+    },
+    loading: emptyLoadingSlots(GenericLoadingPanelBody),
+  },
   "file-tree": {
     live: {
       Body: FileTreePanelBody,
@@ -430,7 +449,7 @@ function getVisiblePanelGroupDefinitions(
 ): ReadonlyArray<LeftPanelDefinition> {
   return group.panelIds.flatMap((panelId) => {
     const definition = getLeftPanelDefinition(definitionsById, panelId);
-    return definition.isVisible(context) ? [definition] : [];
+    return isLeftPanelVisible(definition, context) ? [definition] : [];
   });
 }
 
@@ -448,15 +467,18 @@ function getActivePanelDefinitions(
     );
     return definitions.length === 0 ? [] : [definitions];
   });
-  const activeGroup = visibleGroups.find((group) =>
-    group.some((definition) => definition.id === activePanelId),
+  // Shared with the rail so the highlighted icon and the rendered body agree
+  // even when the active panel is hidden.
+  const activeIndex = resolveActiveVisibleGroupIndex(
+    visibleGroups.map((definitions) =>
+      definitions.map((definition) => definition.id),
+    ),
+    activePanelId,
   );
-  if (activeGroup !== undefined) return activeGroup;
-  const defaultGroup = visibleGroups.find((group) =>
-    group.some((definition) => definition.id === DEFAULT_LEFT_PANEL_ID),
-  );
-  if (defaultGroup !== undefined) return defaultGroup;
-  return [getLeftPanelDefinition(definitionsById, DEFAULT_LEFT_PANEL_ID)];
+  if (activeIndex === null) {
+    return [getLeftPanelDefinition(definitionsById, DEFAULT_LEFT_PANEL_ID)];
+  }
+  return visibleGroups[activeIndex];
 }
 
 export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
@@ -468,9 +490,24 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
   const activeArtifact = useEpicArtifact(activeArtifactId);
   const hasActiveCommentableArtifact =
     activeArtifact !== null && "kind" in activeArtifact;
+  const hostId = useReactiveActiveHostId();
+  const hasPullRequests = usePrSeenFactsStore(
+    selectPrScopeHasItems(hostId, epicId),
+  );
+  const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
-    () => ({ commentsPanelRevealed, hasActiveCommentableArtifact }),
-    [commentsPanelRevealed, hasActiveCommentableArtifact],
+    () => ({
+      commentsPanelRevealed,
+      hasActiveCommentableArtifact,
+      hasPullRequests,
+      visibilityOverrideById,
+    }),
+    [
+      commentsPanelRevealed,
+      hasActiveCommentableArtifact,
+      hasPullRequests,
+      visibilityOverrideById,
+    ],
   );
   const panels = useMemo(
     () =>
@@ -505,12 +542,22 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
   const activePanelId = useActiveLeftPanelId(tabId);
   const panelGroups = useLeftPanelGroups();
   const commentsPanelRevealed = useCommentsPanelRevealed(tabId);
+  const hostId = useReactiveActiveHostId();
+  // The persisted PR baseline is readable before the epic's Y.doc resolves, so
+  // the loading rail already shows the same set of panels the live one will -
+  // no icon appears or disappears as the epic finishes opening.
+  const hasPullRequests = usePrSeenFactsStore(
+    selectPrScopeHasItems(hostId, epicId),
+  );
+  const visibilityOverrideById = usePanelVisibilityOverrides();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
     () => ({
       commentsPanelRevealed,
       hasActiveCommentableArtifact: false,
+      hasPullRequests,
+      visibilityOverrideById,
     }),
-    [commentsPanelRevealed],
+    [commentsPanelRevealed, hasPullRequests, visibilityOverrideById],
   );
   const panels = useMemo(
     () =>
@@ -1004,7 +1051,19 @@ function CommentsPanelBodyLive(props: {
   readonly tabId: string;
 }) {
   const activeArtifactId = useActiveEpicArtifactId(props.tabId);
-  if (activeArtifactId === null) return null;
+  // Normally unreachable - the panel is revealed by an artifact that has
+  // comments. Reachable once a user checks Comments in the rail context menu,
+  // which keeps the panel there regardless of what the canvas is showing.
+  if (activeArtifactId === null) {
+    return (
+      <SidebarPanelEmptyState
+        icon={MessageSquareText}
+        title="No artifact open"
+        description="Open an artifact to see and add comments on it."
+        testId="epic-comments-empty"
+      />
+    );
+  }
   return (
     <CommentSidebarPanel
       epicId={props.epicId}
@@ -1536,23 +1595,31 @@ function TreePanelActions(props: TreePanelActionsProps) {
 
   return (
     <div className="flex items-center gap-0.5">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        onClick={collapseAll}
-        aria-label="Collapse all"
-        title="Collapse all"
-        data-testid={`epic-sidebar-collapse-all-${props.panelId}`}
-        disabled={props.collapsed}
-        className={cn(
-          "text-muted-foreground hover:text-foreground",
-          PANEL_HEADER_ACTION_REVEAL_CLASS,
-          COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
-        )}
+      <TooltipWrapper
+        label="Collapse all"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <CopyMinus className="size-4" />
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={collapseAll}
+            aria-label="Collapse all"
+            data-testid={`epic-sidebar-collapse-all-${props.panelId}`}
+            disabled={props.collapsed}
+            className={cn(
+              "text-muted-foreground hover:text-foreground",
+              PANEL_HEADER_ACTION_REVEAL_CLASS,
+              COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
+            )}
+          >
+            <CopyMinus className="size-4" />
+          </Button>
+        </span>
+      </TooltipWrapper>
       {props.panelId === "chats" ? (
         <NewConversationModalAction
           epicId={props.epicId}
@@ -1723,23 +1790,36 @@ function CompactMoreMenuTrigger(props: {
   readonly collapsed: boolean;
 }) {
   return (
-    <DropdownMenuTrigger asChild>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label={props.label}
-        title={props.label}
-        disabled={props.collapsed}
-        className={cn(
-          "hidden text-muted-foreground hover:text-foreground aria-expanded:opacity-100 @max-[21rem]:inline-flex",
-          PANEL_HEADER_ACTION_REVEAL_CLASS,
-        )}
-        data-testid={props.testId}
-      >
-        <MoreHorizontal className="size-4" />
-      </Button>
-    </DropdownMenuTrigger>
+    // Tooltip OUTSIDE the menu trigger, with no span between them: both are
+    // `asChild`, so nesting this way merges the tooltip's and the menu's props
+    // onto the button itself. A guard span in between took delivery of them
+    // instead - which broke this button's own `aria-expanded:opacity-100` (the
+    // attribute landed on the span) and left the always-`inline-flex` span
+    // rendered in the header while its `@max-[21rem]:inline-flex` child stayed
+    // hidden at wider widths.
+    <TooltipWrapper
+      label={props.label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={props.label}
+          disabled={props.collapsed}
+          className={cn(
+            "hidden text-muted-foreground hover:text-foreground aria-expanded:opacity-100 @max-[21rem]:inline-flex",
+            PANEL_HEADER_ACTION_REVEAL_CLASS,
+          )}
+          data-testid={props.testId}
+        >
+          <MoreHorizontal className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+    </TooltipWrapper>
   );
 }
 
@@ -1854,23 +1934,31 @@ function MarkAllArtifactsReadButton(props: {
   }, [markRead, props.epicId, unreadArtifacts]);
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      onClick={handleMarkAllRead}
-      aria-label="Mark all unread artifacts as read"
-      title="Mark all unread artifacts as read"
-      data-testid="epic-sidebar-mark-all-artifacts-read"
-      disabled={props.collapsed || unreadArtifacts.length === 0}
-      className={cn(
-        "text-muted-foreground hover:text-foreground",
-        PANEL_HEADER_ACTION_REVEAL_CLASS,
-        COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
-      )}
+    <TooltipWrapper
+      label="Mark all unread artifacts as read"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <CheckCheck className="size-4" />
-    </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={handleMarkAllRead}
+          aria-label="Mark all unread artifacts as read"
+          data-testid="epic-sidebar-mark-all-artifacts-read"
+          disabled={props.collapsed || unreadArtifacts.length === 0}
+          className={cn(
+            "text-muted-foreground hover:text-foreground",
+            PANEL_HEADER_ACTION_REVEAL_CLASS,
+            COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
+          )}
+        >
+          <CheckCheck className="size-4" />
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -1884,22 +1972,30 @@ function ArtifactSearchButton(props: { readonly collapsed: boolean }) {
   const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
   if (!available) return null;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      onClick={() => openSearch("artifacts", "")}
-      aria-label="Search artifacts"
-      title="Search artifacts"
-      data-testid="epic-sidebar-search-artifacts"
-      disabled={props.collapsed}
-      className={cn(
-        "text-muted-foreground hover:text-foreground @max-[14rem]:hidden",
-        PANEL_HEADER_ACTION_REVEAL_CLASS,
-      )}
+    <TooltipWrapper
+      label="Search artifacts"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <Search className="size-4" />
-    </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => openSearch("artifacts", "")}
+          aria-label="Search artifacts"
+          data-testid="epic-sidebar-search-artifacts"
+          disabled={props.collapsed}
+          className={cn(
+            "text-muted-foreground hover:text-foreground @max-[14rem]:hidden",
+            PANEL_HEADER_ACTION_REVEAL_CLASS,
+          )}
+        >
+          <Search className="size-4" />
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -2011,17 +2107,25 @@ function SidebarBulkSelectionActions() {
       >
         {selection.allVisibleSelected ? "Deselect all" : "Select all"}
       </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Cancel selection"
-        title="Cancel selection"
-        disabled={selection.deletePending}
-        onClick={selection.cancelSelection}
+      <TooltipWrapper
+        label="Cancel selection"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <X className="size-3.5" />
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Cancel selection"
+            disabled={selection.deletePending}
+            onClick={selection.cancelSelection}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </span>
+      </TooltipWrapper>
       {selection.panelId === "artifacts" ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

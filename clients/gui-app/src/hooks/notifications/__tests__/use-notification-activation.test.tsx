@@ -11,6 +11,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import type { NotificationNavigate } from "@/lib/notifications";
 
 type CapturedNavigate = {
   readonly to: string;
@@ -26,6 +27,13 @@ type CapturedNavigate = {
 const navigateSpy = vi.hoisted(() =>
   vi.fn<(options: CapturedNavigate) => void>(),
 );
+const explicitNavigateCalls = vi.hoisted(() =>
+  vi.fn<(options: unknown) => void>(),
+);
+const explicitNavigate: NotificationNavigate = (options) => {
+  explicitNavigateCalls(options);
+  return Promise.resolve();
+};
 const activeHostIdStub: { value: string | null } = vi.hoisted(() => ({
   value: "stub-host",
 }));
@@ -53,7 +61,10 @@ vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: vi.fn(),
 }));
 
-import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
+import {
+  useNotificationActivation,
+  useNotificationActivationWithNavigate,
+} from "@/hooks/notifications/use-notification-activation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 function createTestQueryClient(): QueryClient {
@@ -90,6 +101,7 @@ describe("useNotificationActivation", () => {
   beforeEach(() => {
     navigateSpy.mockReset();
     navigateSpy.mockImplementation(() => undefined);
+    explicitNavigateCalls.mockReset();
     activeHostIdStub.value = "stub-host";
     bindStubClient();
     useEpicCanvasStore.setState({
@@ -97,6 +109,33 @@ describe("useNotificationActivation", () => {
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
+    });
+  });
+
+  it("routes with an explicitly owned router outside ambient router context", () => {
+    const hook = renderHook(
+      () => useNotificationActivationWithNavigate(explicitNavigate),
+      { wrapper: createWrapper() },
+    );
+
+    act(() => {
+      hook.result.current.activate({
+        payload: { kind: "chat", epicId: "epic-owned", chatId: "chat-owned" },
+        receivedAt: 789,
+        feedId: "host:n-owned",
+        onResult: null,
+      });
+    });
+
+    expect(explicitNavigateCalls).toHaveBeenCalledTimes(1);
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(explicitNavigateCalls.mock.calls[0][0]).toMatchObject({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-owned" },
+      search: {
+        focusedAt: 789,
+        focusArtifactId: "chat-owned",
+      },
     });
   });
 

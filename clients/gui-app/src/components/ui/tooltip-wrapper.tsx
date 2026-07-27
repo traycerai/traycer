@@ -38,7 +38,16 @@ export function TooltipWrapper(props: TooltipWrapperProps) {
     onOpenChange,
     ...rest
   } = props;
-  if (label === null || (typeof label === "string" && label.length === 0)) {
+  // `undefined` degrades exactly like `null`. It used to fall through and
+  // render an empty tooltip box, which is never what a caller means - and the
+  // shape that produces it (`someReason ?? undefined`, left over from the
+  // native `title` attribute this component replaces) is the single most
+  // common way to call it.
+  if (
+    label === null ||
+    label === undefined ||
+    (typeof label === "string" && label.length === 0)
+  ) {
     return <Slot.Root {...rest}>{children}</Slot.Root>;
   }
   return (
