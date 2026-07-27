@@ -51,14 +51,14 @@ export function useWsStreamClient(): WsStreamClient<HostStreamRpcRegistry> | nul
 // null-client handling; only the per-snapshot read differs. The readers are
 // module-level constants so `getSnapshot`'s identity stays keyed on
 // `[client, method]` alone.
-function useStreamMethodValueForClient<T>(
-  client: WsStreamClient<HostStreamRpcRegistry> | null,
+function useStreamMethodValue<T>(
   method: keyof HostStreamRpcRegistry & string,
   read: (
     client: WsStreamClient<HostStreamRpcRegistry>,
     method: keyof HostStreamRpcRegistry & string,
   ) => T,
 ): T | null {
+  const client = useWsStreamClient();
   const subscribe = useCallback(
     (callback: () => void) => {
       if (client === null) {
@@ -75,17 +75,6 @@ function useStreamMethodValueForClient<T>(
     return read(client, method);
   }, [client, method, read]);
   return useSyncExternalStore(subscribe, getSnapshot, () => null);
-}
-
-function useStreamMethodValue<T>(
-  method: keyof HostStreamRpcRegistry & string,
-  read: (
-    client: WsStreamClient<HostStreamRpcRegistry>,
-    method: keyof HostStreamRpcRegistry & string,
-  ) => T,
-): T | null {
-  const client = useWsStreamClient();
-  return useStreamMethodValueForClient(client, method, read);
 }
 
 const readMethodSupport = (
@@ -108,18 +97,4 @@ export function useStreamMethodSchemaVersion(
   method: keyof HostStreamRpcRegistry & string,
 ): SchemaVersion | null {
   return useStreamMethodValue(method, readMethodSchemaVersion);
-}
-
-/**
- * Method-support reader for an EXPLICIT client instance, not the app-wide
- * default-host `StreamRuntimeContext`. A per-tab tile (`useHostStreamClientFor`)
- * dials a transient client for its bound host, which may not be the app's
- * default/active host - `useStreamMethodSupport` would read the wrong
- * client's negotiated capabilities in that case.
- */
-export function useStreamMethodSupportFor(
-  client: WsStreamClient<HostStreamRpcRegistry> | null,
-  method: keyof HostStreamRpcRegistry & string,
-): StreamMethodSupport | null {
-  return useStreamMethodValueForClient(client, method, readMethodSupport);
 }

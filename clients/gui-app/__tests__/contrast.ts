@@ -14,13 +14,6 @@ export interface ThemeSurfaces {
   readonly background: string;
   readonly canvas: string;
   readonly popover: string;
-  /**
-   * `--accent`. Carried because selection surfaces wash it over the row and
-   * then composite a state tint on top, and most presets keep it a near-grey
-   * while `traycer-green` sets it to its saturated `--primary` - the one case
-   * that decides whether a tinted glyph survives being selected.
-   */
-  readonly accent: string;
 }
 
 export const LIGHT_THEME_SURFACES: Readonly<Record<string, ThemeSurfaces>> = {
@@ -28,67 +21,32 @@ export const LIGHT_THEME_SURFACES: Readonly<Record<string, ThemeSurfaces>> = {
     background: "oklch(0.985 0 0)",
     canvas: "oklch(1 0 0)",
     popover: "oklch(1 0 0)",
-    accent: "oklch(0.97 0 0)",
   },
-  amoled: {
-    background: "#fafafa",
-    canvas: "#ffffff",
-    popover: "#ffffff",
-    accent: "#ebebeb",
-  },
+  amoled: { background: "#fafafa", canvas: "#ffffff", popover: "#ffffff" },
   "traycer-green": {
     background: "#f6f9f8",
     canvas: "#ffffff",
     popover: "#ffffff",
-    accent: "#eaeaea",
   },
-  dracula: {
-    background: "#efefef",
-    canvas: "#f8f8f2",
-    popover: "#ffffff",
-    accent: "#eaeaee",
-  },
+  dracula: { background: "#efefef", canvas: "#f8f8f2", popover: "#ffffff" },
   catppuccin: {
     background: "#e6e9ef",
     canvas: "#eff1f5",
     popover: "#e6e9ef",
-    accent: "#ccd0da",
   },
-  github: {
-    background: "#f6f8fa",
-    canvas: "#ffffff",
-    popover: "#ffffff",
-    accent: "#eaeef2",
-  },
-  gruvbox: {
-    background: "#f2e5bc",
-    canvas: "#fbf1c7",
-    popover: "#f2e5bc",
-    accent: "#ebdbb2",
-  },
+  github: { background: "#f6f8fa", canvas: "#ffffff", popover: "#ffffff" },
+  gruvbox: { background: "#f2e5bc", canvas: "#fbf1c7", popover: "#f2e5bc" },
   "tokyo-night": {
     background: "#d0d5e3",
     canvas: "#e1e2e7",
     popover: "#d0d5e3",
-    accent: "#b7c1e3",
   },
-  nord: {
-    background: "#e5e9f0",
-    canvas: "#eceff4",
-    popover: "#e5e9f0",
-    accent: "#d8dee9",
-  },
-  ayu: {
-    background: "#f8f9fa",
-    canvas: "#fcfcfc",
-    popover: "#f8f9fa",
-    accent: "#eef0f3",
-  },
+  nord: { background: "#e5e9f0", canvas: "#eceff4", popover: "#e5e9f0" },
+  ayu: { background: "#f8f9fa", canvas: "#fcfcfc", popover: "#f8f9fa" },
   everforest: {
     background: "#f4f0d9",
     canvas: "#fdf6e3",
     popover: "#f4f0d9",
-    accent: "#efebd4",
   },
 };
 
@@ -97,67 +55,32 @@ export const DARK_THEME_SURFACES: Readonly<Record<string, ThemeSurfaces>> = {
     background: "oklch(0.205 0 0)",
     canvas: "oklch(0.145 0 0)",
     popover: "oklch(0.205 0 0)",
-    accent: "oklch(0.269 0 0)",
   },
-  amoled: {
-    background: "#000000",
-    canvas: "#000000",
-    popover: "#1a1a1a",
-    accent: "#1f1f1f",
-  },
+  amoled: { background: "#000000", canvas: "#000000", popover: "#1a1a1a" },
   "traycer-green": {
     background: "#121715",
     canvas: "#0f0f0f",
     popover: "#1a2421",
-    accent: "#257174",
   },
-  dracula: {
-    background: "#21222c",
-    canvas: "#282a36",
-    popover: "#343746",
-    accent: "#44475a",
-  },
+  dracula: { background: "#21222c", canvas: "#282a36", popover: "#343746" },
   catppuccin: {
     background: "#181825",
     canvas: "#1e1e2e",
     popover: "#313244",
-    accent: "#45475a",
   },
-  github: {
-    background: "#010409",
-    canvas: "#0d1117",
-    popover: "#161b22",
-    accent: "#21262d",
-  },
-  gruvbox: {
-    background: "#1d2021",
-    canvas: "#282828",
-    popover: "#32302f",
-    accent: "#3c3836",
-  },
+  github: { background: "#010409", canvas: "#0d1117", popover: "#161b22" },
+  gruvbox: { background: "#1d2021", canvas: "#282828", popover: "#32302f" },
   "tokyo-night": {
     background: "#16161e",
     canvas: "#1a1b26",
     popover: "#24283b",
-    accent: "#2a2e41",
   },
-  nord: {
-    background: "#242933",
-    canvas: "#2e3440",
-    popover: "#3b4252",
-    accent: "#434c5e",
-  },
-  ayu: {
-    background: "#080b10",
-    canvas: "#0b0e14",
-    popover: "#11151c",
-    accent: "#1c222b",
-  },
+  nord: { background: "#242933", canvas: "#2e3440", popover: "#3b4252" },
+  ayu: { background: "#080b10", canvas: "#0b0e14", popover: "#11151c" },
   everforest: {
     background: "#232a2e",
     canvas: "#2d353b",
     popover: "#343f44",
-    accent: "#3d484d",
   },
 };
 
