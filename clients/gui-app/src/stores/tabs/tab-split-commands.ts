@@ -8,7 +8,7 @@ import {
   type StripItem,
 } from "@/stores/tabs/layout";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
-import { useTabsStore } from "@/stores/tabs/store";
+import { readTabStripLayout, useTabsStore } from "@/stores/tabs/store";
 import { tabSurfaceDescriptor } from "@/stores/tabs/registry";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
@@ -84,7 +84,7 @@ export function resolveTabSplitCommandAvailability(
   invokedRef: TabRef | null,
 ): TabSplitCommandAvailability {
   const state = useTabsStore.getState();
-  const layout = layoutFromState();
+  const layout = readTabStripLayout();
   const focused = selectHostFocusedRef(state);
   const focusedItem = itemForRef(layout, focused);
   const invokedItem = itemForRef(layout, invokedRef);
@@ -141,16 +141,6 @@ export function executeTabSplitCommand(
     return executePairCommand(availability.pair, focused, invokedRef);
   }
   return executeGroupCommand(id, availability, invokedRef);
-}
-
-function layoutFromState(): PersistedTabStripLayout {
-  const state = useTabsStore.getState();
-  return {
-    version: 2 as const,
-    items: state.items,
-    activeItemId: state.activeItemId,
-    systemTabs: state.systemTabs,
-  };
 }
 
 function itemForRef(
@@ -244,7 +234,7 @@ function executeGroupCommand(
   availability: TabSplitCommandAvailability,
   invokedRef: TabRef | null,
 ): boolean {
-  const layout = layoutFromState();
+  const layout = readTabStripLayout();
   const focused = selectHostFocusedRef(useTabsStore.getState());
   const targetSplit = splitForCommand(
     itemForRef(layout, focused),

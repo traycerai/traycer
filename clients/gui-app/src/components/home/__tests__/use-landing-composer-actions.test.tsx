@@ -96,12 +96,15 @@ const UNKNOWN_WORKSPACE_PATH = "/tmp/unknown-workspace";
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
+  readonly reject: (reason: Error) => void;
 } {
   let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => {
+  let reject: (reason: Error) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 describe("useLandingComposerActions", () => {
@@ -704,6 +707,19 @@ describe("useLandingComposerActions", () => {
       landingMocks.request.mock.calls.filter((c) => c[0] === "epic.create"),
     ).toHaveLength(1);
     expect(landingMocks.navigate).not.toHaveBeenCalled();
+
+    // The guarded submit still STARTED an attempt before bailing, and each
+    // `draftId: null` resolves to its own draft - so the guard has to settle
+    // the attempt it is refusing. Otherwise that second draft keeps a composer
+    // disabled forever with nothing left in flight to release it.
+    const stillSubmitting = useLandingDraftStore
+      .getState()
+      .drafts.filter(
+        (draft) =>
+          draftRuntimeRegistry.getOrHydrate(draft.id)?.store.getState()
+            .isSubmitting === true,
+      );
+    expect(stillSubmitting).toEqual([]);
 
     queryClient.clear();
   });
@@ -1321,6 +1337,65 @@ describe("useLandingComposerActions", () => {
       useInitialChatHandoffStore.getState().handoffs,
     )[0];
     expect(handoffAfter.status).toBe("pending");
+    queryClient.clear();
+  });
+
+  it("retires a REJECTED create at identity teardown without marking its handoff failed", async () => {
+    // The mirror of the test above on the failure arm. A late rejection after
+    // teardown must not write `failed` back onto the torn-down identity: the
+    // bridge has already moved on, so the next identity would inherit a
+    // failure banner for a submission it never made.
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-retired-reject", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      Object.values(useInitialChatHandoffStore.getState().handoffs)[0].status,
+    ).toBe("pending");
+
+    draftRuntimeRegistry.teardown();
+    createGate.reject(new Error("epic.create rejected after teardown"));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      Object.values(useInitialChatHandoffStore.getState().handoffs)[0].status,
+    ).toBe("pending");
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     queryClient.clear();
   });
 

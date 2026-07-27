@@ -400,6 +400,18 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     return Array.from(selectedIds).filter((id) => selectableIdSet.has(id));
   }, [selectableIdSet, selectedIds]);
   const selectedCount = visibleSelectedIds.length;
+  // Delete-eligible and sweepable are different questions: a selection can be
+  // entirely tasks that own no worktrees, and opening Sweep on those shows a
+  // dialog with nothing to sweep. The row control already gates on this
+  // (`useHistoryRowSweep`); the bulk button has to ask the same question, of
+  // the SELECTION rather than of one task, so a mixed selection still sweeps.
+  const canSweepSelected = useMemo(
+    () =>
+      visibleSelectedIds.some(
+        (id) => (worktreesByEpicId.get(id) ?? EMPTY_WORKTREES).length > 0,
+      ),
+    [visibleSelectedIds, worktreesByEpicId],
+  );
   const enterSelectionMode = useCallback(() => {
     setSelectedIds(new Set());
     setSelectionMode(true);
@@ -493,6 +505,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                     selectableItemIds.length > 0 &&
                     selectedCount === selectableItemIds.length,
                   isDeletePending: deleteMutation.isPending,
+                  canSweepSelected,
                   onSelectAll: selectAllVisible,
                   onDeselectAll: deselectAllVisible,
                   onCancel: cancelSelection,
@@ -503,7 +516,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                     // The whole selection goes in as ONE set so a worktree
                     // shared between two selected tasks is judged against the
                     // selection, not one task, and stops reading as "shared".
-                    if (visibleSelectedIds.length === 0) return;
+                    if (!canSweepSelected) return;
                     setSweepEpicIds(visibleSelectedIds);
                   },
                 }
@@ -672,6 +685,8 @@ type PanelSelectionControls =
       readonly selectedCount: number;
       readonly allVisibleSelected: boolean;
       readonly isDeletePending: boolean;
+      /** At least one selected task owns a worktree the dialog could list. */
+      readonly canSweepSelected: boolean;
       readonly onSelectAll: () => void;
       readonly onDeselectAll: () => void;
       readonly onCancel: () => void;
@@ -754,7 +769,7 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
               }
               aria-haspopup="dialog"
               data-testid="epics-list-sweep-selected"
-              disabled={props.selection.selectedCount === 0}
+              disabled={!props.selection.canSweepSelected}
               className="text-muted-foreground hover:text-foreground"
               onClick={props.selection.onSweepSelected}
             >

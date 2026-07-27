@@ -3576,6 +3576,57 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  it("propagates a failed durable write out of the update handler and still releases echo suppression", async () => {
+    // `perWindowStateUpdate` is `async` and awaits the durable write, so a
+    // rejection has to reach `handleInvoke` rather than being swallowed into a
+    // silent success - the renderer's projection queue decides whether to
+    // retry on exactly that signal. The release matters just as much: it lives
+    // in a `finally`, so a failed write must not leave the window permanently
+    // suppressed and deaf to every later main-initiated change.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const perWindowState = new DeferredPerWindowState();
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState,
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    windowA.sentMessages.length = 0;
+
+    const updateHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.perWindowStateUpdate,
+    );
+    if (updateHandler === undefined) {
+      throw new Error("perWindowStateUpdate handler missing");
+    }
+
+    const invoked = Promise.resolve(
+      updateHandler(sender(101), { activeTabId: "tab-a" }),
+    );
+    perWindowState.failNext(new Error("disk write rejected"));
+    await expect(invoked).rejects.toThrow("disk write rejected");
+
+    perWindowState.emitChange("window-a");
+    expect(
+      windowA.sentMessages.filter(
+        (message) => message.channel === RunnerHostEvent.perWindowStateChange,
+      ),
+    ).toHaveLength(1);
+    bridge.dispose();
+  });
+
   it("keeps a window's echo suppressed until its LAST overlapping update settles", async () => {
     // The renderer can invoke a second update while the first is still in
     // flight. Suppression used to be a Set of window ids, which is idempotent:
@@ -3648,7 +3699,10 @@ describe("RunnerIpcBridge", () => {
  */
 class DeferredPerWindowState implements IpcPerWindowState {
   private readonly events = new EventEmitter();
-  private readonly pending: Array<() => void> = [];
+  private readonly pending: Array<{
+    readonly settle: () => void;
+    readonly fail: (error: Error) => void;
+  }> = [];
 
   get(): PerWindowSnapshot {
     return createEmptyPerWindowSnapshot();
@@ -3659,10 +3713,13 @@ class DeferredPerWindowState implements IpcPerWindowState {
   }
 
   update(windowId: string): Promise<PerWindowStateUpdateAcknowledgement> {
-    return new Promise((resolve) => {
-      this.pending.push(() => {
-        this.emitChange(windowId);
-        resolve({ capabilities: this.capabilities(), revision: 1 });
+    return new Promise((resolve, reject) => {
+      this.pending.push({
+        settle: () => {
+          this.emitChange(windowId);
+          resolve({ capabilities: this.capabilities(), revision: 1 });
+        },
+        fail: reject,
       });
     });
   }
@@ -3670,7 +3727,14 @@ class DeferredPerWindowState implements IpcPerWindowState {
   settleNext(): void {
     const next = this.pending.shift();
     if (next === undefined) throw new Error("no update in flight");
-    next();
+    next.settle();
+  }
+
+  /** Fails the oldest in-flight durable write, as a rejected disk write does. */
+  failNext(error: Error): void {
+    const next = this.pending.shift();
+    if (next === undefined) throw new Error("no update in flight");
+    next.fail(error);
   }
 
   emitChange(windowId: string): void {

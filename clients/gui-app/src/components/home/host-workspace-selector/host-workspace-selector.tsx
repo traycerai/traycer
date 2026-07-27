@@ -904,7 +904,12 @@ function HostOnlySelect(props: {
     props.activeHostId,
     props.hostLabel,
   );
-  const disabled = props.mode === "locked" || props.disabled;
+  // Two reasons to go inert, but only one of them explains itself: `locked`
+  // means this surface can never switch host, while `props.disabled` is a
+  // transient draft-create settle. Labelling the second "Terminal host is
+  // fixed" would tell an editable composer's user their host is permanent.
+  const lockedToFixedHost = props.mode === "locked";
+  const disabled = lockedToFixedHost || props.disabled;
   return (
     <Select
       value={props.activeHostId ?? undefined}
@@ -912,7 +917,7 @@ function HostOnlySelect(props: {
       disabled={disabled}
     >
       <TooltipWrapper
-        label={disabled ? "Terminal host is fixed" : undefined}
+        label={lockedToFixedHost ? "Terminal host is fixed" : undefined}
         side="top"
         sideOffset={undefined}
         align={undefined}

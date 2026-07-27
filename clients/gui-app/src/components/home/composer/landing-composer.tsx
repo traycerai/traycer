@@ -485,7 +485,12 @@ export function LandingComposer(props: LandingComposerProps) {
     const toolbar = toolbarStore.getState();
     if (toolbar.selection.modelSlug.length === 0) return;
     actions.submit({
-      draftId,
+      // `handleSnapshot` mints the unbound draft the moment the first edit
+      // becomes submittable, but `props.draftId` only catches up on the
+      // parent's next render - so a type-then-Enter still reads `null` here.
+      // Without this fallback `ensureSubmissionDraft` would mint a SECOND
+      // draft and strand the one already holding the user's content.
+      draftId: draftId ?? createdUnboundDraftIdRef.current,
       editor: editorRef.current,
       toolbar: {
         selection: toolbar.selection,

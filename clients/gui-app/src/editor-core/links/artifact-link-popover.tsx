@@ -1318,7 +1318,11 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       card.removeEventListener("pointerleave", handleCardPointerLeave);
       card.removeEventListener("keydown", handleCardKeyDown);
     };
-  }, [cancelHide, scheduleHoverHide, target]);
+    // `paneContainer` dep for the same reason as the positioning effect above:
+    // this reads `cardRef.current` under identical conditions, so without it
+    // the hover-hide and keyboard handlers stay bound to the pre-remount node
+    // while the card the user sees has none.
+  }, [cancelHide, scheduleHoverHide, target, paneContainer]);
 
   useLayoutEffect(() => {
     if (target?.mode === "create" || focusEditUrlRef.current) {

@@ -43,6 +43,8 @@ import {
 } from "@/lib/chats/resolve-steer-submit";
 import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
+import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
 import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -207,10 +209,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   // The mention/slash menu renders through a body portal. It belongs to the
   // one focused canvas tile, not merely every visible split member, so close
-  // its logical picker state whenever the exact focused owner changes. Both
-  // context signals default to `true` outside Epic surfaces.
+  // its logical picker state whenever the exact focused owner changes. All
+  // three context signals default to `true` outside Epic surfaces.
   const paneFocused = usePaneFocused();
-  const focused = chatComposerFocused(isActive, paneFocused);
+  const tabSelected = useTabBodySelected();
+  const focused = chatComposerFocused(isActive, paneFocused, tabSelected);
   useEffect(() => {
     if (focused) return;
     pickerStore.getState().close();
@@ -571,8 +574,21 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
 }
 
-function chatComposerFocused(isActive: boolean, paneFocused: boolean): boolean {
-  return isActive && paneFocused;
+/**
+ * The composer owns exactly what the tile it lives in owns, so it answers with
+ * the tile's own predicate rather than a second, shorter one. `tabSelected` is
+ * the part that is easy to lose: keep-alive leaves a background tab's body
+ * mounted inside a focused pane, so pane focus plus tile-active is `true` for a
+ * composer that is not on screen - which would let it hold catalog
+ * subscriptions, own dictation, and mark its editor active from behind
+ * whichever tab the user is actually looking at.
+ */
+function chatComposerFocused(
+  isActive: boolean,
+  paneFocused: boolean,
+  tabSelected: boolean,
+): boolean {
+  return chatTileCatalogActivity(paneFocused, tabSelected, isActive);
 }
 
 function focusedProviderRefreshInputs(

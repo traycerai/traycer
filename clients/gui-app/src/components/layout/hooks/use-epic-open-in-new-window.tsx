@@ -23,21 +23,10 @@ import {
   hasPendingDesktopTabsWrite,
 } from "@/stores/tabs/desktop-tabs-persistence";
 import { findStripItemForRef } from "@/stores/tabs/layout";
-import type { PersistedTabStripLayout } from "@/stores/tabs/layout";
-import { useTabsStore } from "@/stores/tabs/store";
+import { readTabStripLayout } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { isTabStructurallyLocked } from "@/stores/tabs/tab-structural-lock";
 import type { TabRef } from "@/stores/tabs/types";
-
-function currentTabsLayout(): PersistedTabStripLayout {
-  const state = useTabsStore.getState();
-  return {
-    version: 2,
-    items: state.items,
-    activeItemId: state.activeItemId,
-    systemTabs: state.systemTabs,
-  };
-}
 
 /**
  * True when `ref` is currently part of a split item in the tab strip. Feeds
@@ -49,7 +38,7 @@ function currentTabsLayout(): PersistedTabStripLayout {
  * survived in.
  */
 function isRefGroupedInLayout(ref: TabRef): boolean {
-  const item = findStripItemForRef(currentTabsLayout(), ref);
+  const item = findStripItemForRef(readTabStripLayout(), ref);
   return item !== null && item.kind === "split";
 }
 

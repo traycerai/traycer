@@ -144,11 +144,14 @@ interface EpicDndState {
     preview: TopLevelEdgeSplitTarget | null,
   ) => void;
   readonly topLevelStripPairPreviewChanged: (preview: TabRef | null) => void;
+  // Every field is required: the preview lands verbatim in `reparent*` state,
+  // which is `string | null`. An omitted key reads as `undefined` and would
+  // store a third value the readers below never compare against.
   readonly sidebarReparentPreviewChanged: (preview: {
     readonly targetNodeId: string | null;
-    readonly targetViewTabId?: string | null;
+    readonly targetViewTabId: string | null;
     readonly rootPanelId: RootCreatePanelId | null;
-    readonly rootViewTabId?: string | null;
+    readonly rootViewTabId: string | null;
   }) => void;
   readonly dragEnded: () => void;
 }

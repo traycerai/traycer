@@ -793,6 +793,47 @@ describe("<EpicsListPanel />", () => {
     ).toBeNull();
   });
 
+  it("keeps bulk Sweep closed for a selection where no task owns a worktree", async () => {
+    // The row control is already gated this way, so a selection of only
+    // worktree-less tasks must not open a Sweep dialog with nothing in it.
+    testState.items = [historyItem({})];
+    testState.worktreesByEpicId = new Map();
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    expect(
+      screen.getByTestId("epics-list-sweep-selected").matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("opens bulk Sweep as soon as one selected task owns a worktree", async () => {
+    // Mixed selections still sweep: the whole selection is the unit, so the
+    // worktree-less members ride along rather than closing the affordance.
+    testState.items = [
+      historyItem({}),
+      historyItem({
+        id: "history-epic-2",
+        epicId: "epic-two",
+        title: "Second history item",
+      }),
+    ];
+    testState.worktreesByEpicId = new Map([["epic-two", [historyWorktree()]]]);
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    expect(
+      screen.getByTestId("epics-list-sweep-selected").matches(":disabled"),
+    ).toBe(false);
+  });
+
   it("selects all visible history rows and cancels selection mode", async () => {
     testState.items = [
       historyItem({}),

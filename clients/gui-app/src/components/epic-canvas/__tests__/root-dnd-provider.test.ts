@@ -436,15 +436,24 @@ describe("sidebar reparent preview fields", () => {
   it("records a row target and suppresses equal writes", () => {
     useEpicDndStore.getState().sidebarReparentPreviewChanged({
       targetNodeId: "node-a",
+      targetViewTabId: null,
       rootPanelId: null,
+      rootViewTabId: null,
     });
     expect(useEpicDndStore.getState().reparentTargetNodeId).toBe("node-a");
     expect(useEpicDndStore.getState().reparentRootPanelId).toBeNull();
+    // `null`, never `undefined`: the preview writes straight through to state
+    // typed `string | null`, so an absent view-tab has to arrive as the same
+    // empty value the readers and the drag-end reset compare against.
+    expect(useEpicDndStore.getState().reparentTargetViewTabId).toBeNull();
+    expect(useEpicDndStore.getState().reparentRootViewTabId).toBeNull();
 
     const before = useEpicDndStore.getState();
     useEpicDndStore.getState().sidebarReparentPreviewChanged({
       targetNodeId: "node-a",
+      targetViewTabId: null,
       rootPanelId: null,
+      rootViewTabId: null,
     });
     expect(useEpicDndStore.getState()).toBe(before);
   });
@@ -452,19 +461,25 @@ describe("sidebar reparent preview fields", () => {
   it("records a panel root target", () => {
     useEpicDndStore.getState().sidebarReparentPreviewChanged({
       targetNodeId: null,
+      targetViewTabId: null,
       rootPanelId: "chats",
+      rootViewTabId: "view-tab-a",
     });
     expect(useEpicDndStore.getState().reparentRootPanelId).toBe("chats");
     expect(useEpicDndStore.getState().reparentTargetNodeId).toBeNull();
+    expect(useEpicDndStore.getState().reparentRootViewTabId).toBe("view-tab-a");
   });
 
   it("clears both reparent fields on drag end", () => {
     useEpicDndStore.getState().sidebarReparentPreviewChanged({
       targetNodeId: "node-a",
+      targetViewTabId: "view-tab-a",
       rootPanelId: null,
+      rootViewTabId: null,
     });
     useEpicDndStore.getState().dragEnded();
     expect(useEpicDndStore.getState().reparentTargetNodeId).toBeNull();
     expect(useEpicDndStore.getState().reparentRootPanelId).toBeNull();
+    expect(useEpicDndStore.getState().reparentTargetViewTabId).toBeNull();
   });
 });

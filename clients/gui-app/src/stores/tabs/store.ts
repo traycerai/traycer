@@ -606,5 +606,28 @@ export const useTabsStore = create<TabsStoreState>()(
   ),
 );
 
+/**
+ * The store's current state read as a `PersistedTabStripLayout`, for callers
+ * that only need to ask the layout helpers a question.
+ *
+ * One exported reader rather than a literal per call site: the four fields ARE
+ * the layout contract, so a copy that misses a future field keeps compiling
+ * while quietly answering against a shape the store no longer produces.
+ *
+ * Deliberately the plain projection - `layoutFromState` above additionally
+ * rebuilds from a directly-seeded `stripOrder`, and the coordinator's
+ * `currentLayout` does the same keyed on transaction depth. Both of those are
+ * write-path compatibility concerns; a read-only caller must not inherit them.
+ */
+export function readTabStripLayout(): PersistedTabStripLayout {
+  const state = useTabsStore.getState();
+  return {
+    version: 2,
+    items: state.items,
+    activeItemId: state.activeItemId,
+    systemTabs: state.systemTabs,
+  };
+}
+
 // Reconciliation install lives in `WindowsBridgeProvider` so the hydration
 // gate's ready-promise can be set up before subscriptions fire.

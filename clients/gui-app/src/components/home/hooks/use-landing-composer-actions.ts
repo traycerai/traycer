@@ -451,6 +451,16 @@ export function useLandingComposerActions(): LandingComposerActions {
           draftRuntimeRegistry.complete(attempt);
         })
         .catch(() => {
+          // A retired attempt takes the same exit as the success path above:
+          // the id-scoped leftovers still have to go, but `markFailed` must
+          // not - it would re-insert a handoff entry keyed to an identity the
+          // bridge already tore down, and the next identity would surface a
+          // failure banner for a submission it never made.
+          if (draftRuntimeRegistry.settlement(attempt).kind === "retired") {
+            discardRetiredLandingEpic({ epicId, chatId });
+            draftRuntimeRegistry.complete(attempt);
+            return;
+          }
           // The epic never landed on the host: drop the create marker so its
           // orphaned tab is no longer exempt from existence reconciliation.
           unmarkEpicCreatedThisSession(epicId);
@@ -526,7 +536,15 @@ export function useLandingComposerActions(): LandingComposerActions {
       // browsing, quota exceeded, corrupt DB) instead of failing silently; `.finally`
       // clears the flag on success, missing-bytes, and a rejected read alike, so the
       // guard can never get stuck.
-      if (submissionInFlightRef.current) return;
+      if (submissionInFlightRef.current) {
+        // `startSubmission` already flipped this attempt's draft to
+        // `isSubmitting`, but this guard is per-composer while the attempt is
+        // per-draft: a re-entrant submit that resolved to a DIFFERENT draft
+        // gets a live attempt and then bails here, so without completing it
+        // that draft stays `isSubmitting` with nothing left to settle it.
+        draftRuntimeRegistry.complete(attempt);
+        return;
+      }
       submissionInFlightRef.current = true;
       void resolveImageBytes(hashes)
         .then((bytesByHash) => {

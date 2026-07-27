@@ -295,6 +295,47 @@ describe("LandingComposer direct submit gate", () => {
     expect(testState.submit).toHaveBeenCalledTimes(1);
   });
 
+  it("submits the draft handleSnapshot minted, not null, while props.draftId is still catching up", () => {
+    // The real race: the first submittable edit mints an unbound draft inside
+    // this component, but `props.draftId` only flips on the parent's next
+    // render - so a type-then-Enter submits with the prop still `null`. If that
+    // `null` reaches the action, `ensureSubmissionDraft` mints a SECOND draft
+    // and the one already holding the user's content is stranded. Nothing
+    // re-render carries a new `draftId`, so the prop is still `null` at submit
+    // time exactly as it is in the app.
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+    // Re-render so the composer observes the content it just snapshotted and
+    // opens the submit gate - still with `draftId={null}`, which is the point.
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+
+    expect(testState.submit).toHaveBeenCalledTimes(1);
+    expect(testState.submit.mock.calls[0][0]).toMatchObject({
+      draftId: "draft-for-test",
+    });
+  });
+
   // Item 8: a live runPendingImageJob (landing in-place paste) holds submit closed
   // until the job settles, then clears.
   it("blocks submit while a runPendingImageJob is in flight and opens after it settles", async () => {

@@ -3,7 +3,7 @@ import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
-import { useTabsStore } from "@/stores/tabs/store";
+import { readTabStripLayout, useTabsStore } from "@/stores/tabs/store";
 import {
   findStripItemForRef,
   flattenStripItemRefs,
@@ -57,13 +57,7 @@ export function useCloseTabFlow(): CloseTabFlow {
   const closeOtherTabs = useCallback(
     (target: HeaderTab) => {
       const skipped: string[] = [];
-      const state = useTabsStore.getState();
-      const layout = {
-        version: 2 as const,
-        items: state.items,
-        activeItemId: state.activeItemId,
-        systemTabs: state.systemTabs,
-      };
+      const layout = readTabStripLayout();
       const targetItem = findStripItemForRef(layout, {
         kind: target.kind,
         id: target.id,

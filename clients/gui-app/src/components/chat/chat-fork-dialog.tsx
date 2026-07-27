@@ -96,8 +96,9 @@ interface ChatForkDialogProps {
 export function ChatForkDialog(props: ChatForkDialogProps) {
   const presentedOpen = useFocusedPaneModalOpen(props.open);
   // The dialog stays mounted per chat tile; gate the toolbar store's catalog
-  // queries on `open` so a closed dialog holds no harness/model subscription
-  // (the same semantics the old `activityEnabled` flag carried).
+  // queries on `presentedOpen` - open AND pane-focused - so a closed dialog,
+  // or one belonging to a background split pane, holds no harness/model
+  // subscription (the same semantics the old `activityEnabled` flag carried).
   return (
     <SurfaceActivityProvider active={presentedOpen}>
       <ChatForkDialogBody {...props} />
