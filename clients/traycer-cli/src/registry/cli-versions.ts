@@ -44,7 +44,7 @@ const CLI_VERSIONS_URL = releaseManifestUrl("cli-manifest");
 
 export async function fetchCliVersions(): Promise<CliVersionsManifest> {
   const url = CLI_VERSIONS_URL;
-  const body = await fetchText(url, { signal: null });
+  const body = await fetchText(url, { signal: null, onHeartbeat: null });
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);

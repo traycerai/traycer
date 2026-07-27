@@ -3,6 +3,7 @@ import {
   use,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type Context,
   type ReactNode,
@@ -24,6 +25,9 @@ import {
   type RemoteHostFetcher,
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { HostBindingAuthorityRegistry } from "@traycer-clients/shared/host-client/host-binding-authority-registry";
+import { HostRequestCoordinator } from "@traycer-clients/shared/host-client/host-request-coordinator";
+import type { RpcSchedulingPolicy } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import { AuthService } from "@/lib/auth/auth-service";
 import { HostDirectoryService } from "@/lib/host/host-directory-service";
@@ -45,15 +49,6 @@ export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
 
 export type MessengerFactory<Registry extends VersionedRpcRegistry> = (args: {
   readonly registry: Registry;
-  readonly endpoint: () =>
-    | import("@traycer-clients/shared/host-client/host-directory").HostDirectoryEntry
-    | null;
-  // Mirrors the transport's actual seam: a bearer source for the WS open frame,
-  // not a full RequestContext. An override that wires a real WsRpcClient passes
-  // this straight through.
-  readonly bearer: () =>
-    | import("@traycer-clients/shared/auth/bearer-source").OpenFrameBearerSource
-    | null;
 }) => IHostMessenger<Registry>;
 
 interface HostRuntimeProviderProps<Registry extends VersionedRpcRegistry> {
@@ -113,9 +108,9 @@ export interface TypedHostRuntime<Registry extends VersionedRpcRegistry> {
  *
  * Unmount disposes the runtime and services.
  */
-export function createHostRuntime<
-  Registry extends VersionedRpcRegistry,
->(): TypedHostRuntime<Registry> {
+export function createHostRuntime<Registry extends VersionedRpcRegistry>(
+  schedulingPolicy: RpcSchedulingPolicy<Registry>,
+): TypedHostRuntime<Registry> {
   const context: Context<HostRuntimeBinding<Registry> | null> =
     createContext<HostRuntimeBinding<Registry> | null>(null);
   const latestBindingSnapshot: {
@@ -145,6 +140,23 @@ export function createHostRuntime<
 
     const runnerHost = useRunnerHost();
     const queryClient = useQueryClient();
+    const authorityRegistryRef = useRef<HostBindingAuthorityRegistry | null>(
+      null,
+    );
+    const requestCoordinatorRef =
+      useRef<HostRequestCoordinator<Registry> | null>(null);
+    const authorityRegistryDisposalGeneration = useRef(0);
+    if (authorityRegistryRef.current === null) {
+      authorityRegistryRef.current = new HostBindingAuthorityRegistry();
+    }
+    const authorityRegistry = authorityRegistryRef.current;
+    if (requestCoordinatorRef.current === null) {
+      requestCoordinatorRef.current = new HostRequestCoordinator({
+        registry,
+        schedulingPolicy,
+      });
+    }
+    const requestCoordinator = requestCoordinatorRef.current;
     const [binding, setBinding] = useState<HostRuntimeBinding<Registry> | null>(
       null,
     );
@@ -171,29 +183,26 @@ export function createHostRuntime<
 
       let runtime: HostRuntime<Registry> | null = null;
 
-      const endpoint = () =>
-        runtime === null ? null : runtime.hostClient.getActiveHost();
-      // The transport only needs the bearer; hand it the active context's
-      // credential lease (a structural `OpenFrameBearerSource`). Shared by the
-      // factory override and the default client so the port matches the seam.
-      const bearer = () =>
-        runtime === null
-          ? null
-          : (runtime.hostClient.getRequestContext()?.credentials ?? null);
-      // Read live (mirrors `bearer`/`endpoint`) - the remote transport's
-      // `(hostId, userId)` session-cache key (Architecture §4 / S1).
-      const userId = () =>
-        runtime === null ? null : runtime.hostClient.getRequestContextUserId();
+      // Endpoint + bearer now ride the per-request `HostRequestAuthority` the
+      // coordinator mints, so neither is closed over here. The remote branch
+      // still needs the FULL directory entry (`kind`/`publicKey`) behind the
+      // hostId an authority names - that lookup is all this seam supplies.
+      //
+      // Resolved against the whole DIRECTORY, not just the active host: a
+      // transient requester (`createRequester`, Settings ▸ Worktrees / the
+      // My Hosts panel) issues authorities for a non-active host, and keying
+      // this off `getActiveHost()` would drop those onto the local WS client -
+      // i.e. dial a relay attach URL directly and never connect.
+      const resolveTarget = (hostId: string) =>
+        runtime === null ? null : runtime.hostClient.resolveHostById(hostId);
 
       let runtimeMessenger: RuntimeHostMessengerBinding<Registry> | null = null;
       const rawMessenger: IHostMessenger<Registry> =
         messengerFactory !== null
-          ? messengerFactory({ registry, endpoint, bearer })
+          ? messengerFactory({ registry })
           : (runtimeMessenger = buildRuntimeHostMessenger({
               registry,
-              endpoint,
-              bearer,
-              userId,
+              resolveTarget,
               authnBaseUrl: runnerHost.authnBaseUrl,
               requestId,
             })).messenger;
@@ -213,9 +222,7 @@ export function createHostRuntime<
       // queries intentionally disable TanStack retry, so the refresh loop must
       // complete in the transport layer.
       const messenger: IHostMessenger<Registry> = createRetryingMessenger(
-        createAuthAwareMessenger(rawMessenger, auth, {
-          retry: { bearer },
-        }),
+        createAuthAwareMessenger(rawMessenger, auth),
         DEFAULT_TRANSPORT_RETRY_POLICY,
       );
 
@@ -226,6 +233,9 @@ export function createHostRuntime<
         requestContextProvider: auth.getRequestContextProvider(),
         directory,
         invalidator,
+        authorityRegistry,
+        schedulingPolicy,
+        requestCoordinator,
       });
 
       const activeRuntime = runtime;
@@ -303,7 +313,24 @@ export function createHostRuntime<
       registry,
       messengerFactory,
       remoteFetcher,
+      authorityRegistry,
+      requestCoordinator,
     ]);
+
+    useEffect(() => {
+      authorityRegistryDisposalGeneration.current += 1;
+      return () => {
+        const cleanupGeneration = ++authorityRegistryDisposalGeneration.current;
+        queueMicrotask(() => {
+          if (
+            authorityRegistryDisposalGeneration.current === cleanupGeneration
+          ) {
+            authorityRegistry.dispose();
+            requestCoordinator.dispose();
+          }
+        });
+      };
+    }, [authorityRegistry, requestCoordinator]);
 
     if (binding === null) {
       return <>{fallback}</>;

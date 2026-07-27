@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  createAgentRequestSchemaV20,
+  createAgentRequestSchemaV30,
   createAgentResponseSchema,
   type CreateAgentWorkspace,
 } from "@traycer/protocol/host/agent/shared";
@@ -33,6 +33,12 @@ import type { CommandFn } from "../runner/runner";
  * representable v1.0 wire value and the transport's downgrade fails the call
  * with upgrade guidance rather than silently falling back to the sender's
  * profile.
+ *
+ * GUI permission selection (`--permission-mode`) defaults to `full_access`.
+ * Callers pass a more restrictive mode when the agent selection guide directs
+ * them to do so. The choice is carried by `agent.create@3.0`; transport
+ * downgrade to released v1/v2 hosts fails with upgrade guidance rather than
+ * discarding it.
  */
 export function buildAgentCreateCommand(opts: {
   readonly epicId: string | null;
@@ -44,6 +50,7 @@ export function buildAgentCreateCommand(opts: {
   readonly agentMode: string | null;
   readonly reasoningEffort: string | null;
   readonly fast: boolean;
+  readonly permissionMode: string | null;
   readonly profile: string | null;
   readonly cwd: string | null;
   readonly workspacePaths: readonly string[];
@@ -56,7 +63,7 @@ export function buildAgentCreateCommand(opts: {
     // Validate the full request locally so a bad --surface / --harness
     // fails fast with a clear E_INVALID_ARGUMENT (listing the allowed harness
     // values) instead of round-tripping or leaking a raw ZodError stack.
-    const request = parseUserInput(createAgentRequestSchemaV20, {
+    const request = parseUserInput(createAgentRequestSchemaV30, {
       senderAgentId,
       epicId,
       name: opts.name,
@@ -66,6 +73,7 @@ export function buildAgentCreateCommand(opts: {
       agentMode: opts.agentMode,
       reasoningEffort: opts.reasoningEffort,
       fastMode: opts.fast ? true : null,
+      permissionMode: opts.permissionMode ?? "full_access",
       workspace: parseAgentCreateWorkspace({
         cwd: opts.cwd,
         workspacePaths: opts.workspacePaths,

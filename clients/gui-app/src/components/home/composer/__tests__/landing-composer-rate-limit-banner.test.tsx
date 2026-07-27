@@ -209,6 +209,7 @@ vi.mock("@/hooks/composer/use-landing-composer-paste", () => ({
     isDraggingFiles: false,
     isIngestingImages: false,
   }),
+  pastedComposerImagesToFiles: vi.fn(() => ({ files: [], droppedCount: 0 })),
 }));
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
@@ -280,6 +281,7 @@ function renderLandingComposer(): RenderResult {
   return render(
     <LandingComposer
       draftId={null}
+      pendingCreateId={null}
       initialSettings={null}
       workspaceControls={null}
     />,

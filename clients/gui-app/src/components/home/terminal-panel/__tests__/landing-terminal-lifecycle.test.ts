@@ -8,6 +8,10 @@ import {
 } from "@/stores/home/landing-terminal-store";
 import { reconcileLandingTerminalTabs } from "@/components/home/terminal-panel/landing-terminal-reconciliation";
 import { resolveLandingTerminalAvailability } from "@/components/home/terminal-panel/landing-terminal-availability";
+import {
+  resolveLandingTerminalLaunchCwd,
+  type LandingTerminalHostContext,
+} from "@/components/home/terminal-panel/landing-terminal-host-context";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 const HOST_A = "host-a";
@@ -198,6 +202,46 @@ describe("landing terminal lifecycle", () => {
       "active",
     ]);
     expect(result.activeInstanceId).toBe("dead-host");
+  });
+});
+
+describe("resolveLandingTerminalLaunchCwd", () => {
+  const hostAHome: LandingTerminalHostContext = {
+    hostId: HOST_A,
+    homeCwd: "/Users/dev",
+  };
+  const hostANullHome: LandingTerminalHostContext = {
+    hostId: HOST_A,
+    homeCwd: null,
+  };
+  const hostBHome: LandingTerminalHostContext = {
+    hostId: HOST_B,
+    homeCwd: "/Users/other",
+  };
+
+  it("prefers the primary workspace over host home", () => {
+    expect(
+      resolveLandingTerminalLaunchCwd("/workspace/project", hostAHome, HOST_A),
+    ).toBe("/workspace/project");
+  });
+
+  it("falls back to the reconciled active host home", () => {
+    expect(resolveLandingTerminalLaunchCwd(null, hostAHome, HOST_A)).toBe(
+      "/Users/dev",
+    );
+  });
+
+  it("never returns another host's home path", () => {
+    expect(resolveLandingTerminalLaunchCwd(null, hostBHome, HOST_A)).toBeNull();
+    expect(resolveLandingTerminalLaunchCwd(null, hostAHome, HOST_B)).toBeNull();
+  });
+
+  it("returns null when homeCwd is bridged null or context is missing", () => {
+    expect(
+      resolveLandingTerminalLaunchCwd(null, hostANullHome, HOST_A),
+    ).toBeNull();
+    expect(resolveLandingTerminalLaunchCwd(null, null, HOST_A)).toBeNull();
+    expect(resolveLandingTerminalLaunchCwd(null, hostAHome, null)).toBeNull();
   });
 });
 

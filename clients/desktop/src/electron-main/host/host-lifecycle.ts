@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { watch, type FSWatcher } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
+import { connect as createTlsConnection } from "node:tls";
 import { basename } from "node:path";
 import { log } from "../app/logger";
 import {
@@ -14,31 +15,12 @@ import {
   withDefaultHostName,
 } from "./host-display-name";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
-import { streamTraycerCliJson } from "../cli/traycer-cli";
-import { HOST_RESTART_SUBPROCESS_TIMEOUT_MS } from "@traycer/protocol/host/lifecycle-constants";
+import {
+  isCurrentHostWebsocketUrl,
+  isPublishedHostEndpointReachable,
+} from "./host-endpoint-reachability";
 
-/**
- * Snapshot of the OS-supervised host's runtime state, as projected by
- * `HostLifecycle.getServiceStatus`. Mirrors the wire shape consumed by the
- * renderer's Service Health pane.
- */
-export interface ServiceStatus {
-  readonly state: "running" | "stopped" | "not-installed";
-  readonly version: string | null;
-  readonly listenUrl: string | null;
-  readonly pid: number | null;
-}
-
-/**
- * Committed WS-only endpoint path published by the bundled host.
- *
- * Mirrors the `WS_RPC_PATH` published by the host (the external
- * Traycer Host) - kept as a local constant because desktop-main is
- * CommonJS-isolated and must not import the host workspace. If the host
- * changes its path, update both sides.
- */
-const WS_RPC_PATH = "/rpc";
-const WS_RPC_HOST = "127.0.0.1";
+export { isCurrentHostWebsocketUrl } from "./host-endpoint-reachability";
 
 /**
  * How long we wait for the OS-supervised host to publish its PID
@@ -83,6 +65,12 @@ export interface HostLifecycleEvents {
  * rendering, but are no longer raised by the steady-state boot path -
  * a missing/unreachable host now surfaces as `HOST_NOT_READY` and
  * the renderer routes into the Doctor/CLI recovery card.
+ *
+ * Host Update Layer Redesign Tech Plan (Desktop main: HostController):
+ * `SERVICE_RESTART_FAILED` joins that same retained-but-unraised set -
+ * `respawn()` (the CLI-subprocess restart it used to come from) moved to
+ * `HostController`, which reports restart failures through its own
+ * `MutationOutcome`, not this discriminant.
  */
 export type HostStartupErrorCode =
   | "BUNDLED_HOST_MISSING"
@@ -240,55 +228,15 @@ export class HostLifecycle extends EventEmitter {
   }
 
   /**
-   * Renderer-driven restart. The CLI is the host lifecycle authority, so
-   * we shell out to `traycer host restart` (the slot is baked into the CLI
-   * build) instead of poking the platform service-manager APIs directly. The
-   * PID-file watcher fires `change` once the new host publishes fresh
-   * metadata.
-   *
-   * Rethrows after logging/emitting so the renderer-driven caller (IPC
-   * `requestHostRespawn` via `respawnHost`) sees a rejected promise instead of
-   * a false success - a swallowed failure here used to resolve while the host
-   * stayed dead.
-   */
-  async respawn(): Promise<void> {
-    if (this.disposed) {
-      return;
-    }
-    log.info("[host] respawn requested");
-
-    this.notifyRespawning();
-
-    try {
-      try {
-        await this.cliHostRestart();
-      } catch (cause) {
-        throw new HostStartupException(
-          "SERVICE_RESTART_FAILED",
-          `traycer host restart failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        );
-      }
-      await this.waitForReady();
-      this.installWatcher();
-    } catch (cause) {
-      const startupError = await this.buildStartupError(cause);
-      log.error("[host] respawn failed", startupError);
-      this.emit("error", startupError);
-      throw cause;
-    }
-  }
-
-  /**
    * Mark the host as "currently down" from the renderer's perspective.
    *
-   * Used by the macOS host-owned-login-item respawn path
-   * (`app/host-respawn.ts`) so it can drive the SMAppService
-   * re-register cycle itself without re-entering `respawn()`'s
-   * CLI-restart codepath - but still keep the renderer's cached
-   * snapshot consistent (cleared on respawn start, repopulated by the
-   * existing pid-file watcher when the new host publishes pid.json).
-   * On non-macOS / dev / non-login-item paths, callers go through
-   * `respawn()`, which calls this internally.
+   * Used by `HostController`'s macOS host-owned-login-item activation cycle
+   * so it can drive the SMAppService re-register cycle itself while still
+   * keeping the renderer's cached snapshot consistent (cleared on respawn
+   * start, repopulated by the existing pid-file watcher when the new host
+   * publishes pid.json). `HostController`'s CLI-owned restart path
+   * (`traycer host restart`) does not call this - it shells out directly
+   * rather than through this lifecycle.
    */
   notifyRespawning(): void {
     if (this.disposed) return;
@@ -370,34 +318,6 @@ export class HostLifecycle extends EventEmitter {
     // Lifecycle-level `dispose()` only tears down shell-side observers.
   }
 
-  // -----------------------------------------------------------
-  // Service-control passthroughs for the Service Health pane.
-  //
-  // All routes delegate to the CLI subprocess so Desktop never reaches
-  // for the legacy platform service-manager dispatch (Tech Plan
-  // Decision 1, Ticket 7c890b39). `getServiceStatus` is metadata-first:
-  // a published `pid.json` is a running host; absence is presented to
-  // the renderer as `not-installed` so the Doctor card surfaces.
-  // -----------------------------------------------------------
-
-  async getServiceStatus(): Promise<ServiceStatus> {
-    const snapshot = await readPidMetadata(this.options.layout.pidMetadataFile);
-    if (snapshot === null) {
-      return {
-        state: "not-installed",
-        version: null,
-        listenUrl: null,
-        pid: null,
-      };
-    }
-    return {
-      state: "running",
-      version: snapshot.version,
-      listenUrl: snapshot.websocketUrl,
-      pid: snapshot.pid,
-    };
-  }
-
   getRecentLogTail(maxLines: number): Promise<string | null> {
     return safeReadLogTail(this.options.layout.logFile, maxLines);
   }
@@ -422,12 +342,14 @@ export class HostLifecycle extends EventEmitter {
       this.options.layout.pidMetadataFile,
     );
     const raw = readState.kind === "parsed" ? readState.snapshot : null;
+    const publishedAt =
+      readState.kind === "parsed" ? readState.startedAt : null;
     // Filter an unreachable / wrong-shaped host out of what the renderer sees,
     // so the host gate treats it as not-ready and fires `ensureHost`. A
     // reachable host is surfaced regardless of its version stamp - the renderer
     // negotiates protocol compatibility over the WS handshake and prompts for a
     // restart only if the running host is genuinely incompatible.
-    const next = await this.toReachableSnapshot(raw);
+    const next = await this.toReachableSnapshot(raw, publishedAt);
     // Superseded by a newer reload (or disposed): skip the emit so we never
     // clobber newer state, but still RETURN what THIS read derived. A caller
     // awaiting us - the host-busy surfacing in host-ensure-ipc - must judge
@@ -502,15 +424,20 @@ export class HostLifecycle extends EventEmitter {
 
   private async toReachableSnapshot(
     raw: DesktopLocalHostSnapshot | null,
+    publishedAt: string | null,
   ): Promise<DesktopLocalHostSnapshot | null> {
     if (raw === null) {
       return null;
     }
-    if (!isCurrentHostWebsocketUrl(raw.websocketUrl)) {
-      return null;
-    }
     const probe = this.options.reachabilityProbe ?? canReachHostWebsocketUrl;
-    if (!(await probe(raw.websocketUrl))) {
+    if (
+      !(await isPublishedHostEndpointReachable(
+        raw.websocketUrl,
+        raw.pid,
+        publishedAt,
+        probe,
+      ))
+    ) {
       return null;
     }
     return withConfiguredHostName(this.options.layout, raw);
@@ -574,22 +501,6 @@ export class HostLifecycle extends EventEmitter {
     });
   }
 
-  private async cliHostRestart(): Promise<void> {
-    // The CLI resolves its slot from `config.environment` (baked per build),
-    // so no channel arg is passed.
-    await streamTraycerCliJson<unknown>({
-      args: ["host", "restart"],
-      env: null,
-      timeoutMs: HOST_RESTART_SUBPROCESS_TIMEOUT_MS,
-      invocation: null,
-      onEvent: () => {
-        // No progress sink - restart payload is small and any partial
-        // progress lines are advisory. The PID-metadata watcher fires
-        // `change` once the new host publishes pid.json.
-      },
-    });
-  }
-
   private async buildStartupError(cause: unknown): Promise<HostStartupError> {
     const logTail = await safeReadLogTail(this.options.layout.logFile, 50);
     if (cause instanceof HostStartupException) {
@@ -598,29 +509,6 @@ export class HostLifecycle extends EventEmitter {
     const message = cause instanceof Error ? cause.message : String(cause);
     return { code: "UNKNOWN", message, logTail };
   }
-}
-
-/**
- * Returns `true` only when `url` matches the committed WS-only host
- * endpoint contract: `ws://127.0.0.1:<port>/rpc` (or the `wss://` variant).
- */
-export function isCurrentHostWebsocketUrl(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-    return false;
-  }
-  if (parsed.hostname !== WS_RPC_HOST) {
-    return false;
-  }
-  if (parsed.port === "") {
-    return false;
-  }
-  return parsed.pathname === WS_RPC_PATH;
 }
 
 export function canReachHostWebsocketUrl(url: string): Promise<boolean> {
@@ -642,10 +530,21 @@ export function canReachHostWebsocketUrl(url: string): Promise<boolean> {
   }
 
   return new Promise((resolve) => {
-    const socket = createConnection({
-      host: parsed.hostname,
-      port,
-    });
+    const socket =
+      parsed.protocol === "wss:"
+        ? createTlsConnection({
+            host: parsed.hostname,
+            port,
+            // The host's loopback endpoint is authenticated by the
+            // pid-record contract, not a public CA. TLS is still required
+            // here: writing an HTTP upgrade before its handshake completes
+            // would make a `wss://` host look unreachable.
+            rejectUnauthorized: false,
+          })
+        : createConnection({
+            host: parsed.hostname,
+            port,
+          });
 
     const settle = (reachable: boolean): void => {
       socket.removeAllListeners();
@@ -654,7 +553,53 @@ export function canReachHostWebsocketUrl(url: string): Promise<boolean> {
     };
 
     socket.setTimeout(HOST_ENDPOINT_CHECK_TIMEOUT_MS);
-    socket.once("connect", () => settle(true));
+    let response = "";
+    socket.once(
+      parsed.protocol === "wss:" ? "secureConnect" : "connect",
+      () => {
+        socket.write(
+          [
+            `GET ${parsed.pathname} HTTP/1.1`,
+            `Host: ${parsed.host}`,
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "",
+            "",
+          ].join("\r\n"),
+        );
+      },
+    );
+    socket.on("data", (chunk: Buffer) => {
+      response += chunk.toString("utf8");
+      if (!response.includes("\r\n\r\n")) return;
+      const [statusLine = "", ...headerLines] = response.split("\r\n");
+      const headers = headerLines
+        .filter((line) => line.includes(":"))
+        .map((line) => {
+          const separator = line.indexOf(":");
+          return [
+            line.slice(0, separator).trim().toLowerCase(),
+            line
+              .slice(separator + 1)
+              .trim()
+              .toLowerCase(),
+          ] as const;
+        });
+      const upgrade = headers.find(([name]) => name === "upgrade")?.[1];
+      const connection = headers.find(([name]) => name === "connection")?.[1];
+      const accept = headers.find(
+        ([name]) => name === "sec-websocket-accept",
+      )?.[1];
+      settle(
+        /^HTTP\/1\.1 101(?:\s|$)/.test(statusLine) &&
+          upgrade === "websocket" &&
+          connection?.includes("upgrade") === true &&
+          typeof accept === "string" &&
+          accept.length > 0,
+      );
+    });
     socket.once("timeout", () => settle(false));
     socket.once("error", () => settle(false));
   });
@@ -670,7 +615,11 @@ export function canReachHostWebsocketUrl(url: string): Promise<boolean> {
  * interleaving, not a theoretical one.
  */
 type PidMetadataRead =
-  | { readonly kind: "parsed"; readonly snapshot: DesktopLocalHostSnapshot }
+  | {
+      readonly kind: "parsed";
+      readonly snapshot: DesktopLocalHostSnapshot;
+      readonly startedAt: string | null;
+    }
   | { readonly kind: "absent" }
   | { readonly kind: "indeterminate" };
 
@@ -704,6 +653,7 @@ export async function readPidMetadataState(
   const websocketUrl = obj.websocketUrl;
   const version = obj.version;
   const pid = obj.pid;
+  const startedAt = obj.startedAt;
 
   if (
     typeof hostId !== "string" ||
@@ -717,6 +667,7 @@ export async function readPidMetadataState(
   return {
     kind: "parsed",
     snapshot: withDefaultHostName({ hostId, websocketUrl, version, pid }),
+    startedAt: typeof startedAt === "string" ? startedAt : null,
   };
 }
 

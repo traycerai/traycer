@@ -11,6 +11,7 @@ import { AlertTriangle } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatActiveTurn,
+  ChatQueueDeliveryPolicy,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
@@ -33,6 +34,12 @@ import {
   type WorkspaceComposerAvailability,
 } from "@/lib/composer/workspace-composer-availability";
 import type { ChatLowerSurfaceTopSpacing } from "@/components/chat/chat-pinned-stack";
+import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  steerHintIsActive,
+  type ChatComposerSubmitSource,
+} from "@/lib/chats/resolve-steer-submit";
 import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
@@ -81,6 +88,13 @@ interface ChatComposerProps {
    */
   readonly isActive: boolean;
   readonly sendDisabled: boolean | undefined;
+  /**
+   * Why `sendDisabled` is true, shown as the send button's hover/focus
+   * tooltip (e.g. "Reconnecting to the host…"). Without it a blocked send
+   * button is silently grey and reads as broken. `null`/absent when
+   * `sendDisabled` is false or the caller has no reason to give.
+   */
+  readonly sendDisabledHint: string | null | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
@@ -90,6 +104,27 @@ interface ChatComposerProps {
     ((input: ChatComposerSubmitInput) => boolean) | null;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
+  /**
+   * Whether the running turn's harness supports same-turn steering, projected
+   * from the host `activeTurn.sameTurnSteeringSupported` capability. A stable
+   * boolean (changes only when the turn's harness changes), so it never churns
+   * the memoized composer per streamed token. Gates the Cmd+Enter steer
+   * behavior and the discovery hints (decisions 5, 8, 9).
+   */
+  readonly steerCapable: boolean;
+  /**
+   * Whether the tab's negotiated `chat.subscribe` protocol version understands
+   * `after_safe_point` (host handshake minor >= 5). `false` degrades `Mod-Enter`
+   * to plain-Enter queueing so a new renderer never steers a released <=1.4 host
+   * that predates same-turn steering.
+   */
+  readonly steerProtocolSupported: boolean;
+  /**
+   * Reads the live active turn at submit time (not a reactive prop) so the
+   * settings-drift comparison for a Cmd+Enter steer never re-creates the submit
+   * callback per streamed token - mirrors `steerQueuedItemNow`'s live read.
+   */
+  readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly editingQueueItemId: string | null;
   readonly onCancelQueueEdit: (() => void) | null;
   readonly hasPendingApprovals: boolean;
@@ -119,6 +154,7 @@ export interface ChatComposerSubmitInput {
   readonly contentText: string;
   readonly attachments: ReadonlyArray<Attachment>;
   readonly settings: ChatRunSettings;
+  readonly deliveryPolicy: ChatQueueDeliveryPolicy;
 }
 
 function ChatComposerImpl(props: ChatComposerProps) {
@@ -126,6 +162,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     taskId,
     isActive,
     sendDisabled,
+    sendDisabledHint,
     mentionRoots,
     fallbackToGlobalMentionRoots,
     currentEpicId,
@@ -134,6 +171,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     onSubmitMessage,
     onSettingsChange,
     activeTurnStatus,
+    steerCapable,
+    steerProtocolSupported,
+    getActiveTurnForSteer,
     editingQueueItemId,
     onCancelQueueEdit,
     hasPendingApprovals,
@@ -233,6 +273,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
     seedSource.kind,
   );
   const sendBlocked = sendDisabled === true || reauthGate.signedOut;
+  const sendBlockedHint = resolveSendBlockedHint({
+    workspaceDisabledHint: workspaceAvailability.disabledHint,
+    signedOut: reauthGate.signedOut,
+    sendDisabled,
+    sendDisabledHint,
+  });
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   // Rate-limit switch prompt: purely informational + user-confirmed, so it
   // never blocks send the way the reauth gate does. Scoped to the selected
@@ -298,12 +344,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
     isResolvingFilePaths,
   });
 
-  const submitDraft = useChatComposerSubmit({
+  const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
+  const { submitDraft, steerConflict } = useChatComposerSubmit({
     taskId,
     editorRef,
     pickerStore,
     toolbarStore,
     activeTurnStatus,
+    steerCapable,
+    steerEnabled,
+    steerProtocolSupported,
+    getActiveTurnForSteer,
     hasPendingApprovals,
     sendDisabled: sendBlocked,
     workspaceBlocked,
@@ -316,9 +367,27 @@ function ChatComposerImpl(props: ChatComposerProps) {
     reauthGate.state,
     profileId,
   );
-  const handleSubmitDraft = useCallback((): void => {
-    ambientDrift.guardSubmit(submitDraft);
-  }, [ambientDrift, submitDraft]);
+  // Preserves the submit source (Enter vs Cmd+Enter) across the ambient-drift
+  // "Continue" resubmit, so acknowledging drift on a steer chord still steers.
+  const lastSubmitSourceRef = useRef<ChatComposerSubmitSource>("enter");
+  const handleSubmitDraft = useCallback(
+    (source: ChatComposerSubmitSource): void => {
+      lastSubmitSourceRef.current = source;
+      ambientDrift.guardSubmit(() => submitDraft(source));
+    },
+    [ambientDrift, submitDraft],
+  );
+  const handleSubmitFromButton = useCallback((): void => {
+    handleSubmitDraft("enter");
+  }, [handleSubmitDraft]);
+  // Whether a Cmd+Enter here would steer (vs queue), gating the discovery hints
+  // (decisions 8, 9). Capability comes from the host; the setting is the opt-out.
+  const steerHintActive = steerHintIsActive({
+    activeTurnStatus,
+    steerCapable,
+    steerEnabled,
+    steerProtocolSupported,
+  });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const topBannerKind = resolveComposerTopBannerKind({
     reauthVisible: reauthBanner !== null,
@@ -329,7 +398,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const continueAfterAmbientDrift = (): void => {
     ambientDrift.acknowledge(() => {
       if (rateLimitPrompt.kind === "visible") return;
-      submitDraft();
+      submitDraft(lastSubmitSourceRef.current);
     });
   };
 
@@ -388,6 +457,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
         </ChatComposerBannerPortal>
       ) : null}
       <div
+        data-chat-composer=""
         className={cn(
           "bg-canvas px-4 pb-4",
           topSpacing === "normal" ? "pt-4" : "pt-0",
@@ -441,9 +511,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   initialSelection={initialSelection}
                   slashProviderId={harnessId}
                   hasPastedImageBytes={hasPastedImageBytes}
+                  ingestPastedComposerImages={null}
                   isActive={isActive}
                   onSnapshot={handleSnapshot}
                   onSubmit={handleSubmitDraft}
+                  steerHintActive={steerHintActive}
                   onPaste={onPaste}
                   onDragOver={onDragOver}
                   onDrop={onDrop}
@@ -456,12 +528,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   onAttachImages={attachImageFiles}
                   canSubmit={canSubmit}
                   attachmentPending={attachmentPending}
-                  onSubmit={handleSubmitDraft}
+                  onSubmit={handleSubmitFromButton}
                   activeTurnStatus={activeTurnStatus}
                   hasPendingApprovals={hasPendingApprovals}
                   stopDisabled={stopDisabled}
                   onStopTurn={onStopTurn}
-                  composerDisabledHint={workspaceAvailability.disabledHint}
+                  composerDisabledHint={sendBlockedHint}
                   dictation={dictationControl}
                   dictationPreparing={dictationPreparing}
                   settingsLocked={false}
@@ -486,6 +558,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
           )}
         </div>
       </div>
+      <SteerSettingsConflictDialog
+        open={steerConflict.open}
+        onOpenChange={steerConflict.onOpenChange}
+        onRestart={steerConflict.onRestart}
+        changed={steerConflict.changed}
+      />
     </>
   );
 }
@@ -571,6 +649,27 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+}
+
+/**
+ * Every blocked-send reason gets a hover/focus hint on the send button — a
+ * silently grey button reads as broken. Priority mirrors severity: the
+ * workspace gate (can't run anywhere), then the signed-out gate (the reauth
+ * banner has the full story), then the caller's reason (connection loss /
+ * view-only access).
+ */
+function resolveSendBlockedHint(args: {
+  readonly workspaceDisabledHint: string | null;
+  readonly signedOut: boolean;
+  readonly sendDisabled: boolean | undefined;
+  readonly sendDisabledHint: string | null | undefined;
+}): string | null {
+  if (args.workspaceDisabledHint !== null) return args.workspaceDisabledHint;
+  if (args.signedOut) {
+    return "Signed out of the provider — sign in to send messages";
+  }
+  if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
+  return null;
 }
 
 function canSubmitDraft(args: CanSubmitDraftArgs): boolean {

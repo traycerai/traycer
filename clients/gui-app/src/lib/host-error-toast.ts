@@ -4,6 +4,7 @@ import {
   type HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
@@ -18,6 +19,7 @@ export function toastFromHostError(
   error: HostRpcError,
   fallback: string,
 ): void {
+  if (shouldSuppressRecoverableUnauthorized(error)) return;
   const message = hostErrorToastMessage(error, fallback);
   emitHostFatalErrorNotification(error, message);
   const dedupeKey = hostErrorDedupeKey(error);
@@ -56,6 +58,7 @@ export function toastFromHostErrorWithDetail(
   error: HostRpcError,
   fallback: string,
 ): void {
+  if (shouldSuppressRecoverableUnauthorized(error)) return;
   const message = hostErrorToastMessageWithDetail(error, fallback);
   emitHostFatalErrorNotification(error, message);
   const dedupeKey = hostErrorDedupeKey(error);
@@ -71,6 +74,24 @@ export function toastFromHostErrorWithDetail(
   );
 }
 
+/**
+ * A host `UNAUTHORIZED` while the app-level session is still signed in is the
+ * recoverable stale-bearer race (the wake-after-suspension case: an in-flight
+ * call raced the token refresh). The shared single-flight revalidator owns
+ * recovery: on "rotated" the retry succeeds silently, and on "rejected" the
+ * revalidator signs out - flipping auth status to `signed-out`, which emits
+ * the one authoritative "Session expired - sign in again." toast via
+ * `AuthSessionExpiredToastBridge`. Toasting here too produced a "sign in"
+ * toast on every overnight wake even though recovery succeeded seconds later.
+ * The `retryable` (host-side JWKS outage) variant keeps its distinct copy:
+ * it is not a credential statement and never leads to a sign-out.
+ */
+function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
+  if (error.code !== "UNAUTHORIZED") return false;
+  if (error.fatalDetails?.retryable === true) return false;
+  return useAuthStore.getState().status !== "signed-out";
+}
+
 function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   // Connection-level failures name the underlying cause, not whichever
   // operation happened to be in flight when the host went away.
@@ -79,6 +100,12 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
   }
   if (isLastOwnerRevokeError(error.message)) {
     return "Can't revoke the only Owner. Transfer ownership first.";
+  }
+  // An optional method the active host predates (declared `degrade:
+  // unsupported`). This is a version gap, not a failed operation, so the copy
+  // points at the fix rather than restating the operation name.
+  if (error.code === "E_HOST_UNSUPPORTED") {
+    return "This needs a newer Traycer host. Update the host to continue.";
   }
   if (error.code === "FORBIDDEN") {
     return "You don't have permission to do that.";
@@ -90,7 +117,7 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
     return "Please sign in again.";
   }
   if (error.code === "WORKTREE_BUSY") {
-    return "Worktree is in use by an active chat or terminal. Stop those runs and try again.";
+    return "Worktree is in use by an active agent or terminal. Stop those runs and try again.";
   }
   if (error.code === "WORKTREE_REBIND_BLOCKED") {
     return "Stop the active run before rebinding the worktree.";
@@ -160,6 +187,13 @@ function emitHostFatalErrorNotification(
   message: string,
 ): void {
   if (error.fatalDetails === null) return;
+  // A capability gap (older host lacking an optional method) is not a genuine
+  // operation failure - it carries fatal details but must not spawn a
+  // persistent app-local failure row. The one-shot toast already delivers the
+  // upgrade guidance; a lingering feed entry would just be noise. This mirrors
+  // `toastFromBackgroundHostError`, which suppresses `E_HOST_UNSUPPORTED`
+  // outright.
+  if (error.code === "E_HOST_UNSUPPORTED") return;
   const dedupeKey = hostErrorDedupeKey(error);
   emitHostErrorNotification({
     id: dedupeKey ?? `${error.method}:${error.requestId}`,

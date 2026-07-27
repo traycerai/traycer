@@ -292,7 +292,7 @@ const SIDEBAR_PANEL_RAIL_ITEMS: ReadonlyArray<{
   readonly icon: LucideIcon;
   readonly active: boolean;
 }> = [
-  { label: "Chats", icon: MessagesSquare, active: true },
+  { label: "Agents", icon: MessagesSquare, active: true },
   { label: "Git Diff", icon: GitBranch, active: false },
   { label: "Artifacts", icon: Files, active: false },
   { label: "Sharing", icon: UserPlus, active: false },
@@ -305,7 +305,7 @@ function taskSceneFor(index: number): TaskScene {
 const PALETTE_ROWS = [
   { label: "New task", hint: "Cmd N" },
   { label: "New terminal agent", hint: "Cmd T" },
-  { label: "Chats", hint: "" },
+  { label: "Agents", hint: "" },
   { label: "Artifacts", hint: "" },
   { label: "Files", hint: "Cmd P" },
   { label: "View diff", hint: "" },
@@ -609,7 +609,7 @@ function TaskSidebar(props: {
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <SidebarGroup
-          title="Chats"
+          title="Agents"
           activeKind={activeKind}
           className=""
           rows={[

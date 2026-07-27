@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Bug } from "lucide-react";
+import { toast } from "sonner";
 import { useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
@@ -82,6 +83,16 @@ export function ReportIssueDialog(
         outcome: "succeeded",
         blocker: null,
       });
+      // The hand-off to GitHub is the primary channel and must survive a
+      // Sentry outage, so a failed diagnostics upload does not block it. It
+      // does have to be visible: this dialog closes below, so the warning goes
+      // to a toast rather than an inline banner nobody would ever see.
+      if (reportId === null) {
+        toast.warning("Diagnostic logs could not be uploaded", {
+          description:
+            "Your report will still open on GitHub. Attach your logs manually from Settings → Diagnostics so the team can diagnose it.",
+        });
+      }
       const url = buildSupportIssueUrl(
         submission.snapshot,
         submission.form,
@@ -262,7 +273,7 @@ function reportIssueFormFromContext(
 function buildSupportIssueUrl(
   snapshot: DesktopSupportSnapshot | null,
   form: ReportIssueForm,
-  reportId: string,
+  reportId: string | null,
 ): string {
   return buildGitHubIssueUrl({
     ...supportSnapshotIssueFields(snapshot),

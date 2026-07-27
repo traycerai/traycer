@@ -25,7 +25,7 @@ export function useProvidersSetTerminalAgentArgs(): UseMutationResult<
   return useHostScopedMutation({
     method: "providers.setTerminalAgentArgs",
     mutationKey: providersMutationKeys.setTerminalAgentArgs(),
-    errorMessage: "Couldn't save terminal agent arguments.",
+    errorMessage: "Couldn't save Terminal interface CLI arguments.",
     invalidateMethods: TERMINAL_AGENT_ARGS_INVALIDATIONS,
   });
 }

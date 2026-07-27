@@ -13,7 +13,6 @@ import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import type {
   HostDoctorIssue,
   HostDoctorReport,
-  HostOperationStatus,
   FreePortAndRestartInput,
   IHostManagement,
   IRunnerHost,
@@ -34,15 +33,17 @@ interface ManagementOverrides {
   readonly freePortAndRestart?: (
     input: FreePortAndRestartInput,
   ) => Promise<FreePortAndRestartInput>;
-  readonly getOperationStatus?: () => Promise<HostOperationStatus | null>;
 }
 
 function makeManagement(overrides: ManagementOverrides): IHostManagement {
   const notImplemented = (method: string) => (): Promise<never> =>
     Promise.reject(new Error(`${method} not implemented in mock`));
   return {
-    installHost: vi.fn(notImplemented("installHost")),
-    updateHost: vi.fn(notImplemented("updateHost")),
+    getHostControllerStatus: vi.fn(notImplemented("getHostControllerStatus")),
+    convergeReady: vi.fn(notImplemented("convergeReady")),
+    applyStaged: vi.fn(notImplemented("applyStaged")),
+    activateInstalled: vi.fn(notImplemented("activateInstalled")),
+    installVersion: vi.fn(notImplemented("installVersion")),
     uninstallHost: vi.fn(notImplemented("uninstallHost")),
     restartHost: overrides.restartHost ?? vi.fn(() => Promise.resolve()),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
@@ -55,11 +56,8 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
     availableVersions: vi.fn(notImplemented("availableVersions")),
     installedRecord: vi.fn(() => Promise.resolve(null)),
     registerService: vi.fn(notImplemented("registerService")),
-    ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
     registryCheck: vi.fn(notImplemented("registryCheck")),
-    getOperationStatus:
-      overrides.getOperationStatus ?? vi.fn(() => Promise.resolve(null)),
     freePortAndRestart:
       overrides.freePortAndRestart ?? vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
@@ -154,9 +152,10 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     expect(screen.getByRole("button", { name: /Restart host/i })).toBeTruthy();
   });
 
-  it("closes the Free Port + Restart confirmation while its restart is still pending", async () => {
-    const pendingRestart = Promise.withResolvers<FreePortAndRestartInput>();
-    const freePortAndRestart = vi.fn(() => pendingRestart.promise);
+  it("opens the Free Port + Restart confirmation when PORT_CONFLICT carries process identity", async () => {
+    const freePortAndRestart = vi.fn((input: FreePortAndRestartInput) =>
+      Promise.resolve(input),
+    );
     const issue: HostDoctorIssue = {
       code: "PORT_CONFLICT",
       severity: "error",
@@ -184,7 +183,7 @@ describe("HostDoctorCard pending CLI upgrade", () => {
     });
     renderCard(makeHostWithManagement(management));
 
-    const fixButton = await screen.findByRole<HTMLButtonElement>("button", {
+    const fixButton = await screen.findByRole("button", {
       name: /Free port \+ restart/i,
     });
     fireEvent.click(fixButton);
@@ -214,14 +213,6 @@ describe("HostDoctorCard pending CLI upgrade", () => {
       pid: 4321,
       processName: "node",
     });
-    // The subprocess promise is intentionally unresolved here. Before the
-    // fix, `isPending` kept this dialog open with Cancel/Esc disabled for the
-    // entire restart budget.
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(fixButton.disabled).toBe(true);
-    fireEvent.click(fixButton);
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(freePortAndRestart).toHaveBeenCalledTimes(1);
   });
 
   it("allows Free Port + Restart when PID and process name are unknown", async () => {
@@ -367,69 +358,6 @@ describe("HostDoctorCard pending CLI upgrade", () => {
 
     await waitFor(() => {
       expect(restartHost).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // Review follow-up finding: Doctor's fix actions (including Free Port +
-  // Restart) must respect the same cross-surface operation-status signal
-  // Settings → Host reads, since a Doctor fix racing a tracked
-  // restart/install/update elsewhere interleaves two independent
-  // stop/kill/start sequences.
-  it("disables fix buttons while a tracked host operation is active elsewhere", async () => {
-    const restartHost = vi.fn(() => Promise.resolve());
-    const activeStatus: HostOperationStatus = {
-      operationId: "op-elsewhere",
-      kind: "install",
-      stage: null,
-      percent: null,
-      bytes: null,
-      totalBytes: null,
-      message: null,
-      startedAt: "2026-05-15T00:00:00Z",
-    };
-    const management = makeManagement({
-      runDoctor: () =>
-        Promise.resolve<HostDoctorReport>({
-          issues: [pendingUpgradeIssue()],
-          ranAt: "2026-05-15T00:00:00Z",
-        }),
-      restartHost,
-      getOperationStatus: () => Promise.resolve(activeStatus),
-    });
-    renderCard(makeHostWithManagement(management));
-
-    const button = await screen.findByRole<HTMLButtonElement>("button", {
-      name: /Restart host/i,
-    });
-    await waitFor(() => {
-      expect(button.disabled).toBe(true);
-    });
-    fireEvent.click(button);
-    expect(restartHost).not.toHaveBeenCalled();
-  });
-
-  it("keeps fix buttons disabled until operation status resolves idle", async () => {
-    const operationStatus = Promise.withResolvers<HostOperationStatus | null>();
-    const restartHost = vi.fn(() => Promise.resolve());
-    const management = makeManagement({
-      runDoctor: () =>
-        Promise.resolve<HostDoctorReport>({
-          issues: [pendingUpgradeIssue()],
-          ranAt: "2026-05-15T00:00:00Z",
-        }),
-      restartHost,
-      getOperationStatus: () => operationStatus.promise,
-    });
-    renderCard(makeHostWithManagement(management));
-
-    const button = await screen.findByRole<HTMLButtonElement>("button", {
-      name: /Restart host/i,
-    });
-    expect(button.disabled).toBe(true);
-
-    operationStatus.resolve(null);
-    await waitFor(() => {
-      expect(button.disabled).toBe(false);
     });
   });
 });

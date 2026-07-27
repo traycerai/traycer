@@ -14,10 +14,8 @@ export function createFakeRunnerHost(
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
-    validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
-    refreshAuthToken: () => Promise.resolve({ kind: "network-error" as const }),
     listRegisteredHosts: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
@@ -70,8 +68,13 @@ export function createFakeRunnerHost(
     },
     tokenStore: {
       get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
+      signIn: () => Promise.resolve(),
+      rotate: () =>
+        Promise.resolve({ outcome: "deleted" as const, pair: null }),
       delete: () => Promise.resolve(),
+      subscribe: () => ({ dispose: () => undefined }),
+      migrateLegacyCredentials: () =>
+        Promise.resolve("identity-unknown" as const),
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),

@@ -32,7 +32,7 @@ import type {
 } from "@traycer/protocol/host/resources/subscribe";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
-import { chatDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { useRegisteredEpicLiveArtifactTitle } from "@/lib/epic-selectors";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { Button } from "@/components/ui/button";
@@ -2264,9 +2264,14 @@ function isResourceSortOption(value: string): value is ResourceSortOption {
 }
 
 function ownerKindLabel(kind: ResourceOwnerKindWire): string {
+  // Three owner kinds render side by side here, so a raw Terminal has to stay
+  // distinguishable from an Agent using the Terminal interface - qualification
+  // is warranted. It uses the interface axis rather than coining "Chat agent" /
+  // "Terminal agent" as sibling nouns, which would restate the entity model the
+  // rename removes.
   if (kind === "terminal") return "Terminal";
-  if (kind === "terminal-agent") return "TUI agent";
-  return "GUI agent";
+  if (kind === "terminal-agent") return "Agent (Terminal)";
+  return "Agent (Chat)";
 }
 
 // Subtitle beside the provider icon. Always non-empty so the icon never sits
@@ -2303,10 +2308,13 @@ function ownerLabel(
     });
   }
   if (snapshot.owner.kind === "chat") {
-    return chatDisplayTitle({
-      title: liveArtifactTitle ?? location?.ref.name ?? record?.name ?? "",
-      firstUserMessage: null,
-    });
+    // Durable Agent read surface: an untitled Chat-interface Agent falls back
+    // to "Untitled agent" (this light surface carries no first-user-message to
+    // derive from).
+    return displayTitle(
+      liveArtifactTitle || location?.ref.name || record?.name || "",
+      "agent",
+    );
   }
   if (liveArtifactTitle !== null) return liveArtifactTitle;
   if (location !== null) return location.ref.name;

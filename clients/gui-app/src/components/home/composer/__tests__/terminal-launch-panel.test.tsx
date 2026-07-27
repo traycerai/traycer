@@ -140,13 +140,11 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     renderPanel(onStart);
 
     const input = screen.getByLabelText<HTMLInputElement>(
-      "Terminal agent CLI arguments",
+      "Terminal interface CLI arguments",
     );
     expect(input.value).toBe("--from-settings");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start terminal agent" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -160,12 +158,13 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     const onStart = vi.fn();
     renderPanel(onStart);
 
-    fireEvent.change(screen.getByLabelText("Terminal agent CLI arguments"), {
-      target: { value: "" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start terminal agent" }),
+    fireEvent.change(
+      screen.getByLabelText("Terminal interface CLI arguments"),
+      {
+        target: { value: "" },
+      },
     );
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -178,12 +177,13 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     const onStart = vi.fn();
     renderPanel(onStart);
 
-    fireEvent.change(screen.getByLabelText("Terminal agent CLI arguments"), {
-      target: { value: "--dangerously-skip-permissions" },
-    });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Start terminal agent" }),
+    fireEvent.change(
+      screen.getByLabelText("Terminal interface CLI arguments"),
+      {
+        target: { value: "--dangerously-skip-permissions" },
+      },
     );
+    fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
     expect(onStart).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -205,7 +205,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       </TooltipProvider>,
     );
 
-    const start = screen.getByRole("button", { name: "Start terminal agent" });
+    const start = screen.getByRole("button", { name: "Start agent" });
     expect(start.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(start);
     expect(onStart).not.toHaveBeenCalled();

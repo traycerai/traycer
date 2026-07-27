@@ -17,6 +17,7 @@ import {
   listTerminalsRequestSchemaV20,
   listTerminalsResponseSchema,
   listTerminalsResponseSchemaV20,
+  listTerminalsResponseSchemaV21,
   renameTerminalRequestSchema,
   renameTerminalResponseSchema,
   type TerminalScope,
@@ -142,12 +143,21 @@ export const terminalListV10 = defineRpcContract({
 
 // `scope: { kind: "independent" }` lists landing-scope (epic-less) sessions
 // instead of an epic's. See `terminalCreateV20`'s comment for the
-// major-bump rationale.
+// major-bump rationale. Frozen released shape - do not edit in place.
 export const terminalListV20 = defineRpcContract({
   method: "terminal.list",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: listTerminalsRequestSchemaV20,
   responseSchema: listTerminalsResponseSchemaV20,
+});
+
+// Additive `homeCwd` on the response; request is identical to `@2.0`.
+// Canonical for major 2 after this minor lands.
+export const terminalListV21 = defineRpcContract({
+  method: "terminal.list",
+  schemaVersion: { major: 2, minor: 1 } as const,
+  requestSchema: listTerminalsRequestSchemaV20,
+  responseSchema: listTerminalsResponseSchemaV21,
 });
 
 export const terminalListUpgradeV10ToV20 = defineUpgradePath<
@@ -167,11 +177,29 @@ export const terminalListUpgradeV10ToV20 = defineUpgradePath<
   }),
 });
 
-export const terminalListDowngradeV20ToV10 = defineDowngradePath<
+// A v2.0 peer has no authoritative host home path, so the upgrade fills
+// `homeCwd: null`. Sessions pass through unchanged.
+export const terminalListUpgradeV20ToV21 = defineUpgradePath<
   typeof terminalListV20,
-  typeof terminalListV10
+  typeof terminalListV21
 >({
   from: terminalListV20.schemaVersion,
+  to: terminalListV21.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    sessions: response.sessions,
+    homeCwd: null,
+  }),
+});
+
+// Bridges from v2.1 (major 2's latest) down to the frozen v1.0 - not from
+// v2.0, since v2.1 supersedes it as major 2's latest. Strips `homeCwd` by
+// projecting only sessions, and keeps the independent-scope failure gate.
+export const terminalListDowngradeV21ToV10 = defineDowngradePath<
+  typeof terminalListV21,
+  typeof terminalListV10
+>({
+  from: terminalListV21.schemaVersion,
   to: terminalListV10.schemaVersion,
   downgradeRequest: (request) => {
     const epicId = downgradeTerminalScopeForV10(request.scope);
@@ -179,7 +207,9 @@ export const terminalListDowngradeV20ToV10 = defineDowngradePath<
     return { ok: true, value: { epicId: epicId.value } };
   },
   downgradeResponse: (response) => {
-    const downgraded = response.sessions.map(downgradeTerminalSessionInfoForV10);
+    const downgraded = response.sessions.map(
+      downgradeTerminalSessionInfoForV10,
+    );
     // A single un-representable session fails the whole response: a v1.0 peer's
     // session shape has no field that can carry an independent-scope terminal,
     // so there is no partial list worth sending.

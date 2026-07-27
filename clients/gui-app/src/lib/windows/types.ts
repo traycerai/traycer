@@ -1,7 +1,15 @@
 import type {
-  HostOperationStatus,
-  HostRegistryUpdateState,
-} from "@traycer-clients/shared/platform/runner-host";
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+
+export type {
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutStatus,
+} from "@traycer-clients/shared/keybindings/global-shortcuts";
+import type { HostControllerStatus } from "@traycer-clients/shared/platform/runner-host";
 
 export type DesktopJsonPrimitive = string | number | boolean | null;
 export type DesktopJsonValue =
@@ -106,12 +114,10 @@ export type DesktopMenuCommandId =
 export interface DesktopMenuCommandPayload {
   readonly command: DesktopMenuCommandId;
   readonly windowId: string;
-  // Only meaningful for `host.installUpdate`: the exact host version the
-  // native menu/tray row displayed. Echoed back as the update's
-  // `expectedVersion` so the shell refuses to install a target the user never
-  // confirmed (e.g. after a release-channel switch). `null` otherwise.
-  readonly hostUpdateVersion: string | null;
 }
+
+export type DesktopTopLevelMenuId =
+  "file" | "edit" | "view" | "window" | "help";
 
 export interface DesktopZoomBridge {
   readonly ladder: readonly number[];
@@ -184,6 +190,14 @@ export interface DesktopMenuBridge {
   };
 }
 
+export interface DesktopMenuPopupBridge {
+  openTopLevel(
+    menuId: DesktopTopLevelMenuId,
+    anchorX: number,
+    anchorY: number,
+  ): Promise<void>;
+}
+
 export type DesktopAppUpdateStatus =
   | "idle"
   | "checking"
@@ -229,6 +243,11 @@ export interface DesktopAppUpdateSnapshot {
   // dialog with the steps instead of disabling it - the update can still be
   // applied, just not fully automatically.
   readonly installGuidance: DesktopAppUpdateGuidance | null;
+  // True from the moment the main process hands off to `quitAndInstall` until
+  // the install either ends the process or fails back to "error". The quit is
+  // not instant, so this is what every restart affordance reads to go pending -
+  // it's broadcast, so a second window can't fire a duplicate install either.
+  readonly installInFlight: boolean;
   readonly errorMessage: string | null;
   readonly lastCheckedAt: string | null;
   readonly lastCheckIntent: DesktopAppUpdateCheckIntent | null;
@@ -249,14 +268,30 @@ export interface DesktopAppUpdatesBridge {
   };
 }
 
-export interface DesktopHostRegistryUpdatesBridge {
-  onChange(handler: (state: HostRegistryUpdateState) => void): {
+/**
+ * Wire snapshot pushed on `globalShortcutsChange` and returned by
+ * `getSnapshot`. `sequence` guards against an out-of-order frame overwriting
+ * a newer one in the renderer's store, the same monotonic pattern
+ * `DesktopAppUpdateSnapshot` uses.
+ */
+export interface DesktopGlobalShortcutsSnapshot {
+  readonly sequence: number;
+  readonly statuses: Readonly<Record<GlobalShortcutId, GlobalShortcutStatus>>;
+}
+
+export interface DesktopGlobalShortcutsBridge {
+  getSnapshot(): Promise<DesktopGlobalShortcutsSnapshot>;
+  set(
+    id: GlobalShortcutId,
+    intent: GlobalShortcutIntent,
+  ): Promise<GlobalShortcutStatus>;
+  onChange(handler: (snapshot: DesktopGlobalShortcutsSnapshot) => void): {
     dispose(): void;
   };
 }
 
-export interface DesktopHostOperationStatusBridge {
-  onChange(handler: (status: HostOperationStatus | null) => void): {
+export interface DesktopHostControllerStatusBridge {
+  onChange(handler: (status: HostControllerStatus) => void): {
     dispose(): void;
   };
 }
@@ -270,7 +305,10 @@ export interface DesktopReportIssueForm {
 }
 
 export interface DesktopSubmitReportResult {
-  readonly reportId: string;
+  // `null` when the diagnostics upload never reached Sentry. The issue is
+  // still filed, but without a Support Report row - there is nothing to look
+  // up, and advertising an id that resolves to nothing is the bug being fixed.
+  readonly reportId: string | null;
 }
 
 export interface DesktopSupportBridge {

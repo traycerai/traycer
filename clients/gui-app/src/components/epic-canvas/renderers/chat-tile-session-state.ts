@@ -230,16 +230,24 @@ export function resolvedTurnStatus(
 /**
  * Tri-state activity for the chat's progress indicators (sidebar tree, tab
  * icons): is the agent actually processing, or is only background work
- * (Bash `run_in_background` / a subagent / Monitor / a scheduled wakeup)
- * keeping the chat non-idle? `runStatus` alone can't tell the two apart, and
- * showing the same spinner for both left users unable to see whether the
- * agent was really running.
+ * (Bash `run_in_background` / Monitor / a scheduled wakeup) keeping the chat
+ * non-idle? `runStatus` alone can't tell the two apart, and showing the same
+ * spinner for both left users unable to see whether the agent was really
+ * running.
  *
  * `"turn"` wins whenever a genuine turn is active or activating (the host's
  * `turnInProgress`, via {@link resolvedTurnStatus}) — background work running
  * alongside a turn is subsumed by it. A runnable queue also reads `"turn"`:
  * the next prompt is imminent, and the momentary turn-boundary gaps while a
  * queue drains must not flicker the indicator through the background style.
+ *
+ * Native agent work — a spawned subagent or a workflow fleet still running
+ * after the turn ended — also reads `"turn"`: it IS the agent working, just
+ * detached from the turn, so it gets the busy spinner rather than the muted
+ * background-process glyph. Only process-like kinds (command / monitor /
+ * wakeup / mcp) read `"background"`. This deliberately diverges from
+ * {@link resolvedTurnStatus}, which keeps reporting no active turn for the
+ * same state: a detached subagent must not surface a Stop-turn affordance.
  */
 export type ChatActivityIndicator = "turn" | "background" | null;
 
@@ -254,7 +262,12 @@ export function chatActivityIndicator(
   if (resolvedTurnStatus(state, turnStatus) !== null) return "turn";
   const isQueueRunnable =
     state.queue.status !== "paused" && state.queue.items.length > 0;
-  return isQueueRunnable ? "turn" : "background";
+  if (isQueueRunnable) return "turn";
+  const hasNativeAgentWork =
+    state.backgroundItems?.some(
+      (item) => item.kind === "subagent" || item.kind === "workflow",
+    ) ?? false;
+  return hasNativeAgentWork ? "turn" : "background";
 }
 
 export function normalizeInlineEditForSession(

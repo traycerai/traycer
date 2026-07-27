@@ -9,14 +9,13 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { EpicNodeRecord } from "@/lib/artifacts/node-display";
 import {
-  WORKSPACE_FILE_TAB_KIND,
-  isDiffTileRef,
   type EpicCanvasTileRef,
   type EpicCanvasState,
   type EpicViewTab,
   type TileLayoutNode,
   type TilePane,
 } from "./types";
+import { isTileRefRecordBacked } from "./tile-schema";
 import { findPaneById } from "./tile-tree";
 import { EMPTY_CANVAS } from "./canvas-state";
 import { findPaneTabByContentId } from "./actions";
@@ -111,6 +110,33 @@ export function useEpicArtifactRecords(
   return useEpicCanvasStore(selector);
 }
 
+/**
+ * Whether `ref`'s backing artifact record is still live: not a record-backed
+ * kind at all (terminal, workspace-file, git-diff - nothing to go stale),
+ * still within the optimistic-create window (`pendingCreateArtifactIds`,
+ * before a just-created record has projected), or `hasLiveRecord` finds it.
+ *
+ * `hasLiveRecord` is a caller-supplied presence check rather than a fixed
+ * records array, because the two consumers reach live record data through
+ * genuinely different paths: `useEpicRouteSynchronization`'s cleanup effect
+ * (closes an OPEN tile whose record disappeared) has a React-context-bound
+ * live records array in hand, while the back/forward preview-reopen path
+ * (must not resurrect a CLOSED tile whose record disappeared while it was
+ * closed) has only an epicId and looks the session up imperatively via the
+ * open-Epic session registry. Sharing this predicate keeps the "record-
+ * backed + pending-create-exempt" decision itself from drifting between the
+ * two - only the presence lookup differs.
+ */
+export function isTileRefRecordLive(
+  ref: EpicCanvasTileRef,
+  pendingCreateArtifactIds: ReadonlySet<string>,
+  hasLiveRecord: (id: string) => boolean,
+): boolean {
+  if (!isTileRefRecordBacked(ref)) return true;
+  if (pendingCreateArtifactIds.has(ref.id)) return true;
+  return hasLiveRecord(ref.id);
+}
+
 export function makeSelectEpicCanvas(tabId: string | undefined) {
   return (state: EpicCanvasStore): EpicCanvasState => {
     if (tabId === undefined) return EMPTY_CANVAS;
@@ -132,8 +158,12 @@ export function makeSelectActiveEpicArtifactId(tabId: string | undefined) {
     if (pane === null || pane.activeTabId === null) return null;
     const active = canvas.tilesByInstanceId[pane.activeTabId];
     if (active === undefined) return null;
-    if (active.type === WORKSPACE_FILE_TAB_KIND) return null;
-    if (isDiffTileRef(active)) return null;
+    // Only record-backed tiles are resolvable artifacts. Renderer-only tiles -
+    // workspace file, git-diff, and PR detail - carry synthetic ids that cannot
+    // be restored from artifact records, so they must never become the
+    // persisted `lastFocusedArtifactId` (route sync writes whatever this
+    // returns). `isTileRefRecordBacked` covers all three and any future one.
+    if (!isTileRefRecordBacked(active)) return null;
     return active.id;
   };
 }
@@ -171,6 +201,49 @@ export function useIsActiveEpicArtifact(
   const selector = useMemo(
     () => makeSelectIsActiveEpicArtifact(tabId, nodeId),
     [tabId, nodeId],
+  );
+  return useEpicCanvasStore(selector);
+}
+
+/**
+ * Whether `tileId` is the tile showing in `tabId`'s active pane - the
+ * NON-record-backed counterpart to {@link makeSelectIsActiveEpicArtifact}.
+ *
+ * Renderer-only tiles (workspace file, git-diff, PR detail) are deliberately
+ * invisible to `makeSelectActiveEpicArtifactId`, which returns `null` for them
+ * so their synthetic ids never reach the persisted `lastFocusedArtifactId`.
+ * They still need to light up their own list row, and their ids ARE stable
+ * (derived from host + coordinates), so matching on the tile id directly is
+ * safe here in a way that persisting it would not be.
+ *
+ * `null` means "this row has no tile" (an unknown-base PR) and is never active.
+ * Selects a per-row BOOLEAN for the same reason the artifact variant does:
+ * threading the active id to every row re-renders the whole list on every
+ * selection change.
+ */
+export function makeSelectIsActiveTile(
+  tabId: string | undefined,
+  tileId: string | null,
+) {
+  return (state: EpicCanvasStore): boolean => {
+    if (tabId === undefined || tileId === null) return false;
+    const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
+    if (canvas.activePaneId === null) return false;
+    const pane = findPaneById(canvas.root, canvas.activePaneId);
+    if (pane === null || pane.activeTabId === null) return false;
+    const active = canvas.tilesByInstanceId[pane.activeTabId];
+    if (active === undefined) return false;
+    return active.id === tileId;
+  };
+}
+
+export function useIsActiveTile(
+  tabId: string | undefined,
+  tileId: string | null,
+): boolean {
+  const selector = useMemo(
+    () => makeSelectIsActiveTile(tabId, tileId),
+    [tabId, tileId],
   );
   return useEpicCanvasStore(selector);
 }

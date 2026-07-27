@@ -94,6 +94,7 @@ function createHarness(): Harness {
       callbacks = nextCallbacks;
       return {
         sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => undefined,
       };
     },
@@ -157,6 +158,7 @@ function emitSnapshot(
         claudePendingWakes: [],
         messages: [...messages],
         events: [...events],
+        archivedAt: null,
       },
       access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
       queue: { status: "idle", items: [] },
@@ -246,6 +248,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           agentMode: "epic",
           profileId: null,
         },
+        "auto",
       );
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
@@ -324,6 +327,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           agentMode: "epic",
           profileId: null,
         },
+        "auto",
       );
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
@@ -439,6 +443,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           agentMode: "epic",
           profileId: null,
         },
+        "auto",
       );
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
@@ -512,6 +517,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           agentMode: "epic",
           profileId: null,
         },
+        "auto",
       );
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
@@ -572,6 +578,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           agentMode: "epic",
           profileId: null,
         },
+        "auto",
       );
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
@@ -664,6 +671,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           agentMode: "epic",
           profileId: null,
         },
+        "auto",
       );
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
@@ -719,6 +727,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           agentMode: "epic",
           profileId: null,
         },
+        "auto",
       );
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
@@ -800,6 +809,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
           agentMode: "epic",
           profileId: null,
         },
+        "auto",
       );
     });
     const sent = harness.handle.store.getState().pendingUserMessages.at(0);
@@ -863,7 +873,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     clickWarningReportAction();
 
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
-      title: "Chat action failed",
+      title: "Agent action failed",
       message: null,
       code: null,
       source: "Chat",

@@ -15,7 +15,7 @@ const CHAT_ID = "chat-1";
 const TEST_ID = "chat-progress";
 const RUNNING_TEST_ID = `${TEST_ID}-activity-${CHAT_ID}`;
 const BACKGROUND_TEST_ID = `${TEST_ID}-background-activity-${CHAT_ID}`;
-const TURN_RUNNING_LABEL = "Chat in progress";
+const TURN_RUNNING_LABEL = "Agent in progress";
 const BACKGROUND_RUNNING_LABEL = "Background activity — agent idle";
 
 const MONITOR_ITEM = {
@@ -27,18 +27,21 @@ const MONITOR_ITEM = {
   scheduledFor: null,
 };
 
+// Awareness reports a TIER per working agent, not bare membership: a host that
+// classifies its agents distinguishes an active turn from background-only work,
+// and one that does not reports every working agent as "turn".
 const mockSessionState = vi.hoisted<{
-  readonly activeAgentIds: Set<string>;
+  readonly activityTiers: Map<string, "turn" | "background">;
   existingHandle: ChatSessionStoreHandle | null;
   epicPermissionRole: "owner" | "editor" | "viewer" | null;
 }>(() => ({
-  activeAgentIds: new Set<string>(),
+  activityTiers: new Map<string, "turn" | "background">(),
   existingHandle: null,
   epicPermissionRole: "owner",
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useEpicActiveAgentIds: () => mockSessionState.activeAgentIds,
+  useEpicAgentActivityTiers: () => mockSessionState.activityTiers,
   useEpicPermissionRole: () => mockSessionState.epicPermissionRole,
 }));
 
@@ -48,11 +51,12 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
 
 import { ChatProgressIcon } from "@/components/chat/chat-progress-icon";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const createdHandles: ChatSessionStoreHandle[] = [];
 
 afterEach(() => {
   cleanup();
-  mockSessionState.activeAgentIds.clear();
+  mockSessionState.activityTiers.clear();
   mockSessionState.existingHandle = null;
   mockSessionState.epicPermissionRole = "owner";
   for (const handle of createdHandles.splice(0)) {
@@ -62,19 +66,21 @@ afterEach(() => {
 
 describe("<ChatProgressIcon />", () => {
   it("shows a running spinner for an active chat without an opened session handle", () => {
-    mockSessionState.activeAgentIds.add(CHAT_ID);
+    mockSessionState.activityTiers.set(CHAT_ID, "turn");
 
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
+    expect(tooltipTextNear(screen.getByTestId(RUNNING_TEST_ID))).toBe(
+      "Agent in progress",
+    );
   });
 
   it("shows the static chat icon when an unopened chat is not active", () => {
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).toBeNull();
+    expect(screen.queryByTitle("Agent in progress")).toBeNull();
     expect(screen.queryByTitle("Waiting for your approval")).toBeNull();
   });
 
@@ -87,7 +93,7 @@ describe("<ChatProgressIcon />", () => {
     const { container } = renderIcon();
 
     expect(
-      screen.getByRole("status", { name: "Read-only chat" }),
+      screen.getByRole("status", { name: "Read-only agent" }),
     ).toBeDefined();
     const icon = container.querySelector(".lucide-message-square-lock");
     expect(icon).not.toBeNull();
@@ -103,7 +109,9 @@ describe("<ChatProgressIcon />", () => {
 
     const { container } = renderIcon();
 
-    expect(screen.queryByRole("status", { name: "Read-only chat" })).toBeNull();
+    expect(
+      screen.queryByRole("status", { name: "Read-only agent" }),
+    ).toBeNull();
     expect(container.querySelector(".lucide-message-square-lock")).toBeNull();
   });
 
@@ -115,7 +123,9 @@ describe("<ChatProgressIcon />", () => {
 
     const { container } = renderIcon();
 
-    expect(screen.queryByRole("status", { name: "Read-only chat" })).toBeNull();
+    expect(
+      screen.queryByRole("status", { name: "Read-only agent" }),
+    ).toBeNull();
     expect(container.querySelector(".lucide-message-square-lock")).toBeNull();
   });
 
@@ -125,7 +135,7 @@ describe("<ChatProgressIcon />", () => {
     renderIcon();
 
     expect(
-      screen.getByRole("status", { name: "Read-only chat" }),
+      screen.getByRole("status", { name: "Read-only agent" }),
     ).toBeDefined();
   });
 
@@ -137,7 +147,9 @@ describe("<ChatProgressIcon />", () => {
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
+    expect(tooltipTextNear(screen.getByTestId(RUNNING_TEST_ID))).toBe(
+      "Agent in progress",
+    );
   });
 
   it("shows the muted background indicator instead of the turn spinner when only background work runs", () => {
@@ -147,9 +159,9 @@ describe("<ChatProgressIcon />", () => {
       turnInProgress: false,
       backgroundItems: [MONITOR_ITEM],
     });
-    // Epic-level activity also reads active during background-only phases;
-    // the session's own tri-state must still win.
-    mockSessionState.activeAgentIds.add(CHAT_ID);
+    // Awareness reads active during background-only phases too; the session's
+    // own tri-state must still win, since it sees the queue directly.
+    mockSessionState.activityTiers.set(CHAT_ID, "turn");
     mockSessionState.existingHandle = handle;
 
     renderIcon();
@@ -189,14 +201,49 @@ describe("<ChatProgressIcon />", () => {
     handle.store.setState({
       pendingInterviews: [{ blockId: "question-1", requestedAt: 1 }],
     });
-    mockSessionState.activeAgentIds.add(CHAT_ID);
+    mockSessionState.activityTiers.set(CHAT_ID, "turn");
     mockSessionState.existingHandle = handle;
 
     renderIcon();
 
     expect(screen.queryByTestId(RUNNING_TEST_ID)).not.toBeNull();
     expect(screen.queryByTitle("Waiting for your approval")).toBeNull();
-    expect(screen.queryByTitle("Chat in progress")).not.toBeNull();
+    expect(tooltipTextNear(screen.getByTestId(RUNNING_TEST_ID))).toBe(
+      "Agent in progress",
+    );
+  });
+
+  it("shows the background glyph for an UNOPENED chat the host reports as background-only", () => {
+    // No session handle, so awareness is the only authority. Reading it as a
+    // bare id set could not express this: every working chat got the turn
+    // spinner, which put an unopened background-only chat at odds with the
+    // calm glyph the sidebar's descendant rollup showed for that same chat.
+    mockSessionState.activityTiers.set(CHAT_ID, "background");
+
+    renderIcon();
+
+    expect(
+      screen.getByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: TURN_RUNNING_LABEL }),
+    ).toBeNull();
+  });
+
+  it("still shows the turn spinner when the host has not classified its agents", () => {
+    // A host that omits the turn field leaves every working agent at "turn" -
+    // the conservative pre-tier reading - so this arm must not regress into
+    // presenting unclassified work as background.
+    mockSessionState.activityTiers.set(CHAT_ID, "turn");
+
+    renderIcon();
+
+    expect(
+      screen.getByRole("status", { name: TURN_RUNNING_LABEL }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("status", { name: BACKGROUND_RUNNING_LABEL }),
+    ).toBeNull();
   });
 });
 
@@ -223,6 +270,7 @@ function createHandle(): ChatSessionStoreHandle {
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: () => ({
       sendAction: () => undefined,
+      sameTurnSteeringProtocolSupported: () => true,
       close: () => undefined,
     }),
   });

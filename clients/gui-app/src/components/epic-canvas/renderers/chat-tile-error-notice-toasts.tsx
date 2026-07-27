@@ -15,7 +15,7 @@ import {
 } from "@/lib/reportable-error-toast";
 
 const CHAT_ACTION_REPORT_CONTEXT = createReportIssueContext({
-  title: "Chat action failed",
+  title: "Agent action failed",
   message: null,
   code: null,
   source: "Chat",

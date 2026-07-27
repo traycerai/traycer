@@ -36,6 +36,14 @@ export interface LogicalStreamPort {
   ): void;
   /** Sends a logical close intent for this stream, then forgets it. */
   closeStream(streamId: number, reason: string): void;
+  /**
+   * Asks the SHARED session to drop its socket and re-dial through its own
+   * backoff state machine. Per-stream by API (`IStreamSession.requestReconnect`)
+   * but session-wide in effect - shared fate means one stream's request
+   * reconnects every stream on this host, which is exactly what the caller
+   * (a post-sleep/wake liveness nudge) wants.
+   */
+  requestSessionReconnect(reason: string): void;
 }
 
 export interface LogicalStreamInit {
@@ -88,6 +96,19 @@ export class LogicalStream implements IStreamSession {
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
+  }
+
+  /**
+   * `IStreamSession.requestReconnect`. This object owns no socket or backoff
+   * loop, so it forwards to the shared `RemoteSession` (see
+   * `LogicalStreamPort.requestSessionReconnect`). No-op once disposed, matching
+   * the local session's "already closed" contract.
+   */
+  requestReconnect(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.port.requestSessionReconnect("caller-requested-reconnect");
   }
 
   close(): void {

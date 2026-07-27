@@ -1,5 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  focusManager,
+  QueryClientProvider,
+  type Query,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -13,11 +18,17 @@ import type {
 } from "@traycer/protocol/host/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
-import { createAppQueryClient } from "@/lib/query-client";
 import {
-  nextHarnessAvailabilityRefetchInterval,
+  HARNESS_ALL_AVAILABLE_POLL_LANE,
+  HARNESS_PENDING_POLL_LANE,
+} from "@/lib/host-rpc-policy/host-method-policy-table";
+import { createAppQueryClient } from "@/lib/query-client";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
+import {
   useGuiHarnessCatalog,
+  useGuiHarnessesQuery,
   useGuiHarnessModelsQuery,
+  useRefreshHarnessCatalog,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 
 const hostBindingMock = vi.hoisted(() => ({
@@ -25,11 +36,13 @@ const hostBindingMock = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/host/runtime", () => ({
   useHostBinding: () => hostBindingMock.current,
+  useHostClient: () => hostBindingMock.current?.hostClient ?? null,
 }));
 
-const FIFTEEN_MIN_MS = 15 * 60 * 1000;
-const RETRY_MIN_MS = 30 * 1000;
-const RETRY_MAX_MS = 5 * 60 * 1000;
+const UNAVAILABLE_INITIAL_MS = 30 * 1000;
+const UNAVAILABLE_SECOND_MS = 60 * 1000;
+const UNAVAILABLE_THIRD_MS = 120 * 1000;
+const PENDING_INITIAL_MS = 800;
 
 function response(
   available: boolean,
@@ -56,113 +69,37 @@ function response(
   };
 }
 
-const PENDING_REFRESH_MS = 800;
+function harnessesQuery(queryClient: QueryClient): Query {
+  const query = queryClient
+    .getQueryCache()
+    .getAll()
+    .find((entry) => entry.queryKey.includes("agent.gui.listHarnesses"));
+  if (query === undefined) {
+    throw new Error("Expected agent.gui.listHarnesses query");
+  }
+  return query;
+}
 
-describe("nextHarnessAvailabilityRefetchInterval", () => {
-  it("keeps the steady-state interval before any data arrives", () => {
-    expect(
-      nextHarnessAvailabilityRefetchInterval({
-        queryHash: "no-data",
-        dataUpdateCount: 0,
-        data: undefined,
-      }),
-    ).toBe(FIFTEEN_MIN_MS);
-  });
+function appliedDelay(query: Query): number | false | undefined {
+  const interval = refetchIntervalFor(query);
+  if (!isRefetchInterval(interval)) {
+    return typeof interval === "number" || interval === false
+      ? interval
+      : undefined;
+  }
+  return interval(query);
+}
 
-  it("keeps the steady-state interval when every harness is available", () => {
-    expect(
-      nextHarnessAvailabilityRefetchInterval({
-        queryHash: "all-available",
-        dataUpdateCount: 1,
-        data: response(true, false),
-      }),
-    ).toBe(FIFTEEN_MIN_MS);
-  });
+function refetchIntervalFor(query: Query): unknown {
+  const { options } = query;
+  return "refetchInterval" in options ? options.refetchInterval : undefined;
+}
 
-  it("fast-polls at 800ms when any harness has availabilityPending", () => {
-    expect(
-      nextHarnessAvailabilityRefetchInterval({
-        queryHash: "pending",
-        dataUpdateCount: 1,
-        data: response(false, true),
-      }),
-    ).toBe(PENDING_REFRESH_MS);
-  });
-
-  it("retries at the host-cache TTL on the first unavailable result", () => {
-    expect(
-      nextHarnessAvailabilityRefetchInterval({
-        queryHash: "first-unavailable",
-        dataUpdateCount: 1,
-        data: response(false, false),
-      }),
-    ).toBe(RETRY_MIN_MS);
-  });
-
-  it("backs off exponentially toward the ceiling across successive fetches", () => {
-    const hash = "backoff";
-    const intervals = [1, 2, 3, 4, 5, 6].map((dataUpdateCount) =>
-      nextHarnessAvailabilityRefetchInterval({
-        queryHash: hash,
-        dataUpdateCount,
-        data: response(false, false),
-      }),
-    );
-    expect(intervals).toEqual([
-      RETRY_MIN_MS, // 30s
-      RETRY_MIN_MS * 2, // 1m
-      RETRY_MIN_MS * 4, // 2m
-      RETRY_MIN_MS * 8, // 4m
-      RETRY_MAX_MS, // capped at 5m
-      RETRY_MAX_MS,
-    ]);
-  });
-
-  it("does not advance the backoff when re-evaluated for the same fetch", () => {
-    const hash = "same-fetch";
-    const first = nextHarnessAvailabilityRefetchInterval({
-      queryHash: hash,
-      dataUpdateCount: 7,
-      data: response(false, false),
-    });
-    const second = nextHarnessAvailabilityRefetchInterval({
-      queryHash: hash,
-      dataUpdateCount: 7,
-      data: response(false, false),
-    });
-    expect(first).toBe(RETRY_MIN_MS);
-    expect(second).toBe(RETRY_MIN_MS);
-  });
-
-  it("resets the backoff once the catalog recovers", () => {
-    const hash = "recovery";
-    nextHarnessAvailabilityRefetchInterval({
-      queryHash: hash,
-      dataUpdateCount: 1,
-      data: response(false, false),
-    });
-    nextHarnessAvailabilityRefetchInterval({
-      queryHash: hash,
-      dataUpdateCount: 2,
-      data: response(false, false),
-    });
-    expect(
-      nextHarnessAvailabilityRefetchInterval({
-        queryHash: hash,
-        dataUpdateCount: 3,
-        data: response(true, false),
-      }),
-    ).toBe(FIFTEEN_MIN_MS);
-    // A later drop starts the backoff over from the host-cache TTL.
-    expect(
-      nextHarnessAvailabilityRefetchInterval({
-        queryHash: hash,
-        dataUpdateCount: 4,
-        data: response(false, false),
-      }),
-    ).toBe(RETRY_MIN_MS);
-  });
-});
+function isRefetchInterval(
+  value: unknown,
+): value is (query: Query) => number | false | undefined {
+  return typeof value === "function";
+}
 
 // Real-hook regression coverage for the removed model-query interval (F1 /
 // R2-F1): unlike availability above, model queries must never install a
@@ -244,6 +181,219 @@ function createCatalogFixture(
   );
   return { Wrapper, queryClient };
 }
+
+describe("useGuiHarnessesQuery table cadence", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    focusManager.setFocused(true);
+  });
+
+  afterEach(() => {
+    focusManager.setFocused(undefined);
+    vi.useRealTimers();
+    hostBindingMock.current = null;
+    cleanup();
+  });
+
+  it("stamps hostRpcMethod, forces retry:false, and brands the interval", async () => {
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => response(true, false),
+    });
+
+    renderHook(
+      () => useGuiHarnessesQuery({ enabled: true, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const query = harnessesQuery(fixture.queryClient);
+    const branded = getConditionPollEpisodeCoordinator(
+      fixture.queryClient,
+    ).refetchIntervalFor("agent.gui.listHarnesses");
+
+    expect(query.options.meta).toMatchObject({
+      hostRpcMethod: "agent.gui.listHarnesses",
+    });
+    expect(query.options.retry).toBe(false);
+    expect(refetchIntervalFor(query)).toBe(branded);
+    expect(appliedDelay(query)).toBe(
+      HARNESS_ALL_AVAILABLE_POLL_LANE.initialDelayMs,
+    );
+  });
+
+  it("resumes unavailable across a pending timer detour: 30s → 60s → 800ms → 120s", async () => {
+    vi.setSystemTime(0);
+    let next: ListGuiHarnessesResponse = response(false, false);
+    const fetchTimes: number[] = [];
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => {
+        fetchTimes.push(Date.now());
+        return next;
+      },
+    });
+
+    renderHook(
+      () => useGuiHarnessesQuery({ enabled: true, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Mount settlement enters unavailable at attempt 0.
+    next = response(false, false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UNAVAILABLE_INITIAL_MS);
+    });
+
+    next = response(false, true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UNAVAILABLE_SECOND_MS);
+    });
+
+    next = response(false, false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PENDING_INITIAL_MS);
+    });
+    await act(async () => {
+      // Unavailable counter resumes at attempt 2 → 30s * 2^2 = 120s.
+      await vi.advanceTimersByTimeAsync(UNAVAILABLE_THIRD_MS);
+    });
+
+    const deltas = fetchTimes
+      .slice(1)
+      .map((time, index) => time - fetchTimes[index]);
+    expect(deltas).toEqual([
+      UNAVAILABLE_INITIAL_MS,
+      UNAVAILABLE_SECOND_MS,
+      PENDING_INITIAL_MS,
+      UNAVAILABLE_THIRD_MS,
+    ]);
+  });
+
+  it("applies the unavailable exponential schedule on the real timer", async () => {
+    vi.setSystemTime(0);
+    const fetchTimes: number[] = [];
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => {
+        fetchTimes.push(Date.now());
+        return response(false, false);
+      },
+    });
+
+    renderHook(
+      () => useGuiHarnessesQuery({ enabled: true, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UNAVAILABLE_INITIAL_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UNAVAILABLE_SECOND_MS);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UNAVAILABLE_THIRD_MS);
+    });
+
+    const deltas = fetchTimes
+      .slice(1)
+      .map((time, index) => time - fetchTimes[index]);
+    expect(deltas).toEqual([
+      UNAVAILABLE_INITIAL_MS,
+      UNAVAILABLE_SECOND_MS,
+      UNAVAILABLE_THIRD_MS,
+    ]);
+  });
+
+  it("resets a capped unavailable episode before the explicit catalog refresh", async () => {
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => response(false, false),
+    });
+
+    renderHook(
+      () => useGuiHarnessesQuery({ enabled: true, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const query = harnessesQuery(fixture.queryClient);
+    for (let index = 0; index < 4; index += 1) {
+      fixture.queryClient.setQueryData(query.queryKey, response(false, false));
+    }
+    expect(appliedDelay(query)).toBe(5 * 60 * 1_000);
+
+    const { result } = renderHook(() => useRefreshHarnessCatalog(), {
+      wrapper: fixture.Wrapper,
+    });
+    await result.current();
+
+    expect(appliedDelay(query)).toBe(UNAVAILABLE_INITIAL_MS);
+  });
+
+  it("clears unavailable progress when the all-available reset lane is entered", async () => {
+    let next: ListGuiHarnessesResponse = response(false, false);
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => next,
+    });
+
+    renderHook(
+      () => useGuiHarnessesQuery({ enabled: true, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const query = harnessesQuery(fixture.queryClient);
+
+    next = response(false, false);
+    await act(async () => {
+      await query.fetch();
+    });
+    expect(appliedDelay(query)).toBe(UNAVAILABLE_SECOND_MS);
+
+    next = response(true, false);
+    await act(async () => {
+      await query.fetch();
+    });
+    expect(appliedDelay(query)).toBe(
+      HARNESS_ALL_AVAILABLE_POLL_LANE.initialDelayMs,
+    );
+
+    next = response(false, false);
+    await act(async () => {
+      await query.fetch();
+    });
+    expect(appliedDelay(query)).toBe(UNAVAILABLE_INITIAL_MS);
+  });
+
+  it("uses the pending error lane for cold recovery", async () => {
+    const fixture = createCatalogFixture({
+      "agent.gui.listHarnesses": () => {
+        throw new Error("harness catalog unavailable");
+      },
+    });
+
+    renderHook(
+      () => useGuiHarnessesQuery({ enabled: true, subscribed: true }),
+      { wrapper: fixture.Wrapper },
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(appliedDelay(harnessesQuery(fixture.queryClient))).toBe(
+      HARNESS_PENDING_POLL_LANE.initialDelayMs,
+    );
+  });
+});
 
 describe("useGuiHarnessModelsQuery (interval removal regression)", () => {
   afterEach(() => {

@@ -9,12 +9,9 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { useRef, type ReactNode } from "react";
 import * as Y from "yjs";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -25,16 +22,22 @@ import {
   RouterProvider,
   useRouterState,
 } from "@tanstack/react-router";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { NotificationsPopover } from "@/components/notifications/notifications-popover";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import {
+  __resetHostNotificationsStoreForTests,
+  useHostNotificationsStore,
+} from "@/stores/notifications/host-notifications-store";
 import {
   __resetNotificationsStoreForTests,
   openNotificationsStream,
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
-import {
-  __resetHostNotificationsStoreForTests,
-  useHostNotificationsStore,
-} from "@/stores/notifications/host-notifications-store";
+import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
@@ -48,11 +51,32 @@ import {
   createNotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
-import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-category";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { toast } from "sonner";
 
-const hostBindingState = vi.hoisted<{
-  current: { readonly hostClient: HostClient<HostRpcRegistry> } | null;
-}>(() => ({ current: null }));
+const hostRequestMock = vi.hoisted(() => vi.fn());
+
+const hostBindingState = vi.hoisted(() => ({
+  current: null as {
+    readonly hostClient: {
+      readonly request: typeof hostRequestMock;
+      readonly getActiveHostId: () => string | null;
+    };
+  } | null,
+}));
+
+const activeHostIdRef = vi.hoisted(() => ({
+  value: null as string | null,
+}));
+
+const directoryRef = vi.hoisted(() => ({
+  value: null as {
+    findById: (hostId: string) => typeof mockLocalHostEntry | null;
+  } | null,
+}));
 
 vi.mock("@/lib/host", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host")>();
@@ -62,7 +86,34 @@ vi.mock("@/lib/host", async (importActual) => {
   };
 });
 
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () => activeHostIdRef.value,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) => {
+    if (hostId.length === 0 || directoryRef.value === null) return null;
+    return directoryRef.value.findById(hostId);
+  },
+}));
+
+vi.mock("@/lib/host-error-toast", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host-error-toast")>();
+  return {
+    ...actual,
+    toastFromHostError: vi.fn(actual.toastFromHostError),
+  };
+});
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}));
+
 const TASK_TITLE = "Checkout notification title and hover behavior";
+const DAY_MS = 86_400_000;
 
 function seedEntries(
   callbacks: NotificationsStreamCallbacks,
@@ -85,14 +136,36 @@ interface TargetCapture {
   focusThreadId: string | null;
 }
 
+function PopoverShell(props: { readonly onNavigate: () => void }): ReactNode {
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
+  return (
+    <NotificationsPopover
+      onNavigate={props.onNavigate}
+      headingRef={headingRef}
+      shellRef={shellRef}
+      shellStyle={{}}
+      onFilterMenuOpenChange={() => undefined}
+    />
+  );
+}
+
 function buildRouterWithCapture(target: TargetCapture, onNavigate: () => void) {
+  // Keep the center mounted across in-app navigation the way the real app
+  // shell does: routeNotification may change the route while the center is
+  // still open; the shell itself must stay mounted until onNavigate closes it.
   const rootRoute = createRootRoute({
-    component: () => <Outlet />,
+    component: () => (
+      <>
+        <PopoverShell onNavigate={onNavigate} />
+        <Outlet />
+      </>
+    ),
   });
   const indexRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/",
-    component: () => <NotificationsPopover onNavigate={onNavigate} />,
+    component: () => null,
   });
   const epicRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -152,44 +225,20 @@ function renderRouter(router: AnyRouter): void {
   );
 }
 
-function createHostClient(
-  clearAllRequests: Array<{ readonly beforeUpdatedAt: number }>,
-): HostClient<HostRpcRegistry> {
-  const client = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: { invalidateHostScope: () => undefined },
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "clear-all-request",
-      handlers: {
-        "host.notifications.clearAll": (request) => {
-          clearAllRequests.push(request);
-          return {};
-        },
-      },
-    }),
-  });
-  client.bind(mockLocalHostEntry);
-  client.setRequestContext(
-    createRequestContextFixture({
-      origin: "renderer",
-      bearerToken: "test-token",
-    }),
-  );
-  return client;
-}
-
 function hostAgentEntry(input: {
   readonly id: string;
   readonly kind: "agent.stopped" | "agent.stalled";
   readonly severity: "failure" | "done";
   readonly outcome: "completed" | "stopped" | "errored" | null;
+  readonly updatedAt: number | null;
+  readonly readAt: number | null;
 }): HostNotificationEntry {
+  const updatedAt = input.updatedAt ?? (input.id === "failed" ? 20 : 10);
   if (input.kind === "agent.stopped") {
     return {
       id: input.id,
-      updatedAt: input.id === "failed" ? 20 : 10,
-      readAt: null,
+      updatedAt,
+      readAt: input.readAt,
       kind: "agent.stopped",
       sourceRef: input.id,
       severity: input.severity,
@@ -208,8 +257,8 @@ function hostAgentEntry(input: {
   }
   return {
     id: input.id,
-    updatedAt: input.id === "failed" ? 20 : 10,
-    readAt: null,
+    updatedAt,
+    readAt: input.readAt,
     kind: "agent.stalled",
     sourceRef: input.id,
     severity: input.severity,
@@ -228,6 +277,63 @@ function hostAgentEntry(input: {
       outcome: "errored",
     },
   };
+}
+
+function hostPrompt(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "approval.requested",
+    sourceRef: id,
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "approval",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: TASK_TITLE,
+      approvalId: id,
+    },
+  };
+}
+
+function hostFailure(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationEntry {
+  return hostAgentEntry({
+    id,
+    kind: "agent.stopped",
+    severity: "failure",
+    outcome: "errored",
+    updatedAt,
+    readAt,
+  });
+}
+
+function hostDone(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationEntry {
+  return hostAgentEntry({
+    id,
+    kind: "agent.stopped",
+    severity: "done",
+    outcome: "completed",
+    updatedAt,
+    readAt,
+  });
 }
 
 function threadEntry(
@@ -271,68 +377,206 @@ function threadEntryWithState(state: ThreadEntryState): NotificationEntry {
   };
 }
 
+function applyHostSnapshot(
+  entries: ReadonlyArray<HostNotificationEntry>,
+  summary: { readonly unreadCount: number; readonly attentionCount: number },
+): void {
+  useHostNotificationsStore.getState().applySnapshot({
+    attention: {
+      entries: entries.filter(
+        (entry) =>
+          entry.severity === "needs_action" || entry.severity === "failure",
+      ),
+      nextCursor: null,
+    },
+    recent: { entries, nextCursor: null },
+    summary,
+  });
+}
+
 function notificationIds(rows: ReadonlyArray<HTMLElement>) {
   return rows.map((row) => row.dataset.notificationId);
 }
 
-const ELEMENT_DIMENSIONS = [
-  "scrollHeight",
-  "clientHeight",
-  "scrollWidth",
-  "clientWidth",
-] as const;
-
-type ElementDimension = (typeof ELEMENT_DIMENSIONS)[number];
-
-function mockElementDimensions(
-  getValue: (element: HTMLElement, dimension: ElementDimension) => number,
-) {
-  const descriptors = new Map(
-    ELEMENT_DIMENSIONS.map((dimension) => [
-      dimension,
-      Object.getOwnPropertyDescriptor(HTMLElement.prototype, dimension),
-    ]),
-  );
-
-  ELEMENT_DIMENSIONS.forEach((dimension) => {
-    Object.defineProperty(HTMLElement.prototype, dimension, {
-      configurable: true,
-      get(this: HTMLElement) {
-        return getValue(this, dimension);
-      },
-    });
+function resetPopoverFilters(): void {
+  useNotificationsPopoverStore.setState({
+    open: false,
+    unreadOnly: false,
+    categories: ALL_NOTIFICATION_CATEGORIES,
+    originUnavailable: false,
+    originUnavailableHostLabel: null,
   });
+}
 
-  return (): void => {
-    ELEMENT_DIMENSIONS.forEach((dimension) => {
-      const descriptor = descriptors.get(dimension);
-      if (descriptor === undefined) {
-        Reflect.deleteProperty(HTMLElement.prototype, dimension);
-      } else {
-        Object.defineProperty(HTMLElement.prototype, dimension, descriptor);
-      }
-    });
+function bindHostClient(): void {
+  hostBindingState.current = {
+    hostClient: {
+      request: hostRequestMock,
+      getActiveHostId: () => mockLocalHostEntry.hostId,
+    },
   };
 }
 
-async function selectTab(testId: string) {
-  const trigger = screen.getByTestId(testId);
-  await act(async () => {
-    fireEvent.mouseDown(trigger, { button: 0, ctrlKey: false });
-    await Promise.resolve();
+/** Faithful DISCONNECT: runtime binding retained (`client !== null`) while
+ * the active host id is null on both the reactive signal and
+ * `client.getActiveHostId()`, and the exact summary goes unknown. Call after
+ * `applyHostSnapshot` so `byId` rows stay rendered. */
+function simulateHostDisconnect(): void {
+  activeHostIdRef.value = null;
+  hostBindingState.current = {
+    hostClient: {
+      request: hostRequestMock,
+      getActiveHostId: () => null,
+    },
+  };
+  useHostNotificationsStore.getState().markSummaryUnknown();
+}
+
+function markAllReadButton(): HTMLButtonElement {
+  const button = screen.getByTestId("notifications-mark-all-read");
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error("expected mark-all button");
+  }
+  return button;
+}
+
+function seedUnreadAppLocal(id: string): void {
+  useAppLocalNotificationsStore.getState().activateIdentity("user-popover");
+  useAppLocalNotificationsStore.getState().upsert({
+    id,
+    updatedAt: 50,
+    readAt: null,
+    kind: "stream.transport.error",
+    sourceRef: id,
+    payload: null,
+    message: "Worktree failed",
+    detail: null,
   });
 }
 
-describe("NotificationsPopover click routing", () => {
+function defaultHostRequest(method: string): Promise<unknown> {
+  if (method === "host.notifications.markRead") {
+    return Promise.resolve({ ok: true });
+  }
+  if (method === "host.notifications.resolve") {
+    return Promise.resolve({ ok: true });
+  }
+  if (method === "host.notifications.markAllRead") {
+    return Promise.resolve({ ok: true });
+  }
+  return Promise.resolve({});
+}
+
+function activateButtonFor(row: HTMLElement): HTMLButtonElement {
+  const button = row.querySelector("button");
+  if (button === null) throw new Error("activate button not found");
+  return button;
+}
+
+function startOfLocalDay(timestamp: number): number {
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function unsupportedResolveError(): HostRpcError {
+  return new HostRpcError({
+    code: "E_HOST_UNSUPPORTED",
+    message: "host.notifications.resolve is not supported",
+    requestId: "req-unsupported-resolve",
+    method: "host.notifications.resolve",
+    fatalDetails: {
+      code: "E_HOST_UNSUPPORTED",
+      reason: "Method not advertised by this host",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function markAllReadCallParams(): { readonly beforeUpdatedAt: number } {
+  const call = hostRequestMock.mock.calls.find(
+    (entry) => entry[0] === "host.notifications.markAllRead",
+  );
+  const params: unknown = call === undefined ? undefined : call[1];
+  if (!isRecord(params)) {
+    throw new Error("expected host.notifications.markAllRead params");
+  }
+  const beforeUpdatedAt = params["beforeUpdatedAt"];
+  if (typeof beforeUpdatedAt !== "number") {
+    throw new Error("expected host.notifications.markAllRead params");
+  }
+  return { beforeUpdatedAt };
+}
+
+function resolveCallOccurrences(): ReadonlyArray<{
+  readonly id: string;
+  readonly updatedAt: number;
+  readonly sourceRef: string | null;
+}> {
+  const call = hostRequestMock.mock.calls.find(
+    (entry) => entry[0] === "host.notifications.resolve",
+  );
+  const params: unknown = call === undefined ? undefined : call[1];
+  if (!isRecord(params)) {
+    throw new Error("expected host.notifications.resolve params");
+  }
+  const occurrences = params["occurrences"];
+  if (!Array.isArray(occurrences)) {
+    throw new Error("expected host.notifications.resolve params");
+  }
+  return occurrences.map((raw: unknown) => {
+    if (!isRecord(raw)) {
+      throw new Error("expected resolve occurrence token");
+    }
+    const id = raw["id"];
+    const updatedAt = raw["updatedAt"];
+    const sourceRef = raw["sourceRef"];
+    if (
+      typeof id !== "string" ||
+      typeof updatedAt !== "number" ||
+      (sourceRef !== null && typeof sourceRef !== "string")
+    ) {
+      throw new Error("expected resolve occurrence token");
+    }
+    return {
+      id,
+      updatedAt,
+      sourceRef: sourceRef === null ? null : sourceRef,
+    };
+  });
+}
+
+describe("NotificationsPopover", () => {
   beforeEach(() => {
+    hostRequestMock.mockReset();
+    hostRequestMock.mockImplementation(defaultHostRequest);
     hostBindingState.current = null;
+    vi.mocked(toastFromHostError).mockClear();
+    vi.mocked(toast.error).mockClear();
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    resetPopoverFilters();
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    directoryRef.value = {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    };
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
+    });
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: { entries: [], nextCursor: null },
+      summary: { unreadCount: 0, attentionCount: 0 },
     });
   });
 
@@ -343,8 +587,6 @@ describe("NotificationsPopover click routing", () => {
   });
 
   it("renders a relative timestamp on every notification row", async () => {
-    // Use the floor of 2.5 minutes so we land firmly inside the `2m ago`
-    // bucket and cannot drift into `1m ago` between module load and render.
     const twoMinutesAgo = Date.now() - 150_000;
     const captured: TargetCapture = {
       epicId: null,
@@ -378,7 +620,14 @@ describe("NotificationsPopover click routing", () => {
     expect(timestamp.textContent).toBe("2m ago");
   });
 
-  it("defaults to Unread and shows read notifications only in All", async () => {
+  it("renders Attention before Recent and omits Attention when empty", async () => {
+    applyHostSnapshot(
+      [hostPrompt("prompt", 100, null), hostDone("done", 90, null)],
+      {
+        unreadCount: 2,
+        attentionCount: 1,
+      },
+    );
     const captured: TargetCapture = {
       epicId: null,
       tabId: null,
@@ -386,91 +635,371 @@ describe("NotificationsPopover click routing", () => {
       focusThreadId: null,
     };
     const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
 
+    const shell = await screen.findByTestId("notifications-popover");
+    const text = shell.textContent || "";
+    expect(text.indexOf("Needs attention")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("Recent activity")).toBeGreaterThan(
+      text.indexOf("Needs attention"),
+    );
+    expect(
+      notificationIds(screen.getAllByTestId("notification-entry")),
+    ).toEqual(["host:prompt", "host:done"]);
+
+    act(() => {
+      applyHostSnapshot([hostDone("done", 90, null)], {
+        unreadCount: 1,
+        attentionCount: 0,
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Needs attention")).toBeNull();
+    });
+    expect(screen.getByText("Recent activity")).not.toBeNull();
+    expect(
+      notificationIds(screen.getAllByTestId("notification-entry")),
+    ).toEqual(["host:done"]);
+  });
+
+  it("uses flat non-card row classes with hover/focus-visible row tint", async () => {
+    applyHostSnapshot([hostDone("done", 10, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.className).not.toContain("rounded-2xl");
+    expect(row.className).not.toMatch(/bg-accent\/55|bg-muted\/35/);
+    expect(row.className.split(/\s+/)).toEqual(
+      expect.arrayContaining([
+        "hover:bg-muted/70",
+        "has-[:focus-visible]:bg-muted/70",
+      ]),
+    );
+    // Unread rows prepend an absolute rail span; the glyph holder is the
+    // permanent size-6 box, not necessarily the first child.
+    const glyph = Array.from(row.querySelectorAll("span")).find((span) =>
+      span.className.split(/\s+/).includes("size-6"),
+    );
+    expect(glyph?.className).toContain("size-6");
+    expect(glyph?.className).not.toMatch(/bg-|rounded-2xl/);
+  });
+
+  it("renders non-navigable unread rows with one acknowledge control that disappears once read", async () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "local-1",
+      updatedAt: 50,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "local-1",
+      payload: null,
+      message: "Worktree failed",
+      detail: null,
+    });
+
+    const onNavigate = vi.fn();
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    const acknowledge = within(row).getByTestId("notification-acknowledge");
+    expect(acknowledge.getAttribute("aria-label")).toBe("Acknowledge");
+    expect(acknowledge.hasAttribute("disabled")).toBe(false);
+    // The content column is a plain div, not a nested button. Unread rows
+    // also render an absolute rail as the first child, so locate by flex-1.
+    const contentColumn = Array.from(row.children).find(
+      (child): child is HTMLElement =>
+        child instanceof HTMLElement &&
+        child.className.split(/\s+/).includes("flex-1"),
+    );
+    if (contentColumn === undefined) {
+      throw new Error("missing content column");
+    }
+    expect(contentColumn.tagName.toLowerCase()).toBe("div");
+    expect(within(row).getAllByRole("button")).toHaveLength(1);
+
+    fireEvent.click(acknowledge);
+    expect(onNavigate).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(
+        useAppLocalNotificationsStore.getState().byId["local-1"].readAt,
+      ).toBeTypeOf("number");
+    });
+    // Once read, the trailing acknowledge control is unmounted entirely
+    // (no disabled dead CheckCheck button). Re-query the live row — a
+    // lifecycle move out of Attention can remount the entry.
+    await waitFor(() => {
+      const live = screen
+        .queryAllByTestId("notification-entry")
+        .find((entry) => entry.dataset.notificationId === "app-local:local-1");
+      if (live === undefined) {
+        expect(screen.queryByTestId("notification-acknowledge")).toBeNull();
+        return;
+      }
+      expect(within(live).queryByTestId("notification-acknowledge")).toBeNull();
+      expect(within(live).queryAllByRole("button")).toHaveLength(0);
+    });
+  });
+
+  it("does not render a trailing acknowledge control on already-read non-navigable rows", async () => {
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "local-read",
+      updatedAt: 50,
+      readAt: 40,
+      kind: "stream.transport.error",
+      sourceRef: "local-read",
+      payload: null,
+      message: "Worktree failed",
+      detail: null,
+    });
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationRead).toBe("true");
+    expect(within(row).queryByTestId("notification-acknowledge")).toBeNull();
+    expect(within(row).queryByTestId("notification-mark-read")).toBeNull();
+    expect(within(row).queryAllByRole("button")).toHaveLength(0);
+  });
+
+  it("renders navigable unread rows with one primary button and sibling mark-read, never nested buttons", async () => {
+    openNotificationsStream((callbacks) => {
+      act(() => {
+        seedEntries(callbacks, [
+          threadEntry("route-1", "epic-xyz", "art-7", "thread-9"),
+        ]);
+      });
+      return { applyUpdate: () => {}, close: () => {} };
+    }, null);
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    const buttons = within(row).getAllByRole("button");
+    expect(buttons).toHaveLength(2);
+    expect(within(row).getByTestId("notification-mark-read")).not.toBeNull();
+    for (const button of buttons) {
+      expect(button.querySelector("button")).toBeNull();
+    }
+
+    fireEvent.click(within(row).getByTestId("notification-mark-read"));
+    await waitFor(() => {
+      expect(
+        useNotificationsStore
+          .getState()
+          .entries.find((entry) => entry.id === "route-1")?.readAt,
+      ).toBeTypeOf("number");
+    });
+    expect(within(row).queryByTestId("notification-mark-read")).toBeNull();
+    expect(within(row).getAllByRole("button")).toHaveLength(1);
+  });
+
+  it("filters Recent through the menu while leaving Attention unchanged", async () => {
+    applyHostSnapshot(
+      [
+        hostPrompt("prompt", 100, null),
+        hostDone("done-unread", 90, null),
+        hostDone("done-read", 80, 10),
+      ],
+      { unreadCount: 2, attentionCount: 1 },
+    );
     openNotificationsStream((callbacks) => {
       act(() => {
         seedEntries(callbacks, [
           threadEntryWithState({
-            id: "unread-new",
+            id: "collab",
             epicId: "epic-1",
             artifactId: "art-1",
             threadId: "thread-1",
-            createdAt: 2,
+            createdAt: 60,
             readAt: null,
-          }),
-          threadEntryWithState({
-            id: "read-old",
-            epicId: "epic-2",
-            artifactId: "art-2",
-            threadId: "thread-2",
-            createdAt: 1,
-            readAt: 10,
           }),
         ]);
       });
       return { applyUpdate: () => {}, close: () => {} };
     }, null);
 
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
     renderRouter(router);
 
-    const unreadContent = await screen.findByTestId(
-      "notifications-tab-content-unread",
-    );
-    const unreadRows =
-      within(unreadContent).getAllByTestId("notification-entry");
-    expect(notificationIds(unreadRows)).toEqual(["global:unread-new"]);
-    const unreadRow = unreadRows[0];
-    const unreadMarker = within(unreadRow).getByTestId(
-      "notification-unread-marker",
-    );
-    expect(unreadMarker.className).toContain("absolute");
-    expect(unreadMarker.className).toContain("inset-y-2");
-    expect(unreadMarker.className).toContain("left-0");
-    expect(unreadMarker.className).toContain("rounded-r-full");
+    await screen.findByText("Needs attention");
+    const before = notificationIds(screen.getAllByTestId("notification-entry"));
+    expect(before[0]).toBe("host:prompt");
 
-    await selectTab("notifications-tab-all");
-
-    const allContent = await screen.findByTestId(
-      "notifications-tab-content-all",
-    );
-    let allRows: ReadonlyArray<HTMLElement> = [];
-    await waitFor(() => {
-      allRows = within(allContent).getAllByTestId("notification-entry");
-      expect(notificationIds(allRows)).toEqual([
-        "global:unread-new",
-        "global:read-old",
-      ]);
+    // Radix DropdownMenuTrigger opens on pointerdown, not click.
+    fireEvent.pointerDown(screen.getByTestId("notifications-filter-trigger"), {
+      button: 0,
     });
-    const readRow = allRows[1];
+    fireEvent.click(
+      await screen.findByTestId("notifications-filter-unread-only"),
+    );
+
+    await waitFor(() => {
+      const ids = notificationIds(screen.getAllByTestId("notification-entry"));
+      expect(ids).toEqual(["host:prompt", "host:done-unread", "global:collab"]);
+    });
+
+    fireEvent.click(
+      await screen.findByTestId("notifications-filter-category-task"),
+    );
+
+    await waitFor(() => {
+      const ids = notificationIds(screen.getAllByTestId("notification-entry"));
+      expect(ids).toEqual(["host:prompt", "global:collab"]);
+    });
+    expect(screen.getByText("Needs attention")).not.toBeNull();
+  });
+
+  it("restores Recent rows from the filtered-empty Reset filters control", async () => {
+    applyHostSnapshot([hostDone("done-read", 80, 10)], {
+      unreadCount: 0,
+      attentionCount: 0,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    expect(await screen.findByTestId("notification-entry")).not.toBeNull();
+
+    fireEvent.pointerDown(screen.getByTestId("notifications-filter-trigger"), {
+      button: 0,
+    });
+    fireEvent.click(
+      await screen.findByTestId("notifications-filter-unread-only"),
+    );
+
     expect(
-      within(readRow).queryByTestId("notification-unread-marker"),
-    ).toBeNull();
+      await screen.findByTestId("notifications-filter-empty"),
+    ).not.toBeNull();
+    fireEvent.click(screen.getByTestId("notifications-filter-reset"));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("notifications-filter-empty")).toBeNull();
+      expect(screen.getByTestId("notification-entry")).not.toBeNull();
+    });
+    expect(useNotificationsPopoverStore.getState().unreadOnly).toBe(false);
+  });
+
+  it("inserts temporal separators only when the calendar group changes", async () => {
+    const now = Date.now();
+    const today = now - 60_000;
+    const yesterday = startOfLocalDay(now) - DAY_MS / 2;
+    const earlier = startOfLocalDay(now) - 3 * DAY_MS;
+
+    applyHostSnapshot(
+      [
+        hostDone("today", today, null),
+        hostDone("yesterday", yesterday, null),
+        hostDone("earlier", earlier, null),
+      ],
+      { unreadCount: 3, attentionCount: 0 },
+    );
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const separators = await screen.findAllByTestId(
+      "notification-temporal-separator",
+    );
+    expect(separators.map((node) => node.textContent)).toEqual([
+      "Today",
+      "Yesterday",
+      "Earlier",
+    ]);
+
+    // Only one separator per group boundary - three groups → three labels.
+    expect(separators).toHaveLength(3);
+
+    // Desktop-pass subordination: micro/muted sentence case, not overline caps.
+    for (const separator of separators) {
+      expect(separator.className).toContain("text-micro");
+      expect(separator.className).not.toContain("uppercase");
+      expect(separator.className).not.toContain("font-semibold");
+      expect(separator.className).not.toContain("text-overline");
+    }
+    const recentHeader = screen.getByText("Recent activity");
+    expect(recentHeader.className).toContain("text-overline");
+    expect(recentHeader.className).toContain("uppercase");
+    expect(recentHeader.className).toContain("font-semibold");
   });
 
   it("renders failed host outcomes and stalled rows as failure severity", async () => {
-    useHostNotificationsStore.getState().replaceFromSnapshot(
-      [
-        hostAgentEntry({
-          id: "completed",
-          kind: "agent.stopped",
-          severity: "done",
-          outcome: "completed",
-        }),
-        hostAgentEntry({
-          id: "failed",
-          kind: "agent.stopped",
-          severity: "failure",
-          outcome: "errored",
-        }),
-        hostAgentEntry({
-          id: "stalled",
-          kind: "agent.stalled",
-          severity: "failure",
-          outcome: "errored",
-        }),
-      ],
-      50,
-    );
+    const entries = [
+      hostAgentEntry({
+        id: "completed",
+        kind: "agent.stopped",
+        severity: "done",
+        outcome: "completed",
+        updatedAt: 10,
+        readAt: null,
+      }),
+      hostAgentEntry({
+        id: "failed",
+        kind: "agent.stopped",
+        severity: "failure",
+        outcome: "errored",
+        updatedAt: 20,
+        readAt: null,
+      }),
+      hostAgentEntry({
+        id: "stalled",
+        kind: "agent.stalled",
+        severity: "failure",
+        outcome: "errored",
+        updatedAt: 15,
+        readAt: null,
+      }),
+    ];
+    applyHostSnapshot(entries, { unreadCount: 3, attentionCount: 2 });
 
     const captured: TargetCapture = {
       epicId: null,
@@ -493,101 +1022,20 @@ describe("NotificationsPopover click routing", () => {
     );
 
     expect(failed?.dataset.notificationSeverity).toBe("failure");
-    expect(failed?.dataset.notificationOutcome).toBe("errored");
     expect(failed?.textContent).toContain(TASK_TITLE);
-    expect(failed?.textContent).toContain("Agent • Failed");
     expect(completed?.dataset.notificationSeverity).toBe("done");
     expect(completed?.textContent).toContain(TASK_TITLE);
-    expect(completed?.textContent).toContain("Agent • Done");
     expect(stalled?.dataset.notificationSeverity).toBe("failure");
     expect(stalled?.textContent).toContain(TASK_TITLE);
-    expect(stalled?.textContent).toContain(
-      "Agent • Provider is taking longer than expected",
-    );
 
     if (completed === undefined) throw new Error("missing completed row");
     const notificationTitle =
       within(completed).getByTestId("notification-title");
-    const notificationBody = within(completed).getByTestId("notification-body");
-    expect(notificationTitle.className).toContain("line-clamp-2");
+    expect(notificationTitle.className).toContain("truncate");
     expect(notificationTitle.className).toContain("font-semibold");
-    expect(notificationBody.className).toContain("line-clamp-2");
   });
 
-  it("expands overflowing notification text inline", async () => {
-    const restoreDimensions = mockElementDimensions((_element, dimension) =>
-      dimension === "scrollHeight" ? 48 : 24,
-    );
-
-    try {
-      useHostNotificationsStore.getState().replaceFromSnapshot(
-        [
-          hostAgentEntry({
-            id: "completed",
-            kind: "agent.stopped",
-            severity: "done",
-            outcome: "completed",
-          }),
-        ],
-        50,
-      );
-
-      const captured: TargetCapture = {
-        epicId: null,
-        tabId: null,
-        focusArtifactId: null,
-        focusThreadId: null,
-      };
-      const onNavigate = vi.fn();
-      const { router } = buildRouterWithCapture(captured, onNavigate);
-      renderRouter(router);
-
-      const completed = await screen.findByTestId("notification-entry");
-      const notificationTitle =
-        within(completed).getByTestId("notification-title");
-      const notificationBody =
-        within(completed).getByTestId("notification-body");
-      expect(notificationTitle.className).toContain("line-clamp-2");
-      expect(notificationTitle.className).toContain("font-semibold");
-      expect(notificationBody.className).toContain("line-clamp-2");
-      expect(notificationBody.className).toContain("break-words");
-      expect(notificationBody.className).not.toContain("truncate");
-
-      const expand = within(completed).getByRole("button", {
-        name: "Show more",
-      });
-      expect(expand.getAttribute("aria-expanded")).toBe("false");
-      fireEvent.click(expand);
-      expect(onNavigate).not.toHaveBeenCalled();
-
-      expect(notificationTitle.className).not.toContain("line-clamp-2");
-      expect(notificationBody.className).not.toContain("line-clamp-2");
-      const collapse = within(completed).getByRole("button", {
-        name: "Show less",
-      });
-      expect(collapse.getAttribute("aria-expanded")).toBe("true");
-
-      fireEvent.click(collapse);
-      expect(notificationTitle.className).toContain("line-clamp-2");
-      expect(notificationBody.className).toContain("line-clamp-2");
-    } finally {
-      restoreDimensions();
-    }
-  });
-
-  it("omits the expansion control when notification text fits", async () => {
-    useHostNotificationsStore.getState().replaceFromSnapshot(
-      [
-        hostAgentEntry({
-          id: "completed",
-          kind: "agent.stopped",
-          severity: "done",
-          outcome: "completed",
-        }),
-      ],
-      50,
-    );
-
+  it("shows the full empty state when every source is empty", async () => {
     const captured: TargetCapture = {
       epicId: null,
       tabId: null,
@@ -597,160 +1045,10 @@ describe("NotificationsPopover click routing", () => {
     const { router } = buildRouterWithCapture(captured, () => undefined);
     renderRouter(router);
 
-    await screen.findByTestId("notification-entry");
-    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
-  });
-
-  it("omits disclosure when the title and body fit within two lines", async () => {
-    const restoreDimensions = mockElementDimensions((element, dimension) => {
-      const isTitle = element.dataset.testid === "notification-title";
-      const isWidth =
-        dimension === "scrollWidth" || dimension === "clientWidth";
-      if (isWidth) {
-        return isTitle &&
-          dimension === "scrollWidth" &&
-          element.className.includes("truncate")
-          ? 240
-          : 200;
-      }
-      return isTitle ? 40 : 20;
-    });
-
-    try {
-      useHostNotificationsStore.getState().replaceFromSnapshot(
-        [
-          hostAgentEntry({
-            id: "completed",
-            kind: "agent.stopped",
-            severity: "done",
-            outcome: "completed",
-          }),
-        ],
-        50,
-      );
-
-      const captured: TargetCapture = {
-        epicId: null,
-        tabId: null,
-        focusArtifactId: null,
-        focusThreadId: null,
-      };
-      const { router } = buildRouterWithCapture(captured, () => undefined);
-      renderRouter(router);
-
-      await screen.findByTestId("notification-entry");
-      expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
-    } finally {
-      restoreDimensions();
-    }
-  });
-
-  it("shows disclosure consistently for overflowing read and unread rows", async () => {
-    const restoreDimensions = mockElementDimensions((element, dimension) => {
-      if (dimension === "scrollWidth" || dimension === "clientWidth")
-        return 200;
-      const isBody = element.dataset.testid === "notification-body";
-      if (isBody && dimension === "scrollHeight") return 60;
-      return isBody ? 40 : 20;
-    });
-
-    try {
-      const readEntry = {
-        ...hostAgentEntry({
-          id: "read",
-          kind: "agent.stopped",
-          severity: "done",
-          outcome: "completed",
-        }),
-        readAt: 10,
-      };
-      useHostNotificationsStore.getState().replaceFromSnapshot(
-        [
-          hostAgentEntry({
-            id: "unread",
-            kind: "agent.stopped",
-            severity: "done",
-            outcome: "completed",
-          }),
-          readEntry,
-        ],
-        50,
-      );
-
-      const captured: TargetCapture = {
-        epicId: null,
-        tabId: null,
-        focusArtifactId: null,
-        focusThreadId: null,
-      };
-      const { router } = buildRouterWithCapture(captured, () => undefined);
-      renderRouter(router);
-      await screen.findByTestId("notifications-tab-all");
-      await selectTab("notifications-tab-all");
-
-      const allContent = await screen.findByTestId(
-        "notifications-tab-content-all",
-      );
-      await waitFor(() => {
-        expect(
-          within(allContent).getAllByRole("button", { name: "Show more" }),
-        ).toHaveLength(2);
-      });
-    } finally {
-      restoreDimensions();
-    }
-  });
-
-  it("keeps the Unread tab visible when every notification is read", async () => {
-    const captured: TargetCapture = {
-      epicId: null,
-      tabId: null,
-      focusArtifactId: null,
-      focusThreadId: null,
-    };
-    const { router } = buildRouterWithCapture(captured, () => undefined);
-
-    openNotificationsStream((callbacks) => {
-      act(() => {
-        seedEntries(callbacks, [
-          threadEntryWithState({
-            id: "read-only",
-            epicId: "epic-1",
-            artifactId: "art-1",
-            threadId: "thread-1",
-            createdAt: 1,
-            readAt: 10,
-          }),
-        ]);
-      });
-      return { applyUpdate: () => {}, close: () => {} };
-    }, null);
-
-    renderRouter(router);
-
-    expect(
-      await screen.findByTestId("notifications-tab-unread"),
-    ).not.toBeNull();
-    const unreadContent = await screen.findByTestId(
-      "notifications-tab-content-unread",
-    );
-    const emptyState = within(unreadContent).getByTestId("notifications-empty");
-    expect(emptyState).not.toBeNull();
-    expect(emptyState.className).toContain("h-full");
-    expect(emptyState.className).toContain("justify-center");
-
-    await selectTab("notifications-tab-all");
-
-    const allContent = await screen.findByTestId(
-      "notifications-tab-content-all",
-    );
-    await waitFor(() => {
-      expect(
-        notificationIds(
-          within(allContent).getAllByTestId("notification-entry"),
-        ),
-      ).toEqual(["global:read-only"]);
-    });
+    const empty = await screen.findByTestId("notifications-empty");
+    expect(empty.textContent).toContain("You're all caught up");
+    expect(screen.queryByText("Needs attention")).toBeNull();
+    expect(screen.queryByText("Recent activity")).toBeNull();
   });
 
   it("navigates to /epics/$epicId/$tabId with focusArtifactId and focusThreadId on click", async () => {
@@ -826,54 +1124,7 @@ describe("NotificationsPopover click routing", () => {
     ).toBe(true);
   });
 
-  it("clears every notification when Clear all is clicked", async () => {
-    const clearAllRequests: Array<{ readonly beforeUpdatedAt: number }> = [];
-    hostBindingState.current = {
-      hostClient: createHostClient(clearAllRequests),
-    };
-    useHostNotificationsStore.getState().replaceFromSnapshot(
-      [
-        hostAgentEntry({
-          id: "clear-host",
-          kind: "agent.stopped",
-          severity: "done",
-          outcome: "completed",
-        }),
-      ],
-      50,
-    );
-    const captured: TargetCapture = {
-      epicId: null,
-      tabId: null,
-      focusArtifactId: null,
-      focusThreadId: null,
-    };
-    const { router } = buildRouterWithCapture(captured, () => undefined);
-
-    openNotificationsStream((callbacks) => {
-      act(() => {
-        seedEntries(callbacks, [
-          threadEntry("clear-1", "epic-1", "art-1", "thread-1"),
-          threadEntry("clear-2", "epic-2", "art-2", "thread-2"),
-        ]);
-      });
-      return { applyUpdate: () => {}, close: () => {} };
-    }, null);
-
-    renderRouter(router);
-
-    fireEvent.click(await screen.findByTestId("notifications-clear-all"));
-
-    expect(useNotificationsStore.getState().entries.length).toBe(0);
-    await waitFor(() => {
-      expect(clearAllRequests).toHaveLength(1);
-      expect(clearAllRequests.at(0)?.beforeUpdatedAt).toBe(10);
-      expect(useHostNotificationsStore.getState().orderedIds).toEqual([]);
-    });
-    expect(await screen.findByTestId("notifications-empty")).not.toBeNull();
-  });
-
-  it("opens the Notifications settings section when the gear button is clicked", async () => {
+  it("opens Notification settings from the header gear without an overflow menu", async () => {
     useSettingsSectionStore.getState().setSection(null);
     const captured: TargetCapture = {
       epicId: null,
@@ -888,11 +1139,10 @@ describe("NotificationsPopover click routing", () => {
 
     renderRouter(router);
 
-    fireEvent.click(
-      await screen.findByRole("button", {
-        name: "Open notification settings",
-      }),
-    );
+    expect(screen.queryByTestId("notifications-overflow-menu")).toBeNull();
+    const settings = await screen.findByTestId("notifications-open-settings");
+    expect(settings.tagName.toLowerCase()).toBe("button");
+    fireEvent.click(settings);
 
     expect(navigated).toBe(true);
     expect(useSettingsSectionStore.getState().section).toBe("notifications");
@@ -900,6 +1150,866 @@ describe("NotificationsPopover click routing", () => {
       expect(router.state.location.search).toMatchObject({
         settingsOverlay: true,
       });
+    });
+  });
+
+  it("closes the center on dispatch even when markRead never resolves", async () => {
+    bindHostClient();
+    // markRead is a background write after onResult("success"); the center
+    // must close on route dispatch and never wait for this mutation.
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.markRead") {
+        return new Promise(() => undefined);
+      }
+      return defaultHostRequest(method);
+    });
+
+    applyHostSnapshot(
+      [hostDone("row-a", 20, null), hostDone("row-b", 10, null)],
+      { unreadCount: 2, attentionCount: 0 },
+    );
+
+    const onNavigate = vi.fn();
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    const rows = await screen.findAllByTestId("notification-entry");
+    const rowA = rows.find(
+      (row) => row.dataset.notificationId === "host:row-a",
+    );
+    const rowB = rows.find(
+      (row) => row.dataset.notificationId === "host:row-b",
+    );
+    if (rowA === undefined || rowB === undefined) {
+      throw new Error("expected both host rows");
+    }
+
+    act(() => {
+      fireEvent.click(activateButtonFor(rowA));
+    });
+
+    // Synchronous close on dispatch - no waitFor for a preflight gate.
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    // No pending/disabled row state (activation is synchronous).
+    expect(rowA.dataset.notificationPending).toBeUndefined();
+    expect(activateButtonFor(rowA).disabled).toBe(false);
+    expect(activateButtonFor(rowB).disabled).toBe(false);
+    // markRead is a background mutation - it fires after onResult, but the
+    // never-resolving handler must not block close (already asserted above).
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.markRead",
+        expect.objectContaining({ ids: ["row-a"] }),
+      );
+    });
+  });
+
+  it("on activation success closes the center, marks read, and analytics stay category-only", async () => {
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    openNotificationsStream((callbacks) => {
+      act(() => {
+        seedEntries(callbacks, [
+          threadEntry("route-success", "epic-xyz", "art-7", "thread-9"),
+        ]);
+      });
+      return { applyUpdate: () => {}, close: () => {} };
+    }, null);
+
+    const onNavigate = vi.fn();
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    const entry = await screen.findByTestId("notification-entry");
+    await act(async () => {
+      fireEvent.click(activateButtonFor(entry));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(
+      useNotificationsStore
+        .getState()
+        .entries.find((item) => item.id === "route-success")?.readAt,
+    ).toBeTypeOf("number");
+
+    const activatedCalls = trackSpy.mock.calls.filter(
+      (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
+    );
+    const markedCalls = trackSpy.mock.calls.filter(
+      (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
+    );
+    expect(activatedCalls).toHaveLength(1);
+    expect(activatedCalls[0]?.[1]).toEqual({
+      category: "collaboration",
+      section: "recent",
+      surface: "center",
+      outcome: "success",
+    });
+    expect(markedCalls).toHaveLength(1);
+    expect(markedCalls[0]?.[1]).toEqual({
+      category: "collaboration",
+      acknowledgment_source: "activation",
+    });
+    trackSpy.mockRestore();
+  });
+
+  it("on markRead failure leaves the row unread after the center already closed", async () => {
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    bindHostClient();
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.markRead") {
+        return Promise.reject(new Error("markRead failed"));
+      }
+      return defaultHostRequest(method);
+    });
+
+    applyHostSnapshot([hostDone("fail-row", 20, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+
+    const onNavigate = vi.fn();
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    act(() => {
+      fireEvent.click(activateButtonFor(row));
+    });
+
+    // Dispatch succeeds and closes immediately; markRead is decoupled.
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
+      ),
+    ).toHaveLength(1);
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
+      ),
+    ).toHaveLength(1);
+
+    // markHostRead has no optimistic local flip - only onSuccess writes
+    // markReadLocally. A rejected mutation leaves readAt untouched.
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.markRead",
+        expect.objectContaining({ ids: ["fail-row"] }),
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const failEntry = useHostNotificationsStore.getState().byId["fail-row"];
+    expect(failEntry).toBeDefined();
+    expect(failEntry.readAt).toBeNull();
+    const live = screen
+      .queryAllByTestId("notification-entry")
+      .find((entry) => entry.dataset.notificationId === "host:fail-row");
+    if (live !== undefined) {
+      expect(live.dataset.notificationRead).toBe("false");
+    }
+    trackSpy.mockRestore();
+  });
+
+  it("emits explicit_action marked-read analytics from the acknowledge control", async () => {
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    useAppLocalNotificationsStore.getState().activateIdentity("user-a");
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "ack-local",
+      updatedAt: 50,
+      readAt: null,
+      kind: "stream.transport.error",
+      sourceRef: "ack-local",
+      payload: null,
+      message: "Worktree failed",
+      detail: null,
+    });
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    fireEvent.click(within(row).getByTestId("notification-acknowledge"));
+
+    const activatedCalls = trackSpy.mock.calls.filter(
+      (call) => call[0] === AnalyticsEvent.NotificationActivationCompleted,
+    );
+    const markedCalls = trackSpy.mock.calls.filter(
+      (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
+    );
+    expect(activatedCalls).toHaveLength(1);
+    expect(activatedCalls[0]?.[1]).toEqual({
+      category: "system",
+      section: "attention",
+      surface: "center",
+      outcome: "success",
+    });
+    expect(markedCalls).toHaveLength(1);
+    expect(markedCalls[0]?.[1]).toEqual({
+      category: "system",
+      acknowledgment_source: "explicit_action",
+    });
+    trackSpy.mockRestore();
+  });
+
+  it("tracks filter toggles with the new enabled state and mark-all-read bucket", async () => {
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    bindHostClient();
+    applyHostSnapshot([hostDone("filter-row", 40, null)], {
+      unreadCount: 4,
+      attentionCount: 0,
+    });
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    await screen.findByTestId("notification-entry");
+
+    fireEvent.pointerDown(screen.getByTestId("notifications-filter-trigger"), {
+      button: 0,
+    });
+    fireEvent.click(
+      await screen.findByTestId("notifications-filter-unread-only"),
+    );
+    fireEvent.click(
+      await screen.findByTestId("notifications-filter-category-task"),
+    );
+
+    const filterCalls = trackSpy.mock.calls.filter(
+      (call) => call[0] === AnalyticsEvent.NotificationFilterChanged,
+    );
+    expect(filterCalls).toEqual(
+      expect.arrayContaining([
+        [
+          AnalyticsEvent.NotificationFilterChanged,
+          { filter: "unread_only", enabled: true },
+        ],
+        [
+          AnalyticsEvent.NotificationFilterChanged,
+          { filter: "task", enabled: false },
+        ],
+      ]),
+    );
+
+    fireEvent.click(screen.getByTestId("notifications-mark-all-read"));
+    const markAllCalls = trackSpy.mock.calls.filter(
+      (call) => call[0] === AnalyticsEvent.NotificationsMarkedAllRead,
+    );
+    expect(markAllCalls).toHaveLength(1);
+    expect(markAllCalls[0]?.[1]).toEqual({
+      affected_count_bucket: "2-5",
+    });
+    trackSpy.mockRestore();
+  });
+
+  it("keeps an unresolved approval in Attention after successful activation", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostPrompt("prompt-keep", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const onNavigate = vi.fn();
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationId).toBe("host:prompt-keep");
+
+    await act(async () => {
+      fireEvent.click(activateButtonFor(row));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+    });
+
+    // Success acknowledges the row but does not resolve the prompt; Attention
+    // membership is driven by resolvedAt, not readAt.
+    expect(screen.getByText("Needs attention")).not.toBeNull();
+    const stillThere = screen
+      .getAllByTestId("notification-entry")
+      .find((entry) => entry.dataset.notificationId === "host:prompt-keep");
+    expect(stillThere).not.toBeUndefined();
+  });
+
+  it("renders Dismiss on blocking Attention rows, including already-read ones", async () => {
+    applyHostSnapshot(
+      [
+        hostPrompt("prompt-unread", 120, null),
+        hostPrompt("prompt-read", 110, 50),
+        hostFailure("fail-unread", 100, null),
+        hostDone("recent-read", 90, 40),
+      ],
+      { unreadCount: 2, attentionCount: 3 },
+    );
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    function findRow(feedId: string): HTMLElement {
+      const row = screen
+        .getAllByTestId("notification-entry")
+        .find((entry) => entry.dataset.notificationId === feedId);
+      if (row === undefined) throw new Error(`missing row ${feedId}`);
+      return row;
+    }
+
+    const unreadPrompt = findRow("host:prompt-unread");
+    const readPrompt = findRow("host:prompt-read");
+    const failure = findRow("host:fail-unread");
+    const recentRead = findRow("host:recent-read");
+
+    // Core fix: blocking Attention keeps Dismiss even after navigation read.
+    expect(readPrompt.dataset.notificationRead).toBe("true");
+    const readDismiss = within(readPrompt).getByTestId("notification-dismiss");
+    expect(readDismiss.getAttribute("aria-label")).toBe("Dismiss");
+    expect(
+      within(readPrompt).queryByTestId("notification-mark-read"),
+    ).toBeNull();
+
+    expect(
+      within(unreadPrompt).getByTestId("notification-dismiss"),
+    ).not.toBeNull();
+    expect(
+      within(unreadPrompt).queryByTestId("notification-mark-read"),
+    ).toBeNull();
+
+    // Failure-tier Attention still uses mark-read, never Dismiss.
+    expect(
+      within(failure).getByTestId("notification-mark-read"),
+    ).not.toBeNull();
+    expect(within(failure).queryByTestId("notification-dismiss")).toBeNull();
+
+    // Read Recent rows show no trailing control (regression guard).
+    expect(recentRead.dataset.notificationRead).toBe("true");
+    expect(within(recentRead).queryByTestId("notification-dismiss")).toBeNull();
+    expect(
+      within(recentRead).queryByTestId("notification-mark-read"),
+    ).toBeNull();
+    expect(
+      within(recentRead).queryByTestId("notification-acknowledge"),
+    ).toBeNull();
+  });
+
+  it("Dismiss resolves without activating and moves the row to Recent as read", async () => {
+    bindHostClient();
+    applyHostSnapshot(
+      [hostPrompt("prompt-dismiss", 100, 50), hostDone("done", 90, null)],
+      { unreadCount: 1, attentionCount: 1 },
+    );
+
+    const onNavigate = vi.fn();
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    const attentionRow = screen
+      .getAllByTestId("notification-entry")
+      .find((entry) => entry.dataset.notificationId === "host:prompt-dismiss");
+    if (attentionRow === undefined) {
+      throw new Error("expected blocking attention row");
+    }
+
+    fireEvent.click(within(attentionRow).getByTestId("notification-dismiss"));
+
+    // Sibling control - never activates / navigates the row.
+    expect(onNavigate).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.resolve",
+        {
+          occurrences: [
+            {
+              id: "prompt-dismiss",
+              updatedAt: 100,
+              sourceRef: "prompt-dismiss",
+            },
+          ],
+        },
+      );
+    });
+    expect(
+      trackSpy.mock.calls.filter(
+        (call) => call[0] === AnalyticsEvent.NotificationMarkedRead,
+      ),
+    ).toEqual([
+      [
+        AnalyticsEvent.NotificationMarkedRead,
+        {
+          category: "task",
+          acknowledgment_source: "explicit_action",
+        },
+      ],
+    ]);
+
+    // No optimistic client write: the row stays in Attention until the host's
+    // authoritative readStateChanged frame arrives.
+    expect(screen.queryByText("Needs attention")).not.toBeNull();
+    const stillPending =
+      useHostNotificationsStore.getState().byId["prompt-dismiss"];
+    expect(
+      "resolvedAt" in stillPending ? stillPending.resolvedAt : null,
+    ).toBeNull();
+
+    const resolvedAt = 999;
+    act(() => {
+      useHostNotificationsStore
+        .getState()
+        .applyReadStateFrame(["prompt-dismiss"], {
+          readAt: resolvedAt,
+          resolvedAt,
+          removedIds: [],
+          summary: { unreadCount: 1, attentionCount: 0 },
+        });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Needs attention")).toBeNull();
+    });
+    const live = screen
+      .getAllByTestId("notification-entry")
+      .find((entry) => entry.dataset.notificationId === "host:prompt-dismiss");
+    if (live === undefined) {
+      throw new Error("expected dismissed row in Recent");
+    }
+    expect(live.dataset.notificationRead).toBe("true");
+    expect(within(live).queryByTestId("notification-dismiss")).toBeNull();
+    const dismissed =
+      useHostNotificationsStore.getState().byId["prompt-dismiss"];
+    expect(dismissed.readAt).toBe(resolvedAt);
+    expect("resolvedAt" in dismissed ? dismissed.resolvedAt : null).toBe(
+      resolvedAt,
+    );
+    trackSpy.mockRestore();
+  });
+
+  it("Mark all read also resolves loaded blocking Attention rows without optimistic removal", async () => {
+    bindHostClient();
+    applyHostSnapshot(
+      [
+        hostPrompt("prompt-a", 200, null),
+        hostPrompt("prompt-b", 150, 40),
+        hostDone("done-unread", 100, null),
+      ],
+      { unreadCount: 2, attentionCount: 2 },
+    );
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("notifications-mark-all-read"));
+
+    await waitFor(() => {
+      expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
+      expect(
+        [...resolveCallOccurrences()].sort((a, b) => a.id.localeCompare(b.id)),
+      ).toEqual([
+        { id: "prompt-a", updatedAt: 200, sourceRef: "prompt-a" },
+        { id: "prompt-b", updatedAt: 150, sourceRef: "prompt-b" },
+      ]);
+    });
+
+    // No optimistic write: rows stay in Attention until the host frame.
+    expect(screen.getByText("Needs attention")).not.toBeNull();
+    expect(
+      screen
+        .getAllByTestId("notification-entry")
+        .filter((entry) =>
+          ["host:prompt-a", "host:prompt-b"].includes(
+            entry.dataset.notificationId ?? "",
+          ),
+        ),
+    ).toHaveLength(2);
+
+    act(() => {
+      useHostNotificationsStore
+        .getState()
+        .applyReadStateFrame(["prompt-a", "prompt-b"], {
+          readAt: 999,
+          resolvedAt: 999,
+          removedIds: [],
+          summary: { unreadCount: 0, attentionCount: 0 },
+        });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Needs attention")).toBeNull();
+    });
+    expect(
+      screen
+        .queryAllByTestId("notification-entry")
+        .filter((entry) =>
+          ["host:prompt-a", "host:prompt-b"].includes(
+            entry.dataset.notificationId ?? "",
+          ),
+        )
+        .every((entry) => entry.dataset.notificationRead === "true"),
+    ).toBe(true);
+  });
+
+  it("Mark all read does not call resolve when no loaded blocking Attention rows exist", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostDone("done-only", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    fireEvent.click(await screen.findByTestId("notifications-mark-all-read"));
+
+    await waitFor(() => {
+      expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.resolve",
+      ),
+    ).toBe(false);
+  });
+
+  it("Mark all read still applies when resolve degrades as E_HOST_UNSUPPORTED", async () => {
+    bindHostClient();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-popover");
+    applyHostSnapshot(
+      [
+        hostPrompt("prompt-old-host", 200, null),
+        hostDone("done-unread", 100, null),
+      ],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.resolve") {
+        return Promise.reject(unsupportedResolveError());
+      }
+      return defaultHostRequest(method);
+    });
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("notifications-mark-all-read"));
+
+    await waitFor(() => {
+      expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
+      expect(resolveCallOccurrences()).toEqual([
+        {
+          id: "prompt-old-host",
+          updatedAt: 200,
+          sourceRef: "prompt-old-host",
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(
+        useHostNotificationsStore.getState().byId["done-unread"].readAt,
+      ).toBeTypeOf("number");
+    });
+    await waitFor(() => {
+      expect(toastFromHostError).toHaveBeenCalledTimes(1);
+    });
+    expect(toastFromHostError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: "E_HOST_UNSUPPORTED",
+        method: "host.notifications.resolve",
+      }),
+      "Couldn't dismiss the notifications.",
+    );
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith(
+      "This needs a newer Traycer host. Update the host to continue.",
+      {
+        id: "host-error:E_HOST_UNSUPPORTED:E_HOST_UNSUPPORTED",
+        cancel: null,
+      },
+    );
+    expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
+    expect(screen.getByText("Needs attention")).not.toBeNull();
+    expect(
+      screen
+        .getAllByTestId("notification-entry")
+        .some(
+          (entry) => entry.dataset.notificationId === "host:prompt-old-host",
+        ),
+    ).toBe(true);
+  });
+
+  it("enables Mark all read when only loaded Attention remains with an active host, disables when neither unread nor Attention", async () => {
+    // Read-but-unresolved needs_action: unreadCount 0, still dismissable while
+    // a host is active (loaded host Attention counts toward enablement).
+    applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
+      unreadCount: 0,
+      attentionCount: 1,
+    });
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    expect(markAllReadButton().disabled).toBe(false);
+
+    cleanup();
+    __resetHostNotificationsStoreForTests();
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: { entries: [], nextCursor: null },
+      summary: { unreadCount: 0, attentionCount: 0 },
+    });
+
+    const empty: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const emptyRouter = buildRouterWithCapture(empty, () => undefined);
+    renderRouter(emptyRouter.router);
+
+    await screen.findByTestId("notifications-empty");
+    expect(markAllReadButton().disabled).toBe(true);
+  });
+
+  it("disables Mark all read on disconnect when only retained host Attention remains", async () => {
+    // Retain a read-but-unresolved host needs_action row, then disconnect:
+    // binding kept, active host id null, summary unknown. Host Attention must
+    // not keep the double-tick enabled into unbound-rejecting RPCs.
+    applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
+      unreadCount: 0,
+      attentionCount: 1,
+    });
+    simulateHostDisconnect();
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    expect(
+      screen
+        .getAllByTestId("notification-entry")
+        .some((entry) => entry.dataset.notificationId === "host:prompt-read"),
+    ).toBe(true);
+    expect(markAllReadButton().disabled).toBe(true);
+  });
+
+  it("enables Mark all read on disconnect when a local unread row remains actionable", async () => {
+    applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
+      unreadCount: 0,
+      attentionCount: 1,
+    });
+    seedUnreadAppLocal("local-during-disconnect");
+    simulateHostDisconnect();
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    await screen.findByText("Needs attention");
+    expect(
+      screen
+        .getAllByTestId("notification-entry")
+        .some(
+          (entry) =>
+            entry.dataset.notificationId ===
+            "app-local:local-during-disconnect",
+        ),
+    ).toBe(true);
+    expect(markAllReadButton().disabled).toBe(false);
+  });
+
+  it("Mark all read during disconnect skips host mutations, marks local rows, and raises no error toasts", async () => {
+    applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
+      unreadCount: 0,
+      attentionCount: 1,
+    });
+    seedUnreadAppLocal("local-mark-all-disconnect");
+    simulateHostDisconnect();
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    await screen.findByText("Needs attention");
+    const markAll = markAllReadButton();
+    expect(markAll.disabled).toBe(false);
+    fireEvent.click(markAll);
+
+    await waitFor(() => {
+      expect(
+        useAppLocalNotificationsStore.getState().byId[
+          "local-mark-all-disconnect"
+        ].readAt,
+      ).toBeTypeOf("number");
+    });
+
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.markAllRead",
+      ),
+    ).toBe(false);
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.resolve",
+      ),
+    ).toBe(false);
+    expect(toastFromHostError).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    // Retained host Attention stays unresolved - no host half ran.
+    const retained = useHostNotificationsStore.getState().byId["prompt-read"];
+    expect("resolvedAt" in retained ? retained.resolvedAt : null).toBeNull();
+  });
+
+  it("reconnect restores Mark all read enablement for retained host Attention and host mutations fire on click", async () => {
+    applyHostSnapshot([hostPrompt("prompt-read", 110, 50)], {
+      unreadCount: 0,
+      attentionCount: 1,
+    });
+    simulateHostDisconnect();
+
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const first = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(first.router);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    expect(markAllReadButton().disabled).toBe(true);
+
+    // Reconnect: active host id returns, binding reports a real id, retained
+    // byId rows stay. Summary may still be landing; enablement only needs the
+    // active host + loaded host Attention.
+    cleanup();
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    bindHostClient();
+
+    const second = buildRouterWithCapture(
+      {
+        epicId: null,
+        tabId: null,
+        focusArtifactId: null,
+        focusThreadId: null,
+      },
+      () => undefined,
+    );
+    renderRouter(second.router);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    expect(markAllReadButton().disabled).toBe(false);
+
+    fireEvent.click(markAllReadButton());
+
+    await waitFor(() => {
+      expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
+      expect(resolveCallOccurrences()).toEqual([
+        {
+          id: "prompt-read",
+          updatedAt: 110,
+          sourceRef: "prompt-read",
+        },
+      ]);
     });
   });
 });

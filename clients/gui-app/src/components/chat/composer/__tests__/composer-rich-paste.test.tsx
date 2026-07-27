@@ -790,10 +790,11 @@ function makeEditorWithPastedImagePresenceGetter(
     element,
     extensions: buildComposerExtensions({
       pickerStore,
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: { current: onSubmit },
       slashProviderId: "claude",
       getHasPastedImageBytes,
+      getIngestPastedComposerImages: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });

@@ -46,8 +46,11 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 
-const GROUP_EDITOR_FOCUS_TARGET_SELECTOR =
-  "[data-composer-editor], [data-artifact-editor]";
+const SELECTED_GROUP_TAB_SELECTOR =
+  '[data-tab-instance-id][data-selected="true"]';
+const PRIMARY_CHAT_COMPOSER_SELECTOR =
+  "[data-chat-composer] [data-composer-editor]";
+const ARTIFACT_EDITOR_SELECTOR = "[data-artifact-editor]";
 
 // ---------------------------------------------------------------------------
 // Narrow router adapter - decouples dispatch from `@tanstack/react-router`'s
@@ -73,6 +76,7 @@ export interface KeybindingRouter {
    */
   readonly navigateToTabIntent: (intent: TabNavigationIntent) => void;
   readonly navigateNestedFocus?: NavigateNestedFocus;
+  readonly navigateNestedFocusToPrimaryEditor?: NavigateNestedFocus;
   /**
    * In-app history back/forward. Delegate to the shared
    * `goBack`/`goForward` actions on the CURRENT router (the live
@@ -693,11 +697,15 @@ function focusGroupInDirection(
   if (active === undefined) return false;
   const nextId = findNeighbor(active, rects, dir);
   if (nextId === null) return false;
-  runNestedFocus(router, tab, () =>
+  const prepare = () =>
     useEpicCanvasStore
       .getState()
-      .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId),
-  );
+      .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId);
+  if (router.navigateNestedFocusToPrimaryEditor === undefined) {
+    runNestedFocus(router, tab, prepare);
+  } else {
+    router.navigateNestedFocusToPrimaryEditor(tab.epicId, tab.tabId, prepare);
+  }
   focusGroupEditor(nextId);
   return true;
 }
@@ -705,9 +713,12 @@ function focusGroupInDirection(
 function focusGroupEditor(groupId: string): boolean {
   if (typeof document === "undefined") return false;
   const group = document.querySelector<HTMLElement>(groupIdSelector(groupId));
-  const editor = group?.querySelector<HTMLElement>(
-    GROUP_EDITOR_FOCUS_TARGET_SELECTOR,
+  const selectedTab = group?.querySelector<HTMLElement>(
+    SELECTED_GROUP_TAB_SELECTOR,
   );
+  const editor =
+    selectedTab?.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
+    selectedTab?.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR);
   if (editor === undefined || editor === null) return false;
   editor.focus({ preventScroll: true });
   return true;

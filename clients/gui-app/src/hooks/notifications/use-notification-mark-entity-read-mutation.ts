@@ -39,6 +39,7 @@ export function useNotificationMarkEntityRead(): UseMutationResult<
           queryClient,
           context.hostId,
           [entity],
+          client,
         );
       },
       onError: (error) => {

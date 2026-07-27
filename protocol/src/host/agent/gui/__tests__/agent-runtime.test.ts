@@ -106,6 +106,42 @@ describe("agent runtime stream schema", () => {
       type: "user_message.anchor_resolved",
       anchor: { harnessId: "cursor", cursorRunId: null },
     });
+
+    // Hermes anchor: `hermesSessionId` is the ACP session id, resolved to a
+    // string once `session/new` returns and null until then. Both parse.
+    expect(
+      runtimeEventSchema.parse({
+        type: "user_message.anchor_resolved",
+        messageId: "message_3",
+        blockId: "ses_hermes",
+        timestamp: 8,
+        anchor: {
+          harnessId: "hermes",
+          sessionId: "ses_hermes",
+          hermesSessionId: "ses_hermes",
+        },
+      }),
+    ).toMatchObject({
+      type: "user_message.anchor_resolved",
+      anchor: { harnessId: "hermes", hermesSessionId: "ses_hermes" },
+    });
+
+    expect(
+      runtimeEventSchema.parse({
+        type: "user_message.anchor_resolved",
+        messageId: "message_4",
+        blockId: "ses_hermes_pending",
+        timestamp: 9,
+        anchor: {
+          harnessId: "hermes",
+          sessionId: "ses_hermes_pending",
+          hermesSessionId: null,
+        },
+      }),
+    ).toMatchObject({
+      type: "user_message.anchor_resolved",
+      anchor: { harnessId: "hermes", hermesSessionId: null },
+    });
   });
 
   it("accepts runtime plan events", () => {

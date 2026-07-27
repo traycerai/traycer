@@ -1,9 +1,13 @@
 import { v4 as uuidv4 } from "uuid";
-import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import type {
+  BearerSourceProvider,
+  OpenFrameBearerSource,
+} from "@traycer-clients/shared/auth/bearer-source";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import {
   HostRpcError,
+  type HostRequestAuthority,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -43,8 +47,14 @@ export interface BuildRawHostMessengerForTargetParams<
   Registry extends VersionedRpcRegistry,
 > {
   readonly target: HostDirectoryEntry;
-  readonly endpoint: () => HostDirectoryEntry | null;
   readonly registry: Registry;
+  /**
+   * Reads the bearer the CURRENT request is authorized under. The remote
+   * transport outlives any single request (its Noise session is cached per
+   * `(hostId, userId)`), so it must read the live lease rather than capture
+   * one request's `authority.bearer` - that is what lets a rotated-in-place
+   * bearer reach the next `open` frame without rebuilding the session.
+   */
   readonly bearer: BearerSourceProvider;
   readonly authnBaseUrl: string;
   readonly requestId: RequestIdProvider;
@@ -93,8 +103,6 @@ export function buildRawHostMessengerForTarget<
   return {
     messenger: new WsRpcClient<Registry>({
       registry: params.registry,
-      endpoint: params.endpoint,
-      bearer: params.bearer,
       requestId: params.requestId,
       webSocketFactory: browserWebSocketFactory,
       dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
@@ -116,16 +124,16 @@ export interface BuildRuntimeHostMessengerParams<
   Registry extends VersionedRpcRegistry,
 > {
   readonly registry: Registry;
-  readonly endpoint: () => HostDirectoryEntry | null;
-  readonly bearer: BearerSourceProvider;
+  /**
+   * Resolves the full directory entry for the host a `HostRequestAuthority`
+   * names. The authority only carries `{ hostId, websocketUrl }`, but the
+   * remote branch additionally needs `kind`/`publicKey` to decide that this is
+   * a relay target at all and to run the Noise-NK handshake - so the entry is
+   * looked up here rather than threaded through the transport contract.
+   */
+  readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
   readonly authnBaseUrl: string;
   readonly requestId: RequestIdProvider;
-  /**
-   * Reads the signed-in user live (mirrors `bearer`/`endpoint`) - part of the
-   * shared `(hostId, userId)` remote-session cache key (Architecture §4 / S1).
-   * `null` while signed out.
-   */
-  readonly userId: () => string | null;
 }
 
 export function buildRuntimeHostMessenger<
@@ -145,25 +153,24 @@ class RuntimeHostMessenger<
   Registry extends VersionedRpcRegistry,
 > implements IHostMessenger<Registry> {
   private readonly registry: Registry;
-  private readonly endpoint: () => HostDirectoryEntry | null;
-  private readonly bearer: BearerSourceProvider;
+  private readonly resolveTarget: (hostId: string) => HostDirectoryEntry | null;
   private readonly authnBaseUrl: string;
   private readonly requestId: RequestIdProvider;
-  private readonly userId: () => string | null;
   private readonly localMessenger: IHostMessenger<Registry>;
   private remoteBinding: RemoteBinding<Registry> | null = null;
+  // The bearer of the request currently being dispatched. The cached remote
+  // session outlives a single request, so it reads this through a thunk
+  // instead of capturing one authority's bearer - a bearer rotated in place
+  // for the same context then reaches the next `open` frame unchanged.
+  private currentBearer: OpenFrameBearerSource | null = null;
 
   constructor(params: BuildRuntimeHostMessengerParams<Registry>) {
     this.registry = params.registry;
-    this.endpoint = params.endpoint;
-    this.bearer = params.bearer;
+    this.resolveTarget = params.resolveTarget;
     this.authnBaseUrl = params.authnBaseUrl;
     this.requestId = params.requestId;
-    this.userId = params.userId;
     this.localMessenger = new WsRpcClient<Registry>({
       registry: params.registry,
-      endpoint: params.endpoint,
-      bearer: params.bearer,
       requestId: params.requestId,
       webSocketFactory: browserWebSocketFactory,
       dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
@@ -174,14 +181,15 @@ class RuntimeHostMessenger<
   request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    const target = this.endpoint();
+    const target = this.resolveTarget(authority.endpoint.hostId);
     if (target === null || target.kind !== "remote") {
       this.closeRemoteTransport();
-      return this.localMessenger.request(method, params);
+      return this.localMessenger.request(method, params, authority);
     }
 
-    const remoteMessenger = this.remoteMessengerFor(target);
+    const remoteMessenger = this.remoteMessengerFor(target, authority);
     if (remoteMessenger === null) {
       return Promise.reject(
         new HostRpcError({
@@ -193,25 +201,27 @@ class RuntimeHostMessenger<
         }),
       );
     }
-    return remoteMessenger.request(method, params);
+    return remoteMessenger.request(method, params, authority);
   }
 
   requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    const target = this.endpoint();
+    const target = this.resolveTarget(authority.endpoint.hostId);
     if (target === null || target.kind !== "remote") {
       this.closeRemoteTransport();
       return this.localMessenger.requestWithResponseTimeout(
         method,
         params,
         responseTimeoutMs,
+        authority,
       );
     }
 
-    const remoteMessenger = this.remoteMessengerFor(target);
+    const remoteMessenger = this.remoteMessengerFor(target, authority);
     if (remoteMessenger === null) {
       return Promise.reject(
         new HostRpcError({
@@ -227,6 +237,7 @@ class RuntimeHostMessenger<
       method,
       params,
       responseTimeoutMs,
+      authority,
     );
   }
 
@@ -240,26 +251,30 @@ class RuntimeHostMessenger<
 
   private remoteMessengerFor(
     target: HostDirectoryEntry,
+    authority: HostRequestAuthority,
   ): IHostMessenger<Registry> | null {
     const nextKey = remoteTransportKey(target);
     if (nextKey === null) {
       return null;
     }
+    // Publish this request's bearer before any dial so both a cache hit and a
+    // freshly-built session read the lease this call was authorized under.
+    this.currentBearer = authority.bearer;
     if (this.remoteBinding !== null && this.remoteBinding.key === nextKey) {
       return this.remoteBinding.transport.messenger;
     }
-    const userId = this.userId();
-    if (userId === null) {
-      return null;
-    }
+    // The remote session cache is keyed `(hostId, userId)` (Architecture §4 /
+    // S1); the authority's bearer is the authoritative identity for the
+    // request being dispatched, so take the user from it rather than a
+    // separately-read signed-in user that could disagree mid-transition.
+    const userId = authority.bearer.identity.userId;
 
     this.closeRemoteTransport();
     const built = buildRawHostMessengerForTarget({
       target,
       userId,
-      endpoint: this.endpoint,
       registry: this.registry,
-      bearer: this.bearer,
+      bearer: () => this.currentBearer,
       authnBaseUrl: this.authnBaseUrl,
       requestId: this.requestId,
     });

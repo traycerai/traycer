@@ -1,4 +1,5 @@
-import { CopyPlus, ExternalLink, Pencil, X } from "lucide-react";
+import { CopyPlus, ExternalLink, Pencil, Pin, X } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   ContextMenuContent,
   ContextMenuItem,
@@ -11,11 +12,14 @@ interface TabContextMenuContentProps {
   readonly canCloseOtherTabs: boolean;
   readonly canOpenInNewWindow: boolean;
   readonly canEditTitle: boolean;
+  readonly taskPinned: boolean | null;
+  readonly isTaskPinPending: boolean;
   readonly onCloseOtherTabs: (tab: HeaderTab) => void;
   readonly onDuplicateTab: (tab: HeaderTab) => void;
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   /** Switches the epic tab title into the inline editable input. */
   readonly onEditTitle: () => void;
+  readonly onSetTaskPinned: (pinned: boolean) => void;
 }
 
 export function TabContextMenuContent(
@@ -26,10 +30,13 @@ export function TabContextMenuContent(
     canCloseOtherTabs,
     canOpenInNewWindow,
     canEditTitle,
+    taskPinned,
+    isTaskPinPending,
     onCloseOtherTabs,
     onDuplicateTab,
     onOpenInNewWindow,
     onEditTitle,
+    onSetTaskPinned,
   } = props;
 
   const showDuplicate = tab.canDuplicate;
@@ -37,14 +44,36 @@ export function TabContextMenuContent(
 
   return (
     <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
-      {tab.kind === "epic" && canEditTitle ? (
+      {tab.kind === "epic" ? (
         <>
+          {canEditTitle ? (
+            <ContextMenuItem
+              onSelect={onEditTitle}
+              data-testid={`tab-edit-title-${tab.kind}-${tab.id}`}
+            >
+              <Pencil />
+              Edit Title
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuItem
-            onSelect={onEditTitle}
-            data-testid={`tab-edit-title-${tab.kind}-${tab.id}`}
+            disabled={taskPinned === null || isTaskPinPending}
+            onSelect={() => {
+              if (taskPinned === null) return;
+              onSetTaskPinned(!taskPinned);
+            }}
+            data-testid={`tab-pin-history-${tab.id}`}
           >
-            <Pencil />
-            Edit Title
+            <Pin className={taskPinned === true ? "fill-current" : undefined} />
+            {taskPinned === true
+              ? "Unpin Task in History"
+              : "Pin Task in History"}
+            {taskPinned === null || isTaskPinPending ? (
+              <AgentSpinningDots
+                className="ml-auto text-muted-foreground"
+                testId={`tab-pin-history-spinner-${tab.id}`}
+                variant={undefined}
+              />
+            ) : null}
           </ContextMenuItem>
           <ContextMenuSeparator />
         </>

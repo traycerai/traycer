@@ -9,21 +9,22 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostUpdateBanner } from "@/components/home/host-update-banner";
-import { HostRegistryUpdateListener } from "@/components/layout/bridges/host-registry-update-listener";
+import { HostControllerStatusListener } from "@/components/layout/bridges/host-controller-status-listener";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import {
   HOST_UPDATE_BANNER_SNOOZE_MS,
   useHostUpdateBannerStore,
 } from "@/stores/settings/host-update-banner-store";
 import type {
-  HostInstallResult,
-  HostOperationStatus,
-  HostRegistryUpdateState,
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  HostControllerStatus,
   IHostManagement,
   IRunnerHost,
+  MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
-import type { DesktopHostRegistryUpdatesBridge } from "@/lib/windows/types";
+import type { DesktopHostControllerStatusBridge } from "@/lib/windows/types";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -34,17 +35,47 @@ vi.mock("sonner", () => ({
 }));
 
 interface Overrides {
-  readonly registryCheck?: () => Promise<HostRegistryUpdateState>;
-  readonly updateHost?: () => Promise<HostInstallResult>;
-  readonly getOperationStatus?: () => Promise<HostOperationStatus | null>;
+  readonly status?: HostControllerStatus;
+  readonly applyStaged?: () => Promise<MutationOutcome<ApplyStagedOk>>;
+  readonly activateInstalled?: () => Promise<
+    MutationOutcome<ActivateInstalledOk>
+  >;
 }
+
+const UP_TO_DATE_STATUS: HostControllerStatus = {
+  download: null,
+  mutation: null,
+  installedVersion: "1.4.1",
+  latestVersion: "1.4.1",
+  stagedVersion: null,
+  installedRuntimeVersion: null,
+  runningRuntimeVersion: null,
+  updateReady: false,
+  activation: "activated",
+  reachable: true,
+  removedByUser: false,
+  checkedAt: "2026-05-15T00:00:00Z",
+};
+
+const READY_STATUS: HostControllerStatus = {
+  ...UP_TO_DATE_STATUS,
+  latestVersion: "1.4.2",
+  stagedVersion: "1.4.2",
+  updateReady: true,
+};
 
 function makeManagement(overrides: Overrides): IHostManagement {
   const notImplemented = (method: string) => (): Promise<never> =>
     Promise.reject(new Error(`${method} not implemented`));
+  const status = overrides.status ?? UP_TO_DATE_STATUS;
   return {
-    installHost: vi.fn(notImplemented("installHost")),
-    updateHost: vi.fn(overrides.updateHost ?? notImplemented("updateHost")),
+    getHostControllerStatus: vi.fn(() => Promise.resolve(status)),
+    convergeReady: vi.fn(notImplemented("convergeReady")),
+    applyStaged: vi.fn(overrides.applyStaged ?? notImplemented("applyStaged")),
+    activateInstalled: vi.fn(
+      overrides.activateInstalled ?? notImplemented("activateInstalled"),
+    ),
+    installVersion: vi.fn(notImplemented("installVersion")),
     uninstallHost: vi.fn(notImplemented("uninstallHost")),
     restartHost: vi.fn(() => Promise.resolve()),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
@@ -55,24 +86,8 @@ function makeManagement(overrides: Overrides): IHostManagement {
     availableVersions: vi.fn(notImplemented("availableVersions")),
     installedRecord: vi.fn(() => Promise.resolve(null)),
     registerService: vi.fn(notImplemented("registerService")),
-    ensureHost: vi.fn(notImplemented("ensureHost")),
     deregisterService: vi.fn(notImplemented("deregisterService")),
-    registryCheck:
-      overrides.registryCheck ??
-      vi.fn(() =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: null,
-          installedVersion: null,
-          updateAvailable: false,
-          reachable: false,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
-      ),
-    getOperationStatus: vi.fn(
-      overrides.getOperationStatus ?? (() => Promise.resolve(null)),
-    ),
+    registryCheck: vi.fn(notImplemented("registryCheck")),
     freePortAndRestart: vi.fn((input) => Promise.resolve(input)),
     cliManifest: vi.fn(() => Promise.resolve(null)),
     getHostName: vi.fn(() =>
@@ -127,14 +142,14 @@ function renderBanner(host: IRunnerHost): QueryClient {
   return queryClient;
 }
 
-function renderBannerWithRegistryListener(host: IRunnerHost): QueryClient {
+function renderBannerWithStatusListener(host: IRunnerHost): QueryClient {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   render(
     <QueryClientProvider client={queryClient}>
       <RunnerHostProvider runnerHost={host}>
-        <HostRegistryUpdateListener />
+        <HostControllerStatusListener />
         <HostUpdateBanner className={undefined} />
       </RunnerHostProvider>
     </QueryClientProvider>,
@@ -142,11 +157,11 @@ function renderBannerWithRegistryListener(host: IRunnerHost): QueryClient {
   return queryClient;
 }
 
-function createRegistryUpdatesBridge(): {
-  readonly bridge: DesktopHostRegistryUpdatesBridge;
-  readonly emit: (state: HostRegistryUpdateState) => void;
+function createStatusBridge(): {
+  readonly bridge: DesktopHostControllerStatusBridge;
+  readonly emit: (status: HostControllerStatus) => void;
 } {
-  const handlers = new Set<(state: HostRegistryUpdateState) => void>();
+  const handlers = new Set<(status: HostControllerStatus) => void>();
   return {
     bridge: {
       onChange: (handler) => {
@@ -158,9 +173,9 @@ function createRegistryUpdatesBridge(): {
         };
       },
     },
-    emit: (state) => {
+    emit: (status) => {
       for (const handler of handlers) {
-        handler(state);
+        handler(status);
       }
     },
   };
@@ -174,11 +189,11 @@ function findHostUpdateBanner(): Promise<HTMLElement> {
 
 function queryHostUpdateBanner(): HTMLElement | null {
   return screen.queryByRole("status", {
-    name: /Traycer host update available/i,
+    name: /Traycer host update/i,
   });
 }
 
-describe("HostUpdateBanner (Flow 6)", () => {
+describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset persistent zustand state so a snooze written by one test does
@@ -189,138 +204,235 @@ describe("HostUpdateBanner (Flow 6)", () => {
     cleanup();
   });
 
-  it("renders Install button when registryCheck reports an update available", async () => {
-    const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: "1.4.2",
-          installedVersion: "1.4.1",
-          updateAvailable: true,
-          reachable: true,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
-    });
+  it("renders 'Update now' when the status is updateReady", async () => {
+    const management = makeManagement({ status: READY_STATUS });
     renderBanner(makeHost(management));
     expect(await findHostUpdateBanner()).toBeTruthy();
     expect(screen.getByText(/1\.4\.2/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Install/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Update now/i })).toBeTruthy();
   });
 
-  it("stays hidden when no update is available", async () => {
+  it("stays hidden when up to date (no debt, activation:'activated')", async () => {
+    const management = makeManagement({ status: UP_TO_DATE_STATUS });
+    renderBanner(makeHost(management));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(queryHostUpdateBanner()).toBeNull();
+  });
+
+  it("never shows for a merely-detected update (latestVersion ahead but not staged/ready)", async () => {
     const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: "1.4.1",
-          installedVersion: "1.4.1",
-          updateAvailable: false,
-          reachable: true,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
+      status: {
+        ...UP_TO_DATE_STATUS,
+        latestVersion: "1.5.0",
+        stagedVersion: null,
+        updateReady: false,
+      },
     });
     renderBanner(makeHost(management));
     await new Promise((r) => setTimeout(r, 20));
     expect(queryHostUpdateBanner()).toBeNull();
   });
 
-  it("stays hidden when the registry probe was not reachable", async () => {
+  it.each(["pendingActivation", "activationUnknown"] as const)(
+    "renders 'Restart host' identically for activation debt (%s)",
+    async (activation) => {
+      const management = makeManagement({
+        status: { ...UP_TO_DATE_STATUS, activation },
+      });
+      renderBanner(makeHost(management));
+      expect(
+        await screen.findByRole("button", { name: /Restart host/i }),
+      ).toBeTruthy();
+    },
+  );
+
+  it("activation:'unavailable' suppresses debt UI (direct projection)", async () => {
     const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: null,
-          installedVersion: "1.4.1",
-          updateAvailable: false,
-          reachable: false,
-          errorMessage: "offline",
-          includePreReleases: false,
-        }),
+      status: { ...UP_TO_DATE_STATUS, activation: "unavailable" },
     });
     renderBanner(makeHost(management));
     await new Promise((r) => setTimeout(r, 20));
     expect(queryHostUpdateBanner()).toBeNull();
   });
 
-  it("invokes updateHost when Install is clicked and invalidates the registry cache", async () => {
-    const updateHost = vi.fn(() =>
-      Promise.resolve<HostInstallResult>({
-        version: "1.4.2",
-        installedAt: "2026-05-15T00:00:00Z",
-        executablePath: "/tmp/traycerd",
-        source: { kind: "registry", value: "1.4.2" },
-        archiveSha256: "deadbeef",
-        signatureKeyId: "stub",
-        sizeBytes: 1024,
-        previousVersion: "1.4.1",
-        serviceLifecycle: {
-          priorServiceState: "running",
-          stoppedBeforeSwap: true,
-          postSwapAction: "restart",
-          postSwapError: null,
-        },
+  it("update-over-debt priority: updateReady + activation debt renders the update copy, and the click submits applyStaged (direct projection)", async () => {
+    const applyStaged = vi.fn(() =>
+      Promise.resolve<MutationOutcome<ApplyStagedOk>>({
+        kind: "ok",
+        value: { appliedVersion: "1.4.2", runningActivated: true },
+      }),
+    );
+    const activateInstalled = vi.fn(() =>
+      Promise.resolve<MutationOutcome<ActivateInstalledOk>>({
+        kind: "ok",
+        value: { activated: true },
       }),
     );
     const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: "1.4.2",
-          installedVersion: "1.4.1",
-          updateAvailable: true,
-          reachable: true,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
-      updateHost,
+      status: { ...READY_STATUS, activation: "pendingActivation" },
+      applyStaged,
+      activateInstalled,
     });
     renderBanner(makeHost(management));
-    const button = await screen.findByRole("button", { name: /Install/i });
+
+    const button = await screen.findByRole("button", { name: /Update now/i });
+    expect(screen.queryByRole("button", { name: /Restart host/i })).toBeNull();
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(applyStaged).toHaveBeenCalledWith("manual", false);
+    });
+    expect(activateInstalled).not.toHaveBeenCalled();
+  });
+
+  it("invokes applyStaged when 'Update now' is clicked and shows success toast, clearing the snooze", async () => {
+    const applyStaged = vi.fn(() =>
+      Promise.resolve<MutationOutcome<ApplyStagedOk>>({
+        kind: "ok",
+        value: { appliedVersion: "1.4.2", runningActivated: true },
+      }),
+    );
+    const management = makeManagement({
+      status: READY_STATUS,
+      applyStaged,
+    });
+    renderBanner(makeHost(management));
+    const button = await screen.findByRole("button", { name: /Update now/i });
+    useHostUpdateBannerStore
+      .getState()
+      .snooze("1.4.2", Date.now() + HOST_UPDATE_BANNER_SNOOZE_MS);
     fireEvent.click(button);
     await waitFor(() => {
-      expect(updateHost).toHaveBeenCalledTimes(1);
+      expect(applyStaged).toHaveBeenCalledWith("manual", false);
     });
-    // Review finding 5: the banner pins the install to the exact version it
-    // is displaying, so the shell can refuse if the registry resolves a
-    // different target by the time this click lands (e.g. a channel switch
-    // in another window/the tray).
-    expect(updateHost).toHaveBeenCalledWith({
-      expectedVersion: "1.4.2",
-      onProgress: null,
+    await waitFor(() => {
+      const snoozes = useHostUpdateBannerStore.getState().snoozeUntilByVersion;
+      expect(Object.hasOwn(snoozes, "1.4.2")).toBe(false);
     });
   });
 
-  it("hides when the desktop registry update event clears availability", async () => {
-    const updates = createRegistryUpdatesBridge();
+  it("opens the Force/Defer dialog on a busy outcome, Force following continuation:'retry-with-force'", async () => {
+    const applyStaged = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: "busy" as const,
+        continuation: "retry-with-force" as const,
+        message: "Another Traycer process is applying an update.",
+      })
+      .mockResolvedValueOnce({
+        kind: "ok" as const,
+        value: { appliedVersion: "1.4.2", runningActivated: true },
+      });
+    const management = makeManagement({ status: READY_STATUS, applyStaged });
+    renderBanner(makeHost(management));
+    const button = await screen.findByRole("button", { name: /Update now/i });
+    fireEvent.click(button);
+
+    const dialog = await screen.findByTestId("host-busy-force-defer-dialog");
+    expect(dialog.textContent).toContain(
+      "Another Traycer process is applying an update.",
+    );
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+    await waitFor(() => {
+      expect(applyStaged).toHaveBeenCalledWith("manual", true);
+    });
+  });
+
+  it("Force follows continuation:'activate' by submitting activateInstalled, not re-running apply", async () => {
+    const applyStaged = vi.fn(() =>
+      Promise.resolve({
+        kind: "busy" as const,
+        continuation: "activate" as const,
+        message: "Update already committed; activation is pending.",
+      }),
+    );
+    const activateInstalled = vi.fn(() =>
+      Promise.resolve<MutationOutcome<ActivateInstalledOk>>({
+        kind: "ok",
+        value: { activated: true },
+      }),
+    );
     const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: "1.4.2",
-          installedVersion: "1.4.1",
-          updateAvailable: true,
-          reachable: true,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
+      status: READY_STATUS,
+      applyStaged,
+      activateInstalled,
     });
+    renderBanner(makeHost(management));
+    const button = await screen.findByRole("button", { name: /Update now/i });
+    fireEvent.click(button);
+
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    fireEvent.click(screen.getByTestId("host-busy-force"));
+    await waitFor(() => {
+      expect(activateInstalled).toHaveBeenCalledWith(true);
+    });
+    expect(applyStaged).toHaveBeenCalledTimes(1);
+  });
+
+  it("Defer dismisses the busy dialog without re-submitting", async () => {
+    const applyStaged = vi.fn(() =>
+      Promise.resolve({
+        kind: "busy" as const,
+        continuation: "retry-with-force" as const,
+        message: "Another Traycer process is applying an update.",
+      }),
+    );
+    const management = makeManagement({ status: READY_STATUS, applyStaged });
+    renderBanner(makeHost(management));
+    const button = await screen.findByRole("button", { name: /Update now/i });
+    fireEvent.click(button);
+
+    await screen.findByTestId("host-busy-force-defer-dialog");
+    fireEvent.click(screen.getByTestId("host-busy-defer"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
+    });
+    expect(applyStaged).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders its own deferred-lock outcome inline, with Retry", async () => {
+    const applyStaged = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: "deferred" as const,
+        message: "Another Traycer process is managing the host.",
+      })
+      .mockResolvedValueOnce({
+        kind: "ok" as const,
+        value: { appliedVersion: "1.4.2", runningActivated: true },
+      });
+    const management = makeManagement({ status: READY_STATUS, applyStaged });
+    renderBanner(makeHost(management));
+    const button = await screen.findByRole("button", { name: /Update now/i });
+    fireEvent.click(button);
+
+    const deferred = await screen.findByTestId("host-update-banner-deferred");
+    expect(deferred.textContent).toContain(
+      "Another Traycer process is managing the host.",
+    );
+
+    fireEvent.click(screen.getByTestId("host-update-banner-retry"));
+    await waitFor(() => {
+      expect(applyStaged).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("host-update-banner-deferred")).toBeNull();
+    });
+  });
+
+  it("hides when a pushed controller-status status clears updateReady", async () => {
+    const statusBridge = createStatusBridge();
+    const management = makeManagement({ status: READY_STATUS });
     const host = Object.assign(makeHost(management), {
-      hostRegistryUpdates: updates.bridge,
+      hostControllerStatus: statusBridge.bridge,
     });
-    renderBannerWithRegistryListener(host);
+    renderBannerWithStatusListener(host);
     expect(await findHostUpdateBanner()).toBeTruthy();
 
     act(() => {
-      updates.emit({
-        checkedAt: "2026-05-15T00:01:00Z",
-        latestVersion: "1.4.2",
+      statusBridge.emit({
+        ...UP_TO_DATE_STATUS,
         installedVersion: "1.4.2",
-        updateAvailable: false,
-        reachable: true,
-        errorMessage: null,
-        includePreReleases: false,
       });
     });
 
@@ -339,18 +451,7 @@ describe("HostUpdateBanner (Flow 6)", () => {
   // The store is reset in beforeEach so these tests cannot bleed into
   // each other.
   it("hides the banner after clicking the snooze (X) button", async () => {
-    const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: "1.4.2",
-          installedVersion: "1.4.1",
-          updateAvailable: true,
-          reachable: true,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
-    });
+    const management = makeManagement({ status: READY_STATUS });
     renderBanner(makeHost(management));
     expect(await findHostUpdateBanner()).toBeTruthy();
     const snoozeBtn = screen.getByRole("button", { name: /Remind me later/i });
@@ -364,25 +465,14 @@ describe("HostUpdateBanner (Flow 6)", () => {
     expect(snoozes["1.4.2"]).toBeGreaterThan(Date.now());
   });
 
-  it("stays hidden when a non-expired snooze exists for the current latestVersion", async () => {
+  it("stays hidden when a non-expired snooze exists for the current stagedVersion", async () => {
     // Pre-seed the store with a snooze that has not yet expired.
     useHostUpdateBannerStore.setState({
       snoozeUntilByVersion: {
         "1.4.2": Date.now() + HOST_UPDATE_BANNER_SNOOZE_MS,
       },
     });
-    const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: "1.4.2",
-          installedVersion: "1.4.1",
-          updateAvailable: true,
-          reachable: true,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
-    });
+    const management = makeManagement({ status: READY_STATUS });
     renderBanner(makeHost(management));
     await new Promise((r) => setTimeout(r, 20));
     expect(queryHostUpdateBanner()).toBeNull();
@@ -395,99 +485,20 @@ describe("HostUpdateBanner (Flow 6)", () => {
         "1.4.2": Date.now() - 60 * 60 * 1000,
       },
     });
-    const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: "1.4.2",
-          installedVersion: "1.4.1",
-          updateAvailable: true,
-          reachable: true,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
-    });
+    const management = makeManagement({ status: READY_STATUS });
     renderBanner(makeHost(management));
     expect(await findHostUpdateBanner()).toBeTruthy();
   });
 
-  it("re-arms when latestVersion advances past the snoozed version (snooze is per-version)", async () => {
-    // User snoozed v1.4.1; now the registry reports v1.4.2.
+  it("re-arms when stagedVersion advances past the snoozed version (snooze is per-version)", async () => {
+    // User snoozed v1.4.1; now the stage reports v1.4.2.
     useHostUpdateBannerStore.setState({
       snoozeUntilByVersion: {
         "1.4.1": Date.now() + HOST_UPDATE_BANNER_SNOOZE_MS,
       },
     });
-    const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: "1.4.2",
-          installedVersion: "1.4.0",
-          updateAvailable: true,
-          reachable: true,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
-    });
+    const management = makeManagement({ status: READY_STATUS });
     renderBanner(makeHost(management));
     expect(await findHostUpdateBanner()).toBeTruthy();
-  });
-
-  it("clears the snooze for the installed version after a successful install via the Install button", async () => {
-    // Start with no snooze so the banner renders. The Install onSuccess
-    // calls clearSnooze(data.version); to prove the wiring works we
-    // re-snooze v1.4.2 right before the click so the post-install
-    // clearSnooze has something to remove.
-    const updateHost = vi.fn(() =>
-      Promise.resolve<HostInstallResult>({
-        version: "1.4.2",
-        installedAt: "2026-05-15T00:00:00Z",
-        executablePath: "/tmp/traycerd",
-        source: { kind: "registry", value: "1.4.2" },
-        archiveSha256: "deadbeef",
-        signatureKeyId: "stub",
-        sizeBytes: 1024,
-        previousVersion: "1.4.1",
-        serviceLifecycle: {
-          priorServiceState: "running",
-          stoppedBeforeSwap: true,
-          postSwapAction: "restart",
-          postSwapError: null,
-        },
-      }),
-    );
-    const management = makeManagement({
-      registryCheck: () =>
-        Promise.resolve<HostRegistryUpdateState>({
-          checkedAt: "2026-05-15T00:00:00Z",
-          latestVersion: "1.4.2",
-          installedVersion: "1.4.1",
-          updateAvailable: true,
-          reachable: true,
-          errorMessage: null,
-          includePreReleases: false,
-        }),
-      updateHost,
-    });
-    renderBanner(makeHost(management));
-    const button = await screen.findByRole("button", { name: /Install/i });
-    useHostUpdateBannerStore
-      .getState()
-      .snooze("1.4.2", Date.now() + HOST_UPDATE_BANNER_SNOOZE_MS);
-    expect(
-      Object.hasOwn(
-        useHostUpdateBannerStore.getState().snoozeUntilByVersion,
-        "1.4.2",
-      ),
-    ).toBe(true);
-    fireEvent.click(button);
-    await waitFor(() => {
-      expect(updateHost).toHaveBeenCalledTimes(1);
-    });
-    await waitFor(() => {
-      const snoozes = useHostUpdateBannerStore.getState().snoozeUntilByVersion;
-      expect(Object.hasOwn(snoozes, "1.4.2")).toBe(false);
-    });
   });
 });

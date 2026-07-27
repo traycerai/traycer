@@ -3,7 +3,6 @@ import {
   RunnerHostEvent,
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
-import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type {
   HostListFetchResult,
@@ -15,7 +14,14 @@ import type {
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
 } from "../ipc-contracts/host-types";
-import type { AuthTokenRefreshResult } from "../ipc-contracts/auth-types";
+import type {
+  CredentialsMigrationOutcome,
+  StoredAuthTokens,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+  TokenStoreChange,
+} from "../ipc-contracts/auth-types";
 import type { DesktopAuthSessionSnapshot } from "../ipc-contracts/window-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
 
@@ -61,18 +67,9 @@ function subscribeAuthCallback(handler: Listener<void>): Disposable {
 }
 
 export interface AuthBridgeSurface {
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult>;
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult>;
   listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
   listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
   revokeUserSession(
@@ -99,26 +96,11 @@ export interface AuthBridgeSurface {
 
 export function buildAuthBridge(): AuthBridgeSurface {
   return {
-    validateAuthToken: (token, refreshToken) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.validateAuthToken,
-        token,
-        refreshToken,
-      ) as Promise<AuthTokenValidationResult>,
-
-    validateAuthTokenIdentity: (token, refreshToken) =>
+    validateAuthTokenIdentity: (token) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.validateAuthTokenIdentity,
         token,
-        refreshToken,
       ) as Promise<AuthIdentityValidationResult>,
-
-    refreshAuthToken: (token, refreshToken) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.refreshAuthToken,
-        token,
-        refreshToken,
-      ) as Promise<AuthTokenRefreshResult>,
 
     listRegisteredHosts: (bearerToken) =>
       ipcRenderer.invoke(
@@ -173,6 +155,63 @@ export function buildAuthBridge(): AuthBridgeSurface {
     beginAuthAttempt: () => undefined,
 
     onAuthCallback: (handler) => subscribeAuthCallback(handler),
+  };
+}
+
+/**
+ * Renderer-side `ITokenStore` backed by the main-process `FileTokenStore`
+ * (tech plan §3). `rotate` performs the refresh spend in main under the file
+ * lock; `subscribe` receives the owned-watcher change events (source lands in
+ * §4). The renderer wraps this exactly as its `ITokenStore` implementation.
+ */
+export interface AuthTokenStoreBridgeSurface {
+  get(): Promise<StoredCredentials | null>;
+  signIn(
+    tokens: StoredAuthTokens,
+    identity: StoredCredentialsIdentity,
+  ): Promise<void>;
+  rotate(expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<TokenRotateResult>;
+  delete(): Promise<void>;
+  subscribe(handler: Listener<TokenStoreChange>): Disposable;
+  migrateLegacyCredentials(
+    legacy: StoredAuthTokens,
+  ): Promise<CredentialsMigrationOutcome>;
+}
+
+export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
+  return {
+    get: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreGet,
+      ) as Promise<StoredCredentials | null>,
+    signIn: (tokens, identity) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreSignIn,
+        tokens,
+        identity,
+      ) as Promise<void>,
+    rotate: (expected) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreRotate,
+        expected,
+      ) as Promise<TokenRotateResult>,
+    delete: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreDelete,
+      ) as Promise<void>,
+    subscribe: (handler) =>
+      subscribe<TokenStoreChange>(
+        RunnerHostEvent.authTokenStoreChange,
+        handler,
+      ),
+    migrateLegacyCredentials: (legacy) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreMigrateLegacy,
+        legacy,
+      ) as Promise<CredentialsMigrationOutcome>,
   };
 }
 

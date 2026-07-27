@@ -10,6 +10,10 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import type {
+  CredentialsMutationStore,
+  MutationResult,
+} from "@traycer/protocol/config/credentials-mutation";
 
 // Native Packaging runner-discipline migration: every runner-aware
 // command (logout, config env set/delete, config shell set/reset,
@@ -23,6 +27,14 @@ import {
 // `legacy-json-migration.test.ts` so future drift in the runner
 // contract surfaces in the same way across the suite.
 
+// `store/paths` binds its home root from `os.homedir()` at module load.
+// Keep the environment mutation below, but redirect `homedir()` too.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 
@@ -35,6 +47,7 @@ let stderrChunks: string[];
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-runner-disc-test-"));
+  osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
   stdoutChunks = [];
@@ -164,11 +177,47 @@ function assertSingleTerminalResult(out: ParsedRunnerOutput): void {
 
 // ----------------------------- logoutCommand ----------------------------
 
+// `traycer logout` now signs out through the locked mutation store (§7): a
+// pre-read decides `loggedOut`, and `signOut` deletes-under-lock + tombstones.
+// Mock the store-factory helpers so the runner contract is exercised without
+// touching disk.
+function mockLogoutStore(args: {
+  readonly hadSession: boolean;
+  readonly signOut: MutationResult;
+}): CredentialsMutationStore {
+  const store: CredentialsMutationStore = {
+    read: async () =>
+      args.hadSession
+        ? {
+            token: "t",
+            refreshToken: "r",
+            authnBaseUrl: "https://authn.test",
+            savedAt: "2026-01-01T00:00:00.000Z",
+            user: { id: "u1", email: "a@b.c", name: "A" },
+          }
+        : null,
+    signOut: vi.fn(async () => args.signOut),
+    rotate: vi.fn(),
+    signIn: vi.fn(),
+    updateProfile: vi.fn(),
+    guardedSignIn: vi.fn(),
+    migrateFirstWrite: vi.fn(),
+    hasPendingContinuation: () => false,
+    dispose: vi.fn(),
+  };
+  vi.doMock("../../store/credentials-store", () => ({
+    runWithCliStore: <T>(fn: (s: CredentialsMutationStore) => Promise<T>) =>
+      fn(store),
+    withCommitRetry: <T>(op: () => Promise<T>) => op(),
+  }));
+  return store;
+}
+
+const DELETED: MutationResult = { outcome: "deleted", credentials: null };
+
 describe("logoutCommand runner contract", () => {
-  it("JSON mode: emits a single ok result with loggedOut=true when credentials were removed", async () => {
-    vi.doMock("../../store/credentials", () => ({
-      deleteCredentials: async () => true,
-    }));
+  it("JSON mode: emits a single ok result with loggedOut=true when a session existed", async () => {
+    mockLogoutStore({ hadSession: true, signOut: DELETED });
     const { logoutCommand } = await import("../logout");
     const out = await runJsonCommand(logoutCommand);
     assertSingleTerminalResult(out);
@@ -181,9 +230,7 @@ describe("logoutCommand runner contract", () => {
   });
 
   it("JSON mode: emits a single ok result with loggedOut=false when nothing was on disk", async () => {
-    vi.doMock("../../store/credentials", () => ({
-      deleteCredentials: async () => false,
-    }));
+    const store = mockLogoutStore({ hadSession: false, signOut: DELETED });
     const { logoutCommand } = await import("../logout");
     const out = await runJsonCommand(logoutCommand);
     assertSingleTerminalResult(out);
@@ -192,12 +239,13 @@ describe("logoutCommand runner contract", () => {
       status: "ok",
       data: { loggedOut: false },
     });
+    // logout always advances the tombstone via signOut, even when nothing was on
+    // disk — so a racing first-write can't resurrect a just-signed-out session.
+    expect(store.signOut).toHaveBeenCalledTimes(1);
   });
 
-  it("human mode: prints 'Logged out.' when credentials were removed", async () => {
-    vi.doMock("../../store/credentials", () => ({
-      deleteCredentials: async () => true,
-    }));
+  it("human mode: prints 'Logged out.' when a session existed", async () => {
+    mockLogoutStore({ hadSession: true, signOut: DELETED });
     const { logoutCommand } = await import("../logout");
     const out = await runHumanCommand(logoutCommand);
     expect(out.terminal).toBeNull();
@@ -206,14 +254,26 @@ describe("logoutCommand runner contract", () => {
   });
 
   it("human mode: prints 'Not logged in.' when nothing was on disk", async () => {
-    vi.doMock("../../store/credentials", () => ({
-      deleteCredentials: async () => false,
-    }));
+    mockLogoutStore({ hadSession: false, signOut: DELETED });
     const { logoutCommand } = await import("../logout");
     const out = await runHumanCommand(logoutCommand);
     expect(out.terminal).toBeNull();
     expect(joined(stdoutChunks)).toContain("Not logged in.");
     expect(out.exitCode).toBe(0);
+  });
+
+  it("JSON mode: emits a single error envelope (UNEXPECTED) when the sign-out delete fails", async () => {
+    mockLogoutStore({
+      hadSession: true,
+      signOut: { outcome: "commit-failed", credentials: null },
+    });
+    const { logoutCommand } = await import("../logout");
+    const out = await runJsonCommand(logoutCommand);
+    assertSingleTerminalResult(out);
+    expect(out.terminal).toMatchObject({ status: "error" });
+    const error = out.terminal?.error as Record<string, unknown>;
+    expect(error.code).toBe("E_UNEXPECTED");
+    expect(out.exitCode).toBe(1);
   });
 });
 

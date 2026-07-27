@@ -34,11 +34,10 @@ export function formatHostNotificationPresentation(
     entry.kind,
     entry.payload,
   );
-  const { agentName, title, chatContext, isTerminalAgent } =
-    knownPresentationContext(known);
+  const { agentName, title, agentContext } = knownPresentationContext(known);
   switch (entry.kind) {
     case "agent.stopped": {
-      const context = notificationContext(agentName, title, isTerminalAgent);
+      const context = notificationContext(agentName, title);
       const reason = known === null ? null : knownStoppedReason(known);
       const providerId = known === null ? null : knownProviderId(known);
       return {
@@ -49,18 +48,35 @@ export function formatHostNotificationPresentation(
     case "agent.stalled":
       return {
         title,
-        body: `${notificationContext(agentName, title, isTerminalAgent)} • ${agentStalledStatus(known)}`,
+        body: `${notificationContext(agentName, title)} • ${agentStalledStatus(known)}`,
       };
     case "workspace.operation.failed":
       return {
         title,
-        body: `${chatContext} • ${workspaceOperationFailedStatus(known)}`,
+        body: `${agentContext} • ${workspaceOperationFailedStatus(known)}`,
       };
     case "approval.requested":
-      return { title, body: `${chatContext} • Approval requested` };
+      return {
+        title,
+        body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Approval requested", "Approval resolved")}`,
+      };
     case "interview.requested":
-      return { title, body: `${chatContext} • Question waiting` };
+      return {
+        title,
+        body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Question waiting", "Question resolved")}`,
+      };
   }
+}
+
+// The protocol records only whether an approval/interview has resolved, not
+// how it resolved. Keep the canonical formatter honest and shared across the
+// in-app feed and external hook deliveries.
+function resolvableRequestStatus(
+  resolvedAt: number | null,
+  waitingLabel: string,
+  resolvedLabel: string,
+): string {
+  return resolvedAt === null ? waitingLabel : resolvedLabel;
 }
 
 function knownPresentationContext(known: HostNotificationKnownPayload | null) {
@@ -73,8 +89,8 @@ function knownPresentationContext(known: HostNotificationKnownPayload | null) {
   return {
     agentName,
     title,
-    chatContext: chatTitle !== null && chatTitle !== title ? chatTitle : "Chat",
-    isTerminalAgent: known?.kind === "epic",
+    agentContext:
+      chatTitle !== null && chatTitle !== title ? chatTitle : "Agent",
   };
 }
 
@@ -186,6 +202,14 @@ function agentStoppedFailureStatus(
         "Provider connection failed",
         (providerName) => `Connection to ${providerName} failed`,
       );
+    case "context_exhausted":
+      return "Context limit reached";
+    case "request_rejected":
+      return providerSpecificFailureStatus(
+        providerId,
+        "Provider rejected the request",
+        (providerName) => `${providerName} rejected the request`,
+      );
     case "turn_start_timeout":
       return "Provider did not start in time";
     case "missing_terminal_event":
@@ -233,13 +257,9 @@ function workspaceOperationFailedStatus(
   return "Workspace operation failed";
 }
 
-function notificationContext(
-  agentName: string | null,
-  title: string,
-  isTerminalAgent: boolean,
-): string {
+function notificationContext(agentName: string | null, title: string): string {
   if (agentName !== null && agentName !== title) return agentName;
-  return isTerminalAgent ? "Terminal agent" : "Chat";
+  return "Agent";
 }
 
 function nonEmptyTitle(value: string | null): string | null {

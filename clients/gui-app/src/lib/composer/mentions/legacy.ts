@@ -57,10 +57,13 @@ function legacyEntityMentionAttachment(
       artifactId: null,
       artifactType: null,
       chatId: null,
+      terminalAgentId: null,
       status: null,
     };
   }
 
+  // `chat:` is the durable reference syntax for a chat-interface Agent and stays
+  // parseable indefinitely - persisted references are never rewritten.
   const chatMatch = path.match(/^chat:([^/\s]+)\/([^\s]+)$/u);
   if (chatMatch !== null) {
     const epicId = chatMatch[1];
@@ -79,6 +82,32 @@ function legacyEntityMentionAttachment(
       artifactId: null,
       artifactType: null,
       chatId,
+      terminalAgentId: null,
+      status: null,
+    };
+  }
+
+  const terminalAgentMatch = path.match(
+    /^terminal-agent:([^/\s]+)\/([^\s]+)$/u,
+  );
+  if (terminalAgentMatch !== null) {
+    const epicId = terminalAgentMatch[1];
+    const terminalAgentId = terminalAgentMatch[2];
+    return {
+      kind: "mention",
+      contextType: "terminal-agent",
+      path,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: terminalAgentId,
+      description: "",
+      epicId,
+      artifactId: null,
+      artifactType: null,
+      chatId: null,
+      terminalAgentId,
       status: null,
     };
   }
@@ -105,6 +134,7 @@ function legacyEntityMentionAttachment(
     artifactId,
     artifactType,
     chatId: null,
+    terminalAgentId: null,
     status: null,
   };
 }

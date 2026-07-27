@@ -58,7 +58,7 @@ function openPinned(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
 ): EpicCanvasState {
-  return openTile(state, node, false);
+  return openTile(state, node, false, null);
 }
 
 /** Preview open - `openTile` with `preview: true`. */
@@ -66,7 +66,7 @@ function openPreview(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
 ): EpicCanvasState {
-  return openTile(state, node, true);
+  return openTile(state, node, true, null);
 }
 
 /** Max depth of the tree under `state.root` (a bare pane is depth 1). */
@@ -1196,25 +1196,25 @@ describe("findActiveGitFileDiffTile", () => {
 describe("openTile no-op short-circuits (same reference)", () => {
   it("returns the same reference for a pinned re-open of the active tab in the focused pane", () => {
     const state = openPinned(createEmptyCanvas(), SPEC_A);
-    expect(openTile(state, SPEC_A, false)).toBe(state);
+    expect(openTile(state, SPEC_A, false, null)).toBe(state);
   });
 
   it("returns the same reference for a preview open of an already-active pinned tab in the focused pane", () => {
     // Previously `openTilePreview` rebuilt an identical state object here;
     // the unified `openTile` short-circuits to the same reference.
     const state = openPinned(createEmptyCanvas(), SPEC_A);
-    expect(openTile(state, SPEC_A, true)).toBe(state);
+    expect(openTile(state, SPEC_A, true, null)).toBe(state);
   });
 
   it("returns the same reference for a preview re-open of the active preview tab in the focused pane", () => {
     const state = openPreview(createEmptyCanvas(), SPEC_A);
-    expect(openTile(state, SPEC_A, true)).toBe(state);
+    expect(openTile(state, SPEC_A, true, null)).toBe(state);
   });
 
   it("is NOT a no-op when a pinned open promotes the active preview tab", () => {
     // Promote-on-pin must still produce a new state with the preview cleared.
     const state = openPreview(createEmptyCanvas(), SPEC_A);
-    const next = openTile(state, SPEC_A, false);
+    const next = openTile(state, SPEC_A, false, null);
     expect(next).not.toBe(state);
     expect(rootPane(next).previewTabId).toBeNull();
     expect(rootPane(next).activeTabId).toBe(SPEC_A.instanceId);
@@ -1229,7 +1229,7 @@ describe("openTile no-op short-circuits (same reference)", () => {
       node: SPEC_B,
     });
     expect(state.activePaneId).not.toBe(holdingPaneId);
-    const next = openTile(state, SPEC_A, false);
+    const next = openTile(state, SPEC_A, false, null);
     expect(next).not.toBe(state);
     expect(next.root).toBe(state.root);
     expect(next.activePaneId).toBe(holdingPaneId);

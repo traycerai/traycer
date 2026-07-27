@@ -17,37 +17,56 @@ type CapturedStreamClientOptions = {
   readonly endpoint: () => unknown;
 };
 
-const { subscribeMock, revalidateMock, sessions, streamClientOptions } =
-  vi.hoisted(() => {
-    const sessions: FakeSession[] = [];
-    const streamClientOptions: CapturedStreamClientOptions[] = [];
-    const subscribeMock = vi.fn(() => {
-      const session: FakeSession = {
-        statusChange: null,
-        serverFrame: null,
-        closed: false,
-      };
-      const handle = {
-        onStatusChange(h: (status: string, reason: unknown) => void) {
-          session.statusChange = h;
-        },
-        onServerFrame(h: (envelope: unknown) => void) {
-          session.serverFrame = h;
-        },
-        close() {
-          session.closed = true;
-        },
-      };
-      sessions.push(session);
-      return handle;
-    });
-    return {
-      subscribeMock,
-      revalidateMock: vi.fn(),
-      sessions,
-      streamClientOptions,
+const {
+  subscribeMock,
+  revalidateMock,
+  disposeMock,
+  sessions,
+  streamClientOptions,
+} = vi.hoisted(() => {
+  const sessions: FakeSession[] = [];
+  const streamClientOptions: CapturedStreamClientOptions[] = [];
+  const subscribeMock = vi.fn(() => {
+    const session: FakeSession = {
+      statusChange: null,
+      serverFrame: null,
+      closed: false,
     };
+    const handle = {
+      onStatusChange(h: (status: string, reason: unknown) => void) {
+        session.statusChange = h;
+      },
+      onServerFrame(h: (envelope: unknown) => void) {
+        session.serverFrame = h;
+      },
+      close() {
+        session.closed = true;
+      },
+    };
+    sessions.push(session);
+    return handle;
   });
+  return {
+    subscribeMock,
+    revalidateMock: vi.fn(),
+    disposeMock: vi.fn(),
+    sessions,
+    streamClientOptions,
+  };
+});
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+// The recovery assertions use console diagnostics, not persistent logging.
+// Stub the CLI logger so this state-machine test never appends to ~/.traycer.
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+}));
 
 vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
   WsStreamClient: class {
@@ -59,15 +78,19 @@ vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
   },
 }));
 
-vi.mock("../../../../shared/auth/bearer-revalidator", () => ({
-  createBearerRevalidator: vi.fn(() => ({
+// The monitor's revalidator now comes from the store-backed factory (§7); the
+// recovery state machine under test is agnostic to how the revalidator refreshes,
+// so a mocked `revalidateCurrentContext` drives it exactly as before. The store
+// is a `dispose`-only stub (the monitor disposes it on exit).
+vi.mock("../../store/credentials-store", () => ({
+  createCliCredentialsStore: vi.fn(() => ({ dispose: disposeMock })),
+  createStoreBackedRevalidator: vi.fn(() => ({
     revalidateCurrentContext: revalidateMock,
   })),
 }));
 
 vi.mock("../../internal/host-auth", () => ({
   resolveHostAuth: vi.fn(),
-  cliBearerStore: { read: vi.fn(), write: vi.fn(), clear: vi.fn() },
 }));
 
 vi.mock("../../host/pid-metadata", async (importOriginal) => {
@@ -117,6 +140,7 @@ beforeEach(() => {
   streamClientOptions.length = 0;
   subscribeMock.mockClear();
   revalidateMock.mockReset();
+  disposeMock.mockClear();
   resolveAuthMock.mockResolvedValue({
     token: "tok-1",
     authnBaseUrl: "https://authn.test",
@@ -163,6 +187,8 @@ describe("runMonitor recovery", () => {
     expect(await result).toBeInstanceOf(Error);
     expect((await result).message).toMatch(/session expired/);
     expect(subscribeMock).toHaveBeenCalledTimes(1);
+    // The per-run store is disposed when the monitor loop terminates (finally).
+    expect(disposeMock).toHaveBeenCalledTimes(1);
   });
 
   it("terminates immediately on a non-auth fatal (INCOMPATIBLE) without refreshing", async () => {
@@ -233,5 +259,79 @@ describe("runMonitor recovery", () => {
     expect((await result).message).toMatch(
       /session rejected after \d+ refreshes/,
     );
+  });
+});
+
+describe("role awareness frames (negotiated @1.1)", () => {
+  it("prints one compact [traycer roles] line per event, for both claim and relinquish", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    await flush(0);
+
+    const claim = {
+      claimId: "33333333-3333-4333-8333-333333333333",
+      agentId: "peer-1",
+      role: "Planner",
+      scope: "auth migration",
+      claimedAt: 10,
+    };
+    sessions[0].serverFrame?.({
+      kind: "role-awareness",
+      hasBinaryPayload: false,
+      event: { kind: "role-claimed", epicId: "e1", claim, at: 20 },
+    });
+    sessions[0].serverFrame?.({
+      kind: "role-awareness",
+      hasBinaryPayload: false,
+      event: { kind: "role-relinquished", epicId: "e1", claim, at: 30 },
+    });
+
+    const lines = stdoutSpy.mock.calls.map((call) => String(call[0]));
+    expect(lines).toContain(
+      '[traycer roles] agent peer-1 claimed role "Planner" (scope: auth migration)\n',
+    );
+    expect(lines).toContain(
+      '[traycer roles] agent peer-1 relinquished role "Planner" (scope: auth migration)\n',
+    );
+
+    stdoutSpy.mockRestore();
+    void result;
+  });
+
+  it("drops a malformed role-awareness frame without printing", async () => {
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);
+    await flush(0);
+
+    // `claim` violates the wire schema (empty role), so the frame must not
+    // reach the printer - the monitor drops what it cannot trust.
+    sessions[0].serverFrame?.({
+      kind: "role-awareness",
+      hasBinaryPayload: false,
+      event: {
+        kind: "role-claimed",
+        epicId: "e1",
+        claim: {
+          claimId: "33333333-3333-4333-8333-333333333333",
+          agentId: "peer-1",
+          role: "",
+          scope: "auth migration",
+          claimedAt: 10,
+        },
+        at: 20,
+      },
+    });
+
+    const lines = stdoutSpy.mock.calls.map((call) => String(call[0]));
+    expect(lines.filter((line) => line.includes("[traycer roles]"))).toEqual(
+      [],
+    );
+
+    stdoutSpy.mockRestore();
+    void result;
   });
 });

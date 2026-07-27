@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, GitBranch } from "lucide-react";
 import {
   Popover,
@@ -41,11 +41,68 @@ export function FolderBranchControl(props: {
   // above) from the host dialog (an ancestor) on outside-click - see
   // preserveWhenNestedOverlay.
   const contentRef = useRef<HTMLDivElement>(null);
-  // Committing (Select/Enter) closes the popover, which would restore focus to
-  // the chip — and the chip is also the branch tooltip's trigger, so the tooltip
-  // would auto-open with the cursor away. Suppress the focus restoration on a
-  // commit-close only (Escape / click-outside still restore focus normally).
-  const suppressChipFocusRef = useRef(false);
+  // Closing restores focus to the chip (keyboard a11y). That focus would also
+  // open the branch tooltip with the pointer away — suppress the open once.
+  const [chipTooltipOpen, setChipTooltipOpen] = useState(false);
+  const suppressChipTooltipRef = useRef(false);
+  // Owns the focusin listener + fallback timer for one suppress cycle.
+  // Previous cleanup runs before arming a new one; unmount runs it too.
+  const clearTooltipSuppressRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    return () => {
+      clearTooltipSuppressRef.current?.();
+      clearTooltipSuppressRef.current = null;
+    };
+  }, []);
+
+  const handlePopoverOpenChange = (next: boolean): void => {
+    setOpen(next);
+    // Do not arm tooltip suppress here — Radix restores focus from its own
+    // setTimeout(0) after content unmount; arming in onOpenChange clears too
+    // early. onCloseAutoFocus arms it right before the trigger is focused.
+    if (!next) {
+      setChipTooltipOpen(false);
+    }
+  };
+
+  const handleChipTooltipOpenChange = (next: boolean): void => {
+    if (next && suppressChipTooltipRef.current) return;
+    setChipTooltipOpen(next);
+  };
+
+  const handleCloseAutoFocus = (): void => {
+    // Fires immediately before Radix focuses the trigger. Do not preventDefault
+    // — keyboard a11y needs focus-return on Escape.
+    clearTooltipSuppressRef.current?.();
+    suppressChipTooltipRef.current = true;
+    setChipTooltipOpen(false);
+
+    let timeoutId: number | null = null;
+    let cleared = false;
+    const clear = (): void => {
+      if (cleared) return;
+      cleared = true;
+      window.removeEventListener("focusin", onFocusIn, true);
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      suppressChipTooltipRef.current = false;
+      if (clearTooltipSuppressRef.current === clear) {
+        clearTooltipSuppressRef.current = null;
+      }
+    };
+    const onFocusIn = (): void => {
+      // Clear after the focus-restore handlers (incl. tooltip open attempt)
+      // finish, while suppress still blocked that open.
+      queueMicrotask(clear);
+    };
+    window.addEventListener("focusin", onFocusIn, true);
+    // Fallback if focus never restores (pointer close without focus move).
+    timeoutId = window.setTimeout(clear, 150);
+    clearTooltipSuppressRef.current = clear;
+  };
 
   // Read-only branch label for every mode except an editable new worktree.
   // Derived from the intent kind, not `mode`: an adopted worktree (`import`) is
@@ -171,12 +228,14 @@ export function FolderBranchControl(props: {
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handlePopoverOpenChange}>
       <TooltipWrapper
         label={tooltipLabel}
         side="top"
         sideOffset={undefined}
         align={undefined}
+        open={chipTooltipOpen}
+        onOpenChange={handleChipTooltipOpenChange}
       >
         <PopoverTrigger asChild>{chip}</PopoverTrigger>
       </TooltipWrapper>
@@ -191,11 +250,7 @@ export function FolderBranchControl(props: {
         onInteractOutside={(event) =>
           preserveWhenNestedOverlay(event, contentRef.current)
         }
-        onCloseAutoFocus={(event) => {
-          if (!suppressChipFocusRef.current) return;
-          suppressChipFocusRef.current = false;
-          event.preventDefault();
-        }}
+        onCloseAutoFocus={handleCloseAutoFocus}
       >
         <NewWorktreeForm
           key={item.displayPath}
@@ -207,10 +262,6 @@ export function FolderBranchControl(props: {
           currentIntent={item.currentIntent}
           defaultNewBranchName={item.defaultNewBranchName}
           onEmit={item.onEmit}
-          onCommitted={() => {
-            suppressChipFocusRef.current = true;
-            setOpen(false);
-          }}
         />
       </PopoverContent>
     </Popover>

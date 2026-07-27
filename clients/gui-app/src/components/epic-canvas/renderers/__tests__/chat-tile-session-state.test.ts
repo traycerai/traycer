@@ -249,6 +249,7 @@ function expectToastAction(
 }
 
 const ACTIVE_TURN: ChatActiveTurn = {
+  sameTurnSteeringSupported: false,
   turnId: "turn-1",
   status: "running",
   harnessId: "codex",
@@ -535,6 +536,52 @@ describe("chatActivityIndicator", () => {
         turnInProgress: false,
       }),
     ).toBe("background");
+  });
+
+  it("reads turn (not background) while a detached subagent is still running", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [
+          {
+            taskId: "t2",
+            kind: "subagent" as const,
+            title: "Explore the codebase",
+            blockId: "t2",
+            parentTaskId: null,
+            scheduledFor: null,
+          },
+        ],
+        turnInProgress: false,
+      }),
+    ).toBe("turn");
+  });
+
+  it("reads turn (not background) while a detached workflow fleet is still running", () => {
+    expect(
+      chatActivityIndicator({
+        runStatus: "running",
+        activeTurn: null,
+        queue: EMPTY_QUEUE,
+        backgroundItems: [
+          MONITOR_ITEM,
+          {
+            taskId: "t3",
+            kind: "workflow" as const,
+            title: "review-changes",
+            blockId: "t3",
+            parentTaskId: null,
+            phase: null,
+            activeLabel: null,
+            agentsStarted: null,
+            agentsFinished: null,
+          },
+        ],
+        turnInProgress: false,
+      }),
+    ).toBe("turn");
   });
 
   it("prioritizes the turn when a turn and background work run simultaneously", () => {

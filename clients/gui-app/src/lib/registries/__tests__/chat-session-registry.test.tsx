@@ -133,6 +133,7 @@ function fakeStreamSession(): IStreamSession {
     sendClientFrame: () => undefined,
     onServerFrame: () => undefined,
     onStatusChange: () => undefined,
+    requestReconnect: () => undefined,
     close: () => undefined,
   };
 }

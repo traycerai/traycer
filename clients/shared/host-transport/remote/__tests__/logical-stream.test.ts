@@ -13,7 +13,10 @@ interface SentFrame {
   readonly binaryPayload: Uint8Array | null;
 }
 
-function createStream(sent: SentFrame[]): LogicalStream {
+function createStream(
+  sent: SentFrame[],
+  reconnectReasons: string[],
+): LogicalStream {
   const port: LogicalStreamPort = {
     sendStreamFrame(
       streamId: number,
@@ -24,6 +27,9 @@ function createStream(sent: SentFrame[]): LogicalStream {
     },
     closeStream(): void {
       return;
+    },
+    requestSessionReconnect(reason: string): void {
+      reconnectReasons.push(reason);
     },
   };
   return new LogicalStream({
@@ -40,7 +46,7 @@ describe("LogicalStream", () => {
   it("opens only after delivering the first inbound frame", () => {
     const sent: SentFrame[] = [];
     const events: string[] = [];
-    const stream = createStream(sent);
+    const stream = createStream(sent, []);
     const clientFrame = { kind: "input", hasBinaryPayload: false };
     const serverFrame = { kind: "snapshot", hasBinaryPayload: false };
 
@@ -63,5 +69,21 @@ describe("LogicalStream", () => {
     expect(sent).toEqual([
       { streamId: 17, envelope: clientFrame, binaryPayload: null },
     ]);
+  });
+
+  // A logical stream owns no socket - `requestReconnect` (the post-sleep/wake
+  // liveness nudge on `IStreamSession`) is only meaningful if it reaches the
+  // shared session that DOES own one. A silent no-op here would leave a woken
+  // remote host wedged with no reconnect ever scheduled.
+  it("forwards requestReconnect to the shared session, and stops once closed", () => {
+    const reconnectReasons: string[] = [];
+    const stream = createStream([], reconnectReasons);
+
+    stream.requestReconnect();
+    expect(reconnectReasons).toHaveLength(1);
+
+    stream.close();
+    stream.requestReconnect();
+    expect(reconnectReasons).toHaveLength(1);
   });
 });

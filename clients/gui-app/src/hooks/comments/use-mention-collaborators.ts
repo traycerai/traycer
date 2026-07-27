@@ -17,7 +17,10 @@ export interface MentionCollaborator {
 export function useMentionCollaborators(
   epicId: string,
 ): ReadonlyArray<MentionCollaborator> {
-  const { data } = useEpicCollaboratorsQuery(epicId, null);
+  const { data } = useEpicCollaboratorsQuery(epicId, {
+    poll: false,
+    staleTime: undefined,
+  });
   return useMemo<ReadonlyArray<MentionCollaborator>>(() => {
     if (data === undefined) return [];
     const seen = new Set<string>();

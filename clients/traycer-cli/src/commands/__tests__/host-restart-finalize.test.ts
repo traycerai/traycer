@@ -20,6 +20,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // service manager. The CLI manifest is written under a tmp HOME so
 // the manifest read/write paths exercise the real on-disk format.
 
+// `store/paths` binds its home root from `os.homedir()` at module load.
+// Keep the environment mutation below, but redirect `homedir()` too.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 
@@ -27,6 +35,7 @@ let workHome: string;
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-restart-test-"));
+  osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
   // The `store/paths` module captures `homedir()` once at module
@@ -308,7 +317,10 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       expect(script).toContain("$ParentPid = 4242");
       expect(script).toContain(liveBinaryPath);
       expect(script).toContain(stagedBinaryPath);
-      expect(script).toContain("ai.traycer.host.production");
+      // Binary swap + service start hand off to the staged binary's own
+      // hidden `cli finalize-upgrade` command (see finalize-helper.ts's
+      // module doc comment) rather than this script doing them inline.
+      expect(script).toContain("$StagedBinary cli finalize-upgrade");
     } finally {
       chmodSync(lockedDir, 0o755);
     }

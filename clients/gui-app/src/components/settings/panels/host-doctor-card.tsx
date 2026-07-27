@@ -26,7 +26,6 @@ import {
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
 import type {
   HostDoctorIssue,
   HostDoctorReport,
@@ -74,19 +73,6 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   );
   const [freePortPrompt, setFreePortPrompt] =
     useState<FreePortAndRestartInput | null>(null);
-
-  // Same cross-surface single-flight signal Settings → Host reads (Ticket:
-  // host-update-race-conditions) - a tracked restart/install/update started
-  // from ANOTHER surface must gate Doctor's fix actions too, since a Doctor
-  // fix racing a tracked restart-class operation interleaves two independent
-  // stop/kill/start sequences (worst on Windows, where one can kill the
-  // other's freshly started host).
-  const { data: operationStatus } =
-    useRunnerHostOperationStatusQuery(management);
-  // Fail closed while the initial status read is unresolved: `null` is the
-  // only authoritative idle state. Otherwise Doctor could briefly enable a
-  // destructive fix while another surface's operation is still being read.
-  const sharedOperationActive = operationStatus !== null;
 
   const {
     data: report,
@@ -222,9 +208,6 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       recurrence={recurrenceModel.recurrence}
       reportFetching={reportFetching}
       fixPendingCode={fixMutation.isPending ? fixMutation.variables.code : null}
-      externalOperationActive={
-        sharedOperationActive || freePortMutation.isPending
-      }
       freePortPrompt={freePortPrompt}
       freePortPending={freePortMutation.isPending}
       onFix={handleFix}
@@ -235,14 +218,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       }}
       onConfirmFreePort={() => {
         if (freePortPrompt !== null) {
-          // Capture the destructive target, then close optimistically before
-          // starting the restart. This operation shares the platform-wide
-          // restart budget and can legitimately run for minutes; keeping the
-          // dialog tied to `isPending` would lock every dismissal path for
-          // that entire window.
-          const input = freePortPrompt;
-          setFreePortPrompt(null);
-          freePortMutation.mutate(input);
+          freePortMutation.mutate(freePortPrompt);
         }
       }}
     />

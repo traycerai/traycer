@@ -14,6 +14,7 @@ vi.mock("@/lib/host", () => ({
       getRequestContextUserId: () => "user-test",
       onChange: () => () => undefined,
       request,
+      requestWithSignal: request,
     },
   }),
 }));
@@ -66,10 +67,11 @@ describe("useEpicMentionEntries", () => {
     );
 
     await waitFor(() => expect(result.current.data).toHaveLength(1));
-    expect(request).toHaveBeenCalledWith("epic.mentionEpics", {
-      query: "login",
-      limit: 8,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "epic.mentionEpics",
+      { query: "login", limit: 8 },
+      expect.any(AbortSignal),
+    );
   });
 
   it("does not request suggestions without request descriptors", () => {

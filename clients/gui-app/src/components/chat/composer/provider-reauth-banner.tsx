@@ -113,7 +113,7 @@ function ProfileUnavailableBanner({
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
   const message =
     reason === "profile_missing"
-      ? `This chat's ${providerLabel} profile is no longer available.`
+      ? `This agent's ${providerLabel} profile is no longer available.`
       : `"${profileLabel ?? providerLabel}" is signed out.`;
   const { openSettings } = useSystemTabModalActions();
   const openProviderSettings = (): void => {
@@ -307,8 +307,8 @@ export function ProviderReauthBanner({
       <ReauthBannerShell icon={BANNER_HEADER_ICON} action={null}>
         <span className="text-foreground/90">{message}</span>
         <span className="text-ui-xs text-muted-foreground">
-          This chat&apos;s machine is unavailable. Reconnect once it&apos;s back
-          online.
+          This agent&apos;s machine is unavailable. Reconnect once it&apos;s
+          back online.
         </span>
       </ReauthBannerShell>
     );

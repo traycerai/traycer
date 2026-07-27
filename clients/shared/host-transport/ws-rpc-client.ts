@@ -14,14 +14,14 @@ import {
 } from "@traycer/protocol/framework/index";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
-import type {
-  BearerSourceProvider,
-  OpenFrameBearerSource,
-} from "@traycer-clients/shared/auth/bearer-source";
+import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  type HostRequestAuthority,
+  type HostTransportEndpoint,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -45,6 +45,7 @@ import {
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/index";
 import type { TimerHandle } from "./timer-handle";
+import { recordNegotiatedHostMethods } from "./negotiated-manifest-registry";
 
 /**
  * Minimal endpoint shape the transport layer needs to dial a host. The
@@ -53,10 +54,7 @@ import type { TimerHandle } from "./timer-handle";
  * exists purely to keep `host-transport` free of any dependency on the
  * app-runtime host-directory module.
  */
-export interface HostTransportEndpoint {
-  readonly hostId: string;
-  readonly websocketUrl: string | null;
-}
+export type { HostTransportEndpoint } from "./host-messenger";
 
 /**
  * Injectable source of the host endpoint the client should target. Returning
@@ -70,14 +68,6 @@ export type RequestIdProvider = () => string;
 
 export interface WsRpcClientOptions<Registry extends VersionedRpcRegistry> {
   readonly registry: Registry;
-  readonly endpoint: HostEndpointProvider;
-  /**
-   * Source of the bearer for the WS `open` frame. The transport is the ONLY
-   * client-side layer permitted to read it (`source.getBearerToken()`); every
-   * consumer above threads the bearer source itself. `null` → no bearer → the
-   * transport fails before dialing.
-   */
-  readonly bearer: BearerSourceProvider;
   readonly requestId: RequestIdProvider;
   readonly webSocketFactory: IWebSocketFactory;
   readonly dialTimeoutMs: number;
@@ -146,8 +136,6 @@ export class WsRpcClient<
   Registry extends VersionedRpcRegistry,
 > implements IHostMessenger<Registry> {
   private readonly registry: Registry;
-  private readonly endpoint: HostEndpointProvider;
-  private readonly bearer: BearerSourceProvider;
   private readonly requestIdProvider: RequestIdProvider;
   private readonly webSocketFactory: IWebSocketFactory;
   private readonly dialTimeoutMs: number;
@@ -155,8 +143,6 @@ export class WsRpcClient<
 
   constructor(options: WsRpcClientOptions<Registry>) {
     this.registry = options.registry;
-    this.endpoint = options.endpoint;
-    this.bearer = options.bearer;
     this.requestIdProvider = options.requestId;
     this.webSocketFactory = options.webSocketFactory;
     this.dialTimeoutMs = options.dialTimeoutMs;
@@ -166,27 +152,26 @@ export class WsRpcClient<
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
-    return this.requestWithResponseTimeout(method, params, this.frameTimeoutMs);
+    return this.requestWithResponseTimeout(
+      method,
+      params,
+      this.frameTimeoutMs,
+      authority,
+    );
   }
 
   async requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
+    authority: HostRequestAuthority,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     const requestId = this.requestIdProvider();
-    const selected = this.endpoint();
+    const selected = authority.endpoint;
 
-    if (selected === null) {
-      throw new HostTransportFailureError({
-        code: "RPC_ERROR",
-        message: "No host is currently bound to the client",
-        requestId,
-        method,
-        fatalDetails: null,
-      });
-    }
+    throwIfAuthorityAborted(authority, requestId, method);
 
     if (selected.websocketUrl === null) {
       throw new HostRpcError({
@@ -200,7 +185,7 @@ export class WsRpcClient<
 
     const clientManifest = this.buildManifest();
     const token = extractBearerOrThrowRpcError(
-      this.bearer(),
+      authority.bearer,
       requestId,
       method,
     );
@@ -211,6 +196,13 @@ export class WsRpcClient<
       requestId,
       method,
     });
+    const onAbort = (): void => {
+      session.abort();
+    };
+    authority.abortSignal.addEventListener("abort", onAbort, { once: true });
+    if (authority.abortSignal.aborted) {
+      onAbort();
+    }
 
     try {
       await session.dial();
@@ -247,6 +239,15 @@ export class WsRpcClient<
       const mergedHostManifest = mergeConnectionManifests(
         ackFrame.manifest,
         ackFrame.optionalManifest,
+      );
+      // Publish what this host advertised so UI layers can gate an optional
+      // (non-floor) affordance without calling the method to find out. Recorded
+      // BEFORE the compatibility check: an incompatible pairing still tells us
+      // truthfully which methods the host has, and the gate wants that fact
+      // even when this particular call is about to fail.
+      recordNegotiatedHostMethods(
+        selected.hostId,
+        Object.keys(mergedHostManifest),
       );
       const clientCanonical = mergedClientManifest[method];
       const hostCanonical = mergedHostManifest[method];
@@ -315,6 +316,7 @@ export class WsRpcClient<
         responseTimeoutMs,
       );
     } finally {
+      authority.abortSignal.removeEventListener("abort", onAbort);
       session.close(1000, "ok");
     }
   }
@@ -804,6 +806,7 @@ interface Session {
    */
   next(timeoutMs: number): Promise<HostFrame>;
   send(frame: ClientFrame): void;
+  abort(): void;
   close(code: number, reason: string): void;
 }
 
@@ -1000,6 +1003,26 @@ function openSession(options: SessionOptions): Session {
       socket.send(JSON.stringify(frame));
     },
 
+    abort(): void {
+      failAll(
+        new HostRequestAbortedError({
+          message:
+            "Host request authority was aborted while the WebSocket was open",
+          requestId,
+          method,
+        }),
+      );
+      if (closed) {
+        return;
+      }
+      closed = true;
+      try {
+        socket.close(1000, "authority-aborted");
+      } catch (cause) {
+        void cause;
+      }
+    },
+
     close(code: number, reason: string): void {
       if (closed) {
         return;
@@ -1070,7 +1093,7 @@ export function extractBearerForOpenFrame(
 }
 
 function extractBearerOrThrowRpcError(
-  source: OpenFrameBearerSource | null,
+  source: OpenFrameBearerSource,
   requestId: string,
   method: string,
 ): string {
@@ -1088,4 +1111,19 @@ function extractBearerOrThrowRpcError(
     }
     throw cause;
   }
+}
+
+function throwIfAuthorityAborted(
+  authority: HostRequestAuthority,
+  requestId: string,
+  method: string,
+): void {
+  if (!authority.abortSignal.aborted) {
+    return;
+  }
+  throw new HostRequestAbortedError({
+    message: "Host request authority was aborted before the WebSocket dial",
+    requestId,
+    method,
+  });
 }

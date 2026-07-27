@@ -155,6 +155,7 @@ export function TerminalTile(props: TerminalTileProps) {
     return (
       <TerminalDeadTileBanner
         hostLabel={reachability.hostLabel}
+        ownerKind="terminal"
         onClose={closeCanvasTile}
         testId={`terminal-tile-${props.tileId}`}
       />
@@ -424,6 +425,7 @@ function TerminalLive(props: TerminalLiveProps) {
             onContainerResize={handleContainerResize}
             onWriterReady={handleWriterReady}
             shouldFocusOnActivePane={props.isActive}
+            registerImperativeFocus
             findTargetId={
               props.isActive
                 ? `terminal:${props.viewTabId}:${props.tileId}:${handle.sessionId}`

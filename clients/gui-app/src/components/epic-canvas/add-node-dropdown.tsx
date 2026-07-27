@@ -225,7 +225,7 @@ export function AddNodeDropdown(props: AddArtifactDropdownProps) {
                 )}
                 style={terminalAgentIconStyle}
               />
-              Terminal Agent
+              New agent (Terminal)
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent
               ref={terminalAgentSubRef}
@@ -423,7 +423,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
           Additional arguments
         </DropdownMenuLabel>
         <Input
-          aria-label="Terminal agent additional arguments"
+          aria-label="Terminal interface CLI arguments"
           className="h-8 min-w-0 font-mono text-ui-xs"
           placeholder="Additional arguments (optional)"
           value={argsDraft}

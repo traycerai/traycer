@@ -445,7 +445,7 @@ function snapshotDiffFindKindLabel(diff: SnapshotDiffTilePayload): string {
   if (diff.kind === "snapshot-hash") return "Artifact diff";
   if (diff.kind === "snapshot-segment") return "Edit";
   if (diff.kind === "snapshot-cumulative") return "Changes";
-  return "Cumulative chat changes";
+  return "Cumulative agent changes";
 }
 
 function SnapshotDiffLoading(props: {
@@ -514,7 +514,7 @@ function snapshotDiffPrimaryTitle(diff: SnapshotDiffTilePayload): string {
 
 function snapshotDiffSecondaryLine(diff: SnapshotDiffTilePayload): ReactNode {
   if (diff.kind === "snapshot-cumulative-bundle") {
-    return "Cumulative chat changes";
+    return "Cumulative agent changes";
   }
   if (diff.kind === "snapshot-hash") {
     return "Artifact diff";

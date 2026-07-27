@@ -68,8 +68,30 @@ export interface ChatLowerAccessState {
   readonly canAct: boolean;
 }
 
+/**
+ * Why the composer's send is blocked, for the send button's tooltip. `canAct`
+ * folds role and connection: a viewer can never act; a non-viewer with
+ * `canAct === false` means the chat stream is not open (host reconnecting
+ * after a drop / renderer resume).
+ */
+function chatSendDisabledHint(access: ChatLowerAccessState): string | null {
+  if (access.canAct) return null;
+  if (access.isViewer) return "You have view-only access to this chat";
+  return "Reconnecting to the host — sending is paused";
+}
+
 export interface ChatLowerTurnState {
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
+  /** Host-projected same-turn steering capability of the running turn's harness. */
+  readonly steerCapable: boolean;
+  /**
+   * Whether the tab's negotiated `chat.subscribe` version understands
+   * `after_safe_point` (host handshake minor >= 5). Gates whether `Mod-Enter`
+   * can steer at all, keeping a new renderer from steering a <=1.4 host.
+   */
+  readonly steerProtocolSupported: boolean;
+  /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
+  readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly stopDisabled: boolean;
   readonly onStopTurn: () => string | null;
 }
@@ -163,6 +185,9 @@ export function ChatLowerInteractionSurfaces(
   const turnOnStopTurn = props.turn.onStopTurn;
   const turnActiveTurnStatus = props.turn.activeTurnStatus;
   const turnStopDisabled = props.turn.stopDisabled;
+  const turnSteerCapable = props.turn.steerCapable;
+  const turnSteerProtocolSupported = props.turn.steerProtocolSupported;
+  const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
 
   // Intercept the composer Stop button: when this chat has active
   // sub-agents, raise the cascade prompt instead of stopping only its turn.
@@ -178,10 +203,20 @@ export function ChatLowerInteractionSurfaces(
   const turnWithCascade = useMemo(
     () => ({
       activeTurnStatus: turnActiveTurnStatus,
+      steerCapable: turnSteerCapable,
+      steerProtocolSupported: turnSteerProtocolSupported,
+      getActiveTurnForSteer: turnGetActiveTurnForSteer,
       stopDisabled: turnStopDisabled,
       onStopTurn: requestStopTurn,
     }),
-    [turnActiveTurnStatus, turnStopDisabled, requestStopTurn],
+    [
+      turnActiveTurnStatus,
+      turnSteerCapable,
+      turnSteerProtocolSupported,
+      turnGetActiveTurnForSteer,
+      turnStopDisabled,
+      requestStopTurn,
+    ],
   );
 
   // Memoize on the underlying approvals array: `visibleComposerApprovals`
@@ -445,6 +480,7 @@ function LiveChatComposer(props: {
       taskId={model.composer.nodeId}
       isActive={model.composer.isActive}
       sendDisabled={!model.access.canAct}
+      sendDisabledHint={chatSendDisabledHint(model.access)}
       mentionRoots={model.composer.mentionRoots}
       fallbackToGlobalMentionRoots={model.composer.fallbackToGlobalMentionRoots}
       currentEpicId={model.composer.currentEpicId}
@@ -455,6 +491,9 @@ function LiveChatComposer(props: {
       onSubmitMessage={model.composer.onSubmitMessage}
       onSettingsChange={model.composer.onSettingsChange}
       activeTurnStatus={model.turn.activeTurnStatus}
+      steerCapable={model.turn.steerCapable}
+      steerProtocolSupported={model.turn.steerProtocolSupported}
+      getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}
       hasPendingApprovals={props.hasPendingApprovals}
@@ -512,7 +551,7 @@ function ComposerSlotShell(props: {
 function ReadOnlyComposerNotice() {
   return (
     <div className="rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
-      Read-only viewer. The chat owner can send prompts and manage this queue.
+      Read-only viewer. The agent owner can send prompts and manage this queue.
     </div>
   );
 }

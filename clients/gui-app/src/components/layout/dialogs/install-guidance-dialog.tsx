@@ -17,9 +17,9 @@ export interface InstallGuidanceDialogProps {
 }
 
 /**
- * Shown instead of `RestartUpdateDialog` when the running install can't apply
- * the downloaded update automatically (Linux deb/rpm on WSL, or an install
- * the package manager doesn't own at this path) - the update is already
+ * Shown instead of the restart-to-install gesture when the running install
+ * can't apply the downloaded update automatically (Linux deb/rpm on WSL, or an
+ * install the package manager doesn't own at this path) - the update is already
  * downloaded, so this is a "run one command" hand-off, not a dead end.
  */
 export function InstallGuidanceDialog(props: InstallGuidanceDialogProps) {

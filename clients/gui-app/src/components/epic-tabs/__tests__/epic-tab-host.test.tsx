@@ -26,6 +26,8 @@ import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 
+const recordViewed = vi.hoisted(() => vi.fn());
+
 // Keep the app shell + cross-cutting bridges out of the way; we only care
 // about the keep-alive pane host under the `/epics` layout.
 vi.mock("@/components/layout/app-shell", () => ({
@@ -63,6 +65,9 @@ vi.mock("@/stores/tabs/use-deep-link-tab-sync", () => ({
 }));
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
+}));
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewed }),
 }));
 // The epic-list body has its own data deps we don't exercise here; stub it so
 // navigating to `/epics` only verifies the host's keep-alive behavior.
@@ -230,6 +235,7 @@ describe("EpicTabHost keep-alive", () => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLeftPanelStore.setState({ mainCollapsedByTabId: {} });
+    recordViewed.mockReset();
     seedSignedInAuth();
     // Past the one-time tour, so RootComponent's onboarding render gate is inert.
     useOnboardingStore.setState({ completedAt: 1_700_000_000_000 });

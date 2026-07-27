@@ -1,6 +1,7 @@
 import { Check, Copy } from "lucide-react";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  * Copies the path a chat/terminal actually runs from (the adopted worktree
  * path, or the folder itself for local). Shared by the click-open folder rows
@@ -20,18 +21,28 @@ export function CopyPathButton(props: {
     onError: null,
   });
   return (
-    <button
-      type="button"
-      aria-label="Copy folder path"
-      title="Copy path"
-      data-testid={props.testId}
-      onClick={(event) => {
-        event.stopPropagation();
-        copy(props.path);
-      }}
-      className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+    <TooltipWrapper
+      label="Copy path"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-    </button>
+      <button
+        type="button"
+        aria-label="Copy folder path"
+        data-testid={props.testId}
+        onClick={(event) => {
+          event.stopPropagation();
+          copy(props.path);
+        }}
+        className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60"
+      >
+        {copied ? (
+          <Check className="size-3.5" />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
+      </button>
+    </TooltipWrapper>
   );
 }

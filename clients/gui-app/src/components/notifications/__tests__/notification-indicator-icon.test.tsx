@@ -1,6 +1,7 @@
 import "../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 import {
   NotificationIndicatorIcon,
   type IndicatorRunningKind,
@@ -40,7 +41,7 @@ describe("<NotificationIndicatorIcon />", () => {
     expect(
       screen.getByTestId("indicator-failure-subject-1").getAttribute("class"),
     ).toContain("lucide-message-square-x");
-    expect(screen.getByTitle("Task needs attention")).toBeDefined();
+    expect(anyTooltipHasText("Task needs attention")).toBe(true);
     expect(screen.queryByTestId("indicator-activity-subject-1")).toBeNull();
 
     rerender(

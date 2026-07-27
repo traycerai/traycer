@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -55,6 +55,7 @@ class FakeZoomStore implements JsonFileStore<ZoomPreference> {
 
 class FakeZoomWindow implements ZoomManagedWindow {
   readonly factors: number[] = [];
+  readonly titleBarOverlayHeights: number[] = [];
   readonly minimumSizes: Array<{
     readonly width: number;
     readonly height: number;
@@ -76,7 +77,22 @@ class FakeZoomWindow implements ZoomManagedWindow {
   isDestroyed(): boolean {
     return this.destroyed;
   }
+
+  setTitleBarOverlay(options: { readonly height: number }): void {
+    this.titleBarOverlayHeights.push(options.height);
+  }
 }
+
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  "platform",
+);
+
+afterEach(() => {
+  if (originalPlatformDescriptor !== undefined) {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
+});
 
 function testDisplay(width: number, scaleFactor: number): ZoomHeuristicDisplay {
   return { bounds: { width }, scaleFactor };
@@ -163,6 +179,25 @@ describe("WindowZoomController", () => {
     expect(window.height).toBe(700);
     expect(window.minimumSizes).toEqual([]);
     expect(window.sizes).toEqual([]);
+  });
+
+  it("scales the Windows native control overlay with page zoom", async () => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+    const store = new FakeZoomStore();
+    const window = new FakeZoomWindow(1200, 700);
+    const controller = new WindowZoomController({
+      windowRegistry: { records: () => [{ window }] },
+      initialZoomPercent: 100,
+      store,
+    });
+
+    await controller.setZoomPercent(150);
+    await controller.setZoomPercent(67);
+
+    expect(window.titleBarOverlayHeights).toEqual([54, 24]);
   });
 });
 

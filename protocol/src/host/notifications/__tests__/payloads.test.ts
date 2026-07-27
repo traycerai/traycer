@@ -178,6 +178,12 @@ describe("deriveHostNotificationStoppedReason", () => {
     ["overloaded", "provider_unavailable"],
     ["server_error", "provider_unavailable"],
     ["CLAUDE_CODE_TRANSPORT", "provider_connection_failed"],
+    ["connection_failed", "provider_connection_failed"],
+    ["CONNECTION_FAILED", "provider_connection_failed"],
+    ["context_window_exceeded", "context_exhausted"],
+    ["CONTEXT_WINDOW_EXCEEDED", "context_exhausted"],
+    ["invalid_request", "request_rejected"],
+    ["INVALID_REQUEST", "request_rejected"],
     ["TURN_START_TIMEOUT", "turn_start_timeout"],
     ["MISSING_TERMINAL_EVENT", "missing_terminal_event"],
     ["background_work_died", "background_work_failed"],
@@ -185,10 +191,13 @@ describe("deriveHostNotificationStoppedReason", () => {
     expect(deriveHostNotificationStoppedReason(code)).toBe(reason);
   });
 
+  // `policy_refusal` is stamped as a code for the chat error badge and the A2A
+  // errored detail, but deliberately carries NO taxonomy row: the meaningful
+  // part is the raw refusal prose, which never belongs in durable copy.
   it.each([
     null,
     "MISSING_API_KEY",
-    "invalid_request",
+    "policy_refusal",
     "refusal",
     "RUNTIME_THROWN",
     "TURN_FINALIZATION_FAILED",

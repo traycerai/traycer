@@ -12,6 +12,10 @@ import {
   setWorktreeIntentEntryScripts,
 } from "@/components/home/host-workspace-selector/worktree-intent-merge";
 import { basePersistOptions, worktreeIntentStagingKey } from "@/lib/persist";
+import {
+  worktreeFolderIntentReferencesRemoved,
+  type RemovedWorktreeRefs,
+} from "@/lib/worktree/removed-worktree-refs";
 
 /**
  * The *current, not-yet-created* worktree intent for a surface - the pending
@@ -198,6 +202,15 @@ interface WorktreeIntentStagingStore {
     workspacePaths: readonly string[],
   ) => void;
   readonly clear: (key: WorktreeStagingKey) => void;
+  /**
+   * Drops staged entries that reference just-removed worktrees across EVERY
+   * staging slot. Staged picks are deliberately never re-validated by the
+   * seeding tiers ("a folder the user already touched is never overwritten"),
+   * so without this a pick staged before a worktree was swept keeps offering
+   * the deleted worktree verbatim. A slot left empty is cleared like
+   * `setIntent(null)`.
+   */
+  readonly purgeRemovedWorktreeIntents: (removed: RemovedWorktreeRefs) => void;
   readonly resetForTests: () => void;
 }
 
@@ -361,6 +374,54 @@ export const useWorktreeIntentStagingStore =
               // old selection back.
               revisionByKey: incrementStagingRevision(state.revisionByKey, id),
             };
+          }),
+        purgeRemovedWorktreeIntents: (removed) =>
+          set((state) => {
+            let changed = false;
+            const intentByKey = { ...state.intentByKey };
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            let revisionByKey = state.revisionByKey;
+            for (const [id, intent] of Object.entries(intentByKey)) {
+              if (intent === undefined) continue;
+              const entries = intent.entries.filter(
+                (entry) =>
+                  !worktreeFolderIntentReferencesRemoved(entry, removed),
+              );
+              if (entries.length === intent.entries.length) continue;
+              changed = true;
+              if (entries.length === 0) {
+                delete intentByKey[id];
+                delete suspendedWorkspacePathsByKey[id];
+              } else {
+                intentByKey[id] = { entries };
+                // Drop suspended metadata for the entries that just went away,
+                // exactly as `unstageEntry` does. Left behind, a stale
+                // fail-closed path would block a later restage of the same
+                // workspace.
+                const suspended = suspendedWorkspacePathsByKey[id];
+                if (suspended !== undefined) {
+                  const surviving = new Set(
+                    entries.map((entry) => entry.workspacePath),
+                  );
+                  const remaining = suspended.filter((path) =>
+                    surviving.has(path),
+                  );
+                  if (remaining.length === 0) {
+                    delete suspendedWorkspacePathsByKey[id];
+                  } else if (remaining.length !== suspended.length) {
+                    suspendedWorkspacePathsByKey[id] = remaining;
+                  }
+                }
+              }
+              // Bumped like every other slot write so a rejected in-flight
+              // action can't restore the just-purged selection.
+              revisionByKey = incrementStagingRevision(revisionByKey, id);
+            }
+            return changed
+              ? { intentByKey, suspendedWorkspacePathsByKey, revisionByKey }
+              : state;
           }),
         resetForTests: () =>
           set({

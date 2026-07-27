@@ -14,6 +14,20 @@ import { noopLogger } from "../../logger";
 import { callHostRpcFastFail } from "../../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+  noopLogger: loggerMock,
+}));
+
 vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
     typeof import("../../internal/host-rpc")

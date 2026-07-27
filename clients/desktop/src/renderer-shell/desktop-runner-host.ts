@@ -1,23 +1,25 @@
 import type {
-  AuthTokenRefreshResult,
-  AuthTokenValidationResult,
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
   CliInstallManifestSnapshot,
+  ConvergeReadyOk,
   DeviceFlowSession,
   IDeviceFlowHost,
   HostAvailableSnapshot,
   HostAvailableVersionsInput,
+  HostControllerStatus,
   HostDoctorReport,
-  HostEnsureResult,
-  HostInstallResult,
   HostInstalledRecord,
   HostLogsTailResult,
   HostNameSettings,
-  HostOperationStatus,
-  HostProgressEvent,
   HostRegistryUpdateState,
   HostRemovalState,
   HostTrayCommand,
   HostUninstallResult,
+  InstallVersionOk,
+  MutationOutcome,
+  ServiceRegistrationOk,
   TraycerUninstallResult,
   FreePortAndRestartInput,
   IHostManagement,
@@ -36,7 +38,6 @@ import type {
   IZoomHost,
   LocalHostSnapshot,
   MigrationRunningSnapshot,
-  ServiceStatusSnapshot,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -75,19 +76,6 @@ export type {
   Vibrancy as DesktopVibrancy,
 };
 
-/**
- * Single logical entry inside the renderer-side encrypted localStorage.
- * Mirrors the prior `DESKTOP_AUTH_TOKEN_STORAGE_KEY = "traycer.token"` so
- * existing dev installs keep their token across the upgrade.
- */
-// The bearer and refresh token are stored in SEPARATE encrypted slots, each a
-// plain string. Do NOT pack them as JSON into one slot: `encrypt-storage`'s
-// `getItem` deserializes its value, so a stored JSON string round-trips back to
-// an object and `readEncryptedItem` (which only returns strings) yields null -
-// dropping the whole session on every restart. A raw-string slot round-trips
-// exactly (the pre-cutover behavior), which is why the bearer must stay a string.
-const DESKTOP_AUTH_TOKEN_KEY = "traycer.token";
-const DESKTOP_AUTH_REFRESH_TOKEN_KEY = "traycer.refresh-token";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type {
@@ -107,7 +95,15 @@ import type {
   DesktopAppUpdateSnapshot,
 } from "../ipc-contracts/app-update-types";
 import type {
+  GlobalShortcutId,
+  GlobalShortcutIntent,
+  GlobalShortcutsSnapshot,
+  GlobalShortcutStatus,
+} from "../ipc-contracts/global-shortcuts-types";
+import type {
   DesktopAuthSessionSnapshot,
+  DesktopRuntimePlatform,
+  DesktopTopLevelMenuId,
   MenuCommandPayload,
   OpenEpicInNewWindowResult,
   OwnershipClaimResult,
@@ -135,18 +131,9 @@ export interface DesktopPreloadBridge {
   readonly authRedirectUri: string;
   readonly initialRoute: string | null;
   readonly sentryRendererDsn: string;
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult>;
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult>;
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult>;
   listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
   listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
   revokeUserSession(
@@ -167,6 +154,9 @@ export interface DesktopPreloadBridge {
     hostId: string,
     input: UpdateHostVersionPolicyInput,
   ): Promise<UpdateHostVersionPolicyFetchResult>;
+  // Credentials-file token store (tech plan §3): an IPC client of the main
+  // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
+  tokenStore: ITokenStore;
   openExternalLink(url: string): Promise<void>;
   getRegisteredUrlSchemes(
     schemes: readonly string[],
@@ -213,6 +203,7 @@ export interface DesktopPreloadBridge {
   fileDrops: DesktopFileDropsBridge;
   menu: DesktopMenuBridge;
   appUpdates: DesktopAppUpdatesBridge;
+  globalShortcuts: DesktopGlobalShortcutsBridge;
   support: DesktopSupportBridge;
   windows: DesktopWindowsBridge;
   service: DesktopServiceBridge;
@@ -223,6 +214,7 @@ export interface DesktopPreloadBridge {
   zoom: DesktopZoomBridge;
   hostManagement: DesktopHostManagementBridge;
   hostTray: DesktopHostTrayBridge;
+  hostControllerStatus: DesktopHostControllerStatusBridge;
 }
 
 export interface DesktopFileDropsBridge {
@@ -244,14 +236,19 @@ export interface DesktopFileDropsBridge {
  * `buildHostManagementBridge()`.
  */
 export interface DesktopHostManagementBridge {
-  installHost(input: {
-    readonly version: string | null;
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }): Promise<HostInstallResult>;
-  updateHost(input: {
-    readonly expectedVersion: string | null;
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }): Promise<HostInstallResult>;
+  getHostControllerStatus(): Promise<HostControllerStatus>;
+  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  applyStaged(
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>>;
+  activateInstalled(
+    force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+  installVersion(
+    pin: string,
+    force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>>;
   uninstallHost(input: { readonly all: boolean }): Promise<HostUninstallResult>;
   uninstallTraycer(): Promise<TraycerUninstallResult>;
   getRemovalState(): Promise<HostRemovalState>;
@@ -265,24 +262,11 @@ export interface DesktopHostManagementBridge {
     input: HostAvailableVersionsInput,
   ): Promise<HostAvailableSnapshot>;
   installedRecord(): Promise<HostInstalledRecord | null>;
-  registerService(input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-  }): Promise<void>;
-  ensureHost(input: {
-    readonly onProgress: ((event: HostProgressEvent) => void) | null;
-    readonly force: boolean;
-  }): Promise<HostEnsureResult>;
+  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
   deregisterService(): Promise<void>;
   registryCheck(input: {
     readonly force: boolean;
   }): Promise<HostRegistryUpdateState>;
-  onRegistryUpdateState(handler: (state: HostRegistryUpdateState) => void): {
-    dispose: () => void;
-  };
-  getOperationStatus(): Promise<HostOperationStatus | null>;
-  onOperationStatus(handler: (status: HostOperationStatus | null) => void): {
-    dispose: () => void;
-  };
   freePortAndRestart(
     input: FreePortAndRestartInput,
   ): Promise<FreePortAndRestartInput>;
@@ -299,14 +283,8 @@ export interface DesktopHostTrayBridge {
   };
 }
 
-export interface DesktopHostRegistryUpdatesBridge {
-  onChange(handler: (state: HostRegistryUpdateState) => void): {
-    dispose: () => void;
-  };
-}
-
-export interface DesktopHostOperationStatusBridge {
-  onChange(handler: (status: HostOperationStatus | null) => void): {
+export interface DesktopHostControllerStatusBridge {
+  onChange(handler: (status: HostControllerStatus) => void): {
     dispose: () => void;
   };
 }
@@ -400,6 +378,7 @@ export interface DesktopPlatformBridge {
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
+    setTitleBarOverlay(color: string, symbolColor: string): Promise<void>;
   };
 }
 
@@ -438,15 +417,9 @@ export interface DesktopTraycerCliBridge {
     readonly value: string | null;
   }): Promise<void>;
   envOverrideDelete(input: { readonly key: string }): Promise<void>;
-  cliLogin(input: {
-    readonly token: string;
-    readonly refreshToken: string;
-  }): Promise<void>;
-  cliLogout(): Promise<void>;
 }
 
 export interface DesktopServiceBridge {
-  status(): Promise<ServiceStatusSnapshot>;
   install(): Promise<void>;
   uninstall(purge: boolean): Promise<void>;
   start(): Promise<void>;
@@ -458,9 +431,15 @@ export interface DesktopServiceBridge {
 }
 
 export interface DesktopMenuBridge {
+  readonly platform: DesktopRuntimePlatform;
   onCommand(handler: (payload: MenuCommandPayload) => void): {
     dispose: () => void;
   };
+  openTopLevel(
+    menuId: DesktopTopLevelMenuId,
+    anchorX: number,
+    anchorY: number,
+  ): Promise<void>;
 }
 
 export interface DesktopAppUpdatesBridge {
@@ -474,6 +453,17 @@ export interface DesktopAppUpdatesBridge {
   downloadUpdate(): Promise<DesktopAppUpdateSnapshot>;
   installUpdate(): Promise<DesktopAppUpdateSnapshot>;
   onChange(handler: (snapshot: DesktopAppUpdateSnapshot) => void): {
+    dispose: () => void;
+  };
+}
+
+export interface DesktopGlobalShortcutsBridge {
+  getSnapshot(): Promise<GlobalShortcutsSnapshot>;
+  set(
+    id: GlobalShortcutId,
+    intent: GlobalShortcutIntent,
+  ): Promise<GlobalShortcutStatus>;
+  onChange(handler: (snapshot: GlobalShortcutsSnapshot) => void): {
     dispose: () => void;
   };
 }
@@ -561,6 +551,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly windows: DesktopWindowsBridge;
   readonly menu: DesktopMenuBridge;
   readonly appUpdates: DesktopAppUpdatesBridge;
+  readonly globalShortcuts: DesktopGlobalShortcutsBridge;
   readonly support: DesktopSupportBridge;
   readonly service: IServiceHost;
   readonly traycerCli: ITraycerCli;
@@ -570,8 +561,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly zoom: IZoomHost;
   readonly hostManagement: IHostManagement;
   readonly hostTray: IHostTray;
-  readonly hostRegistryUpdates: DesktopHostRegistryUpdatesBridge;
-  readonly hostOperationStatus: DesktopHostOperationStatusBridge;
+  readonly hostControllerStatus: DesktopHostControllerStatusBridge;
   readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
@@ -589,6 +579,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     this.windows = options.bridge.windows;
     this.menu = options.bridge.menu;
     this.appUpdates = options.bridge.appUpdates;
+    this.globalShortcuts = options.bridge.globalShortcuts;
     this.support = options.bridge.support;
     this.platform = options.bridge.platform;
     this.power = options.bridge.power;
@@ -612,11 +603,9 @@ export class DesktopRunnerHost implements IRunnerHost {
       }),
     );
 
-    // Credentials never round-trip through Electron main any more - the
-    // renderer reads/writes them directly via `encrypt-storage` on top of
-    // `window.localStorage`. See `secure-local-storage.ts` for the full
-    // rationale; the short version is "no OS-keychain prompt on first
-    // launch" while still avoiding plaintext-on-disk for casual snooping.
+    // `secureStorage` stays renderer-local encrypted localStorage (no
+    // OS-keychain prompt on first launch, and it has non-token consumers). See
+    // `secure-local-storage.ts` for the full rationale.
     this.secureStorage = {
       get: (key) => Promise.resolve(readEncryptedItem(key)),
       set: (key, value) => {
@@ -629,35 +618,12 @@ export class DesktopRunnerHost implements IRunnerHost {
       },
     };
 
-    this.tokenStore = {
-      get: () => {
-        const token = readEncryptedItem(DESKTOP_AUTH_TOKEN_KEY);
-        if (token === null || token.length === 0) {
-          return Promise.resolve(null);
-        }
-        const refreshToken =
-          readEncryptedItem(DESKTOP_AUTH_REFRESH_TOKEN_KEY) ?? "";
-        return Promise.resolve({ token, refreshToken });
-      },
-      set: (tokens) => {
-        writeEncryptedItem(DESKTOP_AUTH_TOKEN_KEY, tokens.token);
-        // An empty slot reads back as null, so clear rather than store "".
-        if (tokens.refreshToken.length > 0) {
-          writeEncryptedItem(
-            DESKTOP_AUTH_REFRESH_TOKEN_KEY,
-            tokens.refreshToken,
-          );
-        } else {
-          removeEncryptedItem(DESKTOP_AUTH_REFRESH_TOKEN_KEY);
-        }
-        return Promise.resolve();
-      },
-      delete: () => {
-        removeEncryptedItem(DESKTOP_AUTH_TOKEN_KEY);
-        removeEncryptedItem(DESKTOP_AUTH_REFRESH_TOKEN_KEY);
-        return Promise.resolve();
-      },
-    };
+    // Credentials-file token store (tech plan §3): the auth token store now
+    // round-trips through Electron main - it is the single machine-local
+    // credentials file owned by `FileTokenStore` (lock + WAL), shared with the
+    // CLI and read by the host, reached here over IPC. The old renderer-local
+    // encrypted-localStorage token slots are retired (their migration is §6).
+    this.tokenStore = options.bridge.tokenStore;
 
     this.notifications = {
       show: (title, body, payload, replaceKey, deliveryKey) =>
@@ -685,7 +651,6 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
     this.fileDrops = buildDesktopFileDrops(this.bridge.fileDrops);
     this.service = {
-      status: () => this.bridge.service.status(),
       install: () => this.bridge.service.install(),
       uninstall: (purge) => this.bridge.service.uninstall(purge),
       start: () => this.bridge.service.start(),
@@ -713,9 +678,6 @@ export class DesktopRunnerHost implements IRunnerHost {
       envOverrideSet: (input) => this.bridge.traycerCli.envOverrideSet(input),
       envOverrideDelete: (input) =>
         this.bridge.traycerCli.envOverrideDelete(input),
-      cliLogin: (token, refreshToken) =>
-        this.bridge.traycerCli.cliLogin({ token, refreshToken }),
-      cliLogout: () => this.bridge.traycerCli.cliLogout(),
     };
     this.migration = {
       announceRunning: (snapshot) =>
@@ -726,8 +688,13 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
     const managementBridge = this.bridge.hostManagement;
     this.hostManagement = {
-      installHost: (input) => managementBridge.installHost(input),
-      updateHost: (input) => managementBridge.updateHost(input),
+      getHostControllerStatus: () => managementBridge.getHostControllerStatus(),
+      convergeReady: (force) => managementBridge.convergeReady(force),
+      applyStaged: (trigger, force) =>
+        managementBridge.applyStaged(trigger, force),
+      activateInstalled: (force) => managementBridge.activateInstalled(force),
+      installVersion: (pin, force) =>
+        managementBridge.installVersion(pin, force),
       uninstallHost: (input) => managementBridge.uninstallHost(input),
       uninstallTraycer: () => managementBridge.uninstallTraycer(),
       getRemovalState: () => managementBridge.getRemovalState(),
@@ -737,21 +704,16 @@ export class DesktopRunnerHost implements IRunnerHost {
       runDoctor: () => managementBridge.runDoctor(),
       availableVersions: (input) => managementBridge.availableVersions(input),
       installedRecord: () => managementBridge.installedRecord(),
-      registerService: (input) => managementBridge.registerService(input),
-      ensureHost: (input) => managementBridge.ensureHost(input),
+      registerService: () => managementBridge.registerService(),
       deregisterService: () => managementBridge.deregisterService(),
       registryCheck: (input) => managementBridge.registryCheck(input),
-      getOperationStatus: () => managementBridge.getOperationStatus(),
       freePortAndRestart: (input) => managementBridge.freePortAndRestart(input),
       cliManifest: () => managementBridge.cliManifest(),
       getHostName: () => managementBridge.getHostName(),
       setHostName: (input) => managementBridge.setHostName(input),
     };
-    this.hostRegistryUpdates = {
-      onChange: (handler) => managementBridge.onRegistryUpdateState(handler),
-    };
-    this.hostOperationStatus = {
-      onChange: (handler) => managementBridge.onOperationStatus(handler),
+    this.hostControllerStatus = {
+      onChange: (handler) => this.bridge.hostControllerStatus.onChange(handler),
     };
     this.hostTray = {
       onCommand: (handler) =>
@@ -783,25 +745,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.getRegisteredUrlSchemes(schemes);
   }
 
-  validateAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenValidationResult> {
-    return this.bridge.validateAuthToken(token, refreshToken);
-  }
-
   validateAuthTokenIdentity(
     token: string,
-    refreshToken: string,
   ): Promise<AuthIdentityValidationResult> {
-    return this.bridge.validateAuthTokenIdentity(token, refreshToken);
-  }
-
-  refreshAuthToken(
-    token: string,
-    refreshToken: string,
-  ): Promise<AuthTokenRefreshResult> {
-    return this.bridge.refreshAuthToken(token, refreshToken);
+    return this.bridge.validateAuthTokenIdentity(token);
   }
 
   listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult> {

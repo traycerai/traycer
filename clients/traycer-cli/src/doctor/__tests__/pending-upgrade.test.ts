@@ -29,6 +29,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 //   - When the live binary is still locked, finalize reports
 //     `still-locked` and preserves the pendingUpgrade manifest field.
 
+// `store/paths` binds its home root from `os.homedir()` at module load.
+// Keep the environment mutation below, but redirect `homedir()` too.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
 
@@ -36,6 +44,7 @@ let workHome: string;
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-pending-upgrade-test-"));
+  osHome.current = workHome;
   process.env.HOME = workHome;
   process.env.USERPROFILE = workHome;
   vi.resetModules();

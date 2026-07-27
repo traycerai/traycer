@@ -54,6 +54,8 @@ describe("persist key builders — output-preserving against current source", ()
     );
     // Source: src/stores/epics/git-panel-store.ts
     expect(persistKey("git-panel")).toBe("traycer-gui-app:git-panel");
+    // Source: src/stores/epics/pr-seen-facts-store.ts
+    expect(persistKey("pr-seen-facts")).toBe("traycer-gui-app:pr-seen-facts");
     // Source: src/stores/epics/initial-chat-handoff-store.ts (plural divergence)
     expect(persistKey("initial-chat-handoffs")).toBe(
       "traycer-gui-app:initial-chat-handoffs",
@@ -82,6 +84,10 @@ describe("persist key builders — output-preserving against current source", ()
     // Source: src/stores/tabs/settings-section-store.ts (NOT a divergence)
     expect(persistKey("settings-section")).toBe(
       "traycer-gui-app:settings-section",
+    );
+    // Source: src/stores/settings/worktrees-settings-view-store.ts
+    expect(persistKey("worktrees-settings-view")).toBe(
+      "traycer-gui-app:worktrees-settings-view",
     );
     // Source: src/stores/rate-limits/rate-limit-popover-store.ts
     expect(persistKey("rate-limit-popover")).toBe(

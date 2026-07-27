@@ -44,6 +44,7 @@ function createHandle() {
     streamClientFactory: (_epicId, _chatId, _callbacks) => {
       return {
         sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => undefined,
       };
     },

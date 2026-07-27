@@ -1,18 +1,18 @@
 export type {
-  AtomicSwapResult,
+  CommitHostInstallSourceOptions,
+  CommitHostInstallSourceResult,
   InstallHostLifecycle,
   InstallHostOptions,
   InstallHostResult,
   InstallSourceArg,
+  StagedHostInstallSource,
 } from "./install";
 export {
-  flipHostInstallPointer,
-  hostInstallSymlinkType,
+  commitHostInstallSource,
+  currentInstallPlatform,
+  discardStagedHostInstallSource,
   installHost,
-  promoteStagingToVersionedDir,
-  readActiveVersionedDir,
-  rollbackToVersionedDir,
-  sweepOldTrash,
+  stageHostInstallSource,
 } from "./install";
 export type { UninstallHostOptions, UninstallHostResult } from "./uninstall";
 export { uninstallHost } from "./uninstall";

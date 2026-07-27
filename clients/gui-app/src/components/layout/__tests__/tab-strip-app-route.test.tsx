@@ -27,6 +27,11 @@ import { useTabsStore } from "@/stores/tabs/store";
 // production. Test mounts skip the provider, so install once here.
 installTabSyncCoordinator({ readyPromise: Promise.resolve() });
 
+const pinTestState = vi.hoisted(() => ({
+  mutate: vi.fn(),
+}));
+const recordViewed = vi.hoisted(() => vi.fn());
+
 vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({
   DesktopDialogHost: () => null,
 }));
@@ -59,6 +64,19 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     error: null,
     refetch: () => Promise.resolve(),
   }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
+  useEpicTaskPinnedStates: () => new Map(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
+  useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
+  usePendingSetPinnedEpicIds: () => new Set(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewed }),
 }));
 
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
@@ -182,6 +200,8 @@ async function flushNav(): Promise<void> {
 describe("app route tab-strip navigation", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    pinTestState.mutate.mockClear();
+    recordViewed.mockClear();
     resetStores();
   });
 
@@ -205,7 +225,9 @@ describe("app route tab-strip navigation", () => {
       name: "History",
       lastPath: "/epics",
     });
-    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraft(null, undefined);
     const router = renderAppAt(`/epics/epic-current/${epicTabId}`);
     await screen.findByTestId("epic-route-session-body");
 

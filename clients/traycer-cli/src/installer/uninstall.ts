@@ -10,21 +10,22 @@ import { rotateHostLogForPurge } from "../host/host-log-rotation";
 import {
   hostInstallDir,
   hostPidMetadataPath,
-  hostVersionsDir,
+  hostStagedDir,
 } from "../store/paths";
-import {
-  resolveInstallPointerTarget,
-  sweepOldTrash,
-  type InstallPointerTarget,
-} from "./install";
+import { sweepOldTrash } from "./install";
 
 // Uninstall the installed host directory for a single environment. Always
-// removes the install dir + record; runtime state (pid metadata, log)
-// is preserved unless `purgeChannelRuntime` is set. User data under
-// ~/.traycer/ (chats, sqlite, snapshots, credentials, downloaded models +
-// provider binaries) is NEVER removed - there is intentionally no "purge user
-// data" path. The OS service registration is NOT touched here - the caller
-// decides whether to follow up with a service-uninstall (the `--all` flag flow).
+// removes the install dir + record, AND the staged dir alongside it (Tech
+// Plan, "host uninstall ... removes staged/ alongside install/") - a
+// staged-but-not-yet-applied update has nothing left to apply to once the
+// host it was staged against is gone. Both `host uninstall` and
+// `host uninstall --all` route through this function, so both modes get
+// the removal. Runtime state (pid metadata, log) is preserved unless
+// `purgeChannelRuntime` is set. User data under ~/.traycer/ (chats,
+// sqlite, snapshots, credentials, downloaded models + provider binaries)
+// is NEVER removed - there is intentionally no "purge user data" path.
+// The OS service registration is NOT touched here - the caller decides
+// whether to follow up with a service-uninstall (the `--all` flag flow).
 export interface UninstallHostOptions {
   readonly environment: Environment;
   readonly purgeChannelRuntime: boolean;
@@ -33,6 +34,7 @@ export interface UninstallHostOptions {
 export interface UninstallHostResult {
   readonly removedRecord: HostInstallRecord | null;
   readonly removedInstallDir: boolean;
+  readonly removedStagedDir: boolean;
   readonly purgedRuntime: boolean;
 }
 
@@ -67,27 +69,10 @@ export async function uninstallHost(
   });
   let removedInstallDir = false;
   try {
-    // `hostInstallDir` is a stable symlink/junction onto a versioned dir
-    // under `hostVersionsDir` (or, on an unmigrated legacy machine, a
-    // plain directory) - `rm` on a symlink only removes the link entry
-    // itself, not the bytes it points at, so resolve the target first and
-    // remove both. Uninstall also clears every OTHER retained version
-    // (not just the active one, which normally keeps its immediately-
-    // previous generation around as a rollback source) - there is no
-    // "current"/"previous" distinction worth preserving once the whole
-    // host is being removed.
-    const target = hostInstallDir(opts.environment);
-    const resolvedTarget = await resolveInstallDirTarget(target);
-    await rm(target, { recursive: true, force: true });
-    if (resolvedTarget !== null) {
-      await rm(resolvedTarget, { recursive: true, force: true }).catch(
-        () => undefined,
-      );
-    }
-    await rm(hostVersionsDir(opts.environment), {
+    await rm(hostInstallDir(opts.environment), {
       recursive: true,
       force: true,
-    }).catch(() => undefined);
+    });
     removedInstallDir = true;
   } catch (err) {
     logger.warn("Host uninstall failed to remove install directory", {
@@ -102,10 +87,31 @@ export async function uninstallHost(
     environment: opts.environment,
     removedInstallDir,
   });
-  // Sweep any stale `<installDir>.old-*` siblings a pre-versioned-dir CLI's
-  // atomic swap left behind after a crash. Best-effort; never blocks the
-  // uninstall.
-  await sweepOldTrash(hostInstallDir(opts.environment));
+  // Sweep any stale `<installDir>.old-*` siblings the atomic swap left
+  // behind after a crash. Best-effort; never blocks the uninstall.
+  await sweepOldTrash(hostInstallDir(opts.environment), "install.json", logger);
+
+  // A staged update has nothing left to apply to once the host it was
+  // staged against is gone - remove `staged/` (and its own `.old-*`
+  // litter, the identical trash convention `install/` uses, keyed by its
+  // own `staged.json` sidecar) alongside `install/` rather than leaving
+  // it to be silently swept by the next install/apply's reconcile pass.
+  let removedStagedDir = false;
+  try {
+    await rm(hostStagedDir(opts.environment), {
+      recursive: true,
+      force: true,
+    });
+    removedStagedDir = true;
+  } catch (err) {
+    logger.warn("Host uninstall failed to remove staged directory", {
+      environment: opts.environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
+    removedStagedDir = false;
+  }
+  await sweepOldTrash(hostStagedDir(opts.environment), "staged.json", logger);
 
   let purgedRuntime = false;
   if (opts.purgeChannelRuntime) {
@@ -131,26 +137,14 @@ export async function uninstallHost(
   logger.info("Host uninstall completed", {
     environment: opts.environment,
     removedInstallDir,
+    removedStagedDir,
     purgedRuntime,
     hadInstallRecord: previous !== null,
   });
   return {
     removedRecord: previous,
     removedInstallDir,
+    removedStagedDir,
     purgedRuntime,
   };
-}
-
-// Resolve the absolute versioned-dir path `target` (the `hostInstallDir`
-// symlink/junction) currently points at, or `null` when `target` doesn't
-// exist, is itself a plain directory (legacy, unmigrated layout - the
-// `rm(target, ...)` above already removes those bytes directly, there is
-// no separate resolved target to also remove), or couldn't be inspected at
-// all - uninstall is best-effort, so any `lstat` failure here is treated the
-// same as "nothing to resolve" rather than aborting the uninstall.
-async function resolveInstallDirTarget(target: string): Promise<string | null> {
-  const pointer = await resolveInstallPointerTarget(target).catch(
-    (): InstallPointerTarget => ({ kind: "missing", resolved: null }),
-  );
-  return pointer.kind === "symlink" ? pointer.resolved : null;
 }

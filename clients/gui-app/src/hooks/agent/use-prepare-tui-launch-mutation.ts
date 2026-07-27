@@ -1,10 +1,7 @@
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  HostRpcError as HostRpcErrorCtor,
-  withHostRpcErrorBoundary,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostRpcError as HostRpcErrorCtor } from "@traycer-clients/shared/host-transport/host-messenger";
 import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type {
   RequestOfMethod,
@@ -12,6 +9,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { agentMutationKeys } from "@/lib/query-keys";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { toastFromHostErrorWithDetail } from "@/lib/host-error-toast";
 
 interface StartTerminalSessionMutationContext {
@@ -41,7 +39,7 @@ export function useAgentStartTerminalSession(
     withHostMutationLifecycleBoundary("agent.tui.prepareLaunch", {
       mutationKey: agentMutationKeys.startTerminalSession(),
       mutationFn: (variables) =>
-        withHostRpcErrorBoundary("agent.tui.prepareLaunch", () => {
+        withHostQueryErrorBoundary("agent.tui.prepareLaunch", () => {
           if (client === null) {
             return Promise.reject(
               new HostRpcErrorCtor({

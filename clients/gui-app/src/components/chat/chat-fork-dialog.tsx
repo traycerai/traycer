@@ -310,7 +310,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="w-[min(94vw,32rem)] gap-2 sm:max-w-[min(94vw,34rem)]">
         <DialogHeader>
-          <DialogTitle>Fork chat</DialogTitle>
+          <DialogTitle>Fork agent</DialogTitle>
         </DialogHeader>
         <div className="flex min-w-0 flex-col gap-2">
           <label htmlFor={titleInputId} className="flex min-w-0 flex-col gap-2">
@@ -325,7 +325,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 if (event.key === "Enter") submit();
               }}
               disabled={createChat.isPending}
-              aria-label="Fork chat title"
+              aria-label="Fork agent title"
             />
           </label>
           <section className="flex min-w-0 flex-col gap-2">
@@ -395,7 +395,7 @@ function clearChatForkWorkspace(stagingKey: WorktreeStagingKey): void {
 
 function displayChatTitle(title: string): string {
   const trimmed = title.trim();
-  return trimmed.length === 0 ? "Untitled chat" : trimmed;
+  return trimmed.length === 0 ? "Untitled agent" : trimmed;
 }
 
 // Whether the Fork dialog can submit. Extracted from the component to keep its

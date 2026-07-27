@@ -169,7 +169,7 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
 
-  // ── Static zustand stores (18) ───────────────────────────────────────────
+  // ── Static zustand stores (21) ───────────────────────────────────────────
   { camelName: "onboarding", leaf: "onboarding", kind: "static" },
   { camelName: "commandPalette", leaf: "command-palette", kind: "static" },
   { camelName: "composerDraft", leaf: "composer-drafts", kind: "static" },
@@ -188,6 +188,7 @@ export const PERSIST_STORES = [
     kind: "static",
   },
   { camelName: "gitPanel", leaf: "git-panel", kind: "static" },
+  { camelName: "prSeenFacts", leaf: "pr-seen-facts", kind: "static" },
   {
     camelName: "initialChatHandoff",
     leaf: "initial-chat-handoffs",
@@ -210,6 +211,11 @@ export const PERSIST_STORES = [
   },
   { camelName: "settings", leaf: "settings", kind: "static" },
   { camelName: "settingsSection", leaf: "settings-section", kind: "static" },
+  {
+    camelName: "worktreesSettingsView",
+    leaf: "worktrees-settings-view",
+    kind: "static",
+  },
   {
     camelName: "rateLimitPopover",
     leaf: "rate-limit-popover",

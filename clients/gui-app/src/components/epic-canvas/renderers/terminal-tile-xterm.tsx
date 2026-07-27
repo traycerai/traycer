@@ -159,6 +159,13 @@ export interface TerminalXtermHostProps {
    */
   readonly shouldFocusOnActivePane: boolean;
   /**
+   * Whether this host is an interactive focus target for explicit surface
+   * gestures. Measurement-only hosts reuse the real xterm engine before a
+   * session handle exists, but must leave a parked focus request untouched so
+   * the live host can fulfil it after taking ownership of input.
+   */
+  readonly registerImperativeFocus: boolean;
+  /**
    * Whether the underlying terminal session is still live. The host keeps the
    * persistent xterm engine cached across unmount when true, so splitting a
    * pane / switching tabs / reopening does not dispose the `Terminal` and lose
@@ -423,13 +430,12 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // flip (the landing panel expanding around an always-mounted tile, or a tab
   // created before its engine exists) focus through the registry instead of
   // `shouldFocusOnActivePane`.
-  useEffect(
-    () =>
-      registerTerminalFocus(props.instanceId, () => {
-        termRef.current?.focus();
-      }),
-    [props.instanceId],
-  );
+  useEffect(() => {
+    if (!props.registerImperativeFocus) return;
+    return registerTerminalFocus(props.instanceId, () => {
+      termRef.current?.focus();
+    });
+  }, [props.instanceId, props.registerImperativeFocus]);
 
   const pastePaths = useCallback((paths: readonly string[]): void => {
     const input = terminalPathInput(uniquePaths(paths));

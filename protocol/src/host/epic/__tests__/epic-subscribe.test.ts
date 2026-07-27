@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   epicSubscribeClientFrameSchema,
   epicSubscribeServerFrameSchema,
+  epicSubscribeServerFrameSchemaV10,
+  epicSubscribeServerFrameSchemaV11,
   epicSubscribeV10,
 } from "@traycer/protocol/host/epic/subscribe";
 
@@ -411,9 +413,9 @@ describe("epic.subscribe@1.0 artifact-room-scoped client frames", () => {
       hasBinaryPayload: true,
     });
     expect(apply.kind).toBe("artifactRoomApplyUpdate");
-    expect(apply.kind === "artifactRoomApplyUpdate" && apply.artifactRoomId).toBe(
-      "artifact-room-3",
-    );
+    expect(
+      apply.kind === "artifactRoomApplyUpdate" && apply.artifactRoomId,
+    ).toBe("artifact-room-3");
 
     const awareness = epicSubscribeClientFrameSchema.parse({
       kind: "artifactRoomAwareness",
@@ -432,6 +434,231 @@ describe("epic.subscribe@1.0 artifact-room-scoped client frames", () => {
         hasBinaryPayload: true,
       }),
     ).toThrow();
+  });
+});
+
+describe("epic.subscribe dirtySnapshot + dirty deltas version gate (@1.0 frozen, @1.1 additive)", () => {
+  const artifactRoomDirtyFrame = {
+    kind: "artifactRoomDirty",
+    epicId: "epic-1",
+    artifactRoomId: "artifact-room-0",
+    dirty: true,
+    hasBinaryPayload: false,
+  };
+
+  const rootDirtyFrame = {
+    kind: "rootDirty",
+    epicId: "epic-1",
+    dirty: true,
+    hasBinaryPayload: false,
+  };
+
+  const dirtySnapshotFrame = {
+    kind: "dirtySnapshot",
+    epicId: "epic-1",
+    rootDirty: true,
+    rooms: [
+      { artifactRoomId: "artifact-room-0", dirty: true },
+      { artifactRoomId: "artifact-room-1", dirty: false },
+    ],
+    hasBinaryPayload: false,
+  };
+
+  it("rejects an artifactRoomDirty frame under the frozen @1.0 schema", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV10.parse(artifactRoomDirtyFrame),
+    ).toThrow();
+  });
+
+  it("rejects a rootDirty frame under the frozen @1.0 schema", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV10.parse(rootDirtyFrame),
+    ).toThrow();
+  });
+
+  it("rejects a dirtySnapshot frame under the frozen @1.0 schema", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV10.parse(dirtySnapshotFrame),
+    ).toThrow();
+  });
+
+  it("accepts an artifactRoomDirty frame under @1.1", () => {
+    const parsed = epicSubscribeServerFrameSchemaV11.parse(
+      artifactRoomDirtyFrame,
+    );
+    expect(parsed.kind).toBe("artifactRoomDirty");
+    if (parsed.kind === "artifactRoomDirty") {
+      expect(parsed.artifactRoomId).toBe("artifact-room-0");
+      expect(parsed.dirty).toBe(true);
+    }
+  });
+
+  it("accepts a rootDirty frame under @1.1", () => {
+    const parsed = epicSubscribeServerFrameSchemaV11.parse(rootDirtyFrame);
+    expect(parsed.kind).toBe("rootDirty");
+    if (parsed.kind === "rootDirty") {
+      expect(parsed.dirty).toBe(true);
+      expect(parsed.epicId).toBe("epic-1");
+    }
+  });
+
+  it("accepts a dirtySnapshot frame under @1.1 with root + rooms", () => {
+    const parsed = epicSubscribeServerFrameSchemaV11.parse(dirtySnapshotFrame);
+    expect(parsed.kind).toBe("dirtySnapshot");
+    if (parsed.kind === "dirtySnapshot") {
+      expect(parsed.rootDirty).toBe(true);
+      expect(parsed.rooms).toEqual([
+        { artifactRoomId: "artifact-room-0", dirty: true },
+        { artifactRoomId: "artifact-room-1", dirty: false },
+      ]);
+    }
+  });
+
+  it("accepts a dirtySnapshot with an empty rooms list (root-only epic)", () => {
+    const parsed = epicSubscribeServerFrameSchemaV11.parse({
+      ...dirtySnapshotFrame,
+      rootDirty: false,
+      rooms: [],
+    });
+    expect(parsed.kind).toBe("dirtySnapshot");
+    if (parsed.kind === "dirtySnapshot") {
+      expect(parsed.rootDirty).toBe(false);
+      expect(parsed.rooms).toEqual([]);
+    }
+  });
+
+  it("rejects an artifactRoomDirty frame with a non-boolean dirty value", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV11.parse({
+        ...artifactRoomDirtyFrame,
+        dirty: "true",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a rootDirty frame with a non-boolean dirty value", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV11.parse({
+        ...rootDirtyFrame,
+        dirty: "true",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a dirtySnapshot with a non-boolean rootDirty", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV11.parse({
+        ...dirtySnapshotFrame,
+        rootDirty: "true",
+      }),
+    ).toThrow();
+  });
+
+  it("rejects an artifactRoomDirty frame with an empty artifactRoomId", () => {
+    expect(() =>
+      epicSubscribeServerFrameSchemaV11.parse({
+        ...artifactRoomDirtyFrame,
+        artifactRoomId: "",
+      }),
+    ).toThrow();
+  });
+
+  it("@1.1 still accepts every @1.0 frame kind - additive, nothing dropped", () => {
+    const v10Fixtures: ReadonlyArray<Record<string, unknown>> = [
+      {
+        kind: "snapshot",
+        epicId: "epic-1",
+        meta: {
+          schemaVersion: "1.0.0",
+          epicLight: null,
+          permissionRole: "owner",
+          repos: [],
+          workspaces: [],
+          repoMapping: [],
+          workspaceFolders: [],
+          unresolvedRepos: [],
+          hostStateVectorBase64: "AQ==",
+        },
+        hasBinaryPayload: true,
+      },
+      { kind: "update", epicId: "epic-1", hasBinaryPayload: true },
+      { kind: "awareness", epicId: "epic-1", hasBinaryPayload: true },
+      {
+        kind: "permissionChanged",
+        epicId: "epic-1",
+        permissionRole: null,
+        hasBinaryPayload: false,
+      },
+      {
+        kind: "cloudSyncStatus",
+        epicId: "epic-1",
+        status: "connected",
+        hasBinaryPayload: false,
+      },
+      { kind: "pong", hasBinaryPayload: false },
+      {
+        kind: "artifactRoomSnapshot",
+        epicId: "epic-1",
+        artifactRoomId: "artifact-room-0",
+        hostArtifactRoomStateVectorBase64: "AQ==",
+        hasBinaryPayload: true,
+      },
+      {
+        kind: "artifactRoomUpdate",
+        epicId: "epic-1",
+        artifactRoomId: "artifact-room-0",
+        hostArtifactRoomStateVectorBase64: "AQ==",
+        hasBinaryPayload: true,
+      },
+      {
+        kind: "artifactRoomAwareness",
+        epicId: "epic-1",
+        artifactRoomId: "artifact-room-0",
+        hasBinaryPayload: true,
+      },
+      {
+        kind: "artifactRoomState",
+        epicId: "epic-1",
+        artifactRoomId: "artifact-room-0",
+        state: "ready",
+        hasBinaryPayload: false,
+      },
+      { kind: "migrationStarted", epicId: "epic-1", hasBinaryPayload: false },
+      {
+        kind: "migrationProgress",
+        epicId: "epic-1",
+        phase: "upload",
+        chunksDone: 1,
+        chunksTotal: 2,
+        hasBinaryPayload: false,
+      },
+      {
+        kind: "migrationFailed",
+        epicId: "epic-1",
+        reason: "boom",
+        hasBinaryPayload: false,
+      },
+      {
+        kind: "migrationNotAllowed",
+        epicId: "epic-1",
+        hasBinaryPayload: false,
+      },
+      {
+        kind: "epicDeleted",
+        epicId: "epic-1",
+        deletedByDisplayName: null,
+        deletedByTraycerUserId: null,
+        hasBinaryPayload: false,
+      },
+    ];
+    for (const fixture of v10Fixtures) {
+      expect(() =>
+        epicSubscribeServerFrameSchemaV10.parse(fixture),
+      ).not.toThrow();
+      expect(() =>
+        epicSubscribeServerFrameSchemaV11.parse(fixture),
+      ).not.toThrow();
+    }
   });
 });
 

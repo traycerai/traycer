@@ -1,11 +1,23 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { queryOptions, useQueryClient } from "@tanstack/react-query";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { GitListChangedFilesResponseV11 } from "@traycer/protocol/host";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { gitQueryKeys } from "@/lib/query-keys/git-query-keys";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { createRichSlotRequest } from "@/lib/git/git-rich-slot-ordering";
+import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import {
+  refreshGitSubscriptionWithFreshNonce,
+  useGitSubscriptionRefreshState,
+} from "./use-git-list-changed-files-subscription";
+
+export interface GitSubmoduleSnapshotRefreshResult {
+  readonly refresh: () => Promise<void>;
+  readonly isRefreshing: boolean;
+}
 
 /**
  * Manual refresh of the active root's nested snapshot slot (the panel's
@@ -28,19 +40,42 @@ export function useGitSubmoduleSnapshotRefresh(args: {
   readonly hostId: string | null;
   readonly rootRunningDir: string | null;
   readonly ignoreWhitespace: boolean;
-}): () => Promise<void> {
+}): GitSubmoduleSnapshotRefreshResult {
   const queryClient = useQueryClient();
   const entry = useHostDirectoryEntry(args.hostId ?? "");
   const client = useHostClientFor(entry);
+  const wsStreamClient = useWsStreamClient();
 
   const hostId = args.hostId;
   const rootRunningDir = args.rootRunningDir;
   const ignoreWhitespace = args.ignoreWhitespace;
+  const isRefreshing = useGitSubscriptionRefreshState({
+    wsStreamClient,
+    hostId,
+    runningDir: rootRunningDir,
+    ignoreWhitespace,
+  });
 
-  return useCallback(async () => {
+  const refresh = useCallback(async () => {
     if (client === null || hostId === null || rootRunningDir === null) {
       return;
     }
+    // v1.2 guarantees a post-registration snapshot. Replacing the shared
+    // stream session preserves its current cache data while the nonce frame is
+    // pending; a second toolbar/body gesture joins this exact promise.
+    const freshReplacement = refreshGitSubscriptionWithFreshNonce({
+      wsStreamClient,
+      queryClient,
+      hostId,
+      runningDir: rootRunningDir,
+      ignoreWhitespace,
+    });
+    if (freshReplacement !== null) {
+      await freshReplacement;
+      return;
+    }
+    // Minor <=1 (or no active stream) retains the established unary fallback
+    // and its rich-slot arbitration. It makes no freshness claim.
     const queryKey = gitQueryKeys.listChangedFilesWithSubmodules(
       hostId,
       rootRunningDir,
@@ -65,7 +100,7 @@ export function useGitSubmoduleSnapshotRefresh(args: {
     const request = (context: {
       readonly signal: AbortSignal;
     }): Promise<GitListChangedFilesResponseV11> =>
-      withHostRpcErrorBoundary("git.listChangedFiles", () =>
+      withHostQueryErrorBoundary("git.listChangedFiles", () =>
         richSlotRequest(context),
       );
     // Cancel any fetch already in flight for this key first: `fetchQuery`
@@ -76,6 +111,7 @@ export function useGitSubmoduleSnapshotRefresh(args: {
     // stream-write-preservation reason as the ownership-transition cancel in
     // `useGitListChangedFilesWithSubmodules`.
     await queryClient.cancelQueries({ queryKey }, { revert: false });
+    getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(queryKey);
     // Failures land in the query's error state (surfaced by the passive
     // hook); the refresh affordance itself just stops spinning.
     await queryClient
@@ -83,9 +119,20 @@ export function useGitSubmoduleSnapshotRefresh(args: {
         queryOptions({
           queryKey,
           queryFn: request,
+          meta: stampHostRpcMethod(undefined, "git.listChangedFiles"),
+          retry: false,
           staleTime: 0,
         }),
       )
       .catch(() => undefined);
-  }, [client, hostId, ignoreWhitespace, queryClient, rootRunningDir]);
+  }, [
+    client,
+    hostId,
+    ignoreWhitespace,
+    queryClient,
+    rootRunningDir,
+    wsStreamClient,
+  ]);
+
+  return useMemo(() => ({ refresh, isRefreshing }), [isRefreshing, refresh]);
 }

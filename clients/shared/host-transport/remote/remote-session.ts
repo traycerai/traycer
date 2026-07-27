@@ -452,6 +452,21 @@ export class RemoteSession<
     });
   }
 
+  /**
+   * `LogicalStreamPort.requestSessionReconnect`. Routes a caller-requested
+   * reconnect (a post-sleep/wake liveness nudge) through the SAME
+   * `handleConnectionLost` path a real transport drop takes, so the backoff
+   * state machine, stream re-subscribe, and pending-unary rejection stay in
+   * one place. No-op when idle or closed - there is no socket to replace, and
+   * the existing `beginConnect`/backoff already owns getting one.
+   */
+  requestSessionReconnect(reason: string): void {
+    if (this.phase === "closed" || this.phase === "idle") {
+      return;
+    }
+    this.handleConnectionLost(this.connectGeneration, reason);
+  }
+
   closeStream(streamId: number, reason: string): void {
     const connection = this.connection;
     this.subscriptions.delete(streamId);

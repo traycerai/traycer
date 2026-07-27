@@ -58,6 +58,7 @@ import type {
   ChatFileEditApprovalState,
   ChatPendingInterviewState,
   ChatQueuedItem,
+  ChatQueueDeliveryPolicy,
   ChatQueueState,
   ChatRunSettings,
   ChatRunStatus,
@@ -75,6 +76,7 @@ import type {
   TokenUsage,
 } from "@traycer/protocol/persistence/epic/foundation";
 import type {
+  AssistantMessage,
   Chat,
   ChatEvent,
   ContentBlock,
@@ -85,7 +87,10 @@ import type {
 import { v4 as uuidv4 } from "uuid";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 
-type ChatStreamClientHandle = Pick<ChatStreamClient, "sendAction" | "close">;
+type ChatStreamClientHandle = Pick<
+  ChatStreamClient,
+  "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
+>;
 
 export type ChatStreamClientFactory = (
   epicId: string,
@@ -311,6 +316,17 @@ export interface ChatSessionState {
   readonly runStatus: ChatRunStatus;
   readonly activeTurn: ChatActiveTurn | null;
   /**
+   * Whether the tab's negotiated `chat.subscribe` protocol version understands
+   * the `after_safe_point` explicit-steer delivery policy (host handshake
+   * minor >= 5). A new renderer paired with a released <=1.4 host must NOT emit
+   * `after_safe_point`: that host predates same-turn steering and would inject
+   * the message under whatever ordering/settings it does understand. Captured
+   * once the stream reaches `open` (the version is stable per connection);
+   * `false` until then and on any non-open status, so `Mod-Enter` degrades to
+   * the plain-Enter queue alias until steer support is confirmed.
+   */
+  readonly steerProtocolSupported: boolean;
+  /**
    * The host's own `isTurnInProgress()`: is a turn genuinely active or
    * activating right now? Narrower than `runStatus !== "idle"`, which also
    * reads "running" for a pending queued item or visible background work
@@ -418,6 +434,7 @@ export interface ChatSessionState {
     content: JsonContent,
     sender: UserMessageSender,
     settings: ChatRunSettings,
+    deliveryPolicy: ChatQueueDeliveryPolicy,
   ) => SentChatMessageAction | null;
   /**
    * Sends the initial handoff message reusing its pre-minted ids (shared with
@@ -773,6 +790,42 @@ export function createChatSessionStore(
     // flushes the buffer first, so observable ordering matches arrival order.
     let bufferedDeltas: RuntimeEvent[] = [];
 
+    // `providers.list` nudge driven by the DURABLE auth-failure signal: an
+    // error block tagged `code: "auth"` persisted on the latest assistant row
+    // (a trailing user row - e.g. a message accepted after the failure - does
+    // not hide it). Live failures already nudge via the `onBlockDelta` error
+    // frame below; this covers failures that happened headlessly (an
+    // A2A-triggered turn with no live subscriber) and only surface on
+    // subscribe/rehydrate - reload, host restart, reconnect, or opening the
+    // tab after the fact. Deduped by the failed turn's `turnId` (shared by the
+    // live and persisted paths - `ChatActiveTurn.turnId` mirrors 1:1 onto the
+    // eventual `AssistantMessage.turnId`), NOT once per store lifetime: a
+    // reconnect can surface a NEW headless failure after the user already
+    // re-authed the first one, and that later snapshot must still invalidate
+    // the (long-staleTime) provider query. Re-delivery of the SAME row across
+    // reconnects, or a snapshot arriving right after the live nudge already
+    // fired for the same turn, stays a single nudge; a stale nudge is a
+    // harmless refetch either way (the gate is a pure predicate).
+    let nudgedAuthErrorTurnId: string | null = null;
+
+    const nudgeProviderAuthFromPersistedError = (
+      messages: ReadonlyArray<Message>,
+    ): void => {
+      if (options.onProviderAuthError === null) return;
+      const lastAssistant = messages.findLast(
+        (message): message is AssistantMessage => message.role === "assistant",
+      );
+      if (lastAssistant === undefined) return;
+      const turnKey = lastAssistant.turnId ?? lastAssistant.messageId;
+      if (nudgedAuthErrorTurnId === turnKey) return;
+      const hasAuthError = lastAssistant.blocks.some(
+        (block) => block.type === "error" && block.code === AUTH_ERROR_CODE,
+      );
+      if (!hasAuthError) return;
+      nudgedAuthErrorTurnId = turnKey;
+      options.onProviderAuthError();
+    };
+
     const applyBufferedDeltas = (): void => {
       if (bufferedDeltas.length === 0) return;
       const batch = bufferedDeltas;
@@ -820,6 +873,7 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        nudgeProviderAuthFromPersistedError(frame.snapshot.chat.messages);
         flushBlockDeltas();
         // Pendings dispatched on an earlier connection never see their ack, so
         // the snapshot drops them (below). Computed here, before the set, so a
@@ -1192,16 +1246,22 @@ export function createChatSessionStore(
         bufferedDeltas.push(frame.event);
         lease.requestFlush();
         // The `code: "auth"` error frame is the one live push that flips the
-        // re-auth banner on mid-session. The failed turn's error block is itself
-        // suppressed from the transcript by `suppressAuthErrors`, so it never
-        // surfaces a transcript error row.
+        // re-auth banner on mid-session. The failed turn's error block also
+        // renders in the transcript as the failure's durable record; failures
+        // with no live subscriber are instead caught on snapshot by
+        // `nudgeProviderAuthFromPersistedError` above.
         if (
           frame.event.type === "error" &&
           frame.event.code === AUTH_ERROR_CODE
         ) {
           // Nudge `providers.list` to refetch (and read the host's poisoned
-          // `unauthenticated`) so the banner mounts + send blocks.
+          // `unauthenticated`) so the banner mounts + send blocks. Record the
+          // SAME turnId marker `nudgeProviderAuthFromPersistedError` uses, so
+          // the snapshot that follows this live failure (on this connection
+          // or after a reconnect) doesn't nudge a second time for the
+          // identical turn.
           if (options.onProviderAuthError !== null) {
+            nudgedAuthErrorTurnId = get().activeTurn?.turnId ?? null;
             options.onProviderAuthError();
           }
         }
@@ -1406,10 +1466,22 @@ export function createChatSessionStore(
             if (reason?.kind === "fatalError") return reason.details;
             return state.fatalClose;
           };
+          // The negotiated `chat.subscribe` version is stable per connection and
+          // available once the handshake completes (status `open`). Capture the
+          // steer-protocol capability there so the composer only resolves
+          // `after_safe_point` against a host that understands it; a non-open
+          // status drops it back to `false` so a reconnect re-confirms.
+          const resolveSteerProtocolSupported = () => {
+            if (status === "open") {
+              return streamClient?.sameTurnSteeringProtocolSupported() ?? false;
+            }
+            return false;
+          };
           return {
             connectionStatus: status,
             runStatus: status === "closed" ? "idle" : state.runStatus,
             activeTurn: status === "closed" ? null : state.activeTurn,
+            steerProtocolSupported: resolveSteerProtocolSupported(),
             fatalClose: resolveFatalClose(),
           };
         });
@@ -1540,6 +1612,7 @@ export function createChatSessionStore(
       queue: EMPTY_QUEUE,
       runStatus: "idle",
       activeTurn: null,
+      steerProtocolSupported: false,
       turnInProgress: undefined,
       pendingApprovals: [],
       pendingFileEditApprovals: [],
@@ -1564,12 +1637,30 @@ export function createChatSessionStore(
         if (disposed) return;
         closeStreamClient();
         clearBufferedDeltas();
+        const prior = get();
         set({
           connectionStatus: "connecting",
+          steerProtocolSupported: false,
           fatalClose: null,
           snapshotLoaded: false,
         });
-        streamClient = createStreamClient();
+        try {
+          streamClient = createStreamClient();
+        } catch (cause) {
+          // The replacement factory can throw (durable-transport wiring throws
+          // on a failed subscription). Without this restore the session would
+          // strand in "connecting" with NO stream client - nothing ever moves
+          // it again, and recovery passes (the wake retry, the tile's retry
+          // affordance) all key off a terminal status. Restore the pre-attempt
+          // terminal state so the next pulse or click can try again, then
+          // rethrow for the caller to report.
+          set({
+            connectionStatus: "closed",
+            fatalClose: prior.fatalClose,
+            snapshotLoaded: prior.snapshotLoaded,
+          });
+          throw cause;
+        }
       },
       refreshMissingWorktreePaths: (update) => {
         if (disposed) return;
@@ -1587,7 +1678,7 @@ export function createChatSessionStore(
         }
         set({ missingWorktreePaths: next });
       },
-      sendMessage: (content, sender, settings) => {
+      sendMessage: (content, sender, settings, deliveryPolicy) => {
         const clientActionId = uuidv4();
         const messageId = uuidv4();
         // A worktree staged mid-chat ("Create new worktree") rides on this send;
@@ -1612,7 +1703,7 @@ export function createChatSessionStore(
           sender,
           settings,
           accountContext: useAccountContextStore.getState().accountContext,
-          deliveryPolicy: "auto",
+          deliveryPolicy,
           worktreeIntent,
         };
         // Consume before dispatch so the pending action captures precisely the

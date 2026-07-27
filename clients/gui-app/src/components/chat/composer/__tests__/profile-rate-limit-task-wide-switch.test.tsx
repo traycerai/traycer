@@ -100,6 +100,7 @@ function usageEntry(
   };
   return {
     profileId,
+    fetchEligible: true,
     refreshStatus: "idle",
     refresh,
     ensureFresh: () => Promise.resolve(),

@@ -24,6 +24,7 @@ import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import type { TerminalLaunchTarget } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 
 export interface NewTerminalPickerBodyProps {
@@ -40,9 +41,18 @@ export function NewTerminalPickerBody(props: NewTerminalPickerBodyProps) {
     epicId,
     enabled: true,
   });
+  // Host-proven-missing rows are hidden here (a deleted worktree can't host a
+  // terminal); the explicit pick is exempt so a worktree deleted while this
+  // picker is open degrades to its disabled badge instead of vanishing.
   const rows = useMemo(
-    () => bindingsQuery.data?.rows ?? [],
-    [bindingsQuery.data?.rows],
+    () =>
+      withoutResolvedMissingRows(
+        bindingsQuery.data?.rows ?? [],
+        explicitRow === null
+          ? null
+          : { hostId: explicitRow.hostId, runningDir: explicitRow.runningDir },
+      ),
+    [bindingsQuery.data?.rows, explicitRow],
   );
   const selectedRow = useMemo(
     () => resolveTerminalSelection(explicitRow, rows),

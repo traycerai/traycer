@@ -23,7 +23,10 @@ import {
   navigateToTabIntent,
   openOrFocusEpicIntent,
 } from "@/lib/tab-navigation";
-import { navigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
+import {
+  navigateNestedFocus,
+  navigateNestedFocusToPrimaryEditor,
+} from "@/lib/epic-nested-focus-navigation";
 import type { SettingsSectionId } from "@/lib/settings-sections";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { routeIntentViaModalBridge } from "@/stores/tabs/system-overlay-registry";
@@ -99,6 +102,19 @@ export function routerAdapterFor(
     },
     navigateNestedFocus: (epicId, tabId, prepare) =>
       navigateNestedFocus(
+        {
+          history: router.history,
+          navigate: router.navigate,
+          getLocation: () => ({
+            pathname: router.state.location.pathname,
+            search: router.state.location.search ?? {},
+          }),
+        },
+        { epicId, tabId },
+        prepare,
+      ),
+    navigateNestedFocusToPrimaryEditor: (epicId, tabId, prepare) =>
+      navigateNestedFocusToPrimaryEditor(
         {
           history: router.history,
           navigate: router.navigate,

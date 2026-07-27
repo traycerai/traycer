@@ -9,6 +9,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useGitPanelStore } from "@/stores/epics/git-panel-store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import { usePrSeenFactsStore } from "@/stores/epics/pr-seen-facts-store";
 import { useFileTreeStore } from "@/stores/file-tree/file-tree-store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -17,6 +18,7 @@ import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-s
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useWorktreesSettingsViewStore } from "@/stores/settings/worktrees-settings-view-store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
@@ -71,6 +73,7 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "traycer-gui-app:artifact-read-state",
   ],
   ["useGitPanelStore", useGitPanelStore, "traycer-gui-app:git-panel"],
+  ["usePrSeenFactsStore", usePrSeenFactsStore, "traycer-gui-app:pr-seen-facts"],
   [
     "useInitialChatHandoffStore",
     useInitialChatHandoffStore,
@@ -100,6 +103,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useSettingsSectionStore",
     useSettingsSectionStore,
     "traycer-gui-app:settings-section",
+  ],
+  [
+    "useWorktreesSettingsViewStore",
+    useWorktreesSettingsViewStore,
+    "traycer-gui-app:worktrees-settings-view",
   ],
   [
     "useRateLimitPopoverStore",

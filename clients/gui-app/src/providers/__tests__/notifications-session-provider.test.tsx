@@ -27,6 +27,10 @@ function QueryWrapper({
   );
 }
 
+const notificationNavigateMock = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve()),
+);
+
 const hostState = vi.hoisted((): { local: HostDirectoryEntry | null } => ({
   local: {
     hostId: "host-a",
@@ -53,6 +57,10 @@ const mockAuth = {
 
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
+  // Threaded into `invalidateNotificationIndicators` as its nullable read
+  // canceller. These tests drive stream lifecycle, not indicator
+  // invalidation, so `null` (the "no canceller" case) is the honest stub.
+  useHostClient: () => null,
   useAuthService: () => mockAuth,
 }));
 
@@ -101,9 +109,25 @@ vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   },
 }));
 
-import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
+import { NotificationsSessionProvider as RoutedNotificationsSessionProvider } from "@/providers/notifications-session-provider";
 import { __setNotificationsStreamFactoryForTests } from "@/providers/notifications-stream-factory-override";
+
+// The provider now takes a `navigate` (`NotificationNavigate`) it hands to the
+// activation hook. These tests exercise stream lifecycle, not routing, so a
+// local shim supplies a stub navigate and every case below keeps rendering
+// `<NotificationsSessionProvider>` with children only.
+function NotificationsSessionProvider(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <RoutedNotificationsSessionProvider navigate={notificationNavigateMock}>
+      {props.children}
+    </RoutedNotificationsSessionProvider>
+  );
+}
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useHostNotificationsStore } from "@/stores/notifications/host-notifications-store";
+import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
 import {
   __resetNotificationsStoreForTests,
   useNotificationsStore,
@@ -162,6 +186,29 @@ function appendEntry(entry: NotificationEntry): void {
   doc.transact(() => {
     arr.push([createNotificationRoomEntryMap(entry)]);
   }, "stream");
+}
+
+function hostEntry(input: {
+  readonly id: string;
+  readonly epicId: string;
+  readonly chatId: string;
+}): HostNotificationEntry {
+  return {
+    id: input.id,
+    updatedAt: 1,
+    readAt: null,
+    kind: "agent.stopped",
+    sourceRef: input.id,
+    severity: "done",
+    outcome: "completed",
+    epicId: input.epicId,
+    chatId: input.chatId,
+    payload: {
+      epicId: input.epicId,
+      chatId: input.chatId,
+      outcome: "completed",
+    },
+  };
 }
 
 describe("<NotificationsSessionProvider />", () => {
@@ -262,13 +309,28 @@ describe("<NotificationsSessionProvider />", () => {
       expect(streams).toHaveLength(1);
     });
 
+    // Seed the HOST replica (host-scoped rows/summary). The Y.Doc
+    // notifications room is user-scoped and deliberately survives a respawn -
+    // it is the host replica that must not carry a dead process's rows into
+    // the new one.
     act(() => {
-      appendEntry(invitedEntry("n-1", "epic-alpha"));
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: {
+          entries: [
+            hostEntry({
+              id: "n-1",
+              epicId: "epic-alpha",
+              chatId: "chat-alpha",
+            }),
+          ],
+          nextCursor: null,
+        },
+        summary: { unreadCount: 1, attentionCount: 0 },
+      });
     });
 
-    await waitFor(() => {
-      expect(useNotificationsStore.getState().entries).toHaveLength(1);
-    });
+    expect(useHostNotificationsStore.getState().byId["n-1"]).toBeDefined();
 
     // Respawn: same hostId, fresh endpoint (e.g. the local host process
     // restarted on a new port). The provider must teardown the stale stream
@@ -289,7 +351,7 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(streams).toHaveLength(2);
       expect(streams[0].closeCount).toBe(1);
-      expect(useNotificationsStore.getState().entries).toEqual([]);
+      expect(useHostNotificationsStore.getState().byId).toEqual({});
     });
   });
 

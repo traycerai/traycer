@@ -118,28 +118,19 @@ export function AgentSelectionGuideEditorSurface({
         />
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <p className="min-w-[min(100%,18rem)] flex-1 text-ui-xs text-muted-foreground">
-          For workspace-specific instructions, add a{" "}
-          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.95em]">
-            .traycer/agent-selection-guide.md
-          </code>{" "}
-          file in a workspace. It layers on top of these global instructions.
-        </p>
-        <div className="flex shrink-0 items-center gap-3">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={revertDisabled}
-            onClick={onRevert}
-            data-testid={revertTestId}
-            className="h-7 px-2"
-          >
-            Revert to default
-          </Button>
-          {status}
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={revertDisabled}
+          onClick={onRevert}
+          data-testid={revertTestId}
+          className="h-7 px-2"
+        >
+          Revert to default
+        </Button>
+        {status}
       </div>
     </section>
   );

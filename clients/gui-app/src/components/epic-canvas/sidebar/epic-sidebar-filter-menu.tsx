@@ -1,13 +1,15 @@
 /**
- * Filter dropdowns rendered in the chat and artifact panel headers.
+ * Filter dropdowns rendered in the Agents and artifact panel headers.
  *
- * Chat: a single origin choice (GUI chats vs TUI terminal agents).
+ * Agents: a single interface choice (All / Chat / Terminal). Every option lists
+ * Agents; the axis narrows how they are interacted with, not what they are.
  * Artifact: multi-select status + kind, plus a read/unread choice.
  *
  * The trigger reflects active state so a filter that hides nodes is never
  * silent. Multi-select items keep the menu open on toggle.
  */
 import {
+  Archive,
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
   ListFilter,
@@ -50,6 +52,7 @@ import {
   useArtifactFilter,
   useArtifactSort,
   useChatFilter,
+  useChatShowArchived,
   useChatSort,
   useLeftPanelStore,
   type ArtifactReadFilter,
@@ -57,13 +60,18 @@ import {
   type ChatOriginFilter,
 } from "@/stores/epics/left-panel-store";
 
+/**
+ * The Agents panel filters on the INTERFACE axis - every option lists Agents,
+ * narrowed by how the user interacts with them. `CHAT_ORIGIN.Gui` / `.Tui` are
+ * internal filter values on the compatibility boundary; only the copy moves.
+ */
 const CHAT_ORIGIN_OPTIONS: ReadonlyArray<{
   value: ChatOriginFilter;
   label: string;
 }> = [
   { value: CHAT_ORIGIN.All, label: "All" },
-  { value: CHAT_ORIGIN.Gui, label: "Chats" },
-  { value: CHAT_ORIGIN.Tui, label: "Terminal Agents" },
+  { value: CHAT_ORIGIN.Gui, label: "Chat" },
+  { value: CHAT_ORIGIN.Tui, label: "Terminal" },
 ];
 
 const ARTIFACT_STATUS_OPTIONS: ReadonlyArray<ArtifactStatusFilter> = [
@@ -170,15 +178,28 @@ function SortMenuSection(props: {
 export function ChatFilterMenu(props: {
   readonly epicId: string;
   readonly disabled: boolean;
+  /**
+   * Whether the host backing this epic advertises `epic.setChatArchived`. The
+   * "Show archived" item is omitted entirely on a host without it: there is no
+   * way to archive anything there, so the toggle could only ever reveal
+   * nothing.
+   */
+  readonly canArchive: boolean;
 }) {
   const { epicId } = props;
   const filter = useChatFilter(epicId);
   const sort = useChatSort(epicId);
+  const showArchived = useChatShowArchived(epicId);
   const setChatOrigin = useLeftPanelStore((s) => s.setChatOrigin);
+  const toggleChatShowArchived = useLeftPanelStore(
+    (s) => s.toggleChatShowArchived,
+  );
   const setChatSortField = useLeftPanelStore((s) => s.setChatSortField);
   const toggleChatSortDirection = useLeftPanelStore(
     (s) => s.toggleChatSortDirection,
   );
+  // Origin only. "Show archived" reveals rows instead of hiding them, so it
+  // must not light the dot that warns "a filter is hiding nodes".
   const active = isChatFilterActive(filter);
 
   return (
@@ -186,7 +207,7 @@ export function ChatFilterMenu(props: {
       <FilterTrigger
         active={active}
         disabled={props.disabled}
-        label="Filter chats"
+        label="Filter agents"
       />
       <DropdownMenuContent
         align="end"
@@ -194,7 +215,7 @@ export function ChatFilterMenu(props: {
         style={{ maxHeight: "min(70vh, 24rem)" }}
       >
         <DropdownMenuLabel className="px-2 py-1 text-overline uppercase text-muted-foreground/70">
-          Show
+          Interface
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuRadioGroup
@@ -212,6 +233,20 @@ export function ChatFilterMenu(props: {
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+        {props.canArchive ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={showArchived}
+              onCheckedChange={() => toggleChatShowArchived(epicId)}
+              onSelect={(event) => event.preventDefault()}
+              data-testid="epic-sidebar-show-archived"
+            >
+              <Archive className="size-4" />
+              Show archived
+            </DropdownMenuCheckboxItem>
+          </>
+        ) : null}
         <SortMenuSection
           fields={CHAT_SORT_FIELDS}
           sort={sort}

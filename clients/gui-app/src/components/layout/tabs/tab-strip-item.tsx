@@ -91,6 +91,13 @@ interface TabItemProps {
   readonly canCloseOtherTabs: boolean;
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
+  readonly taskPinned: boolean | null;
+  readonly isTaskPinPending: boolean;
+  readonly onSetTaskPinned: (
+    epicId: string,
+    pinned: boolean,
+    displayName: string,
+  ) => void;
 }
 
 export const TabItem = memo(function TabItem(props: TabItemProps) {
@@ -107,6 +114,9 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     canCloseOtherTabs,
     onOpenInNewWindow,
     canOpenInNewWindow,
+    taskPinned,
+    isTaskPinPending,
+    onSetTaskPinned,
   } = props;
   const {
     ref: dndRef,
@@ -143,7 +153,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   );
   const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
-  // back to "Untitled epic". Other kinds render their name verbatim.
+  // back to "Untitled task". Other kinds render their name verbatim.
   const resolvedTabName = liveEpicTitle ?? tab.name;
   const displayName =
     tab.kind === "epic"
@@ -225,7 +235,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   );
   const rename = useInlineRename({
     // Bind to the RAW title, not `displayName` - editing must never seed the
-    // "Untitled epic" fallback into the input and persist it as a real title.
+    // "Untitled task" fallback into the input and persist it as a real title.
     value: resolvedTabName,
     canEdit: canEditTitle,
     onCommit: commitEpicTitle,
@@ -267,6 +277,13 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       }, LONG_PRESS_CONTEXT_MENU_MS);
     },
     [cancelLongPress],
+  );
+  const handleSetTaskPinned = useCallback(
+    (pinned: boolean) => {
+      if (tab.kind !== "epic") return;
+      onSetTaskPinned(tab.epicId, pinned, displayName);
+    },
+    [displayName, onSetTaskPinned, tab],
   );
 
   const leaderBadge: LeaderBadge | null =
@@ -361,10 +378,13 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         canCloseOtherTabs={canCloseOtherTabs}
         canOpenInNewWindow={canOpenInNewWindow}
         canEditTitle={canEditTitle}
+        taskPinned={taskPinned}
+        isTaskPinPending={isTaskPinPending}
         onCloseOtherTabs={onCloseOtherTabs}
         onDuplicateTab={onDuplicateTab}
         onOpenInNewWindow={onOpenInNewWindow}
         onEditTitle={rename.startEditing}
+        onSetTaskPinned={handleSetTaskPinned}
       />
     </ContextMenu>
   );

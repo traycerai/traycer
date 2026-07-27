@@ -56,6 +56,12 @@ const UNKNOWN: ProviderAuth = {
   label: null,
   detail: null,
 };
+const UNAVAILABLE: ProviderAuth = {
+  status: "unavailable",
+  badgeText: null,
+  label: null,
+  detail: null,
+};
 
 function providerState(
   providerId: ProviderId,
@@ -212,6 +218,94 @@ describe("useProviderReauthGate", () => {
       useProviderReauthGate("claude", null, false, "authoritative"),
     );
     expect(result.current.signedOut).toBe(false);
+  });
+
+  describe("convergence window (provider summary lags the ambient profile row)", () => {
+    it("blocks send when the ambient profile row is definitively unauthenticated even though the provider-level summary is still unavailable", () => {
+      // Regression for the send-gate finding: the picker already reads both
+      // sources and degrades, but the gate used to read only `state.auth`
+      // (still `unavailable`, not yet converged) and left Send enabled.
+      mocks.providers = [
+        {
+          ...claudeState(UNAVAILABLE),
+          profiles: [
+            profile(
+              "ambient",
+              "ambient",
+              "Terminal account",
+              "unauthenticated",
+            ),
+            profile("work-uuid", "managed", "Work", "authenticated"),
+          ],
+        },
+      ];
+      const { result } = renderHook(() =>
+        useProviderReauthGate("claude", null, true, "authoritative"),
+      );
+      expect(result.current.signedOut).toBe(true);
+      expect(result.current.reason).toBe("provider_unauthenticated");
+    });
+
+    it("does NOT block a healthy managed profile under the same lagging-summary state", () => {
+      // Same provider state as above, but the composer's committed profile is
+      // the healthy managed row - the broadened ambient predicate must not
+      // leak into the profileId !== null branch.
+      mocks.providers = [
+        {
+          ...claudeState(UNAVAILABLE),
+          profiles: [
+            profile(
+              "ambient",
+              "ambient",
+              "Terminal account",
+              "unauthenticated",
+            ),
+            profile("work-uuid", "managed", "Work", "authenticated"),
+          ],
+        },
+      ];
+      const { result } = renderHook(() =>
+        useProviderReauthGate("claude", "work-uuid", true, "authoritative"),
+      );
+      expect(result.current.signedOut).toBe(false);
+      expect(result.current.reason).toBeNull();
+    });
+
+    it("tracks the ambient profile row for the reconnect edge, not just the provider-level summary", () => {
+      // Starts signed out via the ambient row while the provider-level
+      // summary lags at `unavailable`.
+      mocks.providers = [
+        {
+          ...claudeState(UNAVAILABLE),
+          profiles: [
+            profile(
+              "ambient",
+              "ambient",
+              "Terminal account",
+              "unauthenticated",
+            ),
+          ],
+        },
+      ];
+      const { result, rerender } = renderHook(() =>
+        useProviderReauthGate("claude", null, true, "authoritative"),
+      );
+      expect(result.current.signedOut).toBe(true);
+
+      // Reconnect lands on the ambient row first; the provider-level summary
+      // is STILL `unavailable`.
+      mocks.providers = [
+        {
+          ...claudeState(UNAVAILABLE),
+          profiles: [
+            profile("ambient", "ambient", "Terminal account", "authenticated"),
+          ],
+        },
+      ];
+      rerender();
+      expect(result.current.signedOut).toBe(false);
+      expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("per-profile reasons", () => {

@@ -211,10 +211,8 @@ function createBaseRunnerHost(): IRunnerHost {
     authnBaseUrl: "https://auth.example.invalid",
     relayBaseUrl: "wss://relay.example.invalid/attach",
     hasLocalHost: true,
-    validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
-    refreshAuthToken: () => Promise.resolve({ kind: "network-error" as const }),
     listRegisteredHosts: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
@@ -267,8 +265,13 @@ function createBaseRunnerHost(): IRunnerHost {
     },
     tokenStore: {
       get: () => Promise.resolve(null),
-      set: () => Promise.resolve(),
+      signIn: () => Promise.resolve(),
+      rotate: () =>
+        Promise.resolve({ outcome: "deleted" as const, pair: null }),
       delete: () => Promise.resolve(),
+      subscribe: () => ({ dispose: () => undefined }),
+      migrateLegacyCredentials: () =>
+        Promise.resolve("identity-unknown" as const),
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
@@ -347,9 +350,16 @@ function createDirtyEpicHandle(
     bindingVersion: 0,
     ...EMPTY_PROJECTED_SLICES,
     artifactRooms: { stateByArtifactRoomId: {} },
+    artifactRoomDirtyByArtifactRoomId: {},
+    rootDirty: false,
+    hasDirtySnapshotForOpenCycle: true,
     snapshotMeta: null,
     permissionRole: null,
     connectionStatus: "open",
+    hostTransportStatus: "open",
+    cloudSyncStatus: "connected",
+    hasFreshCloudSyncStatus: true,
+    hasConnectedOnce: true,
     accessLost: false,
     epicDeleted: null,
     snapshotLoaded: true,

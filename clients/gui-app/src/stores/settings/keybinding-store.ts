@@ -29,6 +29,8 @@ export interface KeybindingState {
 const LEGACY_SPLIT_RIGHT_CHORD = "mod+shift+d";
 const LEGACY_SPLIT_DOWN_CHORD = "mod+d";
 
+const KEYBINDING_STORE_KEY = persistKey(STORE_KEYS.keybinding);
+
 export const useKeybindingStore = create<KeybindingState>()(
   persist(
     (set) => ({
@@ -50,11 +52,25 @@ export const useKeybindingStore = create<KeybindingState>()(
       },
     }),
     {
-      ...basePersistOptions(persistKey(STORE_KEYS.keybinding)),
+      ...basePersistOptions(KEYBINDING_STORE_KEY),
       merge: mergePersistedKeybindings,
     },
   ),
 );
+
+// Cross-window sync: zustand's `persist` middleware only writes on this
+// window's own changes and reads once at module load, so without this a
+// second window's rebind never reaches window A's in-memory `bindings` -
+// conflict checks there (both directions with the desktop global summon
+// shortcut) would keep validating against a stale snapshot. The browser
+// `storage` event only fires in OTHER same-origin windows, never the one
+// that wrote, so this can't loop with `setBinding`/`clearBinding`/`resetAll`.
+// `event.key === null` covers an explicit `localStorage.clear()`.
+window.addEventListener("storage", (event) => {
+  if (event.key === null || event.key === KEYBINDING_STORE_KEY) {
+    void useKeybindingStore.persist.rehydrate();
+  }
+});
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -101,6 +117,17 @@ function mergePersistedKeybindings(
   persistedState: unknown,
   currentState: KeybindingState,
 ): KeybindingState {
+  // `persistedState === undefined` means the storage key is genuinely
+  // missing (removed, `localStorage.clear()`'d, or first launch) - zustand's
+  // persist passes `undefined` rather than skipping `merge` in that case.
+  // Reset to defaults rather than keeping whatever is in memory, so a
+  // cross-window "clear local data"/reset doesn't leave this window on a
+  // stale custom map that a later edit could persist right back
+  // (distinct from malformed-but-present data, which still falls back to
+  // `currentState` below).
+  if (persistedState === undefined) {
+    return { ...currentState, bindings: getDefaultBindings() };
+  }
   const bindings = readPersistedBindings(persistedState);
   if (bindings === null) return currentState;
   return {

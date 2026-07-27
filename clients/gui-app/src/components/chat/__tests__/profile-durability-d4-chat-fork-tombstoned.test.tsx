@@ -275,7 +275,7 @@ function renderDialog(target: ChatForkDialogTarget): void {
 }
 
 async function submitFork(): Promise<void> {
-  fireEvent.change(screen.getByRole("textbox", { name: "Fork chat title" }), {
+  fireEvent.change(screen.getByRole("textbox", { name: "Fork agent title" }), {
     target: { value: "Sibling fork" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Fork" }));
