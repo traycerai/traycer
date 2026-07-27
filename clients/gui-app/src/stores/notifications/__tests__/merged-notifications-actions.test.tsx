@@ -242,6 +242,19 @@ function resolveCallOccurrences(): ReadonlyArray<{
   });
 }
 
+/** The exact `useHostQueries` cache key shape for one `indicatorState`
+ * request pair: host scope, method, request params, identity suffix. */
+type IndicatorQueryKey = readonly [
+  "host",
+  string,
+  "host.notifications.indicatorState",
+  {
+    readonly epicIds: ReadonlyArray<string>;
+    readonly chatIds: ReadonlyArray<string>;
+  },
+  string,
+];
+
 function entryResolvedAt(id: string): number | null {
   const byId = useHostNotificationsStore.getState().byId;
   if (!(id in byId)) {
@@ -542,5 +555,141 @@ describe("useMergedNotificationsActions row-level resolve", () => {
     expect(resolveCallOccurrences()).toEqual([
       { id: "prompt-a", updatedAt: 200, sourceRef: "prompt-a" },
     ]);
+  });
+});
+
+describe("useMergedNotificationsActions indicator invalidation", () => {
+  beforeEach(() => {
+    hostRequestMock.mockReset();
+    hostRequestMock.mockImplementation(defaultHostRequest);
+    hostBindingState.current = null;
+    vi.mocked(toastFromHostError).mockClear();
+    vi.mocked(toast.error).mockClear();
+    __resetNotificationsStoreForTests();
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
+  });
+
+  afterEach(() => {
+    cleanup();
+    hostBindingState.current = null;
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  function indicatorKey(epicId: string, chatId: string): IndicatorQueryKey {
+    return [
+      "host",
+      mockLocalHostEntry.hostId,
+      "host.notifications.indicatorState",
+      { epicIds: [epicId], chatIds: [chatId] },
+      "notifications:indicator-state:user-actions",
+    ];
+  }
+
+  function seededIndicatorHarness(): {
+    readonly queryClient: QueryClient;
+    readonly rowKey: IndicatorQueryKey;
+    readonly unrelatedKey: IndicatorQueryKey;
+    readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+  } {
+    const queryClient = createTestQueryClient();
+    const rowKey = indicatorKey("epic-1", "chat-1");
+    const unrelatedKey = indicatorKey("epic-other", "chat-other");
+    queryClient.setQueryData(rowKey, { epics: {}, chats: {} });
+    queryClient.setQueryData(unrelatedKey, { epics: {}, chats: {} });
+    return {
+      queryClient,
+      rowKey,
+      unrelatedKey,
+      wrapper: function Wrapper(props: {
+        readonly children: ReactNode;
+      }): ReactNode {
+        return (
+          <QueryClientProvider client={queryClient}>
+            {props.children}
+          </QueryClientProvider>
+        );
+      },
+    };
+  }
+
+  it("invalidates the row's entity-scoped indicator queries on mark-read success", async () => {
+    // The tab/sidebar error badges refetch off `indicatorState` queries. The
+    // host's `readStateChanged` echo on the feed stream is one invalidation
+    // trigger, but a successful unary mark-read must clear them on its own -
+    // otherwise a stream outage freezes badges while the popover row greys out.
+    bindHostClient();
+    applyHostSnapshot([hostDone("done-1", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { queryClient, rowKey, unrelatedKey, wrapper } =
+      seededIndicatorHarness();
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper,
+    });
+
+    act(() => {
+      result.current.markAsRead("host:done-1");
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(rowKey)?.isInvalidated).toBe(true);
+    });
+    expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(false);
+  });
+
+  it("falls back to the full indicator scope when the marked row names no entity", async () => {
+    // A row can leave `byId` before its mark-read settles (retention pruning,
+    // a snapshot swap), and a row with no `epicId` never named an entity at
+    // all. Neither can produce an entity-scoped invalidation, so the fallback
+    // must refresh the whole host scope rather than silently skip — a skip
+    // would strand exactly the badges this change exists to clear.
+    bindHostClient();
+    applyHostSnapshot([hostDone("done-1", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { queryClient, rowKey, unrelatedKey, wrapper } =
+      seededIndicatorHarness();
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper,
+    });
+
+    act(() => {
+      result.current.markAsRead("host:pruned-before-settle");
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(rowKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(true);
+    });
+  });
+
+  it("invalidates the full indicator scope on mark-all-read success", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostDone("done-1", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { queryClient, rowKey, unrelatedKey, wrapper } =
+      seededIndicatorHarness();
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper,
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(rowKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(true);
+    });
   });
 });
