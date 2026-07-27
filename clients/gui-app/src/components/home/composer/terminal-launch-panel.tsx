@@ -16,7 +16,8 @@ import { isTuiHarnessId } from "@/components/home/data/landing-options";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
-  providerPackPreparingFromInstallState,
+  providerPackBlocksExecution,
+  providerPackPreparingForProvider,
   providerPackPreparingLabel,
 } from "@/components/providers/provider-pack-readiness";
 import { providerDisplayName } from "@/lib/provider-ordering";
@@ -253,14 +254,19 @@ function StartButton(props: StartButtonProps) {
 }
 
 /**
- * Managed-pack hint for the selected terminal harness, or null when it is
- * ready (or is not a terminal harness at all - `selectionIsTuiCapable` owns
- * that case and reports it more precisely).
+ * Managed-pack hint for the selected terminal harness, or null when it can run
+ * (or is not a terminal harness at all - `selectionIsTuiCapable` owns that case
+ * and reports it more precisely).
  *
  * A terminal agent launch bypasses the chat composer entirely, so it needs its
  * own gate rather than inheriting one: the host resolver would refuse the
  * launch either way, but without this the user only finds out after pressing
  * Start.
+ *
+ * Returns null for a NON-BLOCKING install for the same reason the composer
+ * gate does: this string is the panel's disabled-hint, and the host would
+ * resolve the bundled/PATH/custom binary and launch. A hint here would turn a
+ * background download into a refused launch.
  */
 function terminalPackPreparingHint(
   harnessId: GuiHarnessId,
@@ -268,10 +274,13 @@ function terminalPackPreparingHint(
 ): string | null {
   if (!isTuiHarnessId(harnessId) || providers === undefined) return null;
   const providerId = TUI_HARNESS_ID_TO_PROVIDER_ID[harnessId];
-  const preparing = providerPackPreparingFromInstallState(
-    providers.find((provider) => provider.providerId === providerId)
-      ?.managedInstallState,
+  const provider = providers.find(
+    (candidate) => candidate.providerId === providerId,
   );
-  if (preparing === null) return null;
+  if (provider === undefined) return null;
+  const preparing = providerPackPreparingForProvider(provider);
+  if (preparing === null || !providerPackBlocksExecution(preparing)) {
+    return null;
+  }
   return providerPackPreparingLabel(preparing, providerDisplayName(providerId));
 }

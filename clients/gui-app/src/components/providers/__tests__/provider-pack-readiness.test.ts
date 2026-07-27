@@ -1,28 +1,45 @@
 import { describe, expect, it } from "vitest";
 import type {
+  ProviderCliCandidate,
   ProviderCliState,
   ProviderManagedInstallErrorReason,
   ProviderManagedInstallState,
 } from "@traycer/protocol/host/provider-schemas";
 import { providerManagedInstallErrorReasonSchema } from "@traycer/protocol/host/provider-schemas";
 import {
+  providerPackBlocksExecution,
   providerPackPreparingByHarnessId,
-  providerPackPreparingFromInstallState,
+  providerPackPreparingForProvider,
   providerPackPreparingLabel,
   providerPackPreparingShortLabel,
   providerPackRetryable,
+  type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
 
 function providerState(
   providerId: ProviderCliState["providerId"],
-  managedInstallState: ProviderManagedInstallState | null,
+  managedInstallState: ProviderManagedInstallState | null | undefined,
+): ProviderCliState {
+  return providerStateWith(providerId, managedInstallState, {
+    candidates: [],
+    availabilityPending: false,
+  });
+}
+
+function providerStateWith(
+  providerId: ProviderCliState["providerId"],
+  managedInstallState: ProviderManagedInstallState | null | undefined,
+  fallback: {
+    readonly candidates: readonly ProviderCliCandidate[];
+    readonly availabilityPending: boolean;
+  },
 ): ProviderCliState {
   return {
     providerId,
     enabled: true,
     disabledBy: null,
     selected: { kind: "bundled" },
-    candidates: [],
+    candidates: [...fallback.candidates],
     auth: { status: "unknown", badgeText: null, label: null, detail: null },
     authPending: false,
     checkedAt: null,
@@ -30,7 +47,7 @@ function providerState(
     terminalAgentArgs: "",
     envOverrides: [],
     loginCapability: null,
-    availabilityPending: false,
+    availabilityPending: fallback.availabilityPending,
     profiles: [],
     managedInstallState,
     versionVisibility: null,
@@ -38,68 +55,205 @@ function providerState(
   };
 }
 
-describe("providerPackPreparingFromInstallState: which states gate", () => {
-  // The three not-gated answers, each for a different reason - see the
-  // function's own doc comment. Getting any of these wrong locks users out of
-  // a provider the host would happily spawn, which is strictly worse than the
-  // bug this gate exists to fix.
+function candidate(
+  kind: ProviderCliCandidate["kind"],
+  available: boolean,
+): ProviderCliCandidate {
+  return {
+    kind,
+    path: available ? `/usr/local/bin/${kind}` : "",
+    version: null,
+    available,
+    versionPending: false,
+  };
+}
+
+// The copy and retryability assertions below all describe the BLOCKING voice -
+// a provider with nothing to fall back on. These builders pin
+// `fallbackRunnable: false` in one place so that stays deliberate rather than
+// incidental; the non-blocking voice has its own describe block.
+function blockingDownload(percent: number | null): ProviderPackPreparing {
+  return {
+    kind: "downloading",
+    percent,
+    retryAtMs: null,
+    reason: null,
+    fallbackRunnable: false,
+  };
+}
+
+function blockingFailure(
+  reason: ProviderManagedInstallErrorReason,
+  retryAtMs: number | null,
+): ProviderPackPreparing {
+  return {
+    kind: "error",
+    percent: null,
+    retryAtMs,
+    reason,
+    fallbackRunnable: false,
+  };
+}
+
+// Asserting through a null-rejecting helper rather than a `!`: a case that
+// stopped producing a state at all would otherwise pass every "does not block"
+// assertion below for entirely the wrong reason.
+function blocksExecution(preparing: ProviderPackPreparing | null): boolean {
+  if (preparing === null) {
+    throw new Error("expected a preparing state, got null");
+  }
+  return providerPackBlocksExecution(preparing);
+}
+
+describe("providerPackPreparingForProvider: which states say anything", () => {
+  // The three quiet answers, each for a different reason - see the function's
+  // own doc comment. Getting any of these wrong locks users out of a provider
+  // the host would happily spawn, which is strictly worse than the bug this
+  // gate exists to fix.
   it.each([
     ["a null state (old host / unmanaged store)", null],
-    ["an undefined state (key absent on an old wire)", undefined],
     ["installed", { status: "installed" as const }],
     [
       "absent (still shipping bundled bytes pre-cutover)",
       { status: "absent" as const },
     ],
-  ])("does not gate on %s", (_label, state) => {
-    expect(providerPackPreparingFromInstallState(state)).toBeNull();
+  ])("stays quiet on %s", (_label, state) => {
+    expect(
+      providerPackPreparingForProvider(providerState("claude-code", state)),
+    ).toBeNull();
   });
 
-  it("gates on downloading and preserves the percent", () => {
+  it("stays quiet when the key is absent on an old wire", () => {
     expect(
-      providerPackPreparingFromInstallState({
-        status: "downloading",
-        percent: 42,
-      }),
-    ).toEqual({
-      kind: "downloading",
-      percent: 42,
-      retryAtMs: null,
-      reason: null,
-    });
+      providerPackPreparingForProvider(providerState("claude-code", undefined)),
+    ).toBeNull();
+  });
+
+  it("reports downloading and preserves the percent", () => {
+    expect(
+      providerPackPreparingForProvider(
+        providerState("claude-code", { status: "downloading", percent: 42 }),
+      ),
+    ).toEqual(blockingDownload(42));
   });
 
   // N13: a live sibling host owns the transfer, so there is no observable byte
   // count. Null must survive to the renderer as null - coercing it to 0 would
   // render a stalled-looking 0% bar for a download that is actually moving.
-  it("gates on downloading with a null percent and keeps it null", () => {
+  it("reports downloading with a null percent and keeps it null", () => {
     expect(
-      providerPackPreparingFromInstallState({
-        status: "downloading",
-        percent: null,
-      }),
-    ).toEqual({
-      kind: "downloading",
-      percent: null,
-      retryAtMs: null,
-      reason: null,
-    });
+      providerPackPreparingForProvider(
+        providerState("claude-code", { status: "downloading", percent: null }),
+      ),
+    ).toEqual(blockingDownload(null));
   });
 
-  it("gates on error and carries the reason and retry time through", () => {
+  it("reports error and carries the reason and retry time through", () => {
     expect(
-      providerPackPreparingFromInstallState({
+      providerPackPreparingForProvider(
+        providerState("claude-code", {
+          status: "error",
+          reason: "disk-full",
+          message: "ENOSPC",
+          retryAtMs: 1_700_000_000_000,
+        }),
+      ),
+    ).toEqual(blockingFailure("disk-full", 1_700_000_000_000));
+  });
+});
+
+/**
+ * The gate's actual question. `providers.list` reports a managed pack's
+ * lifecycle; it does NOT report whether the provider can run, and reading the
+ * second off the first is what dimmed every provider on the machine behind
+ * `Preparing… 0%` during boot convergence - which enqueues every enabled pack
+ * at once, on hosts whose bundled binaries were sitting right there.
+ *
+ * The host is the reference implementation and these tests are written against
+ * it: `resolveProviderCli` only throws `preparing` after custom, managed, PATH
+ * and bundled have all missed. A client stricter than that is a client
+ * refusing turns the host would have run.
+ */
+describe("fallback awareness: preparing vs unable to run", () => {
+  it.each([
+    ["a bundled binary", "bundled" as const],
+    ["a PATH-discovered binary", "path" as const],
+    ["a custom path the user configured", "custom" as const],
+  ])("does not block a download behind %s", (_label, kind) => {
+    const preparing = providerPackPreparingForProvider(
+      providerStateWith(
+        "claude-code",
+        { status: "downloading", percent: 0 },
+        { candidates: [candidate(kind, true)], availabilityPending: false },
+      ),
+    );
+    expect(preparing).not.toBeNull();
+    // Still REPORTED - a surface that wants to show background progress can.
+    expect(preparing?.kind).toBe("downloading");
+    // ...but it takes nothing away.
+    expect(preparing?.fallbackRunnable).toBe(true);
+    expect(blocksExecution(preparing)).toBe(false);
+  });
+
+  it("blocks when every candidate is unavailable", () => {
+    // The case the gated-and-labelled design was built for, and the one that
+    // becomes normal after the bundled binaries stop shipping: nothing on disk
+    // to fall back to, so the turn genuinely cannot run.
+    const preparing = providerPackPreparingForProvider(
+      providerStateWith(
+        "claude-code",
+        { status: "downloading", percent: 0 },
+        {
+          candidates: [candidate("bundled", false), candidate("path", false)],
+          availabilityPending: false,
+        },
+      ),
+    );
+    expect(preparing?.fallbackRunnable).toBe(false);
+    expect(blocksExecution(preparing)).toBe(true);
+  });
+
+  it("blocks a failed pack only when it has nowhere to fall back to", () => {
+    // A failure is not special here. The user's Claude Code on PATH does not
+    // stop working because a managed copy hit ENOSPC.
+    const withFallback = providerPackPreparingForProvider(
+      providerStateWith(
+        "claude-code",
+        {
+          status: "error",
+          reason: "disk-full",
+          message: "ENOSPC",
+          retryAtMs: null,
+        },
+        { candidates: [candidate("path", true)], availabilityPending: false },
+      ),
+    );
+    expect(blocksExecution(withFallback)).toBe(false);
+
+    const alone = providerPackPreparingForProvider(
+      providerState("claude-code", {
         status: "error",
         reason: "disk-full",
         message: "ENOSPC",
-        retryAtMs: 1_700_000_000_000,
+        retryAtMs: null,
       }),
-    ).toEqual({
-      kind: "error",
-      percent: null,
-      retryAtMs: 1_700_000_000_000,
-      reason: "disk-full",
-    });
+    );
+    expect(blocksExecution(alone)).toBe(true);
+  });
+
+  it("does not block while the shell probe is still settling", () => {
+    // `availabilityPending` means `candidates` UNDER-reports: the PATH probe
+    // has not finished. The execute path awaits that same probe before it
+    // decides, so a binary this snapshot cannot see yet is one the host would
+    // spawn. Fail open for the poll tick rather than dim a working provider.
+    const preparing = providerPackPreparingForProvider(
+      providerStateWith(
+        "claude-code",
+        { status: "downloading", percent: 0 },
+        { candidates: [], availabilityPending: true },
+      ),
+    );
+    expect(blocksExecution(preparing)).toBe(false);
   });
 });
 
@@ -121,46 +275,27 @@ describe("providerPackPreparingByHarnessId", () => {
 describe("preparing labels", () => {
   it("shows a percent when one is known", () => {
     expect(
-      providerPackPreparingLabel(
-        { kind: "downloading", percent: 42, retryAtMs: null, reason: null },
-        "Claude Code",
-      ),
+      providerPackPreparingLabel(blockingDownload(42), "Claude Code"),
     ).toBe("Preparing Claude Code… 42%");
-    expect(
-      providerPackPreparingShortLabel({
-        kind: "downloading",
-        percent: 42,
-        retryAtMs: null,
-        reason: null,
-      }),
-    ).toBe("Preparing… 42%");
+    expect(providerPackPreparingShortLabel(blockingDownload(42))).toBe(
+      "Preparing… 42%",
+    );
   });
 
   it("omits the percent entirely when it is unknown, rather than saying 0%", () => {
     expect(
-      providerPackPreparingLabel(
-        { kind: "downloading", percent: null, retryAtMs: null, reason: null },
-        "Claude Code",
-      ),
+      providerPackPreparingLabel(blockingDownload(null), "Claude Code"),
     ).toBe("Preparing Claude Code…");
-    expect(
-      providerPackPreparingShortLabel({
-        kind: "downloading",
-        percent: null,
-        retryAtMs: null,
-        reason: null,
-      }),
-    ).toBe("Preparing…");
+    expect(providerPackPreparingShortLabel(blockingDownload(null))).toBe(
+      "Preparing…",
+    );
   });
 
   it("gives a failed pack distinct copy per reason, never a progress phrase", () => {
     const failed = (
       reason: "disk-full" | "network" | "verification" | "unknown",
     ) =>
-      providerPackPreparingLabel(
-        { kind: "error", percent: null, retryAtMs: null, reason },
-        "Claude Code",
-      );
+      providerPackPreparingLabel(blockingFailure(reason, null), "Claude Code");
     expect(failed("disk-full")).toContain("disk space");
     expect(failed("network")).toContain("back online");
     expect(failed("verification")).toContain("failed verification");
@@ -175,13 +310,58 @@ describe("preparing labels", () => {
       expect(failed(reason)).not.toContain("Preparing");
     }
     expect(
-      providerPackPreparingShortLabel({
-        kind: "error",
-        percent: null,
-        retryAtMs: null,
-        reason: "network",
-      }),
+      providerPackPreparingShortLabel(blockingFailure("network", null)),
     ).toBe("Setup failed");
+  });
+});
+
+/**
+ * The non-blocking voice. These strings go in front of a user whose provider
+ * WORKS - the pack is downloading or failed behind a bundled/PATH/custom
+ * binary the host will happily spawn. Softening the blocking copy would not
+ * have been enough: "Claude Code setup failed" is simply false there, and
+ * "Preparing Claude Code…" announces a wait that is not happening.
+ */
+describe("labels for an install that blocks nothing", () => {
+  const runnable = (
+    kind: ProviderPackPreparing["kind"],
+    percent: number | null,
+  ): ProviderPackPreparing => ({
+    kind,
+    percent,
+    retryAtMs: null,
+    reason: kind === "error" ? "network" : null,
+    fallbackRunnable: true,
+  });
+
+  it("leads with the fact that the provider works", () => {
+    expect(
+      providerPackPreparingLabel(runnable("downloading", 42), "Claude Code"),
+    ).toBe("Claude Code is ready to use · installing managed copy… 42%");
+    expect(
+      providerPackPreparingLabel(runnable("downloading", null), "Claude Code"),
+    ).toBe("Claude Code is ready to use · installing managed copy…");
+    expect(
+      providerPackPreparingLabel(runnable("error", null), "Claude Code"),
+    ).toBe("Claude Code is ready to use · managed copy failed to install");
+  });
+
+  it("never borrows the blocking copy", () => {
+    for (const preparing of [
+      runnable("downloading", 42),
+      runnable("downloading", null),
+      runnable("error", null),
+    ]) {
+      const label = providerPackPreparingLabel(preparing, "Claude Code");
+      // "Preparing X…" is the disabled composer's line; "X setup failed" is the
+      // dead-provider line. Neither describes a provider the user can run.
+      expect(label).not.toContain("Preparing Claude Code");
+      expect(label).not.toContain("Claude Code setup failed");
+      const short = providerPackPreparingShortLabel(preparing);
+      expect(short).not.toBe("Setup failed");
+      expect(short).not.toContain("Preparing");
+      expect(short.startsWith("Ready")).toBe(true);
+    }
   });
 });
 
@@ -199,10 +379,7 @@ describe("preparing labels", () => {
  * no retry is offered) rather than on a string this file also authored.
  */
 const detailFor = (reason: ProviderManagedInstallErrorReason): string =>
-  providerPackPreparingLabel(
-    { kind: "error", percent: null, retryAtMs: null, reason },
-    "Claude Code",
-  );
+  providerPackPreparingLabel(blockingFailure(reason, null), "Claude Code");
 
 describe("the terminal `unrepairable` reason", () => {
   it("never tells the user to retry a build that can never work", () => {
@@ -221,14 +398,9 @@ describe("the terminal `unrepairable` reason", () => {
   });
 
   it("is the only reason whose surface may not offer a retry", () => {
-    expect(
-      providerPackRetryable({
-        kind: "error",
-        percent: null,
-        retryAtMs: null,
-        reason: "unrepairable",
-      }),
-    ).toBe(false);
+    expect(providerPackRetryable(blockingFailure("unrepairable", null))).toBe(
+      false,
+    );
     // Enumerated, not sampled: every other member of the closed enum stays
     // retryable, because for those a user-initiated `providers.ensurePack` is
     // the user's only way to clear the backoff. An exclusion that grew to cover
@@ -239,25 +411,11 @@ describe("the terminal `unrepairable` reason", () => {
       "verification",
       "unknown",
     ] as const) {
-      expect(
-        providerPackRetryable({
-          kind: "error",
-          percent: null,
-          retryAtMs: null,
-          reason,
-        }),
-      ).toBe(true);
+      expect(providerPackRetryable(blockingFailure(reason, null))).toBe(true);
     }
     // A download in flight has nothing to retry either, and for the opposite
     // reason - it has not failed.
-    expect(
-      providerPackRetryable({
-        kind: "downloading",
-        percent: 42,
-        retryAtMs: null,
-        reason: null,
-      }),
-    ).toBe(false);
+    expect(providerPackRetryable(blockingDownload(42))).toBe(false);
   });
 
   it("withholds the retry for a host that cannot verify the registry", () => {
@@ -267,12 +425,7 @@ describe("the terminal `unrepairable` reason", () => {
     // `providers.ensurePack` on a host with no install machinery at all.
     // Offered-then-failed, reintroduced by a one-line vocabulary addition.
     expect(
-      providerPackRetryable({
-        kind: "error",
-        percent: null,
-        retryAtMs: null,
-        reason: "trust-unavailable",
-      }),
+      providerPackRetryable(blockingFailure("trust-unavailable", null)),
     ).toBe(false);
   });
 
@@ -298,14 +451,9 @@ describe("the terminal `unrepairable` reason", () => {
 
     for (const reason of providerManagedInstallErrorReasonSchema.options) {
       expect(decided.has(reason)).toBe(true);
-      expect(
-        providerPackRetryable({
-          kind: "error",
-          percent: null,
-          retryAtMs: null,
-          reason,
-        }),
-      ).toBe(!nonRetryable.has(reason));
+      expect(providerPackRetryable(blockingFailure(reason, null))).toBe(
+        !nonRetryable.has(reason),
+      );
     }
   });
 });
@@ -344,14 +492,11 @@ describe("the retryable `live-owner-stalled` reason", () => {
     // pass that test and strand this one with no action at all.
     expect(detailFor("live-owner-stalled")).toMatch(/retry/i);
     expect(
-      providerPackRetryable({
-        kind: "error",
-        percent: null,
+      providerPackRetryable(
         // The wire's own distinction: a real future retry time, where
         // `unrepairable` always travels with null.
-        retryAtMs: 1_700_000_000_000,
-        reason: "live-owner-stalled",
-      }),
+        blockingFailure("live-owner-stalled", 1_700_000_000_000),
+      ),
     ).toBe(true);
   });
 });

@@ -26,14 +26,54 @@ export interface ProviderPackPreparing {
   /** Why the install is stuck. Null on the `downloading` arm. */
   readonly reason:
     Extract<ProviderManagedInstallState, { status: "error" }>["reason"] | null;
+  /**
+   * True when the host would still SPAWN something for this provider right
+   * now - a bundled, PATH-discovered or custom candidate reporting
+   * `available`. It decides whether this state GATES or merely INFORMS, and it
+   * is the difference between a pack that is downloading and a provider that
+   * cannot run: those are not the same fact, and reading the second off the
+   * first is what dimmed every provider on a host with perfectly good bundled
+   * bytes.
+   */
+  readonly fallbackRunnable: boolean;
 }
 
 /**
- * The single mapping from wire state to "is this provider gated".
+ * Does the resolver have anything to spawn for this provider without the
+ * managed pack? Mirrors `resolveProviderCli`'s own precedence (custom →
+ * managed → PATH → bundled): it only reports `preparing` when EVERY tier
+ * missed, so a client that gates on the managed tier alone is stricter than
+ * the host it is speaking for.
+ *
+ * `availabilityPending` counts as runnable, and that is the fail-open reading
+ * this module has taken everywhere else. The pending flag means the shell-env
+ * PATH probe has not settled, so `candidates` under-reports; the EXECUTE path
+ * awaits that same probe before it decides, which means a PATH binary this
+ * list has not seen yet is one the host would happily spawn. Gating on the
+ * unsettled snapshot would dim a working provider for a poll tick; not gating
+ * costs at worst one bounced turn on a host that has nothing, and the host's
+ * typed `preparing` error is the backstop for exactly that.
+ *
+ * Known narrow over-openness: the D6 closure-coupled carve can make the host
+ * refuse a version-mismatched PATH candidate as a NEW holder's binary even
+ * though it reports `available` here. That mismatch is not on the wire yet
+ * (the `advisory: row-incompatibility` field is the ticket for it), so this
+ * function cannot see it. Failing open on it is the deliberate choice: the
+ * alternative today is gating every provider on every host.
+ */
+function providerHasRunnableFallback(provider: ProviderCliState): boolean {
+  if (provider.availabilityPending) return true;
+  return provider.candidates.some((candidate) => candidate.available);
+}
+
+/**
+ * The single mapping from a provider row to "is there a managed-pack state
+ * worth saying anything about".
  *
  * `null` (an old host, an unmanaged store, or a provider the staged rollout
- * has not cut over) and `installed` and `absent` all mean NOT GATED, and the
- * three for genuinely different reasons that happen to share an answer:
+ * has not cut over) and `installed` and `absent` all mean NOTHING TO REPORT,
+ * and the three for genuinely different reasons that happen to share an
+ * answer:
  *
  * - `null`/`absent` - this host has no managed-pack opinion about the
  *   provider, so the existing `available`-flag rendering on the bundled
@@ -42,22 +82,32 @@ export interface ProviderPackPreparing {
  *   it would break every provider on every pre-cutover host.
  * - `installed` - the pack is present and verified.
  *
- * Only `downloading` and `error` gate. The host resolver remains the
- * authoritative backstop either way (it throws a typed `preparing` outcome);
- * this is UX, so it fails OPEN - an unrecognized future arm leaves the
- * affordance enabled and lets the host have the final word, rather than
- * locking a user out of a provider the host would happily spawn.
+ * Only `downloading` and `error` produce a state, and producing one is NOT the
+ * same as gating - `providerPackBlocksExecution` owns that question and reads
+ * `fallbackRunnable`. Takes the whole provider row rather than just
+ * `managedInstallState` for exactly that reason: the row is the only place the
+ * fallback candidates live, and a caller holding the state alone cannot answer
+ * the question that matters.
+ *
+ * The host resolver remains the authoritative backstop throughout (it throws a
+ * typed `preparing` outcome); this is UX, so it fails OPEN - an unrecognized
+ * future arm leaves the affordance enabled and lets the host have the final
+ * word, rather than locking a user out of a provider the host would happily
+ * spawn.
  */
-export function providerPackPreparingFromInstallState(
-  state: ProviderManagedInstallState | null | undefined,
+export function providerPackPreparingForProvider(
+  provider: ProviderCliState,
 ): ProviderPackPreparing | null {
+  const state = provider.managedInstallState;
   if (state === null || state === undefined) return null;
+  const fallbackRunnable = providerHasRunnableFallback(provider);
   if (state.status === "downloading") {
     return {
       kind: "downloading",
       percent: state.percent,
       retryAtMs: null,
       reason: null,
+      fallbackRunnable,
     };
   }
   if (state.status === "error") {
@@ -66,9 +116,27 @@ export function providerPackPreparingFromInstallState(
       percent: null,
       retryAtMs: state.retryAtMs,
       reason: state.reason,
+      fallbackRunnable,
     };
   }
   return null;
+}
+
+/**
+ * Whether this state must DISABLE the affordance, as opposed to only labelling
+ * it. The one predicate every gating surface asks, so the composer, the picker
+ * rail, the terminal launcher and the Sign-in button cannot disagree about
+ * what "preparing" costs the user.
+ *
+ * A pack that is downloading while a runnable binary sits on disk blocks
+ * nothing: the host resolves the fallback and the turn runs. Only a provider
+ * with nowhere to fall back to is genuinely unavailable, which is the case the
+ * whole gated-and-labelled design was built for.
+ */
+export function providerPackBlocksExecution(
+  preparing: ProviderPackPreparing,
+): boolean {
+  return !preparing.fallbackRunnable;
 }
 
 /**
@@ -81,9 +149,7 @@ export function providerPackPreparingByHarnessId(
 ): ReadonlyMap<GuiHarnessId, ProviderPackPreparing> {
   const entries = new Map<GuiHarnessId, ProviderPackPreparing>();
   for (const provider of providers) {
-    const preparing = providerPackPreparingFromInstallState(
-      provider.managedInstallState,
-    );
+    const preparing = providerPackPreparingForProvider(provider);
     if (preparing === null) continue;
     entries.set(providerIdToGuiHarnessId(provider.providerId), preparing);
   }
@@ -98,11 +164,28 @@ export function providerPackPreparingByHarnessId(
  * Deliberately mirrors the dictation mic's `preparingLabel`: a percentage when
  * one is known, an honest indeterminate phrase when it is not, and a distinct
  * line for the failed case so a stuck install never reads as a slow one.
+ *
+ * A NON-BLOCKING state gets its own voice rather than a softened version of
+ * the blocking one. "Claude Code setup failed" in front of a user whose Claude
+ * Code is running fine from PATH is simply false, and "Preparing…" on a
+ * provider they can use right now reads as a wait they do not have. The
+ * fallback lines lead with the fact that matters - it works - and mirror the
+ * Settings notice ("Running from PATH · installing managed copy") so the two
+ * surfaces describe one situation the same way.
  */
 export function providerPackPreparingLabel(
   preparing: ProviderPackPreparing,
   providerLabel: string,
 ): string {
+  if (!providerPackBlocksExecution(preparing)) {
+    if (preparing.kind === "error") {
+      return `${providerLabel} is ready to use · managed copy failed to install`;
+    }
+    if (preparing.percent !== null) {
+      return `${providerLabel} is ready to use · installing managed copy… ${preparing.percent}%`;
+    }
+    return `${providerLabel} is ready to use · installing managed copy…`;
+  }
   if (preparing.kind === "error") {
     return `${providerLabel} setup failed - ${providerPackErrorDetail(preparing.reason)}`;
   }
@@ -116,6 +199,13 @@ export function providerPackPreparingLabel(
 export function providerPackPreparingShortLabel(
   preparing: ProviderPackPreparing,
 ): string {
+  if (!providerPackBlocksExecution(preparing)) {
+    if (preparing.kind === "error") return "Ready · managed install failed";
+    if (preparing.percent !== null) {
+      return `Ready · installing… ${preparing.percent}%`;
+    }
+    return "Ready · installing…";
+  }
   if (preparing.kind === "error") return "Setup failed";
   if (preparing.percent !== null) return `Preparing… ${preparing.percent}%`;
   return "Preparing…";
@@ -152,7 +242,13 @@ export function providerPackPreparingShortLabel(
  */
 const PROVIDER_PACK_RETRYABLE_REASONS: ReadonlySet<
   NonNullable<ProviderPackPreparing["reason"]>
-> = new Set(["disk-full", "network", "verification", "live-owner-stalled", "unknown"]);
+> = new Set([
+  "disk-full",
+  "network",
+  "verification",
+  "live-owner-stalled",
+  "unknown",
+]);
 
 export function providerPackRetryable(
   preparing: ProviderPackPreparing,

@@ -50,7 +50,10 @@ import {
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
-import { providerPackPreparingFromInstallState } from "@/components/providers/provider-pack-readiness";
+import {
+  providerPackBlocksExecution,
+  providerPackPreparingForProvider,
+} from "@/components/providers/provider-pack-readiness";
 import { ProviderApiKeySection } from "./provider-api-key-section";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
@@ -639,12 +642,16 @@ function providerCanStartProfileOauth(
   isSelectedHostLocal: boolean,
 ): boolean {
   const oauthArgs = state.loginCapability?.oauthArgs ?? null;
-  const packPreparing = providerPackPreparingFromInstallState(
-    state.managedInstallState,
-  );
+  const packPreparing = providerPackPreparingForProvider(state);
+  // Blocking, not merely preparing: a login spawns whatever the resolver
+  // spawns, so a managed pack downloading behind a runnable bundled/PATH/custom
+  // binary takes nothing away. Withholding Sign in there would strand a user
+  // whose CLI works, on a screen that shows them it works.
+  const packBlocks =
+    packPreparing !== null && providerPackBlocksExecution(packPreparing);
   return (
     isSelectedHostLocal &&
-    packPreparing === null &&
+    !packBlocks &&
     oauthArgs !== null &&
     oauthArgs.length > 0
   );

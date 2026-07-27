@@ -24,6 +24,10 @@ function providersResponse() {
 
 import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 
+// `candidates: []` is the load-bearing default here: no bundled binary, no
+// PATH install, nothing to fall back to. Every "blocks" assertion below depends
+// on it, because the gate's question is "can this provider run", not "is a
+// download in flight" - see `runnableProviderState` for the other half.
 function providerState(
   providerId: ProviderCliState["providerId"],
   managedInstallState: ProviderManagedInstallState | null,
@@ -49,13 +53,32 @@ function providerState(
   };
 }
 
+// The same provider with a runnable binary on disk. Which KIND does not matter
+// to the gate (bundled, PATH and custom all resolve), so this uses the bundled
+// one - the pre-cutover shape every host in the field is in today.
+function runnableProviderState(
+  providerId: ProviderCliState["providerId"],
+  managedInstallState: ProviderManagedInstallState | null,
+): ProviderCliState {
+  return {
+    ...providerState(providerId, managedInstallState),
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/bin/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
+  };
+}
+
 function wrapper({ children }: { readonly children: ReactNode }) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return (
-    <QueryClientProvider client={client}>{children}</QueryClientProvider>
-  );
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
 beforeEach(() => {
@@ -139,6 +162,48 @@ describe("useProviderPackGate", () => {
     expect(result.current.blocked).toBe(false);
   });
 
+  // The regression this gate was rewritten for. Boot convergence enqueues EVERY
+  // enabled pack, so `downloading 0%` is the ordinary first-boot state of every
+  // provider on the machine - while their bundled binaries sit right there,
+  // runnable. Gating on the pack alone dimmed the whole picker and took away
+  // the only send button that would have promoted a pack up the install queue.
+  it("does not block a download standing behind a runnable binary", () => {
+    testState.providers = [
+      runnableProviderState("claude-code", {
+        status: "downloading",
+        percent: 0,
+      }),
+    ];
+    const { result } = renderHook(() => useProviderPackGate("claude"), {
+      wrapper,
+    });
+    expect(result.current.blocked).toBe(false);
+    // No hint either: every consumer feeds this into a DISABLED-state tooltip,
+    // so a non-null hint here would explain why a live button is dead.
+    expect(result.current.hint).toBeNull();
+    // ...but the state is still reported, so a surface that wants to show
+    // background install progress has it.
+    expect(result.current.preparing?.kind).toBe("downloading");
+  });
+
+  it("does not block a failed pack standing behind a runnable binary", () => {
+    // A managed copy hitting ENOSPC does not stop the user's existing binary
+    // from working, and the host would resolve it without complaint.
+    testState.providers = [
+      runnableProviderState("claude-code", {
+        status: "error",
+        reason: "disk-full",
+        message: "ENOSPC",
+        retryAtMs: null,
+      }),
+    ];
+    const { result } = renderHook(() => useProviderPackGate("claude"), {
+      wrapper,
+    });
+    expect(result.current.blocked).toBe(false);
+    expect(result.current.hint).toBeNull();
+  });
+
   // Cross-provider isolation: one provider mid-download must not gate another.
   // On a first boot the host converges every enabled provider at once, so this
   // is the common case, not an edge one.
@@ -147,10 +212,9 @@ describe("useProviderPackGate", () => {
       providerState("claude-code", { status: "downloading", percent: 5 }),
       providerState("codex", { status: "installed" }),
     ];
-    const { result: claude } = renderHook(
-      () => useProviderPackGate("claude"),
-      { wrapper },
-    );
+    const { result: claude } = renderHook(() => useProviderPackGate("claude"), {
+      wrapper,
+    });
     const { result: codex } = renderHook(() => useProviderPackGate("codex"), {
       wrapper,
     });

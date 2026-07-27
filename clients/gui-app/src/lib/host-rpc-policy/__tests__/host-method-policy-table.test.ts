@@ -16,6 +16,7 @@ import {
   ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE,
   ONBOARDING_DRAFT_STALE_ERROR_POLL_LANE,
   PROVIDERS_INITIAL_ERROR_POLL_LANE,
+  PROVIDERS_INSTALLING_POLL_LANE,
   PROVIDERS_LIMITED_POLL_LANE,
   PROVIDERS_PENDING_POLL_LANE,
   PROVIDERS_STALE_ERROR_POLL_LANE,
@@ -141,10 +142,45 @@ describe("host method poll policy table", () => {
     expect(policy.classify(data)).toBe(PROVIDERS_PENDING_POLL_LANE);
   });
 
-  it("orders providers lanes pending, limited, then steady", () => {
+  it("orders providers lanes installing, pending, limited, then steady", () => {
     const policy = HOST_METHOD_POLL_TABLE["providers.list"].poll;
 
     expect(policy.classify(undefined)).toBe(false);
+    // Ahead of the probe lane, and the fixture proves the ordering rather than
+    // the arm: both conditions hold at once here, which is the ordinary first
+    // boot (shell probe running, packs converging). Classified as `pending` a
+    // download's progress would decay to a 30-second refresh.
+    expect(
+      policy.classify({
+        providers: [
+          {
+            enabled: true,
+            authPending: true,
+            availabilityPending: false,
+            candidates: [],
+            profiles: [],
+            managedInstallState: { status: "downloading", percent: 40 },
+          },
+        ],
+      }),
+    ).toBe(PROVIDERS_INSTALLING_POLL_LANE);
+    // ...and it is the DOWNLOADING arm specifically, not "a managed pack
+    // exists". A settled pack must fall straight through to steady, or every
+    // host with a registry would poll `providers.list` every 5s forever.
+    expect(
+      policy.classify({
+        providers: [
+          {
+            enabled: true,
+            authPending: false,
+            availabilityPending: false,
+            candidates: [],
+            profiles: [],
+            managedInstallState: { status: "installed" },
+          },
+        ],
+      }),
+    ).toBe(PROVIDERS_STEADY_POLL_LANE);
     expect(
       policy.classify({
         providers: [
@@ -172,6 +208,21 @@ describe("host method poll policy table", () => {
       }),
     ).toBe(PROVIDERS_LIMITED_POLL_LANE);
     expect(policy.classify({ providers: [] })).toBe(PROVIDERS_STEADY_POLL_LANE);
+  });
+
+  // Not cosmetic, and the reason it is asserted as a bound rather than as two
+  // magic numbers: `providers.list` is the ONLY source of managed-install
+  // progress, and the host reports `downloading` at a full fraction for the
+  // whole extract-and-verify phase. At the pending lane's 30s ceiling - let
+  // alone steady's 15 minutes - a finished-looking bar sits frozen on screen
+  // for exactly the stretch where a user concludes the install is hung.
+  it("keeps the installing lane fast enough to animate a progress bar", () => {
+    expect(PROVIDERS_INSTALLING_POLL_LANE.maxDelayMs).toBeLessThanOrEqual(
+      5 * 1_000,
+    );
+    expect(PROVIDERS_INSTALLING_POLL_LANE.maxDelayMs).toBeLessThan(
+      PROVIDERS_PENDING_POLL_LANE.maxDelayMs,
+    );
   });
 
   it("keeps condition error counters independent from their data lanes", () => {

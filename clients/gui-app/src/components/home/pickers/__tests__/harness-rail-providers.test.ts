@@ -156,11 +156,15 @@ describe("visibleRailEntries: managed-pack readiness", () => {
   function unavailable(id: "claude" | "codex"): HarnessOption {
     return { ...harness(id), available: false };
   }
+  // `fallbackRunnable: false` on purpose: this block is about the provider
+  // that has NO binary yet (see the comment below), which is exactly the case
+  // that still gates.
   const downloading: ProviderPackPreparing = {
     kind: "downloading",
     percent: 42,
     retryAtMs: null,
     reason: null,
+    fallbackRunnable: false,
   };
 
   // The load-bearing one. On a first boot the host converges EVERY enabled
@@ -192,7 +196,13 @@ describe("visibleRailEntries: managed-pack readiness", () => {
       preparingByHarnessId: new Map([
         [
           "claude",
-          { kind: "downloading", percent: null, retryAtMs: null, reason: null },
+          {
+            kind: "downloading",
+            percent: null,
+            retryAtMs: null,
+            reason: null,
+            fallbackRunnable: false,
+          },
         ],
       ]),
       profilesByHarnessId: new Map(),

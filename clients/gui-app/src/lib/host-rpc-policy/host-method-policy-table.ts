@@ -82,6 +82,24 @@ export const PROVIDERS_PENDING_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 800,
   maxDelayMs: 30 * SECOND_MS,
 };
+/**
+ * A managed provider pack is actively downloading. Mirrors the speech model's
+ * download lane below (1.5s → 5s), for the same reason: `providers.list` is
+ * the ONLY source of install progress, so its cadence IS the progress bar's
+ * frame rate.
+ *
+ * A tighter cap than `providers.pending` on purpose. A shell probe that has
+ * not settled after half a minute is genuinely worth backing off from; a
+ * download is not - the wire sits at `downloading` with a full fraction
+ * through the entire extract-and-verify phase, so a 30s (let alone 15min)
+ * cadence leaves a finished-looking bar frozen on screen for the exact stretch
+ * where the user is most likely to conclude the install is hung.
+ */
+export const PROVIDERS_INSTALLING_POLL_LANE: ConditionPollLane = {
+  id: "providers.installing",
+  initialDelayMs: 1_500,
+  maxDelayMs: 5 * SECOND_MS,
+};
 export const PROVIDERS_LIMITED_POLL_LANE: ConditionPollLane = {
   id: "providers.limited",
   initialDelayMs: 30 * SECOND_MS,
@@ -665,6 +683,14 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("providers.list", {
       classify: (data) => {
         if (data === undefined) return false;
+        // Ahead of the probe lane deliberately. Both can be true at once on a
+        // first boot, and `providers.pending` decays to 30s while an install
+        // needs a bounded 5s - taking the faster, tighter-capped lane while
+        // bytes are moving is the only ordering that keeps progress readable.
+        const hasInstallInFlight = data.providers.some(
+          (provider) => provider.managedInstallState?.status === "downloading",
+        );
+        if (hasInstallInFlight) return PROVIDERS_INSTALLING_POLL_LANE;
         const hasPendingProbe = data.providers.some(
           (provider) =>
             provider.enabled &&

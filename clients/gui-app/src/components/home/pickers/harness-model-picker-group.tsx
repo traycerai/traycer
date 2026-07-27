@@ -25,6 +25,7 @@ import {
 } from "@/components/home/pickers/harness-rail-providers";
 import { AccentDot } from "@/components/providers/accent-dot";
 import {
+  providerPackBlocksExecution,
   providerPackPreparingLabel,
   providerPackPreparingShortLabel,
   providerPackRetryable,
@@ -165,12 +166,32 @@ function railButtonTitle(entry: RailEntry, disabled: boolean): string {
     );
     // Only a pack whose failure a retry can actually move gets the retry
     // sentence - a terminal `unrepairable` cell would be inviting a click the
-    // host is guaranteed to no-op.
-    return providerPackRetryable(entry.preparing)
-      ? `${status} Click to retry.`
-      : status;
+    // host is guaranteed to no-op. A NON-BLOCKING failure is excluded for a
+    // different reason: that tab's click still means "select", so promising a
+    // retry would describe an action the click does not take.
+    return railEntryPackRetryable(entry) ? `${status} Click to retry.` : status;
   }
   return entry.harness.label;
+}
+
+// The rail's two pack questions, answered in one place so a tab's appearance,
+// its tooltip and its click handler cannot disagree.
+//
+// A pack state only GATES when the provider has nowhere to fall back to
+// (`providerPackBlocksExecution`); otherwise the tab stays selectable and the
+// progress ring is pure information. Retry rides on top of gating rather than
+// beside it: an ungated tab already has a click that means something.
+function railEntryPackGated(entry: RailEntry): boolean {
+  const preparing = entry.preparing;
+  return preparing !== null && providerPackBlocksExecution(preparing);
+}
+
+function railEntryPackRetryable(entry: RailEntry): boolean {
+  const preparing = entry.preparing;
+  if (preparing === null || !providerPackBlocksExecution(preparing)) {
+    return false;
+  }
+  return providerPackRetryable(preparing);
 }
 
 // Accessible name for a rail tab. Mirrors `railButtonTitle`'s precedence so a
@@ -237,11 +258,16 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
   const preparingDescriptionId = useId();
   const harness = entry.harness;
   const preparing = entry.preparing;
-  // The settled UX decision, mirroring the dictation mic: a provider whose
-  // managed pack is not ready is GATED and labelled, never selectable and
-  // never silently missing. The host resolver is still the authoritative
-  // backstop - this only stops the user starting a turn that would bounce.
-  const packGated = preparing !== null;
+  // The settled UX decision, mirroring the dictation mic: a provider that
+  // CANNOT RUN is GATED and labelled, never selectable and never silently
+  // missing. The host resolver is still the authoritative backstop - this only
+  // stops the user starting a turn that would bounce.
+  //
+  // A pack downloading behind a runnable bundled/PATH/custom binary is not
+  // that case: the turn would resolve and run, so the tab stays selectable and
+  // the progress ring below reports the background install without taking the
+  // provider away.
+  const packGated = railEntryPackGated(entry);
   // ...with one exception that is a real affordance rather than a leak: a
   // FAILED pack's tab is clickable, and the click means "retry", not "select".
   // That keeps the retry a genuine user gesture (which is what earns the
@@ -252,7 +278,7 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
   // an `unrepairable` cell is terminal host-side, so a click there would reach
   // `providers.ensurePack` and be a guaranteed no-op. Such a tab stays gated,
   // labelled and unfocusable, exactly like a downloading one.
-  const packRetryable = preparing !== null && providerPackRetryable(preparing);
+  const packRetryable = railEntryPackRetryable(entry);
   const selectable = !disabled && !packGated;
   // A retryable (failed) tab keeps keyboard focus - the retry IS its action.
   const focusable = selectable || packRetryable;
@@ -364,14 +390,21 @@ function PreparingDescription(props: {
 
 // The tab's glyph: the plain harness icon, or the same icon inside a progress
 // ring while its pack is being readied.
+//
+// The failure ring is withheld from a provider that runs anyway. A managed
+// copy that could not install is a real fact and the tooltip and sr-only
+// description both still carry it, but painting a failure marker on a provider
+// the user can select and run right now misreports their situation - the place
+// that owes them the detail is Settings → Providers, which shows it.
 function RailButtonIcon(props: { readonly entry: RailEntry }): ReactNode {
   const { harness, preparing } = props.entry;
   if (preparing === null) return <HarnessIcon harnessId={harness.id} />;
+  const failed = preparing.kind === "error";
+  if (failed && !providerPackBlocksExecution(preparing)) {
+    return <HarnessIcon harnessId={harness.id} />;
+  }
   return (
-    <PackProgressRing
-      percent={preparing.percent}
-      failed={preparing.kind === "error"}
-    >
+    <PackProgressRing percent={preparing.percent} failed={failed}>
       <HarnessIcon harnessId={harness.id} />
     </PackProgressRing>
   );
