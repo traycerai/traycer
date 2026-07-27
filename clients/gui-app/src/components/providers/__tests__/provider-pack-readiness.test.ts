@@ -4,6 +4,7 @@ import type {
   ProviderManagedInstallErrorReason,
   ProviderManagedInstallState,
 } from "@traycer/protocol/host/provider-schemas";
+import { providerManagedInstallErrorReasonSchema } from "@traycer/protocol/host/provider-schemas";
 import {
   providerPackPreparingByHarnessId,
   providerPackPreparingFromInstallState,
@@ -257,6 +258,55 @@ describe("the terminal `unrepairable` reason", () => {
         reason: null,
       }),
     ).toBe(false);
+  });
+
+  it("withholds the retry for a host that cannot verify the registry", () => {
+    // The trap that made `providerPackRetryable` an allow-list. Under the old
+    // exclusion form (`reason !== "unrepairable"`) this new member was
+    // retryable BY DEFAULT - the rail would draw a button whose click reaches
+    // `providers.ensurePack` on a host with no install machinery at all.
+    // Offered-then-failed, reintroduced by a one-line vocabulary addition.
+    expect(
+      providerPackRetryable({
+        kind: "error",
+        percent: null,
+        retryAtMs: null,
+        reason: "trust-unavailable",
+      }),
+    ).toBe(false);
+  });
+
+  it("forces a retryability decision for every reason the protocol defines", () => {
+    // Enumerating the CLOSED SET from the schema itself, not a hand-copied
+    // list: the failure mode this whole allow-list exists for is a new member
+    // silently inheriting a default. A member added to the protocol without a
+    // deliberate choice here fails this test rather than shipping a button
+    // that does nothing.
+    const decided = new Set<ProviderManagedInstallErrorReason>([
+      "disk-full",
+      "network",
+      "verification",
+      "unknown",
+      "live-owner-stalled",
+      "unrepairable",
+      "trust-unavailable",
+    ]);
+    const nonRetryable = new Set<ProviderManagedInstallErrorReason>([
+      "unrepairable",
+      "trust-unavailable",
+    ]);
+
+    for (const reason of providerManagedInstallErrorReasonSchema.options) {
+      expect(decided.has(reason)).toBe(true);
+      expect(
+        providerPackRetryable({
+          kind: "error",
+          percent: null,
+          retryAtMs: null,
+          reason,
+        }),
+      ).toBe(!nonRetryable.has(reason));
+    }
   });
 });
 

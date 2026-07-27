@@ -135,18 +135,30 @@ export function providerPackPreparingShortLabel(
  * "gated and labelled, never offered-then-failed" rule the rest of this module
  * follows, applied one level in: the tab is still labelled with why it failed.
  *
- * A plain exclusion rather than an allow-list because an unrecognized future
- * reason cannot reach this function: `managedInstallState` is decoded with
- * `.catch(null)` over the WHOLE state, so a member this client does not know
- * normalizes the state to null and nothing gates at all. Every reason that gets
- * here is a member this client knows, and all of them but `unrepairable` -
- * including `live-owner-stalled`, whose whole point is that a retry can move it
- * - must stay retryable.
+ * An ALLOW-LIST, not an exclusion. The exclusion form was sound only while
+ * `unrepairable` was the single non-retryable member, and its own justification
+ * - unknown members normalize to null, so everything reaching here is known -
+ * is exactly what makes it dangerous now: a KNOWN new member is retryable by
+ * default, silently. `trust-unavailable` proved it. That reason means the host
+ * has no install machinery at all, so the exclusion form would have drawn a
+ * retry button whose click reaches `providers.ensurePack` on a host that
+ * cannot serve it - offered-then-failed, the precise thing this module exists
+ * to prevent, reintroduced by a one-line vocabulary addition.
+ *
+ * The set now has two non-retryable members for two unrelated causes (a
+ * defective published build; a host that cannot verify its keyring), which is
+ * the point at which "list what is allowed" stops being ceremony. Adding a
+ * reason now requires deciding whether a click can move it.
  */
+const PROVIDER_PACK_RETRYABLE_REASONS: ReadonlySet<
+  NonNullable<ProviderPackPreparing["reason"]>
+> = new Set(["disk-full", "network", "verification", "live-owner-stalled", "unknown"]);
+
 export function providerPackRetryable(
   preparing: ProviderPackPreparing,
 ): boolean {
-  return preparing.kind === "error" && preparing.reason !== "unrepairable";
+  if (preparing.kind !== "error" || preparing.reason === null) return false;
+  return PROVIDER_PACK_RETRYABLE_REASONS.has(preparing.reason);
 }
 
 function providerPackErrorDetail(
@@ -176,6 +188,14 @@ function providerPackErrorDetail(
       // thing that can (a new release) and the one move they own (a PATH or
       // custom install they point Traycer at).
       return "this build is defective and reinstalling cannot fix it. A corrected version has to be published - until then, install the CLI yourself and select it in Settings → Providers.";
+    case "trust-unavailable":
+      // Not about this pack, and not something a retry can move: the host
+      // could not verify the registry's keyring, so it has no install
+      // machinery at all. The copy names the two things that DO clear it - the
+      // connection coming back (the host re-attempts on its own) and a
+      // restart - and deliberately never says "retry", because the affordance
+      // is withheld for exactly this reason.
+      return "this device could not verify the provider registry. It will try again once you're back online; restarting Traycer also retries immediately.";
     default:
       return "retry to try again.";
   }

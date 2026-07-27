@@ -1768,6 +1768,17 @@ export const providersTouchLoginV10 = defineRpcContract({
  * `E_HOST_UNSUPPORTED` here beyond not offering the retry affordance - which
  * it already will not, because such a host reports `managedInstallState: null`
  * and the affordance only exists on the `downloading`/`error` arms.
+ *
+ * That last clause used to be the WHOLE safety argument, and
+ * `trust-unavailable` retired it: a host whose keyring could not be verified
+ * now reports the `error` arm, so "null means no affordance" no longer covers
+ * every host this method cannot serve. Two mechanisms replace it, and both are
+ * load-bearing - neither is defence in depth for the other. The client must not
+ * draw a retry affordance for `trust-unavailable` (see
+ * `providerManagedInstallErrorReasonSchema`), and a host with no install
+ * machinery must REFUSE this call with a typed error rather than answering
+ * `managedInstallState: null`, which is indistinguishable from success on a
+ * pack that is simply absent and turns a click into a silent no-op forever.
  */
 export const providersEnsurePackV10 = defineRpcContract({
   method: "providers.ensurePack",

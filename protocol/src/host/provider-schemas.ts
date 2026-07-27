@@ -241,6 +241,24 @@ export type ProviderCliCandidate = z.infer<typeof providerCliCandidateSchema>;
  * `unknown`, because `unknown` means the host could not classify the failure at
  * all, and this one is classified precisely - the host detected it on purpose
  * and has a typed error for it.
+ *
+ * `trust-unavailable` is the third pole, and the only reason that is not about
+ * a PACK at all - it is about the host. The registry keyring could not be
+ * verified this process (fetch failed, no cached copy), so there is no install
+ * machinery to schedule anything with. It exists because `null` was carrying
+ * three different facts at once: "this host has no managed packs by design",
+ * "this build has no trust root baked yet" and "this host expected to serve
+ * managed packs and currently cannot". The first two are intended states the
+ * renderer must keep falling back on; the third is an outage, and reporting it
+ * as `null` made a host that could not serve a provider look identical to one
+ * that was never asked to - the provider silently vanished from the picker and
+ * a reached turn fell through to generic "install it yourself" copy.
+ *
+ * It is RETRYABLE in the sense that the condition clears on its own (the host
+ * re-attempts the keyring on the next kick), but a user-facing retry button is
+ * the wrong affordance: the click cannot move it and `providers.ensurePack`
+ * refuses on a host in this state. Its copy names reconnecting or restarting,
+ * never "retry". It always travels with `retryAtMs: null`.
  */
 export const providerManagedInstallErrorReasonSchema = z.enum([
   "disk-full",
@@ -249,6 +267,7 @@ export const providerManagedInstallErrorReasonSchema = z.enum([
   "unknown",
   "unrepairable",
   "live-owner-stalled",
+  "trust-unavailable",
 ]);
 export type ProviderManagedInstallErrorReason = z.infer<
   typeof providerManagedInstallErrorReasonSchema
@@ -1592,8 +1611,14 @@ export type ProvidersEnsurePackRequest = z.infer<
 /**
  * The pack's state as of the kick, in the same vocabulary `providers.list`
  * carries. `null` where that field is null there: the provider has no managed
- * pack on this host (store not managed, no registry keyring, or a provider the
- * staged rollout has not cut over), so there was nothing to ensure.
+ * pack on this host (store not managed, or a provider the staged rollout has
+ * not cut over), so there was nothing to ensure.
+ *
+ * A host with no install machinery at all does NOT answer null here - it
+ * refuses the call with an error. Null and "refused" would otherwise be the
+ * same response, and a client cannot tell a kick it should poll for from one
+ * that did nothing and never will. That is how a retry affordance stays
+ * offered forever for a click that cannot work.
  */
 export const providersEnsurePackResponseSchema = z.object({
   managedInstallState: providerManagedInstallStateSchema.nullable(),
