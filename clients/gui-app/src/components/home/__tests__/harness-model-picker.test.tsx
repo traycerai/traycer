@@ -1511,6 +1511,90 @@ describe("<HarnessModelPicker />", () => {
     expect(selections).toEqual([]);
   });
 
+  // P1. Every other test in this file leaves `candidates: []`, so
+  // `fallbackRunnable` has always been false and the picker's "is this provider
+  // selectable" logic has only ever been exercised against packs that DO block.
+  // The state below - downloading behind a runnable binary - is the common one
+  // on a first boot, and it is the one the rail deliberately keeps selectable.
+  // The rail's own non-blocking copy: it leads with the fact that matters to the
+  // user (the provider works right now) and reports the download second.
+  const PREPARING_TAB_NAME =
+    "Claude is ready to use · installing managed copy… 30%";
+
+  function downloadingBehindRunnableBinarySetup(): void {
+    const codex = codexModels();
+    // available: true - the bundled binary is on disk and the host will spawn
+    // it. The managed pack downloading in the background is an upgrade, not a
+    // prerequisite.
+    queryMock.harnesses = [CLAUDE_HARNESS, CODEX_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CLAUDE_HARNESS, []),
+      catalogHarness(CODEX_HARNESS, codex),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", []],
+    ]);
+    queryMock.providerStates = [
+      {
+        ...providerCliState({
+          providerId: "claude-code",
+          authStatus: "authenticated",
+          apiKey: { supported: false, configured: false, source: null },
+        }),
+        candidates: [
+          {
+            kind: "bundled",
+            path: "/opt/traycer/resources/providers/claude/claude",
+            version: "1.0.0",
+            available: true,
+            versionPending: false,
+          },
+        ],
+        managedInstallState: { status: "downloading", percent: 30 },
+      },
+    ];
+  }
+
+  it("offers the tab of a provider downloading behind a runnable binary", async () => {
+    // The PRECONDITION for the bounce below, pinned separately because it is
+    // the rail's decision (`railEntryPackGated`) and not the picker's: this
+    // assertion passes with or without the resolveActiveProviderId fix. The tab
+    // is labelled, because the download is real and worth reporting, and NOT
+    // disabled, because nothing about it stops the user running a turn - which
+    // is precisely why the selection landing elsewhere was a visible bounce
+    // rather than a harmless no-op.
+    downloadingBehindRunnableBinarySetup();
+
+    renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", { name: PREPARING_TAB_NAME });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("downloading");
+    expect(claudeTab.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("does not bounce the selection off a provider downloading behind a runnable binary", async () => {
+    // The failure P1 named: the rail offered the tab, `handleRailEntryChange`
+    // committed the selection, and `resolveActiveProviderId` then recomputed
+    // and threw it away - so the tab visibly sprang back, once per provider,
+    // until the whole ~1.6 GB queue drained. Asserted on the browsed provider
+    // rather than the click handler because the bounce happened AFTER the
+    // commit: a test that only checked the click would have passed throughout.
+    downloadingBehindRunnableBinarySetup();
+
+    renderPicker(undefined);
+    await openPicker();
+
+    fireEvent.click(screen.getByRole("tab", { name: PREPARING_TAB_NAME }));
+
+    expect(
+      screen
+        .getByRole("tab", { name: PREPARING_TAB_NAME })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
   it("labels an unknown-progress download without inventing a percent", async () => {
     // N13: a live sibling host owns the transfer, so there is no byte count to
     // report. "0%" would read as stalled; the honest label omits it.

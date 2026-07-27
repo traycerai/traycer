@@ -55,6 +55,7 @@ import {
   visibleRailEntries,
 } from "@/components/home/pickers/harness-rail-providers";
 import {
+  providerPackBlocksExecution,
   providerPackPreparingByHarnessId,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
@@ -1034,7 +1035,10 @@ function resolveActiveProviderId(input: {
   readonly activeProviderId: ProviderId;
   readonly selectedProviderId: ProviderId;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
-  readonly preparingByHarnessId: ReadonlyMap<GuiHarnessId, ProviderPackPreparing>;
+  readonly preparingByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ProviderPackPreparing
+  >;
 }): ProviderId {
   const {
     harnesses,
@@ -1043,13 +1047,27 @@ function resolveActiveProviderId(input: {
     degradedHarnessIds,
     preparingByHarnessId,
   } = input;
-  // A provider whose pack is still being readied is visible but NOT
-  // selectable, so the picker must never auto-land on it - otherwise a first
-  // boot would open onto a provider the user cannot pick and whose model list
-  // is empty.
-  const selectable = (harness: HarnessOption): boolean =>
-    !preparingByHarnessId.has(harness.id) &&
-    (harness.available || railHarnessDegraded(harness, degradedHarnessIds));
+  // A provider the user CANNOT RUN is visible but not selectable, so the picker
+  // never auto-lands on it - otherwise a first boot would open onto a provider
+  // whose model list is empty and whose turn would bounce.
+  //
+  // "Cannot run" is `providerPackBlocksExecution`, the same question
+  // `railEntryPackGated` asks, and NOT "has a pack state at all". Those differ
+  // for exactly the case the lazy-download work created: a pack downloading
+  // behind a runnable bundled binary. Treating that as unselectable here while
+  // the rail deliberately renders its tab as selectable made the two disagree -
+  // the tab drew a shortcut badge, accepted the click, committed the selection,
+  // and then this function recomputed and threw it away. The user saw the tab
+  // bounce back, once per provider, for as long as the queue took to drain.
+  const selectable = (harness: HarnessOption): boolean => {
+    const preparing = preparingByHarnessId.get(harness.id);
+    if (preparing !== undefined && providerPackBlocksExecution(preparing)) {
+      return false;
+    }
+    return (
+      harness.available || railHarnessDegraded(harness, degradedHarnessIds)
+    );
+  };
   if (
     harnesses.some(
       (harness) => harness.id === activeProviderId && selectable(harness),
