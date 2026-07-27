@@ -477,10 +477,7 @@ function parseLayer0Frame(value: unknown): Layer0Frame | null {
       ? null
       : { attemptId: value.attemptId, layer0: "declined", incumbentEvidence };
   }
-  if (
-    (value.layer0 === "degraded" || value.layer0 === "unavailable") &&
-    typeof value.evidence === "string"
-  ) {
+  if (value.layer0 === "degraded" && typeof value.evidence === "string") {
     const cause = parseUnavailableCause(value.cause);
     return cause === null
       ? null
@@ -529,11 +526,16 @@ function parseIncumbentEvidence(
 
 function parseUnavailableCause(
   value: unknown,
-): Extract<Layer0Frame, { readonly layer0: "unavailable" }>["cause"] | null {
+): Extract<Layer0Frame, { readonly layer0: "degraded" }>["cause"] | null {
+  // Every string cause the host can emit. Enumerated rather than pattern
+  // matched so a new one arriving from a newer host decodes as `null` (the
+  // frame is ignored, the probe stays inconclusive) rather than as a
+  // confidently-wrong cause the CLI then reports to a user.
   if (
     value === "addon-load-failed" ||
     value === "fs-unsupported" ||
-    value === "lock-path-invalid"
+    value === "lock-path-invalid" ||
+    value === "sharing-violation-unattested"
   ) {
     return value;
   }

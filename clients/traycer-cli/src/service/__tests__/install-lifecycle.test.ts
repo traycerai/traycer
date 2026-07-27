@@ -96,6 +96,13 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
     stop,
     start,
     restart,
+    stopForRestart: vi.fn(async () => {
+      await stop();
+      return { forcedRecycle: false };
+    }),
+    relaunchAfterRestart: vi.fn(async () => {
+      await start();
+    }),
     retireCompetingRegistration,
     takeoverDesktopRegistration: vi.fn(async () => ({
       kind: "not-applicable" as const,

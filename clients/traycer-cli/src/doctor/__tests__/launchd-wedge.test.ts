@@ -118,7 +118,7 @@ describe.runIf(process.platform !== "win32")("probeMacosWedgedJob", () => {
     expect(targets[0]).toContain("ai.traycer.host.agent");
   });
 
-  it("falls through an absent agent label to a wedged CLI-owned job and routes to restart", async () => {
+  it("falls through an absent agent label to a wedged CLI-owned job and routes to a real RE-REGISTRATION, never a restart", async () => {
     const issue = await probeMacosWedgedJob({
       labelId: "ai.traycer.host",
       agentLabelId: "ai.traycer.host.agent",
@@ -135,9 +135,21 @@ describe.runIf(process.platform !== "win32")("probeMacosWedgedJob", () => {
       ownership: "cli-or-other",
       reasons: ["job-state-spawn-failed"],
     });
-    // CLI-owned registration repairs through the service controller.
-    expect(issue?.terminalCommand).toBe("traycer host restart");
-    expect(issue?.fixAction).toBe("host-start");
+    // A wedged job is wedged in the definition launchd has CACHED. Only a
+    // bootout/bootstrap cycle replaces it, and `service install` is the
+    // operation that performs one (pinned behaviourally in macos.test.ts:
+    // "runs print -> bootout -> bootstrap -> kickstart").
+    expect(issue?.terminalCommand).toBe("traycer host service install");
+    expect(issue?.fixAction).toBe("service-install");
+    // Pinned in the other direction too, because the wrong answer here is
+    // not a missing action but a plausible one that cannot work: `restart`
+    // ends in `kickstart -k` against that same cached definition, and both
+    // `host-start` and `host-restart` resolve to `restartHost()` in the GUI.
+    // Offering either returns the user to this exact card.
+    expect(issue?.terminalCommand).not.toBe("traycer host restart");
+    expect(issue?.fixAction).not.toBe("host-start");
+    expect(issue?.fixAction).not.toBe("host-restart");
+    expect(issue?.message).toContain("cannot fix this");
   });
 
   it("stays silent when both labels are absent", async () => {

@@ -16,8 +16,6 @@ import { attestLaunchdSupervisorPid } from "../lifecycle-probe";
 import { parseBootstrapLogLine } from "../bootstrap-log";
 import {
   interpretProbeMarker,
-  waitForAttemptReadiness,
-  type AttemptReadinessObservation,
   type ProbeMarker,
   type ProbeSupervisorAttestation,
 } from "@traycer-clients/shared/host-lifecycle";
@@ -361,148 +359,103 @@ describe.skipIf(!ENABLED)(
       expect(attestation).toBeNull();
     });
 
-    it("M8: fallback label provision + bootstrap + attempt-scoped readiness marker", async () => {
-      await withScopedFallbackReadiness(
-        async ({
-          baseline,
-          hostRoot,
-          installRecordPath,
-          label,
-          pidPath,
-          supervisorMarker,
-        }) => {
-          // Baseline is captured before provisioning. The supervisor evidence is
-          // its real production `starting` log marker, not child-authored state.
-          // The child contributes only later pid/endpoint rungs as the contract
-          // requires.
-          const install = JSON.parse(
-            await readFile(installRecordPath, "utf8"),
-          ) as {
-            readonly installId: string;
-          };
+    it(
+      "M8: fallback label provision + bootstrap + attempt-scoped readiness marker",
+      async () => {
+        await withScopedFallbackReadiness(
+          async ({
+            baseline,
+            hostRoot,
+            installRecordPath,
+            label,
+            pidPath,
+            supervisorMarker,
+          }) => {
+            // Baseline is captured before provisioning. The supervisor evidence is
+            // its real production `starting` log marker, not child-authored state.
+            // The child contributes only later pid/endpoint rungs as the contract
+            // requires.
+            const install = JSON.parse(
+              await readFile(installRecordPath, "utf8"),
+            ) as {
+              readonly installId: string;
+            };
 
-          const readiness = await waitForAttemptReadiness(
-            {
-              observe: async (): Promise<AttemptReadinessObservation> => {
+            // The poll is inlined rather than driven through
+            // `waitForAttemptReadiness`. That helper had zero production
+            // callers and went with the parked decision layer; what M8 proves
+            // does not depend on it. The SUBJECT here is live: a real
+            // fallback-provisioned LaunchAgent publishing a real `pid.json`
+            // whose generation matches the install record, on a socket that
+            // really answers. `highestRung: "endpoint"` is that whole chain.
+            //
+            // Its previous budgets could never have run: 30 s initial / 90 s
+            // maximum inside a 15 s vitest deadline, so the extension path was
+            // unreachable by construction and anything slower than 15 s died
+            // on the deadline before the policy decided anything. One bound
+            // now, comfortably inside one deadline.
+            const readiness = await pollForEndpointReadiness({
+              deadlineMs: READINESS_BUDGET_MS,
+              pollIntervalMs: 500,
+              observe: async () => {
                 const pidMetadata = await readFallbackPidMetadata(pidPath);
-                return {
-                  launchdPid: supervisorMarker.launchdPid,
-                  supervisorAttemptId: supervisorMarker.attemptId,
-                  supervisorPid: supervisorMarker.supervisorPid,
-                  attemptMarkerIdentity: supervisorMarker.identity,
-                  attemptMarkerLength: supervisorMarker.length,
-                  pidMetadata,
-                  pidGeneration: pidMetadata?.generation ?? null,
-                  expectedGeneration: install.installId,
-                  endpoint:
-                    pidMetadata === null
-                      ? "unreachable"
-                      : (await fetch(pidMetadata.websocketUrl)).ok
-                        ? "reachable"
-                        : "unreachable",
-                  terminal: null,
-                };
+                if (pidMetadata === null) return { rung: "supervisor" };
+                if (pidMetadata.generation !== install.installId) {
+                  return { rung: "pid", detail: "generation mismatch" };
+                }
+                const answered = await fetch(pidMetadata.websocketUrl).then(
+                  (response) => response.ok,
+                  () => false,
+                );
+                return answered ? { rung: "endpoint" } : { rung: "pid" };
               },
-              sleep,
-              now: Date.now,
-            },
-            {
-              attemptId: supervisorMarker.attemptId,
-              baseline,
-              initialBudgetMs: 30_000,
-              progressExtensionMs: 15_000,
-              maximumBudgetMs: 90_000,
-              pollIntervalMs: 1_000,
-            },
-          );
+            });
 
-          expect(readiness).toMatchObject({
-            readiness: { kind: "ready", attemptId: supervisorMarker.attemptId },
-            highestRung: "endpoint",
-          });
-          expect(label).toContain(".fallback");
-          expect(hostRoot).toContain(".traycer/host/dev");
-        },
-      );
-    }, 15_000);
+            expect(
+              readiness.rung,
+              // On failure this is the difference between "the harness is
+              // slow" and "R3 reproduced on a clean machine", so the message
+              // has to carry the evidence rather than make someone re-run it
+              // with logging added.
+              `fallback host never reached the endpoint rung within ${READINESS_BUDGET_MS}ms. ` +
+                `Highest rung: ${readiness.rung}${readiness.detail === undefined ? "" : ` (${readiness.detail})`}. ` +
+                `attemptId=${supervisorMarker.attemptId} launchdPid=${supervisorMarker.launchdPid} ` +
+                `supervisorPid=${supervisorMarker.supervisorPid}\n` +
+                `launchctl print:\n${await describeJobState(label)}\n` +
+                `host.log tail:\n${await tailFile(join(hostRoot, "host.log"), 40)}`,
+            ).toBe("endpoint");
+            expect(label).toContain(".fallback");
+            expect(hostRoot).toContain(".traycer/host/dev");
+            expect(baseline).not.toBeNull();
+          },
+        );
+      },
+      READINESS_BUDGET_MS + 20_000,
+    );
 
     /*
-     * M10 — I5, against a real transition.
+     * M10 — REMOVED with the parked decision layer.
      *
-     * The previous shape booted out one `/bin/sleep` job, confirmed the same
-     * plist was still on disk, and bootstrapped that same plist again. There was
-     * no old/new registration pair, no journal, no choreography, no kill point
-     * and no prefix assertion — reversing production's transition order to
-     * evict-before-provision, or deleting the provision step outright, left it
-     * untouched, because it never invoked the transition at all.
+     * These rows drove `beginTransition` / `reconcileTransition` and asserted
+     * I5 under a real SIGKILL at each write-ahead phase. That choreography has
+     * zero production callers and was archived to the epic's
+     * `parked-decision-layer` artifact, so I5-under-SIGKILL is a property OF
+     * the parked reconciler: its coverage is parked by construction.
      *
-     * Now: two real launchd registrations (a scoped agent and a scoped
-     * fallback), the production `beginTransition` / `reconcileTransition` over a
-     * real on-disk journal, and a real SIGKILL at each write-ahead phase. After
-     * every kill point the invariant asserted is I5 itself — **at least one
-     * registration is durable for the next login** — and durability is proven by
-     * really bootstrapping the surviving plist into launchd, not by reading it.
+     * They are recorded here because of HOW they broke rather than why they
+     * went. The worker was generated at runtime and imported the reconciler
+     * through a CONSTRUCTED path — `join(sharedRoot, "transition/reconciler.ts")`
+     * — which no import-statement scan can see. The carve's closure analysis
+     * called the module dead, deleted it, and every local gate stayed green
+     * because this suite is opt-in; the first real macOS runner failed it as a
+     * bare `expect(worker.killed).toBe(true)`, naming nothing about the cause.
+     *
+     * The rule that follows: a dependency expressed as DATA is invisible to
+     * static analysis, so generated-worker fixtures are exactly the shape a
+     * dead-code carve will get wrong. The remaining constructed paths in this
+     * file (the Layer-0 module) keep their existence preflight for that
+     * reason.
      */
-    for (const killBefore of I5_KILL_POINTS) {
-      it(`M10: I5 holds when the transition is SIGKILLed before ${killBefore}`, async () => {
-        await withScopedTransitionPair(async (pair) => {
-          const worker = await runTransitionWorker(pair, killBefore);
-          expect(worker.killed).toBe(true);
-
-          // I5, checked from a fresh process against real launchd state.
-          const survivors = await durableRegistrations(pair);
-          expect(
-            survivors.length,
-            `I5 violated after a kill before ${killBefore}: no registration is ` +
-              "durable for the next login, so the user would boot to a host " +
-              "that never starts. Journal phase on disk: " +
-              `${String(await readJournalPhase(pair))}`,
-          ).toBeGreaterThan(0);
-
-          // …and each survivor really loads, which is what "durable for the
-          // next login" means. A plist on disk that launchd rejects is not a
-          // registration.
-          for (const survivor of survivors) {
-            await runCommand("launchctl", [
-              "bootout",
-              "--wait",
-              survivor.target,
-            ]).catch(() => undefined);
-            await runCommand("launchctl", [
-              "bootstrap",
-              pair.domain,
-              survivor.plistPath,
-            ]);
-            const printed = await runCommand("launchctl", [
-              "print",
-              survivor.target,
-            ]);
-            expect(printed.stdout).toContain(`${survivor.target} = {`);
-          }
-
-          // The journal survived the kill and a fresh process can resume it.
-          //
-          // The cutover obligation is that the next reconcile "completes or
-          // compensates". `TransitionResult`'s kinds are
-          // done | failed | compensated | deferred | demoted, and the previous
-          // assertion admitted four of the five — accepting `failed` and
-          // `deferred`, which are precisely the outcomes that would mean the
-          // resume did *not* complete or compensate. Narrowed to the two the
-          // obligation names; the message carries the observed kind so a real
-          // third outcome is diagnosable rather than merely red.
-          const phase = await readJournalPhase(pair);
-          expect(phase).not.toBeNull();
-          const resumed = await runTransitionWorker(pair, "nothing");
-          expect(
-            ["done", "compensated"],
-            "the resumed reconcile must complete or compensate, not stall: " +
-              `observed "${String(resumed.result)}" after a kill before ` +
-              `${killBefore}`,
-          ).toContain(resumed.result);
-          expect((await durableRegistrations(pair)).length).toBeGreaterThan(0);
-        });
-      }, 90_000);
-    }
 
     it.skip("M3 (live arm): a real CDHash-invalidating registration reaches the wedge verdict — deliberately never attempted, see below", async () => {
       // Deliberately never attempted, even under opt-in: forcing a real
@@ -667,7 +620,8 @@ setInterval(() => undefined, 1_000);
     await runCommand("launchctl", ["bootstrap", domain, plistPath]);
     const supervisorStart = await waitForSupervisorStart(
       bootstrapLogPath,
-      8_000,
+      SUPERVISOR_START_BUDGET_MS,
+      target,
     );
     const printed = await runCommand("launchctl", ["print", target]);
     const pidMatch = /^\s*pid\s*=\s*(\d+)\s*$/m.exec(printed.stdout);
@@ -722,6 +676,7 @@ type SupervisorStartMarker = {
 async function waitForSupervisorStart(
   path: string,
   timeoutMs: number,
+  target: string,
 ): Promise<SupervisorStartMarker> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -753,9 +708,76 @@ async function waitForSupervisorStart(
     }
     await sleep(50);
   }
+  // A bare "timed out" here is unclassifiable: it looks identical whether the
+  // runner was starving on cold I/O or the shipped `host start` genuinely
+  // fails to bootstrap under a LaunchAgent. The temp root is deleted on the
+  // way out, so whatever is not captured now is gone - dump the job state and
+  // the log the supervisor was supposed to write into the failure itself.
   throw new Error(
-    `timed out waiting for supervisor starting marker at ${path}`,
+    `timed out after ${timeoutMs}ms waiting for the supervisor 'starting' marker at ${path}\n` +
+      `launchctl print:\n${await describeJobState(target)}\n` +
+      `log tail:\n${await tailFile(path, 40)}`,
   );
+}
+
+// Budgets live together so the vitest deadline is always derived from them
+// rather than drifting apart, which is how M8 ended up with a 30 s policy
+// budget inside a 15 s deadline. Generous on purpose: a hosted runner can
+// spend tens of seconds on cold module resolution alone before the CLI's
+// first line of work, and a slow machine must read as slow, not as broken.
+const SUPERVISOR_START_BUDGET_MS = 60_000;
+const READINESS_BUDGET_MS = 60_000;
+
+async function describeJobState(target: string): Promise<string> {
+  const printed = await runCommand("launchctl", ["print", target]).catch(
+    (cause: unknown) => ({
+      status: null,
+      stdout: "",
+      stderr: `launchctl print failed: ${String(cause)}`,
+    }),
+  );
+  return `  exit=${String(printed.status)}\n${indent(printed.stdout || printed.stderr)}`;
+}
+
+async function tailFile(path: string, lines: number): Promise<string> {
+  const text = await readFile(path, "utf8").catch(
+    (cause: unknown) => `<unreadable: ${String(cause)}>`,
+  );
+  return indent(text.split(/\r?\n/).slice(-lines).join("\n"));
+}
+
+function indent(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `  | ${line}`)
+    .join("\n");
+}
+
+type ReadinessRungObservation = {
+  readonly rung: "supervisor" | "pid" | "endpoint";
+  readonly detail?: string;
+};
+
+/**
+ * Bounded poll to the endpoint rung, reporting the HIGHEST rung reached
+ * rather than a boolean. A timeout that says "never got past `pid`" is a
+ * different bug report from one that says "never published pid.json".
+ */
+async function pollForEndpointReadiness(input: {
+  readonly deadlineMs: number;
+  readonly pollIntervalMs: number;
+  readonly observe: () => Promise<ReadinessRungObservation>;
+}): Promise<ReadinessRungObservation> {
+  const deadline = Date.now() + input.deadlineMs;
+  let highest: ReadinessRungObservation = { rung: "supervisor" };
+  const order = { supervisor: 0, pid: 1, endpoint: 2 };
+  while (Date.now() < deadline) {
+    const observation = await input.observe();
+    if (order[observation.rung] >= order[highest.rung]) highest = observation;
+    if (observation.rung === "endpoint") return observation;
+    await sleep(input.pollIntervalMs);
+  }
+  return highest;
 }
 
 type FallbackPidMetadata = {
@@ -1020,286 +1042,6 @@ setTimeout(() => process.exit(0), 500);
       );
     }
   }
-}
-
-/*
- * ================= M10: real transition / I5 harness =================
- */
-
-/**
- * Write-ahead kill points for the fallback transition. Each names the mutation
- * the journal has already committed to before it happens, so killing here is
- * the worst moment for that step — exactly where I5 must still hold.
- */
-const I5_KILL_POINTS = [
-  "attestFallbackSlot",
-  "provisionFallback",
-  "evictAgent",
-] as const;
-
-type I5KillPoint = (typeof I5_KILL_POINTS)[number] | "nothing";
-
-type TransitionPair = {
-  readonly root: string;
-  readonly domain: string;
-  readonly agent: RegistrationHandle;
-  readonly fallback: RegistrationHandle;
-  readonly journalPath: string;
-  readonly substratePath: string;
-};
-
-type RegistrationHandle = {
-  readonly label: string;
-  readonly target: string;
-  readonly plistPath: string;
-};
-
-async function withScopedTransitionPair(
-  work: (pair: TransitionPair) => Promise<void>,
-): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), "lifecycle-m10-"));
-  const uid = process.getuid?.() ?? 0;
-  const domain = `gui/${uid}`;
-  const runId = randomUUID().replaceAll("-", "");
-  const base = `ai.traycer.host.test.${process.pid}.${runId}`;
-  const agent: RegistrationHandle = {
-    label: `${base}.agent`,
-    target: `${domain}/${base}.agent`,
-    plistPath: join(root, "agent.plist"),
-  };
-  const fallback: RegistrationHandle = {
-    label: `${base}.fallback`,
-    target: `${domain}/${base}.fallback`,
-    plistPath: join(root, "fallback.plist"),
-  };
-  const pair: TransitionPair = {
-    root,
-    domain,
-    agent,
-    fallback,
-    journalPath: join(root, "transition.json"),
-    substratePath: join(root, "substrate.json"),
-  };
-  cleanupTargets = [...cleanupTargets, agent.target, fallback.target];
-
-  // The old registration exists and is loaded before the transition starts —
-  // this is the incumbent whose eviction I5 constrains.
-  await writeRegistrationPlist(agent);
-  await runCommand("launchctl", ["bootstrap", domain, agent.plistPath]);
-
-  try {
-    await work(pair);
-  } finally {
-    for (const target of [agent.target, fallback.target]) {
-      await runCommand("launchctl", ["bootout", "--wait", target]).catch(
-        () => undefined,
-      );
-    }
-    cleanupTargets = cleanupTargets.filter(
-      (candidate) =>
-        candidate !== agent.target && candidate !== fallback.target,
-    );
-    await rm(root, { recursive: true, force: true });
-  }
-}
-
-async function writeRegistrationPlist(
-  handle: RegistrationHandle,
-): Promise<void> {
-  await writeFile(
-    handle.plistPath,
-    `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>${handle.label}</string>
-<key>ProgramArguments</key><array><string>/bin/sh</string><string>-c</string><string>exec /bin/sleep 120</string><string>host</string><string>start</string></array>
-<key>RunAtLoad</key><true/>
-</dict></plist>`,
-    "utf8",
-  );
-}
-
-/**
- * A registration is durable for the next login when its plist is on disk.
- * Loaded-ness is separate and deliberately not required: I5 is about what
- * launchd would start at the next login, not what is running now.
- */
-async function durableRegistrations(
-  pair: TransitionPair,
-): Promise<readonly RegistrationHandle[]> {
-  const survivors: RegistrationHandle[] = [];
-  for (const handle of [pair.agent, pair.fallback]) {
-    if (existsSync(handle.plistPath)) survivors.push(handle);
-  }
-  return survivors;
-}
-
-async function readJournalPhase(pair: TransitionPair): Promise<string | null> {
-  const raw = await readFile(pair.journalPath, "utf8").catch(() => null);
-  if (raw === null) return null;
-  const parsed: unknown = JSON.parse(raw);
-  return parsed !== null && typeof parsed === "object" && "phase" in parsed
-    ? String((parsed as { readonly phase: unknown }).phase)
-    : null;
-}
-
-type TransitionWorkerResult = {
-  readonly killed: boolean;
-  readonly result: string;
-  readonly stderr: string;
-};
-
-/**
- * Runs the **production** fallback transition in a separate real process whose
- * actuators are real launchd operations, and SIGKILLs that process immediately
- * before the named mutation. Recovery is then driven from this process, which
- * has no in-memory state — the journal on disk is the only thing carried
- * across, which is the property the transition claims.
- */
-async function runTransitionWorker(
-  pair: TransitionPair,
-  killBefore: I5KillPoint,
-): Promise<TransitionWorkerResult> {
-  const script = join(pair.root, `worker-${killBefore}.ts`);
-  const sharedRoot = resolve(process.cwd(), "../shared/host-lifecycle");
-  const resultPath = join(pair.root, `result-${killBefore}.json`);
-  await writeFile(
-    script,
-    `import { readFile, writeFile, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { beginTransition, reconcileTransition } from ${JSON.stringify(join(sharedRoot, "transition/reconciler.ts"))};
-
-const KILL_BEFORE = ${JSON.stringify(killBefore)};
-function killPoint(name) {
-  if (name === KILL_BEFORE) process.kill(process.pid, "SIGKILL");
-}
-function run(command, args) {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    child.stdout?.on("data", (c) => (stdout += String(c)));
-    child.once("close", (status) => resolve({ status, stdout }));
-    child.once("error", () => resolve({ status: -1, stdout: "" }));
-  });
-}
-async function loaded(target) {
-  return (await run("launchctl", ["print", target])).status === 0;
-}
-async function durability(handle) {
-  return {
-    durable: existsSync(handle.plistPath),
-    loaded: await loaded(handle.target),
-    serviceLabel: handle.label,
-  };
-}
-const AGENT = ${JSON.stringify(pair.agent)};
-const FALLBACK = ${JSON.stringify(pair.fallback)};
-const FALLBACK_PLIST = await readFile(${JSON.stringify(pair.agent.plistPath)}, "utf8")
-  .then((text) => text.replaceAll(AGENT.label, FALLBACK.label));
-
-const store = {
-  readJournal: async () => {
-    const raw = await readFile(${JSON.stringify(pair.journalPath)}, "utf8").catch(() => null);
-    if (raw === null) return { kind: "absent" };
-    try { return { kind: "present", journal: JSON.parse(raw) }; }
-    catch { return { kind: "invalid", reason: "corrupt" }; }
-  },
-  writeJournal: async (journal) => {
-    await writeFile(${JSON.stringify(pair.journalPath)}, JSON.stringify(journal), "utf8");
-  },
-  writeSubstrate: async (record) => {
-    await writeFile(${JSON.stringify(pair.substratePath)}, JSON.stringify(record), "utf8");
-  },
-  removeProbeMarker: async () => {},
-};
-
-const actuators = {
-  attestFallbackSlot: async () => {
-    killPoint("attestFallbackSlot");
-    return { kind: "attested", value: FALLBACK.label };
-  },
-  provisionFallback: async () => {
-    killPoint("provisionFallback");
-    await writeFile(FALLBACK.plistPath, FALLBACK_PLIST, "utf8");
-    await run("launchctl", ["bootstrap", ${JSON.stringify(pair.domain)}, FALLBACK.plistPath]);
-  },
-  evictAgent: async () => {
-    killPoint("evictAgent");
-    await run("launchctl", ["bootout", "--wait", AGENT.target]);
-    await rm(AGENT.plistPath, { force: true });
-  },
-  launchProbe: async () => ({ kind: "launched" }),
-  provisionAgent: async () => {},
-  commitRawShutdown: async () => ({ kind: "committed" }),
-  kickstartAgent: async () => {},
-  removeFallback: async () => {},
-};
-
-const deps = {
-  store,
-  actuators,
-  probeWorld: async () => ({
-    agent: await durability(AGENT),
-    fallback: await durability(FALLBACK),
-    readiness: { kind: "ready", attemptId: "m10-attempt" },
-    idle: true,
-  }),
-  readProbeMarker: async () => null,
-  now: () => new Date().toISOString(),
-  failureNextEligibleAt: () => new Date(Date.now() + 60000).toISOString(),
-  probeDeadlineAt: () => new Date(Date.now() + 60000).toISOString(),
-  buildId: "m10-build",
-  cdHash: null,
-  breakerAfterAttempts: 3,
-};
-
-const existing = await store.readJournal();
-const result = existing.kind === "present"
-  ? await reconcileTransition(deps)
-  : await beginTransition(deps, {
-      kind: "fallback",
-      transitionId: "m10-transition",
-      probeNonce: "m10-nonce",
-      expectedIdentities: [AGENT.label, FALLBACK.label],
-      governor: null,
-    });
-await writeFile(${JSON.stringify(resultPath)}, JSON.stringify({ kind: result.kind }), "utf8");
-`,
-    "utf8",
-  );
-
-  const bunPath =
-    process.env.BUN_INSTALL === undefined
-      ? process.execPath
-      : join(process.env.BUN_INSTALL, "bin", "bun");
-  const outcome = await new Promise<{
-    readonly signal: NodeJS.Signals | null;
-    readonly stderr: string;
-  }>((resolveOutcome) => {
-    const child = spawn(bunPath, [script], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.once("close", (_code, signal) => {
-      resolveOutcome({ signal, stderr });
-    });
-  });
-
-  const recorded = await readFile(resultPath, "utf8").catch(() => null);
-  const parsed: unknown = recorded === null ? null : JSON.parse(recorded);
-  const kind =
-    parsed !== null && typeof parsed === "object" && "kind" in parsed
-      ? String((parsed as { readonly kind: unknown }).kind)
-      : "killed";
-  return {
-    killed: outcome.signal === "SIGKILL",
-    result: kind,
-    stderr: outcome.stderr,
-  };
 }
 
 type Layer0ProducerResult = {

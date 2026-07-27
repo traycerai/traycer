@@ -39,6 +39,16 @@ export function createLinuxController(
     stop: (label) => stopService(label),
     start: (label) => startService(label),
     restart: (label) => restartService(label),
+    // There is no Desktop/SMAppService split on Linux, so the restart halves
+    // are exactly the stop and start the command already performed - the
+    // named seam only exists so `host restart` has one shape on every
+    // platform. `forcedRecycle` is never set: `stopService` is a real
+    // systemd stop, so the unit is genuinely down before the start.
+    stopForRestart: async (label) => {
+      await stopService(label);
+      return { forcedRecycle: false };
+    },
+    relaunchAfterRestart: (label) => startService(label),
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with systemd's user unit here.
     retireCompetingRegistration: () =>

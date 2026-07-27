@@ -56,6 +56,16 @@ export function createWindowsController(
     stop: (label) => stopService(label, run),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
+    // No Desktop/SMAppService split on Windows, so the restart halves are the
+    // stop and start `host restart` already performed - the named seam exists
+    // so the command has one shape on every platform. `forcedRecycle` is
+    // never set: `stopService` taskkills and waits, so nothing survives to
+    // need a recycle.
+    stopForRestart: async (label) => {
+      await stopService(label, run);
+      return { forcedRecycle: false };
+    },
+    relaunchAfterRestart: (label) => startService(label, run),
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with the Scheduled Task here.
     retireCompetingRegistration: () =>

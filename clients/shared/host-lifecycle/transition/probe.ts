@@ -1,49 +1,19 @@
-/** Wire-level copy of the host's Layer0Frame.  This is deliberately a real
- * discriminated union so the CLI mapping is exhaustive without importing the
- * internal host package into the OSS client tree. */
-export type Layer0Frame =
-  | { readonly attemptId: string; readonly layer0: "acquired" }
-  | {
-      readonly attemptId: string;
-      readonly layer0: "declined";
-      readonly incumbentEvidence: Layer0IncumbentEvidence;
-    }
-  | {
-      readonly attemptId: string;
-      readonly layer0: "degraded";
-      readonly cause: Layer0UnavailableCause;
-      readonly evidence: string;
-    }
-  | {
-      readonly attemptId: string;
-      readonly layer0: "unavailable";
-      readonly cause: Layer0UnavailableCause;
-      readonly evidence: string;
-    };
+// The Layer 0 frame is a host -> client wire payload, so `@traycer/protocol`
+// owns it and both sides import the same declaration.
+//
+// This file used to carry a hand-written "wire-level copy" of the host's
+// union, justified as keeping the internal host package out of the OSS client
+// tree - which was a real constraint but the wrong remedy. The copy drifted:
+// it kept a fourth `layer0: "unavailable"` variant the host cannot emit, and
+// `transition-probe.test.ts` asserted exhaustiveness over the COPY, so the
+// one test meant to catch drift was structurally unable to see it.
+import type {
+  Layer0Frame,
+  Layer0IncumbentEvidence,
+  Layer0UnavailableCause,
+} from "@traycer/protocol/host/lifecycle";
 
-export type Layer0IncumbentEvidence =
-  | {
-      readonly kind: "pid-metadata";
-      readonly pid: number;
-      readonly hostId: string;
-      readonly startedAt: string;
-    }
-  | {
-      readonly kind: "held-retry-window";
-      readonly lockPath: string;
-      readonly observedForMs: number;
-    };
-
-export type Layer0UnavailableCause =
-  | "addon-load-failed"
-  | "fs-unsupported"
-  | "lock-path-invalid"
-  | {
-      readonly kind: "os-error";
-      readonly syscall: string;
-      readonly code: string;
-      readonly fsType: string | null;
-    };
+export type { Layer0Frame, Layer0IncumbentEvidence, Layer0UnavailableCause };
 
 export type ProbeMarkerOutcome =
   | {
@@ -114,13 +84,20 @@ export function mapLayer0FrameToProbeOutcome(
         incumbentEvidence: frame.incumbentEvidence,
       };
     case "degraded":
-    case "unavailable":
+      // A degraded lock is still a START. Layer 0 is fail-open by decided
+      // policy, so this maps to the same awaiting-readiness outcome as
+      // `acquired`, carrying the degradation for the record rather than as a
+      // reason to stop.
       return {
         kind: "awaiting-readiness",
         attemptId: frame.attemptId,
         degradation: { cause: frame.cause, evidence: frame.evidence },
       };
     default:
+      // Now genuinely reachable only by a host-side addition: the union is
+      // imported from `@traycer/protocol`, so a new arm there turns this into
+      // a compile error here rather than a silently-unhandled frame. That is
+      // the property the old hand-copy could not have.
       return exhaustiveFrame(frame);
   }
 }

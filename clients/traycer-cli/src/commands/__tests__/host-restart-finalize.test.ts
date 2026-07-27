@@ -73,6 +73,8 @@ interface StubController {
   stop: () => Promise<void>;
   start: () => Promise<void>;
   restart: () => Promise<void>;
+  stopForRestart: () => Promise<{ readonly forcedRecycle: boolean }>;
+  relaunchAfterRestart: () => Promise<void>;
 }
 
 function makeStubController(calls: StubCalls): StubController {
@@ -93,6 +95,13 @@ function makeStubController(calls: StubCalls): StubController {
     },
     restart: async () => {
       calls.calls.push("restart");
+    },
+    stopForRestart: async () => {
+      calls.calls.push("stop");
+      return { forcedRecycle: false };
+    },
+    relaunchAfterRestart: async () => {
+      calls.calls.push("start");
     },
   };
 }

@@ -15,8 +15,15 @@ import { traycerClientsImportBoundaryRestrictions } from "../../eslint/traycer-c
 // at line 1, so importing it would have re-entered spawn territory one hop
 // away from a rule that only looked at direct requests. That module is also
 // the module a reader is most tempted to reach for (the start-time
-// comparator) — which is why the reusable part was extracted into
-// `host-lifecycle/shared/process-start-time.ts` instead.
+// comparator).
+//
+// There is deliberately no extracted alternative to point at: the
+// `process-start-time.ts` leaf that used to serve that role went to the epic's
+// `parked-decision-layer` archive along with the rest of the decision layer,
+// because nothing in production consumed it. If a probe genuinely needs a
+// start-time comparator, restore that leaf from the archive rather than
+// reaching through `host-lock` — the ban is on the spawn hop, not the
+// arithmetic.
 const FORBIDDEN_MODULE_PATH_GROUPS = [
   "**/traycer-cli/**",
   "**/service/platforms/**",

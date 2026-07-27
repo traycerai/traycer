@@ -239,13 +239,18 @@ describe("runDoctor SERVICE_STOPPED recovery routing", () => {
     );
     expect(issue).toBeDefined();
     expect(issue?.severity).toBe("info");
+    // No BUTTON: taking registration over from Desktop is an ownership
+    // change, and `--takeover` exists precisely to make that an explicit
+    // user act rather than a one-click on an informational card.
     expect(issue?.fixAction).toBeNull();
-    expect(issue?.terminalCommand).toBeNull();
-    // The card is info-only, but its text must still carry the takeover
-    // path for the case where the Desktop app itself cannot repair the
-    // host - otherwise doctor and the CLI refusals point at each other in
-    // a circle with no exit.
-    expect(issue?.message).toContain("traycer host service uninstall");
+    // But the escape hatch must be COPYABLE. Naming a command in prose while
+    // leaving `terminalCommand` null gives the card's "Open in Terminal"
+    // chip nothing to offer, which is the same dead end as naming nothing -
+    // doctor and the CLI refusals pointing at each other with no exit.
+    expect(issue?.terminalCommand).toBe(
+      "traycer host service install --takeover",
+    );
+    expect(issue?.message).toContain("traycer host service install --takeover");
   });
 
   it("still emits SERVICE_NOT_REGISTERED when pid metadata proves a host process is running", async () => {
@@ -278,12 +283,16 @@ describe("runDoctor SERVICE_STOPPED recovery routing", () => {
     expect(issue?.terminalCommand).toBe("traycer host service install");
   });
 
-  it("suppresses the PID_METADATA_STALE fix action for a Desktop/SMAppService-owned label", async () => {
-    // Desktop's SMAppService owns registration+recovery for an
-    // externally-managed label. A stale pid.json here must still surface
-    // the diagnostic, but `traycer host restart` is the CLI's own service
-    // control command and must not be offered - it's the wrong recovery
-    // path for a job the CLI doesn't manage.
+  it("offers the restart repair on a Desktop/SMAppService-owned label - a terminal card there must never be actionless", async () => {
+    // This used to assert the opposite, on the premise that `host restart`
+    // was "the wrong recovery path for a job the CLI doesn't manage". The
+    // CLI now restarts a Desktop-managed host by asking it to stand down
+    // over its own lifecycle RPCs and kickstarting the agent label: it
+    // drives the LIFECYCLE and mutates none of Desktop's REGISTRATION.
+    //
+    // Withholding the action left every Desktop-managed machine with a card
+    // that described a dead host and offered nothing to press or copy, which
+    // is the lockout shape this changeset exists to remove.
     const hostExecutablePath = join(workHome, "bin", "host");
     mkdirSync(join(workHome, "bin"), { recursive: true });
     writeFileSync(hostExecutablePath, "host-bin");
@@ -311,7 +320,7 @@ describe("runDoctor SERVICE_STOPPED recovery routing", () => {
 
     const issue = result.issues.find((i) => i.code === "PID_METADATA_STALE");
     expect(issue).toBeDefined();
-    expect(issue?.fixAction).toBeNull();
-    expect(issue?.terminalCommand).toBeNull();
+    expect(issue?.fixAction).toBe("host-restart");
+    expect(issue?.terminalCommand).toBe("traycer host restart");
   });
 });

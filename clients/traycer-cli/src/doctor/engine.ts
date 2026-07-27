@@ -181,9 +181,15 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         code: DOCTOR_ISSUE_CODES.SERVICE_EXTERNALLY_MANAGED,
         severity: "info",
         title: "Service managed by Traycer Desktop",
-        message: `The OS service for '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI does not manage it. Use the Traycer app to repair or remove the host on this machine. If the app cannot repair it, take over from the CLI: 'traycer host service uninstall' then 'traycer host service install'.`,
+        message: `The OS service for '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI manages the host's lifecycle cooperatively but not its registration. Use the Traycer app to repair or remove the host on this machine. If the app itself is the broken part, take registration over from the CLI with 'traycer host service install --takeover'.`,
+        // No `fixAction`: taking over Desktop's registration is an ownership
+        // change and must stay an explicit user act, not a button on an
+        // informational card - which is exactly what `--takeover` encodes.
+        // The command is still handed over, because a card that NAMES an
+        // escape hatch and gives you no way to copy it is the same dead end
+        // as one that names nothing.
         fixAction: null,
-        terminalCommand: null,
+        terminalCommand: `traycer host service install --takeover`,
         details: { label: label.id },
       });
     } else if (serviceStatus.state === "stopped") {
@@ -215,11 +221,20 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   }
 
   // ---- 3. Pid metadata freshness ----
-  // Desktop's SMAppService owns registration+recovery for an
-  // externally-managed label (see the info issue above); the CLI must not
-  // hand the user a `host-restart`/`host-free-port-and-restart` fix for a
-  // job it doesn't control. Diagnostics below still surface, but their
-  // fixAction/terminalCommand are suppressed in that case.
+  // These diagnostics used to drop their fixAction AND terminalCommand when
+  // Desktop owned the label, on the premise that "the CLI must not hand the
+  // user a fix for a job it doesn't control". That premise no longer holds:
+  // `host restart` on a Desktop-managed machine asks the running host to
+  // stand down over its own lifecycle RPCs and then kickstarts the agent
+  // label - it controls the host's LIFECYCLE while mutating none of
+  // Desktop's REGISTRATION. Ownership routes which mechanism runs; it is not
+  // a reason to withhold the repair.
+  //
+  // Suppressing them turned every terminal card on a Desktop-managed
+  // machine ("stale pid", "endpoint unreachable", "port held", "RPC failed")
+  // into a description of a broken host with nothing to press and nothing to
+  // copy - the dead end this whole change exists to remove. The card now
+  // carries the repair that actually works there.
   const isExternallyManaged = serviceStatus?.state === "externally-managed";
   const pidMetadata = await readHostPidMetadata(opts.environment);
   const hostProcessAlive =
@@ -246,8 +261,8 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       severity: "warning",
       title: "Stale host pid metadata",
       message: `pid.json references pid=${pidMetadata.pid} which is no longer alive.`,
-      fixAction: isExternallyManaged ? null : "host-restart",
-      terminalCommand: isExternallyManaged ? null : `traycer host restart`,
+      fixAction: "host-restart",
+      terminalCommand: `traycer host restart`,
       details: { pid: pidMetadata.pid, version: pidMetadata.version },
     });
   } else {
@@ -285,10 +300,11 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           severity: "error",
           title: "Host port held by another process",
           message: `Port ${portInfo.port} (${pidMetadata.websocketUrl}) is held by ${conflict.processName} (pid=${conflict.pid}), not the host (pid=${pidMetadata.pid}).`,
-          fixAction: isExternallyManaged ? null : "host-free-port-and-restart",
-          terminalCommand: isExternallyManaged
-            ? null
-            : `traycer host free-port-and-restart --pid ${conflict.pid} --port ${portInfo.port}`,
+          // Safe under Desktop management too: freeing the port kills the
+          // FOREIGN holder, and the restart that follows goes through the
+          // same cooperative controller path.
+          fixAction: "host-free-port-and-restart",
+          terminalCommand: `traycer host free-port-and-restart --pid ${conflict.pid} --port ${portInfo.port}`,
           details: {
             pid: pidMetadata.pid,
             websocketUrl: pidMetadata.websocketUrl,
@@ -307,8 +323,8 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           severity: "error",
           title: "Host endpoint unreachable",
           message: `Host process (pid=${pidMetadata.pid}) is running but its endpoint ${pidMetadata.websocketUrl} did not accept a TCP connection. No identifiable foreign listener on this port - restart the service.`,
-          fixAction: isExternallyManaged ? null : "host-restart",
-          terminalCommand: isExternallyManaged ? null : `traycer host restart`,
+          fixAction: "host-restart",
+          terminalCommand: `traycer host restart`,
           details: {
             pid: pidMetadata.pid,
             websocketUrl: pidMetadata.websocketUrl,
@@ -335,11 +351,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         opts.environment,
       );
       if (rpcIssue !== null) {
-        issues.push(
-          isExternallyManaged && rpcIssue.fixAction === "host-restart"
-            ? { ...rpcIssue, fixAction: null, terminalCommand: null }
-            : rpcIssue,
-        );
+        issues.push(rpcIssue);
       }
     }
   }

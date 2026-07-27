@@ -29,6 +29,9 @@ import {
 // masquerade as the job's plist path.
 import { requestCooperativeShutdown } from "./desktop-agent-shutdown";
 import {
+  classifyLaunchctlPrintResult,
+  deriveWedgeVerdict,
+  type ProbeCommandResult,
   isSmAppServiceLaunchAgentPath,
   parseLaunchctlPrintFields,
   SMAPPSERVICE_PATH_UNKNOWN,
@@ -45,6 +48,7 @@ import type {
   CompetingRegistrationRetirement,
   DesktopRegistrationTakeover,
   InstallServiceOptions,
+  RestartStop,
   ServiceController,
   ServiceStatus,
   UninstallServiceOptions,
@@ -82,6 +86,9 @@ export function createMacosController(
     stop: (label) => stopService(label, run),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
+    stopForRestart: (label) => stopServiceForRestart(label, run),
+    relaunchAfterRestart: (label, stop) =>
+      relaunchServiceAfterRestart(label, stop, run),
     retireCompetingRegistration: (label) =>
       retireCompetingRegistration(label, run),
     takeoverDesktopRegistration: (label) =>
@@ -139,7 +146,11 @@ async function takeoverDesktopRegistration(
     });
   }
   const logger = createCliLogger(label.environment);
-  if (outcome.kind === "unreachable" || outcome.kind === "hung") {
+  if (
+    outcome.kind === "unreachable" ||
+    outcome.kind === "hung" ||
+    outcome.kind === "no-metadata"
+  ) {
     logger.warn(
       "Takeover: the Desktop-managed host could not be stopped cooperatively; booting the job out underneath it.",
       {
@@ -148,7 +159,9 @@ async function takeoverDesktopRegistration(
         cause:
           outcome.kind === "unreachable"
             ? outcome.cause
-            : `pid ${outcome.pid} outlived the shutdown grace`,
+            : outcome.kind === "hung"
+              ? `pid ${outcome.pid} outlived the shutdown grace`
+              : "pid metadata is missing or unreadable, so no endpoint could be asked",
       },
     );
   }
@@ -159,14 +172,29 @@ async function takeoverDesktopRegistration(
     timeoutMs: 10_000,
     tolerateNonZeroExit: true,
   });
-  const postBootout = await inspectLaunchdOwnership(agentTarget, run).catch(
-    (): LaunchdOwnership => ({ kind: "not-loaded" }),
-  );
-  if (postBootout.kind === "smappservice") {
+  // Verification must be POSITIVE. `inspectLaunchdOwnership` collapses every
+  // non-zero exit - and its caller every thrown error - into `not-loaded`,
+  // so an EPERM, a timeout, or a launchctl that could not spawn would all
+  // have read as "the bootout worked". Registering the CLI LaunchAgent on
+  // that evidence is how a machine ends up with BOTH registrations live,
+  // which is the dual-host state this command exists to resolve.
+  //
+  // So: proceed only when the probe positively says the label is gone. A
+  // still-loaded agent and an unreadable probe both abort, with the same
+  // actionable routing - the user is never left holding a half-takeover.
+  const postBootout = await verifyAgentBootedOut(agentTarget, run);
+  if (postBootout !== "absent") {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
-      message: `service install --takeover: launchctl bootout of '${desktopAgent.agentLabelId}' did not take effect (the agent is still loaded). Use the Traycer app to remove the host, or run 'traycer host service uninstall'.`,
-      details: { label: label.id, agentLabel: desktopAgent.agentLabelId },
+      message:
+        postBootout === "still-loaded"
+          ? `service install --takeover: launchctl bootout of '${desktopAgent.agentLabelId}' did not take effect (the agent is still loaded). Use the Traycer app to remove the host, or run 'traycer host service uninstall'.`
+          : `service install --takeover: could not confirm that '${desktopAgent.agentLabelId}' was booted out (launchctl did not answer), so the takeover was stopped rather than risk running two hosts. Re-run the command, or use the Traycer app to remove the host, or run 'traycer host service uninstall'.`,
+      details: {
+        label: label.id,
+        agentLabel: desktopAgent.agentLabelId,
+        verification: postBootout,
+      },
       exitCode: 1,
     });
   }
@@ -799,6 +827,17 @@ async function stopDesktopManagedHost(
     case "stopped":
     case "no-host":
       return;
+    case "no-metadata":
+      // Nothing published an endpoint, so there is nothing this command can
+      // ask to stand down - and no launchd mutation the CLI may perform on
+      // a registration Desktop owns. Reporting success would be a lie if a
+      // host is mid-boot, so say exactly what is known.
+      throw cliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: `host stop: no host endpoint is published for '${label.id}' (pid metadata is missing or unreadable), so the running host - if any - cannot be asked to stand down. If the host is starting, retry in a moment; if it is wedged, run 'traycer host service uninstall' and relaunch the Traycer app, or take over with 'traycer host service install --takeover'.`,
+        details: { label: label.id, agentLabel: agent.agentLabelId },
+        exitCode: 1,
+      });
     case "busy":
       throw cliError({
         code: CLI_ERROR_CODES.HOST_BUSY,
@@ -845,6 +884,19 @@ async function restartDesktopManagedHost(
   agent: DesktopAgentOwnership,
   run: ProcessRunner,
 ): Promise<void> {
+  const stop = await standDownDesktopManagedHost(label, agent);
+  await kickstartDesktopAgent(agent, stop.forcedRecycle, run);
+}
+
+// The stop half of a Desktop-managed restart. Unlike `stopDesktopManagedHost`
+// a host that cannot be asked to stand down is NOT terminal here: the caller
+// is going to relaunch the job either way, so the inability to ask is
+// reported as `forcedRecycle` instead of throwing. `busy` still throws -
+// never escalate over live work.
+async function standDownDesktopManagedHost(
+  label: ServiceLabel,
+  agent: DesktopAgentOwnership,
+): Promise<RestartStop> {
   const outcome = await requestCooperativeShutdown(
     label.environment,
     "restart",
@@ -858,9 +910,28 @@ async function restartDesktopManagedHost(
       exitCode: 1,
     });
   }
-  const force = outcome.kind === "unreachable" || outcome.kind === "hung";
+  return {
+    forcedRecycle:
+      outcome.kind === "unreachable" ||
+      outcome.kind === "hung" ||
+      // Unreadable metadata is not proof the host is gone, and a plain
+      // kickstart of a job launchd still considers running is a no-op - the
+      // restart would silently not happen. Recycling is correct in both
+      // readings: it replaces a quietly-live host, and it starts one that
+      // really had exited.
+      outcome.kind === "no-metadata",
+  };
+}
+
+async function kickstartDesktopAgent(
+  agent: DesktopAgentOwnership,
+  forcedRecycle: boolean,
+  run: ProcessRunner,
+): Promise<void> {
   const target = `${guiDomain()}/${agent.agentLabelId}`;
-  const args = force ? ["kickstart", "-k", target] : ["kickstart", target];
+  const args = forcedRecycle
+    ? ["kickstart", "-k", target]
+    : ["kickstart", target];
   try {
     await run("launchctl", args, {
       env: undefined,
@@ -871,7 +942,7 @@ async function restartDesktopManagedHost(
   } catch (cause) {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
-      message: `launchctl ${force ? "kickstart -k" : "kickstart"} failed for ${agent.agentLabelId}: ${describeCause(cause)}`,
+      message: `launchctl ${forcedRecycle ? "kickstart -k" : "kickstart"} failed for ${agent.agentLabelId}: ${describeCause(cause)}`,
       details: { label: agent.agentLabelId, cause: describeCause(cause) },
       exitCode: 1,
     });
@@ -948,6 +1019,112 @@ type ManifestProbe =
  * summary. This runs as a side effect of an install the user asked for, so
  * it must not be able to fail that install.
  */
+/**
+ * Post-bootout verification for `--takeover`, as three states rather than
+ * two. The shared classifier is what makes "gone" separable from "could not
+ * tell": it recognises launchctl's not-found output as `absent` and maps a
+ * permission error, a timeout, or a spawn failure to `indeterminate` -
+ * distinctions `inspectLaunchdOwnership` deliberately discards because for
+ * ownership questions an unreadable label is safely "not ours".
+ *
+ * For a takeover the safe direction is the opposite one, so this probe
+ * exists instead of reusing that one.
+ */
+async function verifyAgentBootedOut(
+  agentTarget: string,
+  run: ProcessRunner,
+): Promise<"absent" | "still-loaded" | "indeterminate"> {
+  const result = await run("launchctl", ["print", agentTarget], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: 10_000,
+    tolerateNonZeroExit: true,
+  }).then(
+    (value): ProbeCommandResult => ({
+      exitCode: value.exitCode,
+      stdout: value.stdout,
+      stderr: value.stderr,
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    }),
+    (): ProbeCommandResult => ({
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      spawnFailed: true,
+      signal: null,
+    }),
+  );
+  const probe = classifyLaunchctlPrintResult(result, null, null);
+  switch (probe.kind) {
+    case "absent":
+      return "absent";
+    case "observed":
+      return "still-loaded";
+    case "indeterminate":
+      return "indeterminate";
+  }
+}
+
+/**
+ * Positive-evidence wedge probe for the retirement gate, read from the
+ * agent's own `launchctl print` through the shared classifier.
+ *
+ * Only a POSITIVE `not-wedged` unlocks the destructive path: an
+ * indeterminate probe (spawn failure, timeout, permission) reports
+ * `unknown`, and callers must treat that like `wedged`. `loginItemEnabled`
+ * stays `null` so the loaded-but-no-pid heuristic remains disarmed - the
+ * agent may legitimately not have spawned yet, and only the explicit
+ * markers may condemn it.
+ */
+async function probeAgentWedge(
+  agentTarget: string,
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<"wedged" | "not-wedged" | "unknown"> {
+  const result = await run("launchctl", ["print", agentTarget], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: 10_000,
+    tolerateNonZeroExit: true,
+  }).then(
+    (value): ProbeCommandResult => ({
+      exitCode: value.exitCode,
+      stdout: value.stdout,
+      stderr: value.stderr,
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    }),
+    (): ProbeCommandResult => ({
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      spawnFailed: true,
+      signal: null,
+    }),
+  );
+  const verdict = deriveWedgeVerdict(
+    classifyLaunchctlPrintResult(result, null, smAppServiceAgentLabelId(label)),
+    {
+      loginItemEnabled: null,
+      hasPidMetadata: (await readHostPidMetadata(label.environment)) !== null,
+      hasAttemptProgress: false,
+    },
+  );
+  switch (verdict.kind) {
+    case "wedged":
+      return "wedged";
+    case "healthy-or-unknown":
+      return "not-wedged";
+    case "indeterminate":
+      return "unknown";
+  }
+}
+
 async function retireCompetingRegistration(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -964,6 +1141,30 @@ async function retireCompetingRegistration(
   ).catch((): LaunchdOwnership => ({ kind: "not-loaded" }));
   if (agentOwnership.kind !== "smappservice") {
     return { kind: "not-applicable" };
+  }
+  // Desktop owning registration is NOT enough to justify deleting the CLI
+  // one. If the agent is loaded but unspawnable (spawn failed / EX_CONFIG /
+  // stale LWCR), the CLI registration below may be the only host this
+  // machine can actually run - including one deliberately created by
+  // `service install --takeover`. Retiring it there boots out the working
+  // job and kickstarts one already known not to spawn, which is precisely
+  // the hostless lockout this whole change exists to remove.
+  //
+  // Fail toward KEEPING the CLI registration: only a probe that positively
+  // reports "not wedged" may proceed. This mirrors the gate Desktop's
+  // launch-time retirement already applies to the identical destructive
+  // direction (`host-login-item.ts`, `agent-possibly-wedged`).
+  const agentWedge = await probeAgentWedge(
+    `${guiTarget}/${agentLabelId}`,
+    label,
+    run,
+  );
+  if (agentWedge !== "not-wedged") {
+    createCliLogger(label.environment).warn(
+      "Service repair: the Traycer Desktop agent may not be spawnable, so the competing CLI registration was kept - it may be the only host that starts on this machine.",
+      { label: label.id, agentLabel: agentLabelId, probe: agentWedge },
+    );
+    return { kind: "kept-agent-possibly-wedged", probe: agentWedge };
   }
   const serviceTarget = `${guiTarget}/${label.id}`;
   // The CLI-label probe canNOT be collapsed the same way. `null` is a fourth
@@ -1251,6 +1452,40 @@ async function startService(
       exitCode: 1,
     });
   }
+}
+
+// `host restart`'s stop half. On a Desktop-managed machine an unreachable or
+// hung host reports `forcedRecycle` instead of throwing, so the command
+// reaches its relaunch - that is the whole repair report 2 asked for.
+async function stopServiceForRestart(
+  label: ServiceLabel,
+  run: ProcessRunner,
+): Promise<RestartStop> {
+  const desktopAgent = await probeDesktopAgentOwnership(label, run);
+  if (desktopAgent !== null) {
+    return await standDownDesktopManagedHost(label, desktopAgent);
+  }
+  // CLI-owned: `stopService` signals and then waits for the process to
+  // really exit, so a plain kickstart is enough afterwards.
+  await stopService(label, run);
+  return { forcedRecycle: false };
+}
+
+async function relaunchServiceAfterRestart(
+  label: ServiceLabel,
+  stop: RestartStop,
+  run: ProcessRunner,
+): Promise<void> {
+  const desktopAgent = await probeDesktopAgentOwnership(label, run);
+  if (desktopAgent !== null) {
+    await kickstartDesktopAgent(desktopAgent, stop.forcedRecycle, run);
+    return;
+  }
+  if (stop.forcedRecycle) {
+    await restartService(label, run);
+    return;
+  }
+  await startService(label, run);
 }
 
 async function restartService(

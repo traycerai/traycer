@@ -110,12 +110,12 @@ describe("readLayer0Frame", () => {
     });
   });
 
-  it("the os-error 'unavailable' cause round-trips through the wire format", async () => {
+  it("the os-error 'degraded' cause round-trips through the wire format", async () => {
     const stream = new PassThrough();
     const pending = readLayer0Frame(stream, 1_000);
     writeFrame(stream, {
       attemptId: "a3",
-      layer0: "unavailable",
+      layer0: "degraded",
       cause: {
         kind: "os-error",
         syscall: "flock",
@@ -129,7 +129,7 @@ describe("readLayer0Frame", () => {
       kind: "frame",
       frame: {
         attemptId: "a3",
-        layer0: "unavailable",
+        layer0: "degraded",
         cause: {
           kind: "os-error",
           syscall: "flock",
@@ -138,6 +138,27 @@ describe("readLayer0Frame", () => {
         },
         evidence: "kernel lifecycle lock acquisition was not determinable",
       },
+    });
+  });
+
+  it("rejects a 'unavailable' frame - a shape the host has no way to emit must not decode as a verdict", async () => {
+    const stream = new PassThrough();
+    const pending = readLayer0Frame(stream, 1_000);
+    // `unavailable` was a fourth arm carried only by the OSS client's
+    // hand-written copy of the host's union; the host emits three. Now that
+    // both sides import the declaration from `@traycer/protocol`, a frame
+    // claiming this arm is either a corrupted stream or a foreign writer, and
+    // either way must leave the probe inconclusive rather than be read as a
+    // degraded-but-started verdict.
+    writeFrame(stream, {
+      attemptId: "a-unavailable",
+      layer0: "unavailable",
+      cause: "addon-load-failed",
+      evidence: "native addon dlopen refused",
+    });
+    await expect(pending).resolves.toEqual({
+      kind: "indeterminate",
+      reason: "status-shape-invalid",
     });
   });
 

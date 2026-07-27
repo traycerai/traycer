@@ -4,6 +4,12 @@ export {
   lifecycleReleaseShutdownV10,
 } from "./contracts";
 
+export type {
+  Layer0Frame,
+  Layer0IncumbentEvidence,
+  Layer0UnavailableCause,
+} from "./layer0-frame";
+
 export {
   claimShutdownRequestSchema,
   claimShutdownResponseSchema,

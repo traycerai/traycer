@@ -38,27 +38,38 @@ const ALL_LAYER0_FRAMES: readonly Layer0Frame[] = [
     cause: "fs-unsupported",
     evidence: "known-network filesystem 'nfs'; lock is best-effort",
   },
+  // Every cause the host can attach to a degraded start. There is no
+  // `layer0: "unavailable"` arm here because the host has none: the union is
+  // imported from `@traycer/protocol` now, so writing one would not compile
+  // rather than sitting in a fixture list pretending to be covered.
   {
-    attemptId: "attempt-unavailable-addon",
-    layer0: "unavailable",
+    attemptId: "attempt-degraded-addon",
+    layer0: "degraded",
     cause: "addon-load-failed",
     evidence: "native addon dlopen refused: bad ABI",
   },
   {
-    attemptId: "attempt-unavailable-fs",
-    layer0: "unavailable",
+    attemptId: "attempt-degraded-fs-network",
+    layer0: "degraded",
     cause: "fs-unsupported",
     evidence: "lifecycle lock path is on known-network filesystem 'nfs'",
   },
   {
-    attemptId: "attempt-unavailable-lock-path",
-    layer0: "unavailable",
+    attemptId: "attempt-degraded-lock-path",
+    layer0: "degraded",
     cause: "lock-path-invalid",
     evidence: "lifecycle lock inode changed during all 4 acquisition attempts",
   },
   {
-    attemptId: "attempt-unavailable-os-error",
-    layer0: "unavailable",
+    attemptId: "attempt-degraded-sharing-violation",
+    layer0: "degraded",
+    cause: "sharing-violation-unattested",
+    evidence:
+      "windows: lock file is open by another process and no live pid.json corroborates a host",
+  },
+  {
+    attemptId: "attempt-degraded-os-error",
+    layer0: "degraded",
     cause: {
       kind: "os-error",
       syscall: "flock",
@@ -100,13 +111,13 @@ describe("mapLayer0FrameToProbeOutcome — exhaustiveness over the Layer0Frame u
     }
   });
 
-  it("maps legacy 'unavailable' frames to awaiting-readiness with durable degradation evidence", () => {
-    const unavailableFrames = ALL_LAYER0_FRAMES.filter(
-      (f): f is Extract<Layer0Frame, { layer0: "unavailable" }> =>
-        f.layer0 === "unavailable",
+  it("maps every 'degraded' cause to awaiting-readiness with durable degradation evidence - a degraded lock still starts", () => {
+    const degradedFrames = ALL_LAYER0_FRAMES.filter(
+      (f): f is Extract<Layer0Frame, { layer0: "degraded" }> =>
+        f.layer0 === "degraded",
     );
-    expect(unavailableFrames.length).toBeGreaterThanOrEqual(4);
-    for (const frame of unavailableFrames) {
+    expect(degradedFrames.length).toBeGreaterThanOrEqual(5);
+    for (const frame of degradedFrames) {
       const outcome = mapLayer0FrameToProbeOutcome(frame);
       expect(outcome.kind).toBe("awaiting-readiness");
       if (outcome.kind === "awaiting-readiness") {
@@ -120,7 +131,7 @@ describe("mapLayer0FrameToProbeOutcome — exhaustiveness over the Layer0Frame u
 
   it("the os-error cause survives the availability-preserving mapping with its nested fields intact", () => {
     const osErrorFrame = ALL_LAYER0_FRAMES.find(
-      (f) => f.layer0 === "unavailable" && typeof f.cause === "object",
+      (f) => f.layer0 === "degraded" && typeof f.cause === "object",
     );
     expect(osErrorFrame).toBeDefined();
     if (osErrorFrame === undefined) return;
@@ -136,7 +147,7 @@ describe("mapLayer0FrameToProbeOutcome — exhaustiveness over the Layer0Frame u
           fsType: "apfs",
         },
         evidence:
-          osErrorFrame.layer0 === "unavailable" ? osErrorFrame.evidence : "",
+          osErrorFrame.layer0 === "degraded" ? osErrorFrame.evidence : "",
       },
     });
   });

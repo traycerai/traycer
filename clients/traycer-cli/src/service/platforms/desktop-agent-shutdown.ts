@@ -24,9 +24,16 @@ import type { Environment } from "../../runner/environment";
 export type CooperativeShutdownOutcome =
   // Claim granted, commit acknowledged, and the pid was observed to exit.
   | { readonly kind: "stopped" }
-  // No live host process to stop (no pid metadata, or a stale record whose
-  // process is gone).
+  // PROVEN absent: pid metadata was read and the process it names is gone.
   | { readonly kind: "no-host" }
+  // Pid metadata could not be read at all - absent, unreadable, or
+  // malformed. This is NOT proof that no host is running, and conflating
+  // the two is how a host that is still booting (loaded agent, endpoint not
+  // published yet) gets reported as successfully stopped: `host stop`
+  // returns success while it keeps serving, and an install swaps bytes
+  // underneath it. Callers pick the safe direction for their operation
+  // rather than inheriting a guess.
+  | { readonly kind: "no-metadata" }
   // The host denied the claim: it has work in progress. Callers must
   // surface this rather than escalate - a denied claim is retryable, a
   // killed working host is not.
@@ -57,7 +64,10 @@ export async function requestCooperativeShutdown(
 ): Promise<CooperativeShutdownOutcome> {
   const logger = createCliLogger(environment);
   const metadata = await readHostPidMetadata(environment);
-  if (metadata === null || !isProcessAlive(metadata.pid)) {
+  if (metadata === null) {
+    return { kind: "no-metadata" };
+  }
+  if (!isProcessAlive(metadata.pid)) {
     return { kind: "no-host" };
   }
   if (!isValidLocalHostWebsocketUrl(metadata.websocketUrl)) {

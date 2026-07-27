@@ -145,6 +145,13 @@ function makeController(
     stop: vi.fn(async () => {
       current = "stopped";
     }),
+    stopForRestart: vi.fn(async () => {
+      current = "stopped";
+      return { forcedRecycle: false };
+    }),
+    relaunchAfterRestart: vi.fn(async () => {
+      current = "running";
+    }),
     restart: vi.fn(async () => {
       current = "running";
     }),

@@ -95,14 +95,21 @@ describe("requestCooperativeShutdown", () => {
     });
   });
 
-  it("reports no-host without any RPC when pid metadata is absent", async () => {
+  // Unreadable metadata and a proven-dead pid are DIFFERENT machines and must
+  // not share an answer. Absence proves only that nothing published an
+  // endpoint - a host that is still booting under a loaded agent looks
+  // exactly like this. Reporting it as `no-host` let callers treat it as a
+  // completed stop: `host stop` returned success over a host that kept
+  // serving, and an install swapped bytes underneath it.
+  it("reports no-metadata - never the proven-absent answer - when pid metadata cannot be read", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(null);
     const outcome = await requestCooperativeShutdown("production", "stop");
-    expect(outcome).toEqual({ kind: "no-host" });
+    expect(outcome).toEqual({ kind: "no-metadata" });
+    expect(outcome).not.toEqual({ kind: "no-host" });
     expect(MOCKS.callHostRpcAtEndpoint).not.toHaveBeenCalled();
   });
 
-  it("reports no-host without any RPC when the recorded pid is dead", async () => {
+  it("reports no-host without any RPC when the recorded pid is PROVEN dead", async () => {
     MOCKS.readHostPidMetadata.mockResolvedValue(LIVE_METADATA);
     MOCKS.isProcessAlive.mockReturnValue(false);
     const outcome = await requestCooperativeShutdown("production", "stop");

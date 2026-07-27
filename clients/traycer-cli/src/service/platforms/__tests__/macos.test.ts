@@ -1432,6 +1432,104 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       // No kickstart of any kind was issued over live work.
       expect(calls.map((c) => c.args[0])).toEqual(["print"]);
     });
+
+    /*
+     * The restart HALVES, which is what `traycer host restart` actually calls.
+     *
+     * `restart()` above has always recycled an unreachable host, but the
+     * command could never reach it: it was spelled `stop()` then `start()`,
+     * and `stop()` throws on exactly the unreachable/hung outcomes the
+     * recycle exists for. So the command died on the broken-host state it
+     * was added to repair while these platform tests stayed green against a
+     * primitive production never called. These rows pin the halves instead.
+     */
+    it("stopForRestart does NOT throw where stop does - an unreachable host reports forcedRecycle so the command reaches its relaunch", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "dial timeout",
+      });
+
+      await expect(controller.stopForRestart(label)).resolves.toEqual({
+        forcedRecycle: true,
+      });
+      // Contrast, on the identical staged outcome: `stop` is terminal here.
+      // If this ever stops throwing, the two are the same operation and the
+      // finding this row exists for has been re-introduced by convergence.
+      await expect(controller.stop(label)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      });
+      // Neither half mutates launchd - only the advisory ownership probe.
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
+    });
+
+    /*
+     * Unreadable pid metadata is not proof the host is gone, and each half
+     * takes the safe direction for its own operation.
+     */
+    it("stop refuses rather than reporting success when no endpoint is published", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "no-metadata",
+      });
+
+      await expect(controller.stop(label)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("cannot be asked to stand down"),
+      });
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("stopForRestart forces a recycle when no endpoint is published - a plain kickstart of a job launchd still thinks is running is a no-op", async () => {
+      const { controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "no-metadata",
+      });
+
+      await expect(controller.stopForRestart(label)).resolves.toEqual({
+        forcedRecycle: true,
+      });
+    });
+
+    it("stopForRestart reports no forced recycle when the host really stood down", async () => {
+      const { controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(controller.stopForRestart(label)).resolves.toEqual({
+        forcedRecycle: false,
+      });
+    });
+
+    it("stopForRestart still refuses over live work", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
+
+      await expect(controller.stopForRestart(label)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+      });
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("relaunchAfterRestart recycles the agent job when the stop half could not ask the host to exit", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+
+      await expect(
+        controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+      ).resolves.toBeUndefined();
+      // `-k` is load-bearing: the old process was never asked to leave, and
+      // launchd treats a plain kickstart of a running job as satisfied - the
+      // host would keep serving the old bytes after a "successful" restart.
+      expect(calls[1]?.args).toEqual(["kickstart", "-k", agentTarget]);
+    });
+
+    it("relaunchAfterRestart plain-kickstarts when the host already exited", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+
+      await expect(
+        controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+      ).resolves.toBeUndefined();
+      expect(calls[1]?.args).toEqual(["kickstart", agentTarget]);
+    });
   });
 
   describe("takeoverDesktopRegistration", () => {
@@ -1562,6 +1660,97 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect.stringContaining("could not be stopped cooperatively"),
         expect.objectContaining({ cause: "dial timeout" }),
       );
+    });
+
+    /*
+     * Verification must be POSITIVE, in both indeterminate shapes.
+     *
+     * The takeover proceeds on "the agent is gone". Every non-zero
+     * `launchctl print` used to collapse to not-loaded, and a thrown probe
+     * was caught into not-loaded as well - so an EPERM, a timeout, or a
+     * launchctl that could not spawn all read as proof the bootout worked.
+     * Registering the CLI LaunchAgent on that evidence leaves BOTH
+     * registrations live: two hosts, one data dir - the dual-host state this
+     * command exists to resolve.
+     */
+    it("aborts the takeover when the post-bootout probe fails rather than treating it as proof of absence", async () => {
+      const calls: RecordedCall[] = [];
+      let agentPrints = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          const target = args[1] ?? "";
+          if (target.endsWith(`/${label.id}.agent`)) {
+            agentPrints += 1;
+            // First probe establishes Desktop ownership; the verification
+            // probe afterwards cannot answer.
+            if (agentPrints === 1) {
+              return {
+                stdout: `path = ${smAgentPath}\n`,
+                stderr: "",
+                exitCode: 0,
+              };
+            }
+            throw new Error("launchctl could not be spawned");
+          }
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        return buildSuccessResult();
+      };
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("could not confirm"),
+      });
+    });
+
+    it("aborts the takeover when the post-bootout probe fails for a reason that is not service-not-found", async () => {
+      const calls: RecordedCall[] = [];
+      let agentPrints = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          const target = args[1] ?? "";
+          if (target.endsWith(`/${label.id}.agent`)) {
+            agentPrints += 1;
+            if (agentPrints === 1) {
+              return {
+                stdout: `path = ${smAgentPath}\n`,
+                stderr: "",
+                exitCode: 0,
+              };
+            }
+            // Non-zero, but NOT "could not find" - a permission failure is
+            // no evidence the label is gone.
+            return {
+              stdout: "",
+              stderr: "Operation not permitted\n",
+              exitCode: 1,
+            };
+          }
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        return buildSuccessResult();
+      };
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("could not confirm"),
+      });
     });
 
     it("refuses on a pre-split machine where the CLI label is Desktop's own registration", async () => {
@@ -1765,6 +1954,91 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(booted).toHaveLength(1);
       expect(booted[0]?.endsWith(`/${label.id}`)).toBe(true);
       await expect(readFile(createdPlistPath, "utf8")).rejects.toThrow();
+    });
+
+    /*
+     * The availability gate, in both directions.
+     *
+     * "Desktop's agent is loaded" is the only thing the ownership probe
+     * proves, and it is not enough to justify deleting the other
+     * registration. On a machine where the agent is loaded but cannot spawn
+     * (stale LWCR after an app replace, EX_CONFIG), the CLI job may be the
+     * ONLY host that runs - very possibly because the user created it with
+     * `service install --takeover` for exactly this reason. Retiring it there
+     * boots out the working host and kickstarts one already known to fail:
+     * the hostless lockout, produced by the repair.
+     *
+     * Desktop's launch-time retirement already gates the identical
+     * destructive direction; this is the CLI-side half of that rule.
+     */
+    const WEDGED_AGENT_PRINT = [
+      "\tpath = (submitted by smd.321)",
+      "\ttype = Submitted",
+      "\tmanaged_by = com.apple.xpc.ServiceManagement",
+      "\tstate = spawn failed",
+      "\tlast exit code = 78",
+    ].join("\n");
+
+    it("keeps the competing CLI registration when Desktop's agent shows positive wedge markers", async () => {
+      const calls: RecordedCall[] = [];
+      const runner = makeRunner(
+        { [agentLabelId]: WEDGED_AGENT_PRINT, [label.id]: CLI_PRINT },
+        calls,
+      );
+      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+      await writeFile(createdPlistPath, "<plist/>", "utf8");
+
+      await expect(
+        createMacosController(runner).retireCompetingRegistration(label),
+      ).resolves.toEqual({
+        kind: "kept-agent-possibly-wedged",
+        probe: "wedged",
+      });
+
+      // Nothing destructive ran: the CLI job still exists and its manifest
+      // is still on disk. Asserting the outcome alone would pass even if the
+      // bootout had happened and only the return value changed.
+      expect(bootoutTargets(calls)).toEqual([]);
+      expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual([]);
+      await expect(readFile(createdPlistPath, "utf8")).resolves.toBe(
+        "<plist/>",
+      );
+    });
+
+    it("keeps the competing CLI registration when the agent's health cannot be read at all", async () => {
+      const calls: RecordedCall[] = [];
+      // The ownership probe answers (so the repair is in scope), then the
+      // wedge probe cannot run. An unreadable health probe must fail toward
+      // keeping the registration, exactly like positive wedge evidence.
+      let printsSeen = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          printsSeen += 1;
+          if (printsSeen === 1) {
+            return {
+              stdout: `${args[1] ?? ""} = {\n${SMAPPSERVICE_PRINT}\n}\n`,
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          throw new Error("launchctl could not be spawned");
+        }
+        return buildSuccessResult();
+      };
+      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+      await writeFile(createdPlistPath, "<plist/>", "utf8");
+
+      await expect(
+        createMacosController(runner).retireCompetingRegistration(label),
+      ).resolves.toEqual({
+        kind: "kept-agent-possibly-wedged",
+        probe: "unknown",
+      });
+      expect(bootoutTargets(calls)).toEqual([]);
+      await expect(readFile(createdPlistPath, "utf8")).resolves.toBe(
+        "<plist/>",
+      );
     });
 
     // The availability step. The agent job being LOADED (which is all the

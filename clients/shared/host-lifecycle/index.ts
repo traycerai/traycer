@@ -170,17 +170,6 @@ export type { MutationResult } from "./actuators/conditional-mutation";
 
 // ---- Journaled substrate transitions --------------------------------------
 export type {
-  AttemptReadinessEvaluation,
-  AttemptReadinessObservation,
-  ReadinessBaseline,
-  ReadinessPollingDeps,
-  ReadinessPollingOptions,
-} from "./transition/readiness";
-export {
-  evaluateAttemptReadiness,
-  waitForAttemptReadiness,
-} from "./transition/readiness";
-export type {
   Layer0Frame,
   Layer0Degradation,
   Layer0IncumbentEvidence,

@@ -127,11 +127,19 @@ export async function probeMacosWedgedJob(
           "'traycer host service uninstall' and then relaunch the app (or run " +
           "'traycer host service install' to switch to CLI management)."
         : `launchd has '${labelId}' loaded but the job cannot run (${summary}). ` +
-          "Run 'traycer host restart' to re-register it.",
-      fixAction: desktopOwned ? null : "host-start",
+          "Run 'traycer host service install' to re-register it. A restart " +
+          "cannot fix this: it kickstarts the definition launchd already has " +
+          "cached, and that definition is the one that will not spawn - only " +
+          "a bootout/bootstrap cycle replaces it.",
+      // `service-install` is the register cycle (bootout -> bootstrap ->
+      // kickstart), which is what a wedged job needs. `host-start` and
+      // `host-restart` both resolve to `restartHost()` in the GUI, i.e. the
+      // kickstart that already failed - the button and the copyable command
+      // would both return the user to this same card.
+      fixAction: desktopOwned ? null : "service-install",
       terminalCommand: desktopOwned
         ? "traycer host service uninstall"
-        : "traycer host restart",
+        : "traycer host service install",
       details: {
         labelId,
         ownership: probe.ownership.kind,
