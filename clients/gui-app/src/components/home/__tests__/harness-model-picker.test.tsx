@@ -804,7 +804,6 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       selection,
       reasoning: resolvedInput.reasoning ?? "",
       serviceTier: resolvedInput.serviceTier ?? "",
-      agentMode: "regular",
     },
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,

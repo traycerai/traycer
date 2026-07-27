@@ -684,7 +684,6 @@ export function NewConversationModalBody(props: {
       permission: toolbar.permission,
       reasoning: toolbar.reasoning,
       serviceTier: toolbar.serviceTier,
-      agentMode: toolbar.agentMode,
     });
     if (settings.model.length === 0) return;
     // Global, single-selection billing context captured at create time; it
@@ -829,7 +828,6 @@ export function NewConversationModalBody(props: {
           harnessId: launch.harnessId,
           model: launch.model,
           reasoningEffort: launch.reasoningEffort,
-          agentMode: launch.agentMode,
           forkSourceHarnessSessionId: null,
           sourceTuiAgentId: null,
           sourceProfileId: null,
@@ -1032,7 +1030,9 @@ function useLatestConversationSettingsSeed(): {
           defaults.defaultServiceTier.trim().length === 0
             ? null
             : defaults.defaultServiceTier,
-        agentMode: agent.agentMode,
+        // Epic Mode was removed: seed the one remaining mode rather than
+        // carrying a legacy value off the source agent.
+        agentMode: "regular",
         profileId: agent.profileId,
         // TUI agents carry no billing context; seed Personal (the store
         // default). The composer lets the user switch before sending.

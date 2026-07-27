@@ -108,7 +108,6 @@ export function ComposerBody({
   const chatPasteActive = composerMode === "chat";
   const hiddenInTerminal = cn(composerMode !== "chat" && "hidden");
   const hiddenInChat = cn(composerMode !== "terminal" && "hidden");
-  const showLandingAgentModeTooltip = true;
 
   return (
     <div className="flex flex-col gap-3">
@@ -168,7 +167,6 @@ export function ComposerBody({
                 store={toolbarStore}
                 onAttachImages={paste.attachImageFiles}
                 showNextTurnPermissionNote={false}
-                showAgentModeTooltip={showLandingAgentModeTooltip}
                 canSubmit={canSubmit}
                 attachmentPending={attachmentPending}
                 onSubmit={onSubmit}

@@ -1009,7 +1009,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const defaultServiceTier = useSettingsStore(
     (state) => state.defaultServiceTier,
   );
-  const defaultAgentMode = useSettingsStore((state) => state.defaultAgentMode);
   const defaultRunSettings = useMemo(
     () =>
       buildChatRunSettings({
@@ -1017,15 +1016,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         permission: defaultPermission,
         reasoning: defaultReasoning,
         serviceTier: defaultServiceTier,
-        agentMode: defaultAgentMode,
       }),
-    [
-      defaultAgentMode,
-      defaultPermission,
-      defaultReasoning,
-      defaultServiceTier,
-      defaultSelection,
-    ],
+    [defaultPermission, defaultReasoning, defaultServiceTier, defaultSelection],
   );
   const profile = useAuthStore((state) => state.profile);
   const activeHostId = useTabHostId();

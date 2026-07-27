@@ -9,8 +9,8 @@ import type {
  *
  * The comparison set is kept in lockstep with the host's
  * `queuedSettingsMatchActiveExecution`: harness, model, reasoning effort,
- * service tier, agent mode, and profileId are baked into turn/thread start, so
- * changing any of them can't apply to a turn already in flight - a
+ * service tier, and profileId are baked into turn/thread start, so changing
+ * any of them can't apply to a turn already in flight - a
  * differently-profiled prompt would otherwise fold into the running turn's
  * provider process and deliver under the wrong account. permissionMode is
  * excluded - it applies softly to the next turn, so a permission-only change
@@ -58,10 +58,6 @@ export function decideSteerSettings(
   }
   if (activeTurn.serviceTier !== currentSettings.serviceTier) {
     changed.push("service tier");
-  }
-  const agentModeChanged = activeTurn.agentMode !== currentSettings.agentMode;
-  if (agentModeChanged) {
-    changed.push("agent mode");
   }
   if (activeTurn.profileId !== currentSettings.profileId) {
     changed.push("profile");
