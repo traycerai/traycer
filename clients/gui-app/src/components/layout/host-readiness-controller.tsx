@@ -5,8 +5,10 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { useRouterState } from "@tanstack/react-router";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { Button } from "@/components/ui/button";
+import { AppHeader } from "@/components/layout/header/app-header";
 import {
   HostReadinessControllerContext,
   isHostDialable,
@@ -20,6 +22,7 @@ import {
   type SurfaceReadiness,
 } from "@/components/layout/host-readiness-controller-context";
 import {
+  GATE_BYPASS_PATH_PREFIX,
   HostProvisioningController,
   type HostProvisioningLifecycle,
 } from "@/components/local-host-gate";
@@ -306,6 +309,64 @@ function SlowHostFallback(props: {
       testId="surface-readiness-unavailable-host"
       messageTestId={null}
     />
+  );
+}
+
+/**
+ * Full-screen default-host gate: while the default host is not ready, NOTHING
+ * host-dependent is reachable - not the tab strip, not another tab, not a
+ * keyboard route change. Split view made every surface project its own
+ * in-place fallback, which left the shell live and let a user drive
+ * host-dependent affordances during setup.
+ *
+ * Two properties are deliberate and must not be "simplified" away:
+ *
+ *  - It reuses `fallbackContent`, so every recovery action (retry / force
+ *    update / reinstall / report) survives the block. Collapsing this to a
+ *    generic spinner would strand a user whose host cannot start - the exact
+ *    lockout traycer#738 exists to prevent.
+ *  - `/settings` still bypasses it. The splash's own "Configure shell" button
+ *    navigates there, so gating settings on a ready host would make the
+ *    escape hatch unreachable from the screen that offers it.
+ *
+ * Readiness and presentation both come from the one controller above; this
+ * adds no second subscription.
+ */
+export function DefaultHostReadyGate(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const readiness = useSurfaceReadiness("default-host", null);
+  const controller = useHostReadinessController();
+  const authStatus = useAuthStore((state) => state.status);
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  });
+  // Only a signed-in user can HAVE a ready default host, so blocking anyone
+  // else would hide the sign-in surface behind a host that cannot exist yet.
+  // `resolveSurfaceReadiness` only special-cases auth for the request-context
+  // arm; the host arms answer `loading-host`/`mobile-no-host` regardless of
+  // who is signed in, which is correct for a surface and wrong for a gate.
+  if (authStatus !== "signed-in") return props.children;
+  if (pathname.startsWith(GATE_BYPASS_PATH_PREFIX)) return props.children;
+  if (readiness.kind === "ready") return props.children;
+  return (
+    <div
+      className="flex min-h-svh w-full flex-col bg-background text-foreground"
+      data-testid="host-ready-gate"
+      data-readiness={readiness.kind}
+    >
+      <AppHeader variant="host-loading" />
+      <FallbackFrame
+        fallback={fallbackContent(
+          readiness,
+          controller.defaultHostPresentation,
+        )}
+        testId={`host-ready-gate-${readiness.kind}`}
+        messageTestId={
+          readiness.kind === "mobile-no-host" ? "mobile-no-host" : null
+        }
+      />
+    </div>
   );
 }
 
