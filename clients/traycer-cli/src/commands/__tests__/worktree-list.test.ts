@@ -4,11 +4,26 @@ import type { WorktreeTier } from "@traycer-clients/shared/worktree/classify-wor
 import {
   buildWorktreeListCommand,
   formatWorktreeListTable,
+  parseWorktreeListLimit,
   type WorktreeListRow,
 } from "../worktree-list";
 import { callHostRpc } from "../../internal/host-rpc";
 import type { CommandContext } from "../../runner/runner";
 import { CLI_ERROR_CODES } from "../../runner/errors";
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+  noopLogger: loggerMock,
+}));
 
 vi.mock("../../internal/host-rpc", async () => {
   const actual = await vi.importActual<
@@ -72,6 +87,21 @@ const defaultOpts = {
   cursor: null,
   limit: null,
 } as const;
+
+describe("parseWorktreeListLimit", () => {
+  it.each(["1e3", "0x10", " 7", "7 ", "7.5", "-7", "0", ""])(
+    "rejects non-decimal or non-positive lexical form %j",
+    (value) => {
+      expect(() => parseWorktreeListLimit(value)).toThrow(
+        "--limit must be a positive integer",
+      );
+    },
+  );
+
+  it("accepts a clean positive decimal run", () => {
+    expect(parseWorktreeListLimit("7")).toBe(7);
+  });
+});
 
 describe("formatWorktreeListTable", () => {
   it("returns an explicit empty-state line when there are no worktrees", () => {

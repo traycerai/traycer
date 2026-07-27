@@ -6,7 +6,10 @@ import {
 import {
   hostNotificationsSubscribeClientFrameSchema,
   type HostNotificationEntry,
+  type HostNotificationsAttentionCursor,
+  type HostNotificationsChronologicalCursor,
   type HostNotificationsSubscribeClientFrame,
+  type HostNotificationsSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import type {
   IStreamSession,
@@ -20,10 +23,17 @@ import {
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
   __resetHostNotificationsStoreForTests,
+  compareHostNotificationEntries,
   HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS,
   openHostNotificationsStream,
+  selectHostNotificationIds,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
+
+const EMPTY_SUMMARY: HostNotificationsSummary = {
+  unreadCount: 0,
+  attentionCount: 0,
+};
 
 function entry(
   id: string,
@@ -64,11 +74,55 @@ function promptEntry(id: string): HostNotificationEntry {
   };
 }
 
+function chronologicalCursor(
+  updatedAt: number,
+  id: string,
+): HostNotificationsChronologicalCursor {
+  return { kind: "chronological", updatedAt, id };
+}
+
+function attentionCursor(
+  updatedAt: number,
+  id: string,
+): HostNotificationsAttentionCursor {
+  return { kind: "attention", tier: "blocking", updatedAt, id };
+}
+
+function defaultSummaryFor(
+  entries: ReadonlyArray<HostNotificationEntry>,
+): HostNotificationsSummary {
+  return {
+    unreadCount: entries.filter((item) => item.readAt === null).length,
+    attentionCount: entries.filter((item) => item.severity === "needs_action")
+      .length,
+  };
+}
+
+function applySimpleSnapshot(input: {
+  readonly entries: ReadonlyArray<HostNotificationEntry>;
+  readonly summary: HostNotificationsSummary;
+  readonly recentCursor: HostNotificationsChronologicalCursor | null;
+  readonly attentionNext: HostNotificationsAttentionCursor | null;
+}): void {
+  useHostNotificationsStore.getState().applySnapshot({
+    attention: {
+      entries: input.entries.filter(
+        (item) =>
+          item.severity === "needs_action" || item.severity === "failure",
+      ),
+      nextCursor: input.attentionNext,
+    },
+    recent: { entries: input.entries, nextCursor: input.recentCursor },
+    summary: input.summary,
+  });
+}
+
 class MockStreamSession implements IStreamSession {
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusChangeHandler: StatusChangeHandler | null = null;
   readonly clientFrames: HostNotificationsSubscribeClientFrame[] = [];
   closed = false;
+  requestReconnectCount = 0;
 
   sendClientFrame(envelope: StreamFrameEnvelope): void {
     this.clientFrames.push(
@@ -84,6 +138,10 @@ class MockStreamSession implements IStreamSession {
     this.statusChangeHandler = handler;
   }
 
+  requestReconnect(): void {
+    this.requestReconnectCount += 1;
+  }
+
   close(): void {
     this.closed = true;
   }
@@ -93,14 +151,30 @@ class MockStreamSession implements IStreamSession {
     this.serverFrameHandler(envelope, null);
   }
 
+  emitServerFrameWithBinary(
+    envelope: StreamFrameEnvelope,
+    binaryPayload: Uint8Array,
+  ): void {
+    if (this.serverFrameHandler === null) return;
+    this.serverFrameHandler(envelope, binaryPayload);
+  }
+
   emitOpen(): void {
     if (this.statusChangeHandler === null) return;
     this.statusChangeHandler("open", null);
   }
+
+  emitStatus(status: "connecting" | "open" | "closed" | "reconnecting"): void {
+    if (this.statusChangeHandler === null) return;
+    this.statusChangeHandler(status, null);
+  }
 }
 
 class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
-  readonly session = new MockStreamSession();
+  session = new MockStreamSession();
+  readonly sessions: MockStreamSession[] = [];
+  subscribeCount = 0;
+  lastSubscribeParams: unknown = null;
 
   constructor() {
     super({
@@ -124,9 +198,14 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
 
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
     _method: Method,
-    _params: ParamsOf<HostStreamRpcRegistry, Method>,
+    params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
-    return this.session;
+    this.subscribeCount += 1;
+    this.lastSubscribeParams = params;
+    const session = new MockStreamSession();
+    this.session = session;
+    this.sessions.push(session);
+    return session;
   }
 }
 
@@ -135,76 +214,290 @@ describe("host notifications store", () => {
     __resetHostNotificationsStoreForTests();
   });
 
-  it("overwrites upserted rows by id, reorders by updatedAt, and flips read rows unread", () => {
-    const store = useHostNotificationsStore.getState();
+  it("replaces byId, both cursors, and summary atomically and resets unreadRecentCursor", () => {
+    useHostNotificationsStore
+      .getState()
+      .mergeUnreadRecentPage(
+        [entry("prior-unread", 5, null)],
+        chronologicalCursor(5, "prior-unread"),
+        {
+          snapshotEpoch: 0,
+          liveLifecycleRevision:
+            useHostNotificationsStore.getState().liveLifecycleRevision,
+          cursor: null,
+        },
+      );
+    expect(
+      useHostNotificationsStore.getState().unreadRecentCursor,
+    ).not.toBeNull();
 
-    store.replaceFromSnapshot(
-      [entry("older", 10, null), entry("target", 20, 30)],
-      50,
-    );
+    applySimpleSnapshot({
+      entries: [entry("older", 10, null), entry("target", 20, 30)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: chronologicalCursor(10, "older"),
+      attentionNext: null,
+    });
 
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual([
-      "target",
-      "older",
-    ]);
-    expect(useHostNotificationsStore.getState().unreadCount).toBe(1);
-
-    useHostNotificationsStore.getState().upsert(entry("target", 40, null));
-
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual([
-      "target",
-      "older",
-    ]);
-    expect(useHostNotificationsStore.getState().byId.target.updatedAt).toBe(40);
-    expect(useHostNotificationsStore.getState().unreadCount).toBe(2);
+    const state = useHostNotificationsStore.getState();
+    expect(selectHostNotificationIds(state)).toEqual(["target", "older"]);
+    expect(state.summary).toEqual({ unreadCount: 1, attentionCount: 0 });
+    expect(state.recentCursor).toEqual(chronologicalCursor(10, "older"));
+    expect(state.attentionCursor).toBeNull();
+    expect(state.unreadRecentCursor).toBeNull();
+    expect(state.unreadRecentHasLoadedOnce).toBe(false);
+    expect(state.attentionStatus).toBe("idle");
+    expect(state.recentStatus).toBe("idle");
+    expect(state.unreadRecentStatus).toBe("idle");
+    expect(state.snapshotEpoch).toBe(1);
   });
 
-  it("wipes and replaces stale rows on a new snapshot", () => {
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot([entry("stale", 10, null)], 50);
+  describe("unreadRecentHasLoadedOnce", () => {
+    it("starts false and is set true by a successful merge regardless of nextCursor", () => {
+      expect(
+        useHostNotificationsStore.getState().unreadRecentHasLoadedOnce,
+      ).toBe(false);
 
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot([entry("fresh", 20, null)], 50);
+      applySimpleSnapshot({
+        entries: [entry("anchor", 100, null)],
+        summary: { unreadCount: 1, attentionCount: 0 },
+        recentCursor: null,
+        attentionNext: null,
+      });
+      expect(
+        useHostNotificationsStore.getState().unreadRecentHasLoadedOnce,
+      ).toBe(false);
 
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["fresh"]);
-    expect(useHostNotificationsStore.getState().byId.stale).toBeUndefined();
-    expect(useHostNotificationsStore.getState().snapshotEpoch).toBe(2);
+      const epoch = useHostNotificationsStore.getState().snapshotEpoch;
+      const revision =
+        useHostNotificationsStore.getState().liveLifecycleRevision;
+
+      // Successful first page with remaining cursor still marks loaded-once.
+      useHostNotificationsStore
+        .getState()
+        .mergeUnreadRecentPage(
+          [entry("page-1", 90, null)],
+          chronologicalCursor(90, "page-1"),
+          {
+            snapshotEpoch: epoch,
+            liveLifecycleRevision: revision,
+            cursor: null,
+          },
+        );
+      expect(
+        useHostNotificationsStore.getState().unreadRecentHasLoadedOnce,
+      ).toBe(true);
+      expect(useHostNotificationsStore.getState().unreadRecentCursor).toEqual(
+        chronologicalCursor(90, "page-1"),
+      );
+
+      // applySnapshot clears the flag for a fresh Unread-only session.
+      applySimpleSnapshot({
+        entries: [entry("fresh", 200, null)],
+        summary: { unreadCount: 1, attentionCount: 0 },
+        recentCursor: null,
+        attentionNext: null,
+      });
+      expect(
+        useHostNotificationsStore.getState().unreadRecentHasLoadedOnce,
+      ).toBe(false);
+      expect(
+        useHostNotificationsStore.getState().unreadRecentCursor,
+      ).toBeNull();
+
+      const nextEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+      const nextRevision =
+        useHostNotificationsStore.getState().liveLifecycleRevision;
+
+      // Successful terminal page (null nextCursor) also marks loaded-once.
+      useHostNotificationsStore
+        .getState()
+        .mergeUnreadRecentPage([entry("last", 50, null)], null, {
+          snapshotEpoch: nextEpoch,
+          liveLifecycleRevision: nextRevision,
+          cursor: null,
+        });
+      expect(
+        useHostNotificationsStore.getState().unreadRecentHasLoadedOnce,
+      ).toBe(true);
+      expect(
+        useHostNotificationsStore.getState().unreadRecentCursor,
+      ).toBeNull();
+    });
+
+    it("does not set true when mergeUnreadRecentPage is stale-rejected", () => {
+      applySimpleSnapshot({
+        entries: [entry("anchor", 100, null)],
+        summary: { unreadCount: 1, attentionCount: 0 },
+        recentCursor: null,
+        attentionNext: null,
+      });
+      const staleEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+      const staleRevision =
+        useHostNotificationsStore.getState().liveLifecycleRevision;
+
+      // Bump epoch so the captured token is stale.
+      applySimpleSnapshot({
+        entries: [entry("fresh", 200, null)],
+        summary: { unreadCount: 1, attentionCount: 0 },
+        recentCursor: null,
+        attentionNext: null,
+      });
+      expect(
+        useHostNotificationsStore.getState().unreadRecentHasLoadedOnce,
+      ).toBe(false);
+
+      useHostNotificationsStore
+        .getState()
+        .mergeUnreadRecentPage(
+          [entry("stale-page", 10, null)],
+          chronologicalCursor(10, "stale-page"),
+          {
+            snapshotEpoch: staleEpoch,
+            liveLifecycleRevision: staleRevision,
+            cursor: null,
+          },
+        );
+
+      const state = useHostNotificationsStore.getState();
+      expect(state.unreadRecentHasLoadedOnce).toBe(false);
+      expect(state.unreadRecentCursor).toBeNull();
+      expect(state.byId["stale-page"]).toBeUndefined();
+      expect(state.unreadRecentStatus).toBe("idle");
+    });
   });
 
-  it("patches resolvedAt with read-state frames without changing entry order", () => {
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot([promptEntry("question")], 50);
-    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+  it("applies upsert, read-state, and removal frames atomically with exact summary", () => {
+    applySimpleSnapshot({
+      entries: [entry("target", 20, null), entry("gone", 10, null)],
+      summary: { unreadCount: 2, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
 
     useHostNotificationsStore
       .getState()
-      .applyReadState(["question"], 20, 20, snapshotEpoch);
+      .applyUpsertFrame(entry("target", 40, null), ["gone"], {
+        unreadCount: 1,
+        attentionCount: 0,
+      });
+
+    let state = useHostNotificationsStore.getState();
+    expect(selectHostNotificationIds(state)).toEqual(["target"]);
+    expect(state.byId.gone).toBeUndefined();
+    expect(state.summary).toEqual({ unreadCount: 1, attentionCount: 0 });
+
+    useHostNotificationsStore.getState().applyReadStateFrame(["target"], {
+      readAt: 50,
+      resolvedAt: null,
+      removedIds: [],
+      summary: { unreadCount: 0, attentionCount: 0 },
+    });
+    state = useHostNotificationsStore.getState();
+    expect(state.byId.target.readAt).toBe(50);
+    expect(state.summary).toEqual({ unreadCount: 0, attentionCount: 0 });
+
+    useHostNotificationsStore
+      .getState()
+      .applyRemovalFrame(["target"], EMPTY_SUMMARY);
+    state = useHostNotificationsStore.getState();
+    expect(state.byId.target).toBeUndefined();
+    expect(state.summary).toEqual(EMPTY_SUMMARY);
+  });
+
+  it("does not add a just-pruned backdated upsert whose id is in removedIds", () => {
+    applySimpleSnapshot({
+      entries: [entry("kept", 10, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+
+    useHostNotificationsStore
+      .getState()
+      .applyUpsertFrame(entry("pruned-self", 20, null), ["pruned-self"], {
+        unreadCount: 1,
+        attentionCount: 0,
+      });
+
+    const state = useHostNotificationsStore.getState();
+    expect(state.byId["pruned-self"]).toBeUndefined();
+    expect(selectHostNotificationIds(state)).toEqual(["kept"]);
+    expect(state.summary).toEqual({ unreadCount: 1, attentionCount: 0 });
+  });
+
+  it("keeps exact summary independent of byId contents", () => {
+    applySimpleSnapshot({
+      entries: [entry("a", 10, null)],
+      summary: { unreadCount: 99, attentionCount: 7 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    expect(useHostNotificationsStore.getState().summary).toEqual({
+      unreadCount: 99,
+      attentionCount: 7,
+    });
+
+    useHostNotificationsStore
+      .getState()
+      .applyUpsertFrame(entry("b", 20, null), [], {
+        unreadCount: 3,
+        attentionCount: 1,
+      });
+    // byId has 2 unread rows, but summary is authoritative.
+    expect(useHostNotificationsStore.getState().summary).toEqual({
+      unreadCount: 3,
+      attentionCount: 1,
+    });
+    expect(
+      Object.values(useHostNotificationsStore.getState().byId).filter(
+        (item) => item.readAt === null,
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("patches resolvedAt with read-state frames", () => {
+    applySimpleSnapshot({
+      entries: [promptEntry("question")],
+      summary: defaultSummaryFor([promptEntry("question")]),
+      recentCursor: null,
+      attentionNext: null,
+    });
+    useHostNotificationsStore.getState().applyReadStateFrame(["question"], {
+      readAt: 20,
+      resolvedAt: 20,
+      removedIds: [],
+      summary: { unreadCount: 0, attentionCount: 0 },
+    });
 
     expect(useHostNotificationsStore.getState().byId.question).toMatchObject({
       readAt: 20,
       resolvedAt: 20,
       updatedAt: 10,
     });
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual([
-      "question",
-    ]);
   });
 
   it("preserves frame read state over an equal-timestamp pagination row", () => {
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot([promptEntry("question")], 50);
+    applySimpleSnapshot({
+      entries: [promptEntry("question")],
+      summary: defaultSummaryFor([promptEntry("question")]),
+      recentCursor: null,
+      attentionNext: null,
+    });
     const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
-
+    useHostNotificationsStore.getState().applyReadStateFrame(["question"], {
+      readAt: 20,
+      resolvedAt: 20,
+      removedIds: [],
+      summary: { unreadCount: 0, attentionCount: 0 },
+    });
     useHostNotificationsStore
       .getState()
-      .applyReadState(["question"], 20, 20, snapshotEpoch);
-    useHostNotificationsStore
-      .getState()
-      .mergePage([promptEntry("question")], null, snapshotEpoch);
+      .mergeRecentPage([promptEntry("question")], null, {
+        snapshotEpoch,
+        liveLifecycleRevision:
+          useHostNotificationsStore.getState().liveLifecycleRevision,
+        cursor: null,
+      });
 
     expect(useHostNotificationsStore.getState().byId.question).toMatchObject({
       readAt: 20,
@@ -212,18 +505,841 @@ describe("host notifications store", () => {
     });
   });
 
-  it("allows a genuinely newer upsert to replace a prior read state", () => {
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot([entry("target", 10, null)], 50);
+  it("allows a genuinely newer upsert to replace a prior local read state", () => {
+    applySimpleSnapshot({
+      entries: [entry("target", 10, null)],
+      summary: defaultSummaryFor([entry("target", 10, null)]),
+      recentCursor: null,
+      attentionNext: null,
+    });
     const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
     useHostNotificationsStore
       .getState()
-      .applyReadState(["target"], 20, undefined, snapshotEpoch);
+      .markReadLocally(["target"], 20, snapshotEpoch);
 
-    useHostNotificationsStore.getState().upsert(entry("target", 11, null));
+    useHostNotificationsStore
+      .getState()
+      .applyUpsertFrame(entry("target", 11, null), [], {
+        unreadCount: 1,
+        attentionCount: 0,
+      });
 
     expect(useHostNotificationsStore.getState().byId.target.readAt).toBeNull();
+  });
+
+  it("merges pages into byId and advances only the matching cursor track", () => {
+    applySimpleSnapshot({
+      entries: [entry("same", 100, null), entry("top", 120, null)],
+      summary: { unreadCount: 2, attentionCount: 0 },
+      recentCursor: chronologicalCursor(100, "same"),
+      attentionNext: null,
+    });
+    useHostNotificationsStore
+      .getState()
+      .applyUpsertFrame(entry("same", 130, null), [], {
+        unreadCount: 2,
+        attentionCount: 0,
+      });
+    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+    const recentCursor = useHostNotificationsStore.getState().recentCursor;
+
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage(
+        [entry("same", 90, 95), entry("older", 80, null)],
+        chronologicalCursor(80, "older"),
+        {
+          snapshotEpoch,
+          liveLifecycleRevision:
+            useHostNotificationsStore.getState().liveLifecycleRevision,
+          cursor: recentCursor,
+        },
+      );
+
+    const state = useHostNotificationsStore.getState();
+    expect(selectHostNotificationIds(state)).toEqual(["same", "top", "older"]);
+    expect(state.byId.same.updatedAt).toBe(130);
+    expect(state.recentCursor).toEqual(chronologicalCursor(80, "older"));
+    expect(state.attentionCursor).toBeNull();
+    expect(state.unreadRecentCursor).toBeNull();
+  });
+
+  it("discards a stale-epoch page response entirely", () => {
+    applySimpleSnapshot({
+      entries: [entry("old", 100, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: chronologicalCursor(100, "old"),
+      attentionNext: null,
+    });
+    const staleEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+    const staleCursor = useHostNotificationsStore.getState().recentCursor;
+
+    applySimpleSnapshot({
+      entries: [entry("fresh", 200, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: chronologicalCursor(200, "fresh"),
+      attentionNext: null,
+    });
+    const currentEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+    const currentCursor = useHostNotificationsStore.getState().recentCursor;
+
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage(
+        [entry("stale-page", 50, null)],
+        chronologicalCursor(50, "stale-page"),
+        {
+          snapshotEpoch: staleEpoch,
+          liveLifecycleRevision:
+            useHostNotificationsStore.getState().liveLifecycleRevision,
+          cursor: staleCursor,
+        },
+      );
+
+    const state = useHostNotificationsStore.getState();
+    expect(state.byId["stale-page"]).toBeUndefined();
+    expect(state.byId.fresh).toBeDefined();
+    expect(state.recentCursor).toEqual(currentCursor);
+    expect(state.recentCursor).not.toEqual(
+      chronologicalCursor(50, "stale-page"),
+    );
+    // markReadLocally is epoch-guarded: stale epoch is a no-op.
+    useHostNotificationsStore
+      .getState()
+      .markReadLocally(["fresh"], 250, staleEpoch);
+    expect(useHostNotificationsStore.getState().byId.fresh.readAt).toBeNull();
+
+    // The next request built from the CURRENT token still merges normally -
+    // the discard path does not leave the store permanently stuck.
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage(
+        [entry("retry-page", 40, null)],
+        chronologicalCursor(40, "retry-page"),
+        {
+          snapshotEpoch: currentEpoch,
+          liveLifecycleRevision:
+            useHostNotificationsStore.getState().liveLifecycleRevision,
+          cursor: currentCursor,
+        },
+      );
+    const retried = useHostNotificationsStore.getState();
+    expect(retried.byId["retry-page"]).toBeDefined();
+    expect(retried.recentCursor).toEqual(chronologicalCursor(40, "retry-page"));
+  });
+
+  it("discards a stale-cursor page response entirely", () => {
+    applySimpleSnapshot({
+      entries: [entry("anchor", 100, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: chronologicalCursor(100, "anchor"),
+      attentionNext: null,
+    });
+    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+    const staleCursor = useHostNotificationsStore.getState().recentCursor;
+
+    // Live frame advances the recent cursor conceptually by a later merge.
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage(
+        [entry("page-1", 90, null)],
+        chronologicalCursor(90, "page-1"),
+        {
+          snapshotEpoch,
+          liveLifecycleRevision:
+            useHostNotificationsStore.getState().liveLifecycleRevision,
+          cursor: staleCursor,
+        },
+      );
+    const liveCursor = useHostNotificationsStore.getState().recentCursor;
+    expect(liveCursor).toEqual(chronologicalCursor(90, "page-1"));
+
+    // Stale response still carrying the pre-live cursor must not rewind it,
+    // nor merge any of its rows.
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage(
+        [entry("late", 80, null)],
+        chronologicalCursor(80, "late"),
+        {
+          snapshotEpoch,
+          liveLifecycleRevision:
+            useHostNotificationsStore.getState().liveLifecycleRevision,
+          cursor: staleCursor,
+        },
+      );
+
+    const state = useHostNotificationsStore.getState();
+    expect(state.byId.late).toBeUndefined();
+    expect(state.recentCursor).toEqual(liveCursor);
+
+    // The next request built from the CURRENT (post-live-frame) token still
+    // merges normally.
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage(
+        [entry("retry-page", 70, null)],
+        chronologicalCursor(70, "retry-page"),
+        {
+          snapshotEpoch,
+          liveLifecycleRevision:
+            useHostNotificationsStore.getState().liveLifecycleRevision,
+          cursor: liveCursor,
+        },
+      );
+    const retried = useHostNotificationsStore.getState();
+    expect(retried.byId["retry-page"]).toBeDefined();
+    expect(retried.recentCursor).toEqual(chronologicalCursor(70, "retry-page"));
+  });
+
+  it("guards attention, recent, and unreadRecent tracks independently", () => {
+    applySimpleSnapshot({
+      entries: [promptEntry("prompt"), entry("done", 20, null)],
+      summary: { unreadCount: 2, attentionCount: 1 },
+      recentCursor: chronologicalCursor(10, "prompt"),
+      attentionNext: attentionCursor(10, "prompt"),
+    });
+    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+
+    useHostNotificationsStore.getState().setPageStatus("attention", "loading");
+    useHostNotificationsStore.getState().setPageStatus("recent", "error");
+    useHostNotificationsStore
+      .getState()
+      .setPageStatus("unreadRecent", "loading");
+
+    let state = useHostNotificationsStore.getState();
+    expect(state.attentionStatus).toBe("loading");
+    expect(state.recentStatus).toBe("error");
+    expect(state.unreadRecentStatus).toBe("loading");
+
+    useHostNotificationsStore
+      .getState()
+      .mergeAttentionPage(
+        [promptEntry("older-prompt")],
+        attentionCursor(5, "older-prompt"),
+        {
+          snapshotEpoch,
+          liveLifecycleRevision:
+            useHostNotificationsStore.getState().liveLifecycleRevision,
+          cursor: attentionCursor(10, "prompt"),
+        },
+      );
+    useHostNotificationsStore
+      .getState()
+      .mergeUnreadRecentPage(
+        [entry("unread-page", 5, null)],
+        chronologicalCursor(5, "unread-page"),
+        {
+          snapshotEpoch,
+          liveLifecycleRevision:
+            useHostNotificationsStore.getState().liveLifecycleRevision,
+          cursor: null,
+        },
+      );
+
+    state = useHostNotificationsStore.getState();
+    expect(state.attentionCursor).toEqual(attentionCursor(5, "older-prompt"));
+    expect(state.recentCursor).toEqual(chronologicalCursor(10, "prompt"));
+    expect(state.unreadRecentCursor).toEqual(
+      chronologicalCursor(5, "unread-page"),
+    );
+    expect(state.attentionStatus).toBe("idle");
+    expect(state.recentStatus).toBe("error");
+    expect(state.unreadRecentStatus).toBe("idle");
+  });
+
+  it("nulls summary when connection leaves open while preserving byId", () => {
+    applySimpleSnapshot({
+      entries: [entry("kept", 10, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    useHostNotificationsStore.getState().setConnectionStatus("open");
+    expect(useHostNotificationsStore.getState().summary).toEqual({
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+
+    useHostNotificationsStore.getState().setConnectionStatus("reconnecting");
+    const state = useHostNotificationsStore.getState();
+    expect(state.summary).toBeNull();
+    expect(state.byId.kept).toBeDefined();
+    expect(state.connectionStatus).toBe("reconnecting");
+  });
+
+  it("marks summary unknown and requests session reconnect after a malformed server frame", () => {
+    const client = new MockWsStreamClient();
+    applySimpleSnapshot({
+      entries: [entry("kept", 10, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const close = openHostNotificationsStream(client, null, {
+      windowId: "window-1",
+      now: () => 123,
+      displayChannelEmission: () => undefined,
+      onFeedFrame: () => undefined,
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
+    });
+
+    expect(client.subscribeCount).toBe(1);
+    expect(client.lastSubscribeParams).toEqual({
+      initialAttentionLimit: 50,
+      initialRecentLimit: 50,
+    });
+    expect(client.sessions[0]?.closed).toBe(false);
+    expect(client.sessions[0]?.requestReconnectCount).toBe(0);
+
+    client.session.emitServerFrame({
+      kind: "upserted",
+      hasBinaryPayload: false,
+      entry: entry("live", 20, null),
+      // missing removedIds + summary → schema failure
+    });
+
+    // Integrity failure degrades the exact summary but keeps already-rendered
+    // rows, and asks the existing session to redial through its own backoff
+    // rather than close() + subscribe() a second session (hot redial loop).
+    expect(useHostNotificationsStore.getState().summary).toBeNull();
+    expect(useHostNotificationsStore.getState().byId.kept).toBeDefined();
+    expect(client.subscribeCount).toBe(1);
+    expect(client.sessions).toHaveLength(1);
+    expect(client.sessions[0]?.closed).toBe(false);
+    expect(client.sessions[0]?.requestReconnectCount).toBe(1);
+    close();
+  });
+
+  it("discards an attention page that crosses a live removal revision", () => {
+    const row = promptEntry("attention-row");
+    applySimpleSnapshot({
+      entries: [row],
+      summary: { unreadCount: 1, attentionCount: 1 },
+      recentCursor: null,
+      attentionNext: attentionCursor(10, row.id),
+    });
+    const state = useHostNotificationsStore.getState();
+    const expected = {
+      snapshotEpoch: state.snapshotEpoch,
+      liveLifecycleRevision: state.liveLifecycleRevision,
+      cursor: state.attentionCursor,
+    };
+    state.setPageStatus("attention", "loading");
+    state.applyRemovalFrame([row.id], EMPTY_SUMMARY);
+    state.mergeAttentionPage([row], expected.cursor, expected);
+
+    const after = useHostNotificationsStore.getState();
+    expect(after.byId[row.id]).toBeUndefined();
+    expect(after.summary).toEqual(EMPTY_SUMMARY);
+    expect(after.attentionCursor).toEqual(expected.cursor);
+    expect(after.attentionStatus).toBe("idle");
+  });
+
+  it("discards a recent page that crosses a live removal revision", () => {
+    const row = entry("recent-row", 20, null);
+    applySimpleSnapshot({
+      entries: [row],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: chronologicalCursor(20, row.id),
+      attentionNext: null,
+    });
+    const state = useHostNotificationsStore.getState();
+    const expected = {
+      snapshotEpoch: state.snapshotEpoch,
+      liveLifecycleRevision: state.liveLifecycleRevision,
+      cursor: state.recentCursor,
+    };
+    state.setPageStatus("recent", "loading");
+    state.applyRemovalFrame([row.id], EMPTY_SUMMARY);
+    state.mergeRecentPage([row], expected.cursor, expected);
+
+    const after = useHostNotificationsStore.getState();
+    expect(after.byId[row.id]).toBeUndefined();
+    expect(after.summary).toEqual(EMPTY_SUMMARY);
+    expect(after.recentCursor).toEqual(expected.cursor);
+    expect(after.recentStatus).toBe("idle");
+  });
+
+  it("discards an unread-recent page that crosses a live removal revision", () => {
+    const row = entry("unread-row", 30, null);
+    applySimpleSnapshot({
+      entries: [row],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const state = useHostNotificationsStore.getState();
+    const expected = {
+      snapshotEpoch: state.snapshotEpoch,
+      liveLifecycleRevision: state.liveLifecycleRevision,
+      cursor: state.unreadRecentCursor,
+    };
+    state.setPageStatus("unreadRecent", "loading");
+    state.applyRemovalFrame([row.id], EMPTY_SUMMARY);
+    state.mergeUnreadRecentPage([row], expected.cursor, expected);
+
+    const after = useHostNotificationsStore.getState();
+    expect(after.byId[row.id]).toBeUndefined();
+    expect(after.summary).toEqual(EMPTY_SUMMARY);
+    expect(after.unreadRecentCursor).toBeNull();
+    expect(after.unreadRecentStatus).toBe("idle");
+  });
+
+  // These three reproduce the exact ABA collision from the review's read-only
+  // repro: a page-request token is captured, `reset()` fires, and a fresh
+  // snapshot lands whose epoch/revision would equal the captured token again
+  // if the counters were zeroed by reset. Because both counters are
+  // monotonic across the store's entire lifetime (never reset to 0), the
+  // post-reset epoch keeps climbing past the captured value, so the stale
+  // response is discarded rather than resurrecting the prior identity's row.
+  it("discards an attention page whose captured token collides with a post-reset snapshot (ABA)", () => {
+    applySimpleSnapshot({
+      entries: [promptEntry("prior-user")],
+      summary: { unreadCount: 1, attentionCount: 1 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const capturedToken = {
+      snapshotEpoch: useHostNotificationsStore.getState().snapshotEpoch,
+      liveLifecycleRevision:
+        useHostNotificationsStore.getState().liveLifecycleRevision,
+      cursor: useHostNotificationsStore.getState().attentionCursor,
+    };
+
+    useHostNotificationsStore.getState().reset();
+    applySimpleSnapshot({
+      entries: [promptEntry("fresh-user")],
+      summary: { unreadCount: 1, attentionCount: 1 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+
+    useHostNotificationsStore
+      .getState()
+      .mergeAttentionPage([promptEntry("stale-page")], null, capturedToken);
+
+    const state = useHostNotificationsStore.getState();
+    expect(state.byId["stale-page"]).toBeUndefined();
+    expect(state.byId["prior-user"]).toBeUndefined();
+    expect(state.byId["fresh-user"]).toBeDefined();
+
+    // A retry built from the CURRENT token still merges normally afterward.
+    const currentToken = {
+      snapshotEpoch: state.snapshotEpoch,
+      liveLifecycleRevision: state.liveLifecycleRevision,
+      cursor: state.attentionCursor,
+    };
+    useHostNotificationsStore
+      .getState()
+      .mergeAttentionPage(
+        [promptEntry("retry-page")],
+        attentionCursor(5, "retry-page"),
+        currentToken,
+      );
+    const retried = useHostNotificationsStore.getState();
+    expect(retried.byId["retry-page"]).toBeDefined();
+    expect(retried.attentionCursor).toEqual(attentionCursor(5, "retry-page"));
+  });
+
+  it("discards a recent page whose captured token collides with a post-reset snapshot (ABA)", () => {
+    applySimpleSnapshot({
+      entries: [entry("prior-user", 100, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const capturedToken = {
+      snapshotEpoch: useHostNotificationsStore.getState().snapshotEpoch,
+      liveLifecycleRevision:
+        useHostNotificationsStore.getState().liveLifecycleRevision,
+      cursor: useHostNotificationsStore.getState().recentCursor,
+    };
+
+    // Same-host identity reset landing while the page request above is still
+    // in flight: `reset()` fires, then a replacement snapshot for the new
+    // identity lands BEFORE the old request's response resolves.
+    useHostNotificationsStore.getState().reset();
+    applySimpleSnapshot({
+      entries: [entry("fresh-user", 50, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+
+    // The old request's response resolves only now, carrying the pre-reset
+    // token.
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage([entry("stale-page", 10, null)], null, capturedToken);
+
+    const state = useHostNotificationsStore.getState();
+    expect(state.byId["stale-page"]).toBeUndefined();
+    expect(state.byId["prior-user"]).toBeUndefined();
+    expect(state.byId["fresh-user"]).toBeDefined();
+
+    // A retry built from the CURRENT token still merges normally afterward.
+    const currentToken = {
+      snapshotEpoch: state.snapshotEpoch,
+      liveLifecycleRevision: state.liveLifecycleRevision,
+      cursor: state.recentCursor,
+    };
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage(
+        [entry("retry-page", 5, null)],
+        chronologicalCursor(5, "retry-page"),
+        currentToken,
+      );
+    const retried = useHostNotificationsStore.getState();
+    expect(retried.byId["retry-page"]).toBeDefined();
+    expect(retried.recentCursor).toEqual(chronologicalCursor(5, "retry-page"));
+  });
+
+  it("discards an unread-recent page whose captured token collides with a post-reset snapshot (ABA)", () => {
+    applySimpleSnapshot({
+      entries: [entry("prior-user", 100, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const capturedToken = {
+      snapshotEpoch: useHostNotificationsStore.getState().snapshotEpoch,
+      liveLifecycleRevision:
+        useHostNotificationsStore.getState().liveLifecycleRevision,
+      cursor: useHostNotificationsStore.getState().unreadRecentCursor,
+    };
+
+    useHostNotificationsStore.getState().reset();
+    applySimpleSnapshot({
+      entries: [entry("fresh-user", 50, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+
+    useHostNotificationsStore
+      .getState()
+      .mergeUnreadRecentPage(
+        [entry("stale-page", 10, null)],
+        null,
+        capturedToken,
+      );
+
+    const state = useHostNotificationsStore.getState();
+    expect(state.byId["stale-page"]).toBeUndefined();
+    expect(state.byId["prior-user"]).toBeUndefined();
+    expect(state.byId["fresh-user"]).toBeDefined();
+
+    // A retry built from the CURRENT token still merges normally afterward.
+    const currentToken = {
+      snapshotEpoch: state.snapshotEpoch,
+      liveLifecycleRevision: state.liveLifecycleRevision,
+      cursor: state.unreadRecentCursor,
+    };
+    useHostNotificationsStore
+      .getState()
+      .mergeUnreadRecentPage(
+        [entry("retry-page", 5, null)],
+        chronologicalCursor(5, "retry-page"),
+        currentToken,
+      );
+    const retried = useHostNotificationsStore.getState();
+    expect(retried.byId["retry-page"]).toBeDefined();
+    expect(retried.unreadRecentCursor).toEqual(
+      chronologicalCursor(5, "retry-page"),
+    );
+  });
+
+  // Pre-snapshot reset interval: an in-flight null-cursor page resolves after
+  // `reset()` but BEFORE any replacement snapshot. Reset must advance both
+  // tokens immediately so the stale response cannot merge into the empty
+  // replica; a current-token retry must still succeed afterward.
+  it("discards a pre-snapshot-interval attention page after reset before any replacement snapshot", () => {
+    applySimpleSnapshot({
+      entries: [promptEntry("prior-user")],
+      summary: { unreadCount: 1, attentionCount: 1 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const capturedToken = {
+      snapshotEpoch: useHostNotificationsStore.getState().snapshotEpoch,
+      liveLifecycleRevision:
+        useHostNotificationsStore.getState().liveLifecycleRevision,
+      cursor: null as HostNotificationsAttentionCursor | null,
+    };
+    expect(useHostNotificationsStore.getState().attentionCursor).toBeNull();
+
+    useHostNotificationsStore.getState().reset();
+    // Intentionally no replacement snapshot - the cleared pre-snapshot window.
+
+    useHostNotificationsStore
+      .getState()
+      .mergeAttentionPage(
+        [promptEntry("stale-page")],
+        attentionCursor(999, "stale-cursor-marker"),
+        capturedToken,
+      );
+
+    const afterStale = useHostNotificationsStore.getState();
+    expect(afterStale.byId).toEqual({});
+    expect(afterStale.byId["stale-page"]).toBeUndefined();
+    // Stale response carried a non-null nextCursor; rejection must not apply it.
+    expect(afterStale.attentionCursor).toBeNull();
+    expect(afterStale.attentionCursor).not.toEqual(
+      attentionCursor(999, "stale-cursor-marker"),
+    );
+    expect(afterStale.attentionStatus).toBe("idle");
+
+    const currentToken = {
+      snapshotEpoch: afterStale.snapshotEpoch,
+      liveLifecycleRevision: afterStale.liveLifecycleRevision,
+      cursor: afterStale.attentionCursor,
+    };
+    useHostNotificationsStore
+      .getState()
+      .mergeAttentionPage(
+        [promptEntry("retry-page")],
+        attentionCursor(5, "retry-page"),
+        currentToken,
+      );
+    const retried = useHostNotificationsStore.getState();
+    expect(retried.byId["retry-page"]).toBeDefined();
+    expect(retried.attentionCursor).toEqual(attentionCursor(5, "retry-page"));
+    expect(retried.attentionStatus).toBe("idle");
+  });
+
+  it("discards a pre-snapshot-interval recent page after reset before any replacement snapshot", () => {
+    applySimpleSnapshot({
+      entries: [entry("prior-user", 100, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const capturedToken = {
+      snapshotEpoch: useHostNotificationsStore.getState().snapshotEpoch,
+      liveLifecycleRevision:
+        useHostNotificationsStore.getState().liveLifecycleRevision,
+      cursor: null as HostNotificationsChronologicalCursor | null,
+    };
+    expect(useHostNotificationsStore.getState().recentCursor).toBeNull();
+
+    useHostNotificationsStore.getState().reset();
+
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage(
+        [entry("stale-page", 10, null)],
+        chronologicalCursor(999, "stale-cursor-marker"),
+        capturedToken,
+      );
+
+    const afterStale = useHostNotificationsStore.getState();
+    expect(afterStale.byId).toEqual({});
+    expect(afterStale.byId["stale-page"]).toBeUndefined();
+    // Stale response carried a non-null nextCursor; rejection must not apply it.
+    expect(afterStale.recentCursor).toBeNull();
+    expect(afterStale.recentCursor).not.toEqual(
+      chronologicalCursor(999, "stale-cursor-marker"),
+    );
+    expect(afterStale.recentStatus).toBe("idle");
+
+    const currentToken = {
+      snapshotEpoch: afterStale.snapshotEpoch,
+      liveLifecycleRevision: afterStale.liveLifecycleRevision,
+      cursor: afterStale.recentCursor,
+    };
+    useHostNotificationsStore
+      .getState()
+      .mergeRecentPage(
+        [entry("retry-page", 5, null)],
+        chronologicalCursor(5, "retry-page"),
+        currentToken,
+      );
+    const retried = useHostNotificationsStore.getState();
+    expect(retried.byId["retry-page"]).toBeDefined();
+    expect(retried.recentCursor).toEqual(chronologicalCursor(5, "retry-page"));
+    expect(retried.recentStatus).toBe("idle");
+  });
+
+  it("discards a pre-snapshot-interval unread-recent page after reset before any replacement snapshot", () => {
+    applySimpleSnapshot({
+      entries: [entry("prior-user", 100, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const capturedToken = {
+      snapshotEpoch: useHostNotificationsStore.getState().snapshotEpoch,
+      liveLifecycleRevision:
+        useHostNotificationsStore.getState().liveLifecycleRevision,
+      cursor: null as HostNotificationsChronologicalCursor | null,
+    };
+    expect(useHostNotificationsStore.getState().unreadRecentCursor).toBeNull();
+
+    useHostNotificationsStore.getState().reset();
+
+    useHostNotificationsStore
+      .getState()
+      .mergeUnreadRecentPage(
+        [entry("stale-page", 10, null)],
+        chronologicalCursor(999, "stale-cursor-marker"),
+        capturedToken,
+      );
+
+    const afterStale = useHostNotificationsStore.getState();
+    expect(afterStale.byId).toEqual({});
+    expect(afterStale.byId["stale-page"]).toBeUndefined();
+    // Stale response carried a non-null nextCursor; rejection must not apply it.
+    expect(afterStale.unreadRecentCursor).toBeNull();
+    expect(afterStale.unreadRecentCursor).not.toEqual(
+      chronologicalCursor(999, "stale-cursor-marker"),
+    );
+    expect(afterStale.unreadRecentStatus).toBe("idle");
+
+    const currentToken = {
+      snapshotEpoch: afterStale.snapshotEpoch,
+      liveLifecycleRevision: afterStale.liveLifecycleRevision,
+      cursor: afterStale.unreadRecentCursor,
+    };
+    useHostNotificationsStore
+      .getState()
+      .mergeUnreadRecentPage(
+        [entry("retry-page", 5, null)],
+        chronologicalCursor(5, "retry-page"),
+        currentToken,
+      );
+    const retried = useHostNotificationsStore.getState();
+    expect(retried.byId["retry-page"]).toBeDefined();
+    expect(retried.unreadRecentCursor).toEqual(
+      chronologicalCursor(5, "retry-page"),
+    );
+    expect(retried.unreadRecentStatus).toBe("idle");
+  });
+
+  it("marks summary unknown and requests session reconnect after an unexpected binary frame", () => {
+    const client = new MockWsStreamClient();
+    applySimpleSnapshot({
+      entries: [entry("kept", 10, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const close = openHostNotificationsStream(client, null, {
+      windowId: "window-binary",
+      now: () => 123,
+      displayChannelEmission: () => undefined,
+      onFeedFrame: () => undefined,
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
+    });
+
+    // Notification frames are text-only; a non-null binary companion is the
+    // same connection-integrity failure as a schema-invalid envelope.
+    client.session.emitServerFrameWithBinary(
+      {
+        kind: "snapshot",
+        hasBinaryPayload: true,
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: EMPTY_SUMMARY,
+      },
+      new Uint8Array([1, 2, 3]),
+    );
+
+    expect(useHostNotificationsStore.getState().summary).toBeNull();
+    expect(useHostNotificationsStore.getState().byId.kept).toBeDefined();
+    expect(client.subscribeCount).toBe(1);
+    expect(client.sessions).toHaveLength(1);
+    expect(client.sessions[0]?.closed).toBe(false);
+    expect(client.sessions[0]?.requestReconnectCount).toBe(1);
+    close();
+  });
+
+  it("orders equal-updatedAt host rows by SQLite code-unit id ASC, not localeCompare", () => {
+    // Stable premise: uppercase code units precede lowercase (Z=90, a=97).
+    // Lock the comparator to the SQLite-exact code-unit path
+    // (compareFeedIdAscending), not locale-sensitive collation.
+    expect("Z".charCodeAt(0)).toBeLessThan("a".charCodeAt(0));
+
+    applySimpleSnapshot({
+      entries: [
+        entry("a", 100, null),
+        entry("Z", 100, null),
+        entry("mid", 200, null),
+        entry("old", 50, null),
+      ],
+      summary: { unreadCount: 4, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+
+    expect(
+      selectHostNotificationIds(useHostNotificationsStore.getState()),
+    ).toEqual(["mid", "Z", "a", "old"]);
+
+    expect(
+      compareHostNotificationEntries(
+        entry("Z", 100, null),
+        entry("a", 100, null),
+      ),
+    ).toBeLessThan(0);
+    expect(
+      compareHostNotificationEntries(
+        entry("a", 100, null),
+        entry("Z", 100, null),
+      ),
+    ).toBeGreaterThan(0);
+    expect(
+      compareHostNotificationEntries(
+        entry("same", 100, null),
+        entry("same", 100, null),
+      ),
+    ).toBe(0);
+  });
+
+  it("reset clears every host replica field except the monotonic lifecycle tokens", () => {
+    applySimpleSnapshot({
+      entries: [entry("x", 10, null)],
+      summary: { unreadCount: 1, attentionCount: 0 },
+      recentCursor: chronologicalCursor(10, "x"),
+      attentionNext: attentionCursor(10, "x"),
+    });
+    useHostNotificationsStore
+      .getState()
+      .applyUpsertFrame(entry("x", 20, null), [], {
+        unreadCount: 1,
+        attentionCount: 0,
+      });
+    useHostNotificationsStore.getState().setConnectionStatus("open");
+    useHostNotificationsStore.getState().setPageStatus("recent", "loading");
+    const preResetEpoch = useHostNotificationsStore.getState().snapshotEpoch;
+    const preResetRevision =
+      useHostNotificationsStore.getState().liveLifecycleRevision;
+    expect(preResetEpoch).toBeGreaterThan(0);
+    expect(preResetRevision).toBeGreaterThan(0);
+
+    useHostNotificationsStore.getState().reset();
+
+    const state = useHostNotificationsStore.getState();
+    expect(state).toMatchObject({
+      byId: {},
+      summary: null,
+      attentionCursor: null,
+      recentCursor: null,
+      unreadRecentCursor: null,
+      unreadRecentHasLoadedOnce: false,
+      attentionStatus: "idle",
+      recentStatus: "idle",
+      unreadRecentStatus: "idle",
+      connectionStatus: "connecting",
+    });
+    // Both counters advance by exactly one on every reset and never fall
+    // back, so a captured pre-reset token cannot match again even before a
+    // replacement snapshot lands (and cannot collide after one does).
+    expect(state.snapshotEpoch).toBe(preResetEpoch + 1);
+    expect(state.liveLifecycleRevision).toBe(preResetRevision + 1);
   });
 
   it("surfaces entity refs from read-state frames even when their ids are not loaded", () => {
@@ -248,6 +1364,8 @@ describe("host notifications store", () => {
       entityRefs: [{ epicId: "epic-1", chatId: "chat-1" }],
       readAt: 20,
       resolvedAt: null,
+      removedIds: [],
+      summary: EMPTY_SUMMARY,
     });
 
     expect(frames).toEqual([
@@ -262,113 +1380,15 @@ describe("host notifications store", () => {
     close();
   });
 
-  it("merges back-pages by id and keeps newer upsert state", () => {
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot(
-        [entry("same", 100, null), entry("top", 120, null)],
-        2,
-      );
-
-    useHostNotificationsStore.getState().upsert(entry("same", 130, null));
-    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
-
-    useHostNotificationsStore.getState().mergePage(
-      [entry("same", 90, 95), entry("older", 80, null)],
-      {
-        updatedAt: 80,
-        id: "older",
-      },
-      snapshotEpoch,
-    );
-
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual([
-      "same",
-      "top",
-      "older",
-    ]);
-    expect(useHostNotificationsStore.getState().byId.same.updatedAt).toBe(130);
-    expect(useHostNotificationsStore.getState().nextCursor).toEqual({
-      updatedAt: 80,
-      id: "older",
-    });
-  });
-
-  it("discards stale list and mark-read results after a snapshot bump", () => {
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot(
-        [entry("old", 100, null), entry("older", 90, null)],
-        2,
-      );
-    const staleEpoch = useHostNotificationsStore.getState().snapshotEpoch;
-
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot([entry("fresh", 200, null)], 50);
-
-    useHostNotificationsStore.getState().mergePage(
-      [entry("resurrected", 80, null)],
-      {
-        updatedAt: 80,
-        id: "resurrected",
-      },
-      staleEpoch,
-    );
-    useHostNotificationsStore
-      .getState()
-      .applyReadState(["fresh"], 250, undefined, staleEpoch);
-
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["fresh"]);
-    expect(
-      useHostNotificationsStore.getState().byId.resurrected,
-    ).toBeUndefined();
-    expect(useHostNotificationsStore.getState().byId.fresh.readAt).toBeNull();
-    expect(useHostNotificationsStore.getState().nextCursor).toBeNull();
-  });
-
-  it("clears only rows at or before the requested boundary", () => {
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot(
-        [entry("old", 10, null), entry("boundary", 20, null)],
-        2,
-      );
-    const snapshotEpoch = useHostNotificationsStore.getState().snapshotEpoch;
-    useHostNotificationsStore.getState().upsert(entry("new", 21, null));
-
-    useHostNotificationsStore.getState().clearBeforeLocally(20, snapshotEpoch);
-
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["new"]);
-    expect(useHostNotificationsStore.getState().unreadCount).toBe(1);
-    expect(useHostNotificationsStore.getState().nextCursor).toBeNull();
-  });
-
-  it("ignores a clear request from a stale snapshot epoch", () => {
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot([entry("old", 10, null)], 2);
-    const staleEpoch = useHostNotificationsStore.getState().snapshotEpoch;
-
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot([entry("fresh", 20, null)], 50);
-
-    useHostNotificationsStore.getState().clearBeforeLocally(20, staleEpoch);
-
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["fresh"]);
-    expect(useHostNotificationsStore.getState().unreadCount).toBe(1);
-  });
-
-  it("applies clear frames from another window without removing newer rows", () => {
+  it("applies cleared frames via exact removedIds rather than a timestamp watermark", () => {
     const client = new MockWsStreamClient();
     const frames: Array<{ readonly kind: string }> = [];
-    useHostNotificationsStore
-      .getState()
-      .replaceFromSnapshot(
-        [entry("old", 10, null), entry("new", 30, null)],
-        50,
-      );
+    applySimpleSnapshot({
+      entries: [entry("old", 10, null), entry("new", 30, null)],
+      summary: { unreadCount: 2, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
     const close = openHostNotificationsStream(client, null, {
       windowId: "window-1",
       now: () => 123,
@@ -382,12 +1402,54 @@ describe("host notifications store", () => {
       kind: "cleared",
       hasBinaryPayload: false,
       beforeUpdatedAt: 20,
+      removedIds: ["old"],
+      summary: { unreadCount: 1, attentionCount: 0 },
     });
 
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["new"]);
+    expect(
+      selectHostNotificationIds(useHostNotificationsStore.getState()),
+    ).toEqual(["new"]);
+    expect(useHostNotificationsStore.getState().summary).toEqual({
+      unreadCount: 1,
+      attentionCount: 0,
+    });
     expect(frames).toEqual([
-      { kind: "cleared", hasBinaryPayload: false, beforeUpdatedAt: 20 },
+      expect.objectContaining({
+        kind: "cleared",
+        removedIds: ["old"],
+      }),
     ]);
+    close();
+  });
+
+  it("applies removed frames and notifies feed listeners", () => {
+    const client = new MockWsStreamClient();
+    const frames: Array<{ readonly kind: string }> = [];
+    applySimpleSnapshot({
+      entries: [entry("a", 10, null), entry("b", 20, null)],
+      summary: { unreadCount: 2, attentionCount: 0 },
+      recentCursor: null,
+      attentionNext: null,
+    });
+    const close = openHostNotificationsStream(client, null, {
+      windowId: "window-1",
+      now: () => 123,
+      displayChannelEmission: () => undefined,
+      onFeedFrame: (frame) => frames.push(frame),
+      onPresenceChanged: () => undefined,
+      onStreamOpened: () => undefined,
+    });
+
+    client.session.emitServerFrame({
+      kind: "removed",
+      hasBinaryPayload: false,
+      removedIds: ["a"],
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+
+    expect(useHostNotificationsStore.getState().byId.a).toBeUndefined();
+    expect(useHostNotificationsStore.getState().byId.b).toBeDefined();
+    expect(frames).toEqual([expect.objectContaining({ kind: "removed" })]);
     close();
   });
 
@@ -411,10 +1473,14 @@ describe("host notifications store", () => {
       kind: "upserted",
       hasBinaryPayload: false,
       entry: liveEntry,
+      removedIds: [],
+      summary: { unreadCount: 1, attentionCount: 0 },
     });
 
     expect(displayed).toEqual([]);
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["live"]);
+    expect(
+      selectHostNotificationIds(useHostNotificationsStore.getState()),
+    ).toEqual(["live"]);
 
     client.session.emitServerFrame({
       kind: "channelEmission",
@@ -427,8 +1493,6 @@ describe("host notifications store", () => {
     });
 
     expect(displayed).toEqual([[liveEntry]]);
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual(["live"]);
-
     close();
   });
 
@@ -464,6 +1528,8 @@ describe("host notifications store", () => {
       kind: "upserted",
       hasBinaryPayload: false,
       entry: richFeedEntry,
+      removedIds: [],
+      summary: { unreadCount: 1, attentionCount: 0 },
     });
     client.session.emitServerFrame({
       kind: "channelEmission",
@@ -476,7 +1542,6 @@ describe("host notifications store", () => {
     });
 
     expect(displayed).toEqual([[richFeedEntry]]);
-
     close();
   });
 
@@ -507,12 +1572,13 @@ describe("host notifications store", () => {
     });
 
     expect(displayed).toEqual([]);
-    expect(useHostNotificationsStore.getState().orderedIds).toEqual([]);
-
+    expect(
+      selectHostNotificationIds(useHostNotificationsStore.getState()),
+    ).toEqual([]);
     close();
   });
 
-  it("sends flat presence frames initially and when the stream opens", () => {
+  it("sends flat presence frames when the stream opens", () => {
     const client = new MockWsStreamClient();
 
     const close = openHostNotificationsStream(client, null, {
@@ -524,7 +1590,13 @@ describe("host notifications store", () => {
       onStreamOpened: () => undefined,
     });
 
-    const initialPresenceFrame = client.session.clientFrames[0];
+    expect(client.session.clientFrames).toHaveLength(0);
+    client.session.emitOpen();
+
+    const initialPresenceFrame = client.session.clientFrames.at(0);
+    if (initialPresenceFrame === undefined) {
+      throw new Error("Expected initial notifications presence frame.");
+    }
     if (initialPresenceFrame.kind !== "presence") {
       throw new Error("Expected initial notifications presence frame.");
     }
@@ -532,15 +1604,6 @@ describe("host notifications store", () => {
     expect(initialPresenceFrame).toMatchObject({
       kind: "presence",
       hasBinaryPayload: false,
-      windowId: "window-1",
-      at: 456,
-    });
-
-    client.session.emitOpen();
-
-    expect(client.session.clientFrames).toHaveLength(2);
-    expect(client.session.clientFrames[1]).toMatchObject({
-      kind: "presence",
       windowId: "window-1",
       at: 456,
     });
@@ -562,6 +1625,7 @@ describe("host notifications store", () => {
         onStreamOpened: () => undefined,
       });
 
+      client.session.emitOpen();
       expect(client.session.clientFrames).toHaveLength(1);
 
       // Nothing changed locally — the heartbeat must still refresh the

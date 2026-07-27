@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
 import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import type {
-  EpicChatMentionEntry,
+  EpicAgentMentionEntry,
   EpicMentionEntry,
   MentionAttachment,
   MentionPreview,
@@ -19,7 +19,7 @@ import {
   descriptionForSuggestion,
   detailForSuggestion,
   epicIcon,
-  epicNodeIcon,
+  agentCategoryIcon,
   folderIcon,
   gitIcon,
   iconForSuggestion,
@@ -141,7 +141,8 @@ export interface ComposerMentionProviderContext {
   readonly workspaceEntries: ReadonlyArray<WorkspaceEntry>;
   readonly epicEntries: ReadonlyArray<EpicMentionEntry>;
   readonly currentEpicId: string | null;
-  readonly chatEntries: ReadonlyArray<EpicChatMentionEntry>;
+  /** Every referenceable Agent in the open Task, both interfaces. */
+  readonly agentEntries: ReadonlyArray<EpicAgentMentionEntry>;
 }
 
 export const ROOT_MENTION_STEP: MentionFlowStep = { kind: "root" };
@@ -525,11 +526,18 @@ class EpicMentionProvider extends ComposerMentionProvider {
   }
 }
 
-class ChatMentionProvider extends ComposerMentionProvider {
+/**
+ * The one Agent category. Lists every Agent the current Task can reference,
+ * whichever interface it uses - GUI chat-interface Agents and eligible TUI
+ * terminal-interface Agents alike. The provider id stays `"chat"`: it is an
+ * internal step/registry identifier on the compatibility boundary, not product
+ * copy, and renaming it would churn persisted picker steps for no user benefit.
+ */
+class AgentMentionProvider extends ComposerMentionProvider {
   readonly id = "chat" as const;
   readonly rootOrder = 45;
-  protected readonly label = "Chat";
-  protected readonly description = "Task chats";
+  protected readonly label = "Agents";
+  protected readonly description = "Task agents";
 
   rootEntry(context: ComposerMentionProviderContext): MentionMenuEntry | null {
     if (context.currentEpicId === null) return null;
@@ -537,7 +545,7 @@ class ChatMentionProvider extends ComposerMentionProvider {
       id: "provider:chat",
       label: this.label,
       description: this.description,
-      icon: epicNodeIcon("chat"),
+      icon: agentCategoryIcon(),
       step: this.providerStep("root", null),
     });
   }
@@ -546,18 +554,18 @@ class ChatMentionProvider extends ComposerMentionProvider {
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
     if (context.currentEpicId === null) return EMPTY_MENU_ENTRIES;
-    return chatSuggestionEntries(context);
+    return agentSuggestionEntries(context);
   }
 
   stepEntries(
     _step: MentionFlowStep,
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
-    return [backEntry("Mentions"), ...chatSuggestionEntries(context)];
+    return [backEntry("Mentions"), ...agentSuggestionEntries(context)];
   }
 
   menuCopy(_step: MentionFlowStep): MentionMenuCopy {
-    return { header: "Chats", empty: "No chats available" };
+    return { header: "Agents", empty: "No agents available" };
   }
 }
 
@@ -761,7 +769,7 @@ export const mentionProviderRegistry = new MentionProviderRegistry([
   new WorktreeMentionProvider(),
   new GitMentionProvider(),
   new EpicMentionProvider(),
-  new ChatMentionProvider(),
+  new AgentMentionProvider(),
   new ArtifactMentionProvider("spec", 50),
   new ArtifactMentionProvider("ticket", 60),
   new ArtifactMentionProvider("story", 70),
@@ -826,25 +834,25 @@ function suggestionEntry(
   ];
 }
 
-function chatSuggestionEntries(
+function agentSuggestionEntries(
   context: ComposerMentionProviderContext,
 ): ReadonlyArray<MentionMenuEntry> {
-  return rankChatEntries(
-    context.chatEntries,
+  return rankAgentEntries(
+    context.agentEntries,
     context.query,
     context.limit,
   ).flatMap((entry) => suggestionEntry(entry));
 }
 
-function rankChatEntries(
-  entries: ReadonlyArray<EpicChatMentionEntry>,
+function rankAgentEntries(
+  entries: ReadonlyArray<EpicAgentMentionEntry>,
   query: string,
   limit: number,
-): ReadonlyArray<EpicChatMentionEntry> {
+): ReadonlyArray<EpicAgentMentionEntry> {
   const normalizedQuery = query.trim().toLowerCase();
   return entries
     .flatMap((entry) => {
-      const score = scoreChatEntry(entry, normalizedQuery);
+      const score = scoreAgentEntry(entry, normalizedQuery);
       if (score === null) return [];
       return [{ entry, score }];
     })
@@ -857,13 +865,18 @@ function rankChatEntries(
     .slice(0, limit);
 }
 
-function scoreChatEntry(
-  entry: EpicChatMentionEntry,
+/** The Agent's durable record id, whichever interface it uses. */
+function agentEntryRecordId(entry: EpicAgentMentionEntry): string {
+  return entry.kind === "epic-chat" ? entry.chatId : entry.terminalAgentId;
+}
+
+function scoreAgentEntry(
+  entry: EpicAgentMentionEntry,
   normalizedQuery: string,
 ): number | null {
   if (normalizedQuery.length === 0) return 0;
   const label = entry.label.toLowerCase();
-  const id = entry.chatId.toLowerCase();
+  const id = agentEntryRecordId(entry).toLowerCase();
   if (label === normalizedQuery || id === normalizedQuery) return 0;
   if (label.startsWith(normalizedQuery)) return 100;
   if (label.includes(normalizedQuery)) return 200;

@@ -444,14 +444,15 @@ function GitDiffPanelLoaded(props: GitDiffPanelLoadedProps): ReactNode {
   // Explicit generation-aware unary fetch (works under stream ownership too,
   // where the passive unary query is disabled) - see
   // `useGitSubmoduleSnapshotRefresh`.
-  const handleRefresh = useGitSubmoduleSnapshotRefresh({
-    hostId: selectedRootRow.hostId,
-    rootRunningDir: selectedRootRow.runningDir,
-    ignoreWhitespace,
-  });
+  const { refresh: handleRefresh, isRefreshing } =
+    useGitSubmoduleSnapshotRefresh({
+      hostId: selectedRootRow.hostId,
+      rootRunningDir: selectedRootRow.runningDir,
+      ignoreWhitespace,
+    });
   const referenceRefresh = useRefreshSpinner({
     onRefresh: handleRefresh,
-    externalRefreshing: snapshot.isPending,
+    externalRefreshing: snapshot.isPending || isRefreshing,
     timeoutMs: GIT_REFERENCE_REFRESH_TIMEOUT_MS,
   });
 

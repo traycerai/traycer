@@ -168,10 +168,10 @@ function mountStartupConsumers(
     hasLocalHost: undefined,
     traycerCli: undefined,
   });
-  void host.tokenStore.set({
-    token: "test-token",
-    refreshToken: "test-refresh-token",
-  });
+  void host.tokenStore.signIn(
+    { token: "test-token", refreshToken: "test-refresh-token" },
+    { id: "user-1", email: "test@example.com", name: "Test User" },
+  );
   useAuthStore.getState().setSignedIn(
     {
       userId: "test-user",

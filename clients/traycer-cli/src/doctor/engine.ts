@@ -173,7 +173,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         code: DOCTOR_ISSUE_CODES.SERVICE_EXTERNALLY_MANAGED,
         severity: "info",
         title: "Service managed by Traycer Desktop",
-        message: `The OS service '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI does not manage it. Use the Traycer app to repair or remove the host on this machine.`,
+        message: `The OS service for '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI does not manage it. Use the Traycer app to repair or remove the host on this machine.`,
         fixAction: null,
         terminalCommand: null,
         details: { label: label.id },

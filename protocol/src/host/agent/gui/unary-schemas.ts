@@ -4,6 +4,7 @@ import {
   guiHarnessIdSchemaV10,
   guiHarnessIdSchemaV20,
   guiHarnessIdSchemaV30,
+  guiHarnessIdSchemaV40,
 } from "@traycer/protocol/host/agent/shared";
 import {
   ALL_PERMISSION_MODES,
@@ -218,6 +219,18 @@ export const guiHarnessOptionSchemaV30 = guiHarnessOptionSchema.extend({
 });
 export const listGuiHarnessesResponseSchemaV30 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV30),
+});
+
+// ── Frozen protocol-v4.0 catalog row + response (with Devin/Pi, before ──────
+// Hermes). v4.0 shipped with Devin/Pi; the v5.0 line of
+// `agent.gui.listHarnesses` adds Hermes, and the v5→v4 downgrade bridge
+// filters it out for already-shipped v4.0 callers so their strict decode
+// never sees a value it can't parse.
+export const guiHarnessOptionSchemaV40 = guiHarnessOptionSchema.extend({
+  id: guiHarnessIdSchemaV40,
+});
+export const listGuiHarnessesResponseSchemaV40 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV40),
 });
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema

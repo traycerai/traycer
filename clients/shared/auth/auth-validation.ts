@@ -1,7 +1,6 @@
 /**
- * Stateless boundary helpers that turn a raw bearer token into either a
- * narrow runner-host profile (for `IRunnerHost.validateAuthToken(...)`) or a
- * full `AuthenticatedUser` identity (for minting a `RequestContext`).
+ * Stateless boundary helpers that turn a raw bearer token into a full
+ * `AuthenticatedUser` identity, refresh a token pair, or exchange a PKCE code.
  *
  * Lives under `shared/auth/` because it is the auth-boundary conversion
  * point: raw bearer strings are allowed here only inside validation/refresh
@@ -10,25 +9,18 @@
  * means they can run from Electron main, mobile native, browser preview,
  * or unit tests without any DI or singleton state.
  *
- * Two parallel surfaces are exported:
- *
- *   - `validateAuthTokenViaHttp(...)` returns a narrow `AuthValidationProfile`
- *     for the existing `IRunnerHost` IPC contract; this shape MUST stay
- *     wire-compatible with desktop/mobile shells that already consume it.
- *   - `validateAuthTokenIdentityViaHttp(...)` returns the full
- *     `AuthenticatedUser` so the client `RequestContextProvider` (and its
- *     host-equivalent boundary helper) can mint a context with the same
- *     identity shape that host-minted contexts already carry.
- *
- * Both surfaces share a single one-shot refresh attempt on a failed user
- * lookup so the same retry semantics apply on either return shape.
+ * Validation is ACCESS-ONLY (credentials-file token-store tech plan §3): the
+ * `validateAuthTokenIdentity*` helpers do a single `/api/v3/user` lookup with NO
+ * refresh-on-401, so they can never spend a refresh token. Every *spend* runs
+ * inside the credentials file lock via the mutation store's `rotate`, which
+ * injects the single-attempt `refreshOnceAbortable` below as its `RefreshFn`.
  */
 import { authRecordRegistry } from "@traycer/protocol/auth/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
 import type {
   AuthTokenRefreshResult,
-  AuthTokenValidationResult,
-  AuthValidationProfile,
+  StoredCredentials,
 } from "../platform/runner-host";
 import type { AuthIdentityValidationResult } from "./auth-validation-types";
 
@@ -115,113 +107,53 @@ function isAbortOrTimeout(error: unknown): boolean {
 }
 
 /**
- * Shared bearer-token validation helper used by runner-host implementations.
- *
- * Browser-only hosts (tests, preview, mobile webview) call this directly with
- * the ambient `fetch`. Desktop shells use the same parser in Electron main so
- * the GUI receives the exact same validation semantics without renderer CORS
- * involvement. A failed user lookup is refreshed once before the helper
- * returns a terminal failure.
+ * Access-only full-identity validation (credentials-file token-store tech plan
+ * §3): a single `/api/v3/user` lookup with NO refresh-on-401 fallback, so it can
+ * never spend a refresh token. This is the validator the desktop renderer's
+ * `AuthService` uses everywhere it checks a bearer (startup rehydration, reactive
+ * 401 revalidation, device-flow finalization, cross-window projection): a stale
+ * access token comes back `rejected`/`network-error` and the caller routes the
+ * *spend* through the locked `rotate` op instead. `valid` never carries a
+ * `refreshedToken` — the pair on hand is unchanged.
  */
-export async function validateAuthTokenViaHttp(
+export function validateAuthTokenIdentityAccessOnly(
   authnBaseUrl: string,
   token: string,
-  refreshToken: string,
-): Promise<AuthTokenValidationResult> {
-  const initial = await validateAuthTokenProfileViaHttp(authnBaseUrl, token);
-  if (initial.kind === "valid") {
-    return initial;
-  }
-
-  const refresh = await refreshAuthTokenViaHttp(
-    authnBaseUrl,
-    token,
-    refreshToken,
-  );
-  if (refresh.kind !== "refreshed") {
-    // A confirmed rejection from the initial lookup wins over a refresh error:
-    // a `5xx`/network failure on `/api/v3/auth/refresh` must not downgrade a known
-    // `rejected` token to `network-error`. Only a genuinely transient initial
-    // lookup (no prior rejection) stays `network-error`.
-    return initial.kind === "rejected" ? initial : refresh;
-  }
-
-  const refreshed = await validateAuthTokenProfileViaHttp(
-    authnBaseUrl,
-    refresh.token,
-  );
-  if (refreshed.kind !== "valid") {
-    return refreshed;
-  }
-
-  return {
-    ...refreshed,
-    refreshedToken: refresh.token,
-    refreshedRefreshToken: refresh.refreshToken,
-  };
+): Promise<AuthIdentityValidationResult> {
+  return validateAuthTokenIdentityFetch(authnBaseUrl, token);
 }
 
 /**
- * Full-identity counterpart to `validateAuthTokenViaHttp(...)`. Returns the
- * complete `AuthenticatedUser` so the client `RequestContextProvider` can
- * mint a context whose `identity.user` matches the host-minted shape.
- *
- * Refresh-on-401 behaviour is identical to the narrow-profile helper: a
- * single refresh attempt happens before a terminal `rejected`/`network-error`
- * is surfaced, and a successful refresh is reported via `refreshedToken`.
+ * Single-attempt, ~10s, abort-aware access-only identity probe — the migration
+ * counterpart to {@link validateAuthTokenIdentityAccessOnly} (tech plan §6).
+ * ONE `/api/v3/user` lookup with NO refresh-on-401 (never spends) and NO internal
+ * retry: the migration state machine owns bounded re-entry and threads its
+ * deadline `signal` through here, so a slow probe cannot outlive the migration
+ * budget or blur its "L unspent" accounting the way the 3×10s stack would. The
+ * `signal` is combined with a fresh ~10s timeout (à la {@link refreshOnceAbortable});
+ * either firing collapses to `network-error`.
  */
-export async function validateAuthTokenIdentityViaHttp(
-  authnBaseUrl: string,
-  token: string,
-  refreshToken: string,
-): Promise<AuthIdentityValidationResult> {
-  const initial = await validateAuthTokenIdentityFetch(authnBaseUrl, token);
-  if (initial.kind === "valid") {
-    return initial;
-  }
-
-  const refresh = await refreshAuthTokenViaHttp(
-    authnBaseUrl,
-    token,
-    refreshToken,
+export async function validateAuthTokenIdentityAccessOnceAbortable(args: {
+  readonly authnBaseUrl: string;
+  readonly token: string;
+  readonly signal: AbortSignal | null;
+}): Promise<AuthIdentityValidationResult> {
+  const timeout = AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS);
+  const signal =
+    args.signal === null ? timeout : AbortSignal.any([args.signal, timeout]);
+  const result = await fetchUserResponseOnce(
+    args.authnBaseUrl,
+    args.token,
+    signal,
   );
-  if (refresh.kind !== "refreshed") {
-    // A confirmed rejection from the initial lookup wins over a refresh error:
-    // a `5xx`/network failure on `/api/v3/auth/refresh` must not downgrade a known
-    // `rejected` token to `network-error`. Only a genuinely transient initial
-    // lookup (no prior rejection) stays `network-error`.
-    return initial.kind === "rejected" ? initial : refresh;
-  }
-
-  const refreshed = await validateAuthTokenIdentityFetch(
-    authnBaseUrl,
-    refresh.token,
-  );
-  if (refreshed.kind !== "valid") {
-    return refreshed;
-  }
-
-  return {
-    ...refreshed,
-    refreshedToken: refresh.token,
-    refreshedRefreshToken: refresh.refreshToken,
-  };
-}
-
-async function validateAuthTokenProfileViaHttp(
-  authnBaseUrl: string,
-  token: string,
-): Promise<AuthTokenValidationResult> {
-  const result = await fetchUserResponse(authnBaseUrl, token);
   if (result.kind !== "ok") {
     return result.result;
   }
-
-  const profile = projectProfile(result.body);
-  if (profile === null) {
+  const parsed = authenticatedUserResponseSchema.safeParse(result.body);
+  if (!parsed.success) {
     return { kind: "rejected" };
   }
-  return { kind: "valid", profile };
+  return { kind: "valid", user: parsed.data };
 }
 
 async function validateAuthTokenIdentityFetch(
@@ -240,6 +172,27 @@ async function validateAuthTokenIdentityFetch(
   return { kind: "valid", user: parsed.data };
 }
 
+/**
+ * Projects a validated `AuthenticatedUser` onto the `StoredCredentials.user`
+ * identity block persisted in the credentials file. Shared so the device-flow
+ * sign-in (renderer) and the §6 migration `/user` probe (main) stamp identical
+ * identity shapes; `email`/`name` fall back exactly as the file's decoder
+ * tolerates.
+ *
+ * NB: distinct from protocol's `identityFromAuthenticatedUser`, which projects
+ * onto the `AuthenticatedIdentity` (`{ userId, username, providerHandle }`) a
+ * `RequestContext` carries — a different shape for a different consumer.
+ */
+export function credentialsIdentityFromAuthenticatedUser(
+  user: AuthenticatedUser,
+): StoredCredentials["user"] {
+  return {
+    id: user.user.id,
+    email: user.user.email ?? "",
+    name: user.user.name ?? user.user.providerHandle,
+  };
+}
+
 type UserFetchResult =
   | { readonly kind: "ok"; readonly body: unknown }
   | {
@@ -253,7 +206,12 @@ async function fetchUserResponse(
   token: string,
 ): Promise<UserFetchResult> {
   return withAuthNetworkRetry(
-    () => fetchUserResponseOnce(authnBaseUrl, token),
+    () =>
+      fetchUserResponseOnce(
+        authnBaseUrl,
+        token,
+        AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
+      ),
     isUserFetchTransient,
   );
 }
@@ -265,6 +223,7 @@ function isUserFetchTransient(result: UserFetchResult): boolean {
 async function fetchUserResponseOnce(
   authnBaseUrl: string,
   token: string,
+  signal: AbortSignal,
 ): Promise<UserFetchResult> {
   let response: Response;
   try {
@@ -274,7 +233,7 @@ async function fetchUserResponseOnce(
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
       },
-      signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
+      signal,
     });
   } catch {
     // A thrown `fetch` - a transport failure OR the per-attempt
@@ -307,40 +266,37 @@ async function fetchUserResponseOnce(
 }
 
 /**
- * Token refresh against the authn service's `/api/v3/auth/refresh` endpoint.
- * Post raw-JWS cutover the access token (`token`, the bearer) and the
- * `refreshToken` are separate: the bearer goes in the `Authorization` header and
- * the `refreshToken` in the request body (the endpoint requires it). A success
- * rotates BOTH, so we return the new `{ token, refreshToken }` for the caller to
- * persist. Exported so the CLI's host-auth boundary can refresh a stale bearer
- * on a host `401` without re-running a full `/api/v3/user` validation round trip.
- *
- * Each attempt is time-boxed by `AbortSignal.timeout` and transient outcomes
- * (transport failure, timeout, 5xx, or a 409 grace-window race) are retried on a
- * bounded exponential backoff via {@link withAuthNetworkRetry}; a `rejected`
- * (dead credential) returns on the first attempt. Replaying the same
- * `refreshToken` on a retry is safe: if the prior attempt's write was lost the
- * authn grace window replays the winner's rotated pair (the 409 path).
+ * Single-attempt, ~10s, abort-aware refresh — the exact shape the credentials
+ * mutation store injects as its `RefreshFn` (tech plan §2/§3). It makes ONE
+ * bounded attempt so it fits the "at most one refresh per lock hold" budget: the
+ * locked rotate holds the credentials lock across this call, so a multi-attempt
+ * helper would blow the lock hold time and starve a competing sign-out. The
+ * caller's `signal` (the rotate/migration `AbortSignal`) is combined with a fresh
+ * ~10s timeout, so either the caller aborting or the deadline firing collapses to
+ * `network-error` (nothing spent — the retry re-enters under a fresh lock).
  */
-export async function refreshAuthTokenViaHttp(
-  authnBaseUrl: string,
-  token: string,
-  refreshToken: string,
-): Promise<AuthTokenRefreshResult> {
-  return withAuthNetworkRetry(
-    () => refreshAuthTokenOnceViaHttp(authnBaseUrl, token, refreshToken),
-    isRefreshTransient,
+export async function refreshOnceAbortable(args: {
+  readonly authnBaseUrl: string;
+  readonly token: string;
+  readonly refreshToken: string;
+  readonly signal: AbortSignal | null;
+}): Promise<AuthTokenRefreshResult> {
+  const timeout = AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS);
+  const signal =
+    args.signal === null ? timeout : AbortSignal.any([args.signal, timeout]);
+  return refreshAuthTokenOnceViaHttp(
+    args.authnBaseUrl,
+    args.token,
+    args.refreshToken,
+    signal,
   );
-}
-
-function isRefreshTransient(result: AuthTokenRefreshResult): boolean {
-  return result.kind === "network-error";
 }
 
 async function refreshAuthTokenOnceViaHttp(
   authnBaseUrl: string,
   token: string,
   refreshToken: string,
+  signal: AbortSignal,
 ): Promise<AuthTokenRefreshResult> {
   let response: Response;
   try {
@@ -352,7 +308,7 @@ async function refreshAuthTokenOnceViaHttp(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ refreshToken }),
-      signal: AbortSignal.timeout(AUTH_FETCH_TIMEOUT_MS),
+      signal,
     });
   } catch {
     return { kind: "network-error" };
@@ -467,32 +423,6 @@ export async function exchangeCodeForTokens(
   };
 }
 
-function projectProfile(body: unknown): AuthValidationProfile | null {
-  if (body === null || typeof body !== "object") {
-    return null;
-  }
-
-  const user = (body as Record<string, unknown>).user;
-  if (user === null || typeof user !== "object") {
-    return null;
-  }
-
-  const record = user as Record<string, unknown>;
-  const email = pickString(record, "email");
-  const userName =
-    pickString(record, "name", "providerHandle") ?? emailLocalPart(email);
-  const userId = pickString(record, "id");
-  if (userName === null && email === null && userId === null) {
-    return null;
-  }
-
-  return {
-    userId: userId ?? "",
-    userName: userName ?? "",
-    email: email ?? "",
-  };
-}
-
 /**
  * Outcome of reading the rotated `{ token, refreshToken }` pair from a 2xx
  * token-mint body:
@@ -554,30 +484,4 @@ function authnApiUrl(authnBaseUrl: string, path: string): string {
     path,
     authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`,
   ).toString();
-}
-
-function pickString(
-  record: Record<string, unknown>,
-  ...keys: readonly string[]
-): string | null {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.length > 0) {
-      return value;
-    }
-  }
-  return null;
-}
-
-function emailLocalPart(email: string | null): string | null {
-  if (email === null) {
-    return null;
-  }
-
-  const atIndex = email.indexOf("@");
-  if (atIndex <= 0) {
-    return null;
-  }
-
-  return email.slice(0, atIndex);
 }

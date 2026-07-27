@@ -29,7 +29,10 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
-import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  GuiHarnessId,
+  TuiHarnessId,
+} from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import {
@@ -39,7 +42,7 @@ import {
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
-import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -333,7 +336,9 @@ function recordForChat(c: ChatProjection, hostId: string): EpicTreeRecord {
   const record: EpicTreeRecord = {
     id: c.id,
     parentId: c.parentId,
-    name: displayTitle(c.title, "chat"),
+    // Durable Agent tree row: an untitled Chat-interface Agent falls back to
+    // "Untitled agent"; `type` stays the interface discriminator.
+    name: displayTitle(c.title, "agent"),
     type: "chat",
     status: null,
     hostId,
@@ -348,7 +353,10 @@ function recordForTerminalAgent(a: TuiAgentProjection): EpicTreeRecord {
   const record: EpicTreeRecord = {
     id: a.id,
     parentId: a.parentId,
-    name: tuiAgentDisplayTitle({ title: a.title, harnessId: a.harnessId }),
+    // Durable Agent tree row: an untitled Terminal-interface Agent falls back
+    // to "Untitled agent" too (harness identity is separate interface metadata,
+    // not the title fallback); `type` stays the interface discriminator.
+    name: displayTitle(a.title, "agent"),
     type: "terminal-agent",
     status: null,
     hostId: a.hostId,
@@ -1222,6 +1230,19 @@ export function useEpicNodeHostId(nodeId: string): string | null {
       return s.tuiAgents.byId[nodeId].hostId;
     }
     return null;
+  });
+}
+
+/**
+ * A GUI chat row's persisted harness id, selected as a primitive so unrelated
+ * chat projection churn cannot re-render the sidebar icon. New chats normally
+ * persist settings at creation; legacy or optimistic records can still have
+ * no settings, in which case the caller keeps the generic chat glyph.
+ */
+export function useEpicChatHarnessId(nodeId: string): GuiHarnessId | null {
+  return useEpicStore((s) => {
+    if (!Object.hasOwn(s.chats.byId, nodeId)) return null;
+    return s.chats.byId[nodeId].settings?.harnessId ?? null;
   });
 }
 

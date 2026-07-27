@@ -125,6 +125,15 @@ const runnerHostMock = vi.hoisted((): { current: TestRunnerHost } => ({
   current: { hostManagement: null },
 }));
 
+const appUpdatesMock = vi.hoisted(() => ({
+  current: {
+    bridge: null as {
+      setAllowPrerelease: Mock<(value: boolean) => Promise<unknown>>;
+    } | null,
+    snapshot: { allowPrerelease: false },
+  },
+}));
+
 const hostQueryMocks = vi.hoisted((): HostQueryMocks => ({
   queryResult: {
     data: { bytes: 432 * 1024 * 1024 },
@@ -189,6 +198,10 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => runnerHostMock.current,
 }));
 
+vi.mock("@/hooks/runner/use-desktop-app-updates", () => ({
+  useDesktopAppUpdates: () => appUpdatesMock.current,
+}));
+
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@tanstack/react-router")>();
@@ -232,6 +245,10 @@ describe("GeneralSettingsPanel", () => {
     navigateMock.mockReset();
     windowsBridgeMock.current = null;
     runnerHostMock.current = { hostManagement: null };
+    appUpdatesMock.current = {
+      bridge: null,
+      snapshot: { allowPrerelease: false },
+    };
     clearAllPersistedStoresMock.mockClear();
     clearAllPersistedStoresMock.mockResolvedValue(undefined);
     useAuthStore.setState({
@@ -275,6 +292,121 @@ describe("GeneralSettingsPanel", () => {
     fireEvent.click(button);
 
     expect(migrationStart.fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("defaults release candidate updates off and saves an explicit opt-in", async () => {
+    const setAllowPrerelease = vi.fn(() => Promise.resolve({}));
+    appUpdatesMock.current = {
+      bridge: { setAllowPrerelease },
+      snapshot: { allowPrerelease: false },
+    };
+    renderPanel();
+
+    const toggle = screen.getByRole("switch", {
+      name: "Allow release candidate updates",
+    });
+    expect(toggle.getAttribute("data-state")).toBe("unchecked");
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(setAllowPrerelease).toHaveBeenCalledWith(true);
+    });
+  });
+
+  it("shows progress and disables the release-channel toggle while saving", async () => {
+    const setAllowPrerelease = vi.fn(() => new Promise<unknown>(() => {}));
+    appUpdatesMock.current = {
+      bridge: { setAllowPrerelease },
+      snapshot: { allowPrerelease: false },
+    };
+    renderPanel();
+
+    const toggle = screen.getByRole("switch", {
+      name: "Allow release candidate updates",
+    });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(true);
+    });
+    expect(
+      screen.getByTestId("release-channel-pending-indicator"),
+    ).toBeTruthy();
+  });
+
+  // Review finding 5's amendment: a refusal (main rejects the invoke, e.g.
+  // an update is downloading/staged) must surface as a mutation error and
+  // must NOT be tracked as a successful setting change or invalidate any Host
+  // query - only a durable success does that.
+  it("keeps the switch in its old position, toasts an error, and skips analytics/invalidation when the channel change is refused", async () => {
+    const { Analytics } = await import("@/lib/analytics");
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    const setAllowPrerelease = vi.fn(() =>
+      Promise.reject(
+        new Error(
+          "Finish or restart into the pending Traycer update before changing the release channel.",
+        ),
+      ),
+    );
+    appUpdatesMock.current = {
+      bridge: { setAllowPrerelease },
+      snapshot: { allowPrerelease: false },
+    };
+    runnerHostMock.current = { hostManagement: {} as never };
+    const queryClient = renderPanel();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+
+    const toggle = screen.getByRole("switch", {
+      name: "Allow release candidate updates",
+    });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(setAllowPrerelease).toHaveBeenCalledWith(true);
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalled();
+    });
+
+    // Main never persisted the change, so the pushed snapshot this window
+    // renders from never moved off stable - the switch reads it directly (no
+    // optimistic local state to snap back).
+    expect(toggle.getAttribute("data-state")).toBe("unchecked");
+    expect(trackSpy).not.toHaveBeenCalled();
+    expect(invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it("tracks the setting and invalidates Host queries on a durable channel change", async () => {
+    const { Analytics } = await import("@/lib/analytics");
+    const trackSpy = vi.spyOn(Analytics.getInstance(), "track");
+    const setAllowPrerelease = vi.fn(() =>
+      Promise.resolve({ allowPrerelease: true }),
+    );
+    appUpdatesMock.current = {
+      bridge: { setAllowPrerelease },
+      snapshot: { allowPrerelease: false },
+    };
+    runnerHostMock.current = { hostManagement: {} as never };
+    const queryClient = renderPanel();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Allow release candidate updates",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(setAllowPrerelease).toHaveBeenCalledWith(true);
+    });
+    await waitFor(() => {
+      expect(trackSpy).toHaveBeenCalledWith(
+        "setting_changed",
+        expect.objectContaining({ section: "general" }),
+      );
+    });
+    expect(invalidateQueries).toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("renders the pinned context usage breakdown row and toggles the setting", () => {

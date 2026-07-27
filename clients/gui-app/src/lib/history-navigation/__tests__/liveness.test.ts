@@ -73,8 +73,8 @@ afterEach(() => {
   useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
 });
 
-describe("isHistoryEntryDead — persistent-route liveness", () => {
-  it("keeps valid routes with no source-owned identity", () => {
+describe("isHistoryEntryDead — conservative liveness", () => {
+  it("keeps routes no store can prove dead", () => {
     for (const href of [
       "/",
       "/onboarding",
@@ -83,21 +83,10 @@ describe("isHistoryEntryDead — persistent-route liveness", () => {
       "/settings",
       "/settings/general",
       "/settings/keybindings",
-    ]) {
-      expect(isHistoryEntryDead(href)).toBe(false);
-    }
-  });
-
-  it("prunes malformed or unknown routes before they can be traversed", () => {
-    for (const href of [
       "/totally-unknown/route/shape",
       "",
-      "//host/path",
-      "/epics/only-an-epic",
-      "/draft/a/b",
-      "/settings/not-a-panel",
     ]) {
-      expect(isHistoryEntryDead(href)).toBe(true);
+      expect(isHistoryEntryDead(href)).toBe(false);
     }
   });
 
@@ -163,7 +152,7 @@ describe("isHistoryEntryDead — persistent-route liveness", () => {
     ).toBe(false);
   });
 
-  it("prunes nested hrefs whose pane is missing from the exact tab canvas", () => {
+  it("keeps nested hrefs whose pane is missing from the exact tab canvas (a known tab is never dead)", () => {
     useEpicCanvasStore.setState({
       tabsById: { t1: tab("t1", "e1") },
       canvasByTabId: {
@@ -177,10 +166,10 @@ describe("isHistoryEntryDead — persistent-route liveness", () => {
       isHistoryEntryDead(
         "/epics/e1/t1?focusPaneId=pane-stale&focusTileInstanceId=tile-1",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("prunes nested hrefs whose tile is not in the target pane", () => {
+  it("keeps nested hrefs whose tile is not in the target pane (a known tab is never dead)", () => {
     useEpicCanvasStore.setState({
       tabsById: { t1: tab("t1", "e1") },
       canvasByTabId: {
@@ -195,7 +184,55 @@ describe("isHistoryEntryDead — persistent-route liveness", () => {
       isHistoryEntryDead(
         "/epics/e1/t1?focusPaneId=pane-1&focusTileInstanceId=tile-other",
       ),
-    ).toBe(true);
+    ).toBe(false);
+  });
+
+  it("keeps unresolvable nested hrefs under an OPEN task (preview-reopen case)", () => {
+    // Tab is open; missing tile is the back/forward preview-reopen path, not
+    // a dead entry for the prune scheduler.
+    useEpicCanvasStore.setState({
+      tabsById: { t1: tab("t1", "e1") },
+      openTabOrder: ["t1"],
+      canvasByTabId: {
+        t1: canvas(pane("pane-1", ["tile-1"], "tile-1"), {
+          "tile-1": artifactTile("tile-1"),
+        }),
+      },
+    });
+
+    expect(
+      isHistoryEntryDead(
+        "/epics/e1/t1?focusPaneId=pane-1&focusTileInstanceId=tile-gone",
+      ),
+    ).toBe(false);
+    expect(
+      isHistoryEntryDead(
+        "/epics/e1/t1?focusPaneId=pane-missing&focusTileInstanceId=tile-1",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps unresolvable nested hrefs under a CLOSED task (skip-eligibility handles it, not pruning)", () => {
+    // Entries under a closed Task must survive pruning so the Task becoming
+    // reachable again on reopen also makes its history entries reachable
+    // again - back/forward's skip-eligibility scan (not liveness) is what
+    // keeps back/forward from landing on this entry while the Task stays
+    // closed.
+    useEpicCanvasStore.setState({
+      tabsById: { t1: tab("t1", "e1") },
+      openTabOrder: [],
+      canvasByTabId: {
+        t1: canvas(pane("pane-1", ["tile-1"], "tile-1"), {
+          "tile-1": artifactTile("tile-1"),
+        }),
+      },
+    });
+
+    expect(
+      isHistoryEntryDead(
+        "/epics/e1/t1?focusPaneId=pane-1&focusTileInstanceId=tile-gone",
+      ),
+    ).toBe(false);
   });
 
   it("keeps pane-only nested hrefs while the pane exists, even when empty", () => {

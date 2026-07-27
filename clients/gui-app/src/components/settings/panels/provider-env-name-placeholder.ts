@@ -24,6 +24,9 @@ const ENV_NAME_PLACEHOLDER: Record<ProviderId, string> = {
   amp: "AMP_API_KEY",
   devin: "WINDSURF_API_KEY",
   pi: "ANTHROPIC_API_KEY",
+  // Hermes is subscription/credential-store class; the env name is
+  // illustrative only (Hermes drives provider accounts such as OpenRouter).
+  hermes: "OPENROUTER_API_KEY",
 };
 
 export function envNamePlaceholder(providerId: ProviderId): string {

@@ -15,7 +15,7 @@ import {
 } from "@/stores/terminals/terminal-session-store";
 import { TerminalSessionRegistry } from "@/stores/terminals/terminal-session-registry";
 import type {
-  ListTerminalsResponseV20,
+  ListTerminalsResponseV21,
   TerminalSessionKind,
   TerminalScope,
 } from "@traycer/protocol/host/terminal/unary-schemas";
@@ -235,7 +235,7 @@ export function useTerminalSessionHandle(
         // looped forever, bouncing the PTY stream and leaving reattached
         // terminals blank. (An explicitly justified `setQueriesData`:
         // stream-pushed state IS the response state.)
-        queryClient.setQueriesData<ListTerminalsResponseV20>(
+        queryClient.setQueriesData<ListTerminalsResponseV21>(
           { queryKey: hostQueryKeys.methodScope(args.hostId, "terminal.list") },
           (data) => {
             if (data === undefined) return undefined;
@@ -249,7 +249,10 @@ export function useTerminalSessionHandle(
             ) {
               return data;
             }
+            // Preserve top-level response metadata (e.g. `homeCwd`); only
+            // the sessions array is replaced.
             return {
+              ...data,
               sessions: data.sessions.map((session) =>
                 session.sessionId === args.sessionId
                   ? {

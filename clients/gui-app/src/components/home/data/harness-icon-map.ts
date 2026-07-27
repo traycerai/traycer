@@ -7,6 +7,7 @@ import {
   DevinIcon,
   DroidIcon,
   GrokIcon,
+  HermesIcon,
   KiroIcon,
   KiloCodeIcon,
   KimiIcon,
@@ -41,4 +42,5 @@ export const PROVIDER_ICON_CONFIG: Record<ProviderId, HarnessIconConfig> = {
   amp: { Icon: AmpIcon, className: "text-foreground" },
   devin: { Icon: DevinIcon, className: "text-foreground" },
   pi: { Icon: PiIcon, className: "text-foreground" },
+  hermes: { Icon: HermesIcon, className: "text-foreground" },
 };

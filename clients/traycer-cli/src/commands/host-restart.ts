@@ -3,6 +3,8 @@ import {
   finalizePendingCliUpgrade,
   type FinalizePendingCliUpgradeOutcome,
 } from "./cli-upgrade";
+import { assertHostNotBusy } from "../host/busy-check";
+import { attestInstallRuntime } from "../host/attested-install-runtime";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import {
   createServiceController,
@@ -10,6 +12,7 @@ import {
   type ServiceController,
   type ServiceLabel,
 } from "../service";
+import { withCliLock } from "../store/cli-lock";
 import {
   defaultSpawnImpl,
   defaultWriteImpl,
@@ -45,32 +48,73 @@ import {
 // A failed in-process finalize is non-fatal: the service is still
 // started, the pending state remains visible in Doctor, and the next
 // restart (or the helper) retries the swap.
-export const hostRestartCommand: CommandFn = async (
-  ctx,
-): Promise<CommandResult> => {
-  const label = serviceLabelFor(ctx.runtime.environment);
-  const controller = createServiceController();
-  const result = await restartWithPendingCliUpgradeFinalize({
-    environment: ctx.runtime.environment,
-    controller,
-    label,
-    parentPid: process.pid,
-    platform: osPlatform(),
-    spawnImpl: defaultSpawnImpl,
-    writeImpl: defaultWriteImpl,
-  });
-  return {
-    data: {
-      restarted: true,
-      label: label.id,
-      cliUpgrade: result.finalize,
-      helper: result.helper,
-      markerReconcile: result.markerReconcile,
-    },
-    human: humanForRestart(label.id, result),
-    exitCode: 0,
+//
+// `cli-lock` coverage (Host Update Layer Redesign Tech Plan, "Lifecycle
+// lock coverage"): a terminal restart must not enter another actor's
+// apply/install/activation critical section and stop/kill the process
+// it just started - the whole marker-reconcile -> stop -> finalize ->
+// start sequence runs inside ONE lock acquisition.
+//
+// `--if-idle` (hidden, internal - the CLI-owned activation mode): after
+// acquiring the lock, probe `assertHostNotBusy` before the disruptive
+// step; busy -> `E_HOST_BUSY`, the lock releases with nothing touched.
+// The only step between the probe and `controller.stop()` is
+// `reconcilePostFinalizeMarker`'s local file read - not the network or
+// long-running work the TOCTOU-floor principle guards against - so the
+// probe runs immediately before this call rather than being threaded
+// into `restartWithPendingCliUpgradeFinalize` itself. Plain `host
+// restart` (no `--if-idle`) skips the probe entirely, keeping today's
+// unconditional semantics for explicit user restarts.
+export interface HostRestartArgs {
+  readonly ifIdle: boolean;
+}
+
+export function buildHostRestartCommand(args: HostRestartArgs): CommandFn {
+  return async (ctx): Promise<CommandResult> => {
+    const label = serviceLabelFor(ctx.runtime.environment);
+    const controller = createServiceController();
+    const locked = await withCliLock(
+      {
+        environment: ctx.runtime.environment,
+        reason: "host-restart",
+        waitMs: 30_000,
+        pollIntervalMs: 100,
+      },
+      async () => {
+        if (args.ifIdle) {
+          await assertHostNotBusy(ctx.runtime.environment);
+        }
+        const result = await restartWithPendingCliUpgradeFinalize({
+          environment: ctx.runtime.environment,
+          controller,
+          label,
+          parentPid: process.pid,
+          platform: osPlatform(),
+          spawnImpl: defaultSpawnImpl,
+          writeImpl: defaultWriteImpl,
+        });
+        return {
+          result,
+          attestation: await attestInstallRuntime(ctx.runtime.environment),
+        };
+      },
+    );
+    return {
+      data: {
+        restarted: true,
+        label: label.id,
+        cliUpgrade: locked.result.finalize,
+        helper: locked.result.helper,
+        markerReconcile: locked.result.markerReconcile,
+        installGeneration: locked.attestation.installGeneration,
+        runtimeVersion: locked.attestation.runtimeVersion,
+        runtimeWasNull: locked.attestation.runtimeWasNull,
+      },
+      human: humanForRestart(label.id, locked.result),
+      exitCode: 0,
+    };
   };
-};
+}
 
 interface RestartFinalizeArgs {
   readonly environment: import("../runner/environment").Environment;
@@ -126,7 +170,6 @@ export async function restartWithPendingCliUpgradeFinalize(
       environment: args.environment,
       stagedBinaryPath: finalize.stagedBinaryPath,
       livePath: finalize.livePath,
-      serviceLabel: args.label,
       parentPid: args.parentPid,
       parentExitTimeoutSeconds: 60,
       platform: args.platform,

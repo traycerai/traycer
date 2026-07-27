@@ -35,6 +35,7 @@ import type {
   HostFrame,
 } from "@traycer/protocol/framework/ws-protocol";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
+import type { RpcSchedulingPolicy } from "../rpc-scheduling-policy";
 
 const pingV10 = defineRpcContract({
   method: "host.ping",
@@ -52,6 +53,11 @@ const registry = defineVersionedRpcRegistry({
     },
   },
 });
+
+const schedulingPolicy: RpcSchedulingPolicy<typeof registry> = {
+  modeFor: () => "latest",
+  joinResponseTimeoutMs: () => null,
+};
 
 class RecordingInvalidator implements IHostQueryInvalidator {
   readonly calls: Array<string | null> = [];
@@ -95,7 +101,13 @@ function buildHostClientWithMock(): {
     },
     requestId: () => "req-1",
   });
-  const client = new HostClient({ registry, messenger, invalidator });
+  const client = new HostClient({
+    registry,
+    messenger,
+    invalidator,
+    schedulingPolicy,
+    requestCoordinator: null,
+  });
   const events: HostClientChangeEvent[] = [];
   client.onChange((e) => events.push(e));
   return { client, invalidator, messenger, events };
@@ -284,9 +296,19 @@ describe("HostClient", () => {
 
     const result = await client.request("host.ping", {});
     expect(result).toEqual({ pong: true });
-    expect(messenger.calls).toEqual([
-      { method: "host.ping", params: {}, requestId: "req-1" },
-    ]);
+    expect(messenger.calls).toHaveLength(1);
+    expect(messenger.calls[0]).toMatchObject({
+      method: "host.ping",
+      params: {},
+      requestId: "req-1",
+      authority: {
+        endpoint: {
+          hostId: mockLocalHostEntry.hostId,
+          websocketUrl: mockLocalHostEntry.websocketUrl,
+        },
+        bearer: client.getRequestContext()?.credentials,
+      },
+    });
   });
 
   it("rejects unary requests before the messenger when auth context is missing", async () => {
@@ -317,18 +339,8 @@ describe("HostClient", () => {
       },
     };
 
-    // The providers read from shared state that `HostClient` updates via
-    // `onChange`. This mirrors how `WsRpcClient` lives next to
-    // `HostClient` in real usage without circular construction.
-    const transportState: {
-      host: typeof mockLocalHostEntry | null;
-      ctx: RequestContext | null;
-    } = { host: null, ctx: null };
-
     const wsClient = new WsRpcClient({
       registry,
-      endpoint: () => transportState.host,
-      bearer: () => transportState.ctx?.credentials ?? null,
       requestId: () => "req-1",
       webSocketFactory: factory,
       dialTimeoutMs: 1000,
@@ -339,12 +351,9 @@ describe("HostClient", () => {
       registry,
       invalidator,
       messenger: wsClient,
+      schedulingPolicy,
+      requestCoordinator: null,
     });
-    client.onChange(() => {
-      transportState.host = client.getActiveHost();
-      transportState.ctx = client.getRequestContext();
-    });
-
     const ctx1 = makeContext("user-1", "tok-1");
     client.bind(mockLocalHostEntry);
     client.setRequestContext(ctx1);
@@ -385,8 +394,6 @@ describe("HostClient", () => {
 
     const wsClient = new WsRpcClient({
       registry,
-      endpoint: () => mockLocalHostEntry,
-      bearer: () => ctx?.credentials ?? null,
       requestId: () => "req-1",
       webSocketFactory: factory,
       dialTimeoutMs: 1000,
@@ -396,6 +403,8 @@ describe("HostClient", () => {
       registry,
       invalidator,
       messenger: wsClient,
+      schedulingPolicy,
+      requestCoordinator: null,
     });
     client.bind(mockLocalHostEntry);
     client.setRequestContext(ctx);

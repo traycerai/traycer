@@ -70,6 +70,7 @@ const IDLE_SNAPSHOT: DesktopAppUpdateSnapshot = {
   sequence: 0,
   status: "idle",
   currentVersion: "1.0.0",
+  allowPrerelease: false,
   latestVersion: null,
   downloadProgress: null,
   installBlockedReason: null,
@@ -94,6 +95,7 @@ class FakeAppUpdatesBridge implements DesktopAppUpdatesBridge {
   snapshot: DesktopAppUpdateSnapshot;
   readonly downloadUpdate = vi.fn(() => Promise.resolve(this.snapshot));
   readonly installUpdate = vi.fn(() => Promise.resolve(this.snapshot));
+  readonly setAllowPrerelease = vi.fn(() => Promise.resolve(this.snapshot));
   private readonly handlers = new Set<
     (snapshot: DesktopAppUpdateSnapshot) => void
   >();
@@ -160,6 +162,7 @@ function readySnapshot(sequence: number): DesktopAppUpdateSnapshot {
     sequence,
     status: "ready",
     currentVersion: "1.0.0",
+    allowPrerelease: false,
     latestVersion: "1.2.3",
     downloadProgress: null,
     installBlockedReason: null,

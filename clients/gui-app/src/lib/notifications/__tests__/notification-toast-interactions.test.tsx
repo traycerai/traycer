@@ -32,6 +32,8 @@ const NOTIFICATION: MergedNotificationRow = {
   globalEntry: null,
   severity: "done",
   outcome: "completed",
+  resolvedAt: null,
+  category: "task",
 };
 
 describe("notification toast interactions", () => {
@@ -51,11 +53,15 @@ describe("notification toast interactions", () => {
     render(<Toaster />);
 
     act(() => {
-      displayNotificationRows([NOTIFICATION], {
-        showNotification: vi.fn(() => Promise.resolve()),
-        playChime: vi.fn(),
-        onToastClick,
-      });
+      displayNotificationRows(
+        [NOTIFICATION],
+        {
+          showNotification: vi.fn(() => Promise.resolve()),
+          playChime: vi.fn(),
+          onToastClick,
+        },
+        null,
+      );
     });
 
     const title = await screen.findByText("Checkout notifications");
@@ -64,14 +70,10 @@ describe("notification toast interactions", () => {
     expect(toastSurface).not.toBeNull();
     if (toastSurface === null) return;
 
-    const beforeClick = Date.now();
     fireEvent.click(toastSurface);
 
     expect(onToastClick).toHaveBeenCalledOnce();
-    expect(onToastClick).toHaveBeenCalledWith(NOTIFICATION, expect.any(Number));
-    const activatedAt = onToastClick.mock.calls[0]?.[1];
-    expect(activatedAt).toBeGreaterThanOrEqual(beforeClick);
-    expect(activatedAt).not.toBe(NOTIFICATION.createdAt);
+    expect(onToastClick).toHaveBeenCalledWith(NOTIFICATION);
   });
 
   it("does not activate when the close control is clicked", async () => {
@@ -79,11 +81,15 @@ describe("notification toast interactions", () => {
     render(<Toaster />);
 
     act(() => {
-      displayNotificationRows([NOTIFICATION], {
-        showNotification: vi.fn(() => Promise.resolve()),
-        playChime: vi.fn(),
-        onToastClick,
-      });
+      displayNotificationRows(
+        [NOTIFICATION],
+        {
+          showNotification: vi.fn(() => Promise.resolve()),
+          playChime: vi.fn(),
+          onToastClick,
+        },
+        null,
+      );
     });
 
     const closeToastButton = await screen.findByRole("button", {

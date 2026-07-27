@@ -1,4 +1,5 @@
-import { CopyPlus, ExternalLink, Pencil, X } from "lucide-react";
+import { CopyPlus, ExternalLink, Pencil, Pin, X } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   ContextMenuContent,
   ContextMenuItem,
@@ -16,12 +17,15 @@ interface TabContextMenuContentProps {
   readonly canCloseOtherTabs: boolean;
   readonly canOpenInNewWindow: boolean;
   readonly canEditTitle: boolean;
+  readonly taskPinned: boolean | null;
+  readonly isTaskPinPending: boolean;
   readonly onCloseOtherTabs: (tab: HeaderTab) => void;
   readonly onDuplicateTab: (tab: HeaderTab) => void;
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   /** Switches the epic tab title into the inline editable input. */
   readonly onEditTitle: () => void;
+  readonly onSetTaskPinned: (pinned: boolean) => void;
 }
 
 export function TabContextMenuContent(
@@ -32,35 +36,51 @@ export function TabContextMenuContent(
     canCloseOtherTabs,
     canOpenInNewWindow,
     canEditTitle,
+    taskPinned,
+    isTaskPinPending,
     onCloseOtherTabs,
     onDuplicateTab,
     onOpenInNewWindow,
     onSplitCommand,
     onEditTitle,
+    onSetTaskPinned,
   } = props;
 
   const showDuplicate = tab.canDuplicate;
   const showOpenInNewWindow = tab.canOpenInNewWindow;
-  const splitAvailability = resolveTabSplitCommandAvailability({
-    kind: tab.kind,
-    id: tab.id,
-  });
-  const showsGroupCommands =
-    splitAvailability.swap ||
-    splitAvailability.separate ||
-    splitAvailability.closeLeft !== null ||
-    splitAvailability.closeRight !== null;
 
   return (
     <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
-      {tab.kind === "epic" && canEditTitle ? (
+      {tab.kind === "epic" ? (
         <>
+          {canEditTitle ? (
+            <ContextMenuItem
+              onSelect={onEditTitle}
+              data-testid={`tab-edit-title-${tab.kind}-${tab.id}`}
+            >
+              <Pencil />
+              Edit Title
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuItem
-            onSelect={onEditTitle}
-            data-testid={`tab-edit-title-${tab.kind}-${tab.id}`}
+            disabled={taskPinned === null || isTaskPinPending}
+            onSelect={() => {
+              if (taskPinned === null) return;
+              onSetTaskPinned(!taskPinned);
+            }}
+            data-testid={`tab-pin-history-${tab.id}`}
           >
-            <Pencil />
-            Edit Title
+            <Pin className={taskPinned === true ? "fill-current" : undefined} />
+            {taskPinned === true
+              ? "Unpin Task in History"
+              : "Pin Task in History"}
+            {taskPinned === null || isTaskPinPending ? (
+              <AgentSpinningDots
+                className="ml-auto text-muted-foreground"
+                testId={`tab-pin-history-spinner-${tab.id}`}
+                variant={undefined}
+              />
+            ) : null}
           </ContextMenuItem>
           <ContextMenuSeparator />
         </>
@@ -87,6 +107,42 @@ export function TabContextMenuContent(
         </ContextMenuItem>
       ) : null}
       {showOpenInNewWindow ? <ContextMenuSeparator /> : null}
+      <TabSplitMenuItems tab={tab} onSplitCommand={onSplitCommand} />
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        disabled={!canCloseOtherTabs}
+        onSelect={() => onCloseOtherTabs(tab)}
+        data-testid={`tab-close-others-${tab.kind}-${tab.id}`}
+      >
+        <X />
+        Close Other Tabs
+      </ContextMenuItem>
+    </ContextMenuContent>
+  );
+}
+
+/**
+ * The split-command section. Availability is resolved here at render time so
+ * the menu reflects the live layout, and the group commands (swap / separate /
+ * close-left / close-right) only appear once the invoked tab is in a group.
+ */
+function TabSplitMenuItems(props: {
+  readonly tab: HeaderTab;
+  readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
+}): React.ReactNode {
+  const { tab, onSplitCommand } = props;
+  const splitAvailability = resolveTabSplitCommandAvailability({
+    kind: tab.kind,
+    id: tab.id,
+  });
+  const showsGroupCommands =
+    splitAvailability.swap ||
+    splitAvailability.separate ||
+    splitAvailability.closeLeft !== null ||
+    splitAvailability.closeRight !== null;
+
+  return (
+    <>
       <ContextMenuItem
         disabled={!splitAvailability.add}
         onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.add.id, tab)}
@@ -101,52 +157,43 @@ export function TabContextMenuContent(
       >
         {TAB_SPLIT_COMMANDS.pair.label}
       </ContextMenuItem>
-      {showsGroupCommands ? <ContextMenuSeparator /> : null}
       {showsGroupCommands ? (
-        <ContextMenuItem
-          disabled={!splitAvailability.swap}
-          onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.swap.id, tab)}
-          data-testid={`tab-swap-split-${tab.kind}-${tab.id}`}
-        >
-          {TAB_SPLIT_COMMANDS.swap.label}
-        </ContextMenuItem>
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            disabled={!splitAvailability.swap}
+            onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.swap.id, tab)}
+            data-testid={`tab-swap-split-${tab.kind}-${tab.id}`}
+          >
+            {TAB_SPLIT_COMMANDS.swap.label}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!splitAvailability.separate}
+            onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.separate.id, tab)}
+            data-testid={`tab-separate-split-${tab.kind}-${tab.id}`}
+          >
+            {TAB_SPLIT_COMMANDS.separate.label}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={splitAvailability.closeLeft === null}
+            onSelect={() =>
+              onSplitCommand(TAB_SPLIT_COMMANDS.closeLeft.id, tab)
+            }
+            data-testid={`tab-close-left-${tab.kind}-${tab.id}`}
+          >
+            {TAB_SPLIT_COMMANDS.closeLeft.label}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={splitAvailability.closeRight === null}
+            onSelect={() =>
+              onSplitCommand(TAB_SPLIT_COMMANDS.closeRight.id, tab)
+            }
+            data-testid={`tab-close-right-${tab.kind}-${tab.id}`}
+          >
+            {TAB_SPLIT_COMMANDS.closeRight.label}
+          </ContextMenuItem>
+        </>
       ) : null}
-      {showsGroupCommands ? (
-        <ContextMenuItem
-          disabled={!splitAvailability.separate}
-          onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.separate.id, tab)}
-          data-testid={`tab-separate-split-${tab.kind}-${tab.id}`}
-        >
-          {TAB_SPLIT_COMMANDS.separate.label}
-        </ContextMenuItem>
-      ) : null}
-      {showsGroupCommands ? (
-        <ContextMenuItem
-          disabled={splitAvailability.closeLeft === null}
-          onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.closeLeft.id, tab)}
-          data-testid={`tab-close-left-${tab.kind}-${tab.id}`}
-        >
-          {TAB_SPLIT_COMMANDS.closeLeft.label}
-        </ContextMenuItem>
-      ) : null}
-      {showsGroupCommands ? (
-        <ContextMenuItem
-          disabled={splitAvailability.closeRight === null}
-          onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.closeRight.id, tab)}
-          data-testid={`tab-close-right-${tab.kind}-${tab.id}`}
-        >
-          {TAB_SPLIT_COMMANDS.closeRight.label}
-        </ContextMenuItem>
-      ) : null}
-      <ContextMenuSeparator />
-      <ContextMenuItem
-        disabled={!canCloseOtherTabs}
-        onSelect={() => onCloseOtherTabs(tab)}
-        data-testid={`tab-close-others-${tab.kind}-${tab.id}`}
-      >
-        <X />
-        Close Other Tabs
-      </ContextMenuItem>
-    </ContextMenuContent>
+    </>
   );
 }

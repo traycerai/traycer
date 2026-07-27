@@ -1,6 +1,6 @@
 import { createContext, use } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import type { HostProgressEvent } from "@traycer-clients/shared/platform/runner-host";
+import type { MutationProgress } from "@traycer-clients/shared/platform/runner-host";
 
 export type HostReadinessScope = "none" | "default-host" | "tab-host";
 
@@ -21,7 +21,7 @@ export interface DefaultHostReadinessPresentation {
   readonly localTarget: boolean;
   readonly localHostState: "unknown" | "ready" | "unavailable";
   readonly stage: "loading" | "slow";
-  readonly progress: HostProgressEvent | null;
+  readonly progress: MutationProgress | null;
   readonly provisioningError: Error | null;
   readonly provisioning: boolean;
   readonly removed: boolean;

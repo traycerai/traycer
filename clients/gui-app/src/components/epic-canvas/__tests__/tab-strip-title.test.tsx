@@ -271,7 +271,7 @@ describe("TabStrip title", () => {
         screen.getByTestId(`chat-tab-spinner-activity-${CHAT_ID}`),
       ).toBeTruthy();
     });
-    expect(screen.getByTitle("Chat in progress")).toBeTruthy();
+    expect(screen.getByTitle("Agent in progress")).toBeTruthy();
     expect(
       screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
     ).toBeNull();

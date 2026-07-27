@@ -1,6 +1,6 @@
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { providerIdForHarness } from "@/components/chat/composer/use-provider-reauth-gate";
+import { providerCliIdForHarness } from "@/lib/provider-ordering";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
@@ -32,7 +32,7 @@ export function useResolvedSeededProfileId(
   active: boolean,
   client: HostClient<HostRpcRegistry> | null,
 ): string | null {
-  const providerId = providerIdForHarness(harnessId);
+  const providerId = providerCliIdForHarness(harnessId);
   const providersQuery = useHostQuery<HostRpcRegistry, "providers.list">({
     cacheKeyIdentity: undefined,
     client,

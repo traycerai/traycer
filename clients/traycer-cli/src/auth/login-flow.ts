@@ -9,11 +9,15 @@ import {
   pollDeviceToken,
   startDeviceAuthorization,
 } from "../../../shared/auth/device-auth";
-import { validateAuthTokenViaHttp } from "../../../shared/auth/auth-validation";
+import {
+  credentialsIdentityFromAuthenticatedUser,
+  validateAuthTokenIdentityAccessOnly,
+} from "../../../shared/auth/auth-validation";
 import { config } from "../config";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CommandContext } from "../runner/runner";
-import { writeCredentials } from "../store/credentials";
+import type { StoredCredentials } from "../store/credentials";
+import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 
 interface LoginSuccess {
   readonly token: string;
@@ -31,9 +35,9 @@ interface LoginSuccess {
 // co-located browser, so there is nowhere to redirect to. Instead the CLI
 // prints a short `user_code` + verification URL the human opens on ANY
 // device, then polls the authn service until the request is approved. The
-// resulting `{ token, refreshToken }` is persisted via `writeCredentials`
-// in the exact `StoredCredentials` shape the host reads - byte-compatible
-// with every other login producer.
+// resulting `{ token, refreshToken }` is persisted via the locked mutation
+// store (`store.signIn`, §7) in the exact `StoredCredentials` shape the host
+// reads - byte-compatible with every other login producer.
 export async function runDeviceAuthFlow(
   ctx: CommandContext,
 ): Promise<LoginSuccess> {
@@ -100,10 +104,13 @@ export async function runDeviceAuthFlow(
   });
   const tokens = await pollUntilAuthorized(authnBaseUrl, deviceCode, schedule);
 
-  const validation = await validateAuthTokenViaHttp(
+  // The device flow just minted a FRESH pair, so an access-only `/user` probe
+  // validates it without ever spending the refresh token (§3/§7). No
+  // stale-access fallback-refresh belongs here: a freshly-minted token that
+  // fails to validate is a genuine rejection, not an expiry to refresh past.
+  const validation = await validateAuthTokenIdentityAccessOnly(
     authnBaseUrl,
     tokens.token,
-    tokens.refreshToken,
   );
   if (validation.kind === "network-error") {
     throw cliError({
@@ -122,33 +129,31 @@ export async function runDeviceAuthFlow(
       exitCode: 1,
     });
   }
-  // The auth-validation helper may rotate both tokens once on a stale lookup;
-  // honor the refreshed values if present so the stored credential matches
-  // what the server now considers current.
-  const finalToken =
-    "refreshedToken" in validation ? validation.refreshedToken : tokens.token;
-  const finalRefreshToken =
-    "refreshedRefreshToken" in validation
-      ? validation.refreshedRefreshToken
-      : tokens.refreshToken;
 
-  const creds: LoginSuccess = {
-    token: finalToken,
-    user: {
-      id: validation.profile.userId,
-      email: validation.profile.email,
-      name: validation.profile.userName,
-    },
-    authnBaseUrl,
-  };
-  await writeCredentials({
-    token: creds.token,
-    refreshToken: finalRefreshToken,
+  const user = credentialsIdentityFromAuthenticatedUser(validation.user);
+  const credentials: StoredCredentials = {
+    token: tokens.token,
+    refreshToken: tokens.refreshToken,
     authnBaseUrl,
     savedAt: new Date().toISOString(),
-    user: creds.user,
-  });
-  return creds;
+    user,
+  };
+  // Persist through the locked mutation store (§7) so the CLI shares one write
+  // path with the desktop app. `signIn` is unconditional and clears any
+  // tombstone - exactly the semantics an interactive sign-in needs.
+  const persisted = await runWithCliStore((store) =>
+    withCommitRetry(() => store.signIn(credentials, false, null)),
+  );
+  if (persisted.outcome !== "applied") {
+    throw cliError({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message:
+        "Sign-in succeeded but the credentials could not be saved - please try again.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  return { token: tokens.token, user, authnBaseUrl };
 }
 
 // Drives the `/device/token` poll loop until the request is approved, denied,

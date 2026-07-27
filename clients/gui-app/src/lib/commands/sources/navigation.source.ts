@@ -99,7 +99,10 @@ function buildSectionItem(section: SettingsSection): CommandItem {
     id: `nav:settings/${section.id}`,
     label: section.label,
     description: null,
-    keywords: ["settings", section.label.toLowerCase()],
+    // The section `id` rides along as a keyword so a renamed section stays
+    // findable under the vocabulary users already learned (e.g. "agents" still
+    // reaches "Agent selection").
+    keywords: ["settings", section.label.toLowerCase(), section.id],
     group: "navigation",
     scope: "actions",
     shortcut: null,

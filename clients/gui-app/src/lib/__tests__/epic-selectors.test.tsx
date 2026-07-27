@@ -1,15 +1,25 @@
 import type { ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import type {
+  ChatRunSettings,
+  GuiHarnessId,
+  TuiHarnessId,
+} from "@traycer/protocol/persistence/epic/schemas";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
-import { useMaybeEpicTuiAgentHarnessId } from "@/lib/epic-selectors";
+import {
+  useEpicChatHarnessId,
+  useMaybeEpicTuiAgentHarnessId,
+} from "@/lib/epic-selectors";
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
-import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
+import type {
+  ChatProjection,
+  TuiAgentProjection,
+} from "@/stores/epics/open-epic/types";
 
 const handles: OpenEpicStoreHandle[] = [];
 
@@ -85,6 +95,39 @@ describe("useMaybeEpicTuiAgentHarnessId", () => {
   });
 });
 
+describe("useEpicChatHarnessId", () => {
+  it("tracks a GUI harness and missing legacy settings", () => {
+    const handle = createHandle("epic-chat-harness");
+    handle.store.setState({
+      chats: {
+        allIds: ["chat-1"],
+        byId: {
+          "chat-1": chat("chat-1", "claude"),
+        },
+      },
+    });
+
+    const { result } = renderHook(() => useEpicChatHarnessId("chat-1"), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("claude");
+
+    act(() => {
+      handle.store.setState({
+        chats: {
+          allIds: ["chat-1"],
+          byId: {
+            "chat-1": chat("chat-1", null),
+          },
+        },
+      });
+    });
+
+    expect(result.current).toBeNull();
+  });
+});
+
 function createHandle(epicId: string): OpenEpicStoreHandle {
   const handle = createOpenEpicStore({
     epicId,
@@ -114,6 +157,32 @@ const fakeStreamClientFactory: EpicStreamClientFactory = () => ({
   retryMigration: () => undefined,
   close: () => undefined,
 });
+
+function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
+  const settings: ChatRunSettings | null =
+    harnessId === null
+      ? null
+      : {
+          harnessId,
+          model: "test-model",
+          permissionMode: "supervised",
+          reasoningEffort: null,
+          serviceTier: null,
+          agentMode: "regular",
+          profileId: null,
+        };
+  return {
+    id,
+    title: "Chat",
+    parentId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    userId: null,
+    hostId: "host-a",
+    isTitleEditedByUser: false,
+    settings,
+  };
+}
 
 function tuiAgent(id: string, harnessId: TuiHarnessId): TuiAgentProjection {
   return {

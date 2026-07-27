@@ -13,7 +13,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { WorktreeHostEntryV14 } from "@traycer/protocol/host/index";
 import type { WorktreeListAllForHostResponseV14 } from "@traycer/protocol/host/worktree-schemas";
 import { type HostRpcRegistry } from "@/lib/host";
@@ -489,7 +489,7 @@ export function useWorktreeActivityEnrichment(
       client === null
         ? null
         : createWorktreeEnrichmentBatcher((paths) =>
-            withHostRpcErrorBoundary("worktree.listAllForHost", () =>
+            withHostQueryErrorBoundary("worktree.listAllForHost", () =>
               client.request("worktree.listAllForHost", {
                 includeActivity: true,
                 activityPaths: [...paths],

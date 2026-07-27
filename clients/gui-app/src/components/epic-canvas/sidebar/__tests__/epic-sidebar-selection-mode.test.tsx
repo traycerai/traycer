@@ -9,6 +9,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { Mock } from "vitest";
+import type { ProviderId } from "@/components/home/data/landing-options";
 
 interface TestTreeNode {
   readonly id: string;
@@ -66,6 +67,8 @@ interface TestState {
   indicatorChats: Readonly<Record<string, TestIndicatorState>>;
   activeAgentIds: ReadonlySet<string>;
   activityTierById: Map<string, "turn" | "background">;
+  chatHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
+  tuiHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
   permissionRole: "owner" | "editor" | "viewer" | null;
   rowHostId: string | null;
   rowHostEntry: unknown;
@@ -106,6 +109,8 @@ const testState = vi.hoisted<TestState>(() => ({
   indicatorChats: {},
   activeAgentIds: new Set<string>(),
   activityTierById: new Map<string, "turn" | "background">(),
+  chatHarnessIds: {},
+  tuiHarnessIds: {},
   permissionRole: "owner",
   rowHostId: "host-1",
   rowHostEntry: { hostId: "host-1" },
@@ -172,7 +177,9 @@ vi.mock(
 );
 
 vi.mock("@/components/chat/chat-progress-icon", () => ({
-  ChatProgressIcon: () => <span data-testid="chat-sidebar-spinner" />,
+  ChatProgressIcon: (props: {
+    readonly defaultIcon: ReactNode | undefined;
+  }) => <span data-testid="chat-sidebar-spinner">{props.defaultIcon}</span>,
 }));
 
 vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
@@ -437,6 +444,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifactRecords: () => testState.records,
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
+  useEpicChatHarnessId: (nodeId: string) =>
+    testState.chatHarnessIds[nodeId] ?? null,
   useEpicConnectionStatus: () => "open",
   useEpicNodeHostId: () => testState.rowHostId,
   useEpicNodeOwnerKind: () => "chat",
@@ -447,7 +456,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
   useEpicTreeIndex: () => testState.tree,
   useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
-  useMaybeEpicTuiAgentHarnessId: () => null,
+  useMaybeEpicTuiAgentHarnessId: (nodeId: string) =>
+    testState.tuiHarnessIds[nodeId] ?? null,
   useRootIds: () => testState.tree.rootIds,
 }));
 
@@ -561,6 +571,8 @@ describe("epic sidebar selection mode", () => {
     testState.indicatorChats = {};
     testState.activeAgentIds = new Set<string>();
     testState.activityTierById = new Map();
+    testState.chatHarnessIds = {};
+    testState.tuiHarnessIds = {};
     testState.permissionRole = "owner";
     testState.rowHostId = "host-1";
     testState.rowHostEntry = { hostId: "host-1" };
@@ -574,7 +586,7 @@ describe("epic sidebar selection mode", () => {
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     const startSelectionButton = screen.getByRole("button", {
-      name: "Select chats",
+      name: "Select agents",
     });
     expect(startSelectionButton.textContent).toBe("");
     expect(screen.queryByTestId("epic-sidebar-select-chat-root")).toBeNull();
@@ -627,7 +639,7 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Select chats" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
 
     // Nothing selected yet: the button offers "Select all".
     expect(screen.queryByRole("button", { name: "Deselect all" })).toBeNull();
@@ -666,25 +678,31 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar")).not.toBeNull();
   });
 
-  it("shows the empty chat panel state when there are no chats", () => {
+  it("names the primary panel Agents and offers an interface choice when empty", () => {
     testState.activePanelId = "chats";
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
+    expect(screen.getByText("Agents")).not.toBeNull();
     expect(screen.getByTestId("epic-chat-sidebar-empty")).not.toBeNull();
-    expect(screen.getByText("No chats yet.")).not.toBeNull();
-    expect(screen.queryByText("No chats match the filter.")).toBeNull();
+    expect(screen.getByText("No agents yet.")).not.toBeNull();
+    expect(
+      screen.getByText("Add an agent and choose a Chat or Terminal interface."),
+    ).not.toBeNull();
+    expect(screen.queryByText("No agents use this interface.")).toBeNull();
   });
 
-  it("shows the filtered chat empty state when no chats match the filter", () => {
+  it("blames the interface filter, not the Task, when a filter hides every agent", () => {
     seedGuiChatTree();
     testState.chatFilterOrigin = "tui";
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
     expect(screen.getByTestId("epic-chat-sidebar-filter-empty")).not.toBeNull();
-    expect(screen.getByText("No chats match the filter.")).not.toBeNull();
-    expect(screen.queryByText("No chats yet.")).toBeNull();
+    // The Task HAS agents - they just use the other interface. The empty state
+    // must not read as "this Task has no agents".
+    expect(screen.getByText("No agents use this interface.")).not.toBeNull();
+    expect(screen.queryByText("No agents yet.")).toBeNull();
   });
 
   it("shows the empty artifact panel state when there are no artifacts", () => {
@@ -717,7 +735,7 @@ describe("epic sidebar selection mode", () => {
 
     render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
 
-    expect(screen.queryByRole("button", { name: "Select chats" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Select agents" })).toBeNull();
     expect(screen.queryByTestId("epic-sidebar-select-chat-root")).toBeNull();
   });
 
@@ -732,6 +750,74 @@ describe("epic sidebar selection mode", () => {
     expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
   });
 
+  it("subscripts only TUI harness brands", () => {
+    seedChatTree();
+    testState.chatHarnessIds = {
+      "chat-root": "codex",
+      "chat-child": "claude",
+    };
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(
+      screen
+        .getByTestId("sidebar-agent-harness-chat-root")
+        .getAttribute("data-agent-surface"),
+    ).toBe("gui");
+    expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
+    expect(
+      screen
+        .getByTestId("sidebar-agent-harness-agent-root")
+        .getAttribute("data-agent-surface"),
+    ).toBe("tui");
+    expect(
+      screen
+        .getByTestId("sidebar-agent-surface-agent-root")
+        .getAttribute("data-agent-surface"),
+    ).toBe("tui");
+  });
+
+  it("does not subscript harness brands in a GUI-only task", () => {
+    seedGuiChatTree();
+    testState.chatHarnessIds = {
+      "chat-root": "codex",
+      "chat-child": "claude",
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-surface-chat-child")).toBeNull();
+  });
+
+  it("subscripts harness brands in a TUI-only task", () => {
+    seedTuiAgentTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const terminalSubscript = screen.getByTestId(
+      "sidebar-agent-surface-agent-root",
+    );
+    const terminalHarness = screen.getByTestId(
+      "sidebar-agent-harness-agent-root",
+    );
+    expect(terminalSubscript.getAttribute("data-agent-surface")).toBe("tui");
+    expect(terminalSubscript.tagName.toLowerCase()).toBe("svg");
+    expect(terminalSubscript.getAttribute("stroke-width")).toBe("3");
+    expect(terminalSubscript.getAttribute("class")).toContain("-right-1");
+    expect(terminalSubscript.getAttribute("class")).toContain("-bottom-1.5");
+    expect(terminalSubscript.getAttribute("class")).toContain(
+      "text-muted-foreground",
+    );
+    expect(terminalSubscript.getAttribute("class")).not.toContain(
+      "bg-background",
+    );
+    expect(terminalSubscript.getAttribute("class")).not.toContain("ring");
+    expect(terminalHarness.getAttribute("class")).toContain("w-[1.125rem]");
+  });
+
   it("keeps chat add inline and exposes ellipsis actions on right-click", async () => {
     seedChatTree();
 
@@ -739,9 +825,7 @@ describe("epic sidebar selection mode", () => {
 
     const chatRow = screen.getByTestId("epic-sidebar-item-chat-root");
     expect(
-      chatRow.parentElement?.querySelector(
-        '[aria-label="Add child chat or agent"]',
-      ),
+      chatRow.parentElement?.querySelector('[aria-label="Add child agent"]'),
     ).not.toBeNull();
     fireEvent.contextMenu(chatRow);
 
@@ -795,7 +879,7 @@ describe("epic sidebar selection mode", () => {
       <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Select chats" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select agents" }));
     fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
     expect(
       screen
@@ -812,7 +896,9 @@ describe("epic sidebar selection mode", () => {
       ).toBeNull();
     });
     expect(
-      screen.getByRole("button", { name: "Select chats" }).matches(":disabled"),
+      screen
+        .getByRole("button", { name: "Select agents" })
+        .matches(":disabled"),
     ).toBe(true);
   });
 
@@ -826,7 +912,9 @@ describe("epic sidebar selection mode", () => {
       screen.getByRole("button", { name: "Chat filter" }).matches(":disabled"),
     ).toBe(true);
     expect(
-      screen.getByRole("button", { name: "Select chats" }).matches(":disabled"),
+      screen
+        .getByRole("button", { name: "Select agents" })
+        .matches(":disabled"),
     ).toBe(true);
     expect(
       screen
@@ -834,9 +922,7 @@ describe("epic sidebar selection mode", () => {
         .matches(":disabled"),
     ).toBe(true);
     expect(
-      screen
-        .getByRole("button", { name: "Add chat or agent" })
-        .matches(":disabled"),
+      screen.getByRole("button", { name: "Add agent" }).matches(":disabled"),
     ).toBe(false);
   });
 
@@ -1541,6 +1627,22 @@ function seedGuiChatTree(): void {
     },
   };
   testState.records = [chatRoot, chatChild].map(recordFromNode);
+}
+
+function seedTuiAgentTree(): void {
+  const agentRoot = treeNode(
+    "agent-root",
+    null,
+    "Terminal agent",
+    "terminal-agent",
+  );
+  testState.activePanelId = "chats";
+  testState.tree = {
+    rootIds: ["agent-root"],
+    childrenByParent: {},
+    nodeById: { "agent-root": agentRoot },
+  };
+  testState.records = [recordFromNode(agentRoot)];
 }
 
 function seedArtifactTree(): void {

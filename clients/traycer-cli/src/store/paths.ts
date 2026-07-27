@@ -35,9 +35,20 @@ const CLI_HOME = join(TRAYCER_HOME, "cli");
 const HOST_HOME = join(TRAYCER_HOME, "host");
 const HOST_INSTALL_SUBDIR = "install";
 // The host install temp/extract area (verify-before-replace), kept distinct
-// from the host root. Named "install-staging" for clarity.
+// from the host root. Named "install-staging" for clarity. Also the root
+// under which `host download`'s owner-tokened download/extract temp dirs
+// live (see `installer/stage-reconcile.ts`'s temp-sweep step) - both are
+// transient, verify-before-replace scratch space for the same install
+// tree, so they share one root.
 const HOST_STAGING_SUBDIR = "install-staging";
 const HOST_INSTALL_RECORD_FILENAME = "install.json";
+// The single-slot staged-download area: a fully extracted, verified host
+// tree ready to promote into `install/` (Host Update Layer Redesign Tech
+// Plan, "CLI: two-phase split with a staged store"). Distinct from
+// `install-staging/`, which is scratch space that never itself becomes the
+// final install dir.
+const HOST_STAGED_SUBDIR = "staged";
+const HOST_STAGED_RECORD_FILENAME = "staged.json";
 const CLI_LOG_FILENAME = "cli.log";
 const HOST_LOG_FILENAME = "host.log";
 // Single retained generation of the host log. One is enough: it exists so the
@@ -157,6 +168,14 @@ export function hostInstallRecordPath(environment: Environment): string {
   return join(hostInstallDir(environment), HOST_INSTALL_RECORD_FILENAME);
 }
 
+// Single-slot staged store - see the `HOST_STAGED_SUBDIR` comment above.
+export function hostStagedDir(environment: Environment): string {
+  return join(hostHomeDir(environment), HOST_STAGED_SUBDIR);
+}
+export function hostStagedRecordPath(environment: Environment): string {
+  return join(hostStagedDir(environment), HOST_STAGED_RECORD_FILENAME);
+}
+
 export async function ensureTraycerHomeDir(): Promise<void> {
   await mkdir(TRAYCER_HOME, { recursive: true });
 }
@@ -180,6 +199,18 @@ export async function ensureHostStagingRoot(
   environment: Environment,
 ): Promise<void> {
   await mkdir(hostStagingRoot(environment), { recursive: true });
+}
+
+export async function ensureHostHomeDirForStaged(
+  environment: Environment,
+): Promise<void> {
+  // The staged dir's PARENT (hostHomeDir) must exist before an atomic
+  // rename can place `staged/` there - mirrors `atomicSwap`'s
+  // `mkdir(hostHomeDir(...))` call for `install/`. Deliberately does not
+  // create `staged/` itself: the promote step renames a temp dir into
+  // that exact path, so a pre-created empty dir would collide with the
+  // rename.
+  await ensureHostHomeDir(environment);
 }
 
 // Environment-aware CLI home mkdir. Non-environment callers pass undefined to

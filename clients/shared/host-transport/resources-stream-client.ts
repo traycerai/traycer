@@ -4,11 +4,13 @@ import {
   type EpicResourceSnapshotWire,
   type HostTreeResourceSnapshotWire,
   type OtherResourceSnapshotWire,
-  type OwnerResourceSnapshotWire,
+  type OwnerResourceSnapshotWireV13,
   type ResourcesSubscribeOpenRequestV11,
   type ResourcesSubscribeServerFrame,
   type ResourcesSubscribeServerFrameV12,
+  type ResourcesSubscribeServerFrameV13,
   resourcesSubscribeServerFrameSchemaV12,
+  resourcesSubscribeServerFrameSchemaV13,
 } from "@traycer/protocol/host/resources/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
@@ -29,7 +31,9 @@ export interface ResourcesProjectionPayload {
   readonly epicId: string;
   readonly sampledAt: number;
   readonly app: AppResourceSnapshotWire | null;
-  readonly owners: readonly OwnerResourceSnapshotWire[];
+  // Owners always carry `harnessId` downstream: a host on `@1.3` sends it; an
+  // older host has it backfilled to `null` in `toPayload`.
+  readonly owners: readonly OwnerResourceSnapshotWireV13[];
   readonly epic: EpicResourceSnapshotWire | null;
   readonly epics: readonly EpicResourceSnapshotWire[];
   /** Absent when the connected host negotiated resources.subscribe <= 1.1. */
@@ -136,17 +140,27 @@ export class ResourcesStreamClient {
     envelope: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    const v12Parsed =
-      resourcesSubscribeServerFrameSchemaV12.safeParse(envelope);
-    const parsed = v12Parsed.success
-      ? v12Parsed
-      : resourcesSubscribeServerFrameSchema.safeParse(envelope);
+    // Newest-first: `@1.3` (owners carry harnessId), then `@1.2` (hostTree +
+    // other), then the frozen `@1.0`/`@1.1` base. Each schema strips unknown
+    // keys, so an older client parsing a newer frame degrades cleanly.
+    const v13Parsed =
+      resourcesSubscribeServerFrameSchemaV13.safeParse(envelope);
+    const parsed = v13Parsed.success
+      ? v13Parsed
+      : (() => {
+          const v12 =
+            resourcesSubscribeServerFrameSchemaV12.safeParse(envelope);
+          return v12.success
+            ? v12
+            : resourcesSubscribeServerFrameSchema.safeParse(envelope);
+        })();
     if (!parsed.success) {
       return;
     }
     const frame:
-      ResourcesSubscribeServerFrame | ResourcesSubscribeServerFrameV12 =
-      parsed.data;
+      | ResourcesSubscribeServerFrame
+      | ResourcesSubscribeServerFrameV12
+      | ResourcesSubscribeServerFrameV13 = parsed.data;
     switch (frame.kind) {
       case "snapshot": {
         this.callbacks.onSnapshot(toPayload(frame));
@@ -166,7 +180,9 @@ export class ResourcesStreamClient {
 
 function toPayload(
   frame: Extract<
-    ResourcesSubscribeServerFrame | ResourcesSubscribeServerFrameV12,
+    | ResourcesSubscribeServerFrame
+    | ResourcesSubscribeServerFrameV12
+    | ResourcesSubscribeServerFrameV13,
     { kind: "snapshot" | "update" }
   >,
 ): ResourcesProjectionPayload {
@@ -174,7 +190,11 @@ function toPayload(
     epicId: frame.epicId,
     sampledAt: frame.sampledAt,
     app: frame.app,
-    owners: frame.owners,
+    // Backfill harnessId for pre-`@1.3` frames so downstream always reads a
+    // defined field (the provider is simply unknown on an older host).
+    owners: frame.owners.map((owner) =>
+      "harnessId" in owner ? owner : { ...owner, harnessId: null },
+    ),
     epic: frame.epic,
     epics: frame.epics ?? [],
     hostTree: "hostTree" in frame ? frame.hostTree : undefined,

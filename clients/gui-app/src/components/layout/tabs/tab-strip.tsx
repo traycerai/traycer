@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { LayoutGroup } from "motion/react";
 import { useDroppable } from "@dnd-kit/core";
+import { toast } from "sonner";
 import {
   HEADER_TAB_SLOT_DND_TYPE,
   HEADER_TAB_TRAILING_SLOT_DROP_ID,
@@ -44,6 +45,11 @@ import {
 } from "@/stores/tabs/tab-split-commands";
 import { activatePreparedPairTabIntent } from "@/lib/tab-navigation";
 import type { StripItem } from "@/stores/tabs/layout";
+import {
+  useEpicSetPinned,
+  usePendingSetPinnedEpicIds,
+} from "@/hooks/epic/use-epic-set-pinned-mutation";
+import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -82,6 +88,29 @@ function TabStripBody() {
     chatIds: [],
     enabled: indicatorEpicIds.length > 0,
   });
+  const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
+  const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
+  const { mutate: setEpicPinned } = useEpicSetPinned();
+  const handleSetTaskPinned = useCallback(
+    (epicId: string, pinned: boolean, displayName: string) => {
+      setEpicPinned(
+        { epicId, pinned },
+        {
+          onSuccess: () => {
+            toast.success(pinConfirmationMessage(displayName, pinned), {
+              action: {
+                label: "Undo",
+                onClick: () => {
+                  setEpicPinned({ epicId, pinned: !pinned });
+                },
+              },
+            });
+          },
+        },
+      );
+    },
+    [setEpicPinned],
+  );
 
   // Trailing slot: the strip's empty space after the last tab accepts drops
   // at index `allTabs.length` (both reorder and tear-off).
@@ -258,6 +287,9 @@ function TabStripBody() {
                   onOpenInNewWindow={openInNewWindowFlow.requestOpen}
                   canOpenInNewWindow={openInNewWindowFlow.isAvailable}
                   onSplitCommand={handleSplitCommand}
+                  taskPinnedStates={taskPinnedStates}
+                  pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+                  onSetTaskPinned={handleSetTaskPinned}
                 />
               ))}
             </div>
@@ -283,6 +315,13 @@ interface HeaderStripItemRendererProps {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
+  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
+  readonly onSetTaskPinned: (
+    epicId: string,
+    pinned: boolean,
+    displayName: string,
+  ) => void;
 }
 
 type HeaderStripVisualState = string;
@@ -336,6 +375,9 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
         onOpenInNewWindow={props.onOpenInNewWindow}
         canOpenInNewWindow={props.canOpenInNewWindow}
         onSplitCommand={props.onSplitCommand}
+        taskPinnedStates={props.taskPinnedStates}
+        pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
+        onSetTaskPinned={props.onSetTaskPinned}
       />
     );
   }
@@ -360,6 +402,9 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
       onOpenInNewWindow={props.onOpenInNewWindow}
       canOpenInNewWindow={props.canOpenInNewWindow}
       onSplitCommand={props.onSplitCommand}
+      taskPinnedStates={props.taskPinnedStates}
+      pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
+      onSetTaskPinned={props.onSetTaskPinned}
     />
   );
 });
@@ -378,6 +423,13 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
+  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
+  readonly onSetTaskPinned: (
+    epicId: string,
+    pinned: boolean,
+    displayName: string,
+  ) => void;
 }): ReactNode {
   const dnd = useMemo(
     () => ({
@@ -404,6 +456,16 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
       onOpenInNewWindow={props.onOpenInNewWindow}
       canOpenInNewWindow={props.canOpenInNewWindow}
       onSplitCommand={props.onSplitCommand}
+      taskPinned={
+        props.tab.kind === "epic"
+          ? (props.taskPinnedStates.get(props.tab.epicId) ?? null)
+          : null
+      }
+      isTaskPinPending={
+        props.tab.kind === "epic" &&
+        props.pendingSetPinnedEpicIds.has(props.tab.epicId)
+      }
+      onSetTaskPinned={props.onSetTaskPinned}
     />
   );
 });
@@ -427,4 +489,10 @@ function getHeaderTab(ref: TabRef): HeaderTab | null {
     getHeaderTabs().find((tab) => tab.kind === ref.kind && tab.id === ref.id) ??
     null
   );
+}
+
+function pinConfirmationMessage(displayName: string, pinned: boolean): string {
+  return pinned
+    ? `Pinned “${displayName}” to the top of History`
+    : `Unpinned “${displayName}” from History`;
 }

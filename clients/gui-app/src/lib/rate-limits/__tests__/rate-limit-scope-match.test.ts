@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import {
+  assessProfileRateLimit,
   effectiveProfileRateLimitSeverity,
   rateLimitScopeAffectsModel,
   rateLimitSeverityTier,
@@ -199,5 +200,54 @@ describe("effectiveProfileRateLimitSeverity", () => {
         OPUS,
       ),
     ).toBe("near_limit");
+  });
+});
+
+describe("assessProfileRateLimit", () => {
+  it("distinguishes unknown (no evidence) from known healthy", () => {
+    // Never-read / stale / failed-probe gauge: profile-level enum "unknown".
+    expect(assessProfileRateLimit(profile("unknown", null), OPUS)).toEqual({
+      known: false,
+    });
+    // A successful read below every threshold: proven headroom.
+    expect(assessProfileRateLimit(profile("ok", null), OPUS)).toEqual({
+      known: true,
+      severity: null,
+    });
+  });
+
+  it("treats a scoped snapshot as known, with the selected model's severity", () => {
+    expect(
+      assessProfileRateLimit(
+        profile("near_limit", [{ family: "Fable", severity: "near_limit" }]),
+        OPUS,
+      ),
+    ).toEqual({ known: true, severity: null });
+    expect(
+      assessProfileRateLimit(
+        profile("near_limit", [{ family: null, severity: "near_limit" }]),
+        OPUS,
+      ),
+    ).toEqual({ known: true, severity: "near_limit" });
+    expect(assessProfileRateLimit(profile("ok", []), OPUS)).toEqual({
+      known: true,
+      severity: null,
+    });
+  });
+
+  it("falls back to the profile-level enum when scopes or the model are unavailable", () => {
+    expect(assessProfileRateLimit(profile("hard_limit", null), OPUS)).toEqual({
+      known: true,
+      severity: "hard_limit",
+    });
+    expect(
+      assessProfileRateLimit(
+        profile("hard_limit", [{ family: "Fable", severity: "hard_limit" }]),
+        null,
+      ),
+    ).toEqual({ known: true, severity: "hard_limit" });
+    expect(assessProfileRateLimit(profile("unknown", null), null)).toEqual({
+      known: false,
+    });
   });
 });

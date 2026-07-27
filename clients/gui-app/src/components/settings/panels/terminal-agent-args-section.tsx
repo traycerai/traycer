@@ -28,6 +28,7 @@ const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<ProviderId, string> = {
   amp: "CLI arguments (optional)",
   devin: "CLI arguments (optional)",
   pi: "CLI arguments (optional)",
+  hermes: "CLI arguments (optional)",
 };
 
 function terminalAgentArgsPlaceholder(providerId: ProviderId): string {
@@ -85,7 +86,7 @@ export function TerminalAgentArgsSection({
         htmlFor={inputId}
         className="text-ui-sm font-medium text-foreground"
       >
-        Terminal agent arguments
+        Terminal interface CLI arguments
       </label>
       <div className="flex items-center gap-2">
         <Input
@@ -103,9 +104,9 @@ export function TerminalAgentArgsSection({
         {setArgs.isPending ? <MutedAgentSpinner /> : null}
       </div>
       <p className="text-ui-xs text-muted-foreground">
-        Appended to the CLI when launching a{" "}
-        {PROVIDER_DISPLAY_NAMES[providerId]} terminal agent. Pre-fills the
-        launch picker, where you can override it per launch.
+        Appended to the {PROVIDER_DISPLAY_NAMES[providerId]} CLI when starting
+        an agent on the Terminal interface. Pre-fills the launch picker, where
+        you can override it per launch.
       </p>
     </div>
   );

@@ -115,10 +115,10 @@ describe("HistoryPruneProvider", () => {
     expect(loadSpy).not.toHaveBeenCalled();
   });
 
-  it("sanitizes an unknown boot-restored back entry before it can reach routing", () => {
+  it("sanitizes a dead boot-restored back entry before it can reach routing", () => {
     seedCanvasTabs([{ tabId: "t1", epicId: "e1" }]);
     const history = seedPersistentHistory(
-      ["/not-an-app-route", "/epics/e1/t1"],
+      ["/epics/eGONE/tGONE", "/epics/e1/t1"],
       1,
     );
     const controller = controllerFor(history);
@@ -133,7 +133,7 @@ describe("HistoryPruneProvider", () => {
   it("retries initial sanitation after hydration wins a router-loading race", () => {
     seedCanvasTabs([{ tabId: "t1", epicId: "e1" }]);
     const history = seedPersistentHistory(
-      ["/not-an-app-route", "/epics/e1/t1"],
+      ["/epics/eGONE/tGONE", "/epics/e1/t1"],
       1,
     );
     const controller = controllerFor(history);
@@ -156,7 +156,7 @@ describe("HistoryPruneProvider", () => {
     render(<HistoryPruneProvider router={router} />);
     flushFrames();
     expect(controller.getEntries()).toEqual([
-      "/not-an-app-route",
+      "/epics/eGONE/tGONE",
       "/epics/e1/t1",
     ]);
 

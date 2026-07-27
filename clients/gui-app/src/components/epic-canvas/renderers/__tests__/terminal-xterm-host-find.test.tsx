@@ -14,9 +14,11 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
+import { TerminalGridMeasureProbe } from "@/components/epic-canvas/renderers/terminal-grid-measure-probe";
 import {
   __disposeAllXtermHostsForTests,
   __getXtermHostEntryForTests,
+  reconcileXtermHostAfterLayoutTransition,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { useTerminalFindStore } from "@/stores/find-in-page/terminal-find-store";
@@ -24,6 +26,10 @@ import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import { useTileFindStore } from "@/stores/tile-find";
 import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
 import type { TerminalTileFindKind } from "@/components/epic-canvas/renderers/terminal-tile-find-adapter";
+import {
+  focusTerminalInstance,
+  resetTerminalFocusRegistryForTests,
+} from "@/lib/terminals/terminal-focus-registry";
 
 type Disposable = {
   readonly dispose: () => void;
@@ -39,6 +45,7 @@ type SearchResultListener = (result: SearchResult) => void;
 type MockTerminalInstance = {
   readonly focus: Mock;
   readonly paste: Mock;
+  readonly textarea: HTMLTextAreaElement;
   readonly isDisposed: () => boolean;
 };
 
@@ -87,7 +94,8 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     options: Record<string, unknown>;
     readonly buffer = { active: { baseY: 0, length: 24 } };
-    readonly focus = vi.fn();
+    readonly textarea = document.createElement("textarea");
+    readonly focus = vi.fn(() => this.textarea.focus());
     readonly paste = vi.fn((data: string) => {
       this.dataListeners.forEach((listener) => {
         listener(`\x1b[200~${data}\x1b[201~`);
@@ -98,6 +106,10 @@ vi.mock("@xterm/xterm", () => ({
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
+      this.textarea.addEventListener("keydown", (event) => {
+        if (event.key.length !== 1) return;
+        this.dataListeners.forEach((listener) => listener(event.key));
+      });
       xtermMocks.terminals.push(this);
     }
 
@@ -107,7 +119,8 @@ vi.mock("@xterm/xterm", () => ({
       }
     }
 
-    open(_container: HTMLElement): void {
+    open(container: HTMLElement): void {
+      container.appendChild(this.textarea);
       setTimeout(() => {
         if (this.disposed) {
           throw new TypeError(
@@ -263,6 +276,7 @@ function ScopedTerminalHost(props: ScopedTerminalHostProps) {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={props.isActive}
+        registerImperativeFocus
         findTargetId={findTargetId}
         keepAlive={props.keepAlive}
         chrome="padded"
@@ -307,6 +321,7 @@ function getSearchAddon(index: number): MockSearchAddonInstance {
 describe("<TerminalXtermHost /> terminal find", () => {
   afterEach(() => {
     cleanup();
+    resetTerminalFocusRegistryForTests();
     __disposeAllXtermHostsForTests();
     vi.useRealTimers();
     xtermMocks.terminals.length = 0;
@@ -332,6 +347,52 @@ describe("<TerminalXtermHost /> terminal find", () => {
     useTileFindStore.getState().resetForTests();
   });
 
+  it("keeps landing focus parked through the real measurement-probe to live-host handoff", async () => {
+    const instanceId = "landing-focus-instance";
+    const sessionId = "landing-focus-session";
+    const onLiveInput = vi.fn();
+
+    focusTerminalInstance(instanceId);
+    const rendered = render(
+      <TerminalGridMeasureProbe
+        sessionId={sessionId}
+        instanceId={instanceId}
+        tileKind="terminal"
+        chrome="flush"
+        onMeasured={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(xtermMocks.terminals).toHaveLength(1));
+    const terminal = xtermMocks.terminals[0];
+    expect(terminal.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).not.toBe(terminal.textarea);
+
+    rendered.rerender(
+      <TerminalXtermHost
+        sessionId={sessionId}
+        tileKind="terminal"
+        instanceId={instanceId}
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={onLiveInput}
+        onContainerResize={vi.fn()}
+        onWriterReady={vi.fn()}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive
+        chrome="flush"
+      />,
+    );
+
+    await waitFor(() => expect(document.activeElement).toBe(terminal.textarea));
+    expect(terminal.focus).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(terminal.textarea, { key: "x", code: "KeyX" });
+    expect(onLiveInput).toHaveBeenCalledWith("x");
+  });
+
   it("reuses one xterm engine across a StrictMode remount, then disposes it once on unmount", () => {
     vi.useFakeTimers();
 
@@ -347,6 +408,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           onContainerResize={vi.fn()}
           onWriterReady={vi.fn()}
           shouldFocusOnActivePane={false}
+          registerImperativeFocus
           findTargetId="terminal:test"
           keepAlive={false}
           chrome="padded"
@@ -371,6 +433,37 @@ describe("<TerminalXtermHost /> terminal find", () => {
     expect(xtermMocks.terminals[0].isDisposed()).toBe(true);
   });
 
+  it("reconciles a registered engine after a layout transition and ignores a missing one", () => {
+    render(
+      <TerminalXtermHost
+        sessionId="test-session"
+        tileKind="terminal"
+        instanceId="test-instance"
+        effectiveCols={80}
+        effectiveRows={24}
+        onUserInput={vi.fn()}
+        onContainerResize={vi.fn()}
+        onWriterReady={vi.fn()}
+        shouldFocusOnActivePane={false}
+        registerImperativeFocus
+        findTargetId={null}
+        keepAlive={false}
+        chrome="padded"
+      />,
+    );
+    const entry = __getXtermHostEntryForTests("test-instance");
+    if (entry === null) throw new Error("Expected a registered xterm engine");
+    const reconcile = vi.spyOn(entry.controls, "reconcileWithHost");
+
+    reconcileXtermHostAfterLayoutTransition("test-instance");
+
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(reconcile).toHaveBeenCalledWith(entry.term.cols, entry.term.rows);
+    expect(() =>
+      reconcileXtermHostAfterLayoutTransition("missing-instance"),
+    ).not.toThrow();
+  });
+
   it("clears the glyph atlas before refreshing when a hidden pane becomes visible", () => {
     const hostProps = {
       sessionId: "test-session",
@@ -382,6 +475,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
       onContainerResize: vi.fn(),
       onWriterReady: vi.fn(),
       shouldFocusOnActivePane: false,
+      registerImperativeFocus: true,
       findTargetId: "terminal:test",
       keepAlive: false,
       chrome: "padded",
@@ -433,6 +527,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
               onContainerResize={vi.fn()}
               onWriterReady={vi.fn()}
               shouldFocusOnActivePane
+              registerImperativeFocus
               findTargetId="terminal:split-left"
               keepAlive={false}
               chrome="padded"
@@ -453,6 +548,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
               onContainerResize={vi.fn()}
               onWriterReady={vi.fn()}
               shouldFocusOnActivePane
+              registerImperativeFocus
               findTargetId="terminal:split-right"
               keepAlive={false}
               chrome="padded"
@@ -490,6 +586,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane
+        registerImperativeFocus
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
@@ -527,6 +624,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane
+        registerImperativeFocus
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
@@ -947,6 +1045,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane
+        registerImperativeFocus
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
@@ -975,6 +1074,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           writer = nextWriter;
         }}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
@@ -1031,6 +1131,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           writer = nextWriter;
         }}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
@@ -1098,6 +1199,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           writer = nextWriter;
         }}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
@@ -1156,6 +1258,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           onContainerResize={vi.fn()}
           onWriterReady={vi.fn()}
           shouldFocusOnActivePane
+          registerImperativeFocus
           findTargetId="terminal:test"
           keepAlive={false}
           chrome="padded"
@@ -1180,6 +1283,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           onContainerResize={vi.fn()}
           onWriterReady={vi.fn()}
           shouldFocusOnActivePane
+          registerImperativeFocus
           findTargetId="terminal:test"
           keepAlive={false}
           chrome="padded"
@@ -1204,6 +1308,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
@@ -1228,6 +1333,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
@@ -1250,6 +1356,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane
+        registerImperativeFocus
         findTargetId="terminal:test"
         keepAlive={false}
         chrome="padded"
@@ -1290,6 +1397,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
             onContainerResize={vi.fn()}
             onWriterReady={vi.fn()}
             shouldFocusOnActivePane={active}
+            registerImperativeFocus
             findTargetId={active ? "terminal:test" : null}
             keepAlive={false}
             chrome="padded"
@@ -1335,6 +1443,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
@@ -1391,6 +1500,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
           onContainerResize={vi.fn()}
           onWriterReady={vi.fn()}
           shouldFocusOnActivePane={false}
+          registerImperativeFocus
           findTargetId={null}
           keepAlive={false}
           chrome="padded"
@@ -1439,6 +1549,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"
@@ -1484,6 +1595,7 @@ describe("<TerminalXtermHost /> terminal find", () => {
         onContainerResize={vi.fn()}
         onWriterReady={vi.fn()}
         shouldFocusOnActivePane={false}
+        registerImperativeFocus
         findTargetId={null}
         keepAlive={false}
         chrome="padded"

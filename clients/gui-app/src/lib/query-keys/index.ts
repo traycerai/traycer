@@ -27,6 +27,7 @@ export {
   editorQueryKeys,
 } from "@/lib/query-keys/editor-mutation-keys";
 export { terminalMutationKeys } from "@/lib/query-keys/terminal-mutation-keys";
+export { resourcesMutationKeys } from "@/lib/query-keys/resources-mutation-keys";
 export { agentMutationKeys } from "@/lib/query-keys/agent-mutation-keys";
 export { worktreeMutationKeys } from "@/lib/query-keys/worktree-mutation-keys";
 export { snapshotsMutationKeys } from "@/lib/query-keys/snapshots-mutation-keys";

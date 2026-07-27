@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import type { HostProgressEvent } from "@traycer-clients/shared/platform/runner-host";
+import type { MutationProgress } from "@traycer-clients/shared/platform/runner-host";
 import { AppHeader } from "@/components/layout/header/app-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,7 +13,7 @@ export type LocalHostLoadingStage = "loading" | "slow";
 
 export interface LocalHostLoadingProps {
   readonly stage: LocalHostLoadingStage;
-  readonly progress: HostProgressEvent | null;
+  readonly progress: MutationProgress | null;
   /**
    * Called when the user clicks "Configure shell…". The caller drives
    * router navigation directly because the loading card is rendered
@@ -65,7 +65,7 @@ export function LocalHostLoading(props: LocalHostLoadingProps): ReactNode {
 
 export interface LocalHostLoadingContentProps {
   readonly stage: LocalHostLoadingStage;
-  readonly progress: HostProgressEvent | null;
+  readonly progress: MutationProgress | null;
   readonly onConfigureShell: () => void;
   /**
    * Drives the slow-stage Retry button. Injected rather than reading
@@ -170,12 +170,12 @@ export function LocalHostLoadingContent(
 interface ProgressView {
   readonly heading: string;
   readonly detail: string | null;
-  readonly stage: HostProgressEvent["stage"] | null;
+  readonly stage: string | null;
   readonly percent: number | null;
   readonly byteLabel: string | null;
 }
 
-function buildProgressView(progress: HostProgressEvent | null): ProgressView {
+function buildProgressView(progress: MutationProgress | null): ProgressView {
   if (progress === null) {
     return {
       heading: "Starting local Traycer Host…",
@@ -212,7 +212,7 @@ function formatBytes(bytes: number): string {
 
 interface HostDownloadProgressProps {
   readonly percent: number;
-  readonly stage: HostProgressEvent["stage"] | null;
+  readonly stage: string | null;
   readonly byteLabel: string | null;
 }
 

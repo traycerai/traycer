@@ -33,6 +33,13 @@ export interface SplitTabItemProps {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
+  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
+  readonly onSetTaskPinned: (
+    epicId: string,
+    pinned: boolean,
+    displayName: string,
+  ) => void;
 }
 
 export const SplitTabItem = memo(function SplitTabItem(
@@ -88,6 +95,9 @@ export const SplitTabItem = memo(function SplitTabItem(
         onSplitCommand={props.onSplitCommand}
         showDropIndicatorBefore={props.showDropIndicatorBefore}
         showDropIndicatorAfter={false}
+        taskPinnedStates={props.taskPinnedStates}
+        pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
+        onSetTaskPinned={props.onSetTaskPinned}
       />
       <SplitMember
         member={props.item.right}
@@ -105,6 +115,9 @@ export const SplitTabItem = memo(function SplitTabItem(
         onSplitCommand={props.onSplitCommand}
         showDropIndicatorBefore={false}
         showDropIndicatorAfter={props.showDropIndicatorAfter}
+        taskPinnedStates={props.taskPinnedStates}
+        pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
+        onSetTaskPinned={props.onSetTaskPinned}
       />
     </m.div>
   );
@@ -126,6 +139,13 @@ interface SplitMemberProps {
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   readonly showDropIndicatorBefore: boolean;
   readonly showDropIndicatorAfter: boolean;
+  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
+  readonly onSetTaskPinned: (
+    epicId: string,
+    pinned: boolean,
+    displayName: string,
+  ) => void;
 }
 
 function SplitMember(props: SplitMemberProps): ReactNode {
@@ -198,6 +218,16 @@ function SplitMember(props: SplitMemberProps): ReactNode {
         onOpenInNewWindow={props.onOpenInNewWindow}
         canOpenInNewWindow={props.canOpenInNewWindow}
         onSplitCommand={props.onSplitCommand}
+        taskPinned={
+          props.member.tab.kind === "epic"
+            ? (props.taskPinnedStates.get(props.member.tab.epicId) ?? null)
+            : null
+        }
+        isTaskPinPending={
+          props.member.tab.kind === "epic" &&
+          props.pendingSetPinnedEpicIds.has(props.member.tab.epicId)
+        }
+        onSetTaskPinned={props.onSetTaskPinned}
       />
     </div>
   );

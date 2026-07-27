@@ -7,6 +7,11 @@ import { ExternalLink, FolderGit2, GitBranch } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { HOVER_PREVIEW_SCROLL_CLASS } from "@/components/ui/hover-preview-surface";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
 import { cn } from "@/lib/utils";
@@ -40,26 +45,34 @@ const PR_PILL_CLASS: Record<WorktreeDisplayedPrState, string> = {
 export function WorktreePrPills(props: {
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly detailOnHover: boolean;
+  readonly maximumVisible: number | null;
   readonly className: string | undefined;
   readonly testId: string;
 }): ReactNode {
   const references = worktreePrReferences(props.worktrees);
   if (references.length === 0) return null;
+  const visibleReferences =
+    props.maximumVisible === null
+      ? references
+      : references.slice(0, props.maximumVisible);
+  const overflowReferences =
+    props.maximumVisible === null ? [] : references.slice(props.maximumVisible);
   return (
     <span
-      className={cn(
-        "flex min-w-0 items-center gap-1 overflow-hidden",
-        props.className,
-      )}
+      className={cn("flex min-w-0 items-center gap-1", props.className)}
       data-testid={props.testId}
     >
-      {references.map((reference) => (
+      {visibleReferences.map((reference) => (
         <WorktreePrPill
           key={reference.key}
           reference={reference}
           detailOnHover={props.detailOnHover}
+          flexible={props.maximumVisible !== null}
         />
       ))}
+      {overflowReferences.length === 0 ? null : (
+        <WorktreePrOverflow references={overflowReferences} />
+      )}
     </span>
   );
 }
@@ -67,6 +80,7 @@ export function WorktreePrPills(props: {
 function WorktreePrPill(props: {
   readonly reference: WorktreePrReference;
   readonly detailOnHover: boolean;
+  readonly flexible: boolean;
 }): ReactNode {
   // The pill is a real PR link everywhere it renders - the Epic history list
   // and the chat/owner hover preview (now an interactive HoverCard, so a
@@ -75,11 +89,15 @@ function WorktreePrPill(props: {
     <Badge
       asChild
       variant="outline"
-      className={cn("gap-1 font-medium", PR_PILL_CLASS[props.reference.state])}
+      className={cn(
+        "gap-1 font-medium",
+        props.flexible && "min-w-0 shrink",
+        PR_PILL_CLASS[props.reference.state],
+      )}
     >
       <WorktreePrAnchor
         reference={props.reference}
-        className="max-w-[min(60vw,16rem)]"
+        className={cn("max-w-[min(60vw,16rem)]", props.flexible && "min-w-0")}
       />
     </Badge>
   );
@@ -93,6 +111,49 @@ function WorktreePrPill(props: {
     >
       {pill}
     </TooltipWrapper>
+  );
+}
+
+function WorktreePrOverflow(props: {
+  readonly references: readonly WorktreePrReference[];
+}): ReactNode {
+  const count = props.references.length;
+  return (
+    <Popover>
+      <Badge
+        asChild
+        variant="outline"
+        className="cursor-pointer border-border bg-background font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        <PopoverTrigger
+          aria-label={`Show ${count} more pull request${count === 1 ? "" : "s"}`}
+          data-testid="worktree-pr-overflow-trigger"
+        >
+          +{count}
+        </PopoverTrigger>
+      </Badge>
+      <PopoverContent
+        aria-label="More pull requests"
+        align="end"
+        sideOffset={6}
+        className="w-[min(90vw,24rem)]"
+        data-testid="worktree-pr-overflow-content"
+      >
+        <span className="text-ui-xs font-medium text-muted-foreground">
+          More pull requests
+        </span>
+        <span className="flex flex-wrap gap-1.5">
+          {props.references.map((reference) => (
+            <WorktreePrPill
+              key={reference.key}
+              reference={reference}
+              detailOnHover={false}
+              flexible={false}
+            />
+          ))}
+        </span>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -221,6 +282,7 @@ export function OwnerWorkspaceMetadataContent(props: {
             <WorktreePrPills
               worktrees={[item.worktree]}
               detailOnHover={false}
+              maximumVisible={null}
               className="mt-0.5 flex-wrap overflow-visible"
               testId={`owner-workspace-prs-${item.key}`}
             />

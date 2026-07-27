@@ -36,7 +36,7 @@ const RELIABLE_USAGE: TokenUsage = {
 };
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion)";
-const defaultMatchMedia = window.matchMedia;
+const defaultMatchMedia = window.matchMedia.bind(window);
 
 function percentLeft(usage: TokenUsage | null): number | null {
   return computeEffectiveContextUsage(usage)?.percentLeft ?? null;

@@ -68,12 +68,14 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
   PermissionMode,
   TokenUsage,
 } from "@traycer/protocol/persistence/epic/foundation";
 import type {
+  AssistantMessage,
   Chat,
   ChatEvent,
   ContentBlock,
@@ -461,6 +463,19 @@ export interface ChatSessionState {
     settings: ChatRunSettings,
   ) => string | null;
   updateActivePermissionMode: (permissionMode: PermissionMode) => string | null;
+  /**
+   * Narrow in-flight profile switch, parallel to
+   * `updateActivePermissionMode`: tells the host the chat's CURRENT work
+   * should run on `profileId` (of `harnessId` - profile ids are
+   * harness-scoped). The host stamps a pre-spawn override from the frame at
+   * intake, so a turn still parked on worktree setup adopts the switch
+   * before it spawns. Deliberately not a whole-settings frame: model/harness
+   * never late-bind into an accepted turn.
+   */
+  updateActiveProfile: (
+    harnessId: GuiHarnessId,
+    profileId: string | null,
+  ) => string | null;
   // Live-mirror: atomically re-stamp every non-transient pending queued item
   // with the current toolbar settings so the host's stored copy stays current
   // for auto-send. Transient items (steer_requested/steering/injected) keep the
@@ -759,6 +774,42 @@ export function createChatSessionStore(
     // flushes the buffer first, so observable ordering matches arrival order.
     let bufferedDeltas: RuntimeEvent[] = [];
 
+    // `providers.list` nudge driven by the DURABLE auth-failure signal: an
+    // error block tagged `code: "auth"` persisted on the latest assistant row
+    // (a trailing user row - e.g. a message accepted after the failure - does
+    // not hide it). Live failures already nudge via the `onBlockDelta` error
+    // frame below; this covers failures that happened headlessly (an
+    // A2A-triggered turn with no live subscriber) and only surface on
+    // subscribe/rehydrate - reload, host restart, reconnect, or opening the
+    // tab after the fact. Deduped by the failed turn's `turnId` (shared by the
+    // live and persisted paths - `ChatActiveTurn.turnId` mirrors 1:1 onto the
+    // eventual `AssistantMessage.turnId`), NOT once per store lifetime: a
+    // reconnect can surface a NEW headless failure after the user already
+    // re-authed the first one, and that later snapshot must still invalidate
+    // the (long-staleTime) provider query. Re-delivery of the SAME row across
+    // reconnects, or a snapshot arriving right after the live nudge already
+    // fired for the same turn, stays a single nudge; a stale nudge is a
+    // harmless refetch either way (the gate is a pure predicate).
+    let nudgedAuthErrorTurnId: string | null = null;
+
+    const nudgeProviderAuthFromPersistedError = (
+      messages: ReadonlyArray<Message>,
+    ): void => {
+      if (options.onProviderAuthError === null) return;
+      const lastAssistant = messages.findLast(
+        (message): message is AssistantMessage => message.role === "assistant",
+      );
+      if (lastAssistant === undefined) return;
+      const turnKey = lastAssistant.turnId ?? lastAssistant.messageId;
+      if (nudgedAuthErrorTurnId === turnKey) return;
+      const hasAuthError = lastAssistant.blocks.some(
+        (block) => block.type === "error" && block.code === AUTH_ERROR_CODE,
+      );
+      if (!hasAuthError) return;
+      nudgedAuthErrorTurnId = turnKey;
+      options.onProviderAuthError();
+    };
+
     const applyBufferedDeltas = (): void => {
       if (bufferedDeltas.length === 0) return;
       const batch = bufferedDeltas;
@@ -806,6 +857,7 @@ export function createChatSessionStore(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        nudgeProviderAuthFromPersistedError(frame.snapshot.chat.messages);
         flushBlockDeltas();
         // Pendings dispatched on an earlier connection never see their ack, so
         // the snapshot drops them (below). Computed here, before the set, so a
@@ -1178,16 +1230,22 @@ export function createChatSessionStore(
         bufferedDeltas.push(frame.event);
         lease.requestFlush();
         // The `code: "auth"` error frame is the one live push that flips the
-        // re-auth banner on mid-session. The failed turn's error block is itself
-        // suppressed from the transcript by `suppressAuthErrors`, so it never
-        // surfaces a transcript error row.
+        // re-auth banner on mid-session. The failed turn's error block also
+        // renders in the transcript as the failure's durable record; failures
+        // with no live subscriber are instead caught on snapshot by
+        // `nudgeProviderAuthFromPersistedError` above.
         if (
           frame.event.type === "error" &&
           frame.event.code === AUTH_ERROR_CODE
         ) {
           // Nudge `providers.list` to refetch (and read the host's poisoned
-          // `unauthenticated`) so the banner mounts + send blocks.
+          // `unauthenticated`) so the banner mounts + send blocks. Record the
+          // SAME turnId marker `nudgeProviderAuthFromPersistedError` uses, so
+          // the snapshot that follows this live failure (on this connection
+          // or after a reconnect) doesn't nudge a second time for the
+          // identical turn.
           if (options.onProviderAuthError !== null) {
+            nudgedAuthErrorTurnId = get().activeTurn?.turnId ?? null;
             options.onProviderAuthError();
           }
         }
@@ -2152,6 +2210,25 @@ export function createChatSessionStore(
           get,
           frame,
           pending: basicPending(clientActionId, "activePermissionModeUpdate"),
+          pendingUserMessage: null,
+        });
+      },
+      updateActiveProfile: (harnessId, profileId) => {
+        const clientActionId = uuidv4();
+        const frame: ChatOwnerActionFrame = {
+          kind: "activeProfileUpdate",
+          hasBinaryPayload: false,
+          epicId: options.epicId,
+          chatId: options.chatId,
+          clientActionId,
+          harnessId,
+          profileId,
+        };
+        return sendAction({
+          set,
+          get,
+          frame,
+          pending: basicPending(clientActionId, "activeProfileUpdate"),
           pendingUserMessage: null,
         });
       },

@@ -9,6 +9,8 @@ import type {
   CreateChatResponse,
   DeleteChatRequest,
   DeleteChatResponse,
+  UpdateChatProfileRequest,
+  UpdateChatProfileResponse,
   UpdateChatRunSettingsRequest,
   UpdateChatRunSettingsResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -74,7 +76,8 @@ export function useEpicCreateChat(): UseMutationResult<
       if (activeHostId === null) {
         throw new HostRpcError({
           code: "RPC_ERROR",
-          message: "No active host - connect to a host before creating a chat.",
+          message:
+            "No active host - connect to a host before creating an agent.",
           requestId: "client-pre-flight",
           method: "epic.createChat",
           fatalDetails: null,
@@ -91,7 +94,7 @@ export function useEpicCreateChat(): UseMutationResult<
         invalidateBindingsForEpic(queryClient, ctx.hostId);
       },
       onError: (error) => {
-        toastFromHostError(error, "Couldn't create chat.");
+        toastFromHostError(error, "Couldn't create agent.");
       },
     },
   });
@@ -157,7 +160,7 @@ export function useEpicCreateChatForHostClient(
         invalidateBindingsForEpic(queryClient, ctx.hostId);
       },
       onError: (error) => {
-        toastFromHostError(error, "Couldn't create chat.");
+        toastFromHostError(error, "Couldn't create agent.");
       },
     },
   });
@@ -208,6 +211,38 @@ export function useEpicUpdateChatRunSettings(): UseMutationResult<
 }
 
 /**
+ * Mutation hook for `epic.updateChatProfile` (optional host capability).
+ *
+ * Narrow profile-only settings update: moves a chat onto another logged-in
+ * profile of its current harness WITHOUT rebuilding the full tuple
+ * client-side - the host patches its own authoritative persisted record, so
+ * a possibly-stale projection can never be re-persisted just to move the
+ * profile. Tab-host scoped, like `useEpicUpdateChatRunSettings` above, and
+ * likewise fire-and-forget: against an old host the call fails with
+ * `E_HOST_UNSUPPORTED` and callers degrade to persist-on-next-send.
+ */
+export function useEpicUpdateChatProfile(): UseMutationResult<
+  UpdateChatProfileResponse,
+  HostRpcError,
+  UpdateChatProfileRequest
+> {
+  const client = useTabHostClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.updateChatProfile",
+    unknown,
+    UpdateChatProfileRequest
+  >({
+    client,
+    method: "epic.updateChatProfile",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: epicMutationKeys.updateChatProfile(),
+    },
+  });
+}
+
+/**
  * Mutation hook for epic.renameChat.
  * Input enters pending (read-only) state; success is silent.
  */
@@ -219,7 +254,7 @@ export function useEpicRenameChat() {
     mapVariables: (variables) => variables,
     options: {
       onError: (error) => {
-        toastFromHostError(error, "Couldn't rename chat.");
+        toastFromHostError(error, "Couldn't rename agent.");
       },
     },
   });
@@ -244,7 +279,7 @@ export function useEpicDeleteChat() {
         );
       },
       onError: (error) => {
-        toastFromHostError(error, "Couldn't delete chat.");
+        toastFromHostError(error, "Couldn't delete agent.");
       },
     },
   });

@@ -11,11 +11,25 @@ import {
 } from "../../../ipc-contracts/ipc-channels";
 import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types";
 import type {
+  IpcHostController,
   IpcHostLifecycle,
   IpcManagedWindow,
   IpcWindowRecord,
   IpcWindowRegistry,
 } from "../runner-ipc-bridge";
+import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
+  ConvergeReadyOk,
+  HostControllerStatus,
+  InstallVersionOk,
+  MutationOutcome,
+  MutationProgress,
+  RemoveTraycerOk,
+  ServiceRegistrationOk,
+  UninstallOk,
+} from "../../host/host-controller-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import { PerWindowState } from "../../windows/per-window-state";
@@ -130,7 +144,6 @@ vi.mock("electron-log", () => ({
 
 class FakeHost extends EventEmitter implements IpcHostLifecycle {
   private snapshot: DesktopLocalHostSnapshot | null = null;
-  respawnCalls = 0;
   notifyRespawningCalls = 0;
   reloadSnapshotCalls = 0;
   ensureWatcherCalls = 0;
@@ -146,9 +159,6 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
     this.emit("change", next);
   }
 
-  async respawn(): Promise<void> {
-    this.respawnCalls += 1;
-  }
   notifyRespawning(): void {
     this.notifyRespawningCalls += 1;
     this.snapshot = null;
@@ -161,14 +171,6 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
   ensureWatcherInstalled(): void {
     this.ensureWatcherCalls += 1;
   }
-  async getServiceStatus(): Promise<{
-    state: "running" | "stopped" | "not-installed";
-    version: string | null;
-    listenUrl: string | null;
-    pid: number | null;
-  }> {
-    return { state: "running", version: null, listenUrl: null, pid: null };
-  }
   async installService(): Promise<void> {}
   async uninstallService(_purge: boolean): Promise<void> {}
   async startService(): Promise<void> {}
@@ -178,6 +180,110 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
   async enableLinger(): Promise<void> {}
   async getRecentLogTail(_maxLines: number): Promise<string | null> {
     return null;
+  }
+}
+
+const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
+  download: null,
+  mutation: null,
+  installedVersion: "1.0.0",
+  latestVersion: "1.0.0",
+  stagedVersion: null,
+  installedRuntimeVersion: "1.0.0",
+  runningRuntimeVersion: "1.0.0",
+  updateReady: false,
+  activation: "activated",
+  reachable: true,
+  removedByUser: false,
+  checkedAt: "2026-01-01T00:00:00.000Z",
+};
+
+/**
+ * Structural double for `IpcHostController` - these tests exercise the
+ * bridge's window/tray/auth/lifecycle IPC surface, not `HostController`
+ * itself (see `host-controller.test.ts` for that), so every method just
+ * resolves a plausible "ok" outcome. `respawnCalls` lets the one test that
+ * cares (`requestHostRespawn`) assert without a real controller instance.
+ */
+class FakeHostController implements IpcHostController {
+  respawnCalls = 0;
+
+  async getStatus(): Promise<HostControllerStatus> {
+    return FAKE_HOST_CONTROLLER_STATUS;
+  }
+  async convergeReady(
+    _force: boolean,
+  ): Promise<MutationOutcome<ConvergeReadyOk>> {
+    return { kind: "ok", value: { running: true, version: "1.0.0" } };
+  }
+  async stageLatest(): Promise<void> {}
+  async applyStaged(
+    _trigger: ApplyStagedTrigger,
+    _force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
+    return {
+      kind: "ok",
+      value: { appliedVersion: "1.0.0", runningActivated: true },
+    };
+  }
+  async activateInstalled(
+    _force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    return { kind: "ok", value: { activated: true } };
+  }
+  async installVersion(
+    pin: string,
+    _force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>> {
+    return {
+      kind: "ok",
+      value: { installedVersion: pin, runningActivated: true },
+    };
+  }
+  async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    return { kind: "ok", value: { registered: true } };
+  }
+  async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    return { kind: "ok", value: { registered: false } };
+  }
+  async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
+    this.respawnCalls += 1;
+    return { kind: "ok", value: { activated: true } };
+  }
+  async recoverIfDown(): Promise<
+    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
+  > {
+    return { kind: "suppressed" };
+  }
+  async freePortAndRestart(
+    _pid: number | null,
+    _port: number | null,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    return { kind: "ok", value: { activated: true } };
+  }
+  async uninstallHost(_all: boolean): Promise<MutationOutcome<UninstallOk>> {
+    return {
+      kind: "ok",
+      value: { removedInstallDir: true, deregisteredService: true },
+    };
+  }
+  async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {
+    return {
+      kind: "ok",
+      value: {
+        removedHost: true,
+        deregisteredService: true,
+        removedLoginItem: false,
+      },
+    };
+  }
+  isPendingRevisionRefreshQuarantined(): boolean {
+    return false;
+  }
+  onMutationProgress(
+    _listener: (progress: MutationProgress) => void,
+  ): () => void {
+    return () => undefined;
   }
 }
 
@@ -458,10 +564,12 @@ describe("RunnerIpcBridge", () => {
     const host = new FakeHost();
     const bridge = new mod.RunnerIpcBridge({
       host,
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -472,12 +580,17 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.hostPickerRequestClose,
         RunnerHostInvoke.hostPickerRequestOpen,
         RunnerHostInvoke.workspaceFoldersPick,
-        RunnerHostInvoke.validateAuthToken,
         RunnerHostInvoke.validateAuthTokenIdentity,
         RunnerHostInvoke.deviceFlowStart,
         RunnerHostInvoke.deviceFlowPollNow,
         RunnerHostInvoke.deviceFlowCancel,
-        RunnerHostInvoke.refreshAuthToken,
+        // §3 FileTokenStore IPC seam (get/signIn/rotate/delete); §6 adds the
+        // one-time legacy→file migration channel.
+        RunnerHostInvoke.authTokenStoreGet,
+        RunnerHostInvoke.authTokenStoreSignIn,
+        RunnerHostInvoke.authTokenStoreRotate,
+        RunnerHostInvoke.authTokenStoreDelete,
+        RunnerHostInvoke.authTokenStoreMigrateLegacy,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,
         RunnerHostInvoke.getRegisteredUrlSchemes,
@@ -495,6 +608,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.appUpdateDownload,
         RunnerHostInvoke.appUpdateGetSnapshot,
         RunnerHostInvoke.appUpdateInstall,
+        RunnerHostInvoke.globalShortcutsGetSnapshot,
+        RunnerHostInvoke.globalShortcutsSet,
         RunnerHostInvoke.windowsList,
         RunnerHostInvoke.windowsRequestNew,
         RunnerHostInvoke.windowsRequestFocus,
@@ -531,16 +646,16 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerConfigEnvList,
         RunnerHostInvoke.traycerConfigEnvSet,
         RunnerHostInvoke.traycerConfigEnvDelete,
-        RunnerHostInvoke.traycerCliLogin,
-        RunnerHostInvoke.traycerCliLogout,
         RunnerHostInvoke.migrationAnnounceRunning,
         RunnerHostInvoke.migrationGetRunningSnapshot,
         // Native-packaging host-management bridge (Flow 4 / Flow 6).
         // These channels are registered by `registerHostManagementIpc`
         // which the bridge invokes during `install()`.
-        RunnerHostInvoke.traycerHostInstall,
-        RunnerHostInvoke.traycerHostEnsure,
-        RunnerHostInvoke.traycerHostUpdate,
+        RunnerHostInvoke.traycerHostControllerStatusGet,
+        RunnerHostInvoke.traycerHostConvergeReady,
+        RunnerHostInvoke.traycerHostApplyStaged,
+        RunnerHostInvoke.traycerHostActivateInstalled,
+        RunnerHostInvoke.traycerHostInstallVersion,
         RunnerHostInvoke.traycerHostUninstall,
         RunnerHostInvoke.traycerAppUninstall,
         RunnerHostInvoke.traycerHostRemovalGet,
@@ -555,7 +670,6 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.traycerServiceRegister,
         RunnerHostInvoke.traycerServiceDeregister,
         RunnerHostInvoke.traycerRegistryCheck,
-        RunnerHostInvoke.traycerHostOperationStatusGet,
         RunnerHostInvoke.traycerFreePortAndRestart,
         RunnerHostInvoke.traycerCliManifestRead,
         // Platform IPC channels installed by `registerPlatformIpc(bridge)`,
@@ -597,6 +711,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.displayList,
         RunnerHostInvoke.fileDropWriteTemporary,
         RunnerHostInvoke.fileDropCopyTemporary,
+        RunnerHostInvoke.fileDropReadNativeClipboardPaths,
         RunnerHostInvoke.fileSave,
         RunnerHostInvoke.gpuAccelerationGet,
         RunnerHostInvoke.gpuAccelerationSet,
@@ -618,10 +733,12 @@ describe("RunnerIpcBridge", () => {
     const electron = await import("electron");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -662,10 +779,12 @@ describe("RunnerIpcBridge", () => {
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -700,10 +819,12 @@ describe("RunnerIpcBridge", () => {
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -736,10 +857,12 @@ describe("RunnerIpcBridge", () => {
     showSaveDialog.mockResolvedValue({ canceled: true, filePath: "" });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -769,10 +892,12 @@ describe("RunnerIpcBridge", () => {
     const ownership = new EpicWindowOwnership(null);
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState: new PerWindowState(null),
@@ -853,10 +978,12 @@ describe("RunnerIpcBridge", () => {
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -927,10 +1054,12 @@ describe("RunnerIpcBridge", () => {
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -982,10 +1111,12 @@ describe("RunnerIpcBridge", () => {
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -1033,10 +1164,12 @@ describe("RunnerIpcBridge", () => {
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -1098,10 +1231,12 @@ describe("RunnerIpcBridge", () => {
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState,
@@ -1164,10 +1299,12 @@ describe("RunnerIpcBridge", () => {
     ownership.claim("tab-a", "epic-a", "window-b");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState: new PerWindowState(null),
@@ -1200,10 +1337,12 @@ describe("RunnerIpcBridge", () => {
     const host = new FakeHost();
     const bridge = new mod.RunnerIpcBridge({
       host,
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -1232,10 +1371,12 @@ describe("RunnerIpcBridge", () => {
     registry.add("window-b", 202, windowB);
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1276,10 +1417,12 @@ describe("RunnerIpcBridge", () => {
     ownership.claim("tab-owned", "epic-owned", "window-a");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership,
       perWindowState: new PerWindowState(null),
@@ -1345,10 +1488,12 @@ describe("RunnerIpcBridge", () => {
     registry.add("window-b", 202, windowB);
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1446,10 +1591,12 @@ describe("RunnerIpcBridge", () => {
     registry.add("window-b", 202, windowB);
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1493,10 +1640,12 @@ describe("RunnerIpcBridge", () => {
     registry.add("window-b", 202, windowB);
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1562,10 +1711,12 @@ describe("RunnerIpcBridge", () => {
     registry.add("window-b", 202, buildWindow());
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1599,18 +1750,22 @@ describe("RunnerIpcBridge", () => {
     const windowB = buildWindow();
     const bridgeA = new mod.RunnerIpcBridge({
       host: hostA,
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: windowA,
     });
     const bridgeB = new mod.RunnerIpcBridge({
       host: hostB,
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: windowB,
     });
     bridgeA.install();
@@ -1699,10 +1854,12 @@ describe("RunnerIpcBridge", () => {
 
     const bridge = new mod.RunnerIpcBridge({
       host,
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -1733,10 +1890,12 @@ describe("RunnerIpcBridge", () => {
     registry.add("window-b", 202, windowB);
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1858,10 +2017,12 @@ describe("RunnerIpcBridge", () => {
     const perWindowState = new PerWindowState(null);
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState,
@@ -1913,10 +2074,12 @@ describe("RunnerIpcBridge", () => {
     const authSession = new DesktopAuthSession();
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState: new PerWindowState(null),
@@ -1963,10 +2126,12 @@ describe("RunnerIpcBridge", () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2019,10 +2184,12 @@ describe("RunnerIpcBridge", () => {
       const mod = await import("../register-runner-ipc");
       const bridge = new mod.RunnerIpcBridge({
         host: new FakeHost(),
+        hostController: new FakeHostController(),
         authnBaseUrl: "http://localhost:5005",
         authRedirectUri: null,
         tray: null,
         zoomController: undefined,
+        authTokenStore: undefined,
         window: buildDestroyedWindow(),
       });
       bridge.install();
@@ -2059,10 +2226,12 @@ describe("RunnerIpcBridge", () => {
       const mod = await import("../register-runner-ipc");
       const bridge = new mod.RunnerIpcBridge({
         host: new FakeHost(),
+        hostController: new FakeHostController(),
         authnBaseUrl: "http://localhost:5005",
         authRedirectUri: null,
         tray: null,
         zoomController: undefined,
+        authTokenStore: undefined,
         window: buildWindow(),
       });
       bridge.install();
@@ -2106,10 +2275,12 @@ describe("RunnerIpcBridge", () => {
       const mod = await import("../register-runner-ipc");
       const bridge = new mod.RunnerIpcBridge({
         host: new FakeHost(),
+        hostController: new FakeHostController(),
         authnBaseUrl: "http://localhost:5005",
         authRedirectUri: null,
         tray: null,
         zoomController: undefined,
+        authTokenStore: undefined,
         window: buildWindow(),
       });
       bridge.install();
@@ -2177,10 +2348,12 @@ describe("RunnerIpcBridge", () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2249,10 +2422,12 @@ describe("RunnerIpcBridge", () => {
       const mod = await import("../register-runner-ipc");
       const bridge = new mod.RunnerIpcBridge({
         host: new FakeHost(),
+        hostController: new FakeHostController(),
         authnBaseUrl: "http://localhost:5005",
         authRedirectUri: null,
         tray: null,
         zoomController: undefined,
+        authTokenStore: undefined,
         window: buildWindow(),
       });
       bridge.install();
@@ -2285,10 +2460,12 @@ describe("RunnerIpcBridge", () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2327,10 +2504,12 @@ describe("RunnerIpcBridge", () => {
     const host = new FakeHost();
     const bridge = new mod.RunnerIpcBridge({
       host,
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2362,60 +2541,6 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("validates auth tokens through the main-process HTTP helper", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify({
-              user: {
-                name: "Desktop User",
-                providerHandle: "desktop-user",
-                email: "desktop@example.com",
-              },
-            }),
-            {
-              status: 200,
-              headers: { "Content-Type": "application/json" },
-            },
-          ),
-        ),
-      ),
-    );
-
-    const mod = await import("../register-runner-ipc");
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      window: buildWindow(),
-    });
-    bridge.install();
-
-    const validateHandler = ipcMainState.handlers.get(
-      RunnerHostInvoke.validateAuthToken,
-    );
-    if (validateHandler === undefined) {
-      throw new Error("validateAuthToken handler missing");
-    }
-
-    await expect(
-      validateHandler(bareEvent(), "jwt-abc", "jwt-abc-refresh"),
-    ).resolves.toEqual({
-      kind: "valid",
-      profile: {
-        userId: "",
-        userName: "Desktop User",
-        email: "desktop@example.com",
-      },
-    });
-
-    bridge.dispose();
-  });
-
   it("validates full auth identities through the main-process HTTP helper", async () => {
     const user = createAuthenticatedUserFixture(undefined);
     vi.stubGlobal(
@@ -2433,10 +2558,12 @@ describe("RunnerIpcBridge", () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2463,15 +2590,17 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("routes requestHostRespawn to HostLifecycle.respawn()", async () => {
+  it("routes requestHostRespawn to HostController.respawn()", async () => {
     const mod = await import("../register-runner-ipc");
-    const host = new FakeHost();
+    const hostController = new FakeHostController();
     const bridge = new mod.RunnerIpcBridge({
-      host,
+      host: new FakeHost(),
+      hostController,
       authnBaseUrl: "http://localhost:5005",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2484,7 +2613,38 @@ describe("RunnerIpcBridge", () => {
     }
     await respawnHandler(bareEvent());
     await respawnHandler(bareEvent());
-    expect(host.respawnCalls).toBe(2);
+    expect(hostController.respawnCalls).toBe(2);
+    bridge.dispose();
+  });
+
+  it("rejects requestHostRespawn when HostController.respawn() resolves a non-ok outcome", async () => {
+    const mod = await import("../register-runner-ipc");
+    const hostController = new FakeHostController();
+    hostController.respawn = async () => ({
+      kind: "failed",
+      message: "Traycer needs approval in System Settings.",
+    });
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController,
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const respawnHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.requestHostRespawn,
+    );
+    if (respawnHandler === undefined) {
+      throw new Error("requestHostRespawn handler missing");
+    }
+    await expect(respawnHandler(bareEvent())).rejects.toThrow(
+      "Traycer needs approval in System Settings.",
+    );
     bridge.dispose();
   });
 
@@ -2492,10 +2652,12 @@ describe("RunnerIpcBridge", () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "https://authn.example.invalid",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       window: buildWindow(),
     });
     bridge.install();
@@ -2530,10 +2692,12 @@ describe("RunnerIpcBridge", () => {
     });
     const bridge = new mod.RunnerIpcBridge({
       host: new FakeHost(),
+      hostController: new FakeHostController(),
       authnBaseUrl: "https://authn.example.invalid",
       authRedirectUri: null,
       tray: null,
       zoomController: undefined,
+      authTokenStore: undefined,
       windowRegistry: registry,
       ownership: new EpicWindowOwnership(null),
       perWindowState,
@@ -2587,6 +2751,7 @@ describe("RunnerIpcBridge", () => {
       {
         channel: RunnerHostEvent.appUpdateChange,
         payload: {
+          allowPrerelease: false,
           sequence: 0,
           status: "idle",
           currentVersion: "1.0.0",

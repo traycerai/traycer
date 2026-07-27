@@ -101,11 +101,11 @@ describe("useWorkspaceEntries", () => {
 
     await waitFor(() => expect(result.current.data).toHaveLength(1));
     expect(messenger.calls).toEqual([
-      {
+      expect.objectContaining({
         method: "workspace.mentionFiles",
         params: { roots: ["/repo"], query: "app", limit: 8 },
         requestId: "request-test",
-      },
+      }),
     ]);
   });
 

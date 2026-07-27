@@ -56,6 +56,7 @@ describe("useProviderRateLimitRefresh refresh routing", () => {
         providerId: "codex",
         profileId: null,
         usageUpdatedAt: null,
+        fetchEligible: true,
         isFetching: false,
         refetch,
       }),
@@ -82,6 +83,7 @@ describe("useProviderRateLimitRefresh refresh routing", () => {
         providerId: "openrouter",
         profileId: null,
         usageUpdatedAt: null,
+        fetchEligible: true,
         isFetching: false,
         refetch,
       }),
@@ -103,6 +105,7 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
         providerId: "codex",
         profileId: null,
         usageUpdatedAt: null,
+        fetchEligible: true,
         isFetching: true,
         refetch,
       }),
@@ -114,6 +117,7 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
         providerId: "openrouter",
         profileId: null,
         usageUpdatedAt: null,
+        fetchEligible: true,
         isFetching: true,
         refetch,
       }),
@@ -128,6 +132,7 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
         providerId: "codex",
         profileId: null,
         usageUpdatedAt: null,
+        fetchEligible: true,
         isFetching: false,
         refetch,
       }),
@@ -142,6 +147,7 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
         providerId: "openrouter",
         profileId: null,
         usageUpdatedAt: null,
+        fetchEligible: true,
         isFetching: false,
         refetch,
       }),
@@ -155,10 +161,31 @@ describe("useProviderRateLimitRefresh isRefreshing", () => {
         providerId: "codex",
         profileId: null,
         usageUpdatedAt: null,
+        fetchEligible: true,
         isFetching: false,
         refetch,
       }),
     );
     expect(result.current.isRefreshing).toBe(false);
+  });
+
+  it("does not report or perform a refresh when fetching is ineligible", async () => {
+    const refetch = vi.fn(() => Promise.resolve({}));
+    const { result } = renderHook(() =>
+      useProviderRateLimitRefresh({
+        providerId: "codex",
+        profileId: null,
+        usageUpdatedAt: null,
+        fetchEligible: false,
+        isFetching: true,
+        refetch,
+      }),
+    );
+
+    await result.current.refresh();
+
+    expect(result.current.isRefreshing).toBe(false);
+    expect(refetch).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 });

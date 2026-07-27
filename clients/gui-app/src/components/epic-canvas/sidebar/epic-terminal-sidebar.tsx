@@ -7,7 +7,7 @@
  *
  * Exports `TerminalsPanelBody` and `TerminalsPanelActions` consumed by
  * `epic-sidebar.tsx`'s `PANEL_COMPONENTS["terminals"]`. Agent terminals
- * (`terminal-agent` artifacts) live in the Chats panel instead.
+ * (`terminal-agent` artifacts) live in the Agents panel instead.
  */
 import {
   useCallback,

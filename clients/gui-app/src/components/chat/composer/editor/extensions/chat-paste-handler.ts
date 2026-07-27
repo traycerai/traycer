@@ -20,6 +20,7 @@ import {
   stringValue,
 } from "@/lib/composer/tiptap-json-content";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 
 import {
   isLeadingRange,
@@ -109,7 +110,22 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               const clipboardData = event.clipboardData;
               if (clipboardData === null) return false;
 
-              if (clipboardData.files.length > 0) return false;
+              // File-like clipboards (real `File`s, or a URI-only flavor that
+              // actually parses to a `file://` path) are owned exclusively by
+              // the React-level paste handler (`useComposerPasteEvents`),
+              // which resolves them to real paths asynchronously. Claiming
+              // the event here (returning `true` with no dispatch) stops
+              // ProseMirror's own fallback text/html/markdown branches below
+              // from also inserting the clipboard's textual representation -
+              // a `text/uri-list` paste commonly carries a `text/plain`
+              // sibling (e.g. VS Code), and without this early return that
+              // sibling would insert as plain text alongside the async
+              // path-span insertion. `hasClaimableFileTransfer` (unlike a
+              // type-name-only check) parses the URI content first, so an
+              // ordinary `https://` link paste - which also carries a
+              // `text/uri-list` type - is correctly left unclaimed and falls
+              // through to normal text/markdown paste below.
+              if (hasClaimableFileTransfer(clipboardData)) return true;
 
               const composerContent =
                 readComposerContentFromClipboardData(clipboardData);
@@ -177,6 +193,18 @@ export function createChatPasteHandler(deps: ChatPasteHandlerDeps) {
               );
               view.dispatch(tr.scrollIntoView());
               return true;
+            },
+            // Mirrors the `handlePaste` file-ownership guard above: a
+            // file-like drop (real `File`s, or a URI entry that parses to a
+            // `file://` path) is owned by the React-level drop handler.
+            // Without this, ProseMirror's own default drop handling - which
+            // runs whenever no plugin claims the drop - would insert whatever
+            // text/html representation the drag also carries before React's
+            // async path resolution lands.
+            handleDrop(_view, event) {
+              const dataTransfer = event.dataTransfer;
+              if (dataTransfer === null) return false;
+              return hasClaimableFileTransfer(dataTransfer);
             },
           },
         }),

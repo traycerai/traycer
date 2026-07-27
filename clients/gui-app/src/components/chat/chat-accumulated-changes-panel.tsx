@@ -275,7 +275,7 @@ function UndoAllDialogContent(props: UndoAllDialogProps) {
           </DialogTitle>
           <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground">
             This reverts every changed file to the snapshot from the first time
-            it was edited in this chat.
+            it was edited by this agent.
           </DialogDescription>
           <RevertArtifactsCheckbox
             count={props.artifactCount}
@@ -458,7 +458,10 @@ function ArtifactAccumulatedHeader(props: {
 
 function revertGate(restore: ChatRestoreContextValue): RevertGate {
   if (restore.accessRole !== "owner") {
-    return { enabled: false, tooltip: "Only the chat owner can revert files." };
+    return {
+      enabled: false,
+      tooltip: "Only the agent owner can revert files.",
+    };
   }
   if (restore.activeTurnStatus !== null) {
     return {

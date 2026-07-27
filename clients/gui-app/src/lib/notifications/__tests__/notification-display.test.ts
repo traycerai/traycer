@@ -8,6 +8,7 @@ import {
   displayNotificationRows,
   notificationReplaceKey,
 } from "@/lib/notifications/notification-display";
+import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
@@ -44,6 +45,8 @@ function row(title: string): MergedNotificationRow {
     globalEntry: null,
     severity: "done",
     outcome: "completed",
+    resolvedAt: null,
+    category: "task",
   };
 }
 
@@ -60,21 +63,29 @@ describe("notification display", () => {
     const showNotification = vi.fn(() => Promise.resolve());
     const playChime = vi.fn();
 
-    displayNotificationRows([row("Checkout notifications")], {
-      showNotification,
-      playChime,
-      onToastClick: vi.fn(),
-    });
+    displayNotificationRows(
+      [row("Checkout notifications")],
+      {
+        showNotification,
+        playChime,
+        onToastClick: vi.fn(),
+      },
+      "origin-host-1",
+    );
 
     expect(showNotification).toHaveBeenCalledOnce();
     expect(showNotification).toHaveBeenCalledWith({
       title: "Checkout notifications",
       body: "New chat • Done",
-      payload: {
-        kind: "chat",
-        epicId: "epic-1",
-        chatId: "chat-1",
-      },
+      payload: buildNotificationActivationEnvelope({
+        route: {
+          kind: "chat",
+          epicId: "epic-1",
+          chatId: "chat-1",
+        },
+        feed: { source: "host", id: "n-1" },
+        originHostId: "origin-host-1",
+      }),
       replaceKey: "host:chat:chat-1",
       deliveryKey: null,
     });
@@ -149,16 +160,28 @@ describe("notification display", () => {
     const onToastClick = vi.fn();
     const first = row("One");
 
-    displayNotificationRows([first, row("Two")], {
-      showNotification,
-      playChime,
-      onToastClick,
-    });
+    displayNotificationRows(
+      [first, row("Two")],
+      {
+        showNotification,
+        playChime,
+        onToastClick,
+      },
+      "origin-host-1",
+    );
 
     expect(showNotification).toHaveBeenCalledWith({
       title: "Traycer",
       body: "2 new notifications",
-      payload: first.payload,
+      payload: buildNotificationActivationEnvelope({
+        route: {
+          kind: "chat",
+          epicId: "epic-1",
+          chatId: "chat-1",
+        },
+        feed: { source: "host", id: "n-1" },
+        originHostId: "origin-host-1",
+      }),
       replaceKey: "notification-batch",
       deliveryKey: null,
     });
@@ -168,7 +191,7 @@ describe("notification display", () => {
       screen.getByRole("button", { name: "Traycer 2 new notifications" }),
     );
 
-    expect(onToastClick).toHaveBeenCalledWith(first, expect.any(Number));
+    expect(onToastClick).toHaveBeenCalledWith(first);
   });
 
   it("still plays the chime when native notification setup throws", () => {
@@ -178,11 +201,15 @@ describe("notification display", () => {
     const playChime = vi.fn();
 
     expect(() => {
-      displayNotificationRows([row("Checkout notifications")], {
-        showNotification,
-        playChime,
-        onToastClick: vi.fn(),
-      });
+      displayNotificationRows(
+        [row("Checkout notifications")],
+        {
+          showNotification,
+          playChime,
+          onToastClick: vi.fn(),
+        },
+        null,
+      );
     }).not.toThrow();
 
     expect(playChime).toHaveBeenCalledOnce();
@@ -192,11 +219,15 @@ describe("notification display", () => {
     const onToastClick = vi.fn();
     const notification = row("Checkout notifications");
 
-    displayNotificationRows([notification], {
-      showNotification: vi.fn(() => Promise.resolve()),
-      playChime: vi.fn(),
-      onToastClick,
-    });
+    displayNotificationRows(
+      [notification],
+      {
+        showNotification: vi.fn(() => Promise.resolve()),
+        playChime: vi.fn(),
+        onToastClick,
+      },
+      "origin-host-1",
+    );
 
     renderActionableToast();
     fireEvent.click(
@@ -205,27 +236,44 @@ describe("notification display", () => {
       }),
     );
 
-    expect(onToastClick).toHaveBeenCalledWith(notification, expect.any(Number));
+    expect(onToastClick).toHaveBeenCalledWith(notification);
   });
 
   it("does not make notifications without a destination clickable", () => {
-    displayNotificationRows([{ ...row("Agent finished"), payload: null }], {
-      showNotification: vi.fn(() => Promise.resolve()),
-      playChime: vi.fn(),
-      onToastClick: vi.fn(),
-    });
+    const showNotification = vi.fn(() => Promise.resolve());
+    displayNotificationRows(
+      [{ ...row("Agent finished"), payload: null }],
+      {
+        showNotification,
+        playChime: vi.fn(),
+        onToastClick: vi.fn(),
+      },
+      "origin-host-1",
+    );
 
     expect(toastCalls).toHaveLength(1);
     expect(toastCalls[0]?.title).toBe("Agent finished");
     expect(toastCalls[0]?.options.description).toBe("New chat • Done");
+    // Payload-less rows still show native, but with a null activation payload.
+    expect(showNotification).toHaveBeenCalledWith({
+      title: "Agent finished",
+      body: "New chat • Done",
+      payload: null,
+      replaceKey: "host:id:n-1",
+      deliveryKey: null,
+    });
   });
 
   it("uses the standard toast renderer for actionable notifications", () => {
-    displayNotificationRows([row("Checkout notifications")], {
-      showNotification: vi.fn(() => Promise.resolve()),
-      playChime: vi.fn(),
-      onToastClick: vi.fn(),
-    });
+    displayNotificationRows(
+      [row("Checkout notifications")],
+      {
+        showNotification: vi.fn(() => Promise.resolve()),
+        playChime: vi.fn(),
+        onToastClick: vi.fn(),
+      },
+      null,
+    );
 
     expect(toastCalls).toHaveLength(1);
     expect(isValidElement(toastCalls[0]?.title)).toBe(true);
@@ -299,7 +347,15 @@ describe("host channel emission focus gate", () => {
 
   function displayTarget() {
     return {
-      showNotification: vi.fn(() => Promise.resolve()),
+      showNotification: vi.fn(
+        (_input: {
+          readonly title: string;
+          readonly body: string;
+          readonly payload: unknown;
+          readonly replaceKey: string | null;
+          readonly deliveryKey: string | null;
+        }) => Promise.resolve(),
+      ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
     };
@@ -312,6 +368,7 @@ describe("host channel emission focus gate", () => {
     displayHostChannelEmission(
       [hostEntry("n-1", "chat-1"), hostEntry("n-2", null)],
       target,
+      "stream-host-1",
     );
 
     expect(target.showNotification).not.toHaveBeenCalled();
@@ -326,11 +383,30 @@ describe("host channel emission focus gate", () => {
     displayHostChannelEmission(
       [hostEntry("n-1", "chat-1"), hostEntry("n-2", "chat-2")],
       target,
+      "stream-host-1",
     );
 
     expect(target.showNotification).toHaveBeenCalledOnce();
     expect(target.playChime).toHaveBeenCalledOnce();
     expect(toastCalls).toHaveLength(1);
+    const nativeCall = target.showNotification.mock.calls[0][0];
+    expect(nativeCall).toMatchObject({
+      payload: {
+        kind: "notificationActivation",
+        version: 1,
+        feed: { source: "host", id: "n-2" },
+        originHostId: "stream-host-1",
+        route: {
+          kind: "chat",
+          epicId: "epic-1",
+          chatId: "chat-2",
+        },
+      },
+      replaceKey: "host:chat:chat-2",
+      deliveryKey: null,
+    });
+    expect(typeof nativeCall.title).toBe("string");
+    expect(typeof nativeCall.body).toBe("string");
   });
 
   it("displays rows for the active entity when the window is blurred", () => {
@@ -338,7 +414,11 @@ describe("host channel emission focus gate", () => {
     vi.spyOn(document, "hasFocus").mockReturnValue(false);
     const target = displayTarget();
 
-    displayHostChannelEmission([hostEntry("n-1", "chat-1")], target);
+    displayHostChannelEmission(
+      [hostEntry("n-1", "chat-1")],
+      target,
+      "stream-host-1",
+    );
 
     expect(target.showNotification).toHaveBeenCalledOnce();
     expect(target.playChime).toHaveBeenCalledOnce();

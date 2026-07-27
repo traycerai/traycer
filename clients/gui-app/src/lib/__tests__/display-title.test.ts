@@ -3,7 +3,6 @@ import {
   chatDisplayTitle,
   displayTitle,
   epicDisplayTitle,
-  tuiAgentDisplayTitle,
   UNTITLED_EPIC_TITLE,
 } from "@/lib/display-title";
 
@@ -16,6 +15,9 @@ describe("displayTitle", () => {
     expect(displayTitle("", "epic")).toBe("Untitled epic");
     expect(displayTitle("", "chat")).toBe("Untitled chat");
     expect(displayTitle("", "terminal-agent")).toBe("Untitled terminal agent");
+    // The interface-agnostic durable-Agent fallback, used for both Chat- and
+    // Terminal-interface Agent rows on durable surfaces.
+    expect(displayTitle("", "agent")).toBe("Untitled agent");
   });
 
   it("exposes the single-sourced empty-epic literal", () => {
@@ -59,26 +61,6 @@ describe("epicDisplayTitle", () => {
   it("falls back to 'Untitled epic' when the prompt is whitespace-only", () => {
     expect(epicDisplayTitle({ title: "", initialUserPrompt: "   \n\t " })).toBe(
       "Untitled epic",
-    );
-  });
-});
-
-describe("tuiAgentDisplayTitle", () => {
-  it("returns the raw title when non-empty (harness ignored)", () => {
-    expect(
-      tuiAgentDisplayTitle({ title: "Renamed agent", harnessId: "claude" }),
-    ).toBe("Renamed agent");
-  });
-
-  it("derives the harness label when the title is empty", () => {
-    expect(tuiAgentDisplayTitle({ title: "", harnessId: "claude" })).toBe(
-      "Claude Code",
-    );
-    expect(tuiAgentDisplayTitle({ title: "", harnessId: "codex" })).toBe(
-      "Codex",
-    );
-    expect(tuiAgentDisplayTitle({ title: "", harnessId: "opencode" })).toBe(
-      "OpenCode",
     );
   });
 });

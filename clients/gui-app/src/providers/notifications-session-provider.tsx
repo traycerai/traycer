@@ -22,9 +22,10 @@ import {
 import type { HostNotificationPresenceFrame } from "@/lib/notifications/notification-presence";
 import { getNotificationsStreamFactoryOverride } from "@/providers/notifications-stream-factory-override";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useAuthService } from "@/lib/host";
+import { useAuthService, useHostClient } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
+import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import {
@@ -47,8 +48,11 @@ import {
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
-import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
-import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
+import {
+  useMergedNotificationsActions,
+  type MergedNotificationRow,
+} from "@/stores/notifications/merged-notifications";
+import { activationResultHandler } from "@/lib/notifications/notification-activation-result";
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
@@ -68,13 +72,13 @@ export function NotificationsSessionProvider(
   const queryClient = useQueryClient();
   const activeHostId = useReactiveActiveHostId();
   const authService = useAuthService();
+  const hostClient = useHostClient();
   const showNotification = useNotificationShow();
-  const recordInAppClick = useNotificationEventsStore(
-    (state) => state.recordInAppClick,
-  );
+  const { activate } = useNotificationActivation();
+  const mergedActions = useMergedNotificationsActions();
   const windowsBridge = useWindowsBridge();
   const status = useAuthStore((state) => state.status);
-  const email = useAuthStore((state) => state.profile?.email ?? null);
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const disposerRef = useRef<(() => void) | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   // The stream client BOTH notification streams were opened against. Stream
@@ -91,11 +95,22 @@ export function NotificationsSessionProvider(
   const markEntityRead = markEntityReadMutation.mutate;
   const activeEntityRef = useRef<HostNotificationsEntityRef | null>(null);
   const onToastClick = useCallback(
-    (row: MergedNotificationRow, activatedAt: number): void => {
+    (row: MergedNotificationRow): void => {
       if (row.payload === null) return;
-      recordInAppClick(row.payload, activatedAt);
+      activate({
+        payload: row.payload,
+        receivedAt: row.createdAt,
+        feedId: row.feedId,
+        onResult: activationResultHandler({
+          row,
+          feedId: row.feedId,
+          surface: "toast",
+          markAsRead: mergedActions.markAsRead,
+          onSuccess: null,
+        }),
+      });
     },
-    [recordInAppClick],
+    [activate, mergedActions],
   );
   const onToastClickRef = useRef(onToastClick);
   useEffect(() => {
@@ -130,23 +145,44 @@ export function NotificationsSessionProvider(
   const onFeedFrame = useCallback(
     (frame: HostNotificationsFeedFrame, hostId: string): void => {
       if (activeHostId !== hostId) return;
-      if (frame.kind === "snapshot" || frame.kind === "cleared") {
-        invalidateNotificationIndicators(queryClient, hostId);
+      if (
+        frame.kind === "snapshot" ||
+        frame.kind === "cleared" ||
+        frame.kind === "removed"
+      ) {
+        invalidateNotificationIndicators(queryClient, hostId, hostClient);
         return;
       }
       if (frame.kind === "readStateChanged") {
-        invalidateNotificationIndicatorsForEntities(
-          queryClient,
-          hostId,
-          frame.entityRefs,
-        );
+        // A read-state frame can also carry retention `removedIds` for
+        // unrelated rows the protocol has no entity refs for - full-invalidate
+        // rather than leave those entities' indicators stale.
+        if (frame.removedIds.length > 0) {
+          invalidateNotificationIndicators(queryClient, hostId, hostClient);
+        } else {
+          invalidateNotificationIndicatorsForEntities(
+            queryClient,
+            hostId,
+            frame.entityRefs,
+            hostClient,
+          );
+        }
         return;
       }
       const entity = notificationEntityFromHostEntry(frame.entry);
+      // Same reasoning as above: a surviving upsert's `removedIds` can name
+      // entities this frame carries no ref for.
+      if (frame.removedIds.length > 0) {
+        invalidateNotificationIndicators(queryClient, hostId, hostClient);
+      } else if (entity !== null) {
+        invalidateNotificationIndicatorsForEntities(
+          queryClient,
+          hostId,
+          [entity],
+          hostClient,
+        );
+      }
       if (entity === null) return;
-      invalidateNotificationIndicatorsForEntities(queryClient, hostId, [
-        entity,
-      ]);
       const activeEntity = activeEntityRef.current;
       const isTerminalSeverity =
         frame.entry.severity === "done" || frame.entry.severity === "failure";
@@ -158,7 +194,7 @@ export function NotificationsSessionProvider(
       if (!isTerminalSeverity) return;
       consumeEntity(entity);
     },
-    [activeHostId, consumeEntity, queryClient],
+    [activeHostId, consumeEntity, hostClient, queryClient],
   );
   const onHostStreamOpened = useCallback((): void => {
     activeEntityRef.current = null;
@@ -178,12 +214,31 @@ export function NotificationsSessionProvider(
     }
   }, []);
 
-  const resetReplica = useCallback((): void => {
+  // Identity/sign-out owns the full reset: every user-owned replica (host,
+  // collaboration) is cleared so the incoming user never sees the prior
+  // user's entries.
+  const resetIdentityReplica = useCallback((): void => {
     activeEntityRef.current = null;
     useNotificationsStore.getState().reset();
     useHostNotificationsStore.getState().reset();
     clearNotificationIndicatorCaches(queryClient);
   }, [queryClient]);
+
+  // A host switch only invalidates host-owned truth. Collaboration/system
+  // rows are not scoped to a host and must survive the swap untouched.
+  const resetHostReplica = useCallback((): void => {
+    activeEntityRef.current = null;
+    useHostNotificationsStore.getState().reset();
+    clearNotificationIndicatorCaches(queryClient);
+  }, [queryClient]);
+
+  // A disconnect (IPC drop / host restart) is not a truth reset: rendered
+  // host rows and cursors stay put, and only the exact summary degrades to
+  // unknown until a fresh atomic snapshot lands on reconnect.
+  const markHostReplicaDisconnected = useCallback((): void => {
+    activeEntityRef.current = null;
+    useHostNotificationsStore.getState().setConnectionStatus("connecting");
+  }, []);
 
   // StrictMode mounts, cleans up, then re-mounts effects. Returning Zustand's
   // unsubscribe means exactly one live app-local listener survives that cycle;
@@ -248,12 +303,15 @@ export function NotificationsSessionProvider(
           windowId,
           now: () => Date.now(),
           displayChannelEmission: (entries) => {
-            displayHostChannelEmission(entries, {
-              showNotification,
-              playChime: playNotificationChime,
-              onToastClick: (row, activatedAt) =>
-                onToastClickRef.current(row, activatedAt),
-            });
+            displayHostChannelEmission(
+              entries,
+              {
+                showNotification,
+                playChime: playNotificationChime,
+                onToastClick: (row) => onToastClickRef.current(row),
+              },
+              streamHostId,
+            );
           },
           onFeedFrame: (frame) => onFeedFrame(frame, streamHostId),
           onPresenceChanged: (frame) => onPresenceChanged(frame, streamHostId),
@@ -282,22 +340,26 @@ export function NotificationsSessionProvider(
         transition.kind === "userSwitched"
       ) {
         tearDown();
-        resetReplica();
+        resetIdentityReplica();
       }
     },
-    [tearDown, resetReplica],
+    [tearDown, resetIdentityReplica],
   );
-  useAuthIdentityTransition(status, email, onAuthTransition);
+  // Canonical `contextMetadata.userId`, not `profile.email` - two distinct
+  // accounts can share an email, and an email-keyed comparison would then
+  // misclassify a genuine user switch as an idle re-render, leaving the
+  // outgoing user's collaboration/host rows visible to the incoming one.
+  useAuthIdentityTransition(status, userId, onAuthTransition);
 
   // Open / reopen the stream on signed-in + active-host transitions.
   // `activeHostId` flips to `null` when the desktop host restarts or the
   // IPC channel drops - we teardown so the next reconnect lands on a fresh
-  // client, and reset the replica so the re-landed snapshot isn't merged
-  // into a stale local doc.
+  // client, but this is a disconnect, not an identity/host change: host rows
+  // and cursors are preserved and only the summary degrades to unknown until
+  // a replacement snapshot lands. A genuine host switch resets only the host
+  // replica so the re-landed snapshot isn't merged into a stale local doc.
   useEffect(() => {
     const isSignedIn = status === "signed-in";
-    const priorHostId = previousHostIdRef.current;
-    previousHostIdRef.current = activeHostId;
 
     if (!isSignedIn) {
       // `useAuthIdentityTransition`'s onTransition already tore down on the
@@ -306,12 +368,19 @@ export function NotificationsSessionProvider(
     }
     if (activeHostId === null) {
       tearDown();
-      resetReplica();
+      markHostReplicaDisconnected();
       return;
     }
+    // Only updated on a non-null host so it survives an intervening
+    // disconnect: A -> null -> A must not look like a switch (the reconnect
+    // snapshot alone refreshes the preserved rows), but A -> null -> B must
+    // still reset the host replica before B's stream opens, or B's snapshot
+    // would land on top of A's stale rows for one render.
+    const priorHostId = previousHostIdRef.current;
+    previousHostIdRef.current = activeHostId;
     if (priorHostId !== null && priorHostId !== activeHostId) {
       tearDown();
-      resetReplica();
+      resetHostReplica();
     }
     // A replaced stream client under the SAME host + user (the app-wide
     // liveness rebuild after the client was closed underneath the provider)
@@ -330,10 +399,11 @@ export function NotificationsSessionProvider(
   }, [
     activeHostId,
     status,
-    email,
+    userId,
     wsStreamClient,
     tearDown,
-    resetReplica,
+    resetHostReplica,
+    markHostReplicaDisconnected,
     openForCurrentUser,
   ]);
 

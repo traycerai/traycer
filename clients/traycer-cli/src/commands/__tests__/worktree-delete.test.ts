@@ -6,6 +6,20 @@ import type { StreamCloseReason } from "../../../../shared/host-transport/i-stre
 import { resolveHostAuth } from "../../internal/host-auth";
 import { resolveEndpoint } from "../../internal/host-rpc";
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+  noopLogger: loggerMock,
+}));
+
 // Shared, hoisted so the module mock factory can reference them.
 const hoisted = vi.hoisted(() => ({
   subscribeMock: vi.fn(),

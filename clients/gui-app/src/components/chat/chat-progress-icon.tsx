@@ -132,10 +132,10 @@ function ChatProgressPresentation(props: {
     idleIcon = (
       <span
         role="status"
-        aria-label="Read-only chat"
+        aria-label="Read-only agent"
         className={icon.className}
         style={icon.style}
-        title="Read-only chat"
+        title="Read-only agent"
       >
         <MessageSquareLock aria-hidden className="size-3.5" />
       </span>
@@ -155,7 +155,7 @@ function ChatProgressPresentation(props: {
       testIdPrefix={props.testId}
       className={icon.className}
       style={icon.style}
-      runningTitle="Chat in progress"
+      runningTitle="Agent in progress"
       defaultIcon={idleIcon}
       statusPresentation="message"
     />

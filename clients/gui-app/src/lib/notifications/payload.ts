@@ -267,6 +267,31 @@ export function buildPayloadFromEvent(
 type NavigateFn = UseNavigateResult<string>;
 
 /**
+ * Pure predicate mirroring `routeNotification`'s no-op branches, without
+ * navigating. Lets a caller (native click routing) decide upfront whether an
+ * activation will actually go anywhere, so a non-navigable payload (a
+ * `session` kind, or an `artifact`/`approval` missing the ids it needs) can
+ * fall back to opening the center instead of activating silently.
+ */
+export function isNotificationPayloadRoutable(
+  payload: NotificationPayload,
+): boolean {
+  switch (payload.kind) {
+    case "epic":
+    case "chat":
+    case "interview":
+    case "terminal":
+      return true;
+    case "approval":
+      return payload.epicId !== undefined && payload.chatId !== undefined;
+    case "artifact":
+      return payload.epicId !== undefined;
+    case "session":
+      return false;
+  }
+}
+
+/**
  * Single routing entry point used by both `NotificationFocusBridge` (OS toast
  * clicks) and the in-app notifications popover. Keeps the route-target
  * contract in one place so the two surfaces cannot drift.

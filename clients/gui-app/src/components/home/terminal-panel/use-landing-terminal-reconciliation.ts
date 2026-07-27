@@ -11,6 +11,7 @@ import {
 } from "@/stores/home/landing-terminal-store";
 import { reconcileLandingTerminalTabs } from "./landing-terminal-reconciliation";
 import type { LandingTerminalAvailability } from "./landing-terminal-availability";
+import type { LandingTerminalHostContext } from "./landing-terminal-host-context";
 import type { LandingTerminalKillVariables } from "./use-landing-terminal-kill-mutation";
 
 const INDEPENDENT_SCOPE = { kind: "independent" } as const;
@@ -69,14 +70,17 @@ interface LandingTerminalReconciliationArgs {
   readonly killTerminal: (
     variables: LandingTerminalKillVariables,
   ) => Promise<unknown>;
-  readonly onReconciled: (hostId: string) => void;
+  readonly onReconciled: (context: LandingTerminalHostContext) => void;
   /**
    * Runs after a reconciliation generation has fully applied (store updated,
-   * host id published). The panel owns what happens next - auto-spawning into
-   * an empty panel and honoring a pending open-gesture's pinned-folder intent -
-   * so those decisions always act on reconciled truth, never a stale cache.
+   * host context published). Receives the same generation's host context so
+   * auto-spawn does not depend on a React state round-trip or read an earlier
+   * host's home path. The panel owns auto-spawn and open-gesture retargeting.
    */
-  readonly onSettled: (generation: number) => void;
+  readonly onSettled: (
+    generation: number,
+    context: LandingTerminalHostContext,
+  ) => void;
 }
 
 function landingTerminalListQueryOptions(client: HostClient<HostRpcRegistry>) {
@@ -104,7 +108,8 @@ function landingTerminalListQueryOptions(client: HostClient<HostRpcRegistry>) {
 /**
  * Runs the landing terminal lifecycle as one abortable generation. A cached
  * capability probe may show the panel, but only this zero-stale list fetch may
- * classify a session, clear a tombstone, adopt an orphan, or auto-spawn.
+ * classify a session, clear a tombstone, adopt an orphan, publish `homeCwd`,
+ * or auto-spawn.
  */
 export function useLandingTerminalReconciliation(
   args: LandingTerminalReconciliationArgs,
@@ -176,18 +181,26 @@ export function useLandingTerminalReconciliation(
         releaseLatch();
         return;
       }
-      const freshSessions = await queryClient.fetchQuery(listQuery).then(
-        (response) => response.sessions,
+      // Consume the complete fresh response: sessions drive reconciliation,
+      // `homeCwd` is published only after host identity is rechecked below.
+      const freshResponse = await queryClient.fetchQuery(listQuery).then(
+        (response) => response,
         () => null,
       );
       if (
         isAborted(controller.signal) ||
         client.getActiveHostId() !== activeHostId ||
-        freshSessions === null
+        freshResponse === null
       ) {
         releaseLatch();
         return;
       }
+
+      const freshSessions = freshResponse.sessions;
+      const hostContext: LandingTerminalHostContext = {
+        hostId: activeHostId,
+        homeCwd: freshResponse.homeCwd,
+      };
 
       const initial = useLandingTerminalStore.getState();
       const hostTombstones = initial.pendingKills.filter(
@@ -218,7 +231,10 @@ export function useLandingTerminalReconciliation(
             ),
           ),
       );
-      if (isAborted(controller.signal)) {
+      if (
+        isAborted(controller.signal) ||
+        client.getActiveHostId() !== activeHostId
+      ) {
         releaseLatch();
         return;
       }
@@ -237,8 +253,10 @@ export function useLandingTerminalReconciliation(
         reconciliation.activeInstanceId,
         reconciliation.collapseWhenEmpty,
       );
-      onReconciled(activeHostId);
-      onSettled(generation);
+      // Publish only after session reconciliation applied and host identity
+      // still matches. Auto-spawn gets the same object synchronously.
+      onReconciled(hostContext);
+      onSettled(generation, hostContext);
     })();
 
     return () => {

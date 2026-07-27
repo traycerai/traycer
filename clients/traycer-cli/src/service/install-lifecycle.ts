@@ -211,6 +211,27 @@ export function createServiceInstallLifecycle(
   return { state, lifecycle };
 }
 
+// The truly-bytes-only counterpart to `createServiceInstallLifecycle`: no
+// status probe, no register/rewrite, no start - ever, on any prior service
+// state. The single exception is Windows, where a stray host process
+// holding the install dir open would fail the swap rename regardless of
+// whether the caller wants the service touched, so `beforeSwap` still force-
+// stops there. Used by callers whose bytes-only contract must hold even
+// when a service is already registered (`host install --no-service-
+// register`, `host ensure` with `registerService: false`) - unlike
+// `createServiceInstallLifecycle`'s `bootstrap: null`, which still rewrites
+// and re-loads an EXISTING registration post-swap.
+export function createBytesOnlyInstallLifecycle(
+  controller: ServiceController,
+  label: ServiceLabel,
+): InstallHostLifecycle {
+  return {
+    beforeSwap: (): Promise<void> =>
+      process.platform === "win32" ? controller.stop(label) : Promise.resolve(),
+    afterSwap: (): Promise<void> => Promise.resolve(),
+  };
+}
+
 interface RegisterServiceOptions {
   readonly controller: ServiceController;
   readonly label: ServiceLabel;

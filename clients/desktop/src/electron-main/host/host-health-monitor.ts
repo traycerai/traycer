@@ -1,6 +1,11 @@
 import { log } from "../app/logger";
-import { respawnHost } from "../app/host-respawn";
-import { canReachHostWebsocketUrl, readPidMetadata } from "./host-lifecycle";
+import { HostRecoveryDeferredError } from "../startup/host-health-respawn";
+import {
+  canReachHostWebsocketUrl,
+  readPidMetadata,
+  readPidMetadataState,
+} from "./host-lifecycle";
+import { isPublishedHostEndpointReachable } from "./host-endpoint-reachability";
 import type { IpcHostLifecycle } from "../ipc/runner-ipc-bridge";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 
@@ -53,11 +58,33 @@ export interface HostHealthMonitorDeps {
   readonly probe: ((websocketUrl: string) => Promise<boolean>) | undefined;
   readonly readMetadata:
     ((path: string) => Promise<DesktopLocalHostSnapshot | null>) | undefined;
-  readonly respawn: (() => Promise<void>) | undefined;
+  /**
+   * The platform-correct recovery entry point - production callers pass
+   * `HostController.recoverIfDown()` wrapped to this monitor's void/throw
+   * contract (see `desktop-startup.ts`). No default: `HostController` is a
+   * process singleton constructed by the caller, not something this module
+   * can stand up itself.
+   */
+  readonly respawn: () => Promise<void>;
 }
 
 export interface HostHealthMonitor {
   dispose(): void;
+}
+
+interface PublishedHealthMetadata {
+  readonly snapshot: DesktopLocalHostSnapshot;
+  readonly startedAt: string | null;
+}
+
+function isCurrentPublishedSnapshot(
+  current: DesktopLocalHostSnapshot,
+  published: DesktopLocalHostSnapshot,
+): boolean {
+  return (
+    current.pid === published.pid &&
+    current.websocketUrl === published.websocketUrl
+  );
 }
 
 export function startHostHealthMonitor(
@@ -65,11 +92,69 @@ export function startHostHealthMonitor(
 ): HostHealthMonitor {
   const probe = deps.probe ?? canReachHostWebsocketUrl;
   const readMetadata = deps.readMetadata ?? readPidMetadata;
-  const respawn = deps.respawn ?? (() => respawnHost(deps.host));
+  // Production needs the publication timestamp for A1's process-identity
+  // check. Existing test callers can continue supplying a structural reader;
+  // a missing timestamp deliberately falls through A1's indeterminate arm.
+  const readPublishedMetadata = async (
+    path: string,
+  ): Promise<PublishedHealthMetadata | null> => {
+    if (deps.readMetadata !== undefined) {
+      const snapshot = await readMetadata(path);
+      return snapshot === null ? null : { snapshot, startedAt: null };
+    }
+    const state = await readPidMetadataState(path);
+    return state.kind === "parsed"
+      ? { snapshot: state.snapshot, startedAt: state.startedAt }
+      : null;
+  };
+  const respawn = deps.respawn;
   let consecutiveFailures = 0;
   let respawnsSinceRecovery = 0;
+  let recoveryPending = false;
   let ticking = false;
   let disposed = false;
+
+  const isDisposed = (): boolean => disposed || deps.host.isDisposed;
+
+  const reloadRecoverySnapshot = async (): Promise<boolean> => {
+    const surfaced = await deps.host.reloadSnapshotFromDisk();
+    if (isDisposed()) return false;
+    if (surfaced === null) {
+      recoveryPending = true;
+      return false;
+    }
+    recoveryPending = false;
+    respawnsSinceRecovery = 0;
+    log.info(
+      "[host-health] recovery converged onto a reachable host snapshot",
+      { pid: surfaced.pid },
+    );
+    return true;
+  };
+
+  const attemptRecovery = async (
+    metadata: DesktopLocalHostSnapshot,
+  ): Promise<void> => {
+    if (respawnsSinceRecovery >= MAX_AUTO_RESPAWNS_WITHOUT_RECOVERY) {
+      log.warn(
+        "[host-health] endpoint down but auto-respawn budget exhausted - leaving recovery to the renderer",
+        { pid: metadata.pid },
+      );
+      return;
+    }
+    respawnsSinceRecovery += 1;
+    // The prior reload demoted the lifecycle snapshot. Retain ownership
+    // through this attempt (including a generic failure) until a subsequent
+    // reload proves that a host is actually published again.
+    recoveryPending = true;
+    log.warn(
+      "[host-health] endpoint down with live pid metadata - auto-respawning",
+      { pid: metadata.pid, attempt: respawnsSinceRecovery },
+    );
+    await respawn();
+    if (isDisposed()) return;
+    await reloadRecoverySnapshot();
+  };
 
   const tick = async (): Promise<void> => {
     // A tick that outlives its interval (slow probe + slow respawn) must
@@ -79,11 +164,34 @@ export function startHostHealthMonitor(
     try {
       const snapshot = deps.host.getSnapshot();
       if (snapshot === null) {
-        // Host known-down: the gate/ensure/respawn flows own recovery.
-        consecutiveFailures = 0;
+        // A deferred recovery intentionally demotes the snapshot before the
+        // foreign lock holder finishes. Keep ownership across that null
+        // state; otherwise every later tick returns here and the dead host
+        // is never retried.
+        if (!recoveryPending) {
+          consecutiveFailures = 0;
+          return;
+        }
+        const metadata = await readMetadata(deps.host.pidMetadataFile);
+        if (isDisposed()) return;
+        if (metadata === null) {
+          recoveryPending = false;
+          return;
+        }
+        await attemptRecovery(metadata);
         return;
       }
-      if (await probe(snapshot.websocketUrl)) {
+      const published = await readPublishedMetadata(deps.host.pidMetadataFile);
+      if (
+        published !== null &&
+        isCurrentPublishedSnapshot(snapshot, published.snapshot) &&
+        (await isPublishedHostEndpointReachable(
+          published.snapshot.websocketUrl,
+          published.snapshot.pid,
+          published.startedAt,
+          probe,
+        ))
+      ) {
         consecutiveFailures = 0;
         respawnsSinceRecovery = 0;
         return;
@@ -91,7 +199,7 @@ export function startHostHealthMonitor(
       // Re-check after every await: dispose() landing during a slow probe
       // or metadata read (app quit) must not let this in-flight tick spawn
       // a host the app is tearing down.
-      if (disposed || deps.host.isDisposed) return;
+      if (isDisposed()) return;
       consecutiveFailures += 1;
       if (consecutiveFailures < CONFIRMED_DOWN_AFTER_FAILURES) return;
       consecutiveFailures = 0;
@@ -101,7 +209,7 @@ export function startHostHealthMonitor(
       // the host on a new port and the watcher edge was missed) - converge on
       // it instead of restarting a host that is actually alive.
       const surfaced = await deps.host.reloadSnapshotFromDisk();
-      if (disposed || deps.host.isDisposed) return;
+      if (isDisposed()) return;
       if (surfaced !== null) {
         log.info(
           "[host-health] stale snapshot converged onto a reachable host - no respawn needed",
@@ -117,28 +225,20 @@ export function startHostHealthMonitor(
       // (`traycer host stop`, uninstall) unlinks pid.json, and resurrecting it
       // off a stale "still present" read would fight the user.
       const metadata = await readMetadata(deps.host.pidMetadataFile);
-      if (disposed || deps.host.isDisposed) return;
+      if (isDisposed()) return;
       if (metadata === null) {
         log.info(
           "[host-health] endpoint down and pid metadata gone - treating as a deliberate stop",
         );
         return;
       }
-      if (respawnsSinceRecovery >= MAX_AUTO_RESPAWNS_WITHOUT_RECOVERY) {
-        // The reload above already demoted the snapshot; nothing else to do.
-        log.warn(
-          "[host-health] endpoint down but auto-respawn budget exhausted - leaving recovery to the renderer",
-          { pid: metadata.pid },
-        );
+      await attemptRecovery(metadata);
+    } catch (err) {
+      if (err instanceof HostRecoveryDeferredError) {
+        respawnsSinceRecovery = Math.max(0, respawnsSinceRecovery - 1);
+        recoveryPending = true;
         return;
       }
-      respawnsSinceRecovery += 1;
-      log.warn(
-        "[host-health] endpoint down with live pid metadata - auto-respawning",
-        { pid: metadata.pid, attempt: respawnsSinceRecovery },
-      );
-      await respawn();
-    } catch (err) {
       // A failed respawn already surfaced through the lifecycle's error
       // event; the monitor only logs and keeps watching.
       log.warn("[host-health] auto-recovery attempt failed", err);

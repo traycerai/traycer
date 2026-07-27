@@ -49,7 +49,7 @@ describe("<BackgroundItemsPanel />", () => {
     );
 
     const parentButton = screen.getByRole("button", {
-      name: /Parent agent.*Agent/,
+      name: /Parent agent.*Sub-agent/,
     });
     const childButton = screen.getByRole("button", {
       name: /Child command.*Command/,
@@ -220,7 +220,7 @@ describe("<BackgroundItemsPanel />", () => {
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: /Remembered parent.*Agent/ }),
+      screen.queryByRole("button", { name: /Remembered parent.*Sub-agent/ }),
     ).toBeNull();
     expect(screen.getByRole("button", { name: "Stop Command" })).toBeTruthy();
   });

@@ -39,6 +39,14 @@ export interface ComposerBodyProps {
   readonly attachmentPending: boolean;
   readonly workspaceDisabledHint: string | null;
   readonly header: ReactNode;
+  /**
+   * Rendered between `header` and the composer card (`ComposerShell`) - the
+   * decision-log-mandated slot for a banner that must sit flush above the
+   * card itself, below any mode-switch header. `null` for callers with
+   * nothing to show there (the chat composer routes its own rate-limit
+   * banner through a separate portal and never uses this slot).
+   */
+  readonly topBanner: ReactNode | null;
   readonly attachmentsStrip: ReactNode;
   readonly workspaceControls: ReactNode;
   readonly dictationControl: ComposerDictationControl | null;
@@ -67,6 +75,7 @@ export function ComposerBody({
   attachmentPending,
   workspaceDisabledHint,
   header,
+  topBanner,
   attachmentsStrip,
   workspaceControls,
   dictationControl,
@@ -78,6 +87,7 @@ export function ComposerBody({
   onSnapshot,
 }: ComposerBodyProps) {
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const chatPasteActive = composerMode === "chat";
   const hiddenInTerminal = cn(composerMode !== "chat" && "hidden");
   const hiddenInChat = cn(composerMode !== "terminal" && "hidden");
   const showLandingAgentModeTooltip = true;
@@ -85,13 +95,14 @@ export function ComposerBody({
   return (
     <div className="flex flex-col gap-3">
       {header}
+      {topBanner}
       <ComposerShell
         pickerStore={pickerStore}
-        onDragOver={paste.onDragOver}
-        onDrop={paste.onDrop}
-        onDragEnter={paste.onDragEnter}
-        onDragLeave={paste.onDragLeave}
-        isDraggingFiles={paste.isDraggingFiles}
+        onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
+        onDrop={chatPasteActive ? paste.onDrop : NOOP}
+        onDragEnter={chatPasteActive ? paste.onDragEnter : NOOP}
+        onDragLeave={chatPasteActive ? paste.onDragLeave : NOOP}
+        dragOverlayVariant={chatPasteActive ? paste.dragOverlayVariant : null}
         attachmentsStrip={composerMode === "chat" ? attachmentsStrip : null}
         editor={
           <>
@@ -110,9 +121,9 @@ export function ComposerBody({
                 stabilizeImageAttachmentCaret={false}
                 onSnapshot={onSnapshot}
                 onSubmit={onSubmit}
-                onPaste={paste.onPaste}
-                onDragOver={paste.onDragOver}
-                onDrop={paste.onDrop}
+                onPaste={chatPasteActive ? paste.onPaste : NOOP}
+                onDragOver={chatPasteActive ? paste.onDragOver : NOOP}
+                onDrop={chatPasteActive ? paste.onDrop : NOOP}
                 onKeyDown={undefined}
                 onFocus={NOOP}
                 onBlur={NOOP}

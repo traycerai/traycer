@@ -52,6 +52,7 @@ function buildAppMenu(
         settingsItem(actions),
         authItem(state, actions),
         { type: "separator" },
+        ...hostUpdateItems(state, actions),
         restartHostItem(actions),
         checkForUpdatesItem(state, actions),
         { type: "separator" },
@@ -312,6 +313,20 @@ function restartHostItem(
     click: (_item, browserWindow) =>
       actions.command("host.restart", browserWindow ?? null),
   };
+}
+
+function hostUpdateItems(
+  state: MenuState,
+  actions: MenuBuildActions,
+): readonly MenuItemConstructorOptions[] {
+  if (state.hostUpdateAvailableVersion === null) return [];
+  return [
+    {
+      label: `Update to ${state.hostUpdateAvailableVersion}`,
+      click: (_item, browserWindow) =>
+        actions.command("host.installUpdate", browserWindow ?? null),
+    },
+  ];
 }
 
 function checkForUpdatesItem(

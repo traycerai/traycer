@@ -138,7 +138,7 @@ describe("useEpicCreateChat", () => {
       onError: (e: HostRpcError) => void;
     };
     opts.onError(makeError("RPC_ERROR"));
-    expect(toast.error).toHaveBeenCalledWith("Couldn't create chat.");
+    expect(toast.error).toHaveBeenCalledWith("Couldn't create agent.");
   });
 });
 
@@ -149,7 +149,7 @@ describe("useEpicRenameChat", () => {
       onError: (e: HostRpcError) => void;
     };
     opts.onError(makeError("RPC_ERROR"));
-    expect(toast.error).toHaveBeenCalledWith("Couldn't rename chat.");
+    expect(toast.error).toHaveBeenCalledWith("Couldn't rename agent.");
   });
 });
 
@@ -182,6 +182,6 @@ describe("useEpicDeleteChat", () => {
       onError: (e: HostRpcError) => void;
     };
     opts.onError(makeError("RPC_ERROR"));
-    expect(toast.error).toHaveBeenCalledWith("Couldn't delete chat.");
+    expect(toast.error).toHaveBeenCalledWith("Couldn't delete agent.");
   });
 });

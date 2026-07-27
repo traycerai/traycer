@@ -4,7 +4,6 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
-import type { AuthTokenValidationResult } from "@traycer-clients/shared/platform/runner-host";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 
 /**
@@ -128,7 +127,6 @@ interface PreloadBridge {
       onChange(handler: (snapshot: unknown) => void): { dispose: () => void };
     };
   };
-  validateAuthToken(token: string): Promise<AuthTokenValidationResult>;
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
@@ -150,6 +148,13 @@ interface PreloadBridge {
     saveFile(input: unknown): Promise<string | null>;
   };
   requestHostRespawn(): Promise<void>;
+  hostManagement: {
+    convergeReady(force: boolean): Promise<unknown>;
+    applyStaged(trigger: "launch" | "manual", force: boolean): Promise<unknown>;
+    activateInstalled(force: boolean): Promise<unknown>;
+    installVersion(pin: string, force: boolean): Promise<unknown>;
+    registerService(): Promise<unknown>;
+  };
   menu: {
     onCommand(handler: (payload: unknown) => void): { dispose: () => void };
   };
@@ -157,6 +162,16 @@ interface PreloadBridge {
     getSnapshot(): Promise<unknown>;
     revealLog(target: unknown): Promise<unknown>;
     tailLog(input: unknown): Promise<unknown>;
+  };
+  service: {
+    install(): Promise<void>;
+    uninstall(purge: boolean): Promise<void>;
+    start(): Promise<void>;
+    stop(): Promise<void>;
+    restart(): Promise<void>;
+    upgrade(): Promise<void>;
+    enableLinger(): Promise<void>;
+    getLogTail(maxLines: number): Promise<string | null>;
   };
 }
 
@@ -294,6 +309,57 @@ describe("preload auth-callback replay", () => {
   });
 });
 
+describe("preload host-management mutation invokes", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+  });
+
+  it("passes every mutation intent through its exact IPC channel and payload", async () => {
+    const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
+      [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, ...args) => {
+        calls.push({ channel, args });
+        return Promise.resolve({ kind: "deferred", message: "not now" });
+      },
+      sendSyncFn: undefined,
+    });
+
+    await bridge.hostManagement.convergeReady(true);
+    await bridge.hostManagement.applyStaged("launch", false);
+    await bridge.hostManagement.activateInstalled(true);
+    await bridge.hostManagement.installVersion("2.0.0", false);
+    await bridge.hostManagement.registerService();
+
+    expect(calls).toEqual([
+      {
+        channel: RunnerHostInvoke.traycerHostConvergeReady,
+        args: [{ force: true }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostApplyStaged,
+        args: [{ trigger: "launch", force: false }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostActivateInstalled,
+        args: [{ force: true }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostInstallVersion,
+        args: [{ pin: "2.0.0", force: false }],
+      },
+      { channel: RunnerHostInvoke.traycerServiceRegister, args: [] },
+    ]);
+  });
+});
+
 describe("preload new-capability wiring", () => {
   beforeEach(() => {
     fakeElectron.reset();
@@ -316,36 +382,16 @@ describe("preload new-capability wiring", () => {
     expect(bridge.initialRoute).toBe("/epics/epic-a/tab-a");
   });
 
-  it("forwards validateAuthToken through ipcRenderer.invoke", async () => {
+  it("does not expose the unhandled metadata-only service-status invoke", async () => {
     const bridge = await loadPreload({
       authnApiUrl: undefined,
       desktopDev: undefined,
       initialRouteArg: undefined,
-      invokeFn: (channel, token) => {
-        if (channel !== RunnerHostInvoke.validateAuthToken) {
-          throw new Error(`unexpected channel ${channel}`);
-        }
-        expect(token).toBe("jwt-123");
-        return Promise.resolve({
-          kind: "valid",
-          profile: {
-            userId: "test-user",
-            userName: "Test User",
-            email: "test@example.com",
-          },
-        } satisfies AuthTokenValidationResult);
-      },
+      invokeFn: undefined,
       sendSyncFn: undefined,
     });
 
-    await expect(bridge.validateAuthToken("jwt-123")).resolves.toEqual({
-      kind: "valid",
-      profile: {
-        userId: "test-user",
-        userName: "Test User",
-        email: "test@example.com",
-      },
-    });
+    expect("status" in bridge.service).toBe(false);
   });
 
   it("forwards validateAuthTokenIdentity through ipcRenderer.invoke", async () => {

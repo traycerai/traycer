@@ -81,6 +81,36 @@ function menuByLabel(
 }
 
 describe("buildApplicationMenu", () => {
+  it("renders the exact pending host-update version only when one is available", () => {
+    const commands: MenuCommandId[] = [];
+    const state = buildState("darwin");
+    const withUpdate: MenuState = {
+      ...state,
+      hostUpdateAvailableVersion: "2.0.0",
+    };
+    const actions = {
+      command: (command: MenuCommandId) => commands.push(command),
+      focusWindow: () => undefined,
+      openExternal: () => undefined,
+    };
+    const appMenu =
+      menuByLabel(
+        template(buildApplicationMenu(withUpdate, actions)),
+        "Traycer",
+      ).submenu ?? [];
+
+    const update = menuByLabel(appMenu, "Update to 2.0.0");
+    update.click?.(null, null);
+    expect(commands).toEqual(["host.installUpdate"]);
+
+    const withoutUpdate =
+      menuByLabel(template(buildApplicationMenu(state, actions)), "Traycer")
+        .submenu ?? [];
+    expect(
+      withoutUpdate.some((item) => item.label?.startsWith("Update to ")),
+    ).toBe(false);
+  });
+
   it("maps macOS app and Help About to the rich details command", () => {
     const commands: MenuCommandId[] = [];
     const externalUrls: string[] = [];

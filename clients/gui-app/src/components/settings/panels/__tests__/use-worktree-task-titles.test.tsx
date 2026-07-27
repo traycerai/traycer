@@ -21,11 +21,13 @@ import { useWorktreeTaskTitles } from "@/components/settings/panels/use-worktree
 const HOST_ID = "host-test";
 const USER_ID = "user-test";
 
+const request = vi.fn();
 const mockHostClient = {
   getActiveHostId: () => HOST_ID,
   getRequestContextUserId: () => USER_ID,
   onChange: () => () => undefined,
-  request: vi.fn(),
+  request,
+  requestWithSignal: request,
 };
 
 vi.mock("@/lib/host", () => ({
@@ -189,9 +191,10 @@ describe("useWorktreeTaskTitles", () => {
       expect(result.current.get("epic-unresolved")).toBe("From batch");
     });
 
-    expect(mockHostClient.request).toHaveBeenCalledWith(
+    expect(mockHostClient.requestWithSignal).toHaveBeenCalledWith(
       "epic.getTaskContexts",
       { taskIds: ["epic-unresolved"] },
+      expect.any(AbortSignal),
     );
   });
 

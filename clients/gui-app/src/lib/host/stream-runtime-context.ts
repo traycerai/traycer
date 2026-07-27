@@ -21,9 +21,30 @@ export const StreamRuntimeContext = createContext<StreamRuntimeBinding | null>(
   null,
 );
 
+/**
+ * Returns only a live app-wide stream client. A closed client is hidden
+ * immediately while `HostStreamProvider` rebuilds it, so consumers detach from
+ * dead sessions and rebind when the replacement reaches context.
+ */
 export function useWsStreamClient(): WsStreamClient<HostStreamRpcRegistry> | null {
   const value = use(StreamRuntimeContext);
-  return value === null ? null : value.wsStreamClient;
+  const client = value?.wsStreamClient ?? null;
+  const subscribe = useCallback(
+    (callback: () => void) => {
+      if (client === null) {
+        return () => undefined;
+      }
+      return client.onClosed(callback);
+    },
+    [client],
+  );
+  const getSnapshot = useCallback(() => {
+    if (client === null || client.isClosed()) {
+      return null;
+    }
+    return client;
+  }, [client]);
+  return useSyncExternalStore(subscribe, getSnapshot, () => null);
 }
 
 // Both method-support readers ride the same `subscribeMethodSupport` store and
@@ -37,8 +58,7 @@ function useStreamMethodValue<T>(
     method: keyof HostStreamRpcRegistry & string,
   ) => T,
 ): T | null {
-  const value = use(StreamRuntimeContext);
-  const client = value?.wsStreamClient ?? null;
+  const client = useWsStreamClient();
   const subscribe = useCallback(
     (callback: () => void) => {
       if (client === null) {

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  AuthTokenValidationResult,
+  HostControllerStatus,
   HostRegistryUpdateState,
+  ITokenStore,
   LocalHostSnapshot,
+  StoredCredentials,
   TrayEpic,
   TrayIndicatorState,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -73,16 +75,28 @@ function buildFakeBridge(
     authRedirectUri: "",
     initialRoute: "/",
     sentryRendererDsn: "",
-    validateAuthToken: async (): Promise<AuthTokenValidationResult> => ({
-      kind: "valid",
-      profile: {
-        userId: "test-user",
-        userName: "Test User",
-        email: "test@example.com",
-      },
-    }),
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
-    refreshAuthToken: async () => ({ kind: "network-error" as const }),
+    tokenStore: ((): ITokenStore => {
+      let stored: StoredCredentials | null = null;
+      return {
+        get: async () => stored,
+        signIn: async (tokens, identity) => {
+          stored = {
+            token: tokens.token,
+            refreshToken: tokens.refreshToken,
+            authnBaseUrl: "http://localhost:5005",
+            savedAt: new Date().toISOString(),
+            user: identity,
+          };
+        },
+        rotate: async () => ({ outcome: "deleted", pair: null }),
+        delete: async () => {
+          stored = null;
+        },
+        subscribe: () => ({ dispose: () => undefined }),
+        migrateLegacyCredentials: async () => "identity-unknown" as const,
+      };
+    })(),
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,
@@ -155,6 +169,7 @@ function buildFakeBridge(
       },
       copyTemporaryFiles: async (paths) =>
         paths.map((path) => `/tmp/copied/${path.split("/").pop() ?? ""}`),
+      readNativeClipboardFilePaths: async () => [],
       saveFile: async (input) => {
         temporaryWrites.push(input);
         return input.name;
@@ -168,6 +183,7 @@ function buildFakeBridge(
         sequence: 0,
         status: "idle",
         currentVersion: "0.0.0-test",
+        allowPrerelease: false,
         latestVersion: null,
         downloadProgress: null,
         installBlockedReason: null,
@@ -180,6 +196,7 @@ function buildFakeBridge(
         sequence: 1,
         status: "up-to-date",
         currentVersion: "0.0.0-test",
+        allowPrerelease: false,
         latestVersion: null,
         downloadProgress: null,
         installBlockedReason: null,
@@ -188,10 +205,24 @@ function buildFakeBridge(
         lastCheckedAt: null,
         lastCheckIntent: "manual",
       }),
+      setAllowPrerelease: async (allowPrerelease) => ({
+        sequence: 2,
+        status: "idle",
+        currentVersion: "0.0.0-test",
+        allowPrerelease,
+        latestVersion: null,
+        downloadProgress: null,
+        installBlockedReason: null,
+        installGuidance: null,
+        errorMessage: null,
+        lastCheckedAt: null,
+        lastCheckIntent: null,
+      }),
       downloadUpdate: async () => ({
         sequence: 2,
         status: "downloading",
         currentVersion: "0.0.0-test",
+        allowPrerelease: false,
         latestVersion: "1.2.3",
         downloadProgress: 0,
         installBlockedReason: null,
@@ -204,6 +235,7 @@ function buildFakeBridge(
         sequence: 0,
         status: "idle",
         currentVersion: "0.0.0-test",
+        allowPrerelease: false,
         latestVersion: null,
         downloadProgress: null,
         installBlockedReason: null,
@@ -211,6 +243,26 @@ function buildFakeBridge(
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: null,
+      }),
+      onChange: (_handler) => ({ dispose: () => undefined }),
+    },
+    globalShortcuts: {
+      getSnapshot: async () => ({
+        sequence: 0,
+        statuses: {
+          summon: {
+            id: "summon" as const,
+            intent: { enabled: true, chord: null },
+            effectiveChord: "mod+shift+space",
+            status: "registered" as const,
+          },
+        },
+      }),
+      set: async (_id, intent) => ({
+        id: "summon" as const,
+        intent,
+        effectiveChord: intent.chord ?? "mod+shift+space",
+        status: "registered" as const,
       }),
       onChange: (_handler) => ({ dispose: () => undefined }),
     },
@@ -289,12 +341,6 @@ function buildFakeBridge(
       },
     },
     service: {
-      status: async () => ({
-        state: "not-installed" as const,
-        version: null,
-        listenUrl: null,
-        pid: null,
-      }),
       install: async () => undefined,
       uninstall: async (_purge: boolean) => undefined,
       start: async () => undefined,
@@ -328,8 +374,6 @@ function buildFakeBridge(
       envOverrideList: async () => [],
       envOverrideSet: async () => undefined,
       envOverrideDelete: async () => undefined,
-      cliLogin: async () => undefined,
-      cliLogout: async () => undefined,
     },
     migration: {
       announceRunning: async () => undefined,
@@ -420,11 +464,20 @@ function buildFakeBridge(
       onChange: (_handler) => ({ dispose: () => undefined }),
     },
     hostManagement: {
-      installHost: async () => {
-        throw new Error("installHost not used in test");
+      getHostControllerStatus: async () => {
+        throw new Error("getHostControllerStatus not used in test");
       },
-      updateHost: async () => {
-        throw new Error("updateHost not used in test");
+      convergeReady: async () => {
+        throw new Error("convergeReady not used in test");
+      },
+      applyStaged: async () => {
+        throw new Error("applyStaged not used in test");
+      },
+      activateInstalled: async () => {
+        throw new Error("activateInstalled not used in test");
+      },
+      installVersion: async () => {
+        throw new Error("installVersion not used in test");
       },
       uninstallHost: async () => {
         throw new Error("uninstallHost not used in test");
@@ -441,11 +494,9 @@ function buildFakeBridge(
         throw new Error("availableVersions not used in test");
       },
       installedRecord: async () => null,
-      registerService: async () => undefined,
-      ensureHost: async () => ({
-        action: "already-ready" as const,
-        running: true,
-        version: null,
+      registerService: async () => ({
+        kind: "ok" as const,
+        value: { registered: true },
       }),
       deregisterService: async () => undefined,
       registryCheck: async () => ({
@@ -455,10 +506,8 @@ function buildFakeBridge(
         updateAvailable: false,
         reachable: false,
         errorMessage: null,
+        includePreReleases: false,
       }),
-      onRegistryUpdateState: () => ({ dispose: () => undefined }),
-      getOperationStatus: async () => null,
-      onOperationStatus: () => ({ dispose: () => undefined }),
       freePortAndRestart: async (input) => input,
       cliManifest: async () => null,
       getHostName: async () => ({
@@ -474,6 +523,9 @@ function buildFakeBridge(
     },
     hostTray: {
       onCommand: () => ({ dispose: () => undefined }),
+    },
+    hostControllerStatus: {
+      onChange: () => ({ dispose: () => undefined }),
     },
   };
 
@@ -615,46 +667,26 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     expect(host.authnBaseUrl).toBe("http://localhost:5005");
   });
 
-  it("delegates tokenStore.{get,set,delete} to the bridge", async () => {
+  it("delegates tokenStore.{get,signIn,delete} to the bridge", async () => {
     const fake = buildFakeBridge(null);
     const host = new DesktopRunnerHost({
       bridge: fake.bridge,
       signInUrl: "https://auth.example.invalid/sign-in",
     });
     expect(await host.tokenStore.get()).toBeNull();
-    await host.tokenStore.set({ token: "jwt-1", refreshToken: "refresh-1" });
+    await host.tokenStore.signIn(
+      { token: "jwt-1", refreshToken: "refresh-1" },
+      { id: "u1", email: "u1@example.com", name: "U One" },
+    );
     expect(await host.tokenStore.get()).toEqual({
       token: "jwt-1",
       refreshToken: "refresh-1",
-    });
-    // A bearer-only credential (empty refresh token) must round-trip, not be
-    // dropped on read - else the session is lost on every restart.
-    await host.tokenStore.set({ token: "jwt-2", refreshToken: "" });
-    expect(await host.tokenStore.get()).toEqual({
-      token: "jwt-2",
-      refreshToken: "",
+      authnBaseUrl: "http://localhost:5005",
+      savedAt: expect.any(String),
+      user: { id: "u1", email: "u1@example.com", name: "U One" },
     });
     await host.tokenStore.delete();
     expect(await host.tokenStore.get()).toBeNull();
-  });
-
-  it("delegates validateAuthToken to the bridge", async () => {
-    const fake = buildFakeBridge(null);
-    const host = new DesktopRunnerHost({
-      bridge: fake.bridge,
-      signInUrl: "https://auth.example.invalid/sign-in",
-    });
-
-    await expect(host.validateAuthToken("jwt-1", "refresh-1")).resolves.toEqual(
-      {
-        kind: "valid",
-        profile: {
-          userId: "test-user",
-          userName: "Test User",
-          email: "test@example.com",
-        },
-      },
-    );
   });
 
   it("delegates validateAuthTokenIdentity to the bridge", async () => {
@@ -664,9 +696,7 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
       signInUrl: "https://auth.example.invalid/sign-in",
     });
 
-    await expect(
-      host.validateAuthTokenIdentity("jwt-1", "refresh-1"),
-    ).resolves.toEqual({
+    await expect(host.validateAuthTokenIdentity("jwt-1")).resolves.toEqual({
       kind: "rejected",
     });
   });
@@ -705,22 +735,22 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     expect(host.authnBaseUrl).toBe("http://localhost:5005");
   });
 
-  it("passes host registry update subscriptions through to host management", () => {
+  it("passes host controller status subscriptions through to the bridge", () => {
     const fake = buildFakeBridge(null);
     const disposer = { dispose: vi.fn() };
-    const onRegistryUpdateState = vi.fn(
-      (_handler: (state: HostRegistryUpdateState) => void) => disposer,
+    const onChange = vi.fn(
+      (_handler: (status: HostControllerStatus) => void) => disposer,
     );
-    fake.bridge.hostManagement.onRegistryUpdateState = onRegistryUpdateState;
+    fake.bridge.hostControllerStatus.onChange = onChange;
     const host = new DesktopRunnerHost({
       bridge: fake.bridge,
       signInUrl: "https://auth.example.invalid/sign-in",
     });
     const handler = vi.fn();
 
-    const subscription = host.hostRegistryUpdates.onChange(handler);
+    const subscription = host.hostControllerStatus.onChange(handler);
 
-    expect(onRegistryUpdateState).toHaveBeenCalledWith(handler);
+    expect(onChange).toHaveBeenCalledWith(handler);
     expect(subscription).toBe(disposer);
   });
 
@@ -776,19 +806,58 @@ describe("DesktopRunnerHost.onLocalHostChange", () => {
     expect(fake.temporaryWrites[0]?.name).toBe("screenshot.png");
   });
 
-  it("copies ephemeral dropped paths into stable temp paths", async () => {
+  it("preserves stable URI paths and copies only ephemeral dropped paths", async () => {
+    const fake = buildFakeBridge(null);
+    const host = new DesktopRunnerHost({
+      bridge: fake.bridge,
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const copyTemporaryFiles = vi.spyOn(
+      fake.bridge.fileDrops,
+      "copyTemporaryFiles",
+    );
+    const stablePath = "/repo/src/index.ts";
+    const ephemeralPath =
+      "/var/folders/x/TemporaryItems/screencaptureui_1/Screenshot.png";
+
+    await expect(
+      host.fileDrops.copyDroppedFilePaths([stablePath, ephemeralPath]),
+    ).resolves.toEqual([stablePath, "/tmp/copied/Screenshot.png"]);
+    expect(copyTemporaryFiles).toHaveBeenCalledOnce();
+    expect(copyTemporaryFiles).toHaveBeenCalledWith([ephemeralPath]);
+    await expect(host.fileDrops.copyDroppedFilePaths([])).resolves.toEqual([]);
+  });
+
+  it("forwards globalShortcuts from the bridge - regression for the dropped-bridge bug in PR #533's review", async () => {
     const fake = buildFakeBridge(null);
     const host = new DesktopRunnerHost({
       bridge: fake.bridge,
       signInUrl: "https://auth.example.invalid/sign-in",
     });
 
+    // `host.globalShortcuts` must be the actual preload bridge, not
+    // `undefined` - if `DesktopRunnerHost` ever again forgets to assign it in
+    // its constructor, this call throws instead of the Settings row just
+    // silently never appearing.
+    await expect(host.globalShortcuts.getSnapshot()).resolves.toEqual({
+      sequence: 0,
+      statuses: {
+        summon: {
+          id: "summon",
+          intent: { enabled: true, chord: null },
+          effectiveChord: "mod+shift+space",
+          status: "registered",
+        },
+      },
+    });
     await expect(
-      host.fileDrops.copyDroppedFilePaths([
-        "/var/folders/x/TemporaryItems/screencaptureui_1/Screenshot.png",
-      ]),
-    ).resolves.toEqual(["/tmp/copied/Screenshot.png"]);
-    await expect(host.fileDrops.copyDroppedFilePaths([])).resolves.toEqual([]);
+      host.globalShortcuts.set("summon", { enabled: false, chord: null }),
+    ).resolves.toEqual({
+      id: "summon",
+      intent: { enabled: false, chord: null },
+      effectiveChord: "mod+shift+space",
+      status: "registered",
+    });
   });
 
   it("replays the latest snapshot - not the initial one - to subscribers added after a transition", () => {
