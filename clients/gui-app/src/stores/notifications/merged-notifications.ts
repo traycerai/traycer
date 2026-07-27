@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -13,8 +14,13 @@ import { notificationsMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   buildPayloadFromEvent,
+  notificationEntityFromHostEntry,
   type NotificationPayload,
 } from "@/lib/notifications";
+import {
+  invalidateNotificationIndicators,
+  invalidateNotificationIndicatorsForEntities,
+} from "@/lib/notifications/notification-indicator-cache";
 import {
   categoryForNotificationSource,
   type NotificationCategory,
@@ -383,6 +389,7 @@ export function useNotificationCenterHostState(): NotificationCenterHostState {
 export function useMergedNotificationsActions(): MergedNotificationsActions {
   const binding = useHostBinding();
   const client = binding?.hostClient ?? null;
+  const queryClient = useQueryClient();
   const globalMarkAsRead = useNotificationsStore((state) => state.markAsRead);
   const globalMarkAllAsRead = useNotificationsStore(
     (state) => state.markAllAsRead,
@@ -439,6 +446,16 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             Date.now(),
             context.snapshotEpoch,
           );
+        // Tab/sidebar indicators are otherwise refreshed only by this row's
+        // `readStateChanged` echo on the feed stream; invalidate here too so
+        // a successful mark-read clears them over the unary channel even
+        // while that stream is down.
+        invalidateIndicatorsForHostRow(
+          queryClient,
+          client,
+          context.hostId,
+          variables.sourceId,
+        );
       },
       onError: (error, _variables, context) => {
         if (!isCurrentHostNotificationMutation(client, context)) return;
@@ -544,6 +561,11 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             Date.now(),
             context.snapshotEpoch,
           );
+        // Same stream-independence rationale as the row-level mark-read; a
+        // mark-all has no entity list, so the whole host scope refetches.
+        if (context.hostId !== null) {
+          invalidateNotificationIndicators(queryClient, context.hostId, client);
+        }
       },
       onError: (error, _variables, context) => {
         if (!isCurrentHostNotificationMutation(client, context)) return;
@@ -982,6 +1004,32 @@ function loadedBlockingAttentionOccurrences(): HostNotificationsResolveRequest["
       updatedAt: entry.updatedAt,
       sourceRef: entry.sourceRef,
     }));
+}
+
+/** Entity-scoped indicator invalidation for one acknowledged host row. A row
+ * already pruned from the replica (or one without an epic ref) can't name its
+ * entity, so it degrades to the full host scope rather than staying stale. */
+function invalidateIndicatorsForHostRow(
+  queryClient: QueryClient,
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  sourceId: string,
+): void {
+  if (hostId === null) return;
+  const byId = useHostNotificationsStore.getState().byId;
+  const entity = Object.hasOwn(byId, sourceId)
+    ? notificationEntityFromHostEntry(byId[sourceId])
+    : null;
+  if (entity === null) {
+    invalidateNotificationIndicators(queryClient, hostId, client);
+    return;
+  }
+  invalidateNotificationIndicatorsForEntities(
+    queryClient,
+    hostId,
+    [entity],
+    client,
+  );
 }
 
 function captureHostNotificationMutationContext(
