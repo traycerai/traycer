@@ -187,11 +187,33 @@ export interface SupportLogDescriptor {
   readonly path: string;
 }
 
+/**
+ * Plain-data mirror of `DesktopHostLayer0Record`
+ * (`electron-main/host/host-state.ts`) - duplicated here rather than
+ * imported, same rationale as `DesktopLocalHostSnapshot` above: this
+ * contract must stay import-free of `electron-main`.
+ */
+export type SupportHostLayer0Snapshot =
+  | { readonly status: "acquired"; readonly attemptId: string }
+  | {
+      readonly status: "degraded";
+      readonly attemptId: string;
+      readonly cause: string;
+      readonly evidence: string;
+    }
+  | { readonly status: "unrecognized"; readonly raw: string };
+
 export interface SupportHostSnapshot {
   readonly status: "ready" | "starting";
   readonly version: string | null;
   readonly pid: number | null;
   readonly hostId: string | null;
+  /**
+   * The host's Layer 0 single-writer verdict, or `null` when it is not
+   * known - either no host is running, or its `pid.json` predates the
+   * field. Absence must never render as "guaranteed".
+   */
+  readonly layer0: SupportHostLayer0Snapshot | null;
 }
 
 export interface SupportRuntimeVersions {

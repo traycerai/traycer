@@ -9,6 +9,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RestartStop } from "../../service";
+import type { ServiceLabel } from "../../service/label";
 
 // `host restart` is the controlled supervisor restart that owns the
 // pending CLI upgrade finalize step. Between `controller.stop()` and
@@ -59,6 +61,10 @@ afterEach(() => {
 
 interface StubCalls {
   readonly calls: string[];
+  // What `relaunchAfterRestart` actually received. Recorded because the whole
+  // point of splitting restart into halves is that the stop's verdict reaches
+  // the relaunch - a stub that discards the argument cannot show that.
+  relaunchStop: RestartStop | null;
 }
 
 interface StubController {
@@ -73,6 +79,15 @@ interface StubController {
   stop: () => Promise<void>;
   start: () => Promise<void>;
   restart: () => Promise<void>;
+  // Parameters mirrored from the real `ServiceController`, not elided to
+  // `()`. A zero-arg stub type is the same erasure as the duplicated call
+  // tokens: it makes the argument the halves exist to carry invisible to
+  // both the compiler and the assertions.
+  stopForRestart: (label: ServiceLabel) => Promise<RestartStop>;
+  relaunchAfterRestart: (
+    label: ServiceLabel,
+    stop: RestartStop,
+  ) => Promise<void>;
 }
 
 function makeStubController(calls: StubCalls): StubController {
@@ -93,6 +108,21 @@ function makeStubController(calls: StubCalls): StubController {
     },
     restart: async () => {
       calls.calls.push("restart");
+    },
+    // DISTINCT tokens, deliberately.
+    //
+    // These used to push "stop"/"start" - the same tokens as the plain
+    // primitives - so every `toEqual(["stop", "start"])` below passed
+    // identically whether `host restart` used the cooperative halves this
+    // changeset introduces or fell back to the old `stop()` + `start()` path.
+    // The suite could not observe the distinction it exists to protect.
+    stopForRestart: async () => {
+      calls.calls.push("stopForRestart");
+      return { forcedRecycle: false };
+    },
+    relaunchAfterRestart: async (_label, stop) => {
+      calls.calls.push("relaunchAfterRestart");
+      calls.relaunchStop = stop;
     },
   };
 }
@@ -185,7 +215,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       version: "1.5.0",
     });
 
-    const calls: StubCalls = { calls: [] };
+    const calls: StubCalls = { calls: [], relaunchStop: null };
     const controller = makeStubController(calls);
     const { restartWithPendingCliUpgradeFinalize } =
       await import("../host-restart");
@@ -193,7 +223,11 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       defaultArgs(controller) as never,
     );
 
-    expect(calls.calls).toEqual(["stop", "start"]);
+    expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
+    // The halves exist so the stop's verdict reaches the relaunch — macOS
+    // needs `forcedRecycle` to decide how to bring the job back. Asserting the
+    // call order alone would pass against a relaunch that ignored it.
+    expect(calls.relaunchStop).toEqual({ forcedRecycle: false });
     expect(result.finalize.status).toBe("finalised");
     if (result.finalize.status === "finalised") {
       expect(result.finalize.version).toBe("1.5.0");
@@ -227,7 +261,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       { encoding: "utf8", mode: 0o600 },
     );
 
-    const calls: StubCalls = { calls: [] };
+    const calls: StubCalls = { calls: [], relaunchStop: null };
     const controller = makeStubController(calls);
     const { restartWithPendingCliUpgradeFinalize } =
       await import("../host-restart");
@@ -235,7 +269,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       defaultArgs(controller) as never,
     );
     expect(result.finalize.status).toBe("no-pending");
-    expect(calls.calls).toEqual(["stop", "start"]);
+    expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
     expect(result.helper).toBeNull();
   });
 
@@ -244,7 +278,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     // command must still cycle the host service - supervisor users
     // depend on `host restart` even before any CLI upgrade has
     // happened.
-    const calls: StubCalls = { calls: [] };
+    const calls: StubCalls = { calls: [], relaunchStop: null };
     const controller = makeStubController(calls);
     const { restartWithPendingCliUpgradeFinalize } =
       await import("../host-restart");
@@ -252,7 +286,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       defaultArgs(controller) as never,
     );
     expect(result.finalize.status).toBe("no-manifest");
-    expect(calls.calls).toEqual(["stop", "start"]);
+    expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
     expect(result.helper).toBeNull();
   });
 
@@ -281,7 +315,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     chmodSync(lockedDir, 0o555);
 
     try {
-      const calls: StubCalls = { calls: [] };
+      const calls: StubCalls = { calls: [], relaunchStop: null };
       const controller = makeStubController(calls);
       const spawnCalls: Array<{
         command: string;
@@ -304,7 +338,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
         writeImpl: writeStub,
       } as never);
       // controller.start() must be skipped - the helper takes over.
-      expect(calls.calls).toEqual(["stop"]);
+      expect(calls.calls).toEqual(["stopForRestart"]);
       expect(result.helper).not.toBeNull();
       expect(result.helper?.status).toBe("scheduled");
       expect(result.helper?.helperPid).toBe(99001);
@@ -349,7 +383,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     chmodSync(lockedDir, 0o555);
 
     try {
-      const calls: StubCalls = { calls: [] };
+      const calls: StubCalls = { calls: [], relaunchStop: null };
       const controller = makeStubController(calls);
       const { restartWithPendingCliUpgradeFinalize } =
         await import("../host-restart");
@@ -360,7 +394,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       expect(result.helper).toBeNull();
       // POSIX falls through to the normal start() - supervisor not
       // affected by the read-only install dir.
-      expect(calls.calls).toEqual(["stop", "start"]);
+      expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
       const reread = JSON.parse(
         readFileSync(
           join(workHome, ".traycer", "cli", "manifest.json"),
@@ -409,7 +443,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
       { encoding: "utf8", mode: 0o600 },
     );
 
-    const calls: StubCalls = { calls: [] };
+    const calls: StubCalls = { calls: [], relaunchStop: null };
     const controller = makeStubController(calls);
     const { restartWithPendingCliUpgradeFinalize } =
       await import("../host-restart");
@@ -418,7 +452,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     );
 
     expect(result.markerReconcile?.status).toBe("applied-swapped");
-    expect(calls.calls).toEqual(["stop", "start"]);
+    expect(calls.calls).toEqual(["stopForRestart", "relaunchAfterRestart"]);
     expect(result.helper).toBeNull();
     // pendingUpgrade is now null and the marker has been consumed.
     expect(existsSync(markerPath)).toBe(false);
@@ -471,7 +505,7 @@ describe("restartWithPendingCliUpgradeFinalize", () => {
     chmodSync(lockedDir, 0o555);
 
     try {
-      const calls: StubCalls = { calls: [] };
+      const calls: StubCalls = { calls: [], relaunchStop: null };
       const controller = makeStubController(calls);
       const { restartWithPendingCliUpgradeFinalize } =
         await import("../host-restart");

@@ -25,6 +25,10 @@ export interface ComposerContentBlockRenderArgs {
   readonly nodeKey: string;
 }
 
+export interface ComposerContentOrderedListRenderArgs extends ComposerContentBlockRenderArgs {
+  readonly start: number;
+}
+
 export interface ComposerContentCodeBlockRenderArgs {
   readonly language: string;
   readonly nodeKey: string;
@@ -44,7 +48,7 @@ export interface ComposerContentRenderProfile {
     args: ComposerContentBlockRenderArgs,
   ) => ReactNode;
   readonly renderOrderedList: (
-    args: ComposerContentBlockRenderArgs,
+    args: ComposerContentOrderedListRenderArgs,
   ) => ReactNode;
   readonly renderListItem: (args: ComposerContentBlockRenderArgs) => ReactNode;
   readonly renderBlockquote: (

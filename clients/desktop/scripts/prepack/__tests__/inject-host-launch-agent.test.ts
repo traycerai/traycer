@@ -248,6 +248,10 @@ describe("inject-host-launch-agent afterPack", () => {
               `<key>Label</key>\\s*<string>${expectedLabel.replaceAll(".", "\\.")}</string>`,
             ),
           );
+          const plist = readFileSync(plistPath, "utf8");
+          expect(plist).toContain("traycer-host-start");
+          expect(plist).not.toContain("<string>/bin/sh</string>");
+          expect(plist).toContain(expectedLabel);
         }
       });
 
@@ -276,6 +280,24 @@ describe("inject-host-launch-agent afterPack", () => {
         );
         expect(existsSync(helperBinary)).toBe(true);
         expect(statSync(helperBinary).mode & 0o111).not.toBe(0);
+
+        // The premise the unconditional `--service-label` rests on: the CLI
+        // the shim execs is a byte-identical copy of the one this same
+        // afterPack run staged into the bundle, sitting beside the launcher -
+        // never the user's `~/.traycer` slot symlink. If this ever stops
+        // holding, the shim needs a capability probe again.
+        expect(readFileSync(helperBinary)).toEqual(
+          readFileSync(
+            path.join(
+              appPath,
+              "Contents",
+              "Resources",
+              "cli",
+              "darwin-arm64",
+              "traycer",
+            ),
+          ),
+        );
 
         const helperInfoPlist = path.join(
           helperAppPath,
@@ -334,8 +356,9 @@ describe("inject-host-launch-agent afterPack", () => {
         if (bundleProgramMatch === null) {
           throw new Error("BundleProgram not found in the generated plist");
         }
-        const relativeHelperPath = bundleProgramMatch[1];
-        expect(relativeHelperPath.startsWith("/")).toBe(false);
+        const relativeLauncherPath = bundleProgramMatch[1];
+        expect(relativeLauncherPath.startsWith("/")).toBe(false);
+        expect(relativeLauncherPath.endsWith("/traycer-host-start")).toBe(true);
 
         // Actually relocate the packaged .app (cp -R to a different path) and
         // confirm BundleProgram - parsed from the plist, not just grepped -
@@ -351,12 +374,68 @@ describe("inject-host-launch-agent afterPack", () => {
             `${PRODUCT_NAME}.app`,
           );
           execFileSync("cp", ["-R", appPath, relocatedAppPath]);
-          const resolvedHelperPath = path.join(
+          const resolvedLauncherPath = path.join(
             relocatedAppPath,
-            relativeHelperPath,
+            relativeLauncherPath,
           );
-          expect(existsSync(resolvedHelperPath)).toBe(true);
-          expect(statSync(resolvedHelperPath).mode & 0o111).not.toBe(0);
+          expect(existsSync(resolvedLauncherPath)).toBe(true);
+          expect(statSync(resolvedLauncherPath).mode & 0o111).not.toBe(0);
+
+          // BundleProgram points to this real executable boundary. Execute it
+          // after relocating the app and replace only its sibling CLI, so the
+          // argv the CLI actually receives is asserted rather than XML text
+          // inspected.
+          //
+          // There is deliberately NO capability probe here, and the stub
+          // proves it: it answers nothing but a plain argv dump, so a
+          // launcher that tried to probe would either mis-detect or record an
+          // extra invocation. The shim's CLI is not the user's slot symlink -
+          // `installHelperApp` copies it out of
+          // `Contents/Resources/cli/darwin-<arch>/` into this exact directory
+          // in the same afterPack run, from the same build, shipping in the
+          // same bundle (asserted below). With no mixed-version case to
+          // detect, a probe could only ever answer wrongly - which is what it
+          // did, silently dropping the label as soon as `--service-label` was
+          // hidden from help output.
+          const relocatedCliPath = path.join(
+            path.dirname(resolvedLauncherPath),
+            "traycer",
+          );
+          const invocationsPath = path.join(relocatedRoot, "invocations.txt");
+          writeFileSync(
+            relocatedCliPath,
+            `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(invocationsPath)}
+printf '%s\\n' "$@"
+`,
+            "utf8",
+          );
+          chmodSync(relocatedCliPath, 0o755);
+          expect(
+            execFileSync(resolvedLauncherPath, ["ai.traycer.host.agent"], {
+              encoding: "utf8",
+            }),
+          ).toBe("host\nstart\n--service-label\nai.traycer.host.agent\n");
+          // Exactly one invocation: the host start. No probe round trip.
+          expect(readFileSync(invocationsPath, "utf8")).toBe(
+            "host start --service-label ai.traycer.host.agent\n",
+          );
+
+          // Relative-`$0` hazard, exercised for real. An `argv0` override
+          // cannot test this - the shim is a `#!/bin/sh` script, so the
+          // kernel discards the caller's argv[0] and hands the interpreter
+          // the resolved script path no matter what was passed. Invoking
+          // through a genuinely relative path from a different cwd is what
+          // makes `$0` relative, and so what exercises the
+          // `cd -- "$(dirname -- "$0")"` resolution the shim uses to locate
+          // its sibling CLI.
+          expect(
+            execFileSync(
+              path.join(".", relativeLauncherPath),
+              ["ai.traycer.host.agent"],
+              { encoding: "utf8", cwd: relocatedAppPath },
+            ),
+          ).toBe("host\nstart\n--service-label\nai.traycer.host.agent\n");
         } finally {
           rmSync(relocatedRoot, { recursive: true, force: true });
         }

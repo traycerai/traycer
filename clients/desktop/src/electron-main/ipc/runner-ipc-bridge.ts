@@ -225,7 +225,7 @@ export interface IpcZoomController {
 }
 
 export interface IpcSupportService {
-  getSnapshot(): SupportSnapshot;
+  getSnapshot(): Promise<SupportSnapshot>;
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult>;
   submitReport(
     form: SupportSubmitReportRequest,
@@ -1308,8 +1308,8 @@ class NullPerWindowState implements IpcPerWindowState {
 }
 
 class NullSupportService implements IpcSupportService {
-  getSnapshot(): SupportSnapshot {
-    return {
+  getSnapshot(): Promise<SupportSnapshot> {
+    return Promise.resolve({
       appName: "Traycer",
       appVersion: "0.0.0",
       platform: process.platform,
@@ -1329,11 +1329,12 @@ class NullSupportService implements IpcSupportService {
         version: null,
         pid: null,
         hostId: null,
+        layer0: null,
       },
       logs: [],
       links: [],
       supportEmail: "",
-    };
+    });
   }
 
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult> {

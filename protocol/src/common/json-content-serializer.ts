@@ -652,7 +652,7 @@ function serializeOrderedList(
   };
 
   if (node.content) {
-    let index = 1;
+    let index = readNumberAttr(node.attrs, "start", 1);
     for (const child of node.content) {
       if (child.type === "listItem") {
         items.push(serializeListItem(child, childCtx, true, index));

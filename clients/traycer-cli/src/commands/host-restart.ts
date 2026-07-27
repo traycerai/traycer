@@ -150,7 +150,14 @@ export async function restartWithPendingCliUpgradeFinalize(
     environment: args.environment,
   });
 
-  await args.controller.stop(args.label);
+  // `stopForRestart`, never `stop`: on a Desktop-managed machine a host whose
+  // RPC endpoint is unreachable (or that outlived its own force-exit
+  // watchdog) makes `stop` throw, and this command would exit before ever
+  // relaunching - the exact broken-host state report 2 asked `host restart`
+  // to repair. The restart half reports that as `forcedRecycle` instead, and
+  // the relaunch below recycles the job rather than no-opping a kickstart
+  // against a process that never left. A busy host still throws.
+  const stop = await args.controller.stopForRestart(args.label);
 
   // 2. Try the in-process finalize. On POSIX this almost always works
   //    once the host supervisor releases the binary.
@@ -180,7 +187,7 @@ export async function restartWithPendingCliUpgradeFinalize(
   }
 
   if (!helperOwnsServiceStart) {
-    await args.controller.start(args.label);
+    await args.controller.relaunchAfterRestart(args.label, stop);
   }
 
   return {

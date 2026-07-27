@@ -1,8 +1,16 @@
 import "../../../../../__tests__/test-browser-apis";
+import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { jsonContentToMarkdown } from "@traycer/protocol/common/json-content-serializer";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 
+import {
+  buildSubmittedChatJSONContent,
+  numberValue,
+} from "@/lib/composer/tiptap-json-content";
+import { ComposerContentRenderer } from "../content-renderer";
 import { buildComposerExtensions } from "../editor/editor-config";
 import { createComposerPickerStore } from "../picker/composer-picker-store";
 
@@ -38,6 +46,7 @@ function makeFixture(): {
 }
 
 afterEach(() => {
+  cleanup();
   editors.splice(0).forEach((editor) => editor.destroy());
   elements.splice(0).forEach((element) => element.remove());
 });
@@ -127,7 +136,97 @@ describe("composer list input", () => {
     expect(submitCalls.count).toBe(0);
     expect(listItemTexts(editor)).toEqual(["first", "second"]);
   });
+
+  it("preserves a non-one starting number from input through sent-message rendering", () => {
+    const { editor, submitCalls } = makeFixture();
+    typeText(editor, "2. Hello");
+
+    expect(firstNodeOfType(editor, "orderedList")?.attrs.start).toBe(2);
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+    expect(submitCalls.count).toBe(1);
+
+    const submitted = buildSubmittedChatJSONContent(editor.getJSON());
+    expect(serializeForAgent(submitted)).toBe("2. Hello");
+
+    const rendered = renderSubmittedContent(submitted);
+    const orderedList = orderedListElement(within(rendered).getByRole("list"));
+    expect(orderedList.start).toBe(2);
+    expect(within(orderedList).getByRole("listitem").textContent).toBe("Hello");
+  });
+
+  it("keeps a later-starting multi-item list sequential after submission", () => {
+    const { editor, submitCalls } = makeFixture();
+    typeText(editor, "2. First");
+    expect(editor.commands.keyboardShortcut("Shift-Enter")).toBe(true);
+    typeText(editor, "Second");
+
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+    expect(submitCalls.count).toBe(1);
+
+    const submitted = buildSubmittedChatJSONContent(editor.getJSON());
+    expect(serializeForAgent(submitted)).toBe("2. First\n3. Second");
+
+    const rendered = renderSubmittedContent(submitted);
+    const orderedList = orderedListElement(within(rendered).getByRole("list"));
+    expect(orderedList.start).toBe(2);
+    expect(
+      within(orderedList)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["First", "Second"]);
+  });
+
+  it("preserves separately entered list starts when two appears before one", () => {
+    const { editor, submitCalls } = makeFixture();
+    typeText(editor, "2. Second");
+    expect(editor.commands.keyboardShortcut("Shift-Enter")).toBe(true);
+    expect(editor.commands.keyboardShortcut("Shift-Enter")).toBe(true);
+    typeText(editor, "1. First");
+
+    expect(
+      editor
+        .getJSON()
+        .content.filter((node) => node.type === "orderedList")
+        .map((node) => numberValue(node.attrs?.start)),
+    ).toEqual([2, 1]);
+    expect(editor.commands.keyboardShortcut("Enter")).toBe(true);
+    expect(submitCalls.count).toBe(1);
+
+    const submitted = buildSubmittedChatJSONContent(editor.getJSON());
+    expect(serializeForAgent(submitted)).toBe("2. Second\n\n1. First");
+    const rendered = renderSubmittedContent(submitted);
+    expect(
+      within(rendered)
+        .getAllByRole("list")
+        .map((list) => orderedListElement(list).start),
+    ).toEqual([2, 1]);
+  });
 });
+
+function renderSubmittedContent(content: JsonContent): HTMLElement {
+  return render(
+    <ComposerContentRenderer
+      content={content}
+      variant={undefined}
+      className={undefined}
+      testId={undefined}
+    />,
+  ).container;
+}
+
+function orderedListElement(element: HTMLElement): HTMLOListElement {
+  if (!(element instanceof HTMLOListElement)) {
+    throw new Error("expected an ordered list");
+  }
+  return element;
+}
+
+function serializeForAgent(content: JsonContent): string {
+  return jsonContentToMarkdown(content, {
+    mentionFormat: "llm",
+    platform: "POSIX",
+  });
+}
 
 function typeText(editor: Editor, value: string): void {
   Array.from(value).forEach((char) => typeChar(editor, char));

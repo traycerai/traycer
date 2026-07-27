@@ -5,10 +5,12 @@ import { arch, platform } from "node:process";
 import { dirname } from "node:path";
 import * as Sentry from "@sentry/electron/main";
 import type { HostFsLayout } from "../host/host-paths";
+import { readHostLayer0Record } from "../host/host-state";
 import { log, resolveDesktopLogPath } from "./logger";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   DesktopAuthSessionSnapshot,
+  SupportHostLayer0Snapshot,
   SupportLogTarget,
   SupportLogTailResult,
   SupportRevealLogResult,
@@ -55,9 +57,10 @@ export class DesktopSupportService {
     this.hostLayout = options.hostLayout;
   }
 
-  getSnapshot(): SupportSnapshot {
+  async getSnapshot(): Promise<SupportSnapshot> {
     const host = this.host.getSnapshot();
     const authSession = this.authSession.get();
+    const layer0 = await readHostLayer0Record(this.hostLayout);
     return {
       appName: this.appName,
       appVersion: app.getVersion(),
@@ -78,6 +81,7 @@ export class DesktopSupportService {
         version: host?.version ?? null,
         pid: host?.pid ?? null,
         hostId: host?.hostId ?? null,
+        layer0,
       },
       logs: [
         {
@@ -107,7 +111,7 @@ export class DesktopSupportService {
     form: SupportSubmitReportRequest,
   ): Promise<SupportSubmitReportResult> {
     const reportId = generateReportId();
-    const snapshot = this.getSnapshot();
+    const snapshot = await this.getSnapshot();
 
     // No DSN baked in (dev/staging without sentry). Nothing is uploaded, so
     // there is no report to hand back - returning the locally generated id
@@ -134,6 +138,7 @@ export class DesktopSupportService {
 
     const message = [
       `Title: ${form.title}`,
+      layer0MessageLine(snapshot.host.layer0),
       form.whatHappened && `What happened:\n${form.whatHappened}`,
       form.stepsToReproduce && `Steps to reproduce:\n${form.stepsToReproduce}`,
       form.expectedBehavior && `Expected:\n${form.expectedBehavior}`,
@@ -158,7 +163,11 @@ export class DesktopSupportService {
             platform: `${snapshot.platform}/${snapshot.arch}`,
             hostVersion: snapshot.host.version ?? "unknown",
             electronVersion: snapshot.versions.electron ?? "unknown",
+            layer0Status: layer0StatusTag(snapshot.host.layer0),
           },
+          ...(snapshot.host.layer0 === null
+            ? {}
+            : { contexts: { layer0: snapshot.host.layer0 } }),
         },
         attachments: [
           ...(desktopLogContent
@@ -244,6 +253,33 @@ function truncateToTrailingBytes(text: string, maxBytes: number): string {
 
 function generateReportId(): string {
   return `rpt_${randomUUID().replace(/-/g, "")}`;
+}
+
+/**
+ * A bounded enum for Sentry tags (filterable), never the free-text
+ * cause/evidence - those go in `contexts.layer0` below, which Sentry does
+ * not index or limit the length of the way it does tags.
+ */
+function layer0StatusTag(
+  layer0: SupportHostLayer0Snapshot | null,
+): "acquired" | "degraded" | "unrecognized" | "absent" {
+  return layer0 === null ? "absent" : layer0.status;
+}
+
+/**
+ * Surfaces the degradation in the message body itself - the first thing a
+ * support engineer reads, before they think to open `contexts.layer0` or
+ * grep the host.log attachment. Silent for `acquired` (nothing to flag) and
+ * for `null` (nothing recorded to report, per the "absence is not healthy
+ * but also not a finding" contract `readHostLayer0Record` returns).
+ */
+function layer0MessageLine(
+  layer0: SupportHostLayer0Snapshot | null,
+): string | false {
+  if (layer0 === null || layer0.status === "acquired") return false;
+  if (layer0.status === "degraded")
+    return `Layer 0: degraded (${layer0.cause})`;
+  return `Layer 0: unrecognized (${layer0.raw})`;
 }
 
 function splitLogLines(content: string): readonly string[] {
