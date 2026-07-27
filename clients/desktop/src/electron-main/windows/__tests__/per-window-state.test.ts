@@ -262,7 +262,9 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
       origins.push(change.origin);
     });
 
-    perWindowState.update("window-a", {
+    // A store-backed `update` emits `change` only once its durable write lands,
+    // so the acknowledgement has to be awaited before the origin is observable.
+    await perWindowState.update("window-a", {
       epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
       activeTabId: "tab-a",
       landingDrafts: [],
@@ -275,13 +277,16 @@ describe("PerWindowState + EpicWindowOwnership persistence", () => {
     // Durable delete still happens on clear (IPC only suppresses the push).
     expect(deleteSpy).toHaveBeenCalledWith("window-a");
     expect(perWindowState.get("window-a")).toEqual({
+      revision: 0,
       epicTabs: [],
       activeTabId: null,
       canvasByTabId: {},
       landingDrafts: [],
       activeLandingDraftId: null,
+      tabStripLayout: null,
+      activeRoute: null,
     });
-    // `update`/`clear` enqueue async disk writes; await them before `afterEach`
+    // `clear` enqueues an async disk delete; await it before `afterEach`
     // removes the temp dir, or the in-flight write races teardown (ENOTEMPTY).
     await store.flush();
   });
