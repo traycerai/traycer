@@ -16,9 +16,16 @@ import {
 } from "@traycer/protocol/notifications/notification-room";
 import { createNotificationStreamReopenScheduler } from "@/lib/notifications/notification-stream-reopen";
 
+/** The surface `openNotificationsStream` needs from a stream client; the
+ * only two members production and test doubles both provide. */
+type NotificationsStreamClientHandle = Pick<
+  NotificationsStreamClient,
+  "applyUpdate" | "close"
+>;
+
 export type NotificationsStreamClientFactory = (
   callbacks: NotificationsStreamCallbacks,
-) => Pick<NotificationsStreamClient, "applyUpdate" | "close">;
+) => NotificationsStreamClientHandle;
 
 interface NotificationsState {
   readonly doc: Y.Doc;
@@ -261,10 +268,7 @@ export function openNotificationsStream(
 ): () => void {
   const targetDoc = replica.getDoc();
   let disposed = false;
-  let currentClient: Pick<
-    NotificationsStreamClient,
-    "applyUpdate" | "close"
-  > | null = null;
+  let currentClient: NotificationsStreamClientHandle | null = null;
   let generation = 0;
 
   const reopenScheduler = createNotificationStreamReopenScheduler(() => {
@@ -281,7 +285,11 @@ export function openNotificationsStream(
     // or the status projection its successor now owns.
     const isCurrent = (): boolean =>
       !disposed && clientGeneration === generation;
-    currentClient = factory({
+    // Bound per generation so the reconcile send below targets THIS client
+    // rather than re-reading the module-scoped `currentClient`, whose value
+    // depends on assignment ordering around `factory`.
+    let client: NotificationsStreamClientHandle | null = null;
+    client = factory({
       onSnapshot: (meta, snapshotBytes) => {
         if (!isCurrent()) return;
         // `Y.applyUpdate` fires the doc's "update" listener synchronously, so
@@ -301,7 +309,7 @@ export function openNotificationsStream(
           Y.encodeStateVectorFromUpdate(snapshotBytes),
         );
         if (isNonTrivialYUpdate(reconcileUpdate)) {
-          currentClient?.applyUpdate(reconcileUpdate);
+          client?.applyUpdate(reconcileUpdate);
         }
         // A snapshot — not the raw transport `open` — is the proof the
         // stream is actually usable: the host resolver's async init can
@@ -328,6 +336,7 @@ export function openNotificationsStream(
         }
       },
     });
+    currentClient = client;
   }
 
   openClient();

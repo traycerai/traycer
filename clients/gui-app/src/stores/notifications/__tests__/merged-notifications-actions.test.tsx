@@ -642,6 +642,34 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(false);
   });
 
+  it("falls back to the full indicator scope when the marked row names no entity", async () => {
+    // A row can leave `byId` before its mark-read settles (retention pruning,
+    // a snapshot swap), and a row with no `epicId` never named an entity at
+    // all. Neither can produce an entity-scoped invalidation, so the fallback
+    // must refresh the whole host scope rather than silently skip — a skip
+    // would strand exactly the badges this change exists to clear.
+    bindHostClient();
+    applyHostSnapshot([hostDone("done-1", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { queryClient, rowKey, unrelatedKey, wrapper } =
+      seededIndicatorHarness();
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper,
+    });
+
+    act(() => {
+      result.current.markAsRead("host:pruned-before-settle");
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(rowKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(true);
+    });
+  });
+
   it("invalidates the full indicator scope on mark-all-read success", async () => {
     bindHostClient();
     applyHostSnapshot([hostDone("done-1", 100, null)], {

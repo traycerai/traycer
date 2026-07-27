@@ -1781,6 +1781,59 @@ describe("host notifications store", () => {
     }
   });
 
+  it("re-sends presence and re-notifies the consumer when a replacement session opens", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new MockWsStreamClient();
+      const notified: HostNotificationsSubscribeClientFrame[] = [];
+      const close = openHostNotificationsStream(client, null, {
+        windowId: "window-1",
+        now: () => 456,
+        displayChannelEmission: () => undefined,
+        onFeedFrame: () => undefined,
+        onPresenceChanged: (frame) => {
+          notified.push(frame);
+        },
+        onStreamOpened: () => undefined,
+      });
+      const firstSession = client.session;
+      firstSession.emitOpen();
+      expect(firstSession.clientFrames).toHaveLength(1);
+      expect(notified).toHaveLength(1);
+
+      firstSession.emitClosed({
+        kind: "fatalError",
+        details: {
+          code: "INTERNAL",
+          reason: "host terminated the stream",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      const replacementSession = client.session;
+      expect(replacementSession).not.toBe(firstSession);
+
+      // Nothing about the local presence content changed across the reopen,
+      // but the replacement session still needs the frame (its host-side
+      // record starts empty) and the consumer still needs the notify:
+      // `onStreamOpened` cleared its active entity, so an unchanged-key
+      // dedupe would leave the focused entity permanently unconsumed.
+      replacementSession.emitOpen();
+      expect(replacementSession.clientFrames).toHaveLength(1);
+      expect(replacementSession.clientFrames[0]).toMatchObject({
+        kind: "presence",
+        windowId: "window-1",
+      });
+      expect(notified).toHaveLength(2);
+      expect(notified[1]).toMatchObject({ kind: "presence" });
+
+      close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("escalates the reopen backoff while closes repeat and resets it on a valid snapshot", () => {
     vi.useFakeTimers();
     try {
