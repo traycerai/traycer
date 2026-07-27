@@ -41,6 +41,7 @@ import {
   type SplitSideName,
   type StripItem,
 } from "@/stores/tabs/layout";
+import { tabSourceRefs } from "@/stores/tabs/source-refs";
 import type { TabRef } from "@/stores/tabs/types";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
 import {
@@ -267,17 +268,6 @@ function primaryFailure(failures: ReadonlyArray<Error>): Error | null {
         : new AggregateError(causes, "Tab command cleanup failures"),
   });
   return primary;
-}
-
-function sourceRefs(): ReadonlyArray<TabRef> {
-  const canvas = useEpicCanvasStore.getState();
-  const epicRefs = canvas.openTabOrder.flatMap<TabRef>((tabId) =>
-    canvas.tabsById[tabId] === undefined ? [] : [{ kind: "epic", id: tabId }],
-  );
-  const draftRefs = useLandingDraftStore
-    .getState()
-    .drafts.map<TabRef>((draft) => ({ kind: "draft", id: draft.id }));
-  return [...epicRefs, ...draftRefs];
 }
 
 function sourceHasRef(ref: TabRef): boolean {
@@ -1264,7 +1254,7 @@ export class TabCommandCoordinator {
    * before the normal transaction finalizer projects compatibility state.
    */
   restoreHydratedLayout(layout: PersistedTabStripLayout): void {
-    const sourceKeys = new Set(sourceRefs().map(tabRefKey));
+    const sourceKeys = new Set(tabSourceRefs().map(tabRefKey));
     const current = currentLayout();
     const missing = flattenLayoutRefs(layout).filter(
       (ref) =>
@@ -1324,7 +1314,7 @@ export class TabCommandCoordinator {
     }
     const layoutRefs = flattenLayoutRefs(currentLayout());
     const placed = new Set(layoutRefs.map(tabRefKey));
-    const currentSources = sourceRefs();
+    const currentSources = tabSourceRefs();
     const sourceKeys = new Set(currentSources.map(tabRefKey));
     const newlyReserved = currentSources.filter(
       (ref) =>
@@ -1559,7 +1549,7 @@ export class TabCommandCoordinator {
     readonly additions: ReadonlyArray<TabRef>;
     readonly removals: ReadonlyArray<TabRef>;
   } {
-    const knownSources = sourceRefs();
+    const knownSources = tabSourceRefs();
     const knownKeys = new Set(knownSources.map(tabRefKey));
     const removals = flattenLayoutRefs(layout).filter(
       (ref) =>

@@ -132,6 +132,32 @@ export function usePaneFocused(): boolean {
 }
 
 /**
+ * The pane guard every Radix content wrapper needs, in one place.
+ *
+ * A modal overlay drives `hideOthers` + scroll-lock while open, so a background
+ * split pane un-presents it by unmounting. That unmount runs Radix FocusScope's
+ * close-autofocus which — for a native/deep-link focus transfer, where Radix's
+ * own handler does not `preventDefault` — restores focus into the now-background
+ * pane, whose focus-capture then reactivates it. `paneFocused` decides whether
+ * the content renders at all; `handleCloseAutoFocus` kills the focus-restore on
+ * the way out. Outside a pane both default to the permissive answer, so an
+ * ordinary app-global close behaves normally.
+ *
+ * Shared rather than restated per wrapper: five copies of the same three
+ * statements is five chances for one to drift out of step with this reasoning.
+ */
+export function usePaneAwareContentGuard(
+  onCloseAutoFocus: ((event: Event) => void) | undefined,
+): {
+  readonly paneFocused: boolean;
+  readonly handleCloseAutoFocus: (event: Event) => void;
+} {
+  const paneFocused = usePaneFocused();
+  const handleCloseAutoFocus = usePaneCloseAutoFocusGuard(onCloseAutoFocus);
+  return { paneFocused, handleCloseAutoFocus };
+}
+
+/**
  * Runs an effect only while the surrounding pane is focused. This is the
  * canonical gate for pane-local global ownership: shortcuts, find, DOM focus,
  * modal registration, and active-only toasts. Geometry work belongs to

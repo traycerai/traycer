@@ -1,6 +1,7 @@
 /// <reference types="node" />
 
 import { ESLint, Linter } from "eslint";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -405,6 +406,16 @@ describe("eslint config actually catches tabActivate bypass forms (lintText)", (
   // actual project-tracked file, so these must be real paths that exist.
   const PRODUCTION_FILE_PATH = "src/lib/routes.ts";
   const TEST_FILE_PATH = "src/lib/__tests__/analytics.test.ts";
+
+  // Asserted up front so a renamed or deleted anchor fails as "this file no
+  // longer exists" rather than as an opaque project-resolution error from deep
+  // inside `projectService`, which reads like a broken lint config.
+  it.each([PRODUCTION_FILE_PATH, TEST_FILE_PATH])(
+    "anchors lintText on %s, which must exist on disk",
+    (relativePath) => {
+      expect(existsSync(path.join(guiAppRoot, relativePath))).toBe(true);
+    },
+  );
 
   function tabActivateRestrictedSyntaxMessages(
     messages: readonly Linter.LintMessage[],

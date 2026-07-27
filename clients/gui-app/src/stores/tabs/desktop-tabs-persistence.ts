@@ -6,7 +6,6 @@ import type {
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
   createLayoutItem,
   emptySystemTabs,
@@ -29,6 +28,7 @@ import {
 import { isRegisteredTabKind } from "@/stores/tabs/registry";
 import { setTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { tabSourceRefs } from "@/stores/tabs/source-refs";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 
 const DEBOUNCE_MS = 100;
@@ -370,21 +370,10 @@ function currentLayout(): PersistedTabStripLayout {
   };
 }
 
-function sourceRefs(): ReadonlyArray<TabRef> {
-  const canvas = useEpicCanvasStore.getState();
-  const epics = canvas.openTabOrder.flatMap<TabRef>((id) =>
-    canvas.tabsById[id] === undefined ? [] : [{ kind: "epic", id }],
-  );
-  const drafts = useLandingDraftStore
-    .getState()
-    .drafts.map<TabRef>((draft) => ({ kind: "draft", id: draft.id }));
-  return [...epics, ...drafts];
-}
-
 function sanitizeDesktopLayout(
   persisted: PersistedTabStripLayout,
 ): PersistedTabStripLayout {
-  const sourceKeys = new Set(sourceRefs().map(refKey));
+  const sourceKeys = new Set(tabSourceRefs().map(refKey));
   const missing = flattenLayoutRefs(persisted).filter(
     (ref) =>
       (ref.kind === "epic" || ref.kind === "draft") &&
@@ -428,7 +417,7 @@ function legacyDesktopLayout(
   historyRoute: string | null,
 ): PersistedTabStripLayout {
   const systemTabs = legacySystemTabs(historyRoute);
-  const layout = sourceRefs().reduce(createLayoutItem, {
+  const layout = tabSourceRefs().reduce(createLayoutItem, {
     ...emptyTabStripLayout(),
     systemTabs,
   });
@@ -477,7 +466,7 @@ function legacyActiveRef(
   }
   if (
     snapshot.activeTabId !== null &&
-    sourceRefs().some(
+    tabSourceRefs().some(
       (ref) => ref.kind === "epic" && ref.id === snapshot.activeTabId,
     )
   ) {
@@ -485,7 +474,7 @@ function legacyActiveRef(
   }
   if (
     snapshot.activeLandingDraftId !== null &&
-    sourceRefs().some(
+    tabSourceRefs().some(
       (ref) => ref.kind === "draft" && ref.id === snapshot.activeLandingDraftId,
     )
   ) {
@@ -535,7 +524,7 @@ function refIsRestorable(
   if (ref.kind === "history" || ref.kind === "settings") {
     return systemTabs[ref.kind] !== null;
   }
-  return sourceRefs().some((source) => refKey(source) === refKey(ref));
+  return tabSourceRefs().some((source) => refKey(source) === refKey(ref));
 }
 
 function routeBackingRef(item: StripItem): TabRef | null {

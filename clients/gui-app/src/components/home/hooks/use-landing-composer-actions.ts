@@ -771,10 +771,7 @@ function placeCreatedDraftEpic(input: {
   readonly placement: DraftSubmissionPlacement;
   readonly activate: () => void;
 }): void {
-  const ownsIntentFocus = placementOwnedFocusedRoute(
-    input.placement,
-    input.draftId,
-  );
+  const ownsIntentFocus = placementOwnedFocusedRoute(input.placement);
   const stillFocusedOwner = draftOwnsFocusedRoute(input.draftId);
   const replaced = tabCommandCoordinator.replaceDraftWithEpic({
     draftId: input.draftId,
@@ -809,12 +806,14 @@ function placeCreatedEpicInBackground(epicId: string, epicTitle: string): void {
 
 function placementOwnedFocusedRoute(
   placement: DraftSubmissionPlacement,
-  draftId: string,
 ): boolean {
+  // `captureSubmissionPlacement` builds `refKey` as `draft:<draftId>`, so a
+  // placement already names its own draft. Taking a separate `draftId` here
+  // and re-checking the two agree expressed the invariant twice and only
+  // created a way for a caller to pass a mismatched pair.
   return (
     placement.activeItemId !== null &&
-    placement.focusedRefKey === placement.refKey &&
-    placement.refKey === `draft:${draftId}`
+    placement.focusedRefKey === placement.refKey
   );
 }
 

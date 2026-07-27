@@ -450,17 +450,20 @@ function useHeaderTabDnd(
     }),
     [config, tabId, tabKind],
   );
+  // A `tab:` strip item is already unique per tab, so it keys on the tab id
+  // alone. A split member shares its tab id with nothing but must stay distinct
+  // per half, so it keys on `<splitId>:<tabId>`; an unconfigured (undraggable)
+  // item falls back to the same shape under `member`.
+  const stripItemId = config?.stripItemId ?? "member";
+  const dragKey = stripItemId.startsWith("tab:")
+    ? tabId
+    : `${stripItemId}:${tabId}`;
   const {
     listeners,
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getHeaderTabDragId(
-      tabKind,
-      config?.stripItemId.startsWith("tab:") === true
-        ? tabId
-        : `${config?.stripItemId ?? "member"}:${tabId}`,
-    ),
+    id: getHeaderTabDragId(tabKind, dragKey),
     data: dragData,
     disabled: config === null,
   });

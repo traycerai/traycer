@@ -3,10 +3,7 @@ import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
-import {
-  usePaneCloseAutoFocusGuard,
-  usePaneFocused,
-} from "@/components/epic-tabs/pane-visibility-context";
+import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 
 function DropdownMenu({
   ...props
@@ -51,10 +48,9 @@ function DropdownMenuContent({
 }: DropdownMenuContentProps) {
   // A modal menu drives `hideOthers` + scroll-lock while open, so a background
   // split pane un-presents it by unmounting. The guard preventDefaults Radix's
-  // close-autofocus trigger-refocus when the pane is no longer focused, so the
-  // unmount cannot reactivate the pane. Outside a pane this defaults to true.
-  const paneFocused = usePaneFocused();
-  const handleCloseAutoFocus = usePaneCloseAutoFocusGuard(onCloseAutoFocus);
+  // The close-autofocus half lives in `usePaneAwareContentGuard`.
+  const { paneFocused, handleCloseAutoFocus } =
+    usePaneAwareContentGuard(onCloseAutoFocus);
   if (!paneFocused) return null;
   return (
     <DropdownMenuPrimitive.Portal container={container}>

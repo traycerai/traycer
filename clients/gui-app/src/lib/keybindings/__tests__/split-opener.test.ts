@@ -9,8 +9,10 @@ import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
-import { tabItemId } from "@/stores/tabs/layout";
-import { useTabsStore } from "@/stores/tabs/store";
+import {
+  resetTabsStoreForTest,
+  seedActiveEpicTabInTabsStore,
+} from "@/stores/tabs/test-support/tabs-store-fixtures";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 
 const SPEC_A: EpicNodeRef = {
@@ -54,19 +56,7 @@ function seedActiveGroupTab(): string {
   const store = useEpicCanvasStore.getState();
   const tabId = store.openEpicTab(SEED_EPIC_ID, "Epic");
   store.openTileInTab(tabId, SPEC_A);
-  useTabsStore.setState({
-    version: 2,
-    items: [
-      {
-        kind: "tab",
-        id: tabItemId({ kind: "epic", id: tabId }),
-        ref: { kind: "epic", id: tabId },
-      },
-    ],
-    activeItemId: tabItemId({ kind: "epic", id: tabId }),
-    stripOrder: [{ kind: "epic", id: tabId }],
-    systemTabs: { history: null, settings: null },
-  });
+  seedActiveEpicTabInTabsStore(tabId);
   return tabId;
 }
 
@@ -79,13 +69,7 @@ function activeGroupId(tabId: string): string {
 
 beforeEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useTabsStore.setState({
-    version: 2,
-    items: [],
-    activeItemId: null,
-    stripOrder: [],
-    systemTabs: { history: null, settings: null },
-  });
+  resetTabsStoreForTest();
   useCommandPaletteStore.setState({
     open: false,
     query: "",
@@ -96,13 +80,7 @@ beforeEach(() => {
 
 afterEach(() => {
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useTabsStore.setState({
-    version: 2,
-    items: [],
-    activeItemId: null,
-    stripOrder: [],
-    systemTabs: { history: null, settings: null },
-  });
+  resetTabsStoreForTest();
 });
 
 // Splits create an empty pane that self-renders the inline opener

@@ -526,6 +526,13 @@ function expectButtonDisabled(name: RegExp): void {
   expect(button.disabled).toBe(true);
 }
 
+/**
+ * Deliberately a raw `document` scan, not `screen.getByRole`. These tests drive
+ * buttons while a Radix dialog is open, which marks the background subtree
+ * `aria-hidden` - so the buttons are correctly absent from the accessibility
+ * tree and a role query cannot reach them. Their un-presented-but-still-mounted
+ * state is the behaviour under test, so the query has to bypass the a11y tree.
+ */
 function getDocumentButton(label: string): HTMLButtonElement {
   const button = Array.from(document.querySelectorAll("button")).find(
     (candidate) => candidate.textContent === label,

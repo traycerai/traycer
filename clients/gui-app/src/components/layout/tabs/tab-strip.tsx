@@ -271,15 +271,14 @@ function TabStripBody() {
                   itemId={itemId}
                   stripIndex={index}
                   memberOffset={memberOffsetBefore(layoutItems, index)}
-                  visualState={headerStripVisualState({
-                    active: itemId === activeItemId,
-                    nextActive: headerItemIds[index + 1] === activeItemId,
-                    last: index === headerItemIds.length - 1,
-                    dropBefore: dropIndicatorIndex === index,
-                    dropAfter:
-                      dropIndicatorIndex === index + 1 &&
-                      index === headerItemIds.length - 1,
-                  })}
+                  isActive={itemId === activeItemId}
+                  isNextActive={headerItemIds[index + 1] === activeItemId}
+                  isLastItem={index === headerItemIds.length - 1}
+                  showDropIndicatorBefore={dropIndicatorIndex === index}
+                  showDropIndicatorAfter={
+                    dropIndicatorIndex === index + 1 &&
+                    index === headerItemIds.length - 1
+                  }
                   onClose={closeTabFlow.requestCloseTab}
                   onCloseOtherTabs={closeTabFlow.closeOtherTabs}
                   onDuplicateTab={handleDuplicateTab}
@@ -307,7 +306,15 @@ interface HeaderStripItemRendererProps {
   readonly itemId: string;
   readonly stripIndex: number;
   readonly memberOffset: number;
-  readonly visualState: HeaderStripVisualState;
+  // Passed as named booleans rather than packed into one positional string.
+  // `memo` compares primitives, so five props cost the same as one - and a
+  // packed string spread magic indices across two components, where a wrong
+  // index is a silent visual bug no type check can catch.
+  readonly isActive: boolean;
+  readonly isNextActive: boolean;
+  readonly isLastItem: boolean;
+  readonly showDropIndicatorBefore: boolean;
+  readonly showDropIndicatorAfter: boolean;
   readonly onClose: (tab: HeaderTab) => void;
   readonly onCloseOtherTabs: (tab: HeaderTab) => void;
   readonly onDuplicateTab: (tab: HeaderTab) => void;
@@ -324,39 +331,17 @@ interface HeaderStripItemRendererProps {
   ) => void;
 }
 
-type HeaderStripVisualState = string;
-
-function headerStripVisualState(input: {
-  readonly active: boolean;
-  readonly nextActive: boolean;
-  readonly last: boolean;
-  readonly dropBefore: boolean;
-  readonly dropAfter: boolean;
-}): HeaderStripVisualState {
-  return [
-    input.active,
-    input.nextActive,
-    input.last,
-    input.dropBefore,
-    input.dropAfter,
-  ]
-    .map((value) => (value ? "1" : "0"))
-    .join("");
-}
-
-function visualFlag(state: HeaderStripVisualState, index: number): boolean {
-  return state[index] === "1";
-}
-
 const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
   props: HeaderStripItemRendererProps,
 ): ReactNode {
   const item = useHeaderStripItem(props.itemId);
-  const isActive = visualFlag(props.visualState, 0);
-  const isNextActive = visualFlag(props.visualState, 1);
-  const isLastItem = visualFlag(props.visualState, 2);
-  const showDropIndicatorBefore = visualFlag(props.visualState, 3);
-  const showDropIndicatorAfter = visualFlag(props.visualState, 4);
+  const {
+    isActive,
+    isNextActive,
+    isLastItem,
+    showDropIndicatorBefore,
+    showDropIndicatorAfter,
+  } = props;
   if (item === null) return null;
   if (item.kind === "split") {
     return (
@@ -387,13 +372,9 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
       tab={item.tab}
       index={props.memberOffset}
       stripIndex={props.stripIndex}
-      visualState={headerStripVisualState({
-        active: isActive,
-        nextActive: false,
-        last: isLastItem,
-        dropBefore: showDropIndicatorBefore,
-        dropAfter: showDropIndicatorAfter,
-      })}
+      isActive={isActive}
+      showDropIndicatorBefore={showDropIndicatorBefore}
+      showDropIndicatorAfter={showDropIndicatorAfter}
       showSeparatorAfter={!isLastItem && !isActive && !isNextActive}
       onClose={props.onClose}
       onCloseOtherTabs={props.onCloseOtherTabs}
@@ -414,7 +395,9 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
   readonly tab: HeaderTab;
   readonly index: number;
   readonly stripIndex: number;
-  readonly visualState: HeaderStripVisualState;
+  readonly isActive: boolean;
+  readonly showDropIndicatorBefore: boolean;
+  readonly showDropIndicatorAfter: boolean;
   readonly showSeparatorAfter: boolean;
   readonly onClose: (tab: HeaderTab) => void;
   readonly onCloseOtherTabs: (tab: HeaderTab) => void;
@@ -446,10 +429,10 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
       dnd={dnd}
       chrome="own"
       includeMotionFrame
-      isActive={visualFlag(props.visualState, 0)}
+      isActive={props.isActive}
       showSeparatorAfter={props.showSeparatorAfter}
-      showDropIndicatorBefore={visualFlag(props.visualState, 3)}
-      showDropIndicatorAfter={visualFlag(props.visualState, 4)}
+      showDropIndicatorBefore={props.showDropIndicatorBefore}
+      showDropIndicatorAfter={props.showDropIndicatorAfter}
       onClose={props.onClose}
       onCloseOtherTabs={props.onCloseOtherTabs}
       onDuplicateTab={props.onDuplicateTab}

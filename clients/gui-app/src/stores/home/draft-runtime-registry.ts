@@ -70,7 +70,7 @@ interface PendingDraftWrite {
 class DraftRuntime {
   readonly store: StoreApi<DraftRuntimeState>;
   private pending: PendingDraftWrite | null = null;
-  private timer: Parameters<typeof clearTimeout>[0] | null = null;
+  private timer: number | null = null;
   private attempt: DraftSubmissionAttempt | null = null;
   private attachmentCount = 0;
   private closed = false;
@@ -113,7 +113,10 @@ class DraftRuntime {
     }
     this.pending = { content, selection };
     if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.flush(), DRAFT_CONTENT_DEBOUNCE_MS);
+    this.timer = window.setTimeout(
+      () => this.flush(),
+      DRAFT_CONTENT_DEBOUNCE_MS,
+    );
     this.store.setState({
       content,
       selection,

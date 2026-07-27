@@ -3,10 +3,7 @@
 import * as React from "react";
 import { Popover as PopoverPrimitive } from "radix-ui";
 
-import {
-  usePaneCloseAutoFocusGuard,
-  usePaneFocused,
-} from "@/components/epic-tabs/pane-visibility-context";
+import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 import { cn } from "@/lib/utils";
 
 function Popover({
@@ -40,11 +37,9 @@ function PopoverContent({
   // Keep a pane's controlled root open state intact while its document portal is
   // not allowed to present over the focused split partner: un-present by
   // unmounting the portal (leaving the root open, so it re-presents on refocus).
-  // The guard preventDefaults Radix's close-autofocus restore when the pane is
-  // no longer focused, so the unmount cannot reactivate the pane. Outside a pane
-  // this defaults to `true`.
-  const paneFocused = usePaneFocused();
-  const handleCloseAutoFocus = usePaneCloseAutoFocusGuard(onCloseAutoFocus);
+  // The close-autofocus half lives in `usePaneAwareContentGuard`.
+  const { paneFocused, handleCloseAutoFocus } =
+    usePaneAwareContentGuard(onCloseAutoFocus);
   if (!paneFocused) return null;
   return (
     <PopoverPrimitive.Portal container={container}>

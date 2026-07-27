@@ -314,10 +314,13 @@ describe("<EpicsListPanel /> Phase row activation", () => {
     const entry = resolvers[0];
     expect(entry, "expected a pending navigate to reject").toBeDefined();
     entry.reject(new Error("navigation cancelled"));
-    await Promise.resolve();
-    await Promise.resolve();
 
     // The rejection restores the true pre-command selection: the prior tab.
-    expect(useTabsStore.getState().activeItemId).toBe(tabItemId(priorRef));
+    // Waited on rather than drained with a fixed number of microtask ticks -
+    // that encoded the controller's current `then` depth, so adding an await
+    // anywhere in the rollback path would break this test for no real reason.
+    await waitFor(() => {
+      expect(useTabsStore.getState().activeItemId).toBe(tabItemId(priorRef));
+    });
   });
 });

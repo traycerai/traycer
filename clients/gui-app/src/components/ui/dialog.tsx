@@ -4,10 +4,7 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XIcon } from "lucide-react";
-import {
-  usePaneCloseAutoFocusGuard,
-  usePaneFocused,
-} from "@/components/epic-tabs/pane-visibility-context";
+import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 
 function Dialog({
   ...props
@@ -62,11 +59,9 @@ function DialogContent({
   // survives split focus changes. A modal dialog kept mounted in the background
   // would keep aria-hiding + scroll-locking the focused split partner, so an
   // unfocused pane un-presents by unmounting only its document portal. That
-  // unmount runs Radix's close-autofocus; the guard preventDefaults the
-  // restore when the pane is no longer focused, so it cannot reactivate the
-  // pane. Outside a pane the focus hook defaults to true.
-  const paneFocused = usePaneFocused();
-  const handleCloseAutoFocus = usePaneCloseAutoFocusGuard(onCloseAutoFocus);
+  // The close-autofocus half lives in `usePaneAwareContentGuard`.
+  const { paneFocused, handleCloseAutoFocus } =
+    usePaneAwareContentGuard(onCloseAutoFocus);
   if (!paneFocused) return null;
   return (
     <DialogPortal>

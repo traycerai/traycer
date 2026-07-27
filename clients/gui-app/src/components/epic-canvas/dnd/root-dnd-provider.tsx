@@ -334,10 +334,6 @@ function fillTopLevelSlot(
   activate(source);
 }
 
-function activateHeaderRef(ref: TabRef, activate: (tab: TabRef) => void): void {
-  activate(ref);
-}
-
 function commitHeaderTabDrop(input: {
   readonly event: DragEndEvent;
   readonly headerStripIndex: number | null;
@@ -362,9 +358,7 @@ function commitHeaderTabDrop(input: {
     }
   };
   if (validDrop?.target.kind === "top-level-fillable-slot") {
-    fillTopLevelSlot(validDrop.source, validDrop.target, (ref) =>
-      activateHeaderRef(ref, activate),
-    );
+    fillTopLevelSlot(validDrop.source, validDrop.target, activate);
     return;
   }
   if (validDrop?.target.kind === "top-level-edge-split") {

@@ -8,7 +8,7 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-import { tabItemId } from "@/stores/tabs/layout";
+import { tabItemId, type SplitStripItem } from "@/stores/tabs/layout";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
@@ -1862,12 +1862,15 @@ function setWorkspace(path: string, name: string): void {
   });
 }
 
+// Typed as the real store item so a change to the split shape (a renamed
+// `routeBackingSide`, say) fails these fixtures instead of letting them keep
+// compiling against a layout contract that no longer exists.
 function splitItem(
   id: string,
   left: { readonly kind: "draft"; readonly id: string },
   right: { readonly kind: "draft"; readonly id: string },
   focusedSide: "left" | "right",
-) {
+): SplitStripItem {
   return {
     kind: "split" as const,
     id,
