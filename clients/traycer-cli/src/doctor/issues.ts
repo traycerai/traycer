@@ -12,9 +12,25 @@ export const DOCTOR_ISSUE_CODES = {
   // no fix to offer (its own `service install` refuses SMAppService-owned
   // labels by design; the Desktop app is the management surface).
   SERVICE_EXTERNALLY_MANAGED: "SERVICE_EXTERNALLY_MANAGED",
+  // macOS: launchd reports the label as loaded while the job itself cannot
+  // run (spawn failed / EX_CONFIG last exit / LWCR mismatch). Every
+  // registration-keyed check reads "healthy" in this state - the v1.1.8
+  // field lockout - so doctor must read the job's run state, not just who
+  // registered it.
+  SERVICE_JOB_WEDGED: "SERVICE_JOB_WEDGED",
   SERVICE_STOPPED: "SERVICE_STOPPED",
   PID_METADATA_MISSING: "PID_METADATA_MISSING",
   PID_METADATA_STALE: "PID_METADATA_STALE",
+  // The running host published a Layer 0 verdict that is not "I hold the
+  // single-writer lock". It is serving normally - degrading to today's
+  // no-lock availability is deliberate, because refusing to start would turn
+  // a rare corruption into a routine outage - but the fact has to be
+  // *findable*, since "did this host start without the guarantee?" is the
+  // first question a two-hosts-one-data-dir investigation asks. Warning, not
+  // error: nothing is broken yet, and promoting it would flip the exit code
+  // of `traycer host doctor` for every user whose home is on a network
+  // filesystem.
+  HOST_LAYER0_NOT_GUARANTEED: "HOST_LAYER0_NOT_GUARANTEED",
   PORT_UNREACHABLE: "PORT_UNREACHABLE",
   PORT_CONFLICT: "PORT_CONFLICT",
   // The host's TCP port is open but a real (authenticated) RPC
@@ -29,6 +45,12 @@ export const DOCTOR_ISSUE_CODES = {
   RECENT_CRASH_MARKERS: "RECENT_CRASH_MARKERS",
   REGISTRY_NOT_IMPLEMENTED: "REGISTRY_NOT_IMPLEMENTED",
   CLI_UPGRADE_PENDING: "CLI_UPGRADE_PENDING",
+  // The stable CLI path (`~/.traycer/cli/bin/traycer`) is a symlink the
+  // Desktop app points into its own bundle; removing or replacing the app
+  // leaves it dangling. `ls` (lstat) still shows the file while executing
+  // it fails with ENOENT, and the only existing repair runs at the app's
+  // next *successful* launch - a state users cannot self-diagnose.
+  CLI_SLOT_BINARY_DANGLING: "CLI_SLOT_BINARY_DANGLING",
   // Windows-only: ~/.traycer/cli/credentials inherits permissive
   // default Windows ACLs (POSIX mode 0o600 is ignored on Windows).
   // Doctor surfaces this so VDI/shared-machine users can lock the

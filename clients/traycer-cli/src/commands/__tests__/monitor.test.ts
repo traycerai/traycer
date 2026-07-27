@@ -152,6 +152,9 @@ beforeEach(() => {
     version: "1.0.0",
     websocketUrl: "ws://127.0.0.1:9/rpc",
     startedAt: "2026-01-01T00:00:00.000Z",
+    // Mirrors the real reader, which now always reports the host's Layer 0
+    // verdict. `null` = this fixture's host recorded no attempt.
+    layer0: null,
   });
 });
 
@@ -209,6 +212,7 @@ describe("runMonitor recovery", () => {
       version: "1.0.0",
       websocketUrl: "ws://attacker.example:9/rpc",
       startedAt: "2026-01-01T00:00:00.000Z",
+      layer0: null,
     });
 
     const result = runMonitor({ agentId: "a1", epicId: "e1" }).catch((e) => e);

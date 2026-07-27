@@ -150,6 +150,11 @@ import {
   commentsSetThreadStatusV10,
 } from "@traycer/protocol/host/comments/contracts";
 import { hostStatusV10 } from "@traycer/protocol/host/status/contracts";
+import {
+  lifecycleClaimShutdownV10,
+  lifecycleCommitShutdownV10,
+  lifecycleReleaseShutdownV10,
+} from "@traycer/protocol/host/lifecycle/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -2288,6 +2293,51 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: hostStatusV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "lifecycle.claimShutdown": {
+    // Hosts predating the lifecycle layer cannot safely emulate a shutdown
+    // claim, so reconciliation must re-probe and use its legacy-safe path.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: lifecycleClaimShutdownV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "lifecycle.commitShutdown": {
+    // A commit token has authority only on the host that granted it; there is
+    // no meaningful fallback on an older host.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: lifecycleCommitShutdownV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "lifecycle.releaseShutdown": {
+    // Release authority is meaningful only to the host that minted the token;
+    // an older host cannot emulate this recovery arm safely.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: lifecycleReleaseShutdownV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -4959,9 +5009,10 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
 // directly-imported contract const (`chatSubscribeV15`), so this is a
 // narrow, intentional trade-off - confirmed by a full workspace
 // compile+build with this annotation in place.
-type HostStreamRpcMethodMap = typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
-  readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
-};
+type HostStreamRpcMethodMap =
+  typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
+    readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
+  };
 
 export type HostStreamRpcRegistry =
   VersionedStreamRpcRegistry<HostStreamRpcMethodMap>;

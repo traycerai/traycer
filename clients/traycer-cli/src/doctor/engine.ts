@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { access, stat } from "node:fs/promises";
+import { access, lstat, readlink, stat } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import { cliCredentialsPath } from "../store/paths";
 import {
@@ -11,7 +11,10 @@ import {
   readBootstrapMarkers,
   type BootstrapLogEntry,
 } from "../host/bootstrap-log";
-import { readHostPidMetadata } from "../host/pid-metadata";
+import {
+  readHostPidMetadata,
+  type HostPidMetadata,
+} from "../host/pid-metadata";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
 import { resolveHostAuth } from "../internal/host-auth";
 import { HostRpcError } from "../../../shared/host-transport/host-messenger";
@@ -37,6 +40,11 @@ import {
   serviceLabelFor,
   type ServiceStatus,
 } from "../service";
+import { smAppServiceAgentLabelId } from "../service/label";
+import {
+  createRealLaunchdPrintRunner,
+  probeMacosWedgedJob,
+} from "./launchd-wedge";
 import { isProcessAlive } from "../store/cli-lock";
 import {
   DOCTOR_ISSUE_CODES,
@@ -173,7 +181,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         code: DOCTOR_ISSUE_CODES.SERVICE_EXTERNALLY_MANAGED,
         severity: "info",
         title: "Service managed by Traycer Desktop",
-        message: `The OS service for '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI does not manage it. Use the Traycer app to repair or remove the host on this machine.`,
+        message: `The OS service for '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI does not manage it. Use the Traycer app to repair or remove the host on this machine. If the app cannot repair it, take over from the CLI: 'traycer host service uninstall' then 'traycer host service install'.`,
         fixAction: null,
         terminalCommand: null,
         details: { label: label.id },
@@ -243,6 +251,12 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       details: { pid: pidMetadata.pid, version: pidMetadata.version },
     });
   } else {
+    // Independent of reachability: a degraded host is usually perfectly
+    // reachable, which is exactly why this would otherwise never be noticed.
+    const layer0Issue = layer0GuaranteeIssue(pidMetadata);
+    if (layer0Issue !== null) {
+      issues.push(layer0Issue);
+    }
     const reachable = await probeWebsocketUrl(pidMetadata.websocketUrl);
     if (!reachable) {
       // Both calls are independent network/subprocess I/O - run in parallel.
@@ -405,6 +419,27 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     }
   }
 
+  // ---- 4a. macOS launchd job wedge ----
+  // Registration presence is not health: launchd can hold the label loaded
+  // while the job is unable to run, and every ownership-keyed check reads
+  // that as "healthy". Read the job's run state directly.
+  if (process.platform === "darwin") {
+    const wedgeIssue = await probeMacosWedgedJob({
+      labelId: label.id,
+      agentLabelId: smAppServiceAgentLabelId(label),
+      hasPidMetadata: pidMetadata !== null,
+      runner: createRealLaunchdPrintRunner(),
+    });
+    if (wedgeIssue !== null) issues.push(wedgeIssue);
+  }
+
+  // ---- 4b. CLI slot binary health ----
+  // The manifest's binaryPath may be a symlink into the Desktop app
+  // bundle; a bundle remove/replace leaves it dangling, and the only
+  // repair is the app's own cli-reconcile at its next successful launch.
+  const cliSlotIssue = await probeDanglingCliSlotBinary(opts.environment);
+  if (cliSlotIssue !== null) issues.push(cliSlotIssue);
+
   // ---- 5. Windows credentials ACL ----
   // Windows ignores POSIX mode bits on the credentials file. On a
   // shared / VDI host, other users may have read access via default
@@ -442,6 +477,59 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   }
 
   return { issues };
+}
+
+/**
+ * Surfaces a running host that does NOT hold the Layer 0 single-writer
+ * guarantee.
+ *
+ * This is the only place a support engineer can learn the fact without log
+ * archaeology. The host records it in pid.json precisely because its other
+ * channels do not survive: the framed status pipe has no reader on an ordinary
+ * production start, and the `[host] layer0-degraded` stderr line is one line
+ * at the very top of a log whose diagnostic tail is 200 lines and whose
+ * support attachment is 500.
+ *
+ * `null` for an acquired host, and for a pid.json that predates the field -
+ * absence is "not recorded", and inventing a warning for every host older than
+ * this CLI would drown the real signal.
+ */
+function layer0GuaranteeIssue(
+  pidMetadata: HostPidMetadata,
+): DoctorIssue | null {
+  // `?? null` rather than a bare null check: a pid.json older than this field
+  // decodes without the key at all, and so does any in-process fixture that
+  // predates it. Both mean "not recorded".
+  const record = pidMetadata.layer0 ?? null;
+  if (record === null || record.status === "acquired") {
+    return null;
+  }
+  const detail =
+    record.status === "degraded"
+      ? `cause=${record.cause} evidence=${record.evidence}`
+      : `this CLI does not recognise the record it published (${record.raw})`;
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_LAYER0_NOT_GUARANTEED,
+    severity: "warning",
+    title: "Host is running without the single-writer guarantee",
+    message:
+      `Host pid=${pidMetadata.pid} started without Layer 0's single-writer ` +
+      `lock on its data directory: ${detail}. The host is serving normally - ` +
+      "this is a deliberate degradation, not a failure - but a second host " +
+      "started against the same data directory would not be refused, so " +
+      "quote this in any report of duplicated or corrupted host state.",
+    // No CLI fix exists: the remedy depends on the cause (a reinstall for a
+    // missing native addon, relocating the data directory off a network
+    // filesystem for fs-unsupported). Offering `host restart` would just
+    // reproduce the same degradation.
+    fixAction: null,
+    terminalCommand: null,
+    details: {
+      pid: pidMetadata.pid,
+      hostId: pidMetadata.hostId,
+      layer0: record,
+    },
+  };
 }
 
 function lastCrashMarker(
@@ -732,6 +820,52 @@ export function routeIncompatibleRecovery(
         ? "traycer host restart"
         : null;
   return { fixAction, terminalCommand, plan };
+}
+
+// Detects the "file is both there and not found" field shape: the CLI
+// manifest's binaryPath is a symlink whose target no longer exists, so
+// lstat (and `ls`) succeed while exec fails ENOENT. Never throws -
+// doctor probes are advisory, and an unreadable manifest or a healthy
+// binary both read as "nothing to report".
+async function probeDanglingCliSlotBinary(
+  environment: Environment,
+): Promise<DoctorIssue | null> {
+  try {
+    const manifest = await readCliManifest(environment);
+    if (manifest === null) return null;
+    const linkStat = await lstat(manifest.binaryPath);
+    if (!linkStat.isSymbolicLink()) return null;
+    try {
+      await stat(manifest.binaryPath);
+      return null;
+    } catch {
+      // stat follows the link; failure after a successful lstat on a
+      // symlink is the dangling shape this probe exists to name.
+    }
+    const target = await readlink(manifest.binaryPath).catch(() => "unknown");
+    const repairAdvice =
+      manifest.source === "desktop"
+        ? "Launch the Traycer Desktop app to repair it (the app re-stages its bundled CLI at startup); if the app has been uninstalled, reinstall it, or remove the link and reinstall the CLI another way."
+        : "Reinstall the CLI, or remove the dangling link.";
+    return {
+      code: DOCTOR_ISSUE_CODES.CLI_SLOT_BINARY_DANGLING,
+      severity: "warning",
+      title: "CLI binary is a dangling symlink",
+      message:
+        `The CLI at ${manifest.binaryPath} is a symlink to ${target}, which no longer exists: ` +
+        "listing the file succeeds but executing it fails with 'no such file or directory'. " +
+        repairAdvice,
+      fixAction: null,
+      terminalCommand: null,
+      details: {
+        binaryPath: manifest.binaryPath,
+        linkTarget: target,
+        installSource: manifest.source,
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Best-effort install-vector read for recovery routing. A missing or malformed

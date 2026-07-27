@@ -167,6 +167,7 @@ const {
   registerHostLoginItem,
   readHostLoginItemStatus,
   retireCompetingCliRegistrationAtLaunch,
+  overrideAgentPrintRunnerForTests,
   runLaunchctlBootout,
   withHostLoginItemRegistrationLock,
   hasPendingLoginItemRevision,
@@ -625,10 +626,32 @@ describe("hasUnappliedPendingLoginItemRevision (M-B)", () => {
 describe("retireCompetingCliRegistrationAtLaunch", () => {
   // The outer `beforeAll` pins the platform off-darwin so the register
   // cycle's `bootoutStaleAgent` can never touch the developer's real
-  // launchd domain. This repair spawns nothing at all (deliberately - see
-  // its doc comment), so darwin is safe to restore here, and required:
-  // `hostManagesHostLoginItem()` short-circuits on every other platform.
+  // launchd domain. This repair mutates nothing via launchctl (its only
+  // spawn is the read-only agent print, and that is overridden below so
+  // the suite never reads the developer's real launchd domain), so darwin
+  // is safe to restore here, and required: `hostManagesHostLoginItem()`
+  // short-circuits on every other platform.
   beforeEach(() => {
+    // Default: a loaded, healthy agent - the pre-gate behavior. Wedge
+    // tests override per-test.
+    overrideAgentPrintRunnerForTests(async () => ({
+      exitCode: 0,
+      stdout: [
+        "gui/501/ai.traycer.host.agent = {",
+        "\tactive count = 1",
+        "\tpath = (submitted by smd.516)",
+        "\ttype = Submitted",
+        "\tmanaged_by = com.apple.xpc.ServiceManagement",
+        "\tstate = running",
+        "\tpid = 4242",
+        "}",
+        "",
+      ].join("\n"),
+      stderr: "",
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    }));
     Object.defineProperty(process, "platform", {
       value: "darwin",
       writable: true,
@@ -658,6 +681,7 @@ describe("retireCompetingCliRegistrationAtLaunch", () => {
   });
 
   afterEach(() => {
+    overrideAgentPrintRunnerForTests(null);
     Object.defineProperty(process, "platform", {
       value: "linux",
       writable: true,
@@ -697,6 +721,81 @@ describe("retireCompetingCliRegistrationAtLaunch", () => {
       "not-applicable",
     );
     expect(existsSync(legacyCliManifestPath())).toBe(true);
+  });
+
+  // The formerly-ACCEPTED GAP, now closed: an LWCR/EX_CONFIG-wedged agent
+  // reads `enabled` while every spawn dies. On that machine the CLI
+  // registration may be the machine's only working host - including one
+  // just installed via `service install --takeover` - and deleting it
+  // would hand the machine back to a host that cannot run.
+  it("leaves the competing manifest alone when the agent's print carries wedge markers", async () => {
+    getLoginItemSettings.mockReturnValue({ status: "enabled" });
+    writeLegacyCliManifest();
+    overrideAgentPrintRunnerForTests(async () => ({
+      exitCode: 0,
+      stdout: [
+        "gui/501/ai.traycer.host.agent = {",
+        "\tactive count = 0",
+        "\tpath = (submitted by smd.516)",
+        "\ttype = Submitted",
+        "\tmanaged_by = com.apple.xpc.ServiceManagement",
+        "\tstate = spawn failed",
+        "\tlast exit code = 78",
+        "}",
+        "",
+      ].join("\n"),
+      stderr: "",
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    }));
+
+    await expect(retireCompetingCliRegistrationAtLaunch()).resolves.toBe(
+      "agent-possibly-wedged",
+    );
+    expect(existsSync(legacyCliManifestPath())).toBe(true);
+  });
+
+  // Unknown must fail toward keeping the duplicate (one more login of
+  // dual-host, which Layer 0 makes data-safe), never toward deleting what
+  // may be the only working registration.
+  it("leaves the competing manifest alone when the wedge probe cannot answer", async () => {
+    getLoginItemSettings.mockReturnValue({ status: "enabled" });
+    writeLegacyCliManifest();
+    overrideAgentPrintRunnerForTests(async () => ({
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      spawnFailed: true,
+      signal: null,
+    }));
+
+    await expect(retireCompetingCliRegistrationAtLaunch()).resolves.toBe(
+      "agent-possibly-wedged",
+    );
+    expect(existsSync(legacyCliManifestPath())).toBe(true);
+  });
+
+  // The agent not being loaded at all is NOT a wedge: nothing is
+  // stuck-and-enabled, and the enabled gate above already made the
+  // availability call. Retirement proceeds.
+  it("still retires when the agent label is simply not loaded", async () => {
+    getLoginItemSettings.mockReturnValue({ status: "enabled" });
+    writeLegacyCliManifest();
+    overrideAgentPrintRunnerForTests(async () => ({
+      exitCode: 113,
+      stdout: "",
+      stderr: "Could not find specified service\n",
+      timedOut: false,
+      spawnFailed: false,
+      signal: null,
+    }));
+
+    await expect(retireCompetingCliRegistrationAtLaunch()).resolves.toBe(
+      "retired",
+    );
+    expect(existsSync(legacyCliManifestPath())).toBe(false);
   });
 
   it("is a no-op on a healthy machine with no competing manifest", async () => {

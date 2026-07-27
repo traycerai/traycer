@@ -794,6 +794,23 @@ export const HOST_METHOD_POLL_TABLE = {
   "agent.getProviderProfileRateLimits": { ...LATEST_SCHEDULING, poll: null },
   // Configuring an agent persists its execution settings.
   "agent.configure": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Shutdown claim, commit, and release change admission state and must be
+  // ordered against one another.
+  "lifecycle.claimShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "lifecycle.commitShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "lifecycle.releaseShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
 } satisfies HostMethodPolicyTable;
 
 const hostMethodPolicyTable: HostMethodPolicyTable = HOST_METHOD_POLL_TABLE;

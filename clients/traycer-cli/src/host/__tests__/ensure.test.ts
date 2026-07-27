@@ -153,6 +153,9 @@ function makeController(
     retireCompetingRegistration: vi.fn(async () => ({
       kind: "not-applicable" as const,
     })),
+    takeoverDesktopRegistration: vi.fn(async () => ({
+      kind: "not-applicable" as const,
+    })),
   };
 }
 

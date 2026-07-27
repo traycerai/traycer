@@ -290,6 +290,7 @@ function buildFakeBridge(
           version: null,
           pid: null,
           hostId: null,
+          layer0: null,
         },
         logs: [],
         links: [],

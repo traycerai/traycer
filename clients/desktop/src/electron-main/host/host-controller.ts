@@ -440,6 +440,16 @@ interface AvailableSnapshotShape {
   }>;
 }
 
+// One attempt of the locked macOS activation cycle. The extra arm marks
+// the one failure class the wrapper may repair by re-running the cycle:
+// "register completed, host did not come up in time". Deliberately NOT a
+// MutationOutcome kind - it must never escape to a caller, and carrying
+// the message (not the built failure) defers `failedAfterServiceCycle`'s
+// reload side effect until the retry is truly exhausted.
+type MacActivationCycleAttempt =
+  | MutationOutcome<{ readonly activated: boolean }>
+  | { readonly kind: "retryable-readiness-timeout"; readonly message: string };
+
 interface EligibleStage {
   readonly version: string;
   readonly fingerprint: string;
@@ -1120,7 +1130,41 @@ export class HostController {
   // re-read state under the desktop-held lock, probe busy, cycle
   // SMAppService, wait for readiness, stamp if the record was null.
 
+  // Bounded self-repair around the activation cycle: a readiness timeout
+  // after a COMPLETED register cycle retries the full cycle exactly once
+  // before surfacing the gate card. The register cycle is itself the
+  // repair (bootout + re-register), so the automatic second attempt is
+  // precisely what the card's Retry button would ask the user to click -
+  // the machine must not outsource its own retry. Bounded at one: an
+  // unbounded loop would churn disruptive SMAppService cycles forever
+  // while the user never learns anything is wrong. `requires-approval`
+  // never auto-retries (only the user can act), and every other failure
+  // class surfaces immediately - the retry covers exactly "the cycle
+  // completed, the host did not come up in time".
   private async runLockedMacActivationCycle(
+    force: boolean,
+    postCommitContinuation: BusyContinuation,
+    isConvergeReady: boolean,
+  ): Promise<MutationOutcome<{ readonly activated: boolean }>> {
+    const first = await this.runLockedMacActivationCycleOnce(
+      force,
+      postCommitContinuation,
+      isConvergeReady,
+    );
+    if (first.kind !== "retryable-readiness-timeout") return first;
+    log.warn(
+      "[host-controller] readiness timed out after a completed register cycle - auto-retrying the cycle once before surfacing the failure",
+    );
+    const second = await this.runLockedMacActivationCycleOnce(
+      force,
+      postCommitContinuation,
+      isConvergeReady,
+    );
+    if (second.kind !== "retryable-readiness-timeout") return second;
+    return this.failedAfterServiceCycle(second.message);
+  }
+
+  private async runLockedMacActivationCycleOnce(
     force: boolean,
     postCommitContinuation: BusyContinuation,
     // Fixup B3: lock-contention terminal contract - the desktop-held-lock
@@ -1131,7 +1175,7 @@ export class HostController {
     // `convergeReady`, `applyStaged`, `activateInstalled`, `installVersion`,
     // `respawn`, `recoverIfDown`, and `freePortAndRestart`.
     isConvergeReady: boolean,
-  ): Promise<MutationOutcome<{ readonly activated: boolean }>> {
+  ): Promise<MacActivationCycleAttempt> {
     const outcome = await withDesktopCliLock(
       {
         lockPath: this.lockPath,
@@ -1270,11 +1314,18 @@ export class HostController {
         reason: readiness.reason,
         loginItemStatus: postWaitStatus,
       });
-      const message =
-        postWaitStatus === "requires-approval"
-          ? approvalRequiredMessage()
-          : `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms - run \`traycer host doctor\` to recover.`;
-      return this.failedAfterServiceCycle(message);
+      if (postWaitStatus === "requires-approval") {
+        return this.failedAfterServiceCycle(approvalRequiredMessage());
+      }
+      // Not a terminal failure yet: the wrapper retries the full cycle
+      // once before building the gate card from this message.
+      // `readiness.reason` belongs in the user string, not only the log:
+      // the sibling failure paths (`:992`, `:1533`) already include it,
+      // and this is the one card a locked-out user actually reads.
+      return {
+        kind: "retryable-readiness-timeout",
+        message: `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms (${readiness.reason}) - run \`traycer host doctor\` to recover.`,
+      };
     }
     if (
       expectedRuntimeVersion !== null &&

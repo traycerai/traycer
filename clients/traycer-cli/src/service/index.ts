@@ -85,6 +85,20 @@ export type CompetingRegistrationRetirement =
       readonly manifestRemovalFailed: boolean;
     };
 
+// Outcome of `ServiceController.takeoverDesktopRegistration`.
+export type DesktopRegistrationTakeover =
+  | {
+      readonly kind: "took-over";
+      readonly agentLabelId: string;
+      // How the running host was handled: "stopped" through its own
+      // lifecycle RPCs, "no-host" when nothing was running,
+      // "skipped-unreachable" when the host could not be asked (it is the
+      // broken part - the takeover IS the recovery) and the job was booted
+      // out underneath it.
+      readonly cooperativeStop: "stopped" | "no-host" | "skipped-unreachable";
+    }
+  | { readonly kind: "not-applicable" };
+
 export interface ServiceController {
   install(options: InstallServiceOptions): Promise<void>;
   uninstall(options: UninstallServiceOptions): Promise<void>;
@@ -92,6 +106,20 @@ export interface ServiceController {
   stop(label: ServiceLabel): Promise<void>;
   start(label: ServiceLabel): Promise<void>;
   restart(label: ServiceLabel): Promise<void>;
+  // Explicit-consent counterpart to `install`'s SMAppService refusal
+  // (macOS): move host management from the Desktop app to the CLI. Stops
+  // the Desktop-managed host cooperatively first (a busy denial throws
+  // E_HOST_BUSY - never a takeover over live work), boots out the agent
+  // registration with a verify-after re-probe, and leaves the machine
+  // ready for a plain `install`. Resolves `not-applicable` on platforms
+  // without SMAppService and on machines where Desktop does not own an
+  // agent registration. Throws E_SERVICE_INSTALL_FAILED on
+  // pre-label-split machines where the CLI label IS Desktop's own
+  // registration (bootout there corrupts the BTM state the app manages;
+  // `service uninstall` is the intended route).
+  takeoverDesktopRegistration(
+    label: ServiceLabel,
+  ): Promise<DesktopRegistrationTakeover>;
   // Repair, not refusal: remove a CLI-label registration that would run a
   // SECOND host beside Desktop's SMAppService agent. The v1.1.7 label split
   // let both coexist, and until v1.1.8 the ownership probe was blind to the

@@ -1,0 +1,63 @@
+gui/501/com.apple.enhancedloggingd = {
+	active count = 0
+	path = /System/Library/LaunchAgents/com.apple.enhancedloggingd.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /usr/libexec/enhancedloggingd
+	arguments = {
+		/usr/libexec/enhancedloggingd
+	}
+
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.nZ4scYjk2n/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		MallocSpaceEfficient => 1
+		XPC_SERVICE_NAME => com.apple.enhancedloggingd
+	}
+
+	domain = gui/501 [100023]
+	asid = 100023
+	minimum runtime = 10
+	base minimum runtime = 10
+	exit timeout = 5
+	runs = 0
+	last exit code = (never exited)
+
+	endpoints = {
+		"com.apple.enhancedloggingd.xpc" = {
+			port = 0x0
+			active = 0
+			managed = 1
+			reset = 0
+			hide = 0
+			watching = 1
+		}
+		"com.apple.enhancedloggingd.bug-session-status.xpc" = {
+			port = 0x0
+			active = 0
+			managed = 1
+			reset = 0
+			hide = 0
+			watching = 1
+		}
+	}
+
+	spawn type = adaptive (6)
+	jetsam priority = 40
+	jetsam memory limit (active, soft) = 15 MB
+	jetsam memory limit (inactive, hard) = 15 MB
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	exponential throttling grace limit = 10
+
+	properties = supports transactions | supports pressured exit | inferred program | system service | exponential throttling | tle system
+}

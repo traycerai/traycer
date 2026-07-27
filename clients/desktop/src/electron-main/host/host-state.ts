@@ -107,6 +107,76 @@ export async function readDesktopHostStagedRecord(
 }
 
 /**
+ * Mirror of the CLI's `HostLayer0Record`
+ * (`clients/traycer-cli/src/host/pid-metadata.ts`) - the host's Layer 0
+ * single-writer (I1) verdict. `unrecognized` exists so a desktop build older
+ * than its host reports "I cannot confirm the guarantee" rather than
+ * dropping the record and reporting nothing, which is the same silence this
+ * type exists to remove.
+ */
+export type DesktopHostLayer0Record =
+  | { readonly status: "acquired"; readonly attemptId: string }
+  | {
+      readonly status: "degraded";
+      readonly attemptId: string;
+      readonly cause: string;
+      readonly evidence: string;
+    }
+  | { readonly status: "unrecognized"; readonly raw: string };
+
+/**
+ * Mirror of the CLI's `decodeLayer0Record`, same fail-open contract: a
+ * malformed record decodes to `unrecognized` rather than `null`, so "this
+ * record could not be parsed" is never conflated with "this host predates
+ * the field" (which is `null`, handled by the caller before this is reached).
+ */
+export function decodeHostLayer0Record(
+  value: unknown,
+): DesktopHostLayer0Record | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { status: "unrecognized", raw: JSON.stringify(value) };
+  }
+  const record = value as Record<string, unknown>;
+  const attemptId =
+    typeof record.attemptId === "string" ? record.attemptId : "";
+  if (record.status === "acquired" && attemptId.length > 0) {
+    return { status: "acquired", attemptId };
+  }
+  if (record.status === "degraded" && attemptId.length > 0) {
+    return {
+      status: "degraded",
+      attemptId,
+      cause:
+        typeof record.cause === "string"
+          ? record.cause
+          : JSON.stringify(record.cause ?? null),
+      evidence: typeof record.evidence === "string" ? record.evidence : "",
+    };
+  }
+  return { status: "unrecognized", raw: JSON.stringify(record) };
+}
+
+/**
+ * The host's Layer 0 verdict straight off `pid.json`, read independently of
+ * `HostLifecycle`'s renderer-facing snapshot (`DesktopLocalHostSnapshot`),
+ * which deliberately drops it - same rationale as `RunningHostIdentity`
+ * above. `null` covers both "no host running" (no `pid.json`) and "this
+ * host predates the field" (a `pid.json` with no `layer0` key); the support
+ * report must render both as explicitly unknown, never as the healthy
+ * `acquired` case.
+ */
+export async function readHostLayer0Record(
+  layout: HostFsLayout,
+): Promise<DesktopHostLayer0Record | null> {
+  const parsed = await readJsonFile(layout.pidMetadataFile);
+  if (!isPlainObject(parsed)) return null;
+  return decodeHostLayer0Record(parsed.layer0);
+}
+
+/**
  * The runtime identity the live host is currently publishing, or `null`
  * when there is no reachable running host. Fixup A3: `readPidMetadataState`
  * is a STRUCTURAL parse only (pid.json well-formed) - it says nothing about

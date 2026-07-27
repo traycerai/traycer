@@ -4,6 +4,7 @@ import { readHostPidMetadata } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
 import type { CliInvocation } from "../cli-binary";
+import { buildCompatibleHostStartScript } from "./host-start-script";
 import { fileExists } from "../install-binary";
 import { serviceManifestPath, type ServiceLabel } from "../label";
 import { ProcessRunError, runCommand } from "../process-runner";
@@ -41,6 +42,8 @@ export function createLinuxController(
     // SMAppService is macOS-only, so there is no second registration path
     // that could compete with systemd's user unit here.
     retireCompetingRegistration: () =>
+      Promise.resolve({ kind: "not-applicable" }),
+    takeoverDesktopRegistration: () =>
       Promise.resolve({ kind: "not-applicable" }),
   };
 }
@@ -211,10 +214,11 @@ interface BuildUnitOptions {
 
 function buildUnit(options: BuildUnitOptions): string {
   const programArgs = [
+    "/bin/sh",
+    "-c",
+    buildCompatibleHostStartScript(options.label.id),
     options.cli.command,
     ...options.cli.args,
-    "host",
-    "start",
   ];
   // systemd treats `%` as a specifier introducer and `;`/`\n`/`\t` as
   // line/argument separators inside an Exec= value. Reject any token

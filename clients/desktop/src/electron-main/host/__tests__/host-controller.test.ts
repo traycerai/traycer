@@ -2719,7 +2719,18 @@ describe("platform matrix", () => {
       startedAt: null,
       reason: "pid metadata never appeared",
     });
-    vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+    // "enabled" until the readiness wait has actually run, then
+    // "requires-approval" - the mid-wait toggle this test exists to pin. A
+    // blanket "requires-approval" here made the cycle's EARLY approval
+    // terminal fire before register and before the wait, so the queued
+    // not-ready readiness above was never consumed (and leaked into the
+    // next test's Once queue) while the assertion passed against the wrong
+    // branch.
+    vi.mocked(readHostLoginItemStatus).mockImplementation(() =>
+      vi.mocked(waitForHostReady).mock.calls.length > 0
+        ? "requires-approval"
+        : "enabled",
+    );
 
     const outcome = await controller.installVersion("1.8.0", false);
 
@@ -5418,5 +5429,87 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
     const retryOutcome = await controller.installVersion("1.8.0", false);
     expect(retryOutcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bounded auto-retry: a readiness timeout after a COMPLETED register cycle
+// re-runs the full activation cycle exactly once before surfacing the gate
+// card. The register cycle is itself the repair (bootout + re-register), so
+// this is the machine clicking its own Retry button - bounded at one so a
+// genuinely broken host still surfaces a card instead of churning
+// disruptive SMAppService cycles forever. `requires-approval` never
+// auto-retries: only the user can act there.
+// ---------------------------------------------------------------------------
+describe("packaged-mac activation: bounded auto-retry on readiness timeout", () => {
+  const NOT_READY = {
+    ready: false,
+    version: null,
+    pid: null,
+    startedAt: null,
+    reason: "pid metadata never appeared",
+  } as const;
+
+  function stagePackagedMacWorld(): HostController {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    return controller;
+  }
+
+  it("re-runs the full cycle once (register included) and succeeds when the host comes up on attempt two", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(waitForHostReady)
+      .mockResolvedValueOnce(NOT_READY)
+      .mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("ok");
+    // The retry is a FULL cycle - a second register, not a second wait on
+    // the failed cycle's corpse.
+    expect(waitForHostReady).toHaveBeenCalledTimes(2);
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays bounded: a second timeout surfaces the gate card carrying the readiness reason", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind === "failed") {
+      expect(outcome.message).toContain("pid metadata never appeared");
+    }
+    expect(waitForHostReady).toHaveBeenCalledTimes(2);
+  });
+
+  it("never auto-retries when the login item requires approval - only the user can act there", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
+    // Flips only after the wait ran: a blanket "requires-approval" would
+    // hit the cycle's EARLY approval terminal before register/wait and
+    // this test would pin the wrong branch (see the mid-wait toggle test).
+    vi.mocked(readHostLoginItemStatus).mockImplementation(() =>
+      vi.mocked(waitForHostReady).mock.calls.length > 0
+        ? "requires-approval"
+        : "enabled",
+    );
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
   });
 });

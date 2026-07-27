@@ -70,6 +70,10 @@ interface StageServiceMocksInput {
     readonly version: string;
     readonly websocketUrl: string;
     readonly startedAt: string;
+    // The real reader always reports the host's Layer 0 verdict; these rows
+    // are about service state, so they state "no attempt recorded" rather
+    // than omitting the field the engine now reads.
+    readonly layer0: null;
   } | null;
 }
 
@@ -186,6 +190,7 @@ describe("runDoctor SERVICE_STOPPED recovery routing", () => {
         version: "1.4.0",
         websocketUrl: "ws://127.0.0.1/rpc",
         startedAt: "2026-04-01T00:00:00Z",
+        layer0: null,
       },
     });
 
@@ -236,6 +241,11 @@ describe("runDoctor SERVICE_STOPPED recovery routing", () => {
     expect(issue?.severity).toBe("info");
     expect(issue?.fixAction).toBeNull();
     expect(issue?.terminalCommand).toBeNull();
+    // The card is info-only, but its text must still carry the takeover
+    // path for the case where the Desktop app itself cannot repair the
+    // host - otherwise doctor and the CLI refusals point at each other in
+    // a circle with no exit.
+    expect(issue?.message).toContain("traycer host service uninstall");
   });
 
   it("still emits SERVICE_NOT_REGISTERED when pid metadata proves a host process is running", async () => {
@@ -251,6 +261,7 @@ describe("runDoctor SERVICE_STOPPED recovery routing", () => {
         version: "1.4.0",
         websocketUrl: "ws://127.0.0.1/rpc",
         startedAt: "2026-04-01T00:00:00Z",
+        layer0: null,
       },
     });
 
@@ -285,6 +296,7 @@ describe("runDoctor SERVICE_STOPPED recovery routing", () => {
         version: "1.4.0",
         websocketUrl: "ws://127.0.0.1/rpc",
         startedAt: "2026-04-01T00:00:00Z",
+        layer0: null,
       },
     });
     vi.doMock("../../store/cli-lock", () => ({
