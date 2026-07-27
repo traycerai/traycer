@@ -13,6 +13,7 @@ import {
   useMainPanelCollapsed,
 } from "@/stores/epics/left-panel-store";
 import {
+  defaultPrSeenFactsScopeState,
   selectPrSeenFactsScope,
   usePrSeenFactsStore,
 } from "@/stores/epics/pr-seen-facts-store";
@@ -74,9 +75,16 @@ export function PrListBackgroundMount(
     activeGroupHasPullRequests &&
     !sectionCollapsed;
 
+  // The no-host placeholder must be the shared constant, not a fresh literal:
+  // this selector is a `useSyncExternalStore` snapshot (zustand v5 re-invokes
+  // it per commit without memoizing), so allocating here would read as a
+  // changed store on every commit and re-render until React throws "Maximum
+  // update depth exceeded". `hostId` is null for the whole window in which the
+  // host is still starting - or never starts - which is exactly when the epic
+  // pane must degrade quietly rather than take the error boundary.
   const scopeState = usePrSeenFactsStore((s) =>
     hostId === null
-      ? { seeded: false, hasChanged: false, factsByPrKey: {} }
+      ? defaultPrSeenFactsScopeState
       : selectPrSeenFactsScope(hostId, props.epicId)(s),
   );
   const seedBaseline = usePrSeenFactsStore((s) => s.seedBaseline);

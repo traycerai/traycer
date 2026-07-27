@@ -209,6 +209,22 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
+  useEpicSweepWorktreeCandidates: () => ({
+    rows: [],
+    isPending: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
+  useEpicSweepWorktrees: () => ({
+    isPending: false,
+    mutate: () => {},
+  }),
+  useSweepingWorktreePaths: () => new Set<string>(),
+}));
+
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({
     isPending: false,
@@ -513,6 +529,37 @@ describe("<EpicsListPanel />", () => {
 
     expect(await screen.findByText("Phase somehow pinned")).not.toBeNull();
     expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
+  });
+
+  // The Sweep control keeps its slot in every task row rather than appearing
+  // and disappearing per row: enabled when the task owns worktrees, faded and
+  // non-actionable when it does not.
+  it("renders the row Sweep action when the task owns worktrees", async () => {
+    testState.worktreesByEpicId = new Map([
+      ["epic-from-history", [historyWorktree()]],
+    ]);
+    renderPanel("embedded", "/");
+
+    const sweep = await screen.findByRole("button", {
+      name: /^sweep worktrees for /i,
+    });
+    expect(sweep.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^no worktrees to sweep for /i }),
+    ).toBeNull();
+  });
+
+  it("keeps a disabled Sweep action on a task with no worktrees", async () => {
+    testState.worktreesByEpicId = new Map();
+    renderPanel("embedded", "/");
+
+    const disabled = await screen.findByRole("button", {
+      name: /^no worktrees to sweep for /i,
+    });
+    expect(disabled.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.queryByRole("button", { name: /^sweep worktrees for /i }),
+    ).toBeNull();
   });
 
   it("shows task PR pills without replacing the row navigation layer", async () => {

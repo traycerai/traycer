@@ -370,10 +370,35 @@ function getPersistedPanelVisibilityOverrides(
   }, {});
 }
 
+// `normalizeLeftPanelGroups` returns its input untouched only when the stored
+// value is ALREADY normalized; otherwise it builds a new array. Persisted
+// groups written before a panel id existed can never be already-normalized -
+// the missing group is appended on every call - so the uncached function
+// returns a different reference each time it runs.
+//
+// `useLeftPanelGroups` feeds that value straight into `useSyncExternalStore`,
+// and zustand v5 calls `getSnapshot` as `() => selector(getState())` with no
+// memoization of its own. An unstable reference therefore reads as "the store
+// changed" on every commit, so React re-renders forever and throws "Maximum
+// update depth exceeded" (minified error #185) - which is what every user
+// carrying pre-Pull-Requests sidebar state hit on opening an epic.
+//
+// One entry is enough: the normalized value is a pure function of the stored
+// slice, which zustand only ever replaces by identity, never mutates in place.
+let lastStoredPanelGroupsInput: unknown = null;
+let lastStoredPanelGroupsResult: ReadonlyArray<LeftPanelGroup> =
+  DEFAULT_LEFT_PANEL_GROUPS;
+
 function getStoredPanelGroups(groups: unknown): ReadonlyArray<LeftPanelGroup> {
+  if (groups === lastStoredPanelGroupsInput) return lastStoredPanelGroupsResult;
   const storedGroups = readPersistedPanelGroups(groups);
-  if (storedGroups === null) return DEFAULT_LEFT_PANEL_GROUPS;
-  return normalizeLeftPanelGroups(storedGroups);
+  const normalizedGroups =
+    storedGroups === null
+      ? DEFAULT_LEFT_PANEL_GROUPS
+      : normalizeLeftPanelGroups(storedGroups);
+  lastStoredPanelGroupsInput = groups;
+  lastStoredPanelGroupsResult = normalizedGroups;
+  return normalizedGroups;
 }
 
 function getPersistedActivePanelIds(
