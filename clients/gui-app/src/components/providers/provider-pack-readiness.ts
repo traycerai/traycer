@@ -24,10 +24,8 @@ export interface ProviderPackPreparing {
   /** Epoch ms of the next automatic retry, or null when none is scheduled. */
   readonly retryAtMs: number | null;
   /** Why the install is stuck. Null on the `downloading` arm. */
-  readonly reason: Extract<
-    ProviderManagedInstallState,
-    { status: "error" }
-  >["reason"] | null;
+  readonly reason:
+    Extract<ProviderManagedInstallState, { status: "error" }>["reason"] | null;
 }
 
 /**
@@ -123,6 +121,34 @@ export function providerPackPreparingShortLabel(
   return "Preparing…";
 }
 
+/**
+ * Whether a failed pack's surface may OFFER a retry, as opposed to only
+ * describing the failure.
+ *
+ * Every reason but `unrepairable` is a genuine "try again": a user-initiated
+ * `providers.ensurePack` clears the pack's backoff and jumps the queue.
+ * `unrepairable` means the local copy verified against its signed digest and
+ * was defective anyway, so the host has recorded the cell as TERMINAL and
+ * refuses further installs for it - the click cannot do anything, now or later,
+ * and `providerManagedInstallErrorReasonSchema`'s own contract is that a
+ * renderer must not draw the affordance. Withholding it is the same
+ * "gated and labelled, never offered-then-failed" rule the rest of this module
+ * follows, applied one level in: the tab is still labelled with why it failed.
+ *
+ * A plain exclusion rather than an allow-list because an unrecognized future
+ * reason cannot reach this function: `managedInstallState` is decoded with
+ * `.catch(null)` over the WHOLE state, so a member this client does not know
+ * normalizes the state to null and nothing gates at all. Every reason that gets
+ * here is a member this client knows, and all of them but `unrepairable` -
+ * including `live-owner-stalled`, whose whole point is that a retry can move it
+ * - must stay retryable.
+ */
+export function providerPackRetryable(
+  preparing: ProviderPackPreparing,
+): boolean {
+  return preparing.kind === "error" && preparing.reason !== "unrepairable";
+}
+
 function providerPackErrorDetail(
   reason: ProviderPackPreparing["reason"],
 ): string {
@@ -133,6 +159,23 @@ function providerPackErrorDetail(
       return "the download could not be reached. Retry when you're back online.";
     case "verification":
       return "the downloaded files failed verification. Retry to fetch them again.";
+    case "live-owner-stalled":
+      // Not a network failure and not the user's to fix: another Traycer
+      // process on this machine owns the download and stopped making progress,
+      // so this one stopped waiting behind it. Naming the sibling is the whole
+      // value of the reason - "check your connection" would send the user after
+      // something that is working fine. The copy offers the retry (this IS a
+      // retryable reason, with a real `retryAtMs`) without promising a moment:
+      // the backoff makes an automatic attempt eligible again, it does not
+      // schedule one.
+      return "another Traycer process on this device stopped making progress on the download. Retry to pick it up here.";
+    case "unrepairable":
+      // The one terminal reason. Re-downloading fetches the byte-identical
+      // blob and fails in the same place, fleet-wide, so this copy must not
+      // send the user back to an action that cannot work - it names the one
+      // thing that can (a new release) and the one move they own (a PATH or
+      // custom install they point Traycer at).
+      return "this build is defective and reinstalling cannot fix it. A corrected version has to be published - until then, install the CLI yourself and select it in Settings → Providers.";
     default:
       return "retry to try again.";
   }

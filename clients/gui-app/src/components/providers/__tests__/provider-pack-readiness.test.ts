@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   ProviderCliState,
+  ProviderManagedInstallErrorReason,
   ProviderManagedInstallState,
 } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -8,6 +9,7 @@ import {
   providerPackPreparingFromInstallState,
   providerPackPreparingLabel,
   providerPackPreparingShortLabel,
+  providerPackRetryable,
 } from "@/components/providers/provider-pack-readiness";
 
 function providerState(
@@ -44,7 +46,10 @@ describe("providerPackPreparingFromInstallState: which states gate", () => {
     ["a null state (old host / unmanaged store)", null],
     ["an undefined state (key absent on an old wire)", undefined],
     ["installed", { status: "installed" as const }],
-    ["absent (still shipping bundled bytes pre-cutover)", { status: "absent" as const }],
+    [
+      "absent (still shipping bundled bytes pre-cutover)",
+      { status: "absent" as const },
+    ],
   ])("does not gate on %s", (_label, state) => {
     expect(providerPackPreparingFromInstallState(state)).toBeNull();
   });
@@ -148,7 +153,9 @@ describe("preparing labels", () => {
   });
 
   it("gives a failed pack distinct copy per reason, never a progress phrase", () => {
-    const failed = (reason: "disk-full" | "network" | "verification" | "unknown") =>
+    const failed = (
+      reason: "disk-full" | "network" | "verification" | "unknown",
+    ) =>
       providerPackPreparingLabel(
         { kind: "error", percent: null, retryAtMs: null, reason },
         "Claude Code",
@@ -158,7 +165,12 @@ describe("preparing labels", () => {
     expect(failed("verification")).toContain("failed verification");
     expect(failed("unknown")).toContain("retry");
     // A stuck install must never read like a slow one.
-    for (const reason of ["disk-full", "network", "verification", "unknown"] as const) {
+    for (const reason of [
+      "disk-full",
+      "network",
+      "verification",
+      "unknown",
+    ] as const) {
       expect(failed(reason)).not.toContain("Preparing");
     }
     expect(
@@ -169,5 +181,127 @@ describe("preparing labels", () => {
         reason: "network",
       }),
     ).toBe("Setup failed");
+  });
+});
+
+/**
+ * `unrepairable` is the only reason that is not a "try again" (see
+ * `providerManagedInstallErrorReasonSchema`): the bytes verified against their
+ * signed digest and were defective anyway, so the registry holds the identical
+ * blob fleet-wide and no reinstall can change the outcome.
+ *
+ * The failure these two describes exist to catch is a QUIET one - the enum
+ * grows, the new member lands in `providerPackErrorDetail`'s deliberately
+ * fail-open `default:` arm, and the user is told to "retry to try again" for a
+ * build that can never work. Nothing throws, nothing logs; the copy is just
+ * wrong forever. So both assertions are on the PROPERTY (no retry is promised,
+ * no retry is offered) rather than on a string this file also authored.
+ */
+const detailFor = (reason: ProviderManagedInstallErrorReason): string =>
+  providerPackPreparingLabel(
+    { kind: "error", percent: null, retryAtMs: null, reason },
+    "Claude Code",
+  );
+
+describe("the terminal `unrepairable` reason", () => {
+  it("never tells the user to retry a build that can never work", () => {
+    const copy = detailFor("unrepairable");
+    // The whole point. `default:` returns "retry to try again." and every
+    // other reason's copy contains "retry" or "Retry" on purpose - only this
+    // one must not, in any casing.
+    expect(copy).not.toMatch(/retry/i);
+    // ...and it is not the fail-open fallback wearing different words: the
+    // `unknown` arm is the closest neighbour that DOES route to a retry, so a
+    // copy identical to it would mean the new `case` never ran.
+    expect(copy).not.toBe(detailFor("unknown"));
+    // Still the failed line, not a progress phrase.
+    expect(copy).toContain("Claude Code setup failed");
+    expect(copy).not.toContain("Preparing");
+  });
+
+  it("is the only reason whose surface may not offer a retry", () => {
+    expect(
+      providerPackRetryable({
+        kind: "error",
+        percent: null,
+        retryAtMs: null,
+        reason: "unrepairable",
+      }),
+    ).toBe(false);
+    // Enumerated, not sampled: every other member of the closed enum stays
+    // retryable, because for those a user-initiated `providers.ensurePack` is
+    // the user's only way to clear the backoff. An exclusion that grew to cover
+    // one of these would strand a recoverable failure with no action at all.
+    for (const reason of [
+      "disk-full",
+      "network",
+      "verification",
+      "unknown",
+    ] as const) {
+      expect(
+        providerPackRetryable({
+          kind: "error",
+          percent: null,
+          retryAtMs: null,
+          reason,
+        }),
+      ).toBe(true);
+    }
+    // A download in flight has nothing to retry either, and for the opposite
+    // reason - it has not failed.
+    expect(
+      providerPackRetryable({
+        kind: "downloading",
+        percent: 42,
+        retryAtMs: null,
+        reason: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+/**
+ * The other pole. `live-owner-stalled` means a SIBLING Traycer process on this
+ * machine holds the pack's download lease and stopped advancing its progress
+ * token, so this host stopped waiting behind it. It is fully retryable, with a
+ * real `retryAtMs` - the exact opposite of `unrepairable`, and the two arrived
+ * in the same change on purpose: they are the two ends of what `reason` is for.
+ *
+ * Before it existed this condition was reported as `unknown`, which is the
+ * bucket for a failure the host could NOT classify. This one it classifies
+ * precisely, so the assertions below are about the copy not misdirecting: not
+ * the network (nothing about the registry failed), and not the fallback.
+ */
+describe("the retryable `live-owner-stalled` reason", () => {
+  it("blames the sibling process, not the user's connection", () => {
+    const copy = detailFor("live-owner-stalled");
+    // The misdirection this member exists to prevent. Reported as `network`
+    // (the neighbouring plausible arm) the user is sent to check a connection
+    // that is fine; reported as `unknown` they are told nothing at all.
+    expect(copy).not.toMatch(/online|connection|network/i);
+    expect(copy).not.toBe(detailFor("network"));
+    expect(copy).not.toBe(detailFor("unknown"));
+    // It names what actually happened, in the user's terms.
+    expect(copy).toContain("another Traycer process on this device");
+    // Still the failed line, not a progress phrase.
+    expect(copy).toContain("Claude Code setup failed");
+    expect(copy).not.toContain("Preparing");
+  });
+
+  it("keeps the retry - this failure is a genuine try-again", () => {
+    // Paired with the `unrepairable` test above deliberately: same enum, same
+    // function, opposite answers. A gate that only ever said "no retry" would
+    // pass that test and strand this one with no action at all.
+    expect(detailFor("live-owner-stalled")).toMatch(/retry/i);
+    expect(
+      providerPackRetryable({
+        kind: "error",
+        percent: null,
+        // The wire's own distinction: a real future retry time, where
+        // `unrepairable` always travels with null.
+        retryAtMs: 1_700_000_000_000,
+        reason: "live-owner-stalled",
+      }),
+    ).toBe(true);
   });
 });

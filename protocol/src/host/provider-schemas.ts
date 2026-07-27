@@ -217,12 +217,38 @@ export type ProviderCliCandidate = z.infer<typeof providerCliCandidateSchema>;
  * `definitively-invalid` verdict, `network` is a registry/transport failure,
  * and `unknown` is the honest catch-all for a failure the host could not
  * classify any further.
+ *
+ * `unrepairable` is the one member that is not a failure to retry, and it is
+ * the only reason that changes what the surface may OFFER rather than only
+ * what it says. It means the local copy was digest-verified against a signed
+ * artifact and only then found defective - a schema-invalid `pack.json`, or an
+ * envelope whose manifest does not cover the tree. Re-downloading fetches the
+ * byte-identical blob and fails in exactly the same place, fleet-wide, so the
+ * host records the cell as terminal and refuses further installs for it. It
+ * always travels with `retryAtMs: null`, and a renderer must not draw a retry
+ * affordance for it: the click cannot do anything, now or later. Every other
+ * reason is a genuine "try again"; this one is "this build is broken, and a
+ * new one has to be published".
+ *
+ * `live-owner-stalled` is the opposite pole and belongs to the same story: a
+ * SIBLING PROCESS on this machine holds the pack's download lease and its
+ * progress token stopped advancing, so this host gave up waiting behind it
+ * (bounded on the owner's lack of progress, not on elapsed time - a sibling
+ * legitimately pulling a multi-gigabyte pack outlasts any fixed cap). Fully
+ * retryable, with a real `retryAtMs`. It is deliberately NOT `network`, because
+ * nothing about the registry failed and telling the user to check their
+ * connection would send them after the wrong thing; and it is deliberately not
+ * `unknown`, because `unknown` means the host could not classify the failure at
+ * all, and this one is classified precisely - the host detected it on purpose
+ * and has a typed error for it.
  */
 export const providerManagedInstallErrorReasonSchema = z.enum([
   "disk-full",
   "network",
   "verification",
   "unknown",
+  "unrepairable",
+  "live-owner-stalled",
 ]);
 export type ProviderManagedInstallErrorReason = z.infer<
   typeof providerManagedInstallErrorReasonSchema
@@ -276,8 +302,11 @@ export const providerManagedInstallStateSchema = z.discriminatedUnion(
       // Never the primary copy - the renderer writes its own from `reason`.
       message: z.string(),
       // Epoch ms the host will accept an automatic retry again, or null when
-      // the failure carries no backoff (nothing scheduled; a user-initiated
-      // `providers.ensurePack` is the way forward).
+      // the failure carries no backoff. Null is NOT one condition: read it
+      // together with `reason`. For every reason but `unrepairable` it means
+      // nothing is scheduled and a user-initiated `providers.ensurePack` is
+      // the way forward; for `unrepairable` it means there is no way forward
+      // at all and `ensurePack` is a guaranteed no-op.
       retryAtMs: z.number().nullable(),
     }),
   ],

@@ -26,6 +26,7 @@ import { AccentDot } from "@/components/providers/accent-dot";
 import {
   providerPackPreparingLabel,
   providerPackPreparingShortLabel,
+  providerPackRetryable,
   type ProviderPackPreparing,
 } from "@/components/providers/provider-pack-readiness";
 import { cn } from "@/lib/utils";
@@ -153,7 +154,10 @@ function railButtonTitle(entry: RailEntry, disabled: boolean): string {
       entry.preparing,
       entry.harness.label,
     );
-    return entry.preparing.kind === "error"
+    // Only a pack whose failure a retry can actually move gets the retry
+    // sentence - a terminal `unrepairable` cell would be inviting a click the
+    // host is guaranteed to no-op.
+    return providerPackRetryable(entry.preparing)
       ? `${status} Click to retry.`
       : status;
   }
@@ -228,7 +232,12 @@ function ProviderRailButton(props: ProviderRailButtonProps) {
   // That keeps the retry a genuine user gesture (which is what earns the
   // host's user-initiated arm - backoff cleared, queue jumped) without
   // inventing new chrome inside a 32px tab.
-  const packRetryable = preparing?.kind === "error";
+  //
+  // The exception has its own exception, and `providerPackRetryable` owns it:
+  // an `unrepairable` cell is terminal host-side, so a click there would reach
+  // `providers.ensurePack` and be a guaranteed no-op. Such a tab stays gated,
+  // labelled and unfocusable, exactly like a downloading one.
+  const packRetryable = preparing !== null && providerPackRetryable(preparing);
   const selectable = !disabled && !packGated;
   // A retryable (failed) tab keeps keyboard focus - the retry IS its action.
   const focusable = selectable || packRetryable;
@@ -373,7 +382,9 @@ function PackProgressRing(props: {
   const radius = 8.5;
   const circumference = 2 * Math.PI * radius;
   const determinate = props.percent !== null;
-  const clamped = determinate ? Math.min(1, Math.max(0, props.percent / 100)) : 0;
+  const clamped = determinate
+    ? Math.min(1, Math.max(0, props.percent / 100))
+    : 0;
   return (
     <span className="relative inline-flex size-5 items-center justify-center">
       <svg
@@ -403,7 +414,9 @@ function PackProgressRing(props: {
           strokeWidth="2"
           strokeLinecap="round"
           strokeDasharray={
-            determinate ? circumference : circumference * (props.failed ? 1 : 0.3)
+            determinate
+              ? circumference
+              : circumference * (props.failed ? 1 : 0.3)
           }
           strokeDashoffset={determinate ? circumference * (1 - clamped) : 0}
         />

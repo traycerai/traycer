@@ -1510,6 +1510,41 @@ describe("<HarnessModelPicker />", () => {
     expect(selections).toEqual([]);
   });
 
+  // The exception to the exception above. `unrepairable` is TERMINAL host-side:
+  // the bytes verified against their signed digest and were defective anyway,
+  // so the manager refuses further installs for the cell and `ensurePack` is a
+  // guaranteed no-op. A clickable tab here is not a harmless dead button - it
+  // is the UI promising an action the wire contract says cannot exist, and the
+  // only feedback the user gets is the same failure again.
+  it("withholds the retry affordance entirely for a TERMINAL unrepairable pack", async () => {
+    preparingClaudeSetup({
+      status: "error",
+      reason: "unrepairable",
+      message: "pack.json failed schema validation",
+      retryAtMs: null,
+    });
+
+    const { selections } = renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", {
+      name: /Claude setup failed/,
+    });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("error");
+    expect(claudeTab.getAttribute("aria-disabled")).toBe("true");
+    // Not reachable by keyboard either - the retry WAS its only action.
+    expect(claudeTab.getAttribute("tabindex")).toBe("-1");
+    // Neither the accessible name nor the hover title may invite the click.
+    expect(claudeTab.getAttribute("aria-label")).not.toMatch(/retry/i);
+    expect(claudeTab.getAttribute("title")).not.toMatch(/retry/i);
+
+    fireEvent.click(claudeTab);
+
+    // Dead in both directions: no no-op RPC, and still not a provider switch.
+    expect(queryMock.calls.ensurePack).toEqual([]);
+    expect(selections).toEqual([]);
+  });
+
   it("never opens onto a preparing provider", async () => {
     preparingClaudeSetup({ status: "downloading", percent: 5 });
 
