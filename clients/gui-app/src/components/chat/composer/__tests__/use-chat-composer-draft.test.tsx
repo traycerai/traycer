@@ -27,6 +27,11 @@ function doc(text: string): JsonContent {
   };
 }
 
+const EMPTY_DOC: JsonContent = {
+  type: "doc",
+  content: [{ type: "paragraph" }],
+};
+
 function fakeHandle(ready: boolean) {
   const setContent = vi.fn();
   let isReady = ready;
@@ -168,6 +173,80 @@ describe("useChatComposerDraft bridge", () => {
     });
     expect(setContent).toHaveBeenCalledTimes(2);
     expect(setContent).toHaveBeenLastCalledWith(doc("second restore"), null);
+  });
+
+  /**
+   * clearDraft reuses the resetEpoch broadcast. Old clearDraft deleted the
+   * map entry, so a sibling composer's Tiptap document kept the just-
+   * submitted text (split panes / keep-alive tabs sharing one taskId).
+   */
+  it("broadcasts clearDraft empty content into every ready sibling composer for the same taskId", () => {
+    const taskId = "task-multi-surface";
+    const a = fakeHandle(true);
+    const b = fakeHandle(true);
+    const editorRefA = {
+      current: a.handle as ComposerPromptEditorHandle | null,
+    };
+    const editorRefB = {
+      current: b.handle as ComposerPromptEditorHandle | null,
+    };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, doc("queued steer text"), null);
+    });
+
+    renderBridgeHook({
+      taskId,
+      editorRef: editorRefA,
+      editorReadyTick: 1,
+    });
+    renderBridgeHook({
+      taskId,
+      editorRef: editorRefB,
+      editorReadyTick: 1,
+    });
+
+    act(() => {
+      useComposerDraftStore.getState().clearDraft(taskId);
+    });
+
+    // Both surfaces must push empty content into their local Tiptap docs.
+    // Old clearDraft deleted the map entry and never called setContent on B.
+    expect(a.setContent).toHaveBeenCalledWith(EMPTY_DOC, null);
+    expect(b.setContent).toHaveBeenCalledWith(EMPTY_DOC, null);
+  });
+
+  it("defers clearDraft apply until the handle becomes ready (readiness-deferred empty push)", () => {
+    const taskId = "task-clear-deferred";
+    const { handle, setContent, markReady } = fakeHandle(false);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, doc("stale text"), null);
+    });
+
+    const { rerender } = renderBridgeHook({
+      taskId,
+      editorRef,
+      editorReadyTick: 0,
+    });
+
+    act(() => {
+      useComposerDraftStore.getState().clearDraft(taskId);
+    });
+    // Handle exists but methods no-op until useEditor resolves - must not
+    // stamp the epoch yet or the empty content would be swallowed forever.
+    expect(setContent).not.toHaveBeenCalled();
+
+    markReady();
+    rerender({ taskId, editorRef, editorReadyTick: 1 });
+
+    expect(setContent).toHaveBeenCalledTimes(1);
+    expect(setContent).toHaveBeenCalledWith(EMPTY_DOC, null);
   });
 });
 
