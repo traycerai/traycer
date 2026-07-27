@@ -76,6 +76,47 @@ export function prLocalDiffTarget(
  * active host. Taking a `hostId` argument alongside an app-wide client would
  * let the query key name one host while the request went to another.
  */
+/**
+ * The identity half of the local-diff query key, flattened off a target that
+ * may not exist yet.
+ *
+ * A single `null` branch rather than a per-field `?? ""` chain: the fields
+ * are only ever all-present or all-absent together (that is what
+ * {@link prLocalDiffTarget} decides), so treating them independently would
+ * both overstate the states this can be in and push the hook past its
+ * complexity budget.
+ */
+function localDiffKeyParts(target: PrLocalDiffTarget | null): {
+  readonly epicId: string;
+  readonly linkGroupKey: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly baseRefName: string;
+  readonly headRefName: string;
+  readonly headRefOid: string | null;
+} {
+  if (target === null) {
+    return {
+      epicId: "",
+      linkGroupKey: "",
+      owner: "",
+      repo: "",
+      baseRefName: "",
+      headRefName: "",
+      headRefOid: null,
+    };
+  }
+  return {
+    epicId: target.epicId,
+    linkGroupKey: target.linkGroupKey,
+    owner: target.repoIdentifier.owner,
+    repo: target.repoIdentifier.repo,
+    baseRefName: target.baseRefName,
+    headRefName: target.headRefName,
+    headRefOid: target.headRefOid,
+  };
+}
+
 export function usePrLocalDiffQuery(args: {
   readonly target: PrLocalDiffTarget | null;
   readonly ignoreWhitespace: boolean;
@@ -95,12 +136,7 @@ export function usePrLocalDiffQuery(args: {
       queryKey: [
         ...prQueryKeys.localDiff({
           hostId,
-          linkGroupKey: target?.linkGroupKey ?? "",
-          owner: target?.repoIdentifier.owner ?? "",
-          repo: target?.repoIdentifier.repo ?? "",
-          baseRefName: target?.baseRefName ?? "",
-          headRefName: target?.headRefName ?? "",
-          headRefOid: target?.headRefOid ?? null,
+          ...localDiffKeyParts(target),
           ignoreWhitespace: args.ignoreWhitespace,
         }),
       ],

@@ -53,11 +53,16 @@ export const prQueryKeys = {
    * push re-fetches on its own the moment the detail stream reports the new
    * tip, and `linkGroupKey` is in it because the same PR reached through two
    * bindings is two different checkouts with two possibly different answers.
-   * No `epicId`: unlike the detail frame, nothing here is epic-flavored - a
-   * range diff of two commits is the same diff whoever asked.
+   * `epicId` IS part of the key. A range diff of two commits is the same diff
+   * whoever asked, but the ANSWER is not: the host gates `pr.getLocalDiff` on
+   * the caller's role in `epicId` and only honours a binding belonging to that
+   * epic, so the identical PR under a different epic can legitimately come
+   * back `unavailable`. Sharing one slot would let one epic's answer be served
+   * for another.
    */
   localDiff: (args: {
     readonly hostId: string;
+    readonly epicId: string;
     readonly linkGroupKey: string;
     readonly owner: string;
     readonly repo: string;
@@ -70,6 +75,7 @@ export const prQueryKeys = {
       ...hostQueryKeys.scope(args.hostId),
       "pr",
       "localDiff",
+      args.epicId,
       args.linkGroupKey,
       args.owner,
       args.repo,

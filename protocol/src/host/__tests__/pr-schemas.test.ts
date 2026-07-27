@@ -1019,6 +1019,7 @@ describe("prSubscribeClientFrameSchema", () => {
 });
 
 const LOCAL_DIFF_REQUEST_FIXTURE = {
+  epicId: "epic-1",
   linkGroupKey: "/Users/dev/worktrees/traycer-jolly-fox",
   repoIdentifier: REPO_IDENTIFIER_FIXTURE,
   repoRole: "superproject" as const,
@@ -1084,6 +1085,22 @@ describe("prGetLocalDiffRequestSchema", () => {
       hostId: "host-1",
     });
     expect(parsed).not.toHaveProperty("hostId");
+  });
+
+  it("REQUIRES a non-empty epicId - it is the authorization scope, not a hint", () => {
+    // The host gates this method on the caller's role in `epicId` and matches
+    // it against the binding that vouches for `linkGroupKey`. An absent or
+    // empty value must fail at the boundary rather than reach a resolver that
+    // would then have nothing to authorize against.
+    const { epicId, ...withoutEpicId } = LOCAL_DIFF_REQUEST_FIXTURE;
+    expect(epicId).toBe("epic-1");
+    expect(() => prGetLocalDiffRequestSchema.parse(withoutEpicId)).toThrow();
+    expect(() =>
+      prGetLocalDiffRequestSchema.parse({
+        ...LOCAL_DIFF_REQUEST_FIXTURE,
+        epicId: "",
+      }),
+    ).toThrow();
   });
 });
 
