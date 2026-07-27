@@ -37,6 +37,12 @@ jobs:
           # Default + security-focused queries; the codebase is interpreted, so
           # no build step is needed.
           queries: security-extended
+          # Narrows WHAT is scanned (test specs are excluded), never WHICH rules
+          # run - the config file deliberately carries no `queries` key, so
+          # `security-extended` above still applies. Both halves are observable
+          # in the analysis record: `rules_count` must stay ~103, and
+          # `results_count` drops to 0 once the test-file findings fall out.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
