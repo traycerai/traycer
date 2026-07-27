@@ -619,6 +619,12 @@ setInterval(() => undefined, 1_000);
     "utf8",
   );
   cleanupTargets = [...cleanupTargets, target];
+  // A `throw` from `finally` REPLACES whatever the body was already throwing,
+  // so a teardown complaint would silently overwrite the actual row failure -
+  // the one thing the row exists to report. Only escalate the leak when the
+  // body itself succeeded; on the failing path the original error wins and
+  // the suite-level `cleanupTargets` sweep still gets the job.
+  let bodyCompleted = false;
   try {
     const baselineLog = await readFile(bootstrapLogPath, "utf8").catch(
       () => "",
@@ -657,6 +663,7 @@ setInterval(() => undefined, 1_000);
         supervisorPid: supervisorStart.supervisorPid,
       },
     });
+    bodyCompleted = true;
   } finally {
     await runCommand("launchctl", ["bootout", "--wait", target]).catch(
       () => undefined,
@@ -666,7 +673,7 @@ setInterval(() => undefined, 1_000);
       .catch(() => false);
     await rm(root, { recursive: true, force: true });
     cleanupTargets = cleanupTargets.filter((candidate) => candidate !== target);
-    if (remainsLoaded) {
+    if (remainsLoaded && bodyCompleted) {
       throw new Error(
         `scoped M8 fallback remained loaded after teardown: ${target}`,
       );
@@ -1137,10 +1144,12 @@ setTimeout(() => process.exit(0), 100);
       "utf8",
     );
 
-    const bunPath =
-      process.env.BUN_INSTALL === undefined
-        ? process.execPath
-        : join(process.env.BUN_INSTALL, "bin", "bun");
+    // `resolveBunPath` rather than a local fallback: falling back to
+    // `process.execPath` is precisely what that helper's error message
+    // forbids, because under vitest it is Node, which cannot run the
+    // entrypoint this row spawns. A silent wrong-interpreter spawn fails in a
+    // way that looks like the behaviour under test.
+    const bunPath = resolveBunPath();
     const args = [script, "--layer0-attempt-id", "status-fd-contract"];
     if (options.passStatusFdFlag) args.push("--layer0-status-fd=3");
 
@@ -1321,8 +1330,19 @@ async function waitForProbeMarker(
   return null;
 }
 
+/**
+ * POSIX single-quote for the `/bin/sh` wrappers these rows write.
+ *
+ * This carried the exact defect `posixShellQuote` documents as already fixed
+ * in `service/platforms/host-start-script.ts`: `"'\\\"'\\\"'"` is the JS
+ * string `'\"'\"'`, which is neither `'\''` nor `'"'"'` and leaves the quote
+ * unterminated, so `sh` dies with "unexpected EOF" before anything runs.
+ * Unreachable with today's tmp paths, which contain no quotes - but a fixture
+ * whose wrapper cannot be parsed is a row that proves nothing, and this file
+ * is the one place a real launchd job is actually spawned.
+ */
 function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\\"'\\\"'")}'`;
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 async function withScopedJob(
