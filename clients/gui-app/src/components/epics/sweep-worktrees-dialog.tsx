@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { AlertTriangle, Paintbrush } from "lucide-react";
 import {
   describeReviewReasons,
@@ -265,7 +265,11 @@ function SweepWorktreeRowItem(props: {
   const entry = row.entry;
   const branch = entry.branch ?? "detached HEAD";
   const disabled = row.disabled || interactionDisabled || isSweeping;
-  const checkboxId = `sweep-worktree-${entry.worktreePath}`;
+  // Derived from `useId`, never from the path: a worktree path can contain
+  // spaces (routine on Windows, e.g. `C:\\Users\\John Doe\\wt`), which makes an
+  // invalid HTML id and silently breaks the `htmlFor` association below - the
+  // branch text would stop toggling the row.
+  const checkboxId = useId();
   // The PR pills render external links, so they must NOT sit inside the
   // <label>: clicking one would toggle the checkbox (and nesting interactive
   // content in a label is invalid). Only the text half is label-wrapped.

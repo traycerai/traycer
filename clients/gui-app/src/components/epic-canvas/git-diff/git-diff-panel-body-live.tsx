@@ -148,7 +148,12 @@ export function GitDiffPanelBodyLive(
     () =>
       withoutResolvedMissingRows(
         bindingsQuery.data?.rows ?? [],
-        selectedRepo === null ? null : selectedRepo.rootRunningDir,
+        selectedRepo === null
+          ? null
+          : {
+              hostId: selectedRepo.hostId,
+              runningDir: selectedRepo.rootRunningDir,
+            },
       ),
     [bindingsQuery.data?.rows, selectedRepo],
   );

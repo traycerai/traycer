@@ -56,8 +56,9 @@ export interface SweepWorktreesResult {
  * mid-flight can't redirect the tail of the run or its cache invalidation.
  *
  * Runs in the BACKGROUND (matching Settings worktree deletion): the dialog
- * closes at confirm, `onMutate` acknowledges the kickoff, and the outcome
- * lands as a summary toast when every stream settles.
+ * closes at confirm, the kickoff is acknowledged once the host-connection
+ * guard has passed, and the outcome lands as a summary toast when every
+ * stream settles.
  */
 export function useEpicSweepWorktrees(): UseMutationResult<
   SweepWorktreesResult,
@@ -69,17 +70,19 @@ export function useEpicSweepWorktrees(): UseMutationResult<
   const openStreamTransport = useWorktreeDeleteStreamTransportFactory();
   return useMutation<SweepWorktreesResult, Error, SweepWorktreesVariables>({
     mutationKey: epicMutationKeys.sweepWorktrees(),
-    onMutate: (variables) => {
-      const count = variables.worktrees.length;
-      toast.info(
-        `Sweeping ${count} worktree${count === 1 ? "" : "s"} in the background…`,
-      );
-    },
     mutationFn: async (variables) => {
       const hostId = client.getActiveHostId();
       if (hostId === null) {
         throw new Error("No host connection - can't sweep worktrees.");
       }
+      // Acknowledged here rather than in `onMutate`: the connection guard
+      // above runs first, so a disconnected host shows ONLY its error toast
+      // instead of "Sweeping 2 worktrees…" immediately contradicted by "No
+      // host connection".
+      const count = variables.worktrees.length;
+      toast.info(
+        `Sweeping ${count} worktree${count === 1 ? "" : "s"} in the background…`,
+      );
       const outcome = await runWorktreeCleanup(
         openStreamTransport,
         hostId,

@@ -48,9 +48,11 @@ export function FileTreeWorkspacePicker(props: FileTreeWorkspacePickerProps) {
     () =>
       withoutResolvedMissingRows(
         listQuery.data?.rows ?? [],
-        props.selectedPath,
+        props.hostId === null || props.selectedPath === null
+          ? null
+          : { hostId: props.hostId, runningDir: props.selectedPath },
       ),
-    [listQuery.data?.rows, props.selectedPath],
+    [listQuery.data?.rows, props.hostId, props.selectedPath],
   );
   const selectedRow =
     rows.find((row) => row.runningDir === props.selectedPath) ?? null;

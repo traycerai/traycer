@@ -284,8 +284,31 @@ describe("withoutResolvedMissingRows", () => {
       runningDir: "/wt/gone",
       disabledReason: "missing_worktree_path",
     });
-    expect(withoutResolvedMissingRows([missing], "/wt/gone")).toEqual([
-      missing,
-    ]);
+    expect(
+      withoutResolvedMissingRows([missing], {
+        hostId: "host-1",
+        runningDir: "/wt/gone",
+      }),
+    ).toEqual([missing]);
+  });
+
+  // Rows are keyed by host AND path, so a path-only exemption would keep a
+  // dead row from a DIFFERENT host visible alongside the selected one.
+  it("exempts only the selected host's row when two hosts share a runningDir", () => {
+    const selectedHostRow = row({
+      runningDir: "/wt/shared-path",
+      disabledReason: "missing_worktree_path",
+    });
+    const otherHostRow = row({
+      hostId: "host-2",
+      runningDir: "/wt/shared-path",
+      disabledReason: "missing_worktree_path",
+    });
+    expect(
+      withoutResolvedMissingRows([selectedHostRow, otherHostRow], {
+        hostId: "host-1",
+        runningDir: "/wt/shared-path",
+      }),
+    ).toEqual([selectedHostRow]);
   });
 });

@@ -36,9 +36,17 @@ function renderPill(state: EpicSyncPillState) {
   return render(pillTree());
 }
 
+/**
+ * Reads the claim off the pill's accessible name. Uses `getByRole` rather
+ * than `queryByTestId` deliberately: a missing pill must FAIL these
+ * assertions, not silently satisfy the negative ones - a rendering
+ * regression would otherwise read as "does not claim synced".
+ */
 function pillClaimsSynced(): boolean {
-  const pill = screen.queryByTestId("epic-connection-pill");
-  return pill?.getAttribute("aria-label") === "All changes synced";
+  return (
+    screen.getByRole("button").getAttribute("aria-label") ===
+    "All changes synced"
+  );
 }
 
 async function expectTooltip(text: string) {
@@ -288,7 +296,7 @@ describe("<EpicConnectionPill />", () => {
       // Control, so the assertion below can't pass vacuously: a genuinely
       // syncing verdict shows the syncing tooltip.
       fireEvent.focus(pill());
-      expect(screen.queryByText(SYNCING_TOOLTIP)).not.toBeNull();
+      expect(screen.queryByRole("tooltip")?.textContent).toBe(SYNCING_TOOLTIP);
 
       mocks.useEpicSyncPillState.mockReturnValue("synced");
       rerender(pillTree());
@@ -299,7 +307,9 @@ describe("<EpicConnectionPill />", () => {
       // syncing copy is gone - not that the tooltip vanished.
       expect(screen.getByText("Syncing…")).not.toBeNull();
       fireEvent.focus(pill());
-      expect(screen.queryByText(SYNCING_TOOLTIP)).toBeNull();
+      expect(screen.queryByRole("tooltip")?.textContent).not.toBe(
+        SYNCING_TOOLTIP,
+      );
 
       // ...and once the hold expires the pill catches up to the verdict.
       act(() => {

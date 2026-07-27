@@ -63,7 +63,9 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     () =>
       withoutResolvedMissingRows(
         bindingsQuery.data?.rows ?? [],
-        explicitRow === null ? null : explicitRow.runningDir,
+        explicitRow === null
+          ? null
+          : { hostId: explicitRow.hostId, runningDir: explicitRow.runningDir },
       ),
     [bindingsQuery.data?.rows, explicitRow],
   );

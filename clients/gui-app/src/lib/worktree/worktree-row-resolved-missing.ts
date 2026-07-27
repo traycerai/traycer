@@ -16,19 +16,34 @@ export function isResolvedMissingRow(
 }
 
 /**
+ * The surface's current selection, identified the way rows actually are:
+ * by host AND path. A path alone is ambiguous - the same `runningDir` can
+ * exist on two hosts, and exempting by path would keep another host's dead
+ * row visible.
+ */
+export interface SelectedWorktreeRef {
+  readonly hostId: string;
+  readonly runningDir: string;
+}
+
+/**
  * Drops host-proven-missing rows from browse/launch pickers (terminal
  * creation, file tree, git diff): binding rows deliberately outlive worktree
  * deletion so an OWNING chat can recover via its own picker, but on
  * non-owner surfaces a long-dead row is pure noise - it can never be
- * launched or browsed. `keepRunningDir` exempts the surface's CURRENT
+ * launched or browsed. `keepSelected` exempts the surface's CURRENT
  * selection so a worktree deleted while selected stays visible (as its
  * disabled badge) instead of silently vanishing out from under the user.
  */
 export function withoutResolvedMissingRows(
   rows: ReadonlyArray<WorktreeBindingSelectorRowV12>,
-  keepRunningDir: string | null,
+  keepSelected: SelectedWorktreeRef | null,
 ): ReadonlyArray<WorktreeBindingSelectorRowV12> {
   return rows.filter(
-    (row) => !isResolvedMissingRow(row) || row.runningDir === keepRunningDir,
+    (row) =>
+      !isResolvedMissingRow(row) ||
+      (keepSelected !== null &&
+        row.hostId === keepSelected.hostId &&
+        row.runningDir === keepSelected.runningDir),
   );
 }
