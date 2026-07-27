@@ -197,6 +197,84 @@ describe("<HostReadyGate />", () => {
     ).toBeTruthy();
   });
 
+  it("offers Retry when the local host failed to start", () => {
+    // The lockout this pins. The gate used to call `fallbackContent` directly,
+    // skipping the slow-local-host branch that only `SurfaceReadinessFallback`
+    // had - so a full-screen block on a host that never came up rendered
+    // "This tab's host is unavailable." with NO recovery at all, and copy that
+    // called the whole app a tab.
+    renderGate(
+      { kind: "unavailable-host" },
+      {
+        ...PRESENTATION,
+        localTarget: true,
+        localHostState: "unavailable",
+        stage: "slow",
+      },
+    );
+    expect(screen.getByTestId("local-host-retry")).toBeTruthy();
+    expect(screen.queryByText("This tab's host is unavailable.")).toBeNull();
+  });
+
+  it("spins the Retry it disables", () => {
+    // Pending work states itself with an inline spinner beside an unchanged
+    // label everywhere else in this app. The consolidated cards kept only the
+    // disable, so a retry in flight was indistinguishable from a dead button.
+    renderGate(
+      { kind: "provisioning-error" },
+      {
+        ...PRESENTATION,
+        provisioningError: new Error("boom"),
+        provisioning: true,
+      },
+    );
+    expect(
+      screen.getByTestId("local-host-provisioning-retry-spinner"),
+    ).toBeTruthy();
+  });
+
+  it("tells a user who removed Traycer how to finish", () => {
+    // "Reinstall to start the host again" answered a question they were not
+    // asking - they removed it deliberately and need the next step.
+    renderGate({ kind: "removed-host" }, PRESENTATION);
+    expect(screen.getByTestId("local-host-removed-quit").textContent).toContain(
+      "Quit Traycer",
+    );
+    expect(
+      screen.getByText(/drag it from Applications to the Trash/),
+    ).toBeTruthy();
+  });
+
+  it("labels the incompatibility reason and keeps a restart error distinct", () => {
+    // Both were flattened into one joined sentence, which read as noise: they
+    // answer different questions - why the host is rejected, and why the last
+    // attempt to fix it failed.
+    renderGate(
+      { kind: "incompatible-host" },
+      {
+        ...PRESENTATION,
+        canManageHost: true,
+        provisioningError: new Error("restart failed"),
+        compatibility: {
+          status: "incompatible",
+          errorMessage: "host 1.0.0 < required 1.1.0",
+          retrying: false,
+          retry: () => undefined,
+        },
+      },
+    );
+    expect(
+      screen.getByTestId("local-host-incompatible-reason").textContent,
+    ).toContain("Reason: host 1.0.0 < required 1.1.0");
+    expect(
+      screen.getByTestId("local-host-incompatible-restart-error").textContent,
+    ).toBe("restart failed");
+    expect(
+      screen.getByText(/not compatible with the running host/),
+    ).toBeTruthy();
+    expect(screen.getByTestId("local-host-incompatible-update")).toBeTruthy();
+  });
+
   it("keeps recovery actions reachable inside the block", () => {
     // Blocking must not strand a user whose host cannot start: a full-screen
     // surface with no retry is the lockout shape traycer#738 exists to avoid.

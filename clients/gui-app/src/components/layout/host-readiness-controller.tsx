@@ -9,6 +9,7 @@ import { useRouterState } from "@tanstack/react-router";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AppHeader } from "@/components/layout/header/app-header";
 import {
   HostReadinessControllerContext,
@@ -248,7 +249,13 @@ export function SurfaceReadinessBoundary(props: {
 }): ReactNode {
   const readiness = useSurfaceReadiness(props.scope, props.tabHostId);
   if (readiness.kind === "ready") return props.children;
-  return <SurfaceReadinessFallback readiness={readiness} scope={props.scope} />;
+  return (
+    <SurfaceReadinessFallback
+      readiness={readiness}
+      scope={props.scope}
+      variant="slot"
+    />
+  );
 }
 
 export function HostScopeReady(props: {
@@ -259,12 +266,26 @@ export function HostScopeReady(props: {
   return readiness.kind === "ready" ? props.children : null;
 }
 
+/**
+ * The ONE mapping from a readiness kind to its surface. Both the in-surface
+ * slot and the full-screen splash render through here; they differ only in
+ * `variant`. The gate used to call `fallbackContent` directly, which skipped
+ * the slow-local-host branch below - so a full-screen block on a host that
+ * failed to start showed "This tab's host is unavailable." with no Retry at
+ * all. A second renderer means a second chance to miss a branch, and the one
+ * it missed was the recovery affordance.
+ */
 function SurfaceReadinessFallback(props: {
   readonly readiness: Exclude<SurfaceReadiness, { readonly kind: "ready" }>;
   readonly scope: HostReadinessScope;
+  readonly variant: "slot" | "splash";
 }): ReactNode {
   const controller = useHostReadinessController();
   const presentation = controller.defaultHostPresentation;
+  const testId =
+    props.variant === "splash"
+      ? `host-ready-gate-${props.readiness.kind}`
+      : `surface-readiness-${props.readiness.kind}`;
   if (
     props.readiness.kind === "unavailable-host" &&
     props.scope === "default-host" &&
@@ -272,13 +293,19 @@ function SurfaceReadinessFallback(props: {
     presentation.localHostState === "unavailable" &&
     presentation.stage === "slow"
   ) {
-    return <SlowHostFallback presentation={presentation} />;
+    return (
+      <SlowHostFallback
+        presentation={presentation}
+        variant={props.variant}
+        testId={testId}
+      />
+    );
   }
   return (
     <FallbackFrame
-      variant="slot"
+      variant={props.variant}
       fallback={fallbackContent(props.readiness, presentation)}
-      testId={`surface-readiness-${props.readiness.kind}`}
+      testId={testId}
       messageTestId={
         props.readiness.kind === "mobile-no-host" ? "mobile-no-host" : null
       }
@@ -288,12 +315,14 @@ function SurfaceReadinessFallback(props: {
 
 function SlowHostFallback(props: {
   readonly presentation: DefaultHostReadinessPresentation;
+  readonly variant: "slot" | "splash";
+  readonly testId: string;
 }): ReactNode {
   // Respawn is owned once by the readiness controller, so two default-host slots
   // share one pending lock and a click issues exactly one request.
   return (
     <FallbackFrame
-      variant="slot"
+      variant={props.variant}
       fallback={{
         message: null,
         detail: null,
@@ -306,10 +335,15 @@ function SlowHostFallback(props: {
             retryPending={props.presentation.respawnPending}
           />
         ),
-        footer: null,
+        // The pre-consolidation `LocalHostUnavailable` card carried this; a
+        // startup failure is exactly where a user needs to report.
+        footer: hostStartupReportIssueAction(
+          "Traycer Host is unavailable",
+          "Traycer Host was unavailable.",
+        ),
         actions: [],
       }}
-      testId="surface-readiness-unavailable-host"
+      testId={props.testId}
       messageTestId={null}
     />
   );
@@ -324,10 +358,11 @@ function SlowHostFallback(props: {
  *
  * Two properties are deliberate and must not be "simplified" away:
  *
- *  - It reuses `fallbackContent`, so every recovery action (retry / force
- *    update / reinstall / report) survives the block. Collapsing this to a
- *    generic spinner would strand a user whose host cannot start - the exact
- *    lockout traycer#738 exists to prevent.
+ *  - It renders through `SurfaceReadinessFallback`, the same mapping the
+ *    in-surface slot uses, so every recovery action (retry / force update /
+ *    reinstall / report) survives the block. Collapsing this to a generic
+ *    spinner - or re-deriving the surface here - would strand a user whose
+ *    host cannot start, the exact lockout traycer#738 exists to prevent.
  *  - `/settings` still bypasses it. The splash's own "Configure shell" button
  *    navigates there, so gating settings on a ready host would make the
  *    escape hatch unreachable from the screen that offers it.
@@ -339,7 +374,6 @@ export function DefaultHostReadyGate(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const readiness = useSurfaceReadiness("default-host", null);
-  const controller = useHostReadinessController();
   const authStatus = useAuthStore((state) => state.status);
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
@@ -359,16 +393,10 @@ export function DefaultHostReadyGate(props: {
       data-readiness={readiness.kind}
     >
       <AppHeader variant="host-loading" />
-      <FallbackFrame
+      <SurfaceReadinessFallback
+        readiness={readiness}
+        scope="default-host"
         variant="splash"
-        fallback={fallbackContent(
-          readiness,
-          controller.defaultHostPresentation,
-        )}
-        testId={`host-ready-gate-${readiness.kind}`}
-        messageTestId={
-          readiness.kind === "mobile-no-host" ? "mobile-no-host" : null
-        }
       />
     </div>
   );
@@ -414,7 +442,16 @@ function FallbackFrame(props: {
               onClick={action.onClick}
               data-testid={action.testId}
             >
-              {action.label}
+              <span className="inline-flex items-center gap-1.5">
+                <span>{action.label}</span>
+                {action.pending ? (
+                  <AgentSpinningDots
+                    className={undefined}
+                    testId={`${action.testId}-spinner`}
+                    variant={undefined}
+                  />
+                ) : null}
+              </span>
             </Button>
           ))}
           {props.fallback.footer}
@@ -447,6 +484,13 @@ interface ReadinessFallbackAction {
   readonly testId: string;
   readonly variant: "default" | "destructive" | "outline";
   readonly disabled: boolean;
+  /**
+   * Shows the inline spinner beside an UNCHANGED label, the way every gate
+   * card did before consolidation and the way this app states pending work
+   * everywhere else. Dropping it left a Retry that only greyed out, which
+   * reads as "broken" rather than "working".
+   */
+  readonly pending: boolean;
   readonly onClick: () => void;
 }
 
@@ -492,17 +536,21 @@ function fallbackContent(
       return provisioningErrorFallback(presentation);
     case "removed-host":
       return {
-        message: "Traycer was removed from this device.",
+        message: "Traycer was removed",
+        // The original card named the actual next step. "Reinstall to start
+        // the host again" answered a question the user was not asking: they
+        // removed it on purpose and need to know how to finish.
         detail:
-          "Your chats and history are preserved. Reinstall to start the host again.",
+          "You removed Traycer's background components from this device, so the host won't start. Your agents and history are preserved. To finish, quit Traycer and drag it from Applications to the Trash.",
         body: null,
         footer: null,
         actions: [
           {
-            label: "Quit",
+            label: "Quit Traycer",
             testId: "local-host-removed-quit",
             variant: "destructive",
             disabled: false,
+            pending: false,
             onClick: () => {
               requestAppQuit();
             },
@@ -512,13 +560,14 @@ function fallbackContent(
             testId: "local-host-removed-reinstall",
             variant: "outline",
             disabled: false,
+            pending: false,
             onClick: presentation.reinstall,
           },
         ],
       };
     case "compatibility-error":
       return {
-        message: `Could not verify host compatibility. ${presentation.compatibility.errorMessage ?? ""}`,
+        message: compatibilityErrorMessage(presentation),
         detail: null,
         body: null,
         footer: hostStartupReportIssueAction(
@@ -531,6 +580,7 @@ function fallbackContent(
             testId: "local-host-compatibility-retry",
             variant: "outline",
             disabled: presentation.compatibility.retrying,
+            pending: presentation.compatibility.retrying,
             onClick: presentation.compatibility.retry,
           },
         ],
@@ -623,10 +673,23 @@ function provisioningErrorFallback(
         testId: "local-host-provisioning-retry",
         variant: "outline",
         disabled: presentation.provisioning,
+        pending: presentation.provisioning,
         onClick: presentation.retryProvisioning,
       },
     ],
   };
+}
+
+/**
+ * Trailing space guard: the compat error message is optional, and
+ * `"… compatibility. " + ""` shipped a sentence with a dangling space.
+ */
+function compatibilityErrorMessage(
+  presentation: DefaultHostReadinessPresentation,
+): string {
+  const reason = presentation.compatibility.errorMessage;
+  const base = "Could not verify host compatibility.";
+  return reason === null ? base : `${base} ${reason}`;
 }
 
 function incompatibleFallback(
@@ -636,27 +699,30 @@ function incompatibleFallback(
     "Host update required",
     "Traycer Host requires an update.",
   );
+  const shared = {
+    message: "Host update required",
+    // The explanation, the labelled reason box and the restart error were all
+    // flattened into one joined string. "Host update required" alone does not
+    // say what to do, and an unlabelled concatenated reason reads as noise.
+    detail: presentation.hostBusy
+      ? "The running host has work in progress and is not compatible with this app update. Refresh to check again, or force update the host. Running work may be interrupted."
+      : "This Traycer app update is not compatible with the running host. Update the local host before continuing.",
+    body: <IncompatibleDetail presentation={presentation} />,
+    footer,
+  };
   if (!presentation.canManageHost) {
-    return {
-      message: "Host update required",
-      detail: compatibilityDetail(presentation),
-      body: null,
-      footer,
-      actions: [],
-    };
+    return { ...shared, actions: [] };
   }
   if (presentation.hostBusy) {
     return {
-      message: "Host update required",
-      detail: compatibilityDetail(presentation),
-      body: null,
-      footer,
+      ...shared,
       actions: [
         {
           label: "Refresh",
           testId: "local-host-incompatible-busy-refresh",
           variant: "outline",
           disabled: false,
+          pending: false,
           onClick: presentation.retryProvisioning,
         },
         {
@@ -664,38 +730,66 @@ function incompatibleFallback(
           testId: "local-host-incompatible-busy-force-update",
           variant: "destructive",
           disabled: false,
+          pending: false,
           onClick: presentation.forceProvisioning,
         },
       ],
     };
   }
   return {
-    message: "Host update required",
-    detail: compatibilityDetail(presentation),
-    body: null,
-    footer,
+    ...shared,
     actions: [
       {
         label: "Update host",
         testId: "local-host-incompatible-update",
         variant: "default",
         disabled: false,
+        pending: false,
         onClick: presentation.forceProvisioning,
       },
     ],
   };
 }
 
-function compatibilityDetail(
-  presentation: DefaultHostReadinessPresentation,
-): string | null {
-  const details = [
-    presentation.compatibility.errorMessage,
-    presentation.provisioningError?.message ?? null,
-  ].filter((detail): detail is string => detail !== null);
-  return details.length === 0 ? null : details.join(" ");
+/**
+ * The labelled compatibility reason, plus any restart error kept visually
+ * distinct (destructive) rather than concatenated into the same sentence -
+ * they answer different questions: why the host is rejected, and why the last
+ * attempt to fix it failed.
+ */
+function IncompatibleDetail(props: {
+  readonly presentation: DefaultHostReadinessPresentation;
+}): ReactNode {
+  const reason = props.presentation.compatibility.errorMessage;
+  const restartError = props.presentation.provisioningError?.message ?? null;
+  if (reason === null && restartError === null) return null;
+  return (
+    <>
+      {reason === null ? null : (
+        <p
+          className="max-w-full break-words rounded-md bg-muted/50 px-3 py-2 text-left text-ui-xs text-muted-foreground"
+          data-testid="local-host-incompatible-reason"
+        >
+          Reason: {reason}
+        </p>
+      )}
+      {restartError === null ? null : (
+        <p
+          className="max-w-full break-words text-ui-xs text-destructive"
+          data-testid="local-host-incompatible-restart-error"
+        >
+          {restartError}
+        </p>
+      )}
+    </>
+  );
 }
 
+/**
+ * A tab bound to a host that is not dialable. The default-host arm never lands
+ * here in its recoverable states - `SurfaceReadinessFallback` routes a slow
+ * local host to the Retry card first - so this copy can stay tab-specific.
+ */
 function unavailableFallback(): ReadinessFallback {
   return {
     message: "This tab's host is unavailable.",
