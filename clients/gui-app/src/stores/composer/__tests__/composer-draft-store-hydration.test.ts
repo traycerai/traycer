@@ -124,11 +124,8 @@ describe("composer draft store clearDraft", () => {
     const first = useComposerDraftStore.getState().drafts[taskId];
     expect(first?.resetEpoch).toBe(1);
 
-    // Re-dirty then clear again - epoch must keep climbing so a sibling
-    // that already applied epoch 1 still sees the second clear.
-    useComposerDraftStore
-      .getState()
-      .setSnapshot(taskId, MENTION_DRAFT.content, null);
+    // Clear again while already empty: a sibling that applied epoch 1 must
+    // still observe the second broadcast.
     useComposerDraftStore.getState().clearDraft(taskId);
     const second = useComposerDraftStore.getState().drafts[taskId];
     expect(second?.resetEpoch).toBe(2);
