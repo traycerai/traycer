@@ -420,7 +420,18 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     when the selected program is a login shell, and a quiet _Restore default
     flags_ action shown only while the visible flags deviate from the family
     default - reverting the SELECTED shell via
-    `useRunnerTraycerShellRevertArgsMutation`); and a **`"Host environment ·
+    `useRunnerTraycerShellRevertArgsMutation`). **On Windows hosts with WSL
+    selected** (classified by binary via `windowsShellCaptionFamily`, shared
+    with the host resolver) a single quiet line sits directly under the picker
+    in its column - "Agents won't see tools installed in WSL", amber dot +
+    `Info` glyph - with the explanation and the "run the Traycer host inside
+    WSL" remedy link (docs.traycer.ai/settings/shell#using-wsl) in a
+    `HoverCard`; the glyph is itself a focusable anchor to that docs page so
+    keyboard users reach the remedy without the pointer-only hover card. Only
+    WSL earns a caption: PowerShell / Git Bash profile loading and cmd's plain
+    Windows environment are expected behavior, so those selections (and all
+    non-Windows hosts) render nothing, and the picker row top-aligns only
+    while the caption is shown. There is also a **`"Host environment ·
 After restart"`** card with the shared inline `EnvOverrideEditor`
     (host-process scope only - set/unset mode, value edit, key rename, and
     staged add/remove; per-harness env lives in Settings → Providers). Existing

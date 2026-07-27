@@ -209,6 +209,22 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
+  useEpicSweepWorktreeCandidates: () => ({
+    rows: [],
+    isPending: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-sweep-worktrees-mutation", () => ({
+  useEpicSweepWorktrees: () => ({
+    isPending: false,
+    mutate: () => {},
+  }),
+  useSweepingWorktreePaths: () => new Set<string>(),
+}));
+
 vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
   useEpicUpdateTitle: () => ({
     isPending: false,

@@ -72,6 +72,23 @@ export const hostQueryKeys = {
       { accountContext, profileId: null },
     ),
   /**
+   * The Sweep dialog's act-time candidate probe: a composed fetch (un-probed
+   * base walk to find the Task's paths, then a selection-mode `forceRefresh`
+   * enrichment of exactly those paths). Epic-scoped and deliberately OUTSIDE
+   * the `worktree.listAllForHost` method scope: the forced probe itself makes
+   * the host publish a `worktree.changed` burst, and the client's blanket
+   * listing invalidation (refetchType "active") would refetch this very query
+   * while the dialog is open - re-probing its own just-settled proof and
+   * flashing the candidate list back to "Checking…". External invalidation
+   * buys it nothing anyway: `staleTime: 0` already re-proves on every open.
+   */
+  sweepWorktreeCandidates: (hostId: string | null, epicId: string) =>
+    [
+      ...hostQueryKeys.scope(hostId),
+      "worktree.sweepCandidates",
+      epicId,
+    ] as const,
+  /**
    * Batch task-context title lookup (`epic.getTaskContexts`). Key shape matches
    * what `useHostQuery` / `useHostQueries` produce for that method with
    * `cacheKeyIdentity: userId`: `["host", hostId, method, { taskIds }, userId]`.

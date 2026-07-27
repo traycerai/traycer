@@ -1,6 +1,7 @@
 export const epicMutationKeys = {
   create: () => ["epic.create"] as const,
   batchDelete: () => ["epic.batchDelete"] as const,
+  sweepWorktrees: () => ["epic.sweepWorktrees"] as const,
   setPinned: () => ["epic.setPinned"] as const,
   recordViewed: () => ["epic.recordViewed"] as const,
   sendQueuedInvites: () => ["epic.sendQueuedInvites"] as const,
