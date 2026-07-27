@@ -1103,6 +1103,22 @@ export class HostController {
     }
   }
 
+  // The three `HostLoginItemStatus` values that mean SMAppService has
+  // definitively failed to register the LaunchAgent (as opposed to
+  // `requires-approval`, which means it IS registered and only needs the
+  // user's own toggle) - the CLI's raw-LaunchAgent takeover can recover from
+  // exactly these. Single source of truth for the three call sites below so
+  // a future `HostLoginItemStatus` member can't drift between them.
+  private isCliTakeoverRecoverableStatus(
+    status: RegisterHostLoginItemResult,
+  ): status is "not-registered" | "not-found" | "not-supported" {
+    return (
+      status === "not-registered" ||
+      status === "not-found" ||
+      status === "not-supported"
+    );
+  }
+
   // Last-rung recovery for a macOS register cycle whose SMAppService calls
   // failed (`not-found` / `not-registered` / `not-supported`) AFTER the
   // cycle's own bootout already tore down the loaded agent. Field RCA
@@ -1401,11 +1417,7 @@ export class HostController {
             ),
           };
         }
-        if (
-          registerResult === "not-registered" ||
-          registerResult === "not-found" ||
-          registerResult === "not-supported"
-        ) {
+        if (this.isCliTakeoverRecoverableStatus(registerResult)) {
           // Not terminal: this cycle's own bootout already tore the loaded
           // agent down, so failing here would strand the machine with no
           // registration at all and a Retry that re-runs the same doomed
@@ -1730,7 +1742,7 @@ export class HostController {
       this.pendingRevisionRefreshQuarantined = true;
       return { kind: "failed", message: approvalRequiredMessage() };
     }
-    if (status !== "enabled") {
+    if (this.isCliTakeoverRecoverableStatus(status)) {
       this.pendingRevisionRefreshQuarantined = true;
       log.warn(
         "[host-controller] pending LaunchAgent revision refresh did not enable the agent",
@@ -2778,11 +2790,7 @@ export class HostController {
             }
             return { kind: "ok", value: { registered: true } };
           }
-          if (
-            registration.status === "not-registered" ||
-            registration.status === "not-found" ||
-            registration.status === "not-supported"
-          ) {
+          if (this.isCliTakeoverRecoverableStatus(registration.status)) {
             const recovery = await this.recoverRegistrationViaCliTakeover({
               failedStatus: registration.status,
               prePid: registration.prePid,

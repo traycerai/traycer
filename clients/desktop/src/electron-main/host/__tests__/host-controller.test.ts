@@ -125,9 +125,10 @@ import {
   HostController,
   type HostControllerHostLifecycle,
 } from "../host-controller";
-import type {
-  MutationLaneStatus,
-  MutationProgress,
+import {
+  HOST_REMOVED_BY_USER_MESSAGE,
+  type MutationLaneStatus,
+  type MutationProgress,
 } from "../host-controller-types";
 import { getHostFsLayout, cliLockPath } from "../host-paths";
 import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
@@ -5757,6 +5758,11 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
 
     expect(respawnOutcome.kind).toBe("failed");
     expect(registerOutcome.kind).toBe("failed");
+    // Guards against a vacuous pass: the pre-bootout `requires-approval`
+    // preflight must not have short-circuited before either cycle actually
+    // reached registration - otherwise "failed" and no takeover would hold
+    // trivially without exercising the escalation gate at all.
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
     expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(TAKEOVER_ARGV);
   });
 
@@ -5770,6 +5776,9 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
     const outcome = await controller.respawn();
 
     expect(outcome.kind).toBe("failed");
+    if (outcome.kind === "failed") {
+      expect(outcome.message).toBe(HOST_REMOVED_BY_USER_MESSAGE);
+    }
     expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(TAKEOVER_ARGV);
   });
 });
