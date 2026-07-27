@@ -86,7 +86,7 @@ function EpicSweepActionBody(props: {
         </Button>
       </TooltipWrapper>
       <SweepWorktreesDialog
-        epicId={sweepOpen ? epicId : null}
+        epicIds={sweepOpen ? epicIds : null}
         taskTitle={tabName}
         onOpenChange={(open) => {
           if (!open) setSweepOpen(false);

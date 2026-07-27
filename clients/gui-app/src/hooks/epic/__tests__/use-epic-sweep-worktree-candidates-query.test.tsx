@@ -117,9 +117,9 @@ function wrapperFor(queryClient: QueryClient) {
   );
 }
 
-function renderCandidates(epicId: string | null) {
+function renderCandidates(epicIds: ReadonlyArray<string> | null) {
   const queryClient = new QueryClient();
-  return renderHook(() => useEpicSweepWorktreeCandidates(epicId), {
+  return renderHook(() => useEpicSweepWorktreeCandidates(epicIds), {
     wrapper: wrapperFor(queryClient),
   });
 }
@@ -150,7 +150,7 @@ describe("useEpicSweepWorktreeCandidates", () => {
         entry({ worktreePath: "/wt/review" }),
       ],
     );
-    const { result } = renderCandidates("epic-1");
+    const { result } = renderCandidates(["epic-1"]);
     await waitFor(() => {
       expect(result.current.rows).toHaveLength(3);
     });
@@ -212,7 +212,7 @@ describe("useEpicSweepWorktreeCandidates", () => {
         }),
       ],
     );
-    const { result } = renderCandidates("epic-1");
+    const { result } = renderCandidates(["epic-1"]);
     await waitFor(() => {
       expect(result.current.rows).toHaveLength(1);
     });
@@ -245,7 +245,7 @@ describe("useEpicSweepWorktreeCandidates", () => {
       }),
     ];
     mockActTimeProbe(probed, probed);
-    const { result } = renderCandidates("epic-1");
+    const { result } = renderCandidates(["epic-1"]);
     await waitFor(() => {
       expect(result.current.rows).toHaveLength(3);
     });
@@ -269,12 +269,91 @@ describe("useEpicSweepWorktreeCandidates", () => {
     });
   });
 
+  // The bulk-sweep rule the multi-select exists for: "shared" is judged
+  // against the SELECTION, not one Task. Selecting every owner of a shared
+  // worktree satisfies the constraint, because sweeping the selection removes
+  // every binding that referenced it.
+  it("stops treating a worktree as shared once ALL its owner tasks are selected", async () => {
+    const probed = [
+      entry({
+        worktreePath: "/wt/shared",
+        owners: [owner("epic-1"), owner("epic-2")],
+        prState: "merged",
+        mergedHeadShaMatches: true,
+      }),
+    ];
+    mockActTimeProbe(probed, probed);
+    const { result } = renderCandidates(["epic-1", "epic-2"]);
+    await waitFor(() => {
+      expect(result.current.rows).toHaveLength(1);
+    });
+    expect(result.current.rows[0]).toMatchObject({
+      tier: "merged",
+      defaultChecked: true,
+      disabled: false,
+      note: null,
+    });
+  });
+
+  it("keeps a partially-selected shared worktree unchecked and marked shared", async () => {
+    const probed = [
+      entry({
+        worktreePath: "/wt/shared",
+        owners: [owner("epic-1"), owner("epic-2"), owner("epic-3")],
+        prState: "merged",
+        mergedHeadShaMatches: true,
+      }),
+    ];
+    mockActTimeProbe(probed, probed);
+    // epic-3 is NOT selected, so one binding would survive the sweep.
+    const { result } = renderCandidates(["epic-1", "epic-2"]);
+    await waitFor(() => {
+      expect(result.current.rows).toHaveLength(1);
+    });
+    expect(result.current.rows[0]).toMatchObject({
+      defaultChecked: false,
+      disabled: false,
+      note: "shared",
+    });
+  });
+
+  // The amalgamation: a worktree owned by two selected tasks is ONE row, and
+  // the probe covers every selected task's paths.
+  it("lists the union of the selection's worktrees, de-duplicated", async () => {
+    const shared = entry({
+      worktreePath: "/wt/shared",
+      owners: [owner("epic-1"), owner("epic-2")],
+      atBaseCommit: true,
+    });
+    const onlyOne = entry({ worktreePath: "/wt/one", atBaseCommit: true });
+    const onlyTwo = entry({
+      worktreePath: "/wt/two",
+      owners: [owner("epic-2")],
+      atBaseCommit: true,
+    });
+    mockActTimeProbe([shared, onlyOne, onlyTwo], [shared, onlyOne, onlyTwo]);
+    const { result } = renderCandidates(["epic-1", "epic-2"]);
+    await waitFor(() => {
+      expect(result.current.rows).toHaveLength(3);
+    });
+    expect(result.current.rows.map((r) => r.entry.worktreePath)).toEqual([
+      "/wt/shared",
+      "/wt/one",
+      "/wt/two",
+    ]);
+    expect(mockHostClient.request).toHaveBeenNthCalledWith(
+      2,
+      "worktree.listAllForHost",
+      forcedProbeParams(["/wt/shared", "/wt/one", "/wt/two"]),
+    );
+  });
+
   it("skips the forced probe entirely when the Task owns no worktrees", async () => {
     mockActTimeProbe(
       [entry({ worktreePath: "/wt/foreign", owners: [owner("epic-2")] })],
       [],
     );
-    const { result } = renderCandidates("epic-1");
+    const { result } = renderCandidates(["epic-1"]);
     await waitFor(() => {
       expect(result.current.isPending).toBe(false);
     });
@@ -289,7 +368,7 @@ describe("useEpicSweepWorktreeCandidates", () => {
 
   it("yields zero rows on a failed probe (failure -> no candidates)", async () => {
     mockHostClient.request.mockRejectedValue(new Error("probe failed"));
-    const { result } = renderCandidates("epic-1");
+    const { result } = renderCandidates(["epic-1"]);
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
     });

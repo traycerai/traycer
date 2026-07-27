@@ -346,15 +346,22 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     setWorktreeCheckOverrides(new Map());
   }, []);
 
-  const [sweepEpicId, setSweepEpicId] = useState<string | null>(null);
+  // A sweep target is a SET: one id from a row action, the whole selection
+  // from the bulk action. The set is load-bearing - a worktree shared between
+  // two SELECTED tasks is no longer "shared" and becomes an ordinary
+  // candidate.
+  const [sweepEpicIds, setSweepEpicIds] =
+    useState<ReadonlyArray<string> | null>(null);
   const requestSweep = useCallback((epicId: string) => {
-    setSweepEpicId(epicId);
+    setSweepEpicIds([epicId]);
   }, []);
   const sweepTaskTitle = useMemo(() => {
-    if (sweepEpicId === null) return null;
-    const item = items.find((candidate) => candidate.epicId === sweepEpicId);
+    if (sweepEpicIds === null || sweepEpicIds.length !== 1) return null;
+    const item = items.find(
+      (candidate) => candidate.epicId === sweepEpicIds[0],
+    );
     return item === undefined ? null : historyItemDisplayTitle(item);
-  }, [items, sweepEpicId]);
+  }, [items, sweepEpicIds]);
 
   const selectableItemIds = useMemo(
     () =>
@@ -489,6 +496,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                   onDeleteSelected: () => {
                     requestDelete(visibleSelectedIds);
                   },
+                  onSweepSelected: () => {
+                    // The whole selection goes in as ONE set so a worktree
+                    // shared between two selected tasks is judged against the
+                    // selection, not one task, and stops reading as "shared".
+                    if (visibleSelectedIds.length === 0) return;
+                    setSweepEpicIds(visibleSelectedIds);
+                  },
                 }
               : {
                   kind: "idle",
@@ -551,10 +565,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         onTogglePath={toggleWorktreePathChecked}
       />
       <SweepWorktreesDialog
-        epicId={sweepEpicId}
+        epicIds={sweepEpicIds}
         taskTitle={sweepTaskTitle}
         onOpenChange={(open) => {
-          if (!open) setSweepEpicId(null);
+          if (!open) setSweepEpicIds(null);
         }}
       />
       <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
@@ -659,6 +673,7 @@ type PanelSelectionControls =
       readonly onDeselectAll: () => void;
       readonly onCancel: () => void;
       readonly onDeleteSelected: () => void;
+      readonly onSweepSelected: () => void;
     };
 
 interface PanelRefreshControls {
@@ -724,6 +739,23 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
             >
               <X />
               Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={
+                props.selection.selectedCount > 0
+                  ? `Sweep worktrees for ${props.selection.selectedCount} selected tasks`
+                  : "Sweep worktrees for selected tasks"
+              }
+              aria-haspopup="dialog"
+              data-testid="epics-list-sweep-selected"
+              disabled={props.selection.selectedCount === 0}
+              className="text-muted-foreground hover:text-foreground"
+              onClick={props.selection.onSweepSelected}
+            >
+              <Paintbrush />
             </Button>
             <Button
               type="button"
