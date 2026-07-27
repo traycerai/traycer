@@ -139,7 +139,7 @@ import {
 } from "../host-removal-state";
 import {
   __setAsyncProcessLivenessReaderForTest,
-  __setAsyncProcessStartTimeReaderForTest,
+  __setAsyncProcessStartIdentityReaderForTest,
 } from "../process-identity";
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -342,6 +342,9 @@ function writePidMetadata(
     readonly pid: number;
     readonly websocketUrl?: string;
     readonly startedAt?: string;
+    // Omitted reproduces a pid.json written before the field existed, which
+    // must read as "cannot compare identity" rather than as a mismatch.
+    readonly processStartIdentity?: string;
   },
 ): void {
   const layout = getHostFsLayout(environment);
@@ -354,6 +357,9 @@ function writePidMetadata(
       version: fields.version,
       pid: fields.pid,
       startedAt: fields.startedAt ?? new Date().toISOString(),
+      ...(fields.processStartIdentity === undefined
+        ? {}
+        : { processStartIdentity: fields.processStartIdentity }),
     }),
   );
 }
@@ -1672,31 +1678,13 @@ describe("canonical status: activation-state derivation", () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it("P7/V5: rejects a recycled PID whose current process started after the published host identity", async () => {
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writePidMetadata("production", {
-      version: "1.7.0",
-      pid: process.pid,
-      startedAt: "2000-01-01T00:00:00.000Z",
-    });
-
-    const status = await newControllerWithReachability(
-      "production",
-      async () => true,
-    ).getStatus();
-
-    expect(status.reachable).toBe(false);
-    expect(status.activation).toBe("unavailable");
-  });
-
-  // F3: endpoint reachability is the positive liveness proof. A failed
-  // process-start probe cannot turn that proof into a false "down" result;
-  // identity only rejects a positively established recycled PID.
-  it("F3: keeps a handshake-reachable host online when its OS identity probe is indeterminate", async () => {
-    const restore = __setAsyncProcessStartTimeReaderForTest(async () => null);
+  it("P7/V5: rejects a recycled PID whose kernel creation stamp positively differs", async () => {
+    // Both operands present and same-platform, so the comparison can reach a
+    // POSITIVE "different" - the only verdict entitled to reject a live pid.
+    // The stub keeps the platform tag deterministic across runners.
+    const restore = __setAsyncProcessStartIdentityReaderForTest(
+      async () => "linux:boot-a 1",
+    );
     try {
       writeInstallRecord("production", {
         version: "1.7.0",
@@ -1705,6 +1693,39 @@ describe("canonical status: activation-state derivation", () => {
       writePidMetadata("production", {
         version: "1.7.0",
         pid: process.pid,
+        processStartIdentity: "linux:boot-a 2",
+      });
+
+      const status = await newControllerWithReachability(
+        "production",
+        async () => true,
+      ).getStatus();
+
+      expect(status.reachable).toBe(false);
+      expect(status.activation).toBe("unavailable");
+    } finally {
+      __setAsyncProcessStartIdentityReaderForTest(restore);
+    }
+  });
+
+  // F3: endpoint reachability is the positive liveness proof. A failed
+  // process-start probe cannot turn that proof into a false "down" result;
+  // identity only rejects a positively established recycled PID.
+  it("F3: keeps a handshake-reachable host online when its OS identity probe is indeterminate", async () => {
+    const restore = __setAsyncProcessStartIdentityReaderForTest(
+      async () => null,
+    );
+    try {
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // A recorded identity IS present, so the row exercises a failed PROBE
+      // rather than the easier missing-record path.
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: process.pid,
+        processStartIdentity: "linux:boot-a 1",
       });
 
       const status = await newControllerWithReachability(
@@ -1715,17 +1736,18 @@ describe("canonical status: activation-state derivation", () => {
       expect(status.reachable).toBe(true);
       expect(status.activation).toBe("activated");
     } finally {
-      __setAsyncProcessStartTimeReaderForTest(restore);
+      __setAsyncProcessStartIdentityReaderForTest(restore);
     }
   });
 
   it("F4: awaits the async identity probe instead of synchronously shelling out from getStatus", async () => {
     const livenessGate = deferred<"alive" | "dead" | "indeterminate">();
     const livenessReader = vi.fn(async () => livenessGate.promise);
-    const startReader = vi.fn(async () => Date.now() - 1_000);
+    const startReader = vi.fn(async () => "linux:boot-a 1");
     const restoreLiveness =
       __setAsyncProcessLivenessReaderForTest(livenessReader);
-    const restoreStart = __setAsyncProcessStartTimeReaderForTest(startReader);
+    const restoreStart =
+      __setAsyncProcessStartIdentityReaderForTest(startReader);
     try {
       writeInstallRecord("production", {
         version: "1.7.0",
@@ -1734,6 +1756,7 @@ describe("canonical status: activation-state derivation", () => {
       writePidMetadata("production", {
         version: "1.7.0",
         pid: process.pid,
+        processStartIdentity: "linux:boot-a 1",
       });
       const statusPromise = newControllerWithReachability(
         "production",
@@ -1751,7 +1774,7 @@ describe("canonical status: activation-state derivation", () => {
       await expect(statusPromise).resolves.toMatchObject({ reachable: true });
       expect(startReader).toHaveBeenCalledOnce();
     } finally {
-      __setAsyncProcessStartTimeReaderForTest(restoreStart);
+      __setAsyncProcessStartIdentityReaderForTest(restoreStart);
       __setAsyncProcessLivenessReaderForTest(restoreLiveness);
     }
   });

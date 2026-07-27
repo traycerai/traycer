@@ -11,6 +11,16 @@ export type {
 } from "./layer0-frame";
 
 export {
+  compareProcessStartIdentity,
+  formatDarwinProcessStartIdentity,
+  formatLinuxProcessStartIdentity,
+  formatWindowsProcessStartIdentity,
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+  type ProcessStartIdentityMatch,
+} from "./process-start-identity";
+
+export {
   claimShutdownRequestSchema,
   claimShutdownResponseSchema,
   commitShutdownRequestSchema,

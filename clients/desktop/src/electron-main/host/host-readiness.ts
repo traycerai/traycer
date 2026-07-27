@@ -5,6 +5,10 @@ import {
   sleep,
 } from "./host-lifecycle";
 import { isPublishedHostEndpointReachable } from "./host-endpoint-reachability";
+import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
 import { TraycerCliError } from "../cli/traycer-cli";
 
 // Host-readiness + CLI-error helpers used by the post-auth host-ensure
@@ -70,7 +74,7 @@ export async function waitForHostReady(
       !(await isPublishedHostEndpointReachable(
         snapshot.websocketUrl,
         snapshot.pid,
-        snapshot.startedAt,
+        snapshot.startIdentity,
         canReachHostWebsocketUrl,
       ))
     ) {
@@ -104,6 +108,7 @@ async function readPidMetadataForReady(path: string): Promise<{
   readonly pid: number;
   readonly websocketUrl: string;
   readonly startedAt: string;
+  readonly startIdentity: ProcessStartIdentity | null;
 } | null> {
   let raw: string;
   try {
@@ -132,6 +137,9 @@ async function readPidMetadataForReady(path: string): Promise<{
     pid: obj.pid,
     websocketUrl: obj.websocketUrl,
     startedAt: obj.startedAt,
+    startIdentity: isProcessStartIdentity(obj.processStartIdentity)
+      ? obj.processStartIdentity
+      : null,
   };
 }
 

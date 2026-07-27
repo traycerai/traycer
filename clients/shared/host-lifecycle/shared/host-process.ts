@@ -1,3 +1,7 @@
+import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
 import type { Evidence } from "../evidence";
 import type { Reachability } from "./reachability";
 
@@ -17,6 +21,12 @@ export type HostPidMetadata = {
   readonly startedAt: string;
   /** Milliseconds since epoch; null when the field is absent (legacy). */
   readonly processStartTimeMs: number | null;
+  /**
+   * The kernel's own creation stamp for the publishing process, immune to
+   * wall-clock adjustment. Null when absent (legacy) or malformed, which
+   * means "cannot compare identity" and never "different process".
+   */
+  readonly processStartIdentity: ProcessStartIdentity | null;
 };
 
 /**
@@ -115,6 +125,9 @@ export function decodeHostPidMetadata(
       websocketUrl: obj.websocketUrl,
       startedAt: obj.startedAt,
       processStartTimeMs,
+      processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
+        ? obj.processStartIdentity
+        : null,
     },
   };
 }

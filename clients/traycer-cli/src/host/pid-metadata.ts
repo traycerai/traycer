@@ -1,4 +1,8 @@
 import { readFile, rm } from "node:fs/promises";
+import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
 import type { Environment } from "../runner/environment";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
@@ -15,6 +19,12 @@ export interface HostPidMetadata {
   readonly version: string;
   readonly websocketUrl: string;
   readonly startedAt: string;
+  /**
+   * The publishing process's kernel-recorded creation stamp, `null` when this
+   * pid.json predates the field. Absence is "cannot compare identity" and
+   * must never be read as a mismatch.
+   */
+  readonly processStartIdentity: ProcessStartIdentity | null;
   /**
    * The host's Layer 0 single-writer (I1) verdict, `null` when this pid.json
    * carries none. Absence is "not recorded" - every file written before the
@@ -114,6 +124,9 @@ export async function readHostPidMetadata(
     version: obj.version,
     websocketUrl: obj.websocketUrl,
     startedAt: obj.startedAt,
+    processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
+      ? obj.processStartIdentity
+      : null,
     layer0: decodeLayer0Record(obj.layer0),
   };
 }

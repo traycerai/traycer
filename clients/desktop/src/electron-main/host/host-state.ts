@@ -202,11 +202,11 @@ export async function readRunningRuntimeVersion(
 ): Promise<string | null> {
   const state = await readPidMetadataState(layout.pidMetadataFile);
   if (state.kind !== "parsed") return null;
-  const { snapshot, startedAt } = state;
+  const { snapshot, startIdentity } = state;
   return (await isPublishedHostEndpointReachable(
     snapshot.websocketUrl,
     snapshot.pid,
-    startedAt,
+    startIdentity,
     reachabilityProbe,
   ))
     ? snapshot.version
