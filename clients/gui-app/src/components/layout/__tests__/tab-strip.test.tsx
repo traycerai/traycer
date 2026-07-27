@@ -51,6 +51,7 @@ import {
 } from "vitest";
 import "../../../../__tests__/test-browser-apis";
 
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
   useHostNotificationIndicators: () => ({
     data: { epics: {}, chats: {} },
@@ -300,6 +301,7 @@ function registerChatSession(epicId: string, chatId: string): void {
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         streamClientFactory: () => ({
           sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
           close: () => undefined,
         }),
       }),
@@ -718,9 +720,7 @@ describe("<TabStrip />", () => {
       "lucide-message-square-clock",
     );
     expect(screen.queryByTestId(`header-tab-activity-${EPIC_A.id}`)).toBeNull();
-    expect(
-      screen.queryByTitle("Background activity — agent idle"),
-    ).not.toBeNull();
+    expect(anyTooltipHasText("Background activity — agent idle")).toBe(true);
   });
 
   it("prioritizes turn activity over background work from another chat", async () => {

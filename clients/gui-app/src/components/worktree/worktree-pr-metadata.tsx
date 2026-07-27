@@ -2,6 +2,7 @@ import { use, useCallback, type MouseEvent, type ReactNode } from "react";
 import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
+  WorktreeWorkspaceSummaryV13,
 } from "@traycer/protocol/host/worktree-schemas";
 import { ExternalLink, FolderGit2, GitBranch } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -22,26 +23,27 @@ import {
   type WorktreeDisplayedPrState,
   type WorktreePrReference,
 } from "@/components/worktree/worktree-pr-metadata-model";
+import {
+  PR_STATE_ICON,
+  PR_STATE_PILL_CLASS,
+  PR_STATE_TINT_CLASS,
+} from "@/components/worktree/worktree-pr-state-palette";
 
 /**
- * The one theme-aware PR-pill palette, used wherever a pill renders: the Epic
- * history list (page background) and the chat/owner hover preview (the
- * `bg-popover` hover-preview card). Both are normal, non-inverted surfaces, so
- * a single palette covers them.
+ * PR pills for the Epic history list (page background) and the chat/owner
+ * hover preview (the `bg-popover` hover-preview card). Both are normal,
+ * non-inverted surfaces, so one palette covers them - and it now lives in
+ * `worktree-pr-state-palette.ts` (`PR_STATE_PILL_CLASS` + `PR_STATE_TINT_CLASS`)
+ * alongside the glyph ramp, shared with the sidebar's icon variant and the
+ * Epic PR panel row.
  *
- * The light text is `-800`, not `-700`: over the pill's own 10% tint, `-700`
- * drops to 3.23:1 (green) on Tokyo Night light, whose surfaces are the darkest
- * of the light presets. `-800` clears 4.5:1 across every preset and surface;
- * dark `-300` already does. See worktree-pr-metadata.test.tsx's matrix.
+ * **The LABEL's contrast comes from `text-foreground`, not a tuned ramp.** It
+ * used to be `-800` light / `-300` dark, picked against the pill's own 10%
+ * tint. Coloured label text is gone, so that tuning no longer applies here:
+ * `text-foreground` is the theme's own body-text token, already contrast-checked
+ * against every preset surface. The tuning did NOT become moot, though - the
+ * state GLYPH inherited the job of carrying the state, so it inherited the ramp.
  */
-const PR_PILL_CLASS: Record<WorktreeDisplayedPrState, string> = {
-  open: "border-green-600/30 bg-green-500/10 text-green-800 dark:border-green-400/30 dark:text-green-300",
-  closed:
-    "border-red-600/25 bg-red-500/10 text-red-800 dark:border-red-400/25 dark:text-red-300",
-  merged:
-    "border-purple-600/30 bg-purple-500/10 text-purple-800 dark:border-purple-400/30 dark:text-purple-300",
-};
-
 export function WorktreePrPills(props: {
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly detailOnHover: boolean;
@@ -90,9 +92,9 @@ function WorktreePrPill(props: {
       asChild
       variant="outline"
       className={cn(
-        "gap-1 font-medium",
+        "group/pr-pill gap-1.5 rounded-full px-2 font-medium",
         props.flexible && "min-w-0 shrink",
-        PR_PILL_CLASS[props.reference.state],
+        PR_STATE_PILL_CLASS[props.reference.state],
       )}
     >
       <WorktreePrAnchor
@@ -157,11 +159,28 @@ function WorktreePrOverflow(props: {
   );
 }
 
-function WorktreePrPillContent(props: { readonly label: string }): ReactNode {
+function WorktreePrPillContent(props: {
+  readonly label: string;
+  readonly state: WorktreeDisplayedPrState;
+}): ReactNode {
+  const StateIcon = PR_STATE_ICON[props.state];
   return (
     <>
-      <span className="truncate">{props.label}</span>
-      <ExternalLink className="size-3" aria-hidden />
+      <StateIcon
+        aria-hidden
+        data-testid="worktree-pr-pill-state-glyph"
+        className={cn("size-3 shrink-0", PR_STATE_TINT_CLASS[props.state])}
+      />
+      <span className="truncate tabular-nums">{props.label}</span>
+      {/* Revealed on hover/focus rather than always-on. Every pill is a link,
+          so a permanent icon on each one is redundant chrome repeated N times;
+          on hover it confirms the affordance exactly when it is being
+          considered. `opacity` (not conditional mount) so the pill's width is
+          identical in both states and a row of them cannot reflow on hover. */}
+      <ExternalLink
+        className="size-3 shrink-0 opacity-0 transition-opacity group-hover/pr-pill:opacity-60 group-focus-visible/pr-pill:opacity-60"
+        aria-hidden
+      />
     </>
   );
 }
@@ -192,7 +211,10 @@ function WorktreePrAnchor(props: {
       data-pr-state={props.reference.state}
       onClick={openExternal}
     >
-      <WorktreePrPillContent label={props.reference.label} />
+      <WorktreePrPillContent
+        label={props.reference.label}
+        state={props.reference.state}
+      />
     </a>
   );
 }
@@ -225,6 +247,7 @@ function WorktreePrHoverDetail(props: {
 export function OwnerWorkspaceMetadataContent(props: {
   readonly binding: WorktreeBinding | null;
   readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly workspaces: readonly WorktreeWorkspaceSummaryV13[];
   readonly pending: boolean;
   readonly error: boolean;
 }): ReactNode {
@@ -247,7 +270,11 @@ export function OwnerWorkspaceMetadataContent(props: {
       </span>
     );
   }
-  const items = ownerWorkspaceMetadataItems(props.binding, props.worktrees);
+  const items = ownerWorkspaceMetadataItems(
+    props.binding,
+    props.worktrees,
+    props.workspaces,
+  );
   if (items.length === 0) {
     return (
       <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
@@ -258,7 +285,15 @@ export function OwnerWorkspaceMetadataContent(props: {
   return (
     <span
       className={cn(
-        "flex max-h-[min(60vh,20rem)] w-full flex-col gap-2",
+        // Hairline between folder blocks. Deliberately LIGHTER than the
+        // settings header's `border-border/70`: that rule separates two
+        // different kinds of information (run settings vs workspaces) and
+        // should read as a section break, while these separate repeats of the
+        // SAME kind and only need to group. `divide-y` rather than a border on
+        // each child, so no rule lands above the first block or below the last.
+        // Padding moves onto the children (`py-2` below) so the rule spans the
+        // full width and the blocks are not crowded against it.
+        "flex max-h-[min(60vh,20rem)] w-full flex-col divide-y divide-border/25",
         HOVER_PREVIEW_SCROLL_CLASS,
       )}
       data-testid="owner-workspace-metadata-content"
@@ -268,7 +303,10 @@ export function OwnerWorkspaceMetadataContent(props: {
       tabIndex={-1}
     >
       {items.map((item) => (
-        <span key={item.key} className="flex min-w-0 flex-col gap-0.5">
+        <span
+          key={item.key}
+          className="flex min-w-0 flex-col gap-0.5 py-2 first:pt-0 last:pb-0"
+        >
           <span className="text-ui-sm font-medium">{item.name}</span>
           <span className="flex items-start gap-1.5 text-ui-xs text-muted-foreground">
             <GitBranch className="mt-0.5 size-3 shrink-0" aria-hidden />

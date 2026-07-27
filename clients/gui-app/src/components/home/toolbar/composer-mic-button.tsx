@@ -8,6 +8,7 @@ import { DICTATION_ACTION_ID } from "@/hooks/composer/use-dictation-hotkey";
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  * Presentation-only control bundle the composer hands to the toolbar so the mic
  * button stays a dumb view over the dictation hook's state. The recording timer
@@ -57,18 +58,24 @@ export function ComposerMicButton({
       : label;
 
   return (
-    <ToolbarIconButton
-      aria-label={label}
-      title={title}
-      aria-pressed={isRecording}
-      onClick={onToggle}
-      className={cn(
-        isRecording &&
-          "bg-destructive/15 text-destructive hover:bg-destructive/20 hover:text-destructive",
-      )}
+    <TooltipWrapper
+      label={title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <MicButtonIcon isBusy={isBusy} isRecording={isRecording} />
-    </ToolbarIconButton>
+      <ToolbarIconButton
+        aria-label={label}
+        aria-pressed={isRecording}
+        onClick={onToggle}
+        className={cn(
+          isRecording &&
+            "bg-destructive/15 text-destructive hover:bg-destructive/20 hover:text-destructive",
+        )}
+      >
+        <MicButtonIcon isBusy={isBusy} isRecording={isRecording} />
+      </ToolbarIconButton>
+    </TooltipWrapper>
   );
 }
 
@@ -153,15 +160,22 @@ export function ComposerMicPreparing({
   // gets no pointer events). Put the tooltip on a wrapping span and make the
   // button `pointer-events-none` so the hover lands on the span.
   return (
-    <span title={label} className="inline-flex">
-      <ToolbarIconButton
-        aria-label={label}
-        disabled
-        aria-busy
-        className="pointer-events-none text-muted-foreground disabled:opacity-100"
-      >
-        <MicProgressRing progress={progress} />
-      </ToolbarIconButton>
-    </span>
+    <TooltipWrapper
+      label={label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="inline-flex">
+        <ToolbarIconButton
+          aria-label={label}
+          disabled
+          aria-busy
+          className="pointer-events-none text-muted-foreground disabled:opacity-100"
+        >
+          <MicProgressRing progress={progress} />
+        </ToolbarIconButton>
+      </span>
+    </TooltipWrapper>
   );
 }

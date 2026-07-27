@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { GitStatusBadge } from "./git-status-badge";
 import { HighlightedText } from "./highlighted-text";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export type GitChangedFileRowDensity = "panel" | "tile";
 
 export interface GitChangedFileRowProps {
@@ -142,7 +143,7 @@ function PanelRowContent(props: {
         letter={metadata.statusLetter}
         tone={metadata.statusTone}
         label={metadata.statusLabel}
-        withNativeTitle={false}
+        withTooltip={false}
       />
       <WorkspaceFileIcon fileName={metadata.fileName} className="size-3.5" />
       <MiddleTruncatedFileName
@@ -202,12 +203,22 @@ function TileRowContent(props: {
         letter={metadata.statusLetter}
         tone={metadata.statusTone}
         label={metadata.statusLabel}
-        withNativeTitle
+        withTooltip
       />
       <WorkspaceFileIcon fileName={metadata.fileName} className="size-3.5" />
-      <span className="min-w-0 truncate font-mono text-ui-sm">
-        {metadata.fileName}
-      </span>
+      {/* Scoped to the filename rather than the whole row: the row also holds
+          the status badge, which owns a tooltip of its own at this density. A
+          row-wide trigger opened both at once. */}
+      <TooltipWrapper
+        label={props.file.path}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <span className="min-w-0 truncate font-mono text-ui-sm">
+          {metadata.fileName}
+        </span>
+      </TooltipWrapper>
       {metadata.previousFileName ? (
         <span className="truncate text-ui-xs text-muted-foreground">
           from {metadata.previousFileName}
@@ -276,7 +287,6 @@ export function GitChangedFileRow(props: GitChangedFileRowProps): ReactNode {
         props.active ? "hover:bg-accent" : "hover:bg-accent/50",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
       )}
-      title={isPanel ? undefined : props.file.path}
       aria-label={ariaLabel}
       aria-expanded={props.ariaExpanded}
       aria-current={props.active ? true : undefined}

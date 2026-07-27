@@ -49,6 +49,53 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("useComposerPasteAdapter - runPendingImageJob (landing in-place paste)", () => {
+  // Item 8: pending image jobs gate isIngestingImages the same as file attach.
+  it("holds isIngestingImages true while a runPendingImageJob is in flight, then clears", async () => {
+    const gate: { release: (() => void) | null } = { release: null };
+    const insert = vi.fn(
+      (_attrs: ReadonlyArray<ImageAttachmentAttrs>): number => 0,
+    );
+    const { result } = renderHook(() =>
+      useComposerPasteAdapter(insert, NOOP_FILE_PATHS),
+    );
+
+    act(() => {
+      result.current.runPendingImageJob(async () => {
+        await new Promise<void>((resolve) => {
+          gate.release = resolve;
+        });
+      });
+    });
+
+    expect(result.current.isIngestingImages).toBe(true);
+    expect(
+      isAttachmentIngestPending({
+        isIngestingImages: result.current.isIngestingImages,
+        isResolvingFilePaths: result.current.isResolvingFilePaths,
+      }),
+    ).toBe(true);
+
+    await act(async () => {
+      const release = gate.release;
+      if (release === null) throw new Error("expected pending job gate");
+      release();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(result.current.isIngestingImages).toBe(false);
+    });
+    expect(
+      isAttachmentIngestPending({
+        isIngestingImages: result.current.isIngestingImages,
+        isResolvingFilePaths: result.current.isResolvingFilePaths,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("useComposerPasteAdapter - attachImageFiles", () => {
   it("exposes ingestion as pending until the FileReader settles", async () => {
     const delayedReader = installDelayedFileReader();

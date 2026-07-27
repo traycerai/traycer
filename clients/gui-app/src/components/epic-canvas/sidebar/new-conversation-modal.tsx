@@ -893,6 +893,8 @@ export function NewConversationModalBody(props: {
       dictationPreparing={dictationPreparing}
       paste={paste}
       hasPastedImageBytes={hasPastedImageBytes}
+      ingestPastedComposerImages={null}
+      onEditorReady={null}
       onSubmit={handleSubmit}
       onStartTerminal={handleStartTerminal}
       onSnapshot={handleSnapshot}

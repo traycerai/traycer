@@ -57,6 +57,13 @@ vi.mock("@/components/layout/header/rate-limit-icon", () => ({
   RateLimitIconButton: () => <div data-testid="rate-limit-header-button" />,
 }));
 
+// The Windows menu strip routes its popup through a TanStack mutation; this
+// provider-light AppShell test has no QueryClient, so stub it like the other
+// host/query-backed header children above.
+vi.mock("@/components/layout/header/windows-menu-bar", () => ({
+  WindowsMenuBar: () => null,
+}));
+
 vi.mock("@/components/resources/resource-monitor-popover", () => ({
   ResourceMonitorPopover: () => (
     <div data-testid="resource-monitor-header-button" />

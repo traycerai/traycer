@@ -46,6 +46,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
 import { isSingleTextblockLinkRange } from "./artifact-link-selection";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const HOVER_SHOW_DELAY_MS = 300;
 const HOVER_HIDE_DELAY_MS = 100;
 
@@ -591,48 +592,68 @@ function LinkPreview(props: LinkPreviewProps) {
         href={props.href}
       />
       {openable ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          aria-label={`Open link: ${props.href}`}
-          title={props.href}
-          className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
-          disabled={props.href.trim().length === 0 || externalOpenPending}
-          onClick={props.onOpen}
+        <TooltipWrapper
+          label={props.href}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          <span className="truncate">{props.href}</span>
-          {externalOpenPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId="artifact-link-open-pending"
-              variant={undefined}
-            />
-          ) : null}
-        </Button>
+          <span className="inline-flex">
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              aria-label={`Open link: ${props.href}`}
+              className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
+              disabled={props.href.trim().length === 0 || externalOpenPending}
+              onClick={props.onOpen}
+            >
+              <span className="truncate">{props.href}</span>
+              {externalOpenPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="artifact-link-open-pending"
+                  variant={undefined}
+                />
+              ) : null}
+            </Button>
+          </span>
+        </TooltipWrapper>
       ) : (
-        <span
-          title={props.href}
-          className="min-w-0 max-w-[min(55vw,16rem)] truncate px-1.5 text-ui-xs text-muted-foreground"
+        <TooltipWrapper
+          label={props.href}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {props.href}
-        </span>
+          <span className="min-w-0 max-w-[min(55vw,16rem)] truncate px-1.5 text-ui-xs text-muted-foreground">
+            {props.href}
+          </span>
+        </TooltipWrapper>
       )}
-      <Button
-        type="button"
-        size="icon-xs"
-        variant="ghost"
-        disabled={props.href.trim().length === 0}
-        aria-label={props.copied ? "Copied" : "Copy link"}
-        title={props.copied ? "Copied" : "Copy link"}
-        onClick={props.onCopy}
+      <TooltipWrapper
+        label={props.copied ? "Copied" : "Copy link"}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        {props.copied ? (
-          <Check aria-hidden="true" />
-        ) : (
-          <Copy aria-hidden="true" />
-        )}
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            disabled={props.href.trim().length === 0}
+            aria-label={props.copied ? "Copied" : "Copy link"}
+            onClick={props.onCopy}
+          >
+            {props.copied ? (
+              <Check aria-hidden="true" />
+            ) : (
+              <Copy aria-hidden="true" />
+            )}
+          </Button>
+        </span>
+      </TooltipWrapper>
       {props.editable ? (
         <Button
           type="button"

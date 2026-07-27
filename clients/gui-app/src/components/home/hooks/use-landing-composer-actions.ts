@@ -69,6 +69,7 @@ import {
   getImageBytes,
   sessionImageBytes,
 } from "@/lib/composer/landing-image-store";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
@@ -96,6 +97,7 @@ import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { toast } from "sonner";
 import { buildDefaultBranchByPath } from "@/lib/worktree/default-branch-name";
 import { defaultFolderIntent } from "@/lib/worktree/worktree-intent-seeding";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
@@ -991,6 +993,7 @@ function readCachedDefaultWorktreeIntent(
   const defaultBranchByPath = buildDefaultBranchByPath(
     worktreeDefaults.map((entry) => entry.summary),
     worktreeDefaults.length > 1,
+    useSettingsStore.getState().worktreeBranchPrefix,
   );
   const primaryPath = resolvePrimaryPath(
     workspace.folders,
@@ -1108,19 +1111,6 @@ function inlineImageHashes(
     ...node,
     content: children.map((child) => inlineImageHashes(child, bytesByHash)),
   };
-}
-
-// Chunked so a multi-MB image's byte array never overflows the call stack via a
-// single spread into `String.fromCharCode`.
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const CHUNK_SIZE = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += CHUNK_SIZE) {
-    binary += String.fromCharCode(
-      ...bytes.subarray(offset, offset + CHUNK_SIZE),
-    );
-  }
-  return btoa(binary);
 }
 
 function buildEpicLight(input: {

@@ -11,6 +11,14 @@ import type { DesktopStateStore } from "./desktop-state-store";
 export interface PerWindowStateChange {
   readonly windowId: string;
   readonly snapshot: PerWindowSnapshot;
+  /**
+   * How this change was produced. `"clear"` is a window-teardown wipe (the
+   * durable snapshot was deleted); it is deliberately NOT forwarded to a renderer
+   * (see the IPC forwarder), so a reloading / re-registering live window is never
+   * clobbered with `createEmptyPerWindowSnapshot()`. `"update"` is an ordinary
+   * state write and forwards normally.
+   */
+  readonly origin: "update" | "clear";
 }
 
 type PerWindowStateListener = (change: PerWindowStateChange) => void;
@@ -101,7 +109,11 @@ export class PerWindowState {
       revision: next.revision ?? 0,
     };
     if (this.store === null) {
-      this.events.emit("change", { windowId, snapshot: next });
+      this.events.emit("change", {
+        windowId,
+        snapshot: next,
+        origin: "update",
+      });
       return Promise.resolve(acknowledgement);
     }
     // `DesktopStateStore` serializes and recovers its own disk writes. Invoke
@@ -110,7 +122,11 @@ export class PerWindowState {
     // race ahead of an acknowledged renderer update.
     const durableWrite = this.store.setWindowSnapshot(windowId, next);
     return durableWrite.then(() => {
-      this.events.emit("change", { windowId, snapshot: next });
+      this.events.emit("change", {
+        windowId,
+        snapshot: next,
+        origin: "update",
+      });
       return acknowledgement;
     });
   }
@@ -118,9 +134,13 @@ export class PerWindowState {
   clear(windowId: string): void {
     this.snapshots.delete(windowId);
     this.store?.deleteWindowSnapshot(windowId);
+    // Local listeners (e.g. the menu controller) still observe the wipe so they
+    // rebuild; the IPC forwarder drops `origin: "clear"` before it can reach a
+    // renderer, so a still-alive window is never handed an empty snapshot.
     this.events.emit("change", {
       windowId,
       snapshot: createEmptyPerWindowSnapshot(),
+      origin: "clear",
     });
   }
 

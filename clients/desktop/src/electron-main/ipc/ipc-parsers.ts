@@ -383,18 +383,6 @@ export function readSenderWebContentsId(
   return sender.id;
 }
 
-export function readEpicId(payload: unknown): string | null {
-  if (
-    payload === null ||
-    typeof payload !== "object" ||
-    Array.isArray(payload)
-  ) {
-    return null;
-  }
-  const obj = payload as Record<string, unknown>;
-  return typeof obj.epicId === "string" ? obj.epicId : null;
-}
-
 /**
  * App-scoped commands that may fire with no focused renderer - tray-menu and
  * Windows jump-list clicks happen while another app is foregrounded. The

@@ -125,7 +125,7 @@ describe("/epics/$epicId phase migration gate", () => {
           candidate.surfaceMode.phaseId === "phase-1",
       );
       expect(tab?.epicId).toBe("phase-1");
-      expect(tab?.name).toBe("Untitled epic");
+      expect(tab?.name).toBe("Untitled task");
     });
     expect(testState.mutate).not.toHaveBeenCalled();
   });

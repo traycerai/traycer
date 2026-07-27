@@ -71,6 +71,7 @@ function chat(id: string, title: string): ChatProjection {
     userId: null,
     hostId: "chat-host",
     isTitleEditedByUser: false,
+    archivedAt: null,
     settings: null,
   };
 }
@@ -90,6 +91,7 @@ function agent(id: string, title: string): TuiAgentProjection {
     reasoningEffort: null,
     agentMode: "regular",
     profileId: null,
+    archivedAt: null,
     harnessSessionId: null,
     terminalAgentArgs: null,
     terminalShellCommand: null,

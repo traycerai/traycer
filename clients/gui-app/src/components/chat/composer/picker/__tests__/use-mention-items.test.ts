@@ -33,6 +33,7 @@ function chat(
     userId: null,
     hostId: null,
     isTitleEditedByUser: false,
+    archivedAt: null,
     settings: null,
   };
 }
@@ -67,6 +68,7 @@ function terminalAgent(fields: {
     reasoningEffort: null,
     agentMode: "regular",
     profileId: null,
+    archivedAt: null,
     harnessSessionId: null,
     terminalAgentArgs: null,
     terminalShellCommand: null,

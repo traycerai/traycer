@@ -1,7 +1,8 @@
 import "../../../../__tests__/test-browser-apis";
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -21,6 +22,28 @@ import { useSurfaceActivity } from "@/components/home/composer/surface-activity-
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
+/**
+ * Commit-level observation of the mocked LandingComposer's mount identity.
+ * `useLayoutEffect` runs after each committed render (before paint / before
+ * passive effects), so a passive-effect pending rotation leaves a detectable
+ * intermediate commit that a render-phase rotation never produces.
+ *
+ * The null-draft pre-minted-key rotation this verifies is implemented one
+ * level down, in `LandingDraftSurface` (`HomePage` only sets up
+ * `DraftSurfaceProvider` and does not itself pre-mint anything). `HomePage`
+ * renders the real, unmocked `LandingDraftSurface`, so rendering `<HomePage />`
+ * here still exercises that guarantee end-to-end against this mocked
+ * `LandingComposer`.
+ */
+type ComposerCommit = {
+  readonly draftId: string | null;
+  readonly pendingCreateId: string | null;
+  /** `LandingDraftSurface` uses `draftId ?? pendingDraftId` as the React key. */
+  readonly effectiveKey: string | null;
+  readonly instanceId: number;
+  readonly phase: "mount" | "commit" | "unmount";
+};
+
 const homeMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   systemModalOpen: false,
@@ -35,6 +58,8 @@ const homeMocks = vi.hoisted(() => ({
     version: "0.0.0-test",
     status: "available",
   })),
+  composerCommits: [] as ComposerCommit[],
+  nextInstanceId: 0,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -93,8 +118,10 @@ vi.mock("@/components/home/home-hero", () => ({
 vi.mock("@/components/home/composer/landing-composer", () => ({
   LandingComposer: (props: {
     draftId: string | null;
+    pendingCreateId: string | null;
     initialPrompt: string | undefined;
     initialSettings: unknown;
+    workspaceControls: ReactNode;
     workspaceSlot: ReactNode;
   }) => {
     // The real composer reads surface activity from context (provided by
@@ -102,6 +129,48 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
     const activityEnabled = useSurfaceActivity();
     const actions = useLandingComposerActions();
     const draftId = props.draftId;
+    const pendingCreateId = props.pendingCreateId;
+    const effectiveKey = draftId ?? pendingCreateId;
+    const instanceIdRef = useRef<number | null>(null);
+    if (instanceIdRef.current === null) {
+      homeMocks.nextInstanceId += 1;
+      instanceIdRef.current = homeMocks.nextInstanceId;
+    }
+    const instanceId = instanceIdRef.current;
+
+    // Instance lifetime (keyed remounts). `instanceId` is allocated once per
+    // React key identity; depend only on it so prop updates do not fake unmounts.
+    useLayoutEffect(() => {
+      homeMocks.composerCommits.push({
+        draftId: null,
+        pendingCreateId: null,
+        effectiveKey: null,
+        instanceId,
+        phase: "mount",
+      });
+      return () => {
+        homeMocks.composerCommits.push({
+          draftId: null,
+          pendingCreateId: null,
+          effectiveKey: null,
+          instanceId,
+          phase: "unmount",
+        });
+      };
+    }, [instanceId]);
+
+    // Every committed prop snapshot (catches a stale key frame that reuses
+    // the same React instance when the React key has not changed yet).
+    useLayoutEffect(() => {
+      homeMocks.composerCommits.push({
+        draftId,
+        pendingCreateId,
+        effectiveKey,
+        instanceId,
+        phase: "commit",
+      });
+    });
+
     const handleClick = (): void => {
       actions.submit({
         draftId,
@@ -132,6 +201,10 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
       <div
         data-testid="landing-composer"
         data-activity-enabled={String(activityEnabled)}
+        data-draft-id={draftId ?? ""}
+        data-pending-create-id={pendingCreateId ?? ""}
+        data-effective-key={effectiveKey ?? ""}
+        data-instance-id={String(instanceId)}
       >
         <button
           type="button"
@@ -150,6 +223,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
         <div data-testid="landing-initial-prompt">
           {props.initialPrompt ?? ""}
         </div>
+        {props.workspaceControls}
         {props.workspaceSlot}
       </div>
     );
@@ -194,6 +268,8 @@ describe("<HomePage />", () => {
       version: "0.0.0-test",
       status: "available",
     });
+    homeMocks.composerCommits.length = 0;
+    homeMocks.nextInstanceId = 0;
     useAuthStore.setState({
       status: "signed-in",
       profile: {
@@ -490,6 +566,156 @@ describe("<HomePage />", () => {
     });
     queryClient.clear();
   });
+
+  describe("null-draft mount key rotation (production LandingDraftSurface, rendered live under HomePage)", () => {
+    function renderHome(): QueryClient {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <HomePage />
+        </QueryClientProvider>,
+      );
+      return queryClient;
+    }
+
+    function commitSnapshots(): ReadonlyArray<ComposerCommit> {
+      return homeMocks.composerCommits.filter((c) => c.phase === "commit");
+    }
+
+    function mounts(): ReadonlyArray<ComposerCommit> {
+      return homeMocks.composerCommits.filter((c) => c.phase === "mount");
+    }
+
+    it("never commits a null-draft frame still keyed by a pending-created draft id", () => {
+      const queryClient = renderHome();
+
+      // Initial null session: pendingCreateId is the mount key.
+      const initial = commitSnapshots().at(-1);
+      expect(initial?.draftId).toBeNull();
+      expect(initial?.pendingCreateId).toBeTruthy();
+      const pendingKey = initial?.pendingCreateId ?? "";
+      expect(initial?.effectiveKey).toBe(pendingKey);
+
+      // Create the draft WITH that pre-minted id (mirrors LandingComposer's
+      // real handleSnapshot create branch, which calls
+      // createDraftWithId(props.pendingCreateId ?? uuidv4(), settings)).
+      act(() => {
+        useLandingDraftStore.getState().createDraftWithId(pendingKey, null);
+      });
+      expect(useLandingDraftStore.getState().activeDraftId).toBe(pendingKey);
+      const bound = commitSnapshots().at(-1);
+      expect(bound?.draftId).toBe(pendingKey);
+      expect(bound?.pendingCreateId).toBeNull();
+      expect(bound?.effectiveKey).toBe(pendingKey);
+
+      const commitsBeforeClear = homeMocks.composerCommits.length;
+      const mountsBeforeClear = mounts().length;
+
+      act(() => {
+        useLandingDraftStore.getState().clearActiveDraft();
+      });
+
+      // Passive-effect rotation would leave a committed frame with
+      // draftId=null and effectiveKey=pendingKey (retired id) before reminting.
+      // Render-phase rotation must never produce that frame.
+      const afterClear = homeMocks.composerCommits.slice(commitsBeforeClear);
+      const nullCommits = afterClear.filter(
+        (c) => c.phase === "commit" && c.draftId === null,
+      );
+      expect(nullCommits.length).toBeGreaterThan(0);
+      expect(nullCommits.every((c) => c.effectiveKey !== pendingKey)).toBe(
+        true,
+      );
+      // Exactly one distinct new null-session key (no double remount).
+      const nullKeys = [
+        ...new Set(nullCommits.map((c) => c.effectiveKey).filter(Boolean)),
+      ];
+      expect(nullKeys).toHaveLength(1);
+      expect(nullKeys[0]).not.toBe(pendingKey);
+
+      // One remount for the rotation (not zero, not two).
+      const mountsAfter = mounts().length - mountsBeforeClear;
+      expect(mountsAfter).toBe(1);
+
+      // Flush passive effects: still no late second remint.
+      act(() => {
+        /* flush */
+      });
+      const lateNullKeys = [
+        ...new Set(
+          homeMocks.composerCommits
+            .slice(commitsBeforeClear)
+            .filter((c) => c.phase === "commit" && c.draftId === null)
+            .map((c) => c.effectiveKey)
+            .filter(Boolean),
+        ),
+      ];
+      expect(lateNullKeys).toEqual(nullKeys);
+
+      queryClient.clear();
+    });
+
+    it("remounts exactly once when a pre-existing bound draft goes null", () => {
+      // Bind a draft whose id is NOT the LandingDraftSurface pending mint.
+      const existingId = useLandingDraftStore.getState().createDraft(null);
+      useLandingDraftStore.getState().setActiveDraft(existingId);
+
+      const queryClient = renderHome();
+
+      const bound = commitSnapshots().at(-1);
+      expect(bound?.draftId).toBe(existingId);
+      expect(bound?.effectiveKey).toBe(existingId);
+      const mountsBeforeClear = mounts().length;
+      // Capture any pending id that was never used as a key while bound.
+      const commitsBeforeClear = homeMocks.composerCommits.length;
+
+      act(() => {
+        useLandingDraftStore.getState().clearActiveDraft();
+      });
+
+      const afterClear = homeMocks.composerCommits.slice(commitsBeforeClear);
+      // Every mount after the clear — intermediate stale-pending would be
+      // an extra mount entry.
+      const mountsAfterClear = afterClear.filter((c) => c.phase === "mount");
+      expect(mountsAfterClear).toHaveLength(1);
+
+      const nullCommits = afterClear.filter(
+        (c) => c.phase === "commit" && c.draftId === null,
+      );
+      expect(nullCommits.length).toBeGreaterThan(0);
+      // No committed null frame still keyed by the retired bound draft.
+      expect(nullCommits.every((c) => c.effectiveKey !== existingId)).toBe(
+        true,
+      );
+      // Exactly one distinct null-session key across ALL commits (not
+      // existing → stale-pending → new-pending collapsing to endpoints).
+      const nullKeys = [
+        ...new Set(nullCommits.map((c) => c.effectiveKey).filter(Boolean)),
+      ];
+      expect(nullKeys).toHaveLength(1);
+
+      // Flush passives: a useEffect remint would add a second mount/key.
+      act(() => {
+        /* flush */
+      });
+      const mountsTotalAfter = mounts().length - mountsBeforeClear;
+      expect(mountsTotalAfter).toBe(1);
+      const lateNullKeys = [
+        ...new Set(
+          homeMocks.composerCommits
+            .slice(commitsBeforeClear)
+            .filter((c) => c.phase === "commit" && c.draftId === null)
+            .map((c) => c.effectiveKey)
+            .filter(Boolean),
+        ),
+      ];
+      expect(lateNullKeys).toHaveLength(1);
+
+      queryClient.clear();
+    });
+  });
 });
 
 function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
@@ -504,6 +730,7 @@ function editorHandleForPrompt(prompt: string): ComposerPromptEditorHandle {
     setContent: () => undefined,
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
+    rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

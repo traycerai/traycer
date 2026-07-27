@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useShallow } from "zustand/react/shallow";
 import {
   ArrowDownToLine,
   Check,
@@ -35,6 +36,7 @@ import {
 } from "@/components/epics/use-history-open-in-new-window";
 import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
@@ -120,7 +122,7 @@ const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
 // Single source of a row's display label for both visible text and accessible
 // names. `item.title` is the RAW title (epics can be empty); apply the
-// source-aware "Untitled epic" fallback for epics, while phases already carry
+// source-aware "Untitled task" fallback for epics, while phases already carry
 // their own baked fallback and render verbatim.
 function historyItemDisplayTitle(item: HistoryItem): string {
   return item.taskType === "phase"
@@ -245,6 +247,15 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // data actually changes.
   const { search, update: updateSearch, clear: clearSearch } = historySearch;
   const openInNewWindowFlow = useHistoryOpenInNewWindowFlow();
+  const openEpicIds = useEpicCanvasStore(
+    useShallow((state) =>
+      state.openTabOrder.flatMap((tabId) => {
+        const tab = state.tabsById[tabId];
+        return tab === undefined ? [] : [tab.epicId];
+      }),
+    ),
+  );
+  const openEpicIdSet = useMemo(() => new Set(openEpicIds), [openEpicIds]);
 
   const {
     data,
@@ -511,6 +522,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               onOpenInNewWindow={openInNewWindowFlow.requestOpen}
               openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
               worktreesByEpicId={worktreesByEpicId}
+              openEpicIds={openEpicIdSet}
             />
           </div>
         </NotificationIndicatorsProvider>
@@ -588,7 +600,7 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
           onChange={(event) => {
             props.onChange(event.target.value);
           }}
-          placeholder="Search by title, repo, or PR"
+          placeholder="Search by title, repo, branch, or PR"
           aria-label="Search tasks"
         />
         {props.value.length > 0 ? (
@@ -766,7 +778,7 @@ function describeDeleteTitle(
   if (ids.length > 1) return `Delete ${ids.length} epics?`;
   const match = items.find((item) => item.epicId === ids[0]);
   if (match === undefined) return "Delete 1 epic?";
-  // `match.title` is RAW; apply the source-aware "Untitled epic" fallback (prompt
+  // `match.title` is RAW; apply the source-aware "Untitled task" fallback (prompt
   // slice, else literal) for the rendered confirmation. Phases already carry
   // their own baked fallback.
   const matchTitle =
@@ -802,6 +814,7 @@ interface EpicsListBodyProps {
     string,
     readonly WorktreeHostEntryV12[]
   >;
+  readonly openEpicIds: ReadonlySet<string>;
 }
 
 function EpicsListBody(props: EpicsListBodyProps): ReactNode {
@@ -825,6 +838,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktreesByEpicId,
+    openEpicIds,
   } = props;
 
   if (error !== null) {
@@ -864,6 +878,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               onOpenInNewWindow={onOpenInNewWindow}
               openInNewWindowAvailable={openInNewWindowAvailable}
               worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
+              isOpen={openEpicIds.has(item.epicId)}
             />
           ))}
         </ul>
@@ -932,6 +947,7 @@ interface EpicsListRowProps {
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly isOpen: boolean;
 }
 
 function HistoryRowTrailingMetadata(props: {
@@ -966,6 +982,22 @@ function HistoryRowTrailingMetadata(props: {
   );
 }
 
+function HistoryOpenBadge(props: {
+  readonly epicId: string;
+  readonly isOpen: boolean;
+}): ReactNode {
+  if (!props.isOpen) return null;
+  return (
+    <Badge
+      variant="secondary"
+      data-testid={`task-history-open-${props.epicId}`}
+      className="h-4 px-1 text-overline"
+    >
+      Open
+    </Badge>
+  );
+}
+
 const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const {
     item,
@@ -979,6 +1011,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktrees,
+    isOpen,
   } = props;
   const isPhase = item.taskType === "phase";
   const displayTitle = historyItemDisplayTitle(item);
@@ -1072,7 +1105,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     }
     // Passing the row's title threads it through tab creation so the
     // cold-open canvas skeleton can render the real epic title at +0ms,
-    // not "Untitled epic" until the snapshot arrives.
+    // not "Untitled task" until the snapshot arrives.
     openEpicFromCommand(navigate, item.epicId, pathname, {
       title: item.title,
       source: "direct_ui",
@@ -1217,6 +1250,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
               <span className="truncate font-medium text-foreground">
                 {displayTitle}
               </span>
+              <HistoryOpenBadge epicId={item.epicId} isOpen={isOpen} />
               {pinControl}
               {titleEditControl}
             </span>

@@ -45,6 +45,15 @@ describe("history search params", () => {
     });
   });
 
+  it("round-trips the last-viewed sort", () => {
+    const search = parseHistorySearch({ historySort: "last-viewed" });
+
+    expect(search.sort).toBe("last-viewed");
+    expect(historySearchToParams(search)).toMatchObject({
+      historySort: "last-viewed",
+    });
+  });
+
   it("clears only history params and keeps unrelated route search state", () => {
     expect(
       clearHistorySearchParams({

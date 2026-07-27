@@ -14,10 +14,20 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
 
+const recordViewed = vi.hoisted(() => vi.fn());
+
 vi.mock("@/components/layout/app-shell", () => ({
   AppShell: (props: { readonly children: ReactNode }) => (
     <div data-testid="app-shell">{props.children}</div>
   ),
+}));
+
+// The standalone sign-in / onboarding surfaces render the Windows menu strip
+// in a title-bar band, and the strip routes its popup through a TanStack
+// mutation. This routing test wraps RootComponent in only a router queryClient
+// (no QueryClientProvider), so stub the module like AppShell above.
+vi.mock("@/components/layout/header/windows-menu-bar", () => ({
+  WindowsMenuBar: () => null,
 }));
 
 vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({
@@ -53,6 +63,10 @@ vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewed }),
 }));
 
 vi.mock("@/hooks/migration/use-phase-migrate-to-epic-mutation", () => ({
@@ -147,6 +161,7 @@ describe("/epics/$epicId/$tabId route", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    recordViewed.mockReset();
     seedSignedInAuth();
     // Past the one-time tour, so RootComponent's global onboarding gate is inert.
     useOnboardingStore.setState({ completedAt: 1_700_000_000_000 });
@@ -173,6 +188,7 @@ describe("/epics/$epicId/$tabId route", () => {
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([TAB_ID]);
     expect(Object.keys(state.tabsById)).toEqual([TAB_ID]);
+    expect(recordViewed).toHaveBeenCalledWith({ epicId: EPIC_ID });
   });
 
   it("repairs a stale tab route to a sibling tab without carrying nested focus params", async () => {

@@ -58,6 +58,49 @@ const reactForwardRefCallBan = {
   message:
     "React 19 treats refs as regular props. Type and destructure a `ref` prop instead of wrapping the component in React.forwardRef.",
 };
+// Native `title=` is a browser tooltip: ~700ms delay we do not control, no
+// styling, no touch support, invisible to most screen readers as anything more
+// than a duplicate of the accessible name, and it clips at the OS window edge.
+// `TooltipWrapper` is the app's one tooltip surface.
+//
+// SCOPE: lowercase names only, i.e. real DOM tags. `title` is an ordinary React
+// prop on plenty of components here (`SettingsPanelShell`, `SectionHeading`,
+// `ConfirmDestructiveDialog`, …) where it is a heading, not a tooltip - a
+// blanket ban on the attribute name would flag ~65 of those. The exceptions
+// below are the tags where `title` is SEMANTIC rather than a hover hint:
+// `iframe` (its accessible name - `jsx-a11y/iframe-has-title` actively requires
+// it), `abbr`/`dfn` (expansion of the term), and the metadata/option tags that
+// never render a hoverable box at all.
+//
+// Components that merely forward `title` to a DOM node (`Button`, `Badge`, …)
+// are covered by the companion ban below - they are native tooltips wearing a
+// capital letter.
+const nativeTitleTooltipDomBan = {
+  selector:
+    "JSXOpeningElement[name.name=/^(?!(iframe|abbr|dfn|optgroup|option|track|link|style|meta)$)[a-z][a-zA-Z0-9-]*$/] > JSXAttribute[name.name='title']",
+  message:
+    "Do not use the native `title` attribute as a tooltip. Wrap the element in <TooltipWrapper label={...}> (@/components/ui/tooltip-wrapper), and keep `aria-label` for the accessible name.",
+};
+
+// The shared primitives that spread their props onto a real DOM node, so a
+// `title` passed to them lands as a native tooltip exactly as if it had been
+// written on a `<button>`. Hand-maintained on purpose: it is the price of
+// letting `title` stay a legitimate prop name elsewhere. Add a component here
+// when it starts forwarding `title` to the DOM.
+//
+// The app's OWN wrappers are deliberately absent: rather than police a `title`
+// prop on each of them, they were renamed to take `tooltip` and now own a
+// `TooltipWrapper` internally (`StopButtonShell`, `RoleBadge`,
+// `PillToggleButton`, `ReferenceChipButton`, `IndicatorSpan`). A prop literally
+// named `tooltip` cannot be confused with the native attribute, so those need
+// no rule at all.
+const nativeTitleTooltipForwardingBan = {
+  selector:
+    "JSXOpeningElement[name.name=/^(Button|Badge|DropdownMenuItem|DropdownMenuTrigger|DialogTrigger|PopoverTrigger|SelectTrigger|Switch|ToolbarIconButton|ToolbarPillButton|StartTruncatedText|NodeViewWrapper|WorktreePickerTrigger)$/] > JSXAttribute[name.name='title']",
+  message:
+    "This component forwards `title` to a DOM node, making it a native tooltip. Wrap it in <TooltipWrapper label={...}> (@/components/ui/tooltip-wrapper) instead.",
+};
+
 const epicTabRouteConstructionBan = {
   selector: "CallExpression[callee.name='epicTabRoute']",
   message:
@@ -72,6 +115,8 @@ const tabNavigationStoreActionBans = tabNavigationStoreActionRestrictions([]);
 const generalCustomSyntaxRestrictions = [
   jsxKeyNullishCoalesceLiteral,
   jsxKeyNullishCoalesceTemplate,
+  nativeTitleTooltipDomBan,
+  nativeTitleTooltipForwardingBan,
   forwardRefImportBan,
   forwardRefCallBan,
   reactForwardRefCallBan,
@@ -214,6 +259,27 @@ export default tseslint.config(
             },
           ],
         },
+      ],
+    },
+  },
+  {
+    // Rendered MARKDOWN, not app chrome. A Markdown link title is written by
+    // the document author and belongs on the anchor as `title` - that is the
+    // attribute the syntax maps to. Routing it through `TooltipWrapper` would
+    // restyle author content as app UI and drop the attribute from the DOM.
+    // The ban stays on for every other tooltip in this directory.
+    files: ["src/markdown/components/markdown-anchor.tsx"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...traycerTypeSafetyRestrictions,
+        noFullStoreSubscription,
+        ...generalCustomSyntaxRestrictions.filter(
+          (restriction) =>
+            restriction !== nativeTitleTooltipDomBan &&
+            restriction !== nativeTitleTooltipForwardingBan,
+        ),
+        ...nestedFocusBoundaryRestrictions([]),
       ],
     },
   },

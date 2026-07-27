@@ -39,6 +39,8 @@ export const HOST_NOTIFICATION_STOPPED_REASONS = [
   "model_unavailable",
   "provider_unavailable",
   "provider_connection_failed",
+  "context_exhausted",
+  "request_rejected",
   "turn_start_timeout",
   "missing_terminal_event",
   "background_work_failed",
@@ -75,7 +77,12 @@ export function deriveHostNotificationStoppedReason(
     case "server_error":
       return "provider_unavailable";
     case "claude_code_transport":
+    case "connection_failed":
       return "provider_connection_failed";
+    case "context_window_exceeded":
+      return "context_exhausted";
+    case "invalid_request":
+      return "request_rejected";
     case "turn_start_timeout":
       return "turn_start_timeout";
     case "missing_terminal_event":
@@ -112,7 +119,9 @@ export type HostNotificationChatStoppedPayload = z.infer<
 
 /**
  * TUI `agent.stopped` payload: the "epic" shape. `agentName` is the
- * terminal-agent name — NOT a chat title; these rows carry no chat binding.
+ * terminal-agent name — NOT a chat title. The row itself is chat-scoped to
+ * `tuiAgentId` (hosts minted these rows without a chat binding before that
+ * change, so entries from older rows may still carry a null `chatId`).
  */
 export const hostNotificationEpicStoppedPayloadSchema = z
   .object({

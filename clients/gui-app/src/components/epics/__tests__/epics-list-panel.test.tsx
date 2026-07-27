@@ -43,6 +43,7 @@ import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schem
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
@@ -243,6 +244,8 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     linkedRepos: [],
     linkedWorkspaces: [],
     pullRequestNumbers: [],
+    worktreeBranches: [],
+    worktreePaths: [],
     ownership: "mine",
     permissionRole: "owner",
     isPinned: false,
@@ -390,6 +393,19 @@ describe("<EpicsListPanel />", () => {
       );
     });
     expect(screen.queryByTestId("old-epic-route")).toBeNull();
+  });
+
+  it("labels a task that is already open in the tab strip", async () => {
+    useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-from-history", "Open from landing");
+
+    renderPanel("embedded", "/");
+
+    expect(
+      (await screen.findByTestId("task-history-open-epic-from-history"))
+        .textContent,
+    ).toBe("Open");
   });
 
   it("unpins a pinned app history epic from the row control", async () => {
@@ -656,7 +672,7 @@ describe("<EpicsListPanel />", () => {
     expect(
       await screen.findByTestId("epics-list-row-activity-epic-from-history"),
     ).toBeDefined();
-    expect(screen.queryByTitle("Task activity in progress")).not.toBeNull();
+    expect(anyTooltipHasText("Task activity in progress")).toBe(true);
   });
 
   it("shows the background activity status on history rows", async () => {
@@ -669,9 +685,7 @@ describe("<EpicsListPanel />", () => {
     expect(backgroundIcon.getAttribute("class")).toContain(
       "lucide-message-square-clock",
     );
-    expect(
-      screen.queryByTitle("Background activity — agent idle"),
-    ).not.toBeNull();
+    expect(anyTooltipHasText("Background activity — agent idle")).toBe(true);
   });
 
   it("selects a history row from the outside checkbox without opening the epic", async () => {

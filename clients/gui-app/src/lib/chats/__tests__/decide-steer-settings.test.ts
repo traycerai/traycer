@@ -16,6 +16,7 @@ const SETTINGS: ChatRunSettings = {
 };
 
 const TURN: ChatActiveTurn = {
+  sameTurnSteeringSupported: false,
   turnId: "turn-1",
   status: "running",
   harnessId: "codex",

@@ -11,6 +11,7 @@ import {
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import type { NotificationNavigate } from "@/lib/notifications";
 
 type CapturedNavigate = {
   readonly to: string;
@@ -28,6 +29,13 @@ type CapturedNavigate = {
 const navigateSpy = vi.hoisted(() =>
   vi.fn<(options: CapturedNavigate) => void>(),
 );
+const explicitNavigateCalls = vi.hoisted(() =>
+  vi.fn<(options: unknown) => void>(),
+);
+const explicitNavigate: NotificationNavigate = (options) => {
+  explicitNavigateCalls(options);
+  return Promise.resolve();
+};
 const activeHostIdStub: { value: string | null } = vi.hoisted(() => ({
   value: "stub-host",
 }));
@@ -55,7 +63,10 @@ vi.mock("@/lib/host-error-toast", () => ({
   toastFromHostError: vi.fn(),
 }));
 
-import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
+import {
+  useNotificationActivation,
+  useNotificationActivationWithNavigate,
+} from "@/hooks/notifications/use-notification-activation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
@@ -94,6 +105,7 @@ describe("useNotificationActivation", () => {
     __resetTabNavigationControllerForTesting();
     navigateSpy.mockReset();
     navigateSpy.mockImplementation(() => undefined);
+    explicitNavigateCalls.mockReset();
     activeHostIdStub.value = "stub-host";
     bindStubClient();
     useEpicCanvasStore.setState({
@@ -101,6 +113,33 @@ describe("useNotificationActivation", () => {
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
+    });
+  });
+
+  it("routes with an explicitly owned router outside ambient router context", () => {
+    const hook = renderHook(
+      () => useNotificationActivationWithNavigate(explicitNavigate),
+      { wrapper: createWrapper() },
+    );
+
+    act(() => {
+      hook.result.current.activate({
+        payload: { kind: "chat", epicId: "epic-owned", chatId: "chat-owned" },
+        receivedAt: 789,
+        feedId: "host:n-owned",
+        onResult: null,
+      });
+    });
+
+    expect(explicitNavigateCalls).toHaveBeenCalledTimes(1);
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(explicitNavigateCalls.mock.calls[0][0]).toMatchObject({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-owned" },
+      search: {
+        focusedAt: 789,
+        focusArtifactId: "chat-owned",
+      },
     });
   });
 
@@ -468,6 +507,160 @@ describe("useNotificationActivation", () => {
     // Envelope is required so the reopen is an owned controller navigation.
     expect(navigation.state).toEqual(expect.any(Function));
     expect(onResult).toHaveBeenCalledWith("success");
+  });
+
+  it("routes chat notifications to the exact open chat tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const notifiedChatTabId = store.openEpicTab("epic-chat", "Chat task");
+    store.openTileInTab(notifiedChatTabId, {
+      id: "chat-notified",
+      instanceId: "chat-notified-instance",
+      type: "chat",
+      name: "Notified chat",
+      hostId: "host-1",
+    });
+    const canvas =
+      useEpicCanvasStore.getState().canvasByTabId[notifiedChatTabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected notified chat canvas");
+    }
+    const paneId = canvas.activePaneId;
+    const otherTabId = store.openEpicTab("epic-chat", "Other task view");
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-chat",
+          chatId: "chat-notified",
+        },
+        receivedAt: 903,
+        feedId: "host:chat",
+        onResult: null,
+      });
+    });
+
+    expect(otherTabId).not.toBe(notifiedChatTabId);
+    // `toMatchObject`, not `toEqual`: activation routes through
+    // `activateTabIntent`, which also carries `replace` and a `state` thunk.
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-chat", tabId: notifiedChatTabId },
+      search: {
+        focusedAt: 903,
+        focusArtifactId: "chat-notified",
+        focusThreadId: undefined,
+        migrationSource: undefined,
+        focusPaneId: paneId,
+        focusTileInstanceId: "chat-notified-instance",
+      },
+    });
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(
+      notifiedChatTabId,
+    );
+  });
+
+  it("reopens a closed Task at its exact open chat tile", () => {
+    const store = useEpicCanvasStore.getState();
+    const notifiedChatTabId = store.openEpicTab("epic-hidden", "Hidden task");
+    store.openTileInTab(notifiedChatTabId, {
+      id: "chat-hidden",
+      instanceId: "chat-hidden-instance",
+      type: "chat",
+      name: "Hidden chat",
+      hostId: "host-1",
+    });
+    const canvas =
+      useEpicCanvasStore.getState().canvasByTabId[notifiedChatTabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected hidden chat canvas");
+    }
+    const paneId = canvas.activePaneId;
+    store.closeTab(notifiedChatTabId);
+    store.openEpicTab("epic-other", "Other task");
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-hidden",
+          chatId: "chat-hidden",
+        },
+        receivedAt: 904,
+        feedId: "host:hidden-chat",
+        onResult: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      params: { epicId: "epic-hidden", tabId: notifiedChatTabId },
+      search: {
+        focusedAt: 904,
+        focusArtifactId: "chat-hidden",
+        focusPaneId: paneId,
+        focusTileInstanceId: "chat-hidden-instance",
+      },
+    });
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(
+      notifiedChatTabId,
+    );
+  });
+
+  it("reopens the owning Task when both it and its chat were closed", () => {
+    const store = useEpicCanvasStore.getState();
+    const notifiedChatTabId = store.openEpicTab("epic-closed", "Closed task");
+    store.openTileInTab(notifiedChatTabId, {
+      id: "chat-closed",
+      instanceId: "chat-closed-instance",
+      type: "chat",
+      name: "Closed chat",
+      hostId: "host-1",
+    });
+    const canvas =
+      useEpicCanvasStore.getState().canvasByTabId[notifiedChatTabId];
+    if (canvas === undefined || canvas.activePaneId === null) {
+      throw new Error("expected closed chat canvas");
+    }
+    store.closeCanvasTab(
+      notifiedChatTabId,
+      canvas.activePaneId,
+      "chat-closed-instance",
+    );
+    store.closeTab(notifiedChatTabId);
+    store.openEpicTab("epic-closed", "Other task view");
+    const hook = renderHook(() => useNotificationActivation(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      hook.result.current.activate({
+        payload: {
+          kind: "chat",
+          epicId: "epic-closed",
+          chatId: "chat-closed",
+        },
+        receivedAt: 905,
+        feedId: "host:closed-chat",
+        onResult: null,
+      });
+    });
+
+    expect(navigateSpy.mock.calls[0][0]).toMatchObject({
+      params: { epicId: "epic-closed", tabId: notifiedChatTabId },
+      search: {
+        focusedAt: 905,
+        focusArtifactId: "chat-closed",
+      },
+    });
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(
+      notifiedChatTabId,
+    );
   });
 });
 

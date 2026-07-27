@@ -21,7 +21,7 @@ function makeFixture(): {
     element,
     extensions: buildComposerExtensions({
       pickerStore: createComposerPickerStore(),
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: {
         current: () => {
           submitCalls.count += 1;
@@ -29,6 +29,7 @@ function makeFixture(): {
       },
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,
+      getIngestPastedComposerImages: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });

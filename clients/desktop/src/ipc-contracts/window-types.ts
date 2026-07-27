@@ -136,6 +136,35 @@ export type MenuCommandId =
   | "view.findNext"
   | "view.findPrevious";
 
+/**
+ * Top-level application menus rendered by the Windows frameless title bar.
+ * The native Electron menu remains the command/state authority; the renderer
+ * sends one of these ids only to ask main to open the matching submenu.
+ */
+export const DESKTOP_TOP_LEVEL_MENU_IDS = [
+  "file",
+  "edit",
+  "view",
+  "window",
+  "help",
+] as const;
+
+export type DesktopTopLevelMenuId = (typeof DESKTOP_TOP_LEVEL_MENU_IDS)[number];
+
+export type DesktopRuntimePlatform = "darwin" | "win32" | "linux";
+
+export function desktopTopLevelMenuItemId(
+  menuId: DesktopTopLevelMenuId,
+): string {
+  return `traycer.top-level-menu.${menuId}`;
+}
+
+export function isDesktopTopLevelMenuId(
+  value: unknown,
+): value is DesktopTopLevelMenuId {
+  return DESKTOP_TOP_LEVEL_MENU_IDS.some((menuId) => menuId === value);
+}
+
 export interface MenuCommandPayload {
   readonly command: MenuCommandId;
   readonly windowId: string;
@@ -204,7 +233,12 @@ export interface SupportSubmitReportRequest {
 }
 
 export interface SupportSubmitReportResult {
-  readonly reportId: string;
+  // `null` when the diagnostics upload did not reach Sentry (no DSN baked in,
+  // or the flush timed out). There is then no report for triage to look up, so
+  // the GitHub issue must not advertise one. An id exists if and only if the
+  // upload was confirmed - the invariant is structural, not a parallel flag
+  // that can drift out of sync with the delivery outcome.
+  readonly reportId: string | null;
 }
 
 export interface SupportLogTailResult {

@@ -9,6 +9,7 @@ import type {
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
   useEpicChatHarnessId,
+  useEpicSyncPillState,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
 import {
@@ -128,6 +129,116 @@ describe("useEpicChatHarnessId", () => {
   });
 });
 
+describe("useEpicSyncPillState", () => {
+  function healthyBaseline(handle: OpenEpicStoreHandle): void {
+    handle.store.setState({
+      hostTransportStatus: "open",
+      cloudSyncStatus: "connected",
+      hasFreshCloudSyncStatus: true,
+      hasConnectedOnce: true,
+      isDirty: false,
+      rootDirty: false,
+      hasDirtySnapshotForOpenCycle: true,
+      artifactRoomDirtyByArtifactRoomId: {},
+    });
+  }
+
+  it("treats an artifact-room record absent from a received snapshot as clean", () => {
+    const handle = createHandle("epic-dirty-absent");
+    healthyBaseline(handle);
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("synced");
+  });
+
+  it("treats an empty pre-snapshot map as unknown, never synced", () => {
+    const handle = createHandle("epic-dirty-unknown");
+    healthyBaseline(handle);
+    handle.store.setState({
+      rootDirty: null,
+      hasDirtySnapshotForOpenCycle: false,
+      artifactRoomDirtyByArtifactRoomId: {},
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("connected");
+  });
+
+  it("treats an explicit false record the same as an absent one", () => {
+    const handle = createHandle("epic-dirty-false");
+    healthyBaseline(handle);
+    handle.store.setState({
+      artifactRoomDirtyByArtifactRoomId: { "room-a": false },
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("synced");
+  });
+
+  it("is dirty when any one room in the map is dirty, not only when all are", () => {
+    const handle = createHandle("epic-dirty-any");
+    healthyBaseline(handle);
+    handle.store.setState({
+      artifactRoomDirtyByArtifactRoomId: { "room-a": false, "room-b": true },
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("syncing");
+  });
+
+  it("flips syncing -> synced live as a room's dirty flag flips true -> false", () => {
+    const handle = createHandle("epic-dirty-transition");
+    healthyBaseline(handle);
+    handle.store.setState({
+      artifactRoomDirtyByArtifactRoomId: { "room-a": true },
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("syncing");
+
+    act(() => {
+      handle.store.setState({
+        artifactRoomDirtyByArtifactRoomId: { "room-a": false },
+      });
+    });
+
+    expect(result.current).toBe("synced");
+  });
+
+  it("includes the root doc in host dirtiness", () => {
+    const handle = createHandle("epic-root-dirty");
+    healthyBaseline(handle);
+    handle.store.setState({ rootDirty: true });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("syncing");
+
+    act(() => {
+      handle.store.setState({ rootDirty: false });
+    });
+
+    expect(result.current).toBe("synced");
+  });
+});
+
 function createHandle(epicId: string): OpenEpicStoreHandle {
   const handle = createOpenEpicStore({
     epicId,
@@ -180,6 +291,7 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
     userId: null,
     hostId: "host-a",
     isTitleEditedByUser: false,
+    archivedAt: null,
     settings,
   };
 }
@@ -200,6 +312,7 @@ function tuiAgent(id: string, harnessId: TuiHarnessId): TuiAgentProjection {
     reasoningEffort: null,
     agentMode: "regular",
     profileId: null,
+    archivedAt: null,
     harnessSessionId: null,
     terminalAgentArgs: null,
     terminalShellCommand: null,

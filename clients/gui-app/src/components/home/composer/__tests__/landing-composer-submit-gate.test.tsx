@@ -22,6 +22,9 @@ const testState = vi.hoisted(() => ({
   createPending: false,
   pasteDisabled: false,
   resolvingPaths: false,
+  /** Captures the real-ish pending job runner used by in-place landing paste. */
+  runPendingImageJob: null as
+    ((job: (signal: AbortSignal) => Promise<void>) => void) | null,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -67,6 +70,10 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
     createDraft: vi.fn(() => "draft-for-test"),
+    // handleSnapshot's unbound-create branch now calls createDraftWithId
+    // (reusing a pre-minted pendingCreateId when present) rather than
+    // createDraft directly.
+    createDraftWithId: vi.fn(() => "draft-for-test"),
     setDraftContent: vi.fn(),
   };
   const useLandingDraftStore = Object.assign(
@@ -124,23 +131,43 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
-vi.mock("@/hooks/composer/use-landing-composer-paste", () => ({
-  useLandingComposerPaste: (params: { readonly disabled: boolean }) => {
-    testState.pasteDisabled = params.disabled;
-    return {
-      onPaste: vi.fn(),
-      onDrop: vi.fn(),
-      onDragOver: vi.fn(),
-      onDragEnter: vi.fn(),
-      onDragLeave: vi.fn(),
-      attachImageFiles: vi.fn(),
-      isDraggingFiles: false,
-      dragOverlayVariant: null,
-      isIngestingImages: testState.ingesting,
-      isResolvingFilePaths: testState.resolvingPaths,
-    };
-  },
-}));
+vi.mock("@/hooks/composer/use-landing-composer-paste", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/hooks/composer/use-landing-composer-paste")
+    >();
+  return {
+    ...actual,
+    useLandingComposerPaste: (params: { readonly disabled: boolean }) => {
+      testState.pasteDisabled = params.disabled;
+      // Mirror runPendingImageJob → isIngestingImages so submit gating covers
+      // the in-place paste path (not the deleted attach-at-anchor path).
+      const runPendingImageJob = (
+        job: (signal: AbortSignal) => Promise<void>,
+      ) => {
+        testState.ingesting = true;
+        const controller = new AbortController();
+        void job(controller.signal).finally(() => {
+          testState.ingesting = false;
+        });
+      };
+      testState.runPendingImageJob = runPendingImageJob;
+      return {
+        onPaste: vi.fn(),
+        onDrop: vi.fn(),
+        onDragOver: vi.fn(),
+        onDragEnter: vi.fn(),
+        onDragLeave: vi.fn(),
+        attachImageFiles: vi.fn(),
+        runPendingImageJob,
+        isDraggingFiles: false,
+        dragOverlayVariant: null,
+        isIngestingImages: testState.ingesting,
+        isResolvingFilePaths: testState.resolvingPaths,
+      };
+    },
+  };
+});
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   useResolvedWorkspaceFolders: () => ({ folders: [], isLoading: false }),
@@ -207,6 +234,7 @@ afterEach(() => {
   testState.createPending = false;
   testState.pasteDisabled = false;
   testState.resolvingPaths = false;
+  testState.runPendingImageJob = null;
 });
 
 describe("LandingComposer direct submit gate", () => {
@@ -215,6 +243,7 @@ describe("LandingComposer direct submit gate", () => {
     render(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={(disabled) => (
           <button type="button" disabled={disabled}>
@@ -238,6 +267,7 @@ describe("LandingComposer direct submit gate", () => {
     const view = render(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={() => null}
       />,
@@ -256,6 +286,65 @@ describe("LandingComposer direct submit gate", () => {
     view.rerender(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    expect(testState.submit).toHaveBeenCalledTimes(1);
+  });
+
+  // Item 8: a live runPendingImageJob (landing in-place paste) holds submit closed
+  // until the job settles, then clears.
+  it("blocks submit while a runPendingImageJob is in flight and opens after it settles", async () => {
+    const gate: { release: (() => void) | null } = { release: null };
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+    const runPending = testState.runPendingImageJob;
+    if (runPending === null)
+      throw new Error("expected runPendingImageJob seam");
+
+    runPending(async () => {
+      await new Promise<void>((resolve) => {
+        gate.release = resolve;
+      });
+    });
+    // LandingComposer reads isIngestingImages on render; force a re-render.
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    expect(testState.submit).not.toHaveBeenCalled();
+
+    const release = gate.release;
+    if (release === null) throw new Error("expected pending job gate");
+    release();
+    // Allow the job finally to clear ingesting, then re-render.
+    await Promise.resolve();
+    await Promise.resolve();
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={() => null}
       />,
@@ -270,6 +359,7 @@ describe("LandingComposer direct submit gate", () => {
     const view = render(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={() => null}
       />,
@@ -288,6 +378,7 @@ describe("LandingComposer direct submit gate", () => {
     view.rerender(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
         workspaceControls={() => null}
       />,
@@ -308,6 +399,7 @@ function editorHandle(): ComposerPromptEditorHandle {
     setContent: () => undefined,
     insertImageAttachments: () => undefined,
     beginPathInsertion: () => null,
+    rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

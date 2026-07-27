@@ -5,21 +5,22 @@ import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
+import { useSettingsDensity } from "@/providers/settings-density-context";
+import { cn } from "@/lib/utils";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerUninstallTraycer } from "@/hooks/runner/use-runner-uninstall-traycer-mutation";
-import { useDesktopAppUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { requestAppQuit } from "@/lib/desktop-app-lifecycle";
 import { useHostQuery, useHostMutation } from "@/hooks/host/use-host-query";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import {
   hostQueryKeys,
   runnerMutationKeys,
-  runnerQueryKeys,
   snapshotsMutationKeys,
 } from "@/lib/query-keys";
 import { clearAllPersistedStores } from "@/lib/persist";
@@ -42,9 +43,11 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
+import { modLabel } from "@/lib/keybindings/platform";
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
+const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
 
 interface ClearLocalSnapshotsMutationContext {
   readonly hostId: string | null;
@@ -105,199 +108,185 @@ export function GeneralSettingsPanel() {
   );
   const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
   const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
+  const steerOnModEnterEnabled = useSettingsStore(
+    (s) => s.steerOnModEnterEnabled,
+  );
+  const setSteerOnModEnterEnabled = useSettingsStore(
+    (s) => s.setSteerOnModEnterEnabled,
+  );
+  const compact = useSettingsDensity() === "compact";
 
   return (
-    <SettingsPanelShell title="General">
-      <PrereleaseUpdatesRow />
-      <SettingsRow
-        label="Prevent sleep while running"
-        description="Keep the computer awake while an agent is running, so work continues when you step away."
-        control={
-          <Switch
-            checked={preventSleepWhileRunning}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("preventSleepWhileRunning");
-              setPreventSleepWhileRunning(value);
-            }}
-            aria-label="Prevent sleep while running"
-          />
-        }
-      />
-      <SettingsRow
-        label="Show global resources button"
-        description="Show the app-wide resource monitor in the header."
-        control={
-          <Switch
-            checked={showGlobalResourceMonitor}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("showGlobalResourceMonitor");
-              setShowGlobalResourceMonitor(value);
-            }}
-            aria-label="Show global resources button"
-          />
-        }
-      />
-      <SettingsRow
-        label="Show navigator resource stats"
-        description="Show compact live CPU and memory chips in task navigator rows."
-        control={
-          <Switch
-            checked={showNavigatorResourceStats}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("showNavigatorResourceStats");
-              setShowNavigatorResourceStats(value);
-            }}
-            aria-label="Show navigator resource stats"
-          />
-        }
-      />
-      <SettingsRow
-        label="Pin context usage breakdown"
-        description="Keep the context window breakdown visible near the chat composer when usage data is available."
-        control={
-          <Switch
-            checked={pinContextUsageBreakdown}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("pinContextUsageBreakdown");
-              setPinContextUsageBreakdown(value);
-            }}
-            aria-label="Pin context usage breakdown"
-          />
-        }
-      />
-      <SettingsRow
-        label="Quote reply on text selection"
-        description="Selecting assistant text shows a quote button that inserts the selection into the composer."
-        control={
-          <Switch
-            checked={quoteReplyEnabled}
-            onCheckedChange={(value) => {
-              trackGeneralSetting("quoteReplyEnabled");
-              setQuoteReplyEnabled(value);
-            }}
-            aria-label="Quote reply on text selection"
-          />
-        }
-      />
-      <VoiceSettingsSection />
-      <SettingsRow
-        label="Data migration"
-        description={
-          migrationProgressLabel ??
-          "Retry moving local SQLite tasks and epics to cloud."
-        }
-        control={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={migrationIsRunning}
-            data-testid="settings-reattempt-migration"
-            onClick={() => {
-              startMigrationRun();
-            }}
-          >
-            {migrationIsRunning ? (
-              <AgentSpinningDots
-                className="text-muted-foreground"
-                testId="settings-reattempt-migration-spinner"
-                variant={undefined}
+    <SettingsPanelShell
+      title="General"
+      description="App behavior, agent activity, and local data controls."
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
+        <SettingsGroup
+          title="Chat & composer"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <VoiceSettingsSection />
+          <SettingsRow
+            label="Quote reply on text selection"
+            description="Selecting assistant text shows a quote button that inserts the selection into the composer."
+            control={
+              <Switch
+                checked={quoteReplyEnabled}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("quoteReplyEnabled");
+                  setQuoteReplyEnabled(value);
+                }}
+                aria-label="Quote reply on text selection"
               />
-            ) : null}
-            Re-attempt migration
-          </Button>
-        }
-      />
-      <SettingsRow
-        label="Product tour"
-        description="Replay the first-launch onboarding tour."
-        control={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-testid="settings-replay-onboarding"
-            onClick={() => {
-              restartOnboarding();
-              void navigate({
-                to: "/onboarding",
-                search: { replay: true },
-              });
-            }}
-          >
-            Replay tour
-          </Button>
-        }
-      />
-      <DangerZoneSection />
+            }
+          />
+          <SettingsRow
+            label={`Steer with ${MOD_ENTER_LABEL}`}
+            description={`While a turn is running on a supported harness, ${MOD_ENTER_LABEL} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`}
+            control={
+              <Switch
+                checked={steerOnModEnterEnabled}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("steerOnModEnterEnabled");
+                  setSteerOnModEnterEnabled(value);
+                }}
+                aria-label={`Steer with ${MOD_ENTER_LABEL}`}
+              />
+            }
+          />
+          <SettingsRow
+            label="Pin context usage breakdown"
+            description="Keep the context window breakdown visible near the chat composer when usage data is available."
+            control={
+              <Switch
+                checked={pinContextUsageBreakdown}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("pinContextUsageBreakdown");
+                  setPinContextUsageBreakdown(value);
+                }}
+                aria-label="Pin context usage breakdown"
+              />
+            }
+          />
+        </SettingsGroup>
+
+        <SettingsGroup
+          title="Running agents"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <SettingsRow
+            label="Prevent sleep while running"
+            description="Keep the computer awake while an agent is running, so work continues when you step away."
+            control={
+              <Switch
+                checked={preventSleepWhileRunning}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("preventSleepWhileRunning");
+                  setPreventSleepWhileRunning(value);
+                }}
+                aria-label="Prevent sleep while running"
+              />
+            }
+          />
+          <SettingsRow
+            label="Show global resources button"
+            description="Show the app-wide resource monitor in the header."
+            control={
+              <Switch
+                checked={showGlobalResourceMonitor}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("showGlobalResourceMonitor");
+                  setShowGlobalResourceMonitor(value);
+                }}
+                aria-label="Show global resources button"
+              />
+            }
+          />
+          <SettingsRow
+            label="Show navigator resource stats"
+            description="Show compact live CPU and memory chips in task navigator rows."
+            control={
+              <Switch
+                checked={showNavigatorResourceStats}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("showNavigatorResourceStats");
+                  setShowNavigatorResourceStats(value);
+                }}
+                aria-label="Show navigator resource stats"
+              />
+            }
+          />
+        </SettingsGroup>
+
+        <SettingsGroup
+          title="Setup & migration"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <SettingsRow
+            label="Product tour"
+            description="Replay the first-launch onboarding tour."
+            control={
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                data-testid="settings-replay-onboarding"
+                onClick={() => {
+                  restartOnboarding();
+                  void navigate({
+                    to: "/onboarding",
+                    search: { replay: true },
+                  });
+                }}
+              >
+                Replay tour
+              </Button>
+            }
+          />
+          <SettingsRow
+            label="Data migration"
+            description={
+              migrationProgressLabel ??
+              "Retry moving local SQLite tasks and epics to cloud."
+            }
+            control={
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={migrationIsRunning}
+                data-testid="settings-reattempt-migration"
+                onClick={() => {
+                  startMigrationRun();
+                }}
+              >
+                {migrationIsRunning ? (
+                  <AgentSpinningDots
+                    className="text-muted-foreground"
+                    testId="settings-reattempt-migration-spinner"
+                    variant={undefined}
+                  />
+                ) : null}
+                Re-attempt migration
+              </Button>
+            }
+          />
+        </SettingsGroup>
+
+        <DangerZoneSection />
+      </div>
     </SettingsPanelShell>
   );
 }
 
-function PrereleaseUpdatesRow() {
-  const runnerHost = useRunnerHost();
-  const management = runnerHost.hostManagement;
-  const queryClient = useQueryClient();
-  const { bridge, snapshot } = useDesktopAppUpdates();
-  const preferenceMutation = useMutation({
-    mutationKey: runnerMutationKeys.setAllowPrereleaseUpdates(),
-    mutationFn: (allowPrerelease: boolean) => {
-      if (bridge === null) {
-        return Promise.reject(new Error("Desktop updates are unavailable"));
-      }
-      return bridge.setAllowPrerelease(allowPrerelease);
-    },
-    // Only a durably-persisted change reaches here - main raises a mutation
-    // error when it refuses the switch (an update already downloading/staged),
-    // so a refusal never tracks analytics or invalidates Host state.
-    //
-    // Main has already force-refreshed the Host registry and broadcast the new
-    // channel's state to *every* window and the native menu/tray before this
-    // resolves; these invalidations only nudge this window's channel-scoped
-    // caches, which is why renderer-local invalidation alone was insufficient.
-    onSuccess: () => {
-      trackGeneralSetting("allowPrereleaseUpdates");
-      if (management === null) return;
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostAvailableVersionsScope(management),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostRegistryUpdate(management),
-      });
-    },
-    onError: (error) =>
-      toastFromRunnerError(error, "Couldn't update the release channel."),
-  });
-
-  if (bridge === null) return null;
-
-  return (
-    <SettingsRow
-      label="Release candidate updates"
-      description="Allow Traycer Desktop and Host update checks to install RC releases. Stable releases remain eligible."
-      control={
-        <div className="flex items-center gap-2">
-          {preferenceMutation.isPending ? (
-            <AgentSpinningDots
-              className="size-3"
-              testId="release-channel-pending-indicator"
-              variant={undefined}
-            />
-          ) : null}
-          <Switch
-            checked={snapshot.allowPrerelease}
-            disabled={preferenceMutation.isPending}
-            onCheckedChange={(value) => preferenceMutation.mutate(value)}
-            aria-label="Allow release candidate updates"
-          />
-        </div>
-      }
-    />
-  );
-}
-
-// Destructive local actions live inline so the settings panel keeps one
-// rounded outer border while each action still reads as its own row.
 function DangerZoneSection() {
   const { hostManagement } = useRunnerHost();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -305,10 +294,12 @@ function DangerZoneSection() {
 
   return (
     <>
-      <section className="bg-destructive/5" data-testid="settings-danger-zone">
-        <div className="border-b border-border/40 px-5 py-4">
-          <h2 className="text-ui font-semibold text-foreground">Danger Zone</h2>
-        </div>
+      <SettingsGroup
+        title="Danger Zone"
+        tone="danger"
+        dataTestId="settings-danger-zone"
+        fill={false}
+      >
         <SettingsFileEditSnapshotsSection />
         <SettingsLocalAppStateSection />
         {hostManagement === null ? null : (
@@ -320,7 +311,7 @@ function DangerZoneSection() {
             }}
           />
         )}
-      </section>
+      </SettingsGroup>
       {hostManagement === null ? null : (
         <ConfirmDestructiveDialog
           open={confirmOpen}

@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useRouterState } from "@tanstack/react-router";
+import { v4 as uuidv4 } from "uuid";
 import { HomeHero } from "@/components/home/home-hero";
 import { LandingComposer } from "@/components/home/composer/landing-composer";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
@@ -19,6 +20,27 @@ export function LandingDraftSurface() {
   const draftId = useDraftSurfaceId();
   const { workspaceFolders, settings } = useLandingDraftShell(draftId);
   const activity = useTabSurfaceActivity();
+
+  // Pre-mint the mount identity for the null-draft landing so the first
+  // substantive edit (which creates a draft and flips this surface's id
+  // null->id) does not remount the Tiptap editor and throw the caret to the
+  // document end. Switching between existing drafts still remounts via a
+  // changing key.
+  //
+  // Bound->null rotation is a render-phase state adjustment (React docs
+  // pattern): a passive effect would leave one committed frame still keyed by
+  // the retired draft id (a stale interactive editor). Adjusting here
+  // re-renders synchronously before commit, so the new pending id is the first
+  // key after the transition - exactly one remount, no stale frame.
+  const [pendingDraftId, setPendingDraftId] = useState(() => uuidv4());
+  const [prevDraftId, setPrevDraftId] = useState<string | null>(draftId);
+  if (draftId !== prevDraftId) {
+    setPrevDraftId(draftId);
+    if (draftId === null) {
+      setPendingDraftId(uuidv4());
+    }
+  }
+  const composerMountId = draftId ?? pendingDraftId;
   const systemModalOpen = useRouterState({
     select: (state) => {
       const overlay = parseSystemTabOverlayView(state.location.search);
@@ -51,8 +73,9 @@ export function LandingDraftSurface() {
               active={Boolean(activity.focused && !systemModalOpen)}
             >
               <LandingComposer
-                key={draftId}
+                key={composerMountId}
                 draftId={draftId}
+                pendingCreateId={draftId === null ? pendingDraftId : null}
                 initialSettings={settings}
                 workspaceControls={workspaceControls}
               />

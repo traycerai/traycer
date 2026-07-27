@@ -144,6 +144,8 @@ function phaseHistoryItem(): HistoryItem {
     linkedRepos: [],
     linkedWorkspaces: [],
     pullRequestNumbers: [],
+    worktreeBranches: [],
+    worktreePaths: [],
     ownership: "mine",
     permissionRole: "owner",
     isPinned: false,

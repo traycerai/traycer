@@ -264,7 +264,7 @@ export function buildPayloadFromEvent(
   }
 }
 
-type NavigateFn = UseNavigateResult<string>;
+export type NotificationNavigate = UseNavigateResult<string>;
 
 /**
  * Pure predicate mirroring `routeNotification`'s no-op branches, without
@@ -297,7 +297,7 @@ export function isNotificationPayloadRoutable(
  * contract in one place so the two surfaces cannot drift.
  */
 export function routeNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: NotificationPayload,
   receivedAt: number,
 ): void {
@@ -373,7 +373,7 @@ export function routeNotification(
 }
 
 function routeTerminalNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: TerminalNotificationPayload,
   receivedAt: number,
 ): void {
@@ -426,11 +426,12 @@ function routeTerminalNotification(
 }
 
 function routeEpicChatNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
 ): void {
   if (routeLegacyTerminalNotification(navigate, payload, receivedAt)) return;
+  if (routeOpenChatNotification(navigate, payload, receivedAt)) return;
   navigateToTabIntent(
     navigate,
     openOrFocusEpicIntent({
@@ -446,8 +447,92 @@ function routeEpicChatNotification(
   );
 }
 
+function isChatArtifactTileType(type: string | undefined): boolean {
+  return type === "chat" || type === "terminal-agent";
+}
+
+function routeOpenChatNotification(
+  navigate: NotificationNavigate,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+): boolean {
+  const chatId = payload.chatId;
+  if (chatId === undefined) return false;
+  const state = useEpicCanvasStore.getState();
+  const preferredTabId = state.resolveTabIdForEpic(payload.epicId);
+  const candidateTabIds = [
+    ...(preferredTabId === null ? [] : [preferredTabId]),
+    ...state.openTabOrder,
+    ...Object.keys(state.tabsById),
+  ].filter((tabId, index, tabIds) => tabIds.indexOf(tabId) === index);
+  const match = candidateTabIds
+    .flatMap((tabId) => {
+      const tab = state.tabsById[tabId];
+      if (tab?.epicId !== payload.epicId) return [];
+      const found = findOpenArtifactInTab(tabId, chatId);
+      if (found === null) return [];
+      const tile =
+        state.canvasByTabId[tabId]?.tilesByInstanceId[found.instanceId];
+      if (!isChatArtifactTileType(tile?.type)) return [];
+      return [{ tabId, ...found }];
+    })
+    .at(0);
+  if (match === undefined) {
+    const closedMatchTabId = candidateTabIds.find((tabId) => {
+      const tab = state.tabsById[tabId];
+      if (tab?.epicId !== payload.epicId) return false;
+      return Object.values(state.closedTilePayloadsByTabId[tabId] ?? {}).some(
+        (closed) => {
+          const node = closed?.node;
+          if (node === undefined) return false;
+          return node.id === chatId && isChatArtifactTileType(node.type);
+        },
+      );
+    });
+    if (closedMatchTabId === undefined) return false;
+    navigateToTabIntent(
+      navigate,
+      existingEpicTabIntentWithNestedFocus({
+        epicId: payload.epicId,
+        tabId: closedMatchTabId,
+        focus: {
+          focusedAt: receivedAt,
+          focusArtifactId: chatId,
+          focusThreadId: undefined,
+          migrationSource: undefined,
+        },
+        nestedFocus: null,
+      }),
+      undefined,
+    );
+    return true;
+  }
+
+  const nestedFocus = state.prepareSetActiveTileTabFocusTarget(
+    match.tabId,
+    match.paneId,
+    match.instanceId,
+  );
+  navigateToTabIntent(
+    navigate,
+    existingEpicTabIntentWithNestedFocus({
+      epicId: payload.epicId,
+      tabId: match.tabId,
+      focus: {
+        focusedAt: receivedAt,
+        focusArtifactId: chatId,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+      },
+      nestedFocus,
+    }),
+    undefined,
+  );
+  return true;
+}
+
 function routeLegacyTerminalNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
 ): boolean {

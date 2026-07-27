@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
+import { useEpicRecordViewed } from "@/hooks/epic/use-epic-record-viewed-mutation";
 import {
   useNavigate,
   useParams,
@@ -50,6 +51,12 @@ function EpicRouteTabSync(props: {
     () => tabNavigationResolutionFailed(locationState),
     () => false,
   );
+  const recordViewedMutation = useEpicRecordViewed();
+  const recordViewed = recordViewedMutation.mutate;
+
+  useEffect(() => {
+    recordViewed({ epicId });
+  }, [epicId, recordViewed]);
 
   if (resolutionFailed) return <RootLandingPage />;
 
