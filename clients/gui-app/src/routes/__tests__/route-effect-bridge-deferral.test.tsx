@@ -23,6 +23,13 @@ describe("single route-to-layout authority", () => {
     const route = source("../epic-tab-route-components.tsx");
     const start = route.indexOf("function EpicRouteTabSync");
     const end = route.indexOf("export function PhaseToEpicMigrationGate");
+
+    // Pin both markers before slicing. If either is renamed `indexOf` returns
+    // -1, `slice(-1, end)` collapses to "", and all four assertions below pass
+    // against an empty string - the test would go green while checking nothing.
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+
     const adapter = route.slice(start, end);
 
     expect(adapter).not.toContain("activateTabIntent(");

@@ -42,6 +42,7 @@ import type {
 import { DesktopAuthSession } from "../auth/desktop-auth-session";
 import {
   createEmptyPerWindowSnapshot,
+  PER_WINDOW_STATE_CAPABILITIES,
   type PerWindowStateChange,
 } from "../windows/per-window-state";
 import {
@@ -1244,10 +1245,9 @@ class NullPerWindowState implements IpcPerWindowState {
   }
 
   capabilities(): PerWindowStateCapabilities {
-    return {
-      schemaVersion: 2,
-      features: ["tab-strip-layout-v2", "active-route-v1"],
-    };
+    // Shared with the real store: the renderer handshake must not see a
+    // different feature set depending on which implementation backs the bridge.
+    return PER_WINDOW_STATE_CAPABILITIES;
   }
 
   update(

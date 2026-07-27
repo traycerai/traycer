@@ -236,8 +236,9 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     codeFontFamily,
   );
   const runnerHost = useRunnerHost();
-  // Inactive panes unregister global find ownership. They stay mounted, but
-  // app-level find should only target the visible terminal.
+  // Unfocused panes unregister global find ownership. Both split halves stay
+  // mounted and visible, so app-level find is scoped to the FOCUSED terminal -
+  // visibility alone would leave two panes claiming it.
   const activeFindTargetId = useFocusedPaneValue(props.findTargetId, null);
   const markSearchResultSource = useCallback(
     (source: TerminalSearchResultSource): void => {

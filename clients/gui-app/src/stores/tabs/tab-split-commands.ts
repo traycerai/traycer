@@ -188,9 +188,7 @@ function canPairCurrent(
   invokedItem: StripItem | null,
 ): boolean {
   if (focused === null || invokedRef === null) return false;
-  if (focused.kind === invokedRef.kind && focused.id === invokedRef.id) {
-    return false;
-  }
+  if (refsMatch(focused, invokedRef)) return false;
   return (
     focusedItem?.kind === "tab" &&
     invokedItem?.kind === "tab" &&

@@ -34,16 +34,23 @@ export function createDebouncedDesktopPerWindowProjectionBridge(
     const patch = pendingPatch;
     pendingPatch = null;
     if (patch === null) return writeChain;
-    writeChain = writeChain
+    const attempt = writeChain
       .then(() => target.update(patch))
       .then(() => undefined);
-    return writeChain;
+    // Ordering has to survive a failed projection. A rejected `writeChain` has
+    // no handler, so every later patch would chain off it and be skipped for
+    // the rest of the session. Sequence on a recovered chain and hand the
+    // caller the real attempt so a flush still reports its own failure.
+    writeChain = attempt.catch(() => undefined);
+    return attempt;
   };
 
   const schedule = (): void => {
     clearTimer();
     timer = setTimeout(() => {
-      void flush();
+      // A timer-driven flush has no caller to observe the rejection; the
+      // recovered `writeChain` above keeps the queue alive either way.
+      void flush().catch(() => undefined);
     }, debounceMs);
   };
 
