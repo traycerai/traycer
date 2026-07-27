@@ -25,25 +25,39 @@ import {
 } from "@/components/worktree/worktree-pr-metadata-model";
 import {
   PR_STATE_ICON,
-  PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
 
 /**
- * PR pills for the Epic history list (page background) and the chat/owner
- * hover preview (the `bg-popover` hover-preview card). Both are normal,
- * non-inverted surfaces, so one palette covers them - and it now lives in
- * `worktree-pr-state-palette.ts` (`PR_STATE_PILL_CLASS` + `PR_STATE_TINT_CLASS`)
- * alongside the glyph ramp, shared with the sidebar's icon variant and the
- * Epic PR panel row.
+ * The one theme-aware PR-pill palette, used wherever a pill renders: the Epic
+ * history list (page background) and the chat/owner hover preview (the
+ * `bg-popover` hover-preview card). Both are normal, non-inverted surfaces, so
+ * a single palette covers them.
  *
  * **The LABEL's contrast comes from `text-foreground`, not a tuned ramp.** It
  * used to be `-800` light / `-300` dark, picked against the pill's own 10%
  * tint. Coloured label text is gone, so that tuning no longer applies here:
  * `text-foreground` is the theme's own body-text token, already contrast-checked
- * against every preset surface. The tuning did NOT become moot, though - the
- * state GLYPH inherited the job of carrying the state, so it inherited the ramp.
+ * against every preset surface.
+ *
+ * The tuning did NOT become moot, though - it moved. The state GLYPH inherited
+ * the job of carrying the state, so it inherited the ramp too, and it lives in
+ * `worktree-pr-state-palette.ts` shared with the sidebar's icon variant.
  */
+// Borderless tinted chips. The outline + fill + colored text of the previous
+// pill stacked three signals for one fact, which read as a warning box rather
+// than a link; the tint alone carries the state and the label stays legible
+// foreground text. State lives in the leading glyph (below), so the pill no
+// longer spells "Open" - the word cost more width than the status deserved
+// beside a PR number, and it duplicated what the glyph already said.
+const PR_PILL_CLASS: Record<WorktreeDisplayedPrState, string> = {
+  open: "border-transparent bg-green-500/10 text-foreground hover:bg-green-500/20",
+  closed:
+    "border-transparent bg-red-500/10 text-foreground hover:bg-red-500/20",
+  merged:
+    "border-transparent bg-purple-500/10 text-foreground hover:bg-purple-500/20",
+};
+
 export function WorktreePrPills(props: {
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly detailOnHover: boolean;
@@ -94,7 +108,7 @@ function WorktreePrPill(props: {
       className={cn(
         "group/pr-pill gap-1.5 rounded-full px-2 font-medium",
         props.flexible && "min-w-0 shrink",
-        PR_STATE_PILL_CLASS[props.reference.state],
+        PR_PILL_CLASS[props.reference.state],
       )}
     >
       <WorktreePrAnchor
