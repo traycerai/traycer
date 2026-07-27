@@ -76,6 +76,7 @@ export interface KeybindingRouter {
    */
   readonly navigateToTabIntent: (intent: TabNavigationIntent) => void;
   readonly navigateNestedFocus?: NavigateNestedFocus;
+  readonly navigateNestedFocusToPrimaryEditor?: NavigateNestedFocus;
   /**
    * In-app history back/forward. Delegate to the shared
    * `goBack`/`goForward` actions on the CURRENT router (the live
@@ -696,11 +697,15 @@ function focusGroupInDirection(
   if (active === undefined) return false;
   const nextId = findNeighbor(active, rects, dir);
   if (nextId === null) return false;
-  runNestedFocus(router, tab, () =>
+  const prepare = () =>
     useEpicCanvasStore
       .getState()
-      .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId),
-  );
+      .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId);
+  if (router.navigateNestedFocusToPrimaryEditor === undefined) {
+    runNestedFocus(router, tab, prepare);
+  } else {
+    router.navigateNestedFocusToPrimaryEditor(tab.epicId, tab.tabId, prepare);
+  }
   focusGroupEditor(nextId);
   return true;
 }

@@ -1,4 +1,3 @@
-import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -11,7 +10,7 @@ import type {
   HostRegistryUpdateState,
 } from "@traycer-clients/shared/platform/runner-host";
 
-interface UpdatesRowProps {
+interface HostUpdateRegionProps {
   readonly registryState: HostRegistryUpdateState | undefined;
   readonly registryFetching: boolean;
   readonly anyPending: boolean;
@@ -22,7 +21,7 @@ interface UpdatesRowProps {
   // action button gates on `updateReady`/`stagedVersion`, never the raw
   // `registryState.updateAvailable` detection, so this row never offers an
   // action for a merely-detected update. `downloadProgress` is purely
-  // informational (the download lane never disables this row's actions).
+  // informational (the download lane never disables this region's actions).
   readonly updateReady: boolean;
   readonly stagedVersion: string | null;
   readonly downloadProgress: DownloadProgress | null;
@@ -30,7 +29,14 @@ interface UpdatesRowProps {
   readonly onRefresh: () => void;
 }
 
-export function UpdatesRow(props: UpdatesRowProps) {
+/**
+ * Compact bottom region of the Host summary card (Flow 5): "Up to date /
+ * Check now", Retry, download progress, or a staged version label next to
+ * an "Update" button - same states as the prior `SettingsRow`-based Updates
+ * row, just no longer its own labelled row (the description text already
+ * carries the state).
+ */
+export function HostUpdateRegion(props: HostUpdateRegionProps) {
   const {
     registryState,
     registryFetching,
@@ -45,28 +51,27 @@ export function UpdatesRow(props: UpdatesRowProps) {
     onRefresh,
   } = props;
   return (
-    <SettingsRow
-      label="Updates"
-      description={updatesDescription({
-        registryState,
-        registryFetching,
-        latestReleasedAt,
-        nowMs,
-      })}
-      control={
-        <UpdatesControl
-          registryState={registryState}
-          registryFetching={registryFetching}
-          anyPending={anyPending}
-          updatePending={updatePending}
-          updateReady={updateReady}
-          stagedVersion={stagedVersion}
-          downloadProgress={downloadProgress}
-          onUpdate={onUpdate}
-          onRefresh={onRefresh}
-        />
-      }
-    />
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 bg-muted/10 px-5 py-2.5 text-ui-sm">
+      <span className="min-w-0 flex-1 text-muted-foreground">
+        {updatesDescription({
+          registryState,
+          registryFetching,
+          latestReleasedAt,
+          nowMs,
+        })}
+      </span>
+      <UpdatesControl
+        registryState={registryState}
+        registryFetching={registryFetching}
+        anyPending={anyPending}
+        updatePending={updatePending}
+        updateReady={updateReady}
+        stagedVersion={stagedVersion}
+        downloadProgress={downloadProgress}
+        onUpdate={onUpdate}
+        onRefresh={onRefresh}
+      />
+    </div>
   );
 }
 

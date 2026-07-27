@@ -9,6 +9,7 @@ import {
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
 import { getHistoryController } from "@/lib/persistent-history";
+import { requestNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
 
 export interface NestedFocusLocation {
   readonly pathname: string;
@@ -34,6 +35,23 @@ export function navigateNestedFocus(
   tab: { readonly epicId: string; readonly tabId: string },
   prepare: PrepareNestedFocusTarget,
 ): NestedFocusTarget | null {
+  return navigateNestedFocusWithDomRestore(router, tab, prepare, false);
+}
+
+export function navigateNestedFocusToPrimaryEditor(
+  router: NestedFocusNavigationRouter,
+  tab: { readonly epicId: string; readonly tabId: string },
+  prepare: PrepareNestedFocusTarget,
+): NestedFocusTarget | null {
+  return navigateNestedFocusWithDomRestore(router, tab, prepare, true);
+}
+
+function navigateNestedFocusWithDomRestore(
+  router: NestedFocusNavigationRouter,
+  tab: { readonly epicId: string; readonly tabId: string },
+  prepare: PrepareNestedFocusTarget,
+  restorePrimaryEditor: boolean,
+): NestedFocusTarget | null {
   const { epicId, tabId } = tab;
   const target = prepare();
   if (target === null) {
@@ -52,6 +70,10 @@ export function navigateNestedFocus(
   const currentTarget = parseNestedFocusTargetFromSearch(location.search);
   if (areNestedFocusTargetsEqual(currentTarget, target)) {
     return target;
+  }
+
+  if (restorePrimaryEditor) {
+    requestNestedRoutePrimaryEditorFocus(epicId, tabId, target);
   }
 
   void router.navigate({

@@ -2,6 +2,7 @@ import type {
   CliInstallManifestSnapshot,
   HostAvailableSnapshot,
   HostInstalledRecord,
+  HostNameSettings,
   HostRegistryUpdateState,
   LocalHostSnapshot,
   MutationKind,
@@ -15,6 +16,18 @@ export const VERSION_LIST_PREVIEW = 10;
 // directly - this is the canonical mutation-lane status the progress banner
 // renders, unchanged in shape from `MutationLaneStatus`.
 export type HostProgressState = MutationLaneStatus;
+
+export function customNameFromDraft(
+  draftName: string,
+  settings: HostNameSettings | undefined,
+): string | null {
+  const normalized = draftName.trim().replace(/\s+/g, " ");
+  if (normalized.length === 0) return null;
+  if (settings !== undefined && normalized === settings.systemName) {
+    return null;
+  }
+  return normalized;
+}
 
 export function deriveStatus(
   localHost: LocalHostSnapshot | null,

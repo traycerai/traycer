@@ -44,6 +44,11 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { displayTitle } from "@/lib/display-title";
+import {
+  deriveEpicSyncPillState,
+  type EpicHostDirtyState,
+  type EpicSyncPillState,
+} from "@/lib/epic-sync-pill-state";
 import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -132,6 +137,50 @@ export function useEpicSnapshotMeta(): SnapshotMetaEpic | null {
 
 export function useEpicConnectionStatus(): StreamConnectionStatus {
   return useEpicStore((s) => s.connectionStatus);
+}
+
+/**
+ * Host dirtiness is known only after this subscription cycle's atomic @1.1
+ * snapshot. A clean-looking map before then (or under a negotiated @1.0 host)
+ * is unknown rather than evidence that the cloud has acknowledged everything.
+ */
+const selectHostDirtyState = createSelector(
+  (s: OpenEpicState) => s.hasDirtySnapshotForOpenCycle,
+  (s: OpenEpicState) => s.rootDirty,
+  (s: OpenEpicState) => s.artifactRoomDirtyByArtifactRoomId,
+  (
+    hasDirtySnapshotForOpenCycle,
+    rootDirty,
+    dirtyByArtifactRoomId,
+  ): EpicHostDirtyState => {
+    if (!hasDirtySnapshotForOpenCycle || rootDirty === null) return "unknown";
+    if (rootDirty) return "dirty";
+    return Object.values(dirtyByArtifactRoomId).some((dirty) => dirty)
+      ? "dirty"
+      : "clean";
+  },
+);
+
+/**
+ * The sync pill's single source of truth. Weighs all four legs of the
+ * durability chain rather than the lossy blended `connectionStatus` the pill
+ * used to read on its own - see `@/lib/epic-sync-pill-state` for the ordering
+ * contract and why each leg has to be visible separately.
+ *
+ * Returns a plain string union, so an unchanged verdict is `Object.is`-equal
+ * and never re-renders the pill.
+ */
+export function useEpicSyncPillState(): EpicSyncPillState {
+  return useEpicStore((s) =>
+    deriveEpicSyncPillState({
+      hostTransportStatus: s.hostTransportStatus,
+      cloudSyncStatus: s.cloudSyncStatus,
+      hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
+      hostDirtyState: selectHostDirtyState(s),
+      hasUnsyncedLocalChanges: s.isDirty,
+      hasConnectedOnce: s.hasConnectedOnce,
+    }),
+  );
 }
 
 export function useEpicPermissionRole(): PermissionRole | null {
