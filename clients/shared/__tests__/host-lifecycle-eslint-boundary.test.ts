@@ -3,10 +3,27 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Lives outside host-lifecycle/** so this harness may import child_process
 // to *invoke* eslint.
+
+// Every case below is a real `spawnSync` of the eslint binary, and the
+// config-applies-here case spawns it THREE times (a clean control, a violator,
+// and an outside-the-glob control). Vitest's default 5s budget does not
+// describe that work: that case was measured at 6139ms on a loaded CI runner
+// and timed out, on a commit touching only `.github/`. Its being the most
+// expensive row is exactly why it is the one that tips. This states the real
+// cost instead, with enough headroom for a slow runner while still catching a
+// genuine hang.
+//
+// The budget is the fix for the flake, not for the waste: 18 spawns pay
+// eslint's config-resolution and rule-loading cost 18 times over. Materializing
+// every violator up front and linting them in ONE invocation - asserting
+// per-file messages rather than a per-run exit status - would cut this to a
+// single spawn. Left alone deliberately: this file is a gate, and a subtle
+// error while restructuring it would weaken the boundary it exists to prove.
+vi.setConfig({ testTimeout: 30_000 });
 
 const THIS_DIR = dirname(fileURLToPath(import.meta.url));
 const SHARED_ROOT = join(THIS_DIR, "..");
