@@ -34,7 +34,12 @@ export function TabNavigationRouteBridge(): null {
       readonly location: {
         readonly pathname: string;
         readonly state: unknown;
-        readonly search: string | Readonly<Record<string, unknown>>;
+        // `HistoryLocation.search` is the raw query string, never a parsed
+        // object. Declaring the wider union invited a lossy re-serializer that
+        // dropped every non-string param (`focusedAt` and friends), while the
+        // hydration writer below persisted `searchStr` intact - so the stored
+        // route depended on which writer ran last.
+        readonly search: string;
       };
       readonly action: {
         readonly type: "PUSH" | "REPLACE" | "BACK" | "FORWARD" | "GO";
@@ -44,16 +49,18 @@ export function TabNavigationRouteBridge(): null {
       if (!hydrationReadyRef.current) {
         observedBeforeHydrationRef.current = true;
       }
-      const search = locationSearch(input.location.search);
-      updateDesktopTabsActiveRoute(`${input.location.pathname}${search}`);
+      // Same serialization as the hydration writer below: the raw query string
+      // straight through, including its leading `?`.
+      updateDesktopTabsActiveRoute(
+        `${input.location.pathname}${input.location.search}`,
+      );
       tabNavigationController.observeLocation(
         {
           pathname: input.location.pathname,
           state: input.location.state,
-          search:
-            typeof input.location.search === "string"
-              ? Object.fromEntries(new URLSearchParams(input.location.search))
-              : input.location.search,
+          search: Object.fromEntries(
+            new URLSearchParams(input.location.search),
+          ),
         },
         input.action.type,
         router.navigate,
@@ -91,16 +98,4 @@ export function TabNavigationRouteBridge(): null {
   }, [hydrationReady, router]);
 
   return null;
-}
-
-function locationSearch(
-  search: string | Readonly<Record<string, unknown>>,
-): string {
-  if (typeof search === "string") return search;
-  const params = new URLSearchParams();
-  Object.entries(search).forEach(([key, value]) => {
-    if (typeof value === "string") params.set(key, value);
-  });
-  const serialized = params.toString();
-  return serialized.length === 0 ? "" : `?${serialized}`;
 }

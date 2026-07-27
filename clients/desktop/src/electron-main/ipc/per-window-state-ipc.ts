@@ -22,9 +22,30 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
   //
   // `PerWindowState.update` emits only after its disk write succeeds. Keep the
   // suppression entry through that await so the durable acknowledgement cannot
-  // race its own echo back into the renderer. A per-window Set (rather than a
-  // single scalar) keeps suppression correct when two windows update at once.
-  const suppressEchoWindowIds = new Set<string>();
+  // race its own echo back into the renderer.
+  //
+  // This is a per-window DEPTH, not a set of ids: a set entry is idempotent, so
+  // two overlapping updates from the same window shared one entry and whichever
+  // settled first deleted it - un-suppressing the other update's own echo while
+  // it was still in flight, which is exactly the clobber this guard exists to
+  // prevent. Counting keeps a window suppressed until its last in-flight update
+  // has drained, and keeps windows independent of each other.
+  const echoSuppressionDepth = new Map<string, number>();
+  const beginEchoSuppression = (windowId: string): void => {
+    echoSuppressionDepth.set(
+      windowId,
+      (echoSuppressionDepth.get(windowId) ?? 0) + 1,
+    );
+  };
+  const endEchoSuppression = (windowId: string): void => {
+    const depth = echoSuppressionDepth.get(windowId);
+    if (depth === undefined) return;
+    if (depth <= 1) {
+      echoSuppressionDepth.delete(windowId);
+      return;
+    }
+    echoSuppressionDepth.set(windowId, depth - 1);
+  };
 
   bridge.handleInvoke(RunnerHostInvoke.perWindowStateGet, (event) => {
     const windowId = bridge.resolveSenderWindowId(event);
@@ -45,14 +66,14 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
         log.warn("[runner-ipc] perWindowState.update from unknown window", {});
         return;
       }
-      suppressEchoWindowIds.add(windowId);
+      beginEchoSuppression(windowId);
       try {
         return await bridge.perWindowState.update(
           windowId,
           parsePerWindowStatePatch(patch),
         );
       } finally {
-        suppressEchoWindowIds.delete(windowId);
+        endEchoSuppression(windowId);
       }
     },
   );
@@ -68,7 +89,7 @@ export function registerPerWindowStateIpc(bridge: RunnerIpcBridge): void {
 
   const onPerWindowStateChange = (change: PerWindowStateChange): void => {
     // Don't bounce a window's own update back to it (see suppress note above).
-    if (suppressEchoWindowIds.has(change.windowId)) return;
+    if (echoSuppressionDepth.has(change.windowId)) return;
     // A `clear` is a window-teardown wipe. Never push its empty snapshot to a
     // renderer: for a genuinely-closed window the send would no-op anyway, but a
     // window that dropped from the registry snapshot while its BrowserWindow is

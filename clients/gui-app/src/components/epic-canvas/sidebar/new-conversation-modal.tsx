@@ -626,6 +626,7 @@ export function NewConversationModalBody(props: {
   });
   const workspaceControls = (
     <ActiveHostWorkspaceControls
+      disabled={false}
       stagingKey={stagingKey}
       layout="inline"
       workspaceSeed={draftWorkspace}

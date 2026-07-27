@@ -283,6 +283,7 @@ function renderControl(layout: "inline" | "stacked") {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ActiveHostWorkspaceControls
+          disabled={false}
           stagingKey={{ surface: "landing", draftId: null }}
           workspaceSeed={null}
           seedIntent={null}
@@ -301,6 +302,7 @@ function DelayedBranchValidationHarness() {
   return (
     <>
       <ActiveHostWorkspaceControls
+        disabled={false}
         stagingKey={{ surface: "landing", draftId: null }}
         workspaceSeed={null}
         seedIntent={null}

@@ -357,6 +357,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             </div>
           </section>
           <ActiveHostWorkspaceControls
+            disabled={false}
             stagingKey={stagingKey}
             layout="stacked"
             workspaceSeed={target?.workspaceSeed.workspace ?? null}

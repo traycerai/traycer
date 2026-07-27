@@ -346,6 +346,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             />
           </label>
           <ActiveHostWorkspaceControls
+            disabled={false}
             stagingKey={stagingKey}
             layout="stacked"
             workspaceSeed={target?.workspaceSeed.workspace ?? null}

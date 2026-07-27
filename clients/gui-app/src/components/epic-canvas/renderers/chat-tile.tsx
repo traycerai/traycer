@@ -1607,6 +1607,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const hostWorkspaceSelector = useMemo(
     () => (
       <HostWorkspaceSelector
+        disabled={false}
         surface={{
           kind: "chat",
           hostId: activeHostId,

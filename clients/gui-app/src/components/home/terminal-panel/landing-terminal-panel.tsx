@@ -642,12 +642,14 @@ function landingTerminalCreateGate(args: {
     activeHostId: args.hostId,
     reconciledContext: args.reconciledContext,
   });
+  // Derived from the reason rather than restated, so the two cannot drift.
+  // They previously did: a captured workspace path makes the reason `null`
+  // (the launch cwd is that folder, so no reconciled `homeCwd` is needed),
+  // while this condition still demanded a reconciled context matching the
+  // captured host - leaving the "+" enabled with its tooltip clear but the
+  // tiles' create affordance shut.
   const createEnabled =
-    args.panelOpen &&
-    args.availability === "supported" &&
-    args.hostId !== null &&
-    args.clientReady &&
-    args.reconciledContext?.hostId === args.hostId;
+    args.panelOpen && args.hostId !== null && createDisabledReason === null;
   return { createEnabled, createDisabledReason };
 }
 

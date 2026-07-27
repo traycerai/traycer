@@ -203,7 +203,7 @@ export type HostWorkspaceSelectorSurface =
 interface HostWorkspaceSelectorProps {
   readonly surface: HostWorkspaceSelectorSurface;
   /** A draft create owns the snapshot until it settles. */
-  readonly disabled?: boolean;
+  readonly disabled: boolean;
 }
 
 export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
@@ -234,10 +234,7 @@ export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
 
   if (props.surface.kind === "home") {
     return (
-      <HomeSurface
-        draftId={props.surface.draftId}
-        disabled={props.disabled === true}
-      />
+      <HomeSurface draftId={props.surface.draftId} disabled={props.disabled} />
     );
   }
   return (
@@ -253,7 +250,7 @@ export function HostWorkspaceSelector(props: HostWorkspaceSelectorProps) {
 
 interface HomeSurfaceProps {
   readonly draftId: string | null;
-  readonly disabled?: boolean;
+  readonly disabled: boolean;
 }
 
 function HomeSurface(props: HomeSurfaceProps) {
@@ -306,14 +303,14 @@ type ActiveHostWorkspaceControlsProps = {
   // file-tree-style Host list above a Workspaces section, no trailing chip.
   readonly layout: "inline" | "stacked";
   readonly hostScope: HostWorkspaceControlsHostScope;
-  readonly disabled?: boolean;
+  readonly disabled: boolean;
 };
 
 export function ActiveHostWorkspaceControls(
   props: ActiveHostWorkspaceControlsProps,
 ) {
   const directoryList = useHostDirectoryList();
-  const disabled = props.disabled === true;
+  const disabled = props.disabled;
   const directoryEntries = directoryList.data ?? [];
   const reactiveActiveHostId = useReactiveActiveHostId();
   const activeHostId =
@@ -383,6 +380,7 @@ export function ActiveHostWorkspaceControls(
           entries={visibleHostEntries}
           activeHostId={activeHostId}
           onSelect={handleSelectHost}
+          disabled={disabled}
         />
         <section
           aria-label="Workspaces"

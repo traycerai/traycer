@@ -164,13 +164,14 @@ export function projectDefaultHostReadiness(args: {
   if (args.presentation.removed) return { kind: "removed-host" };
 
   if (args.readiness.kind === "ready") {
-    if (
-      args.presentation.hostBusy ||
-      args.presentation.compatibility.status !== "compatible"
-    ) {
-      return readinessForCompatibility(args.presentation);
-    }
-    return READY;
+    // Compatibility alone decides here. `hostBusy` deliberately does NOT gate
+    // readiness: a busy host is still dialable, and busy is surfaced as the
+    // Refresh / Force-update actions by the presentation layer rather than by
+    // holding the surface closed. It used to appear as a `hostBusy ||` disjunct
+    // in front of this call, which read as a gate but was inert -
+    // `readinessForCompatibility` returns READY for `compatible`, so the busy
+    // branch and the fall-through produced the same answer.
+    return readinessForCompatibility(args.presentation);
   }
   if (
     args.readiness.kind !== "loading-host" &&
