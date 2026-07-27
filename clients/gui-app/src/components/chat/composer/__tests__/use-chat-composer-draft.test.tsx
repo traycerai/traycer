@@ -1,6 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import { useState } from "react";
-import { act, cleanup, render, renderHook } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -371,7 +377,7 @@ describe("appendQuoteToDraft + useChatComposerDraft integration", () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
 
-    const editorDoms = document.querySelectorAll("[data-composer-editor]");
+    const editorDoms = screen.getAllByRole("textbox", { name: "test" });
     expect(editorDoms).toHaveLength(2);
     expect(document.activeElement).toBe(editorDoms[0]);
 
