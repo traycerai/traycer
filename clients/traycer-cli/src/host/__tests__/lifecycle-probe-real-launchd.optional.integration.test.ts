@@ -143,6 +143,46 @@ afterEach(async () => {
   cleanupTargets = [];
 });
 
+/**
+ * Teardown for a scoped launchd job, shared by every `withScoped*` helper so the
+ * two hazards below are answered once rather than re-derived per copy.
+ *
+ * A `throw` from `finally` REPLACES whatever the body was already throwing, so a
+ * teardown complaint would silently overwrite the actual row failure - the one
+ * thing the row exists to report. The leak is only escalated when the body
+ * itself succeeded; on the failing path the original error wins.
+ *
+ * Staying in `cleanupTargets` is what makes that concession safe. A job is only
+ * dropped from the suite-level sweep once launchd confirms it is gone, so a job
+ * that survived `bootout` is retried in `afterEach` whichever way the body went.
+ * Dropping it here would leak it loaded with its plist already unlinked, and the
+ * next run of this suite would fail to bootstrap the label it just poisoned.
+ */
+async function releaseScopedTarget(release: {
+  readonly bodyCompleted: boolean;
+  readonly leakDescription: string;
+  readonly scratchDir: string;
+  readonly target: string;
+}): Promise<void> {
+  const { bodyCompleted, leakDescription, scratchDir, target } = release;
+  await runCommand("launchctl", ["bootout", "--wait", target]).catch(
+    () => undefined,
+  );
+  const remainsLoaded = await runCommand("launchctl", ["print", target])
+    .then(() => true)
+    .catch(() => false);
+  await rm(scratchDir, { recursive: true, force: true });
+  if (!remainsLoaded) {
+    cleanupTargets = cleanupTargets.filter((candidate) => candidate !== target);
+    return;
+  }
+  if (bodyCompleted) {
+    throw new Error(
+      `${leakDescription} remained loaded after teardown: ${target}`,
+    );
+  }
+}
+
 describe.skipIf(!ENABLED)(
   "real macOS lifecycle supervisor — T6 spawn-probe/readiness/wedge (opt-in)",
   () => {
@@ -619,11 +659,6 @@ setInterval(() => undefined, 1_000);
     "utf8",
   );
   cleanupTargets = [...cleanupTargets, target];
-  // A `throw` from `finally` REPLACES whatever the body was already throwing,
-  // so a teardown complaint would silently overwrite the actual row failure -
-  // the one thing the row exists to report. Only escalate the leak when the
-  // body itself succeeded; on the failing path the original error wins and
-  // the suite-level `cleanupTargets` sweep still gets the job.
   let bodyCompleted = false;
   try {
     const baselineLog = await readFile(bootstrapLogPath, "utf8").catch(
@@ -665,19 +700,12 @@ setInterval(() => undefined, 1_000);
     });
     bodyCompleted = true;
   } finally {
-    await runCommand("launchctl", ["bootout", "--wait", target]).catch(
-      () => undefined,
-    );
-    const remainsLoaded = await runCommand("launchctl", ["print", target])
-      .then(() => true)
-      .catch(() => false);
-    await rm(root, { recursive: true, force: true });
-    cleanupTargets = cleanupTargets.filter((candidate) => candidate !== target);
-    if (remainsLoaded && bodyCompleted) {
-      throw new Error(
-        `scoped M8 fallback remained loaded after teardown: ${target}`,
-      );
-    }
+    await releaseScopedTarget({
+      bodyCompleted,
+      leakDescription: "scoped M8 fallback",
+      scratchDir: root,
+      target,
+    });
   }
 }
 
@@ -1063,6 +1091,7 @@ setTimeout(() => process.exit(0), 500);
     bunPath,
     layer0Module,
   );
+  let bodyCompleted = false;
   try {
     await runCommand("launchctl", ["bootstrap", `gui/${uid}`, plistPath]);
     const marker = await waitForProbeMarker(
@@ -1088,21 +1117,15 @@ setTimeout(() => process.exit(0), 500);
       );
     }
     await work({ label, marker, plistPath, target });
+    bodyCompleted = true;
   } finally {
     incumbent?.kill("SIGKILL");
-    await runCommand("launchctl", ["bootout", "--wait", target]).catch(
-      () => undefined,
-    );
-    const remainsLoaded = await runCommand("launchctl", ["print", target])
-      .then(() => true)
-      .catch(() => false);
-    await rm(root, { recursive: true, force: true });
-    cleanupTargets = cleanupTargets.filter((candidate) => candidate !== target);
-    if (remainsLoaded) {
-      throw new Error(
-        `scoped real-launchd supervisor remained loaded after teardown: ${target}`,
-      );
-    }
+    await releaseScopedTarget({
+      bodyCompleted,
+      leakDescription: "scoped real-launchd supervisor",
+      scratchDir: root,
+      target,
+    });
   }
 }
 
@@ -1384,6 +1407,7 @@ async function withScopedJob(
     "utf8",
   );
   cleanupTargets = [...cleanupTargets, target];
+  let bodyCompleted = false;
   try {
     await runCommand("launchctl", ["bootstrap", domain, plistPath]);
     // Give the job a moment to actually spawn before reading its pid back.
@@ -1404,20 +1428,14 @@ async function withScopedJob(
       printed: printed.stdout,
       target,
     });
+    bodyCompleted = true;
   } finally {
-    await runCommand("launchctl", ["bootout", "--wait", target]).catch(
-      () => undefined,
-    );
-    const remainsLoaded = await runCommand("launchctl", ["print", target])
-      .then(() => true)
-      .catch(() => false);
-    await rm(dataDir, { recursive: true, force: true });
-    cleanupTargets = cleanupTargets.filter((candidate) => candidate !== target);
-    if (remainsLoaded) {
-      throw new Error(
-        `scoped real-launchd job remained loaded after teardown: ${target}`,
-      );
-    }
+    await releaseScopedTarget({
+      bodyCompleted,
+      leakDescription: "scoped real-launchd job",
+      scratchDir: dataDir,
+      target,
+    });
   }
 }
 
