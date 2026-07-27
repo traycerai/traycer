@@ -1,5 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
@@ -148,10 +148,10 @@ describe("composer list input", () => {
     const submitted = buildSubmittedChatJSONContent(editor.getJSON());
     expect(serializeForAgent(submitted)).toBe("2. Hello");
 
-    const orderedList = renderSubmittedContent(submitted).querySelector("ol");
-    expect(orderedList).not.toBeNull();
-    expect(orderedList?.start).toBe(2);
-    expect(orderedList?.textContent).toBe("Hello");
+    const rendered = renderSubmittedContent(submitted);
+    const orderedList = orderedListElement(within(rendered).getByRole("list"));
+    expect(orderedList.start).toBe(2);
+    expect(within(orderedList).getByRole("listitem").textContent).toBe("Hello");
   });
 
   it("keeps a later-starting multi-item list sequential after submission", () => {
@@ -166,13 +166,13 @@ describe("composer list input", () => {
     const submitted = buildSubmittedChatJSONContent(editor.getJSON());
     expect(serializeForAgent(submitted)).toBe("2. First\n3. Second");
 
-    const orderedList = renderSubmittedContent(submitted).querySelector("ol");
-    expect(orderedList).not.toBeNull();
-    expect(orderedList?.start).toBe(2);
+    const rendered = renderSubmittedContent(submitted);
+    const orderedList = orderedListElement(within(rendered).getByRole("list"));
+    expect(orderedList.start).toBe(2);
     expect(
-      Array.from(orderedList?.querySelectorAll("li") ?? []).map(
-        (item) => item.textContent,
-      ),
+      within(orderedList)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
     ).toEqual(["First", "Second"]);
   });
 
@@ -194,10 +194,11 @@ describe("composer list input", () => {
 
     const submitted = buildSubmittedChatJSONContent(editor.getJSON());
     expect(serializeForAgent(submitted)).toBe("2. Second\n\n1. First");
+    const rendered = renderSubmittedContent(submitted);
     expect(
-      Array.from(renderSubmittedContent(submitted).querySelectorAll("ol")).map(
-        (list) => list.start,
-      ),
+      within(rendered)
+        .getAllByRole("list")
+        .map((list) => orderedListElement(list).start),
     ).toEqual([2, 1]);
   });
 });
@@ -211,6 +212,13 @@ function renderSubmittedContent(content: JsonContent): HTMLElement {
       testId={undefined}
     />,
   ).container;
+}
+
+function orderedListElement(element: HTMLElement): HTMLOListElement {
+  if (!(element instanceof HTMLOListElement)) {
+    throw new Error("expected an ordered list");
+  }
+  return element;
 }
 
 function serializeForAgent(content: JsonContent): string {
