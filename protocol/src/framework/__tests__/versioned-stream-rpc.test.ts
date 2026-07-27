@@ -25,7 +25,7 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(() => {
       validateVersionedStreamRpcRegistry(hostStreamRpcRegistry);
     }).not.toThrow();
-    expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(0);
+    expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(1);
     expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(5);
     expect(
       hostStreamRpcRegistry["notifications.subscribe"][1].latestMinor,

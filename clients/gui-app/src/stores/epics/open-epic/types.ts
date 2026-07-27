@@ -228,6 +228,16 @@ export const EMPTY_ARTIFACT_ROOMS_SLICE: ArtifactRoomsSlice = Object.freeze({
   ),
 });
 
+/**
+ * Starting value for the per-artifact-room host-dirty mirror. Empty means
+ * "nothing known to be dirty", which is also the correct RESET value on every
+ * re-subscribe: the host tracks what it has emitted per subscription, so a
+ * fresh subscription re-emits `artifactRoomDirty` for whatever is still dirty
+ * and never re-states what is clean.
+ */
+export const EMPTY_ARTIFACT_ROOM_DIRTY: Readonly<Record<string, boolean>> =
+  Object.freeze({} as Record<string, boolean>);
+
 export const EMPTY_AGENT_ROLES_SLICE: AgentRolesSlice = Object.freeze({
   byAgentId: Object.freeze({} as Record<string, readonly RoleClaim[]>),
 });

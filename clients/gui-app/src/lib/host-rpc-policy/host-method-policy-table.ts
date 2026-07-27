@@ -592,6 +592,10 @@ export const HOST_METHOD_POLL_TABLE = {
   "git.getFileDiff": { ...LATEST_SCHEDULING, poll: null },
   "git.getFileDiffs": { ...LATEST_SCHEDULING, poll: null },
   "git.getCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // A read of the local checkout, requested when the PR Files tab opens.
+  // No poll: the PR detail stream is what notices a new push, and a re-render
+  // off a changed `headRefOid` re-keys the query on its own.
+  "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Killing a terminal terminates a host PTY session.
