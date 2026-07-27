@@ -537,6 +537,37 @@ describe("<EpicsListPanel />", () => {
     expect(screen.queryByTestId("epics-list-row-pin")).toBeNull();
   });
 
+  // The Sweep control keeps its slot in every task row rather than appearing
+  // and disappearing per row: enabled when the task owns worktrees, faded and
+  // non-actionable when it does not.
+  it("renders the row Sweep action when the task owns worktrees", async () => {
+    testState.worktreesByEpicId = new Map([
+      ["epic-from-history", [historyWorktree()]],
+    ]);
+    renderPanel("embedded", "/");
+
+    const sweep = await screen.findByRole("button", {
+      name: /^sweep worktrees for /i,
+    });
+    expect(sweep.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^no worktrees to sweep for /i }),
+    ).toBeNull();
+  });
+
+  it("keeps a disabled Sweep action on a task with no worktrees", async () => {
+    testState.worktreesByEpicId = new Map();
+    renderPanel("embedded", "/");
+
+    const disabled = await screen.findByRole("button", {
+      name: /^no worktrees to sweep for /i,
+    });
+    expect(disabled.getAttribute("aria-disabled")).toBe("true");
+    expect(
+      screen.queryByRole("button", { name: /^sweep worktrees for /i }),
+    ).toBeNull();
+  });
+
   it("shows task PR pills without replacing the row navigation layer", async () => {
     testState.worktreesByEpicId = new Map([
       ["epic-from-history", [historyWorktree()]],

@@ -349,15 +349,22 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     setWorktreeCheckOverrides(new Map());
   }, []);
 
-  const [sweepEpicId, setSweepEpicId] = useState<string | null>(null);
+  // A sweep target is a SET: one id from a row action, the whole selection
+  // from the bulk action. The set is load-bearing - a worktree shared between
+  // two SELECTED tasks is no longer "shared" and becomes an ordinary
+  // candidate.
+  const [sweepEpicIds, setSweepEpicIds] =
+    useState<ReadonlyArray<string> | null>(null);
   const requestSweep = useCallback((epicId: string) => {
-    setSweepEpicId(epicId);
+    setSweepEpicIds([epicId]);
   }, []);
   const sweepTaskTitle = useMemo(() => {
-    if (sweepEpicId === null) return null;
-    const item = items.find((candidate) => candidate.epicId === sweepEpicId);
+    if (sweepEpicIds === null || sweepEpicIds.length !== 1) return null;
+    const item = items.find(
+      (candidate) => candidate.epicId === sweepEpicIds[0],
+    );
     return item === undefined ? null : historyItemDisplayTitle(item);
-  }, [items, sweepEpicId]);
+  }, [items, sweepEpicIds]);
 
   const selectableItemIds = useMemo(
     () =>
@@ -492,6 +499,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                   onDeleteSelected: () => {
                     requestDelete(visibleSelectedIds);
                   },
+                  onSweepSelected: () => {
+                    // The whole selection goes in as ONE set so a worktree
+                    // shared between two selected tasks is judged against the
+                    // selection, not one task, and stops reading as "shared".
+                    if (visibleSelectedIds.length === 0) return;
+                    setSweepEpicIds(visibleSelectedIds);
+                  },
                 }
               : {
                   kind: "idle",
@@ -554,10 +568,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         onTogglePath={toggleWorktreePathChecked}
       />
       <SweepWorktreesDialog
-        epicId={sweepEpicId}
+        epicIds={sweepEpicIds}
         taskTitle={sweepTaskTitle}
         onOpenChange={(open) => {
-          if (!open) setSweepEpicId(null);
+          if (!open) setSweepEpicIds(null);
         }}
       />
       <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
@@ -662,6 +676,7 @@ type PanelSelectionControls =
       readonly onDeselectAll: () => void;
       readonly onCancel: () => void;
       readonly onDeleteSelected: () => void;
+      readonly onSweepSelected: () => void;
     };
 
 interface PanelRefreshControls {
@@ -727,6 +742,23 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
             >
               <X />
               Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={
+                props.selection.selectedCount > 0
+                  ? `Sweep worktrees for ${props.selection.selectedCount} selected tasks`
+                  : "Sweep worktrees for selected tasks"
+              }
+              aria-haspopup="dialog"
+              data-testid="epics-list-sweep-selected"
+              disabled={props.selection.selectedCount === 0}
+              className="text-muted-foreground hover:text-foreground"
+              onClick={props.selection.onSweepSelected}
+            >
+              <Paintbrush />
             </Button>
             <Button
               type="button"
@@ -1265,7 +1297,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       })}
     >
       {rowInteractionLayer}
-      <div className={historyRowContentClassName(rowSweep.canSweep)}>
+      <div className={historyRowContentClassName(rowSweep.isVisible)}>
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           <HistoryRowLeadingIcon item={item} />
           {isRenaming ? (
@@ -1448,6 +1480,9 @@ function historySelectedForDelete(args: {
 }
 
 interface HistoryRowSweepState {
+  /** The control renders at all (hidden for phases / during selection). */
+  readonly isVisible: boolean;
+  /** There is something to open the dialog for. */
   readonly canSweep: boolean;
   readonly requestSweep: () => void;
 }
@@ -1468,7 +1503,13 @@ function useHistoryRowSweep(
   const requestSweep = useCallback(() => {
     onRequestSweep(item.epicId);
   }, [item.epicId, onRequestSweep]);
+  // Visible-but-disabled when the Task owns no worktrees, matching how the
+  // delete control and the bulk Sweep button behave: the affordance keeps its
+  // place in the row instead of appearing and disappearing per row. Phases are
+  // still skipped entirely - they never have worktrees, so a permanently dead
+  // control there would be noise rather than consistency.
   return {
+    isVisible: !selectionMode && item.taskType !== "phase",
     canSweep:
       !selectionMode && item.taskType !== "phase" && worktrees.length > 0,
     requestSweep,
@@ -1479,24 +1520,49 @@ function HistoryRowSweepControl(props: {
   readonly sweep: HistoryRowSweepState;
   readonly displayTitle: string;
 }): ReactNode {
-  if (!props.sweep.canSweep) return null;
+  if (!props.sweep.isVisible) return null;
+  if (props.sweep.canSweep) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Sweep worktrees for ${props.displayTitle}`}
+            aria-haspopup="dialog"
+            data-testid="epics-list-row-sweep"
+            className="absolute right-11 top-1/2 -translate-y-1/2 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
+            onClick={props.sweep.requestSweep}
+          >
+            <Paintbrush />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Sweep this task's worktrees</TooltipContent>
+      </Tooltip>
+    );
+  }
+  // `aria-disabled` rather than `disabled`, matching the delete control: a
+  // truly disabled button swallows pointer events, and the tooltip is the only
+  // place the reason is stated.
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`Sweep worktrees for ${props.displayTitle}`}
-          aria-haspopup="dialog"
-          data-testid="epics-list-row-sweep"
-          className="absolute right-11 top-1/2 -translate-y-1/2 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
-          onClick={props.sweep.requestSweep}
+          aria-disabled="true"
+          aria-label={`No worktrees to sweep for ${props.displayTitle}`}
+          data-testid="epics-list-row-sweep-disabled"
+          className="absolute right-11 top-1/2 inline-flex size-8 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-md text-muted-foreground/50 opacity-0 transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
         >
-          <Paintbrush />
-        </Button>
+          <Paintbrush className="size-4" />
+        </button>
       </TooltipTrigger>
-      <TooltipContent>Sweep this task's worktrees</TooltipContent>
+      <TooltipContent>This task has no worktrees on this host</TooltipContent>
     </Tooltip>
   );
 }
@@ -1516,12 +1582,12 @@ function HistorySweepMenuItem(props: {
   );
 }
 
-function historyRowContentClassName(canSweep: boolean): string {
+function historyRowContentClassName(hasSweepControl: boolean): string {
   return cn(
     "pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm",
     // Reserve room for the second hover control so the sweep button never
     // overlaps the trailing metadata / PR pills.
-    canSweep && "pr-20",
+    hasSweepControl && "pr-20",
   );
 }
 

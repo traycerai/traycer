@@ -93,6 +93,20 @@ const SPLIT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["comments"] },
 ];
 
+/**
+ * Exactly what a user who last wrote sidebar state before the Pull Requests
+ * panel shipped has in `localStorage`: every id valid, so the value survives
+ * `readPersistedPanelGroups`, but `pull-requests` absent.
+ */
+const PRE_PULL_REQUESTS_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
+  { panelIds: ["chats", "artifacts"] },
+  { panelIds: ["terminals"] },
+  { panelIds: ["git-diff"] },
+  { panelIds: ["file-tree"] },
+  { panelIds: ["sharing"] },
+  { panelIds: ["comments"] },
+];
+
 function splitChatsAndArtifacts(): void {
   useLeftPanelStore.setState({ panelGroups: SPLIT_PANEL_GROUPS });
 }
@@ -631,6 +645,35 @@ describe("useLeftPanelStore", () => {
     });
 
     expect(hook.result.current).toBe(before);
+  });
+
+  // A build that adds a panel id reaches users whose persisted `panelGroups`
+  // predate it, so the stored array can NEVER satisfy the already-normalized
+  // fast path - the missing group has to be appended on every read. The hook
+  // feeds `useSyncExternalStore`, whose `getSnapshot` is called on every
+  // commit with no memoization (zustand v5), so handing back a freshly built
+  // array each time makes React see a changed snapshot forever and re-render
+  // until it throws "Maximum update depth exceeded" (minified error #185).
+  it("keeps the panel groups hook snapshot stable when stored groups predate a new panel id", () => {
+    useLeftPanelStore.setState({ panelGroups: PRE_PULL_REQUESTS_PANEL_GROUPS });
+
+    const hook = renderHook(() => useLeftPanelGroups());
+    const before = hook.result.current;
+
+    act(() => {
+      useLeftPanelStore.getState().setActivePanelId("tab-a", "comments");
+    });
+
+    expect(hook.result.current).toBe(before);
+  });
+
+  it("appends the new panel id to stored groups that predate it", () => {
+    useLeftPanelStore.setState({ panelGroups: PRE_PULL_REQUESTS_PANEL_GROUPS });
+
+    expect(useLeftPanelStore.getState().getPanelGroups()).toEqual([
+      ...PRE_PULL_REQUESTS_PANEL_GROUPS,
+      { panelIds: ["pull-requests"] },
+    ]);
   });
 
   it("normalizes duplicate or missing panel ids in stored groups", () => {

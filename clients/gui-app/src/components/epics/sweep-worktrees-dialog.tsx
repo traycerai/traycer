@@ -34,8 +34,14 @@ import {
 import { cn } from "@/lib/utils";
 
 interface SweepWorktreesDialogProps {
-  /** The Task being swept; `null` keeps the dialog closed and its query off. */
-  readonly epicId: string | null;
+  /**
+   * The Tasks being swept. `null` (or empty) keeps the dialog closed and its
+   * query off. More than one comes from History's multi-select, and the extra
+   * members are load-bearing rather than cosmetic: a worktree shared between
+   * two selected Tasks stops counting as "shared".
+   */
+  readonly epicIds: ReadonlyArray<string> | null;
+  /** Title for a single-Task sweep; `null` for bulk or unknown. */
   readonly taskTitle: string | null;
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -58,24 +64,28 @@ const TIER_PILL_CLASS: Record<WorktreeTier, string> = {
 };
 
 const NOTE_COPY: Record<NonNullable<EpicSweepWorktreeRow["note"]>, string> = {
-  shared: "Also used by another Task — sweeping breaks its binding",
+  shared:
+    "Also used by a Task outside this selection — sweeping breaks its binding",
   "in-use": "In use by an active agent or terminal",
   checking: "Still checking — facts unverified",
   "not-landed": "Not proven landed — work here may be lost",
 };
 
 /**
- * The Sweep confirmation. EVERY worktree the Task owns is listed with
- * Settings-grade detail (branch, tier pill, PR chips, path); only the
- * proven-safe rows (Landed / At base commit, exclusively owned, not busy)
- * start checked. Unproven or shared rows are unchecked but deliberately
- * checkable — sweeping them is the user's conscious call — while busy and
- * still-checking rows are disabled. Self-contained: both the history rows and
- * the task-status strip render this with just an epicId.
+ * The Sweep confirmation. EVERY worktree owned by the selected Task(s) is
+ * listed once with Settings-grade detail (branch, tier pill, PR chips, path);
+ * only the proven-safe rows (Landed / At base commit, exclusively owned by the
+ * selection, not busy) start checked. Unproven or shared rows are unchecked but
+ * deliberately checkable — sweeping them is the user's conscious call — while
+ * busy and still-checking rows are disabled.
+ *
+ * Self-contained: the History row, History's bulk selection, and the Epic
+ * status row all render it with just a list of epic ids.
  */
 export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
-  const { epicId, taskTitle, onOpenChange } = props;
-  const { rows, isPending, isError } = useEpicSweepWorktreeCandidates(epicId);
+  const { epicIds, taskTitle, onOpenChange } = props;
+  const { rows, isPending, isError } = useEpicSweepWorktreeCandidates(epicIds);
+  const taskCount = epicIds?.length ?? 0;
   const sweepMutation = useEpicSweepWorktrees();
   // Explicit user toggles, cleared whenever the dialog retargets so a
   // reopened dialog starts from the per-row defaults again (the
@@ -83,9 +93,14 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const [checkOverrides, setCheckOverrides] = useState<
     ReadonlyMap<string, boolean>
   >(() => new Map());
-  const [previousEpicId, setPreviousEpicId] = useState(epicId);
-  if (epicId !== previousEpicId) {
-    setPreviousEpicId(epicId);
+  // Keyed on the selection itself so re-opening with a DIFFERENT set of Tasks
+  // starts from the per-row defaults again.
+  const selectionKey =
+    epicIds === null ? null : [...new Set(epicIds)].sort().join(",");
+  const [previousSelectionKey, setPreviousSelectionKey] =
+    useState(selectionKey);
+  if (selectionKey !== previousSelectionKey) {
+    setPreviousSelectionKey(selectionKey);
     setCheckOverrides(new Map());
   }
   // Read from the mutation cache, not this instance: the dialog is mounted
@@ -121,7 +136,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   };
 
   return (
-    <Dialog open={epicId !== null} onOpenChange={onOpenChange}>
+    <Dialog open={taskCount > 0} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
         className="flex max-h-[min(90dvh,42rem)] w-[min(92vw,34rem)] min-w-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-xl"
@@ -133,9 +148,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
           </div>
           <div className="min-h-0 min-w-0 flex-1 space-y-1.5">
             <DialogTitle className="text-ui font-semibold leading-snug wrap-anywhere">
-              {taskTitle === null
-                ? "Sweep worktrees?"
-                : `Sweep worktrees for "${taskTitle}"?`}
+              {sweepDialogTitle(taskCount, taskTitle)}
             </DialogTitle>
             <DialogDescription className="text-ui-sm leading-relaxed text-muted-foreground wrap-anywhere">
               Removes the selected worktrees and their branches from this host.
@@ -204,6 +217,18 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   );
 }
 
+/**
+ * Names what is being swept. A single Task uses its title when we have one;
+ * a bulk sweep names the count instead, because listing titles would push the
+ * worktree list (the thing being confirmed) below the fold.
+ */
+function sweepDialogTitle(taskCount: number, taskTitle: string | null): string {
+  if (taskCount > 1) return `Sweep worktrees for ${taskCount} tasks?`;
+  return taskTitle === null
+    ? "Sweep worktrees?"
+    : `Sweep worktrees for "${taskTitle}"?`;
+}
+
 function SweepRowList(props: {
   readonly isPending: boolean;
   readonly isError: boolean;
@@ -232,8 +257,8 @@ function SweepRowList(props: {
         data-testid="sweep-worktrees-empty"
       >
         {props.isError
-          ? "Couldn't check this Task's worktrees. Try again from Settings ▸ Worktrees."
-          : "This Task has no worktrees on this host."}
+          ? "Couldn't check these worktrees. Try again from Settings ▸ Worktrees."
+          : "No worktrees on this host for the selected tasks."}
       </p>
     );
   }

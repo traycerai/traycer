@@ -21,7 +21,9 @@ import {
  * throughout - as an edge, so both used to leave a stale dot lit forever.
  */
 
-const hostIdRef = vi.hoisted(() => ({ value: "host1" }));
+const hostIdRef = vi.hoisted((): { value: string | null } => ({
+  value: "host1",
+}));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
   useReactiveActiveHostId: () => hostIdRef.value,
@@ -104,6 +106,19 @@ describe("PrListBackgroundMount changed-dot clearing", () => {
     cleanup();
     resetLeftPanelStore();
     usePrSeenFactsStore.setState({ stateByScopeKey: {} });
+  });
+
+  // No host bound yet is the ordinary state while the host is still starting
+  // (and the permanent state when it fails to start). The scope selector must
+  // still hand `useSyncExternalStore` a stable snapshot in that window -
+  // building a fresh placeholder object per call re-renders forever and throws
+  // "Maximum update depth exceeded" (minified React error #185), which takes
+  // the whole epic pane down behind the error boundary.
+  it("mounts without a bound host", () => {
+    hostIdRef.value = null;
+    makePullRequestsPanelVisible();
+
+    expect(() => renderMount(true)).not.toThrow();
   });
 
   it("clears a pre-existing dot when the panel is ALREADY visible on mount", () => {

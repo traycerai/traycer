@@ -58,10 +58,17 @@ const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
  * facts (uncommitted count, branch) and merge proofs — bounded by the Task's
  * worktree count, never the fleet.
  *
- * EVERY task-owned worktree is returned, classified: green + exclusive + not
- * busy rows default-checked, everything else unchecked with its reason (still
- * checkable except busy/unverified rows), so the dialog shows the Task's full
- * worktree picture rather than a silently pre-filtered subset.
+ * Takes the SELECTED SET of Tasks, not one Task, so History's multi-select can
+ * sweep in bulk. The returned rows are the amalgamation - every worktree owned
+ * by any selected Task, listed once - and "shared" is judged against the whole
+ * selection: a worktree owned by two Tasks is only shared while at least one of
+ * its owners is unselected, so selecting both satisfies the constraint and the
+ * row becomes an ordinary candidate.
+ *
+ * EVERY owned worktree is returned, classified: green + exclusive + not busy
+ * rows default-checked, everything else unchecked with its reason (still
+ * checkable except busy/unverified rows), so the dialog shows the full worktree
+ * picture rather than a silently pre-filtered subset.
  *
  * Known residual: PR facts are read non-blocking on the host, so the first
  * forced probe after an EXTERNAL merge can still serve the stale `open` fact
@@ -71,16 +78,25 @@ const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
  *
  * Rows are recomputed only from a settled probe (`isPending` while in flight,
  * including re-opens), so the dialog can never offer rows from a previous
- * open. Pass `null` while the dialog is closed to disable the query. Any
- * error yields zero rows ("failure -> no candidates"); the host-side
+ * open. Pass `null` (or an empty selection) while the dialog is closed to
+ * disable the query. Any error yields zero rows ("failure -> no candidates");
+ * the host-side
  * busy-check on `worktree.deleteByPath` remains the authoritative backstop
  * either way.
  */
 export function useEpicSweepWorktreeCandidates(
-  epicId: string | null,
+  epicIds: ReadonlyArray<string> | null,
 ): EpicSweepWorktreeCandidatesResult {
   const client = useHostClient();
   const readiness = useReactiveHostReadiness(client);
+  // Sorted + de-duplicated so the cache identity does not depend on selection
+  // ORDER, and so re-selecting the same tasks reuses the same query slot.
+  const selectedEpicIds = useMemo(
+    () => (epicIds === null ? null : [...new Set(epicIds)].sort()),
+    [epicIds],
+  );
+  const selectedEpicKey =
+    selectedEpicIds === null ? "" : selectedEpicIds.join(",");
   const fetchFreshTaskWorktrees =
     async (): Promise<WorktreeListAllForHostResponseV14> => {
       // Cheap disk-truth walk (no git/gh probes, host cache is fine): only
@@ -95,8 +111,9 @@ export function useEpicSweepWorktreeCandidates(
           forceRefresh: false,
         },
       );
+      const selected = new Set(selectedEpicIds ?? []);
       const ownedPaths = base.worktrees.flatMap((entry) =>
-        entry.owners.some((owner) => owner.epicId === epicId)
+        entry.owners.some((owner) => selected.has(owner.epicId))
           ? [entry.worktreePath]
           : [],
       );
@@ -123,10 +140,13 @@ export function useEpicSweepWorktreeCandidates(
     queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
       queryKey: hostQueryKeys.sweepWorktreeCandidates(
         readiness.hostId,
-        epicId ?? "",
+        selectedEpicKey,
       ),
       queryFn: fetchFreshTaskWorktreesNormalized,
-      enabled: epicId !== null && readiness.isReady,
+      enabled:
+        selectedEpicIds !== null &&
+        selectedEpicIds.length > 0 &&
+        readiness.isReady,
       // Always stale: every dialog open re-runs the forced probe rather than
       // trusting a previous open's proof.
       staleTime: 0,
@@ -134,25 +154,33 @@ export function useEpicSweepWorktreeCandidates(
     }),
   );
 
-  const isPending = epicId !== null && isFetching;
+  const isPending =
+    selectedEpicIds !== null && selectedEpicIds.length > 0 && isFetching;
   const worktrees = data?.worktrees;
   return useMemo<EpicSweepWorktreeCandidatesResult>(() => {
     // While the probe is in flight, retained data from a PREVIOUS open must
     // not surface as offerable rows — the whole point is act-time proof.
-    if (epicId === null || worktrees === undefined || isError || isPending) {
+    if (
+      selectedEpicIds === null ||
+      worktrees === undefined ||
+      isError ||
+      isPending
+    ) {
       return { rows: EMPTY_ROWS, isPending, isError };
     }
+    // The amalgamation: every worktree owned by ANY selected Task, listed once.
+    const selected = new Set(selectedEpicIds);
     const rows = worktrees.flatMap((entry) =>
-      entry.owners.some((owner) => owner.epicId === epicId)
-        ? [classifySweepRow(epicId, entry)]
+      entry.owners.some((owner) => selected.has(owner.epicId))
+        ? [classifySweepRow(selected, entry)]
         : [],
     );
     return { rows, isPending: false, isError };
-  }, [epicId, isError, isPending, worktrees]);
+  }, [selectedEpicIds, isError, isPending, worktrees]);
 }
 
 function classifySweepRow(
-  epicId: string,
+  selectedEpicIds: ReadonlySet<string>,
   entry: WorktreeHostEntryV14,
 ): EpicSweepWorktreeRow {
   const tier = classifyWorktreeTier(entry);
@@ -163,7 +191,10 @@ function classifySweepRow(
   if (entry.resolvedAt === null) {
     return { ...base, disabled: true, note: "checking" };
   }
-  if (entry.owners.some((owner) => owner.epicId !== epicId)) {
+  // Exclusivity is judged against the WHOLE selection, not one Task: a
+  // worktree shared by two Tasks stops being "shared" once both are selected,
+  // because sweeping the selection removes every binding that referenced it.
+  if (entry.owners.some((owner) => !selectedEpicIds.has(owner.epicId))) {
     return { ...base, disabled: false, note: "shared" };
   }
   if (!sweepEligibleTier(tier)) {
