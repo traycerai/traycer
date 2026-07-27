@@ -106,10 +106,23 @@ export function SplitDivider(props: SplitDividerProps) {
       data-testid={`split-divider-${props.splitId}`}
       style={{ left: `${props.leftRatio * 100}%` }}
       className={cn(
-        "absolute inset-y-0 z-30 w-3 -translate-x-1/2 border-l border-border bg-transparent",
+        "absolute inset-y-0 z-30 w-3 -translate-x-1/2 bg-transparent",
         "cursor-col-resize touch-none outline-none focus-visible:bg-primary/10 focus-visible:ring-2 focus-visible:ring-ring",
       )}
-    />
+    >
+      {/*
+        The hairline is a centred child rather than a `border-l` on the grab
+        area. `left` puts this element's left edge on the pane boundary and
+        `-translate-x-1/2` recentres the 12px grab area over it, so a left
+        border would paint 6px INSIDE the left pane - leaving that pane's
+        content visibly running past the divider it is supposed to stop at.
+      */}
+      <span
+        aria-hidden
+        data-testid={`split-divider-line-${props.splitId}`}
+        className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border"
+      />
+    </div>
   );
 }
 
