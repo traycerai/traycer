@@ -156,6 +156,47 @@ describe("<HostReadyGate />", () => {
     expect(screen.queryByTestId("host-ready-gate")).toBeNull();
   });
 
+  it("draws the setup card the standalone splash drew", () => {
+    // This view predates the split work and the user asked for it unchanged.
+    // The gate took over rendering it from `LocalHostLoading`, which wrapped
+    // the body in a max-w-md shadowed Card; the shared frame's bare max-w-sm
+    // column dropped that outline. Pinned because the frame is now shared with
+    // the in-surface fallback, which must stay card-less.
+    renderGate({ kind: "loading-host" }, PRESENTATION);
+    const card = screen
+      .getByTestId("host-ready-gate")
+      .querySelector('[data-slot="card"]');
+    if (card === null) throw new Error("Expected the setup card");
+    expect(card.className).toContain("max-w-md");
+    expect(card.className).toContain("shadow-sm");
+  });
+
+  it("keeps the same loading body through the compatibility probe", () => {
+    // The old gate passed ONE `checking={props.loading}` node, so the probe
+    // looked identical to the rest of startup. A probe-specific text-only
+    // screen made the app drop from a spinner card to a bare line plus a
+    // button mid-launch, which reads as a failure rather than progress.
+    renderGate({ kind: "compatibility-checking" }, PRESENTATION);
+    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
+    expect(
+      screen.queryByText("Checking Traycer Host compatibility…"),
+    ).toBeNull();
+  });
+
+  it("still names the compatibility probe for a remote host", () => {
+    // The local-bootstrap body (progress bar, bootstrap.log tail) would be
+    // misleading for a remote target, so that arm keeps the plain message -
+    // and must keep saying which wait it is.
+    renderGate(
+      { kind: "compatibility-checking" },
+      { ...PRESENTATION, localTarget: false },
+    );
+    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(
+      screen.getByText("Checking Traycer Host compatibility…"),
+    ).toBeTruthy();
+  });
+
   it("keeps recovery actions reachable inside the block", () => {
     // Blocking must not strand a user whose host cannot start: a full-screen
     // surface with no retry is the lockout shape traycer#738 exists to avoid.

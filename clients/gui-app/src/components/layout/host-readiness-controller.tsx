@@ -8,6 +8,7 @@ import {
 import { useRouterState } from "@tanstack/react-router";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { AppHeader } from "@/components/layout/header/app-header";
 import {
   HostReadinessControllerContext,
@@ -275,6 +276,7 @@ function SurfaceReadinessFallback(props: {
   }
   return (
     <FallbackFrame
+      variant="slot"
       fallback={fallbackContent(props.readiness, presentation)}
       testId={`surface-readiness-${props.readiness.kind}`}
       messageTestId={
@@ -291,6 +293,7 @@ function SlowHostFallback(props: {
   // share one pending lock and a click issues exactly one request.
   return (
     <FallbackFrame
+      variant="slot"
       fallback={{
         message: null,
         detail: null,
@@ -357,6 +360,7 @@ export function DefaultHostReadyGate(props: {
     >
       <AppHeader variant="host-loading" />
       <FallbackFrame
+        variant="splash"
         fallback={fallbackContent(
           readiness,
           controller.defaultHostPresentation,
@@ -374,48 +378,66 @@ function FallbackFrame(props: {
   readonly fallback: ReadinessFallback;
   readonly testId: string;
   readonly messageTestId: string | null;
+  /**
+   * `splash` reproduces the full-screen host-boot card exactly as the
+   * standalone `LocalHostLoading` drew it (max-w-md, shadow-sm, gap-4/py-6)
+   * before the gate took over rendering it - that view predates the split work
+   * and must not drift. `slot` is the bounded in-surface fallback, which
+   * deliberately draws no card because it already sits inside a tab's frame.
+   */
+  readonly variant: "slot" | "splash";
 }): ReactNode {
   const hasActionsRow =
     props.fallback.actions.length > 0 || props.fallback.footer !== null;
+  const content = (
+    <>
+      {props.fallback.message === null ? null : (
+        <p data-testid={props.messageTestId} className="text-muted-foreground">
+          {props.fallback.message}
+        </p>
+      )}
+      {props.fallback.detail === null ? null : (
+        <p className="text-ui-xs text-muted-foreground">
+          {props.fallback.detail}
+        </p>
+      )}
+      {props.fallback.body}
+      {hasActionsRow ? (
+        <div className="flex flex-wrap justify-center gap-2">
+          {props.fallback.actions.map((action) => (
+            <Button
+              key={action.testId}
+              type="button"
+              size="sm"
+              variant={action.variant}
+              disabled={action.disabled}
+              onClick={action.onClick}
+              data-testid={action.testId}
+            >
+              {action.label}
+            </Button>
+          ))}
+          {props.fallback.footer}
+        </div>
+      ) : null}
+    </>
+  );
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-background p-6 text-foreground"
       data-testid={props.testId}
     >
-      <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center text-ui-sm">
-        {props.fallback.message === null ? null : (
-          <p
-            data-testid={props.messageTestId}
-            className="text-muted-foreground"
-          >
-            {props.fallback.message}
-          </p>
-        )}
-        {props.fallback.detail === null ? null : (
-          <p className="text-ui-xs text-muted-foreground">
-            {props.fallback.detail}
-          </p>
-        )}
-        {props.fallback.body}
-        {hasActionsRow ? (
-          <div className="flex flex-wrap justify-center gap-2">
-            {props.fallback.actions.map((action) => (
-              <Button
-                key={action.testId}
-                type="button"
-                size="sm"
-                variant={action.variant}
-                disabled={action.disabled}
-                onClick={action.onClick}
-                data-testid={action.testId}
-              >
-                {action.label}
-              </Button>
-            ))}
-            {props.fallback.footer}
-          </div>
-        ) : null}
-      </div>
+      {props.variant === "splash" ? (
+        <Card className="w-full max-w-md shadow-sm">
+          <CardContent className="flex flex-col items-center gap-4 py-6 text-center text-ui-sm">
+            {content}
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center text-ui-sm">
+          {content}
+        </div>
+      )}
     </div>
   );
 }
@@ -541,39 +563,24 @@ function hostStartupReportIssueAction(
   );
 }
 
-function configureShellAction(
-  presentation: DefaultHostReadinessPresentation,
-): ReadinessFallbackAction {
-  return {
-    label: "Configure shell…",
-    testId: "local-host-open-shell-settings",
-    variant: "outline",
-    disabled: false,
-    onClick: presentation.configureShell,
-  };
-}
-
 function loadingFallback(
   kind: "loading-host" | "provisioning-host" | "compatibility-checking",
   presentation: DefaultHostReadinessPresentation,
 ): ReadinessFallback {
-  if (kind === "compatibility-checking") {
-    return {
-      message: "Checking Traycer Host compatibility…",
-      detail: null,
-      body: null,
-      footer: null,
-      actions: presentation.localTarget
-        ? [configureShellAction(presentation)]
-        : [],
-    };
-  }
-  // `loading-host`/`provisioning-host` for a non-local target (a remote host
-  // still resolving) get the plain message - the rich progress/log card
-  // below is local-bootstrap specific and would be misleading here.
+  // Every local-bootstrap wait - including the compatibility probe - shows the
+  // SAME loading body. The old gate passed one `checking={props.loading}` node
+  // for exactly this reason; giving the probe its own text-only screen made
+  // startup drop from a spinner card to a bare line plus a button, which reads
+  // as an error state mid-launch. "Configure shell…" is not lost: the loading
+  // body carries it inside the details disclosure.
   if (!presentation.localTarget) {
+    // A remote host still resolving: the rich progress/log card below is
+    // local-bootstrap specific and would be misleading here.
     return {
-      message: presentation.progress?.message ?? "Starting local Traycer Host…",
+      message:
+        kind === "compatibility-checking"
+          ? "Checking Traycer Host compatibility…"
+          : (presentation.progress?.message ?? "Starting local Traycer Host…"),
       detail: null,
       body: null,
       footer: null,
