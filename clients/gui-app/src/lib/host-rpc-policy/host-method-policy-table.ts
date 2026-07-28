@@ -7,6 +7,7 @@ import type {
   RpcSchedulingPolicy,
 } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import type { ProviderManagedInstallState } from "@traycer/protocol/host/provider-schemas";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60 * SECOND_MS;
@@ -100,6 +101,58 @@ export const PROVIDERS_INSTALLING_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 1_500,
   maxDelayMs: 5 * SECOND_MS,
 };
+/**
+ * A managed pack failed and the host has scheduled another attempt.
+ *
+ * Without this lane an `error` cell falls straight to `providers.steady`, so a
+ * wifi blip that the host recovers from in a minute keeps "Setup failed" on
+ * screen for up to fifteen. That is the wrong direction for a transient
+ * failure: the steady lane's cadence is chosen for state that is not expected
+ * to change, and a cell carrying `retryAtMs` is state that is.
+ *
+ * Deliberately looser than the installing lane. Nothing here has to animate -
+ * this lane exists to notice ONE transition (error → downloading, or error
+ * with a fresh `retryAtMs`) shortly after it happens, and 30s of staleness on
+ * a failure notice is not the same cost as 30s of frozen progress bar.
+ */
+export const PROVIDERS_RETRY_SCHEDULED_POLL_LANE: ConditionPollLane = {
+  id: "providers.retry-scheduled",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 30 * SECOND_MS,
+};
+
+/**
+ * How long after `retryAtMs` the lane keeps watching.
+ *
+ * A window is needed rather than a bare `retryAtMs > now` because nothing on
+ * the host fires AT `retryAtMs`. The field is the manager's backoff memo -
+ * "this cell becomes eligible again at T" - and the attempt itself rides on
+ * the next kick: a turn resolving the provider, an explicit `ensurePack`, or
+ * the reconvergence tick. So the transition this lane exists to see lands
+ * shortly AFTER `retryAtMs`, never before it, and dropping to the steady lane
+ * the instant eligibility arrives would miss precisely the moment it was
+ * added for.
+ *
+ * It is also what bounds the lane. Past the window the cell is not "about to
+ * heal", it is waiting for a kick nobody has scheduled - and the kick's own
+ * arrival (a turn) already refreshes the list through
+ * `useRefreshProvidersListOnTurn`. Polling a quiescent failure every 30
+ * seconds forever would buy nothing and cost it on every wedged host.
+ */
+export const PROVIDERS_RETRY_OBSERVATION_GRACE_MS = 60 * SECOND_MS;
+
+function isRetryWorthWatching(
+  state: ProviderManagedInstallState | null | undefined,
+  nowMs: number,
+): boolean {
+  if (state === null || state === undefined) return false;
+  if (state.status !== "error") return false;
+  // `retryAtMs: null` is the terminal case - `unrepairable`, or a failure the
+  // manager deliberately declined to memo. Nothing is coming, so watching is
+  // not cheaper than the steady lane, it is only more expensive.
+  if (state.retryAtMs === null) return false;
+  return nowMs < state.retryAtMs + PROVIDERS_RETRY_OBSERVATION_GRACE_MS;
+}
 export const PROVIDERS_LIMITED_POLL_LANE: ConditionPollLane = {
   id: "providers.limited",
   initialDelayMs: 30 * SECOND_MS,
@@ -697,6 +750,13 @@ export const HOST_METHOD_POLL_TABLE = {
               )),
         );
         if (hasPendingProbe) return PROVIDERS_PENDING_POLL_LANE;
+        // After the probe lane, which is faster off the mark and caps at the
+        // same 30s, and before the rate-limit lane, which starts there.
+        const nowMs = Date.now();
+        const hasScheduledRetry = data.providers.some((provider) =>
+          isRetryWorthWatching(provider.managedInstallState, nowMs),
+        );
+        if (hasScheduledRetry) return PROVIDERS_RETRY_SCHEDULED_POLL_LANE;
         const hasLimitedProfile = data.providers.some((provider) =>
           provider.profiles.some(
             (profile) =>
