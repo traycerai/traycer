@@ -7,6 +7,7 @@ import {
   type DevicePollSchedule,
   isDeviceExpired,
   pollDeviceToken,
+  resetPollInterval,
   startDeviceAuthorization,
 } from "../../../shared/auth/device-auth";
 import {
@@ -202,7 +203,9 @@ async function pollUntilAuthorized(
         case "authorized":
           return { token: poll.token, refreshToken: poll.refreshToken };
         case "authorization-pending":
-          // Not approved yet - keep polling at the current interval.
+          // Not approved yet - and the server accepted this poll's pacing, so
+          // decay any earlier slow_down widening back to the base interval.
+          schedule = resetPollInterval(schedule);
           break;
         case "slow-down":
           // Polling too fast - widen the interval (honoring Retry-After).
