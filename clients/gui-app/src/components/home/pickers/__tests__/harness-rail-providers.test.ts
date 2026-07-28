@@ -265,10 +265,7 @@ describe("visibleRailEntries: managed-pack readiness", () => {
         activeProfileIdByHarnessId: NO_ACTIVE_PROFILE_OVERRIDES,
       }).map((entry) => entry.harness.id);
 
-    expect(order(downloadingBehindRunnableBinary)).toEqual([
-      "codex",
-      "claude",
-    ]);
+    expect(order(downloadingBehindRunnableBinary)).toEqual(["codex", "claude"]);
     // ...and a pack that genuinely blocks still sinks, so this is a narrowing
     // rather than a removal.
     expect(order(downloading)).toEqual(["claude", "codex"]);
