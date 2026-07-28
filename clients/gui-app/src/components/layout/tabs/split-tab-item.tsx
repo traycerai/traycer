@@ -1,7 +1,12 @@
 import { memo, useCallback, useMemo, type ReactNode } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import * as m from "motion/react-m";
+import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   HEADER_TAB_SLOT_DND_TYPE,
   getHeaderStripItemSlotDropId,
@@ -18,15 +23,18 @@ import type { SplitSide } from "@/stores/tabs/layout";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import {
+  HeaderTabSeparator,
   SplitMemberChrome,
-  TabChrome,
   TabItem,
 } from "@/components/layout/tabs/tab-strip-item";
 import {
   HEADER_TAB_LAYOUT_TRANSITION,
   TAB_CLASS_BASE,
 } from "@/components/layout/tabs/tab-chrome-tokens";
-import { SplitSlotMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
+import {
+  SplitQuickActionsMenuContent,
+  SplitSlotMenuContent,
+} from "@/components/layout/tabs/tab-strip-context-menu";
 
 export interface SplitTabItemProps {
   readonly item: Extract<HeaderStripItem, { readonly kind: "split" }>;
@@ -34,6 +42,13 @@ export interface SplitTabItemProps {
   readonly leftMemberIndex: number;
   readonly rightMemberIndex: number;
   readonly isActive: boolean;
+  /**
+   * Draws the strip hairline at the GROUP's right edge - the boundary between
+   * this group and whatever strip item follows it. Distinct from the internal
+   * divider between the two halves, which is unconditional and belongs to the
+   * group's own silhouette.
+   */
+  readonly showSeparatorAfter: boolean;
   readonly showDropIndicatorBefore: boolean;
   readonly showDropIndicatorAfter: boolean;
   readonly onClose: (tab: HeaderTab) => void;
@@ -53,11 +68,9 @@ export interface SplitTabItemProps {
 }
 
 /**
- * A split group occupies exactly one ordinary tab's footprint and draws exactly
- * one tab silhouette around both halves. Earlier this was a rounded bordered
- * box holding two members that each drew their own chrome, which nested a
- * second outline inside the first and made a group read as a foreign object in
- * the strip rather than as a tab.
+ * One reorder frame owns the split control and both members. A persistent
+ * accent underline communicates their group membership, while only the
+ * focused member draws ordinary selected-tab chrome.
  */
 export const SplitTabItem = memo(function SplitTabItem(
   props: SplitTabItemProps,
@@ -79,6 +92,8 @@ export const SplitTabItem = memo(function SplitTabItem(
       state.activeHeaderTab !== null &&
       state.activeHeaderTab.stripItemId === props.item.id,
   );
+  const quickActionsTab =
+    memberTab(props.item.left) ?? memberTab(props.item.right);
 
   return (
     <m.div
@@ -91,11 +106,11 @@ export const SplitTabItem = memo(function SplitTabItem(
       aria-label="Split tab group"
       data-testid={`split-tab-group-${props.item.id}`}
       data-active={props.isActive ? "true" : "false"}
-      // HeaderTabMotionFrame's frame at double width: a group holds two titles,
-      // so it earns two tab footprints. Every value here is exactly 2x the
-      // single-tab frame, keeping a group's flex behaviour proportional to an
-      // ordinary tab's instead of a separate rule.
-      className="relative flex w-[28rem] min-w-[240px] max-w-[28rem] flex-[1_1_28rem] items-end [container-type:inline-size]"
+      // Two ordinary tab footprints plus the leading quick-actions control.
+      // The extra width keeps that control from stealing either title's
+      // share. Capped by viewport width (not just the rem ceiling) so the
+      // frame stays fluid on narrow windows instead of pinning to 31rem.
+      className="relative flex w-[min(60vw,31rem)] min-w-[276px] max-w-[min(60vw,31rem)] flex-[1_1_min(60vw,31rem)] items-end [container-type:inline-size]"
     >
       {/*
         The shared silhouette's end caps flare over the outer ~20px, so the
@@ -103,13 +118,18 @@ export const SplitTabItem = memo(function SplitTabItem(
         half's label and focus wash ride on top of the cap curve and read as
         overlapping chrome.
       */}
-      <div className="relative flex h-10 w-full min-w-0 items-center px-[clamp(0.75rem,5%,1.5rem)]">
-        {/*
-          Only the active silhouette is shared. Hover feedback stays per-half
-          (see SplitMemberChrome) because pointing at one side and lighting up
-          both would misreport which side a click lands on.
-        */}
-        {props.isActive ? <TabChrome isActive /> : null}
+      <div className="relative flex h-10 w-full min-w-0 items-center pr-[clamp(0.75rem,5%,1.5rem)] pl-2">
+        {/* Hover and selection feedback stay per-half (see SplitMemberChrome)
+            so the focused member reads like the selected tab in a group. */}
+        {quickActionsTab === null ? null : (
+          <SplitQuickActions
+            splitId={props.item.id}
+            tab={quickActionsTab}
+            focusedSide={props.item.focusedSide}
+            engaged={props.isActive}
+            onSplitCommand={props.onSplitCommand}
+          />
+        )}
         <SplitMember
           member={props.item.left}
           partner={memberTab(props.item.right)}
@@ -131,11 +151,13 @@ export const SplitTabItem = memo(function SplitTabItem(
           pendingSetPinnedEpicIds={props.pendingSetPinnedEpicIds}
           onSetTaskPinned={props.onSetTaskPinned}
         />
-        <span
-          aria-hidden
-          data-testid={`split-tab-divider-${props.item.id}`}
-          className="relative z-20 my-2 w-px shrink-0 self-stretch bg-border/70"
-        />
+        {props.isActive ? null : (
+          <span
+            aria-hidden
+            data-testid={`split-tab-divider-${props.item.id}`}
+            className="relative z-20 my-2 w-px shrink-0 self-stretch bg-border/70"
+          />
+        )}
         <SplitMember
           member={props.item.right}
           partner={memberTab(props.item.left)}
@@ -158,9 +180,145 @@ export const SplitTabItem = memo(function SplitTabItem(
           onSetTaskPinned={props.onSetTaskPinned}
         />
       </div>
+      <SplitGroupUnderline
+        splitId={props.item.id}
+        selectedSide={props.isActive ? props.item.focusedSide : null}
+      />
+      {/*
+        Outside the padded inner row so it lands on the group's own right edge,
+        where an ordinary tab's separator sits - not inset against the trailing
+        half's label.
+      */}
+      <HeaderTabSeparator visible={props.showSeparatorAfter} />
     </m.div>
   );
 });
+
+function SplitGroupUnderline(props: {
+  readonly splitId: string;
+  readonly selectedSide: "left" | "right" | null;
+}): ReactNode {
+  return (
+    <span
+      aria-hidden="true"
+      data-testid={`split-tab-group-underline-${props.splitId}`}
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-px pr-[clamp(0.75rem,5%,1.5rem)] pl-2"
+    >
+      <span
+        data-testid={`split-tab-group-underline-control-${props.splitId}`}
+        className={cn(
+          "relative w-11 shrink-0 rounded-l-full bg-primary",
+          props.selectedSide === "left" &&
+            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-primary",
+        )}
+      />
+      <span
+        data-testid={`split-tab-group-underline-left-${props.splitId}`}
+        className={cn(
+          "relative min-w-0 flex-1 rounded-l-full",
+          props.selectedSide !== "left" && "bg-primary",
+          props.selectedSide === "right" &&
+            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-primary",
+        )}
+      />
+      <span
+        className={cn(
+          "shrink-0",
+          props.selectedSide === null ? "w-px bg-primary" : "w-0",
+        )}
+      />
+      <span
+        data-testid={`split-tab-group-underline-right-${props.splitId}`}
+        className={cn(
+          "relative min-w-0 flex-1 rounded-r-full",
+          props.selectedSide !== "right" && "bg-primary",
+          props.selectedSide === "left" &&
+            "before:absolute before:inset-y-0 before:-left-0.5 before:w-0.5 before:bg-primary",
+        )}
+      />
+    </span>
+  );
+}
+
+function SplitQuickActions(props: {
+  readonly splitId: string;
+  readonly tab: HeaderTab;
+  readonly focusedSide: "left" | "right";
+  readonly engaged: boolean;
+  readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
+}): ReactNode {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          aria-label={`Split view actions, ${props.focusedSide} view focused`}
+          data-testid={`split-quick-actions-${props.splitId}`}
+          className={cn(
+            "relative z-20 mr-1 h-7 w-10 shrink-0 rounded-md hover:bg-accent/60 [-webkit-app-region:no-drag]",
+            props.engaged
+              ? "text-blue-600 hover:text-blue-500 dark:text-blue-300 dark:hover:text-blue-200"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <SplitFocusIcon
+            splitId={props.splitId}
+            focusedSide={props.focusedSide}
+          />
+        </Button>
+      </DropdownMenuTrigger>
+      <SplitQuickActionsMenuContent
+        tab={props.tab}
+        onSplitCommand={props.onSplitCommand}
+      />
+    </DropdownMenu>
+  );
+}
+
+function SplitFocusIcon(props: {
+  readonly splitId: string;
+  readonly focusedSide: "left" | "right";
+}): ReactNode {
+  const leftFocused = props.focusedSide === "left";
+
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      data-testid={`split-focus-indicator-${props.splitId}`}
+      data-focused-side={props.focusedSide}
+      className="size-5"
+    >
+      <rect
+        data-split-pane="left"
+        data-focused={leftFocused ? "true" : "false"}
+        x="3"
+        y="4"
+        width="8"
+        height="16"
+        rx="1.5"
+        fill={leftFocused ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.75"
+      />
+      <rect
+        data-split-pane="right"
+        data-focused={leftFocused ? "false" : "true"}
+        x="13"
+        y="4"
+        width="8"
+        height="16"
+        rx="1.5"
+        fill={leftFocused ? "none" : "currentColor"}
+        stroke="currentColor"
+        strokeWidth="1.75"
+      />
+    </svg>
+  );
+}
 
 function memberTab(member: HeaderStripMember): HeaderTab | null {
   return member.kind === "tab" ? member.tab : null;
@@ -278,7 +436,8 @@ function SplitFillableMember(props: {
       }}
       className={cn(
         TAB_CLASS_BASE,
-        "cursor-pointer gap-1 px-1.5 text-muted-foreground",
+        "cursor-pointer gap-1 text-muted-foreground",
+        props.focused ? "px-5" : "px-1.5",
         "[-webkit-app-region:no-drag]",
         props.focused && "text-foreground",
       )}

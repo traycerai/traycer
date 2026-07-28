@@ -8,6 +8,7 @@ import {
   type Command as CommanderCommand,
 } from "commander";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
+import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
@@ -84,6 +85,7 @@ import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
+import { flushStdio, writeStderr, writeStdout } from "./runner/std-write";
 
 // Helper: register a runner-aware action handler. The runner owns
 // process.exit, so anything composed via `withRunner` participates in
@@ -206,6 +208,12 @@ export function resolveCliVersion(
 // follow-up bug) without spawning a subprocess. The script-mode call at
 // the bottom of this file is the only place that invokes parseAsync.
 export function buildProgram(): Command {
+  return buildProgramWithAgentRoles(readFeatureSettingsSync().agentRoles);
+}
+
+export function buildProgramWithAgentRoles(
+  agentRolesEnabled: boolean,
+): Command {
   const program = new Command();
   program
     .name("traycer")
@@ -217,7 +225,7 @@ export function buildProgram(): Command {
   // `optsWithGlobals()` which is what the runner-aware action handlers
   // rely on.
   addRunnerFlags(program);
-  registerCommands(program);
+  registerCommands(program, agentRolesEnabled);
   // Route commander's own parse failures (missing required option, unknown
   // option/command) through the runner's error contract so `--json`
   // consumers get a structured `result/error` envelope instead of a bare
@@ -244,11 +252,11 @@ function applyRunnerErrorRouting(root: Command): void {
     cmd.exitOverride();
     cmd.configureOutput({
       writeErr: (str) => {
-        if (!argvRequestsJson(root)) process.stderr.write(str);
+        if (!argvRequestsJson(root)) writeStderr(str);
       },
       writeOut: (str) => {
         if (argvRequestsJson(root)) commanderStdoutBuffer += str;
-        else process.stdout.write(str);
+        else writeStdout(str);
       },
     });
     for (const sub of cmd.commands) route(sub);
@@ -301,7 +309,7 @@ function collectValueOptionFlags(root: Command): Set<string> {
 // group and returns void after wiring its commands onto `program`. Keep
 // this split when adding new commands - the body of `registerCommands`
 // stays a single page of declarative registrations.
-function registerCommands(program: Command): void {
+function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerAuthCommands(program);
   registerHostCommands(program);
   registerCliCommands(program);
@@ -309,7 +317,7 @@ function registerCommands(program: Command): void {
   registerCommentsCommands(program);
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
-  registerAgentCommands(program);
+  registerAgentCommands(program, agentRolesEnabled);
   registerMonitorCommand(program);
 }
 
@@ -435,7 +443,7 @@ function registerHostCommands(program: Command): void {
           : { kind: "list", json: opts.json === true },
       );
       if (response.stdout.length > 0) {
-        process.stdout.write(response.stdout);
+        writeStdout(response.stdout);
       }
       process.exitCode = response.exitCode;
     });
@@ -1446,7 +1454,10 @@ function registerWorktreeCommands(program: Command): void {
   );
 }
 
-function registerAgentCommands(program: Command): void {
+function registerAgentCommands(
+  program: Command,
+  agentRolesEnabled: boolean,
+): void {
   const cliSurface = resolveAgentCliSurface(readonlyEnv());
   const readonlyHidden = { hidden: cliSurface === "readonly" };
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
@@ -1744,73 +1755,75 @@ function registerAgentCommands(program: Command): void {
       }),
   );
 
-  const role = agent
-    .command("role")
-    .description(
-      "Claim, list, and relinquish durable Task-local roles for the calling agent",
+  if (agentRolesEnabled) {
+    const role = agent
+      .command("role")
+      .description(
+        "Claim, list, and relinquish durable Task-local roles for the calling agent",
+      );
+
+    withRunner(
+      role
+        .command("claim", readonlyHidden)
+        .description(
+          "Claim a durable role for the calling agent in this Task's role registry",
+        )
+        .requiredOption(
+          "--role <name>",
+          "Role name to claim. Short and memorable; disambiguate against existing roles.",
+        )
+        .requiredOption(
+          "--scope <scope>",
+          "Task-local scope of responsibility this role covers",
+        )
+        .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+        .option(
+          "--agent-id <id>",
+          "Claiming agent (defaults to $TRAYCER_AGENT_ID)",
+        ),
+      (opts) =>
+        buildAgentRoleClaimCommand({
+          epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+          agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+          role: typeof opts.role === "string" ? opts.role : null,
+          scope: typeof opts.scope === "string" ? opts.scope : null,
+        }),
     );
 
-  withRunner(
-    role
-      .command("claim", readonlyHidden)
-      .description(
-        "Claim a durable role for the calling agent in this Task's role registry",
-      )
-      .requiredOption(
-        "--role <name>",
-        "Role name to claim. Short and memorable; disambiguate against existing roles.",
-      )
-      .requiredOption(
-        "--scope <scope>",
-        "Task-local scope of responsibility this role covers",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--agent-id <id>",
-        "Claiming agent (defaults to $TRAYCER_AGENT_ID)",
-      ),
-    (opts) =>
-      buildAgentRoleClaimCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        agentId: typeof opts.agentId === "string" ? opts.agentId : null,
-        role: typeof opts.role === "string" ? opts.role : null,
-        scope: typeof opts.scope === "string" ? opts.scope : null,
-      }),
-  );
+    withRunner(
+      role
+        .command("list")
+        .description(
+          "List the roles currently claimed in this Task (your account's live agents only)",
+        )
+        .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
+      (opts) =>
+        buildAgentRoleListCommand({
+          epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        }),
+    );
 
-  withRunner(
-    role
-      .command("list")
-      .description(
-        "List the roles currently claimed in this Task (your account's live agents only)",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
-    (opts) =>
-      buildAgentRoleListCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-      }),
-  );
-
-  withRunner(
-    role
-      .command("relinquish", readonlyHidden)
-      .description("Relinquish a role claim held by the calling agent")
-      .requiredOption(
-        "--claim-id <id>",
-        "Claim id to relinquish (see 'traycer agent role list')",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--agent-id <id>",
-        "Relinquishing agent (defaults to $TRAYCER_AGENT_ID)",
-      ),
-    (opts) =>
-      buildAgentRoleRelinquishCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        agentId: typeof opts.agentId === "string" ? opts.agentId : null,
-        claimId: typeof opts.claimId === "string" ? opts.claimId : null,
-      }),
-  );
+    withRunner(
+      role
+        .command("relinquish", readonlyHidden)
+        .description("Relinquish a role claim held by the calling agent")
+        .requiredOption(
+          "--claim-id <id>",
+          "Claim id to relinquish (see 'traycer agent role list')",
+        )
+        .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+        .option(
+          "--agent-id <id>",
+          "Relinquishing agent (defaults to $TRAYCER_AGENT_ID)",
+        ),
+      (opts) =>
+        buildAgentRoleRelinquishCommand({
+          epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+          agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+          claimId: typeof opts.claimId === "string" ? opts.claimId : null,
+        }),
+    );
+  }
 
   withRunner(
     agent
@@ -1994,11 +2007,12 @@ function registerMonitorCommand(program: Command): void {
         { exitCode: 1 },
         errorFromUnknown(err),
       );
-      process.stderr.write(
+      writeStderr(
         `[traycer monitor] fatal: ${
           err instanceof Error ? err.message : String(err)
         }\n`,
       );
+      await flushStdio();
       process.exit(1);
     }
   });
@@ -2020,7 +2034,7 @@ if (isTraycerCliEntrypoint(entryArgv)) {
     environment: config.environment,
     argvLength: process.argv.length,
   });
-  program.parseAsync(process.argv).catch((err) => {
+  program.parseAsync(process.argv).catch(async (err) => {
     if (err instanceof CommanderError) {
       const jsonMode = argvRequestsJson(program);
       // Help (`--help`) and version (`--version`) flow through exitOverride
@@ -2041,8 +2055,11 @@ if (isTraycerCliEntrypoint(entryArgv)) {
             data: { output: commanderStdoutBuffer.trimEnd() },
             timestamp: new Date().toISOString(),
           };
-          process.stdout.write(`${JSON.stringify(event)}\n`);
+          writeStdout(`${JSON.stringify(event)}\n`);
         }
+        // `--help` under `--json` wraps the whole help text in one line;
+        // long help easily clears the 64 KiB pipe buffer. See std-write.ts.
+        await flushStdio();
         process.exit(0);
       }
       // Parse failure. In --json mode emit the runner's NDJSON error
@@ -2068,8 +2085,9 @@ if (isTraycerCliEntrypoint(entryArgv)) {
           },
           timestamp: new Date().toISOString(),
         };
-        process.stdout.write(`${JSON.stringify(event)}\n`);
+        writeStdout(`${JSON.stringify(event)}\n`);
       }
+      await flushStdio();
       process.exit(err.exitCode || 1);
     }
     const error = errorFromUnknown(err);
@@ -2090,12 +2108,13 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         },
         timestamp: new Date().toISOString(),
       };
-      process.stdout.write(`${JSON.stringify(event)}\n`);
+      writeStdout(`${JSON.stringify(event)}\n`);
     } else {
-      process.stderr.write(
+      writeStderr(
         `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
       );
     }
+    await flushStdio();
     process.exit(1);
   });
 }
@@ -2127,7 +2146,7 @@ function exitAfterUnhandledFailure(
   const error = errorFromUnknown(cause);
   logger.error(message, { exitCode: 1 }, error);
   Sentry.captureException(cause);
-  process.stderr.write(
+  writeStderr(
     `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
   );
   void Sentry.flush(2000)
@@ -2137,6 +2156,7 @@ function exitAfterUnhandledFailure(
         errorMessage: errorFromUnknown(flushErr).message,
       });
     })
+    .then(() => flushStdio())
     .finally(() => {
       process.exit(1);
     });

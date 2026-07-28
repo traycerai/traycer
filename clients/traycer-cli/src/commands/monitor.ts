@@ -35,6 +35,7 @@ import {
 } from "../host/pid-metadata";
 import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
+import { writeStderr, writeStdout } from "../runner/std-write";
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
@@ -590,7 +591,7 @@ function printInboxMessage(item: AgentInboxMessage): void {
     reply: item.reply,
     body: item.prompt,
   });
-  process.stdout.write(`${output}\n`);
+  writeStdout(`${output}\n`);
 }
 
 /**
@@ -644,7 +645,7 @@ function printInboxNotice(notice: AgentInboxNotice): void {
     `[traycer inbox] based on your judgment decide how to proceed — read transcript, follow up, launch a new agent, etc.`,
     "",
   ];
-  process.stdout.write(`${lines.join("\n")}\n`);
+  writeStdout(`${lines.join("\n")}\n`);
 }
 
 /**
@@ -655,7 +656,7 @@ function printInboxNotice(notice: AgentInboxNotice): void {
 function printRoleAwareness(event: RoleAwarenessEvent): void {
   const verb =
     event.kind === "role-claimed" ? "claimed role" : "relinquished role";
-  process.stdout.write(
+  writeStdout(
     `[traycer roles] agent ${event.claim.agentId} ${verb} "${event.claim.role}" (scope: ${event.claim.scope})\n`,
   );
 }
@@ -693,11 +694,11 @@ function printReceiverCancelledNotice(
     `[traycer inbox] if you are working on the user's behalf, wait for their next instruction; if you are working on behalf of another agent, let that agent know`,
     "",
   ];
-  process.stdout.write(`${lines.join("\n")}\n`);
+  writeStdout(`${lines.join("\n")}\n`);
 }
 
 function diag(message: string): void {
-  process.stderr.write(`[traycer monitor] ${message}\n`);
+  writeStderr(`[traycer monitor] ${message}\n`);
 }
 
 /**

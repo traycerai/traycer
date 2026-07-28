@@ -10,6 +10,7 @@ import {
   readHostLoginItemStatus,
   registerHostLoginItem,
   unregisterHostLoginItem,
+  type HostLoginItemStatus,
   type RegisterHostLoginItemResult,
 } from "../app/host-login-item";
 import { resolveBundledCliPath } from "../cli/cli-discovery";
@@ -631,15 +632,25 @@ export interface HostControllerOptions {
 /**
  * `runLockedMacActivationCycle`'s desktop-locked closure result (fixup A7).
  * `"terminal"` short-circuits with a final outcome decided under the lock
- * (no host installed, busy, registration failure). `"registered"` carries
- * just enough state for the CALLER to finish the choreography (stamp-runtime
- * CAS + readiness wait) AFTER the lock has released - those steps must never
- * run while still holding it, see the comment at the return site.
+ * (no host installed, busy). `"registered"` carries just enough state for
+ * the CALLER to finish the choreography (stamp-runtime CAS + readiness
+ * wait) AFTER the lock has released - those steps must never run while
+ * still holding it, see the comment at the return site.
+ * `"register-failed"` is the SMAppService refusal
+ * (`not-found`/`not-registered`/`not-supported`) - also resolved after the
+ * lock releases, because its recovery spawns the CLI, which re-acquires
+ * this same lock (lock rule 3).
  */
 type LockedMacActivationStep =
   | {
       readonly phase: "terminal";
       readonly outcome: MutationOutcome<{ readonly activated: boolean }>;
+    }
+  | {
+      readonly phase: "register-failed";
+      readonly status: HostLoginItemStatus;
+      readonly prePid: number | null;
+      readonly expectedRuntimeVersion: string | null;
     }
   | {
       readonly phase: "registered";
@@ -1092,6 +1103,125 @@ export class HostController {
     }
   }
 
+  // The three `HostLoginItemStatus` values that mean SMAppService has
+  // definitively failed to register the LaunchAgent (as opposed to
+  // `requires-approval`, which means it IS registered and only needs the
+  // user's own toggle) - the CLI's raw-LaunchAgent takeover can recover from
+  // exactly these. Single source of truth for the three call sites below so
+  // a future `HostLoginItemStatus` member can't drift between them.
+  private isCliTakeoverRecoverableStatus(
+    status: RegisterHostLoginItemResult,
+  ): status is "not-registered" | "not-found" | "not-supported" {
+    return (
+      status === "not-registered" ||
+      status === "not-found" ||
+      status === "not-supported"
+    );
+  }
+
+  // Last-rung recovery for a macOS register cycle whose SMAppService calls
+  // failed (`not-found` / `not-registered` / `not-supported`) AFTER the
+  // cycle's own bootout already tore down the loaded agent. Field RCA
+  // (2026-07-28): SMAppService can answer `not-found` for a byte-correct
+  // in-bundle plist for the remainder of the app process's life (the BTM
+  // record's identity keyed to a previous build), so re-running the same
+  // cycle - which is all the gate card's Retry does - can never recover,
+  // and the machine is stranded with NOTHING registered and no way out.
+  //
+  // The CLI's raw LaunchAgent (`host service install --takeover`) does not
+  // go through SMAppService/BTM at all: takeover cooperatively stops a
+  // still-loaded agent first (aborting on live busy work, proceeding when
+  // it is unreachable), is a no-op when the agent is already gone (this
+  // path's common case - the failed cycle booted it out), and the desktop
+  // re-retires the CLI registration on its next healthy SMAppService
+  // cycle - so the fallback is temporary by construction.
+  //
+  // Must be called OUTSIDE `withDesktopCliLock` sections: the spawned CLI
+  // re-acquires that same lock (lock rule 3: CLI-locked and desktop-locked
+  // sections are sequenced, not nested).
+  private async recoverRegistrationViaCliTakeover(args: {
+    readonly failedStatus: HostLoginItemStatus;
+    readonly prePid: number | null;
+    readonly expectedRuntimeVersion: string | null;
+  }): Promise<
+    | { readonly recovered: true; readonly version: string | null }
+    | {
+        readonly recovered: false;
+        // The takeover's cooperative stop was DENIED by a live host with
+        // work in progress - by the takeover contract that aborts rather
+        // than trample the work, and a later retry succeeds once the work
+        // drains. Callers resolve this as a deferred outcome, not a
+        // failure: surfacing it as an error invites issue reports for a
+        // self-recovering condition (field RCA 2026-07-28 - the very
+        // restart that validated this fallback in the field toasted
+        // "Report issue" while the host was healthy and protecting work).
+        readonly hostBusy: boolean;
+        readonly message: string;
+      }
+  > {
+    // SMAppService is unusable for the rest of this session - quarantine the
+    // pending-revision refresh so it cannot boot the fallback host out for a
+    // plist revision it has just proven it cannot land. The on-disk marker
+    // deliberately survives for the next launch's fresh session.
+    this.pendingRevisionRefreshQuarantined = true;
+    log.warn(
+      "[host-controller] SMAppService registration failed - falling back to the CLI-owned LaunchAgent",
+      { status: args.failedStatus },
+    );
+    let raw: unknown;
+    try {
+      raw = await this.runBundled<unknown>([
+        "host",
+        "service",
+        "install",
+        "--takeover",
+        ...this.devServiceInstallExtras(),
+      ]);
+    } catch (err) {
+      if (err instanceof TraycerCliError && err.code === HOST_BUSY_CODE) {
+        log.info(
+          "[host-controller] CLI takeover declined - the running host has work in progress",
+          { status: args.failedStatus },
+        );
+        return {
+          recovered: false,
+          hostBusy: true,
+          message:
+            "The host has work in progress, so it was not restarted. " +
+            "Try again once the work completes.",
+        };
+      }
+      return {
+        recovered: false,
+        hostBusy: false,
+        message: `Failed to register the host login item (status=${args.failedStatus}), and the fallback service registration failed: ${describeError(err)} Run 'traycer host service uninstall' and relaunch Traycer, or run 'traycer host doctor' to recover.`,
+      };
+    }
+    const result = parseServiceStartResult(raw);
+    try {
+      await this.completeServiceStart(
+        args.prePid,
+        result.runtimeWasNull ? result.installGeneration : null,
+        result.runtimeVersion ?? args.expectedRuntimeVersion,
+      );
+    } catch (err) {
+      return {
+        recovered: false,
+        hostBusy: false,
+        message: `Failed to register the host login item (status=${args.failedStatus}); the fallback service was registered but the host did not come up: ${describeError(err)}`,
+      };
+    }
+    const version = await readRunningRuntimeVersion(
+      this.layout,
+      this.reachabilityProbe,
+    );
+    log.info(
+      "[host-controller] CLI-owned LaunchAgent fallback recovered the host",
+      { status: args.failedStatus, version },
+    );
+    return { recovered: true, version };
+  }
+
   // Success paths which start, cycle, or otherwise claim a live host publish
   // through this one gate. A service manager acknowledgement or a readiness
   // handshake is not sufficient by itself: the renderer-facing snapshot must
@@ -1130,6 +1260,19 @@ export class HostController {
   ): Promise<MutationOutcome<T>> {
     await this.reloadAfterServiceCycleFailure();
     return { kind: "installed-not-converged", message };
+  }
+
+  // Deferred sibling of `failedAfterServiceCycle`, for the takeover's
+  // host-busy denial: the same snapshot healing applies (the cycle may
+  // have cleared the renderer-facing snapshot, and a busy denial proves
+  // the host is alive and publishing pid.json), but the outcome resolves
+  // `deferred` so restart surfaces present "not restarted, retry later"
+  // as information rather than a reportable failure.
+  private async deferredAfterServiceCycle<T>(
+    message: string,
+  ): Promise<MutationOutcome<T>> {
+    await this.reloadAfterServiceCycleFailure();
+    return { kind: "deferred", message };
   }
 
   // ---- Shared locked macOS SMAppService activation cycle ------------------
@@ -1314,17 +1457,18 @@ export class HostController {
             ),
           };
         }
-        if (
-          registerResult === "not-registered" ||
-          registerResult === "not-found" ||
-          registerResult === "not-supported"
-        ) {
+        if (this.isCliTakeoverRecoverableStatus(registerResult)) {
+          // Not terminal: this cycle's own bootout already tore the loaded
+          // agent down, so failing here would strand the machine with no
+          // registration at all and a Retry that re-runs the same doomed
+          // SMAppService call in the same poisoned session. Recovery spawns
+          // the CLI, which re-acquires the lock this closure holds (lock
+          // rule 3), so hand the failure to the post-lock fallback.
           return {
-            phase: "terminal",
-            outcome: {
-              kind: "failed",
-              message: `Failed to register the host login item (status=${registerResult}).`,
-            },
+            phase: "register-failed",
+            status: registerResult,
+            prePid,
+            expectedRuntimeVersion: record.runtimeVersion,
           };
         }
         // Fixup A7: the desktop lock is released as soon as this closure
@@ -1351,6 +1495,19 @@ export class HostController {
     const step = outcome.result;
     if (step.phase === "terminal") {
       return step.outcome;
+    }
+    if (step.phase === "register-failed") {
+      const recovery = await this.recoverRegistrationViaCliTakeover({
+        failedStatus: step.status,
+        prePid: step.prePid,
+        expectedRuntimeVersion: step.expectedRuntimeVersion,
+      });
+      if (!recovery.recovered) {
+        return recovery.hostBusy
+          ? this.deferredAfterServiceCycle(recovery.message)
+          : this.failedAfterServiceCycle(recovery.message);
+      }
+      return { kind: "ok", value: { activated: true } };
     }
     const {
       registerResult,
@@ -1627,15 +1784,32 @@ export class HostController {
       this.pendingRevisionRefreshQuarantined = true;
       return { kind: "failed", message: approvalRequiredMessage() };
     }
-    if (status !== "enabled") {
+    if (this.isCliTakeoverRecoverableStatus(status)) {
       this.pendingRevisionRefreshQuarantined = true;
       log.warn(
         "[host-controller] pending LaunchAgent revision refresh did not enable the agent",
         { status },
       );
+      // This cycle just booted out a host that was verified reachable and
+      // idle moments before - a bare failure here strands the machine with
+      // nothing running AND nothing registered (field RCA 2026-07-28: the
+      // installer restarted the host, this refresh tore it down,
+      // SMAppService answered `not-found`, and the session was locked
+      // out). Restore service via the CLI-owned fallback; the pending
+      // marker deliberately survives for the next launch.
+      const recovery = await this.recoverRegistrationViaCliTakeover({
+        failedStatus: status,
+        prePid,
+        expectedRuntimeVersion,
+      });
+      if (!recovery.recovered) {
+        return recovery.hostBusy
+          ? this.deferredAfterServiceCycle(recovery.message)
+          : this.failedAfterServiceCycle(recovery.message);
+      }
       return {
-        kind: "failed",
-        message: `The host's macOS login item could not be enabled (status: ${status}). Open Doctor or run 'traycer host doctor' to recover.`,
+        kind: "ok",
+        value: { running: true, version: recovery.version ?? currentVersion },
       };
     }
     const readiness = await waitForHostReady(
@@ -2657,6 +2831,19 @@ export class HostController {
               );
             } catch (err) {
               return this.failedAfterServiceCycle(err);
+            }
+            return { kind: "ok", value: { registered: true } };
+          }
+          if (this.isCliTakeoverRecoverableStatus(registration.status)) {
+            const recovery = await this.recoverRegistrationViaCliTakeover({
+              failedStatus: registration.status,
+              prePid: registration.prePid,
+              expectedRuntimeVersion: registration.expectedRuntimeVersion,
+            });
+            if (!recovery.recovered) {
+              return recovery.hostBusy
+                ? this.deferredAfterServiceCycle(recovery.message)
+                : this.failedAfterServiceCycle(recovery.message);
             }
             return { kind: "ok", value: { registered: true } };
           }

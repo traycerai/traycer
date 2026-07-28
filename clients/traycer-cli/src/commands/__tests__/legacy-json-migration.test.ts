@@ -52,16 +52,25 @@ beforeEach(() => {
   process.env.USERPROFILE = workHome;
   stdoutChunks = [];
   stderrChunks = [];
+  // `write`'s completion callback is load-bearing, not decoration: the
+  // runner awaits it (via `flushStdio`) before `process.exit` so a terminal
+  // NDJSON line larger than the 64 KiB pipe buffer is not truncated on the
+  // way to Desktop. A stub that swallows the callback would leave that
+  // flush waiting on a write that never reports completion, so invoke it.
   stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
     chunk: string | Uint8Array,
+    callback: (() => void) | undefined,
   ) => {
     stdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    if (callback !== undefined) callback();
     return true;
   }) as never);
   stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(((
     chunk: string | Uint8Array,
+    callback: (() => void) | undefined,
   ) => {
     stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    if (callback !== undefined) callback();
     return true;
   }) as never);
   // The runner owns process.exit - translate to a throw so the test

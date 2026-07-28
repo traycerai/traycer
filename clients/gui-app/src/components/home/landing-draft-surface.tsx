@@ -11,6 +11,7 @@ import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-
 import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
 import { useLandingDraftShell } from "@/stores/home/landing-draft-store";
+import { LandingTerminalPaneAnchor } from "@/components/home/terminal-panel/landing-terminal-host";
 
 /**
  * Route-independent landing body. Its exact draft runtime remains the T6
@@ -86,7 +87,9 @@ export function LandingDraftSurface() {
             {!systemModalOpen && activity.visible ? (
               <EpicsListPanel
                 variant="embedded"
+                className={undefined}
                 onSelectEpic={null}
+                onOpenItem={null}
                 routeSearch={null}
                 historyNowMs={null}
                 autoFocusSearch={false}
@@ -95,6 +98,9 @@ export function LandingDraftSurface() {
           </div>
         </div>
       </div>
+      {draftId === null ? null : (
+        <LandingTerminalPaneAnchor draftId={draftId} />
+      )}
     </div>
   );
 }

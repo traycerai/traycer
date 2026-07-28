@@ -96,6 +96,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type { ClosedTilePayload } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import type {
   EpicCanvasState,
@@ -143,6 +144,12 @@ interface CanvasResourceSnapshot {
   readonly openTabOrder: readonly string[];
   readonly tabsById: Readonly<Record<string, EpicViewTab | undefined>>;
   readonly canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>;
+  readonly closedTilePayloadsByTabId: Readonly<
+    Record<
+      string,
+      Readonly<Record<string, ClosedTilePayload | undefined>> | undefined
+    >
+  >;
   readonly artifactTreeByEpicId: Readonly<
     Record<string, readonly EpicNodeRecord[] | undefined>
   >;
@@ -156,8 +163,21 @@ interface OpenOwnerLocation {
   readonly ref: EpicNodeRef;
 }
 
+/**
+ * A closed tile whose payload is preserved in `closedTilePayloadsByTabId`.
+ * The preserved ref carries everything needed to reopen the tile (for a
+ * terminal: name, titleSource, cwd - none of which the resource wire
+ * snapshot has), so an owner without a live tile stays clickable, matching
+ * how notification clicks reopen closed terminal/agent tiles.
+ */
+interface ClosedOwnerTile {
+  readonly tabId: string;
+  readonly node: EpicNodeRef;
+}
+
 interface CanvasResourceIndex {
   readonly locationByOwner: ReadonlyMap<string, OpenOwnerLocation>;
+  readonly closedTileByOwner: ReadonlyMap<string, ClosedOwnerTile>;
   readonly tabOrderByOwner: ReadonlyMap<string, number>;
 }
 
@@ -172,6 +192,7 @@ interface OwnerDisplayRow {
   readonly canOpen: boolean;
   readonly tabOrder: number;
   readonly location: OpenOwnerLocation | null;
+  readonly closedTile: ClosedOwnerTile | null;
   readonly record: EpicNodeRecord | null;
   readonly treeCpuPercent: number;
   readonly treeRssBytes: number;
@@ -794,6 +815,7 @@ function useResourceCanvasSnapshot(): CanvasResourceSnapshot {
       openTabOrder: state.openTabOrder,
       tabsById: state.tabsById,
       canvasByTabId: state.canvasByTabId,
+      closedTilePayloadsByTabId: state.closedTilePayloadsByTabId,
       artifactTreeByEpicId: state.artifactTreeByEpicId,
     })),
   );
@@ -1452,7 +1474,7 @@ function OwnerTreeRow(props: {
   );
   const label = ownerLabel(
     props.row.snapshot,
-    props.row.location,
+    ownerTileRef(props.row.location, props.row.closedTile),
     props.row.record,
     liveArtifactTitle,
   );
@@ -1877,6 +1899,7 @@ function buildTaskRows(input: {
         snapshot.owner.ownerId,
       );
       const location = input.canvasIndex.locationByOwner.get(key) ?? null;
+      const closedTile = input.canvasIndex.closedTileByOwner.get(key) ?? null;
       const record = input.recordByOwner.get(key) ?? null;
       const processRows = buildProcessRows(
         snapshot.processes,
@@ -1886,11 +1909,17 @@ function buildTaskRows(input: {
       );
       return {
         snapshot,
-        label: ownerLabel(snapshot, location, record, null),
-        canOpen: canOpenOwner(snapshot, location, record),
+        label: ownerLabel(
+          snapshot,
+          ownerTileRef(location, closedTile),
+          record,
+          null,
+        ),
+        canOpen: canOpenOwner(snapshot, location, closedTile, record),
         tabOrder:
           input.canvasIndex.tabOrderByOwner.get(key) ?? Number.MAX_SAFE_INTEGER,
         location,
+        closedTile,
         record,
         treeCpuPercent: processRows.treeCpuPercent,
         treeRssBytes: processRows.treeRssBytes,
@@ -1968,7 +1997,29 @@ function buildCanvasResourceIndex(
     }
   });
 
-  return { locationByOwner, tabOrderByOwner };
+  // A tile closed out of a tab's canvas keeps its payload in
+  // `closedTilePayloadsByTabId`; index those refs so the owner row can reopen
+  // the tile (terminals have no artifact record, so this preserved ref is the
+  // only way to reconstruct their tile).
+  const closedTileByOwner = new Map<string, ClosedOwnerTile>();
+  for (const tabId of indexedTabIds) {
+    const tab = canvas.tabsById[tabId];
+    if (tab === undefined) continue;
+    for (const payload of Object.values(
+      canvas.closedTilePayloadsByTabId[tabId] ?? {},
+    )) {
+      const node = payload?.node;
+      if (node === undefined || !isOwnerNodeRef(node)) continue;
+      const ownerKind = resourceOwnerKindForRef(node);
+      if (ownerKind === null) continue;
+      const key = ownerKey(tab.epicId, ownerKind, node.id);
+      if (!closedTileByOwner.has(key)) {
+        closedTileByOwner.set(key, { tabId, node });
+      }
+    }
+  }
+
+  return { locationByOwner, closedTileByOwner, tabOrderByOwner };
 }
 
 function buildRecordByOwner(
@@ -2085,6 +2136,30 @@ function openResourceOwner(args: {
   }
 
   const snapshot = args.row.snapshot;
+
+  // No live tile, but the tile's payload survived its close (same store the
+  // notification reopen path reads). Reopen the preserved ref in its original
+  // tab - `setActiveTab` reinserts a hidden tab into the strip, and the
+  // open-tile preparation re-adds the tile to that tab's canvas. This is the
+  // only reopen path for terminals, whose refs (cwd, title) cannot be rebuilt
+  // from the resource snapshot or an artifact record.
+  const closedTile = args.row.closedTile;
+  if (closedTile !== null) {
+    commitOwnerFocus({
+      epicId: snapshot.owner.epicId,
+      tabId: closedTile.tabId,
+      name: undefined,
+      focus: focusForOwner(snapshot),
+      preparation: { kind: "open-tile", node: closedTile.node },
+      navigate: args.navigate,
+      navigateNested: args.navigateNested,
+      activeEpicId: args.activeEpicId,
+      activeTabId: args.activeTabId,
+      desktopNestedFocusEnabled: args.desktopNestedFocusEnabled,
+    });
+    return true;
+  }
+
   if (
     snapshot.owner.kind !== "chat" &&
     snapshot.owner.kind !== "terminal-agent"
@@ -2286,18 +2361,28 @@ function harnessProviderSubtitle(
   return activeProcessName === null ? base : `${base} · ${activeProcessName}`;
 }
 
+/**
+ * The owner's tile ref for labelling - the live canvas tile when one is
+ * open, otherwise the preserved closed-tile payload's ref, so a closed
+ * terminal keeps its manually-set title readable after the tile leaves the
+ * canvas.
+ */
+function ownerTileRef(
+  location: OpenOwnerLocation | null,
+  closedTile: ClosedOwnerTile | null,
+): EpicNodeRef | null {
+  return location?.ref ?? closedTile?.node ?? null;
+}
+
 function ownerLabel(
   snapshot: OwnerResourceSnapshotWireV13,
-  location: OpenOwnerLocation | null,
+  ref: EpicNodeRef | null,
   record: EpicNodeRecord | null,
   liveArtifactTitle: string | null,
 ): string {
   if (snapshot.owner.kind === "terminal") {
-    if (
-      location?.ref.type === "terminal" &&
-      location.ref.titleSource === "manual"
-    ) {
-      return location.ref.name;
+    if (ref?.type === "terminal" && ref.titleSource === "manual") {
+      return ref.name;
     }
     return terminalSessionTitle({
       title: null,
@@ -2309,12 +2394,12 @@ function ownerLabel(
     // to "Untitled agent" (this light surface carries no first-user-message to
     // derive from).
     return displayTitle(
-      liveArtifactTitle || location?.ref.name || record?.name || "",
+      liveArtifactTitle || ref?.name || record?.name || "",
       "agent",
     );
   }
   if (liveArtifactTitle !== null) return liveArtifactTitle;
-  if (location !== null) return location.ref.name;
+  if (ref !== null) return ref.name;
   if (record !== null) return record.name;
   return ownerKindLabel(snapshot.owner.kind);
 }
@@ -2322,9 +2407,11 @@ function ownerLabel(
 function canOpenOwner(
   snapshot: OwnerResourceSnapshotWireV13,
   location: OpenOwnerLocation | null,
+  closedTile: ClosedOwnerTile | null,
   record: EpicNodeRecord | null,
 ): boolean {
   if (location !== null) return true;
+  if (closedTile !== null) return true;
   if (snapshot.owner.kind === "terminal") return false;
   return record !== null;
 }

@@ -6,6 +6,7 @@ import type {
   ActivateInstalledOk,
   ApplyStagedOk,
   BusyContinuation,
+  HostRestartRequestResult,
   HostTrayCommand,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -13,6 +14,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
 import { activateTabIntent } from "@/lib/tab-navigation";
@@ -153,7 +155,7 @@ export function HostTrayCommandListener() {
     );
   };
 
-  const restartMutation = useMutation<void>({
+  const restartMutation = useMutation<HostRestartRequestResult>({
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => {
       if (management === null) {
@@ -161,9 +163,16 @@ export function HostTrayCommandListener() {
       }
       return management.restartHost();
     },
-    onSuccess: () => {
-      toast.success("Host restart requested");
+    onSuccess: (result) => {
       setPendingRestart(false);
+      // `declined` resolves (rather than rejecting) because it is not an
+      // error - the host deliberately was not restarted and a later retry
+      // succeeds on its own; see `toastHostRestartDeclined`.
+      if (result.kind === "declined") {
+        toastHostRestartDeclined(result.message);
+        return;
+      }
+      toast.success("Host restart requested");
       if (management !== null) {
         void queryClient.invalidateQueries({
           queryKey: runnerQueryKeys.hostInstalledRecord(management),

@@ -1918,7 +1918,9 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(parseText(sockets[0].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      // `@1.1` is the newest installed minor of the feed (the arm carrying
+      // `host.operation.finished`); the mirrored handshake negotiates it.
+      schemaVersion: { major: 1, minor: 1 },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,
@@ -1951,7 +1953,9 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(parseText(sockets[1].socket.textSent[1])).toEqual({
       kind: "subscribe",
       method: "host.notifications.feed.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      // `@1.1` is the newest installed minor of the feed (the arm carrying
+      // `host.operation.finished`); the mirrored handshake negotiates it.
+      schemaVersion: { major: 1, minor: 1 },
       params: {
         initialAttentionLimit: 50,
         initialRecentLimit: 50,

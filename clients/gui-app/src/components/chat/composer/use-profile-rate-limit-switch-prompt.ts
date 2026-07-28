@@ -26,6 +26,9 @@ export interface ProfileRateLimitDestination {
   /** Normalized for composer-selection semantics: `null` is the ambient
    * profile even though its wire id is the literal ambient sentinel. */
   readonly profileId: string | null;
+  /** Whether the user may deliberately choose this destination. An
+   * authenticated profile with unknown usage remains selectable, but is never
+   * promoted to `primaryTarget` until a rate-limit read proves it is better. */
   readonly selectable: boolean;
 }
 
@@ -49,8 +52,9 @@ interface VisibleProfileRateLimitPrompt {
   /** Every other provider profile in the host's stable order. Rows that
    * are unavailable for switching stay here so the menu can explain why. */
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
-  /** First selectable destination in provider order. Usage is never used
-   * to rank this default action. */
+  /** First proven-better destination in provider order. Unknown-usage
+   * profiles may be selectable from the menu, but never become this confident
+   * one-click recommendation. Usage is not used to rank eligible targets. */
   readonly primaryTarget: ProfileRateLimitDestination | null;
   /** Set only when `primaryTarget` is null: the first authenticated
    * destination with UNKNOWN rate-limit state, for the banner's single
@@ -100,15 +104,12 @@ function findLimitedProfile(
 }
 
 /**
- * A destination is worth suggesting only when its rate-limit state is KNOWN
- * and, for the selected model, sits in a strictly better tier than the
- * limited current profile (not limited < near_limit < hard_limit) -
- * same-or-worse is no escape. A destination that is limited only on a family
- * the selected model doesn't use stays selectable. Unknown (never read,
- * stale, or failed-probe gauge) is incomparable, NOT weakly healthy: absence
- * of evidence must never power the confident one-click switch, no matter how
- * limited the current profile is. Unknown candidates are instead surfaced
- * through `probeTarget` for a single automatic freshness check.
+ * A user may deliberately choose an authenticated destination unless it is
+ * known to be no better for the selected model. Unknown (never read, stale,
+ * or failed-probe gauge) is therefore a menu option, but remains incomparable
+ * rather than weakly healthy; `recommendedDestination` separately prevents it
+ * from powering the confident one-click switch. A destination limited only
+ * on a family the selected model does not use stays selectable.
  */
 function selectableDestination(
   profile: ProviderProfile,
@@ -118,6 +119,21 @@ function selectableDestination(
   const assessment = assessProfileRateLimit(profile, selectedModel);
   return (
     profile.auth.status === "authenticated" &&
+    (!assessment.known ||
+      rateLimitSeverityTier(assessment.severity) <
+        rateLimitSeverityTier(currentSeverity))
+  );
+}
+
+/** The stricter confidence gate for the banner's one-click recommendation. */
+function recommendedDestination(
+  destination: ProfileRateLimitDestination,
+  selectedModel: ModelOption | null,
+  currentSeverity: ProfileRateLimitSeverity,
+): boolean {
+  if (!destination.selectable) return false;
+  const assessment = assessProfileRateLimit(destination.profile, selectedModel);
+  return (
     assessment.known &&
     rateLimitSeverityTier(assessment.severity) <
       rateLimitSeverityTier(currentSeverity)
@@ -144,6 +160,28 @@ function findProbeTarget(
         !assessProfileRateLimit(destination.profile, selectedModel).known,
     ) ?? null
   );
+}
+
+/**
+ * The banner's default menu preview target, before any hover/keyboard
+ * preview overrides it. `profileId` is the commit id, which is `null` for
+ * the ambient profile - a plain `??` chain on `.profileId` would treat a
+ * legitimately-ambient primary/first-selectable target as absent and fall
+ * through to the wrong destination. Each candidate is therefore null-checked
+ * on the destination object itself, not its `profileId`.
+ */
+export function initialPreviewProfileId(
+  primaryTarget: ProfileRateLimitDestination | null,
+  current: ProviderProfile,
+  destinations: ReadonlyArray<ProfileRateLimitDestination>,
+): string | null {
+  if (primaryTarget !== null) return primaryTarget.profileId;
+  const firstSelectable = destinations.find(
+    (destination) => destination.selectable,
+  );
+  return firstSelectable !== undefined
+    ? firstSelectable.profileId
+    : profileCommitId(current);
 }
 
 function destinationsForLimitedProfile(
@@ -208,7 +246,13 @@ function warningProjection(input: {
     limited.severity,
   );
   const primaryTarget =
-    destinations.find((destination) => destination.selectable) ?? null;
+    destinations.find((destination) =>
+      recommendedDestination(
+        destination,
+        input.selectedModel,
+        limited.severity,
+      ),
+    ) ?? null;
   const probeTarget =
     primaryTarget === null
       ? findProbeTarget(destinations, input.selectedModel)
@@ -233,9 +277,31 @@ function warningProjection(input: {
         : matchingScopes
             .map((scope) => `${scope.family ?? ""}\u0000${scope.severity}`)
             .toSorted(),
+      // Destination identity: each destination contributes {profileId,
+      // recommended} rather than mere membership in the selectable set. A
+      // probe that proves an unknown destination strictly better flips its
+      // `recommended` flag false -> true, changing the key and re-arming the
+      // dismissal - the banner just gained a confident one-click switch. A
+      // probe that instead proves it known-but-not-better only drops the
+      // destination out of the selectable set; `recommended` was false and
+      // stays false, so the key is unchanged - no fresh warning episode, and
+      // (because the composer keys the banner by this key) no remount to
+      // re-arm the banner's single automatic probe onto the next unknown
+      // profile. A destination that appears or disappears entirely still
+      // changes the array and re-arms, as before.
       destinations
-        .filter((destination) => destination.selectable)
-        .map((destination) => destination.profile.profileId)
+        .map(
+          (destination) =>
+            `${destination.profile.profileId}\u0000${
+              recommendedDestination(
+                destination,
+                input.selectedModel,
+                limited.severity,
+              )
+                ? "1"
+                : "0"
+            }`,
+        )
         .toSorted(),
     ]),
     providerId: input.providerId,

@@ -11,6 +11,7 @@
  */
 import { v4 as uuidv4 } from "uuid";
 import {
+  ACTIVE_AGENT_DND_TYPE,
   ARTIFACT_TAB_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
   GIT_DIFF_TILE_DND_TYPE,
@@ -99,21 +100,23 @@ export function canDropOnHeaderStrip(
       | typeof TERMINAL_TILE_DND_TYPE
       | typeof GIT_DIFF_TILE_DND_TYPE
       | typeof WORKSPACE_FILE_DND_TYPE
-      | typeof CHAT_ARTIFACT_DND_TYPE;
+      | typeof CHAT_ARTIFACT_DND_TYPE
+      | typeof ACTIVE_AGENT_DND_TYPE;
   }
 > {
-  // Every openable canvas source can tear off into a new header tab. A
-  // chat-artifact belongs here alongside sidebar nodes / workspace files:
-  // collision already offers it the header slot (via EPIC_CANVAS_DND_SOURCE_TYPES
-  // -> CANVAS_TARGET_KINDS), so omitting it here would leave the header strip a
-  // silent dead zone (preview + commit both gate on this predicate).
+  // Every openable canvas source can tear off into a new header tab. The
+  // self-describing chat-artifact and active-agent sources belong here beside
+  // sidebar nodes / workspace files: collision already offers them the header
+  // slot (via EPIC_CANVAS_DND_SOURCE_TYPES -> CANVAS_TARGET_KINDS), so omitting
+  // either would leave the header strip a silent dead zone.
   return (
     source?.kind === ARTIFACT_TAB_DND_TYPE ||
     source?.kind === SIDEBAR_NODE_DND_TYPE ||
     source?.kind === TERMINAL_TILE_DND_TYPE ||
     source?.kind === GIT_DIFF_TILE_DND_TYPE ||
     source?.kind === WORKSPACE_FILE_DND_TYPE ||
-    source?.kind === CHAT_ARTIFACT_DND_TYPE
+    source?.kind === CHAT_ARTIFACT_DND_TYPE ||
+    source?.kind === ACTIVE_AGENT_DND_TYPE
   );
 }
 
@@ -151,6 +154,11 @@ export function sourceToTileRef(
     // artifact identity only, so two drags of the same card never reuse an
     // instanceId and collide in `tilesByInstanceId`.
     return makeOpenableNodeRef({ ...source.artifact, instanceId: uuidv4() });
+  }
+  if (source.kind === ACTIVE_AGENT_DND_TYPE) {
+    // The payload preserves the agent's bound host; never substitute the app's
+    // currently selected host for a chat or terminal-agent tile.
+    return makeOpenableNodeRef({ ...source.agent, instanceId: uuidv4() });
   }
   return null;
 }

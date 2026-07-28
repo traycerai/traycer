@@ -46,46 +46,55 @@ export function useEpicActivityStatus(
 
 /**
  * Reads session activity across a candidate set of chat ids, falling back to
- * the host-published awareness tier for agents whose session state did not
+ * the host-published activity tier for agents whose session state did not
  * resolve locally. `candidateIds` scopes the aggregation: the whole epic's
  * live agents for {@link useEpicActivityStatus}, or a node's descendant ids
  * for {@link useSubtreeChatActivityTier}.
  *
  * An open chat session is authoritative for its own tier ONLY when it reads
- * some activity - a local `"turn"`/`"background"` is never overridden by
- * awareness, so the two tiers can't be re-conflated. A session reading idle is
- * deliberately NOT treated as resolved: it still defers to awareness, which
+ * some activity - a local `"turn"`/`"background"` is never overridden by the
+ * global source, so the two tiers can't be re-conflated. A session reading idle
+ * is deliberately NOT treated as resolved: it still defers to presence, which
  * backfills the brief subscription-gap window where a genuinely running chat's
  * store has not received its first snapshot yet (same rule as the per-chat icon
- * in `chat-progress-icon.tsx`). Stale awareness is handled by `candidateIds`
- * liveness, not by local idle.
+ * in `chat-progress-icon.tsx`).
  *
  * Everything else - a chat that was never opened, or one whose warm session was
  * evicted - is resolved from `activityTiers`, which reports `"turn"` for any
  * host that does not classify its agents. That keeps the pre-existing
- * conservative reading intact against an older host while letting a newer one
- * report background-only work accurately.
+ * conservative reading intact against an unclassified host while letting a
+ * classifying one report background-only work accurately.
+ *
+ * `candidateIds` is a LIVENESS filter over that fallback: an agent the epic's
+ * projection no longer holds must not keep a spinner alive. `null` means this
+ * window has NO session for the epic, so there is no projection to check
+ * against and the filter is skipped entirely - that is the never-opened epic
+ * the per-user activity room exists to cover, and filtering it against an
+ * empty set would put the original defect straight back. An empty SET is a
+ * different statement: a live projection that authoritatively holds no agents.
  */
 function getChatSessionActivity(
   epicId: string | null,
   activityTiers: ReadonlyMap<string, AgentActivityTier>,
-  candidateIds: ReadonlySet<string>,
+  candidateIds: ReadonlySet<string> | null,
 ): EpicActivityStatus {
   if (epicId === null) return "idle";
   let hasBackgroundActivity = false;
   const locallyResolvedAgentIds = new Set<string>();
-  for (const handle of CHAT_REGISTRY.listHandles()) {
-    if (handle.epicId !== epicId) continue;
-    if (!candidateIds.has(handle.chatId)) continue;
-    const activity = chatSessionActivity(handle.store.getState());
-    if (activity === "turn") return "turn";
-    if (activity === "background") {
-      hasBackgroundActivity = true;
-      locallyResolvedAgentIds.add(handle.chatId);
+  if (candidateIds !== null) {
+    for (const handle of CHAT_REGISTRY.listHandles()) {
+      if (handle.epicId !== epicId) continue;
+      if (!candidateIds.has(handle.chatId)) continue;
+      const activity = chatSessionActivity(handle.store.getState());
+      if (activity === "turn") return "turn";
+      if (activity === "background") {
+        hasBackgroundActivity = true;
+        locallyResolvedAgentIds.add(handle.chatId);
+      }
     }
   }
   for (const [agentId, tier] of activityTiers) {
-    if (!candidateIds.has(agentId)) continue;
+    if (candidateIds !== null && !candidateIds.has(agentId)) continue;
     if (locallyResolvedAgentIds.has(agentId)) continue;
     if (tier === "turn") return "turn";
     hasBackgroundActivity = true;
@@ -96,10 +105,12 @@ function getChatSessionActivity(
 /** Subscribes only to live chats in `candidateIds` belonging to this epic. */
 function subscribeChatSessionActivity(
   epicId: string | null,
-  candidateIds: ReadonlySet<string>,
+  candidateIds: ReadonlySet<string> | null,
   onChange: () => void,
 ): () => void {
-  if (epicId === null || candidateIds.size === 0) return noopUnsubscribe;
+  if (epicId === null || candidateIds === null || candidateIds.size === 0) {
+    return noopUnsubscribe;
+  }
   const handleSubs = new Map<ChatSessionStoreHandle, () => void>();
 
   const resync = (): void => {

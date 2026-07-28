@@ -355,6 +355,30 @@ describe("<SurfaceReadinessBoundary />", () => {
     expect(force).toHaveBeenCalledTimes(1);
   });
 
+  it("draws no setup card on an in-surface fallback", () => {
+    // The full-screen host-boot splash restores its max-w-md Card through the
+    // same `FallbackFrame`. Putting that Card in the shared frame instead of
+    // behind the splash variant would nest a second card inside every tab's
+    // own frame - so the splash's card test alone does not pin this.
+    const controller = readinessController({
+      "default-host:": { kind: "loading-host" },
+    });
+
+    renderWithProviders(
+      controller,
+      <SurfaceReadinessBoundary scope="default-host" tabHostId={null}>
+        <Member id="default" />
+      </SurfaceReadinessBoundary>,
+      buildRunnerHost(),
+    );
+
+    expect(
+      screen
+        .getByTestId("surface-readiness-loading-host")
+        .querySelector('[data-slot="card"]'),
+    ).toBeNull();
+  });
+
   it("projects independent default-host and tab-host fallbacks from one controller", () => {
     const controller = readinessController({
       "default-host:": { kind: "loading-host" },

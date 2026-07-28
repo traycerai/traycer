@@ -12,7 +12,10 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { ProfileDropdownUsageEntry } from "@/components/providers/profile-dropdown-usage";
 import { profileCommitId } from "@/components/providers/provider-profile-model";
 import { ProfileRateLimitSwitchBanner } from "../profile-rate-limit-switch-banner";
-import type { ProfileRateLimitDestination } from "../use-profile-rate-limit-switch-prompt";
+import {
+  initialPreviewProfileId,
+  type ProfileRateLimitDestination,
+} from "../use-profile-rate-limit-switch-prompt";
 import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -32,7 +35,7 @@ function profile(
   profileId: string,
   kind: "ambient" | "managed",
   label: string,
-  rateLimitStatus: "ok" | "hard_limit",
+  rateLimitStatus: "ok" | "hard_limit" | "unknown",
 ): ProviderProfile {
   return {
     profileId,
@@ -63,6 +66,12 @@ const CURRENT = profile(
 );
 const ALTERNATIVE = profile("fresh-uuid", "managed", "Fresh profile", "ok");
 const SECOND = profile("second-uuid", "managed", "Second profile", "ok");
+const UNKNOWN = profile(
+  "personal-uuid",
+  "managed",
+  "Personal profile",
+  "unknown",
+);
 const AMBIENT = profile("ambient", "ambient", "Terminal account", "ok");
 const BLOCKED = profile(
   "blocked-uuid",
@@ -304,6 +313,34 @@ describe("rate-limit banner task-wide switch", () => {
     expect(onSwitchProfileForTask).not.toHaveBeenCalled();
   });
 
+  it("offers an authenticated unchecked profile and can apply that explicit choice to all affected chats", () => {
+    const onSwitchProfile = vi.fn();
+    const onSwitchProfileForTask = vi.fn();
+    renderBanner({
+      affectedChatCount: 3,
+      destinations: [destination(UNKNOWN, true)],
+      profiles: [CURRENT, UNKNOWN],
+      primaryTarget: null,
+      onSwitchProfile,
+      onSwitchProfileForTask,
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Choose a profile" }),
+    ).toBeDefined();
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Choose a profile" }),
+    );
+    const personal = screen.getByRole("menuitem", {
+      name: /Personal profile, Not checked, Available to switch/,
+    });
+    fireEvent.click(personal);
+
+    expect(onSwitchProfile).toHaveBeenCalledWith(UNKNOWN.profileId);
+    expect(onSwitchProfileForTask).toHaveBeenCalledWith(UNKNOWN.profileId);
+  });
+
   it("keeps unavailable rows inspectable and prevents dispatch", () => {
     const onSwitchProfile = vi.fn();
     const unavailable = destination(SECOND, false);
@@ -497,5 +534,60 @@ describe("rate-limit banner task-wide switch", () => {
         name: "Usage details for Fresh profile",
       }),
     ).toBeDefined();
+  });
+});
+
+describe("initialPreviewProfileId (ambient destination handling)", () => {
+  const ambientDestination: ProfileRateLimitDestination = {
+    profile: AMBIENT,
+    profileId: profileCommitId(AMBIENT),
+    selectable: true,
+  };
+  const managedDestination: ProfileRateLimitDestination = {
+    profile: ALTERNATIVE,
+    profileId: profileCommitId(ALTERNATIVE),
+    selectable: true,
+  };
+
+  it("previews the ambient primary target instead of falling through a `??` chain", () => {
+    expect(ambientDestination.profileId).toBeNull();
+    expect(
+      initialPreviewProfileId(ambientDestination, CURRENT, [
+        ambientDestination,
+        managedDestination,
+      ]),
+    ).toBeNull();
+  });
+
+  it("previews the ambient first-selectable destination when there is no primary target", () => {
+    expect(
+      initialPreviewProfileId(null, CURRENT, [
+        ambientDestination,
+        managedDestination,
+      ]),
+    ).toBeNull();
+  });
+
+  it("still falls back to the current profile's commit id when nothing is selectable", () => {
+    const readOnlyDestination: ProfileRateLimitDestination = {
+      profile: BLOCKED,
+      profileId: profileCommitId(BLOCKED),
+      selectable: false,
+    };
+    expect(
+      initialPreviewProfileId(null, AMBIENT, [readOnlyDestination]),
+    ).toBeNull();
+    expect(initialPreviewProfileId(null, CURRENT, [readOnlyDestination])).toBe(
+      CURRENT.profileId,
+    );
+  });
+
+  it("previews a non-ambient primary target normally", () => {
+    expect(
+      initialPreviewProfileId(managedDestination, CURRENT, [
+        managedDestination,
+        ambientDestination,
+      ]),
+    ).toBe(ALTERNATIVE.profileId);
   });
 });

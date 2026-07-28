@@ -1563,6 +1563,19 @@ const SYSTEM_PATH_FLOOR =
 // internal repository's scripts/desktop-install-cloud.js.
 const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
 
+// `AssociatedBundleIdentifiers` groups this raw LaunchAgent under the
+// Traycer app in System Settings → Login Items (macOS 13+; older releases
+// ignore the key). Without it, background-task management names the item
+// after `ProgramArguments[0]` - literally "sh" from an "Unknown
+// Developer", which reads as malware (field observation 2026-07-28:
+// `sfltool dumpbtm` showed `Name: sh, Parent Identifier: Unknown
+// Developer` for this agent, on every CLI-registered install - dev
+// machines have no in-bundle SMAppService plist, so they ALWAYS take this
+// path, as does the desktop's takeover fallback). The id is the desktop
+// app's `appId` for every deploy target; when the app is not installed
+// the key is inert.
+const DESKTOP_APP_BUNDLE_ID = "ai.traycer.desktop";
+
 /**
  * The PATH to bake into the host's LaunchAgent. launchd would otherwise
  * give the host a bare PATH that can't see provider CLIs installed via
@@ -1605,6 +1618,10 @@ function buildPlist(options: BuildPlistOptions): string {
 <dict>
   <key>Label</key>
   <string>${escapeXml(options.label.id)}</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>${DESKTOP_APP_BUNDLE_ID}</string>
+  </array>
   <key>ProgramArguments</key>
   <array>
 ${programArgsXml}

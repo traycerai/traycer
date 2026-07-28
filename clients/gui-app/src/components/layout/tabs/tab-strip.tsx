@@ -273,6 +273,7 @@ function TabStripBody() {
                   memberOffset={memberOffsetBefore(layoutItems, index)}
                   isActive={itemId === activeItemId}
                   isNextActive={headerItemIds[index + 1] === activeItemId}
+                  nextIsSplit={layoutItems[index + 1]?.kind === "split"}
                   isLastItem={index === headerItemIds.length - 1}
                   showDropIndicatorBefore={dropIndicatorIndex === index}
                   showDropIndicatorAfter={
@@ -312,6 +313,7 @@ interface HeaderStripItemRendererProps {
   // index is a silent visual bug no type check can catch.
   readonly isActive: boolean;
   readonly isNextActive: boolean;
+  readonly nextIsSplit: boolean;
   readonly isLastItem: boolean;
   readonly showDropIndicatorBefore: boolean;
   readonly showDropIndicatorAfter: boolean;
@@ -338,11 +340,18 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
   const {
     isActive,
     isNextActive,
+    nextIsSplit,
     isLastItem,
     showDropIndicatorBefore,
     showDropIndicatorAfter,
   } = props;
   if (item === null) return null;
+  // Computed once, above the branch, because it applies to every strip item.
+  // Restating it inside only the tab branch is what left a split group with no
+  // trailing hairline, so the group-to-tab boundary rendered as a blank gap.
+  const isSplitGroupBoundary = item.kind === "split" && nextIsSplit;
+  const showSeparatorAfter =
+    !isLastItem && (isSplitGroupBoundary || (!isActive && !isNextActive));
   if (item.kind === "split") {
     return (
       <SplitTabItem
@@ -351,6 +360,7 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
         leftMemberIndex={props.memberOffset}
         rightMemberIndex={props.memberOffset + Number(item.left.kind === "tab")}
         isActive={isActive}
+        showSeparatorAfter={showSeparatorAfter}
         showDropIndicatorBefore={showDropIndicatorBefore}
         showDropIndicatorAfter={showDropIndicatorAfter}
         onClose={props.onClose}
@@ -375,7 +385,7 @@ const HeaderStripItemRenderer = memo(function HeaderStripItemRenderer(
       isActive={isActive}
       showDropIndicatorBefore={showDropIndicatorBefore}
       showDropIndicatorAfter={showDropIndicatorAfter}
-      showSeparatorAfter={!isLastItem && !isActive && !isNextActive}
+      showSeparatorAfter={showSeparatorAfter}
       onClose={props.onClose}
       onCloseOtherTabs={props.onCloseOtherTabs}
       onDuplicateTab={props.onDuplicateTab}

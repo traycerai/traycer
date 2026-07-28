@@ -220,7 +220,9 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       },
       onLocalHostChange: () => ({ dispose: () => undefined }),
       onSystemResumed: () => ({ dispose: () => undefined }),
-      requestHostRespawn: vi.fn(() => Promise.resolve()),
+      requestHostRespawn: vi.fn(() =>
+        Promise.resolve({ kind: "restarted" as const }),
+      ),
       service: null,
       traycerCli: null,
       migration: null,
@@ -614,7 +616,7 @@ describe("<MenuCommandListener />", () => {
       ),
       installVersion: vi.fn(() => Promise.reject(new Error("not used"))),
       uninstallHost: vi.fn(() => Promise.reject(new Error("not used"))),
-      restartHost: vi.fn(() => Promise.resolve()),
+      restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
       uninstallTraycer: vi.fn(() => Promise.reject(new Error("not used"))),
       getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
       clearRemoval: vi.fn(() => Promise.resolve()),
@@ -794,7 +796,9 @@ describe("<MenuCommandListener />", () => {
 
   it("opens a confirmation dialog for host.restart and only respawns after confirm", async () => {
     const menu = createMenu();
-    const requestHostRespawn = vi.fn(() => Promise.resolve());
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
     const runnerHost = Object.assign(createRunnerHost(menu), {
       requestHostRespawn,
     });

@@ -1,5 +1,6 @@
 import type { CliErrorCode } from "./errors";
 import type { RuntimeContext } from "./runtime";
+import { writeStderr, writeStdout } from "./std-write";
 
 // NDJSON envelope shapes per the Native Packaging tech plan. Every line
 // on stdout in --json mode is one of these three discriminated by
@@ -79,12 +80,15 @@ function now(): string {
   return new Date().toISOString();
 }
 
+// Synchronous by way of `std-write`: the runner `process.exit()`s the instant
+// `emitResult` / `emitError` returns, so a buffered write here loses
+// everything past the 64 KiB pipe buffer. See std-write.ts.
 function writeStdoutLine(line: string): void {
-  process.stdout.write(`${line}\n`);
+  writeStdout(`${line}\n`);
 }
 
 function writeStderrLine(line: string): void {
-  process.stderr.write(`${line}\n`);
+  writeStderr(`${line}\n`);
 }
 
 function formatBytes(n: number): string {
@@ -191,7 +195,7 @@ export function createOutput(runtime: RuntimeContext): Output {
   let lastNonTtyDecile = -1;
   const closeProgressLine = (): void => {
     if (progressOpen) {
-      process.stderr.write("\n");
+      writeStderr("\n");
       progressOpen = false;
       openBarInfo = null;
     }
@@ -203,7 +207,7 @@ export function createOutput(runtime: RuntimeContext): Output {
         if (isTty) {
           // `\r` returns to column 0; `\x1b[2K` clears the line so a shorter
           // render can't leave stale characters from a longer previous one.
-          process.stderr.write(`\r\x1b[2K${renderProgressBar(info)}`);
+          writeStderr(`\r\x1b[2K${renderProgressBar(info)}`);
           progressOpen = true;
           openBarInfo = info;
           return;
@@ -231,7 +235,7 @@ export function createOutput(runtime: RuntimeContext): Output {
         openBarInfo !== null &&
         isArchiveHeartbeatStage(info.stage)
       ) {
-        process.stderr.write(
+        writeStderr(
           `\r\x1b[2K${renderProgressBar({
             stage: info.stage,
             message: info.message ?? openBarInfo.message,

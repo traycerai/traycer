@@ -13,6 +13,7 @@ import {
   __resetTabSyncCoordinatorForTesting,
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
+import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   setLandingDraftDesktopProjectionBridge,
@@ -392,6 +393,34 @@ describe("tab command coordinator transactions", () => {
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(epicTabId);
   });
 
+  it("replaceDraftWithEpic re-reveals an epic tab that was closed but preserved", () => {
+    // Opening an epic from the history list resolves the epic's PRESERVED tab
+    // id (`closeTab` keeps the record and points `mostRecentTabIdByEpicId` at
+    // it), so the swap target is routinely a record that already exists while
+    // being absent from `openTabOrder`. If the source is not re-revealed here,
+    // reconciliation deletes the just-placed epic ref as unbacked and the
+    // draft's strip slot collapses instead of becoming the epic.
+    const { tabId, ref } = openEpicSource("epic-reopened", "Reopened");
+    expect(tabCommandCoordinator.closeRef(ref)).toBe(true);
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
+    expect(useEpicCanvasStore.getState().tabsById[tabId]).toBeDefined();
+
+    const draftRef = openDraftSource();
+    const nextRef = tabCommandCoordinator.replaceDraftWithEpic({
+      draftId: draftRef.id,
+      epicId: "epic-reopened",
+      epicTabId: tabId,
+      epicName: "Reopened",
+    });
+
+    expect(nextRef).toEqual(ref);
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual([
+      tabRefKey(ref),
+    ]);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
   it("closeRef keeps the closed source under pendingRemovals until removal settles", () => {
     const { ref } = openEpicSource("epic-close", "Close me");
     const session = captureSession();
@@ -422,6 +451,103 @@ describe("tab command coordinator transactions", () => {
     );
     expectFinalizedOnce(session);
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("createSourceRefAtStripIndex rolls back the source createSource() minted when placement fails", () => {
+    const collidingRef: TabRef = { kind: "epic", id: "collide-id" };
+    // collidingRef lives only inside a split side here (not yet an open
+    // tab) - a stale layout entry that reconciliation itself would prune,
+    // orthogonal to what this test exercises. It stands in for createSource()
+    // minting a ref that collides with one already occupying a split side,
+    // which is the only way createLayoutItem's placement can reject a ref.
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-existing",
+          left: { kind: "empty" },
+          right: { kind: "tab", ref: collidingRef },
+          focusedSide: "right",
+          routeBackingSide: "right",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-existing",
+      systemTabs: { history: null, settings: null },
+    });
+
+    const session = captureSession();
+    const placed = tabCommandCoordinator.createSourceRefAtStripIndex(0, () => {
+      // A split side is not a top-level strip position, so placing
+      // collidingRef at a strip index fails - this mimics createSource()
+      // minting a ref that collides with one already living inside a split.
+      useEpicCanvasStore.setState((state) => ({
+        tabsById: {
+          ...state.tabsById,
+          [collidingRef.id]: {
+            tabId: collidingRef.id,
+            epicId: "epic-b",
+            name: "B",
+          },
+        },
+        canvasByTabId: {
+          ...state.canvasByTabId,
+          [collidingRef.id]: createEmptyCanvas(),
+        },
+        openTabOrder: [...state.openTabOrder, collidingRef.id],
+        activeTabId: collidingRef.id,
+      }));
+      return collidingRef;
+    });
+    session.dispose();
+
+    expect(placed).toBeNull();
+    session.assertAllSafe();
+    // The source rolled back - createSource()'s mint never survives as a
+    // known source, so a later reconciliation pass has nothing left to
+    // re-adopt as an orphaned, active top-level tab.
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(
+      collidingRef.id,
+    );
+    expect(flattenLayoutRefs(layoutFromTabsState())).not.toContainEqual(
+      collidingRef,
+    );
+  });
+
+  it("createSourceRefAtStripIndex does not close a pre-existing tab createSource() resolves to on failure", () => {
+    const { ref: existingRef } = openEpicSource("epic-b", "B");
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-existing",
+          left: { kind: "empty" },
+          right: { kind: "tab", ref: existingRef },
+          focusedSide: "right",
+          routeBackingSide: "right",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-existing",
+      systemTabs: { history: null, settings: null },
+    });
+    const layoutBefore = layoutFromTabsState();
+
+    const session = captureSession();
+    const placed = tabCommandCoordinator.createSourceRefAtStripIndex(
+      0,
+      () => existingRef,
+    );
+    session.dispose();
+
+    expect(placed).toBeNull();
+    session.assertAllSafe();
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(
+      existingRef.id,
+    );
+    expect(layoutFromTabsState()).toEqual(layoutBefore);
   });
 
   it("nested source write during applySources stays reserved, marks dirty, and defers placement", () => {

@@ -13,6 +13,7 @@ import {
   isDeviceExpired,
   MAX_POLL_INTERVAL_SECONDS,
   pollDeviceToken,
+  resetPollInterval,
   startDeviceAuthorization,
 } from "../device-auth";
 
@@ -431,6 +432,20 @@ describe("backoff helper", () => {
     expect(applySlowDown(schedule, 10_000).intervalMs).toBe(
       MAX_POLL_INTERVAL_SECONDS * 1000,
     );
+  });
+
+  it("resetPollInterval restores the server-issued base after slow_down widening", () => {
+    const schedule = createPollSchedule({
+      intervalSeconds: 5,
+      expiresInSeconds: 600,
+      startedAtMs: 0,
+    });
+    const widened = applySlowDown(applySlowDown(schedule, null), 30);
+    expect(widened.intervalMs).toBe(30_000);
+    const reset = resetPollInterval(widened);
+    expect(reset.intervalMs).toBe(5_000);
+    expect(reset.baseIntervalMs).toBe(5_000);
+    expect(reset.expiresAtMs).toBe(widened.expiresAtMs);
   });
 
   it("isDeviceExpired reports the deadline relative to now", () => {

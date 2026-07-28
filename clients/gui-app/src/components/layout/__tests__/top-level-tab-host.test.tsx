@@ -2,7 +2,10 @@ import "../../../../__tests__/test-browser-apis";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
+import {
+  LandingTerminalHost,
+  LandingTerminalPaneAnchor,
+} from "@/components/home/terminal-panel/landing-terminal-host";
 import {
   MAX_RETAINED_TOP_LEVEL_SURFACES,
   TopLevelTabHost,
@@ -51,7 +54,7 @@ vi.mock(
   }),
 );
 vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
-  LandingTerminalPanel: () => null,
+  LandingTerminalPanel: () => <div data-testid="landing-terminal-panel-body" />,
 }));
 
 const EPIC_A: TabRef = { kind: "epic", id: "epic-a" };
@@ -324,5 +327,76 @@ describe("<TopLevelTabHost />", () => {
     expect(screen.getByTestId("landing-terminal").dataset.draftId).toBe(
       DRAFT_B.id,
     );
+  });
+
+  it("mounts landing terminal chrome for a standalone New Task tab", () => {
+    seedSources([DRAFT_A]);
+    setSingle(DRAFT_A, [DRAFT_A]);
+
+    render(<LandingTerminalHost />);
+
+    expect(screen.getByTestId("landing-terminal").dataset.draftId).toBe(
+      DRAFT_A.id,
+    );
+  });
+
+  it("keeps the landing terminal bound to the visible draft beside a focused chooser", () => {
+    seedSources([DRAFT_A]);
+    useTabsStore.setState((state) => ({
+      ...state,
+      items: [
+        {
+          kind: "split",
+          id: "chooser",
+          left: { kind: "tab", ref: DRAFT_A },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "chooser",
+      stripOrder: [DRAFT_A],
+    }));
+
+    render(<LandingTerminalHost />);
+
+    expect(screen.getByTestId("landing-terminal").dataset.draftId).toBe(
+      DRAFT_A.id,
+    );
+  });
+
+  it("keeps one gesture provider mounted while the panel portals between panes", () => {
+    seedSources([DRAFT_A, DRAFT_B]);
+    setSplit(DRAFT_A, DRAFT_B, "left");
+
+    render(
+      <>
+        <LandingTerminalHost />
+        <LandingTerminalPaneAnchor draftId={DRAFT_A.id} />
+        <LandingTerminalPaneAnchor draftId={DRAFT_B.id} />
+      </>,
+    );
+
+    const provider = screen.getByTestId("landing-terminal");
+    expect(provider.dataset.draftId).toBe(DRAFT_A.id);
+    expect(
+      screen
+        .getByTestId(`landing-terminal-anchor-${DRAFT_A.id}`)
+        .contains(screen.getByTestId("landing-terminal-panel-body")),
+    ).toBe(true);
+
+    act(() => setSplit(DRAFT_A, DRAFT_B, "right"));
+
+    // The provider node survives the focus change: only the panel's DOM moves
+    // between panes, so the captured-gesture state the provider owns (pending
+    // gesture, generation, open-episode draft) is never destroyed mid-flight.
+    expect(screen.getByTestId("landing-terminal")).toBe(provider);
+    expect(provider.dataset.draftId).toBe(DRAFT_B.id);
+    expect(
+      screen
+        .getByTestId(`landing-terminal-anchor-${DRAFT_B.id}`)
+        .contains(screen.getByTestId("landing-terminal-panel-body")),
+    ).toBe(true);
   });
 });

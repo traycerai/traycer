@@ -3,7 +3,10 @@ import { v4 as uuidv4 } from "uuid";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftSelection } from "@/stores/composer/composer-draft-store";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
-import { EMPTY_LANDING_DRAFT_CONTENT } from "./landing-draft-content";
+import {
+  EMPTY_LANDING_DRAFT_CONTENT,
+  sameJsonContent,
+} from "./landing-draft-content";
 
 const DRAFT_CONTENT_DEBOUNCE_MS = 300;
 
@@ -105,12 +108,19 @@ class DraftRuntime {
 
   setSnapshot(content: JsonContent, selection: DraftSelection | null): void {
     const current = this.store.getState();
-    if (
-      current.content === content &&
-      sameSelection(current.selection, selection)
-    ) {
-      return;
-    }
+    // Compare by VALUE, and bump the revision only for a real content change.
+    // Every editor callback hands back a fresh `editor.getJSON()`, so identity
+    // is never stable: `onSelectionUpdate` re-emits the same document on each
+    // caret move, and Tiptap's `setEditable` emits `update` unconditionally -
+    // which the composer triggers on its own the moment `isSubmitting` flips.
+    // Counting those as edits retired the submission that had just started, and
+    // the create's success path then placed the epic in a background tab
+    // instead of replacing the draft, stranding the sent prompt on the landing
+    // page. `contentRevision` answers "did the user change what was sent?", so
+    // a caret move must move `selection` and leave it alone.
+    const contentChanged = !sameJsonContent(current.content, content);
+    const selectionChanged = !sameSelection(current.selection, selection);
+    if (!contentChanged && !selectionChanged) return;
     this.pending = { content, selection };
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = window.setTimeout(
@@ -120,8 +130,12 @@ class DraftRuntime {
     this.store.setState({
       content,
       selection,
-      contentRevision: current.contentRevision + 1,
-      attachmentRoots: imageHashes(content),
+      contentRevision: contentChanged
+        ? current.contentRevision + 1
+        : current.contentRevision,
+      attachmentRoots: contentChanged
+        ? imageHashes(content)
+        : current.attachmentRoots,
     });
   }
 

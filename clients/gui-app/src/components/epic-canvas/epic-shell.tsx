@@ -39,7 +39,7 @@ export function EpicShell(props: EpicShellProps) {
 
   return (
     <div
-      className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-r-lg bg-background"
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
       data-testid="epic-shell"
       data-epic-shell-root="true"
       data-epic-id={epicId}
@@ -143,7 +143,7 @@ function CanvasColumn(props: {
 function LoadingTileCanvas() {
   return (
     <div
-      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden rounded-t-lg border border-canvas-border/70 bg-canvas text-canvas-foreground"
+      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden border border-canvas-border/70 bg-canvas text-canvas-foreground"
       data-testid="tile-canvas-loading"
     >
       <CanvasSkeleton />

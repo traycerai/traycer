@@ -134,6 +134,7 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
 // epics-list-panel suite does.
 vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
   useEpicSweepWorktreeCandidates: () => ({
+    hostId: "host-test",
     rows: [],
     isPending: false,
     isError: false,
@@ -181,7 +182,9 @@ function renderPanel() {
         <TooltipProvider>
           <EpicsListPanel
             variant="embedded"
+            className={undefined}
             onSelectEpic={null}
+            onOpenItem={null}
             routeSearch={null}
             historyNowMs={null}
             autoFocusSearch={false}
