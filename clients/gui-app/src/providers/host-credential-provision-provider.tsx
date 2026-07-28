@@ -20,7 +20,9 @@ import { useHostBinding, useHostDirectory } from "@/lib/host";
 import {
   resetHostCredentialProvisioning,
   setHostCredentialMintRunner,
+  setHostCredentialProvisionGate,
 } from "@/lib/auth/host-credential-provisioning";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import type { StepUpCredential } from "@/lib/auth/step-up-flow";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -44,8 +46,15 @@ export function HostCredentialProvisionProvider(props: {
 }): ReactNode {
   const binding = useHostBinding();
   const directory = useHostDirectory();
-  const [prompt, setPrompt] = useState<StepUpPromptRequest | null>(null);
+  const runnerHost = useRunnerHostOrNull();
+  const [prompt, setPrompt] = useState<ActivePrompt | null>(null);
   const promptIdRef = useRef(0);
+  /**
+   * Rejects the prompt currently on screen. Held in a ref so an identity change
+   * can settle the waiting mint WITHOUT a `setState` inside an effect - the
+   * dialog itself disappears by derivation below, not by a state write.
+   */
+  const pendingRejectRef = useRef<((reason: Error) => void) | null>(null);
   /**
    * Serializes the dialog. There is exactly one prompt slot, and two hosts can
    * report `missing` at the same moment - without this, the second `setPrompt`
@@ -53,19 +62,46 @@ export function HostCredentialProvisionProvider(props: {
    * host's mint forever.
    */
   const promptChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  /**
+   * Bumped whenever the signed-in identity changes. A prompt that was raised
+   * for the previous user - shown, or still queued behind another host's - is
+   * not a question the current user was ever asked, so it must not be answered
+   * by them.
+   */
+  const promptEpochRef = useRef(0);
+  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  /**
+   * Read at mint time rather than closed over, so the runner registered under
+   * one identity cannot mint under another.
+   */
+  const identityRef = useRef(userId);
 
   const requestStepUpCredential = useCallback(
     (subjectLabel: string | null): Promise<StepUpCredential> => {
+      const epochAtRequest = promptEpochRef.current;
       const show = (): Promise<StepUpCredential> => {
+        if (promptEpochRef.current !== epochAtRequest) {
+          // The identity changed while this request waited its turn in the
+          // chain. Showing it now would put the previous user's question in
+          // front of the current one.
+          return Promise.reject(new StepUpCanceledError());
+        }
         const id = promptIdRef.current + 1;
         promptIdRef.current = id;
         return new Promise<StepUpCredential>((resolve, reject) => {
+          pendingRejectRef.current = reject;
           setPrompt({
-            id,
-            purpose: "host-provision",
-            subjectLabel,
-            resolve,
-            reject,
+            // Stamped with the identity that raised it. The render below drops
+            // the dialog when this no longer matches, so a sign-out cannot
+            // leave the previous user's question on screen for the next one.
+            userId: identityRef.current,
+            request: {
+              id,
+              purpose: "host-provision",
+              subjectLabel,
+              resolve,
+              reject,
+            },
           });
         });
       };
@@ -82,15 +118,17 @@ export function HostCredentialProvisionProvider(props: {
   );
 
   const handleVerified = useCallback((credential: StepUpCredential) => {
+    pendingRejectRef.current = null;
     setPrompt((current) => {
-      current?.resolve(credential);
+      current?.request.resolve(credential);
       return null;
     });
   }, []);
 
   const handleCanceled = useCallback(() => {
+    pendingRejectRef.current = null;
     setPrompt((current) => {
-      current?.reject(new StepUpCanceledError());
+      current?.request.reject(new StepUpCanceledError());
       return null;
     });
   }, []);
@@ -106,6 +144,7 @@ export function HostCredentialProvisionProvider(props: {
       // Best-effort: the directory names the machine so the Devices & Sessions
       // row is identifiable. A host we cannot name still gets a credential.
       const hostLabel = directory.findById(request.hostId)?.label ?? null;
+      const identityAtStart = identityRef.current;
       try {
         // ALWAYS prompt, per host, before minting - deliberately NOT
         // `runStepUpProtectedAction`, whose optimistic first attempt is wrong
@@ -123,6 +162,15 @@ export function HostCredentialProvisionProvider(props: {
         return isStepUpCanceledError(error)
           ? { kind: "declined" }
           : { kind: "unavailable" };
+      }
+      if (identityRef.current !== identityAtStart) {
+        // The signed-in user changed while the dialog was open. Minting now
+        // would charge a 30-day credential to a user who never asked for it,
+        // and the provisioning module's generation fence would then discard
+        // the result - leaving an orphaned row that has ALREADY superseded
+        // whatever credential the host was using. Not minting is the only
+        // outcome that leaves the host where it was.
+        return { kind: "unavailable" };
       }
       try {
         const result = await auth.mintHostCredential(
@@ -151,26 +199,71 @@ export function HostCredentialProvisionProvider(props: {
     // in flight (the provisioning module holds that promise, not this effect).
   }, [binding, directory, requestStepUpCredential]);
 
+  // The shell's cross-window arbiter. Every desktop window runs its own copy of
+  // this module, so the per-host memo above is per-WINDOW; the runner host is
+  // the only thing all windows share. Without this, two windows open on the
+  // same un-provisioned host each raise their own email-OTP dialog.
+  useEffect(() => {
+    if (runnerHost === null) {
+      return;
+    }
+    setHostCredentialProvisionGate({
+      claim: async (hostId) => {
+        const grant = await runnerHost.claimHostCredentialProvision(hostId);
+        return grant.kind === "granted" ? grant.token : null;
+      },
+      release: (hostId, token) =>
+        runnerHost.releaseHostCredentialProvision(hostId, token),
+    });
+    return () => {
+      setHostCredentialProvisionGate(null);
+    };
+  }, [runnerHost]);
+
   // Scoped to the signed-in IDENTITY, not to the host binding: the binding is
   // installed once at runtime startup and lives until the provider unmounts, so
   // watching it would mean a normal sign-out never cleared anything and the next
   // user on this machine would silently inherit the previous user's "already
   // asked about this host" memo - including a decline they never made.
-  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
   useEffect(() => {
+    identityRef.current = userId;
+    // Retire every prompt raised for the previous identity: the visible one,
+    // and any still queued behind it. Clearing the memo alone is not enough -
+    // this provider is NOT unmounted by a sign-out (it sits above the auth
+    // gate), so without this a dialog raised for the old user stays on screen
+    // and the new user can answer it.
+    // Rejected through the ref rather than through `setPrompt`: a synchronous
+    // state write here would cascade a render. The dialog goes away by
+    // derivation instead - see `visiblePrompt` below - and the stale entry is
+    // replaced by the next prompt that is actually raised.
+    promptEpochRef.current += 1;
+    pendingRejectRef.current?.(new StepUpCanceledError());
+    pendingRejectRef.current = null;
     resetHostCredentialProvisioning();
   }, [userId]);
+
+  // A prompt outlives the identity that raised it - the provider is not
+  // unmounted by a sign-out - so ownership is checked at render rather than
+  // trusted from state.
+  const visiblePrompt =
+    prompt !== null && prompt.userId === userId ? prompt : null;
 
   return (
     <>
       {props.children}
       <StepUpChallengeDialog
-        request={prompt}
+        request={visiblePrompt?.request ?? null}
         onVerified={handleVerified}
         onCancel={handleCanceled}
       />
     </>
   );
+}
+
+/** A raised prompt plus the identity it was raised for. */
+interface ActivePrompt {
+  readonly userId: string | null;
+  readonly request: StepUpPromptRequest;
 }
 
 function toMintOutcome(

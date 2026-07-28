@@ -611,6 +611,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.revokeUserSession,
         RunnerHostInvoke.revokeAllSessions,
         RunnerHostInvoke.mintHostCredential,
+        RunnerHostInvoke.claimHostCredentialProvision,
+        RunnerHostInvoke.releaseHostCredentialProvision,
         RunnerHostInvoke.requestStepUpChallenge,
         RunnerHostInvoke.verifyStepUpChallenge,
         RunnerHostInvoke.notificationShow,
@@ -2367,6 +2369,289 @@ describe("RunnerIpcBridge", () => {
     )?.Authorization;
     expect(secondAuth).toBe("Bearer user-jwt");
     bridge.dispose();
+  });
+
+  describe("host credential provision claim IPC", () => {
+    const HOST_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+    /** The claim's discriminant, for tests that only care granted vs denied. */
+    function readClaimKind(result: unknown): string {
+      if (
+        result === null ||
+        typeof result !== "object" ||
+        !("kind" in result)
+      ) {
+        throw new Error("claim did not return a result object");
+      }
+      const kind = result.kind;
+      if (typeof kind !== "string") {
+        throw new Error("claim result carried no kind");
+      }
+      return kind;
+    }
+
+    /** Asserts a grant and returns the token `release` requires back. */
+    function readClaimToken(result: unknown): string {
+      if (readClaimKind(result) !== "granted") {
+        throw new Error("expected a granted claim");
+      }
+      if (
+        result === null ||
+        typeof result !== "object" ||
+        !("token" in result)
+      ) {
+        throw new Error("granted claim carried no token");
+      }
+      const token = result.token;
+      if (typeof token !== "string") {
+        throw new Error("claim token was not a string");
+      }
+      return token;
+    }
+
+    function signedIn(
+      userId: string,
+      token: string,
+    ): DesktopAuthSessionSnapshot {
+      return {
+        status: "signed-in",
+        token,
+        profile: {
+          userId,
+          userName: "Test User",
+          email: "test@example.com",
+        },
+      };
+    }
+
+    it("grants the first window and denies a second window for the same hostId", async () => {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      registry.add("window-a", 101, buildWindow());
+      registry.add("window-b", 202, buildWindow());
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+
+      const claim = ipcMainState.handlers.get(
+        RunnerHostInvoke.claimHostCredentialProvision,
+      );
+      if (claim === undefined) {
+        throw new Error("claimHostCredentialProvision handler missing");
+      }
+
+      expect(readClaimKind(await claim(sender(101), HOST_ID))).toBe("granted");
+      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
+      bridge.dispose();
+    });
+
+    it("frees the claim when the holding window closes (retainHolders path)", async () => {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      registry.add("window-a", 101, buildWindow());
+      registry.add("window-b", 202, buildWindow());
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession: new DesktopAuthSession(),
+        quitState: undefined,
+      });
+      bridge.install();
+
+      const claim = ipcMainState.handlers.get(
+        RunnerHostInvoke.claimHostCredentialProvision,
+      );
+      if (claim === undefined) {
+        throw new Error("claimHostCredentialProvision handler missing");
+      }
+
+      expect(readClaimKind(await claim(sender(101), HOST_ID))).toBe("granted");
+      // Closing the holder mid-prompt must free the host without settling it.
+      await registry.closeById("window-a");
+      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("granted");
+      bridge.dispose();
+    });
+
+    it("does not reset the claim registry when only the auth token rotates", async () => {
+      // Token refresh fires authSession.change with the same userId. If that
+      // reset the registry, every refresh would re-open the prompt for a new
+      // window against a host this identity already answered for.
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      registry.add("window-a", 101, buildWindow());
+      registry.add("window-b", 202, buildWindow());
+      const authSession = new DesktopAuthSession();
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession,
+        quitState: undefined,
+      });
+      bridge.install();
+
+      const claim = ipcMainState.handlers.get(
+        RunnerHostInvoke.claimHostCredentialProvision,
+      );
+      const release = ipcMainState.handlers.get(
+        RunnerHostInvoke.releaseHostCredentialProvision,
+      );
+      const setSession = ipcMainState.handlers.get(
+        RunnerHostInvoke.authSessionSet,
+      );
+      if (
+        claim === undefined ||
+        release === undefined ||
+        setSession === undefined
+      ) {
+        throw new Error("provision claim/session handlers missing");
+      }
+
+      await setSession(sender(101), signedIn("user-1", "token-v1"));
+      const token = readClaimToken(await claim(sender(101), HOST_ID));
+      await release(sender(101), HOST_ID, token);
+      // Settled under user-1.
+      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
+
+      // Same userId, new bearer — must leave settled hosts settled.
+      await setSession(sender(101), signedIn("user-1", "token-v2"));
+      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
+      bridge.dispose();
+    });
+
+    it("resets the claim registry when the signed-in userId changes", async () => {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      registry.add("window-a", 101, buildWindow());
+      registry.add("window-b", 202, buildWindow());
+      const authSession = new DesktopAuthSession();
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession,
+        quitState: undefined,
+      });
+      bridge.install();
+
+      const claim = ipcMainState.handlers.get(
+        RunnerHostInvoke.claimHostCredentialProvision,
+      );
+      const release = ipcMainState.handlers.get(
+        RunnerHostInvoke.releaseHostCredentialProvision,
+      );
+      const setSession = ipcMainState.handlers.get(
+        RunnerHostInvoke.authSessionSet,
+      );
+      if (
+        claim === undefined ||
+        release === undefined ||
+        setSession === undefined
+      ) {
+        throw new Error("provision claim/session handlers missing");
+      }
+
+      await setSession(sender(101), signedIn("user-1", "token-u1"));
+      const token = readClaimToken(await claim(sender(101), HOST_ID));
+      await release(sender(101), HOST_ID, token);
+      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
+
+      // Different identity — previous user's settlements must not stick.
+      await setSession(sender(101), signedIn("user-2", "token-u2"));
+      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("granted");
+      bridge.dispose();
+    });
+
+    it("resets the claim registry on sign-out", async () => {
+      const mod = await import("../register-runner-ipc");
+      const registry = new FakeWindowRegistry();
+      registry.add("window-a", 101, buildWindow());
+      registry.add("window-b", 202, buildWindow());
+      const authSession = new DesktopAuthSession();
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController: new FakeHostController(),
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        windowRegistry: registry,
+        ownership: new EpicWindowOwnership(null),
+        perWindowState: new PerWindowState(null),
+        authSession,
+        quitState: undefined,
+      });
+      bridge.install();
+
+      const claim = ipcMainState.handlers.get(
+        RunnerHostInvoke.claimHostCredentialProvision,
+      );
+      const release = ipcMainState.handlers.get(
+        RunnerHostInvoke.releaseHostCredentialProvision,
+      );
+      const setSession = ipcMainState.handlers.get(
+        RunnerHostInvoke.authSessionSet,
+      );
+      if (
+        claim === undefined ||
+        release === undefined ||
+        setSession === undefined
+      ) {
+        throw new Error("provision claim/session handlers missing");
+      }
+
+      await setSession(sender(101), signedIn("user-1", "token-u1"));
+      const token = readClaimToken(await claim(sender(101), HOST_ID));
+      await release(sender(101), HOST_ID, token);
+      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
+
+      const signedOut: DesktopAuthSessionSnapshot = {
+        status: "signed-out",
+        token: null,
+        profile: null,
+      };
+      await setSession(sender(101), signedOut);
+      // After sign-out the memo is clear; a subsequent sign-in would re-ask.
+      // Prove the clear with a re-claim under the same webContents while still
+      // signed out (identity null): claims themselves are not identity-gated.
+      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("granted");
+      bridge.dispose();
+    });
   });
 
   it("awaits a terminal quit decision and defaults malformed payloads to proceed", async () => {

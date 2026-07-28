@@ -47,6 +47,10 @@ import {
 } from "../../auth/devices-sessions-fetcher";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import {
+  HostProvisionClaimRegistry,
+  type HostProvisionClaim,
+} from "../../host-transport/host-provision-claim-registry";
+import {
   credentialsIdentityFromAuthenticatedUser,
   refreshOnceAbortable,
   validateAuthTokenIdentityAccessOnceAbortable,
@@ -101,6 +105,13 @@ function sameFlags(a: readonly string[], b: readonly string[]): boolean {
  * mobile, notifications on web preview) install no-op handlers that never
  * fire, matching the production invariant.
  */
+/**
+ * The mock shell has exactly one renderer realm, so every claim comes from the
+ * same holder. The constant only exists because the registry is shared with
+ * desktop, where holders are real `webContents` ids.
+ */
+const MOCK_PROVISION_HOLDER_ID = 0;
+
 export class MockRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
@@ -135,6 +146,9 @@ export class MockRunnerHost implements IRunnerHost {
   private readonly systemResumedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
+  private readonly provisionClaims = new HostProvisionClaimRegistry(() =>
+    Date.now(),
+  );
 
   readonly tray: MockTrayState = new MockTrayState();
   readonly hostPicker: MockHostPicker = new MockHostPicker();
@@ -257,6 +271,27 @@ export class MockRunnerHost implements IRunnerHost {
       this.retainedStepUpCredential = null;
     }
     return result;
+  }
+
+  /**
+   * Real arbitration rather than a constant `granted`. This double has one
+   * caller to arbitrate between, so the cross-window half of the policy is
+   * moot here - but the "already asked about this host" half still applies,
+   * and a stub would quietly let a test pass that a real shell would fail.
+   *
+   * Identity scoping is deliberately absent: the real registry is reset by the
+   * shell when the signed-in user changes, and this double is constructed
+   * per-test, so it never outlives one identity.
+   */
+  claimHostCredentialProvision(hostId: string): Promise<HostProvisionClaim> {
+    return Promise.resolve(
+      this.provisionClaims.claim(hostId, MOCK_PROVISION_HOLDER_ID),
+    );
+  }
+
+  releaseHostCredentialProvision(hostId: string, token: string): Promise<void> {
+    this.provisionClaims.release(hostId, token);
+    return Promise.resolve();
   }
 
   requestStepUpChallenge(

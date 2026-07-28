@@ -12,6 +12,7 @@ import {
   verifyStepUpChallengeViaHttp,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import { validateAuthTokenIdentityAccessOnly } from "@traycer-clients/shared/auth/auth-validation";
+import { HostProvisionClaimRegistry } from "@traycer-clients/shared/host-transport/host-provision-claim-registry";
 import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
 import {
   assertString,
@@ -20,6 +21,7 @@ import {
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
   parseTokenRotateExpected,
+  readSenderWebContentsId,
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
@@ -37,6 +39,17 @@ function assertBoolean(
   if (typeof value !== "boolean") {
     throw new Error(`${context} requires a boolean argument`);
   }
+}
+
+/**
+ * The identity the provisioning memo is scoped to. Only a fully signed-in
+ * session names one: `signing-in` and `signed-out` both collapse to null, so a
+ * sign-out clears the memo and a sign-in as the same user restores it.
+ */
+function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
+  return snapshot.status === "signed-in"
+    ? (snapshot.profile?.userId ?? null)
+    : null;
 }
 
 function activeRetainedStepUpToken(
@@ -59,6 +72,15 @@ function activeRetainedStepUpToken(
  */
 export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   let retainedStepUpCredential: RetainedStepUpCredential | null = null;
+  const provisionClaims = new HostProvisionClaimRegistry(() => Date.now());
+  // Identity the provisioning memo currently belongs to. Compared - rather
+  // than resetting on every auth-session change - because the session snapshot
+  // also carries the bearer, so an ordinary token refresh fires `change` too.
+  // Clearing the memo there would let the next window to open re-ask about a
+  // host this identity has already answered for.
+  let provisionIdentity: string | null = signedInUserId(
+    bridge.authSession.get(),
+  );
 
   bridge.handleInvoke(
     RunnerHostInvoke.validateAuthTokenIdentity,
@@ -208,6 +230,48 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
+    RunnerHostInvoke.claimHostCredentialProvision,
+    (event, hostId: unknown) => {
+      assertString(hostId, "claimHostCredentialProvision.hostId");
+      const holderId = readSenderWebContentsId(event);
+      if (holderId === null) {
+        // A sender with no identifiable webContents cannot be pruned when its
+        // window closes, so granting it would risk a claim held until the TTL.
+        // Denying costs at most one un-provisioned host; the connection lease
+        // still works. `isTrustedIpcSender` already makes this unreachable in
+        // practice - it resolves the sender against the window registry.
+        return { kind: "denied" };
+      }
+      return provisionClaims.claim(hostId, holderId);
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.releaseHostCredentialProvision,
+    (_event, hostId: unknown, token: unknown) => {
+      assertString(hostId, "releaseHostCredentialProvision.hostId");
+      assertString(token, "releaseHostCredentialProvision.token");
+      // Authorized by the token, not by the sender: the token was minted for
+      // one claim and only the holder of that claim has it.
+      provisionClaims.release(hostId, token);
+    },
+  );
+
+  // A window closed mid-prompt never releases. Drop its claim so the next
+  // window may ask - it is NOT settled, because nobody answered.
+  const onWindowRegistryChange = (): void => {
+    provisionClaims.retainHolders(
+      new Set(
+        bridge.windowRegistry.records().map((record) => record.webContentsId),
+      ),
+    );
+  };
+  bridge.windowRegistry.on("change", onWindowRegistryChange);
+  bridge.disposeFns.push(() => {
+    bridge.windowRegistry.off("change", onWindowRegistryChange);
+  });
+
+  bridge.handleInvoke(
     RunnerHostInvoke.requestStepUpChallenge,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "requestStepUpChallenge.bearerToken");
@@ -256,6 +320,11 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
 
   const onAuthSessionChange = (snapshot: DesktopAuthSessionSnapshot): void => {
     retainedStepUpCredential = null;
+    const nextIdentity = signedInUserId(snapshot);
+    if (nextIdentity !== provisionIdentity) {
+      provisionIdentity = nextIdentity;
+      provisionClaims.reset();
+    }
     bridge.fanOut(RunnerHostEvent.authSessionChange, snapshot);
   };
   bridge.authSession.on("change", onAuthSessionChange);

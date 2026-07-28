@@ -39,3 +39,4 @@ export type {
   StepUpChallengeFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 export type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
+export type { HostProvisionClaim } from "@traycer-clients/shared/host-transport/host-provision-claim-registry";

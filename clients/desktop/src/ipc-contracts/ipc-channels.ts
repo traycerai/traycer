@@ -39,6 +39,11 @@ export const RunnerHostInvoke = {
   // calls, with the added reason that the retained step-up bearer must never
   // reach the renderer.
   mintHostCredential: "runnerHost:auth:hosts:mintCredential",
+  // Cross-window arbitration for the mint above. Each BrowserWindow is its own
+  // module realm, so the renderer's "one prompt per host" memo does not span
+  // them; main holds the single registry every window claims against.
+  claimHostCredentialProvision: "runnerHost:auth:hosts:provisionClaim",
+  releaseHostCredentialProvision: "runnerHost:auth:hosts:provisionRelease",
   requestStepUpChallenge: "runnerHost:auth:stepUp:challenge",
   verifyStepUpChallenge: "runnerHost:auth:stepUp:verify",
   openExternalLink: "runnerHost:openExternalLink",
