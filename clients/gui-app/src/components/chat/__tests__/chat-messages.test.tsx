@@ -56,6 +56,7 @@ import {
   TileFindContext,
   type TileFindContextValue,
 } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import { CHAT_ARROW_SCROLL_STEP_PX } from "@/components/chat/chat-messages-virtuoso-helpers";
 import { ChatUserMessageMinimap } from "@/components/chat/chat-user-message-minimap";
 import {
   chatMinimapClipRegionProps,
@@ -80,6 +81,7 @@ const VIRTUOSO_TEST_CONTEXT = {
   viewportHeight: 500,
 };
 const TILE_FIND_TEST_INSTANCE_ID = "test-instance";
+const TEST_PANE_GROUP_ID = "test-pane-group";
 const TILE_FIND_CONTEXT_VALUE: TileFindContextValue = {
   tileInstanceId: TILE_FIND_TEST_INSTANCE_ID,
   registerAdapter: (adapter: TileFindAdapter) =>
@@ -195,31 +197,41 @@ function chatMessagesJsx(
     scrollRequest: ChatMessageScrollRequest | null;
   },
 ): ReactNode {
+  // Mirrors the canvas DOM the tile actually lives in: the owning pane carries
+  // `data-group-id`, and its tab strip is a SIBLING of the tile that carries
+  // the same id (see `tab-group-view.tsx` / `tab-strip.tsx`).
   return (
     <div data-tile-find-scope="" data-active="true">
-      <div
-        data-chat-keyboard-scroll-scope=""
-        data-active="true"
-        data-testid="chat-keyboard-scroll-scope"
-      >
-        <VirtuosoMessageListTestingContext.Provider
-          value={VIRTUOSO_TEST_CONTEXT}
+      <div data-group-id={TEST_PANE_GROUP_ID} data-testid="canvas-pane-root">
+        <div
+          data-group-id={TEST_PANE_GROUP_ID}
+          data-testid="canvas-tab-strip"
+          tabIndex={-1}
+        />
+        <div
+          data-chat-keyboard-scroll-scope=""
+          data-active="true"
+          data-testid="chat-keyboard-scroll-scope"
         >
-          <ChatMessages
-            taskTitle="Transcript"
-            taskId="test-task"
-            messages={messages}
-            backgroundItems={opts.backgroundItems}
-            minimapItems={opts.minimapItems}
-            scrollStateKey={opts.scrollStateKey}
-            getMessageActions={() => null}
-            nextStepActions={null}
-            instanceId={TILE_FIND_TEST_INSTANCE_ID}
-            visible={opts.visible}
-            systemOverlayActive={opts.systemOverlayActive}
-            scrollRequest={opts.scrollRequest}
-          />
-        </VirtuosoMessageListTestingContext.Provider>
+          <VirtuosoMessageListTestingContext.Provider
+            value={VIRTUOSO_TEST_CONTEXT}
+          >
+            <ChatMessages
+              taskTitle="Transcript"
+              taskId="test-task"
+              messages={messages}
+              backgroundItems={opts.backgroundItems}
+              minimapItems={opts.minimapItems}
+              scrollStateKey={opts.scrollStateKey}
+              getMessageActions={() => null}
+              nextStepActions={null}
+              instanceId={TILE_FIND_TEST_INSTANCE_ID}
+              visible={opts.visible}
+              systemOverlayActive={opts.systemOverlayActive}
+              scrollRequest={opts.scrollRequest}
+            />
+          </VirtuosoMessageListTestingContext.Provider>
+        </div>
       </div>
     </div>
   );
@@ -501,6 +513,68 @@ describe("ChatMessages Virtuoso renderer", () => {
     fireEvent.keyDown(sibling, { key: "PageUp" });
     expect(scroller.scrollTop).toBe(1_500);
     sibling.remove();
+  });
+
+  // Switching to a chat by clicking its canvas tab leaves focus ON the tab -
+  // a SIBLING of the tile, not an ancestor - so the scroll keys were silently
+  // dropped exactly when the user had just chosen this transcript to read.
+  it("claims scroll keys rooted on its own pane's chrome", () => {
+    const messages = makeMessages(100);
+    renderChatMessages(
+      messages,
+      makeDefaultOpts({ minimapItems: minimapItemsFor(messages) }),
+    );
+    const scroller = screen.getByTestId("virtuoso-scroller");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 2_000 },
+    });
+
+    const ownTabStrip = screen.getByTestId("canvas-tab-strip");
+    scroller.scrollTop = 1_000;
+    fireEvent.keyDown(ownTabStrip, { key: "PageUp" });
+    expect(scroller.scrollTop).toBe(500);
+
+    // Another pane's chrome is still never claimed.
+    const otherPane = document.createElement("div");
+    otherPane.setAttribute("data-group-id", "other-pane-group");
+    document.body.appendChild(otherPane);
+    fireEvent.keyDown(otherPane, { key: "PageUp" });
+    expect(scroller.scrollTop).toBe(500);
+    otherPane.remove();
+  });
+
+  // The transcript rows are not focusable, so the browser never makes the
+  // scroller the default keyboard scroller: arrow keys moved nothing at all.
+  it("scrolls the transcript line-by-line with the arrow keys", () => {
+    const messages = makeMessages(100);
+    renderChatMessages(
+      messages,
+      makeDefaultOpts({ minimapItems: minimapItemsFor(messages) }),
+    );
+    const scroller = screen.getByTestId("virtuoso-scroller");
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 2_000 },
+    });
+
+    scroller.scrollTop = 1_000;
+    fireEvent.keyDown(document.body, { key: "ArrowUp" });
+    expect(scroller.scrollTop).toBe(1_000 - CHAT_ARROW_SCROLL_STEP_PX);
+
+    fireEvent.keyDown(document.body, { key: "ArrowDown" });
+    expect(scroller.scrollTop).toBe(1_000);
+
+    // Editable targets keep the arrows for caret movement.
+    const composer = document.createElement("textarea");
+    screen.getByTestId("chat-keyboard-scroll-scope").appendChild(composer);
+    composer.focus();
+    fireEvent.keyDown(composer, { key: "ArrowUp" });
+    expect(scroller.scrollTop).toBe(1_000);
+
+    // Modified arrows are editor/selection chords - never transcript scroll.
+    fireEvent.keyDown(document.body, { key: "ArrowUp", shiftKey: true });
+    expect(scroller.scrollTop).toBe(1_000);
   });
 
   it("keeps scrolling from a focused descendant when the tile is inactive", () => {
