@@ -1456,6 +1456,75 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("replaces the draft in place when the editor re-emits the sent content", async () => {
+    // The live editor is not the memoized fixture: `getJSON()` builds a fresh
+    // object per call, and the composer makes it fire on its own during a send -
+    // `startSubmission` flips `isSubmitting`, which flips the editor's
+    // `disabled`, and Tiptap's `setEditable` emits `update` unconditionally.
+    // That echo carries the SAME document, so it must not retire the placement:
+    // the epic belongs in the tab the draft occupied, not in a background one
+    // with the sent prompt left behind on the landing page.
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-editable-echo", null);
+    const draftRef = { kind: "draft" as const, id: draftId };
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(draftRef), ref: draftRef }],
+      activeItemId: tabItemId(draftRef),
+      systemTabs: { history: null, settings: null },
+      stripOrder: [draftRef],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(() => useLandingComposerActions(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        // A fresh object per `getJSON()` call, exactly like the real editor.
+        editor: {
+          ...editorHandleForPrompt(SUBMITTED_PROMPT),
+          getJSON: () => jsonContentForPrompt(SUBMITTED_PROMPT),
+        },
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+
+    // The `setEditable` echo: same document, new object, no user edit.
+    const runtime = draftRuntimeRegistry.getOrHydrate(draftId);
+    if (runtime === null) throw new Error("expected draft runtime");
+    runtime.setSnapshot(jsonContentForPrompt(SUBMITTED_PROMPT), null);
+
+    createGate.resolve({ roomInfo: null });
+    await waitFor(() => {
+      expect(useTabsStore.getState().items[0]).toMatchObject({
+        kind: "tab",
+        ref: { kind: "epic" },
+      });
+    });
+    expect(useTabsStore.getState().items).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(landingMocks.navigate).toHaveBeenCalledTimes(1);
+    expect(toast.info).not.toHaveBeenCalledWith(
+      "Epic created in the background.",
+    );
+    queryClient.clear();
+  });
+
   it("keeps foreground suppressed when focus was acquired after submit intent", async () => {
     const draftA = useLandingDraftStore
       .getState()

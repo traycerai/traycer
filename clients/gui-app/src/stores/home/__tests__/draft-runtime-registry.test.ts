@@ -171,6 +171,53 @@ describe("DraftRuntimeRegistry", () => {
     expect(draftRuntimeRegistry.liveImageRoots()).not.toContain("submit-hash");
   });
 
+  it("keeps a submission current when the editor re-emits identical content", () => {
+    // Tiptap's `setEditable` emits `update` unconditionally, and the composer
+    // flips `disabled={isSubmitting}` the moment a submission starts - so every
+    // send re-emits a snapshot whose content is byte-identical but a FRESH
+    // object from `getJSON()`. A reference-identity guard treats that as a real
+    // edit, and the create's success path then reads `content-changed` and
+    // routes the epic to a background tab instead of replacing the draft in
+    // place, leaving the sent prompt sitting in the landing composer.
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    const runtime = draftRuntimeRegistry.attach("draft-a");
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+
+    runtime.setSnapshot(content("send me"), null);
+    const attempt = runtime.startSubmission(PLACEMENT);
+    if (attempt === null) throw new Error("expected submission attempt");
+
+    // Same text, new object - exactly what `getJSON()` hands back.
+    runtime.setSnapshot(content("send me"), null);
+
+    expect(draftRuntimeRegistry.settlement(attempt)).toEqual({
+      kind: "current",
+    });
+
+    // A real edit still retires the placement.
+    runtime.setSnapshot(content("send me too"), null);
+    expect(draftRuntimeRegistry.settlement(attempt)).toEqual({
+      kind: "content-changed",
+    });
+  });
+
+  it("tracks a caret move without counting it as a content change", () => {
+    // `onSelectionUpdate` re-emits the same document on every caret move. That
+    // must update the stored selection (the draft restores its caret) without
+    // bumping the revision an in-flight submission is pinned to.
+    useLandingDraftStore.getState().createDraftWithId("draft-a", null);
+    const runtime = draftRuntimeRegistry.attach("draft-a");
+    if (runtime === null) throw new Error("expected keyed draft runtime");
+
+    runtime.setSnapshot(content("caret"), { from: 1, to: 1 });
+    const revision = runtime.store.getState().contentRevision;
+
+    runtime.setSnapshot(content("caret"), { from: 3, to: 5 });
+
+    expect(runtime.store.getState().selection).toEqual({ from: 3, to: 5 });
+    expect(runtime.store.getState().contentRevision).toBe(revision);
+  });
+
   it("releases a retired attempt by identity after same-id rehydration without touching the new runtime", () => {
     useLandingDraftStore.getState().createDraftWithId("draft-a", null);
     const retired = draftRuntimeRegistry.attach("draft-a");

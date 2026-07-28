@@ -29,7 +29,10 @@ import {
   resolvePrimaryPath,
   trimFoldersPreservingPrimary,
 } from "@/lib/worktree/resolve-primary-path";
-import { EMPTY_LANDING_DRAFT_CONTENT } from "./landing-draft-content";
+import {
+  EMPTY_LANDING_DRAFT_CONTENT,
+  sameJsonContent,
+} from "./landing-draft-content";
 import {
   markLandingDraftsReady,
   markLandingDraftsAuthoritativeNonEmpty,
@@ -1090,17 +1093,6 @@ function stripBase64ImageNode(node: JsonContent): JsonContent | null {
   });
   if (node.type === "attachmentGroup" && nextChildren.length === 0) return null;
   return { ...node, content: nextChildren };
-}
-
-// Value-based content equality (H2). This runs on the CANONICAL in-memory
-// content, which may transiently carry a paste's pending b64 image node (bounded
-// by the per-image 5MB cap plus the aggregate image budget) until its background
-// job flips it to a hash. The serialization is therefore bounded, and a stable
-// JSON serialization still short-circuits identical desktop echoes without a deep
-// structural walk.
-function sameJsonContent(a: JsonContent, b: JsonContent): boolean {
-  if (a === b) return true;
-  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function sameDraftSelection(

@@ -662,11 +662,19 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
   );
 }
 
-function HeaderTabSeparator(props: { readonly visible: boolean }) {
+/**
+ * The hairline between two adjacent, non-active strip items. Exported because a
+ * split group is a strip item too and needs the identical rule at its own right
+ * edge - see `SplitTabItem`.
+ */
+export function HeaderTabSeparator(props: { readonly visible: boolean }) {
   if (!props.visible) return null;
   return (
     <span
       aria-hidden
+      // Shared id, disambiguated by scoping the query to the owning strip item
+      // (`tab-<kind>-<id>` or `split-tab-group-<id>`).
+      data-testid="header-tab-separator"
       className="pointer-events-none absolute right-0 top-1/2 z-10 h-5 w-px -translate-y-1/2 bg-border/80"
     />
   );
