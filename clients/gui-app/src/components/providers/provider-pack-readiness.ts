@@ -235,10 +235,11 @@ export function providerPackPreparingShortLabel(
  * cannot serve it - offered-then-failed, the precise thing this module exists
  * to prevent, reintroduced by a one-line vocabulary addition.
  *
- * The set now has two non-retryable members for two unrelated causes (a
- * defective published build; a host that cannot verify its keyring), which is
- * the point at which "list what is allowed" stops being ceremony. Adding a
- * reason now requires deciding whether a click can move it.
+ * The set now has three non-retryable members for three unrelated causes (a
+ * defective published build; a host that cannot verify its keyring; a device
+ * whose storage keeps corrupting a verified archive), which is the point at
+ * which "list what is allowed" stops being ceremony. Adding a reason now
+ * requires deciding whether a click can move it.
  */
 const PROVIDER_PACK_RETRYABLE_REASONS: ReadonlySet<
   NonNullable<ProviderPackPreparing["reason"]>
@@ -292,6 +293,14 @@ export function providerPackErrorDetail(
       // thing that can (a new release) and the one move they own (a PATH or
       // custom install they point Traycer at).
       return "this build is defective and reinstalling cannot fix it. A corrected version has to be published - until then, install the CLI yourself and select it in Settings → Providers.";
+    case "local-storage-mismatch":
+      // The third non-retryable reason, and the only one that is about the
+      // user's machine rather than about Traycer. An archive that passed its
+      // signed digest on arrival read back different, twice, the second time
+      // against a freshly downloaded copy - so the host has stopped refetching
+      // and this copy must not offer the click that would resume it. Named as
+      // a disk problem because that is the only thing the user can act on.
+      return "this device stored the download and read it back changed. Check the disk for errors - until then, install the CLI yourself and select it in Settings → Providers.";
     case "trust-unavailable":
       // Not about this pack, and not something a retry can move: the host
       // could not verify the registry's keyring, so it has no install

@@ -259,6 +259,23 @@ export type ProviderCliCandidate = z.infer<typeof providerCliCandidateSchema>;
  * the wrong affordance: the click cannot move it and `providers.ensurePack`
  * refuses on a host in this state. Its copy names reconnecting or restarting,
  * never "retry". It always travels with `retryAtMs: null`.
+ *
+ * `local-storage-mismatch` is the third non-retryable member, and the only one
+ * that is a claim about the USER'S MACHINE. The host stored an archive that
+ * passed its declared size and signed digest, read it back, and got different
+ * bytes - twice for the same digest, the second time against an independently
+ * re-fetched copy. It is deliberately separate from `verification`, which says
+ * the registry's signed material failed its cryptography and sends the user to
+ * complain about Traycer's publishing, and from `unrepairable`, which says a
+ * published build is defective for everyone. Reported as either of those, the
+ * one machine with failing storage looks like a fleet incident and the user is
+ * pointed at something they cannot fix.
+ *
+ * Automatic refetch STOPS at this reason, which is what it is for: the failure
+ * is deterministic on this device and the loop it replaces was an unbounded
+ * multi-gigabyte download every backoff interval, forever. `retryAtMs` is null
+ * because no attempt is scheduled, and a retry button would be
+ * offered-then-failed.
  */
 export const providerManagedInstallErrorReasonSchema = z.enum([
   "disk-full",
@@ -268,6 +285,7 @@ export const providerManagedInstallErrorReasonSchema = z.enum([
   "unrepairable",
   "live-owner-stalled",
   "trust-unavailable",
+  "local-storage-mismatch",
 ]);
 export type ProviderManagedInstallErrorReason = z.infer<
   typeof providerManagedInstallErrorReasonSchema

@@ -443,10 +443,17 @@ describe("the terminal `unrepairable` reason", () => {
       "live-owner-stalled",
       "unrepairable",
       "trust-unavailable",
+      "local-storage-mismatch",
     ]);
     const nonRetryable = new Set<ProviderManagedInstallErrorReason>([
       "unrepairable",
       "trust-unavailable",
+      // The host has already STOPPED refetching for this reason - that is what
+      // the reason means. A retry button would restart nothing: the click
+      // reaches `providers.ensurePack`, which would meet the same strike record
+      // and the same device. The user's move is the disk, or a CLI outside the
+      // managed store.
+      "local-storage-mismatch",
     ]);
 
     for (const reason of providerManagedInstallErrorReasonSchema.options) {
