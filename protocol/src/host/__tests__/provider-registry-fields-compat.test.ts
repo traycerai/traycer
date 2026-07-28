@@ -252,32 +252,36 @@ describe("old-client behavior on the error arm", () => {
     },
   );
 
-  it("normalizes an unrecognized arm to null for a 6.0 client that predates it", () => {
-    // Stand-in for the pre-error 6.0 client: its union did not model
-    // `status: "error"`, so `.catch(null)` on the FIELD (not the union) turns
-    // the whole value into null rather than throwing the response away. Same
-    // mechanism, exercised here with a status no version will ever model.
-    const parsed = providerCliStateSchema.parse({
+  // The unrecognized-DISCRIMINATOR half of this story - a 6.0 client whose
+  // union has no `error` arm at all - is asserted once, generically, by
+  // "tolerates an unknown future managedInstallState/advisory shape" above; it
+  // exercises this same field and its same `.catch(null)`, so repeating it here
+  // would be a second copy of one guard rather than new coverage. What follows
+  // bounds that fallback from the other side, which nothing else covered.
+  it("tolerates an additive key on a recognized arm but nulls a malformed one", () => {
+    // Why the fallback cannot be read as "any unexpected input nulls the
+    // field": each arm is a plain `z.object`, so an unknown EXTRA key is
+    // stripped and the arm survives - that is what lets a future arm add a
+    // field without blanking this state on every older client.
+    const additive = providerCliStateSchema.parse({
       ...providerState("codex"),
       managedInstallState: {
         status: "error",
         reason: "network",
         message: "registry unreachable",
         retryAtMs: null,
-        // A field a future arm might add, on a status this schema DOES model:
-        // the union is strict on shape, so an unknown extra key is fine but a
-        // wrong-typed known key is not - proving `.catch(null)` is what stands
-        // between a malformed arm and a thrown response.
         retryAtMs2: "not a number",
       },
     });
-    expect(parsed.managedInstallState).toEqual({
+    expect(additive.managedInstallState).toEqual({
       status: "error",
       reason: "network",
       message: "registry unreachable",
       retryAtMs: null,
     });
 
+    // A wrong-typed KNOWN key is the opposite: the arm fails to parse, and
+    // `.catch(null)` is what stands between it and a thrown response.
     const malformed = providerCliStateSchema.parse({
       ...providerState("codex"),
       managedInstallState: {
@@ -288,6 +292,24 @@ describe("old-client behavior on the error arm", () => {
       },
     });
     expect(malformed.managedInstallState).toBeNull();
+  });
+
+  it("nulls the arm when retryAtMs is not a non-negative integer instant", () => {
+    // Guards the tightened `retryAtMs` constraint through the same `.catch(null)`
+    // path: a fractional or negative epoch-ms is a producer bug, and degrading
+    // to "no retry scheduled" beats surfacing a countdown to a nonsense instant.
+    for (const retryAtMs of [-1, 1.5]) {
+      const parsed = providerCliStateSchema.parse({
+        ...providerState("codex"),
+        managedInstallState: {
+          status: "error",
+          reason: "network",
+          message: "registry unreachable",
+          retryAtMs,
+        },
+      });
+      expect(parsed.managedInstallState).toBeNull();
+    }
   });
 });
 
@@ -305,8 +327,9 @@ describe("providers.ensurePack is an additive optional method", () => {
         .success,
     ).toBe(true);
     expect(
-      providersEnsurePackRequestSchema.safeParse({ providerId: "not-a-provider" })
-        .success,
+      providersEnsurePackRequestSchema.safeParse({
+        providerId: "not-a-provider",
+      }).success,
     ).toBe(false);
     expect(
       providersEnsurePackResponseSchema.parse({ managedInstallState: null })

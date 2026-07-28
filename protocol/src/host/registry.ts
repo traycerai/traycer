@@ -449,6 +449,7 @@ import {
   providersSetTerminalAgentArgsResponseSchema,
   providersSetTerminalAgentArgsResponseSchemaV10,
   providersSetTerminalAgentArgsResponseSchemaV20,
+  type DowngradableToV10ProviderState,
   type ProviderCliState,
   type ProviderCliStateV10,
   type ProviderMutationCliStateV20,
@@ -872,23 +873,11 @@ function unsupportedProviderStateDowngrade(
   };
 }
 
-// Accepts either the live (latest) state or the frozen v2.0 state - see
-// `downgradeProviderCliStateToV10`'s comment. `providersListDowngradeV2ToV1`
-// downgrades from v2.0 (already `profiles`-free); every other caller
-// downgrades from the live state. The provider-pack-registry fields are
-// already optional on `ProviderCliState` itself, so no extra typing is
-// needed for those. `loginCapability` is widened to also accept the frozen-v10
-// capability shape (some callers pass a frozen state lifted via
-// `upgradeLoginCapabilityFromV10`); the strict v1.0 parse keeps only
-// `oauthArgs`/`token` regardless.
-type DowngradableToV10ProviderState = Omit<
-  ProviderCliState,
-  "profiles" | "loginCapability"
-> & {
-  profiles?: ProviderCliState["profiles"];
-  loginCapability: ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
-};
-
+// `DowngradableToV10ProviderState` (imported) accepts either the live (latest)
+// state or the frozen v2.0 state - see `downgradeProviderCliStateToV10`'s
+// comment, which owns the shape. `providersListDowngradeV2ToV1` downgrades from
+// v2.0 (already `profiles`-free); every other caller downgrades from the live
+// state.
 function downgradeProviderStateForV10(
   state: DowngradableToV10ProviderState,
 ): DowngradeResult<ProviderCliStateV10> {

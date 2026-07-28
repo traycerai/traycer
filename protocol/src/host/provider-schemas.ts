@@ -344,7 +344,13 @@ export const providerManagedInstallStateSchema = z.discriminatedUnion(
       // nothing is scheduled and a user-initiated `providers.ensurePack` is
       // the way forward; for `unrepairable` it means there is no way forward
       // at all and `ensurePack` is a guaranteed no-op.
-      retryAtMs: z.number().nullable(),
+      //
+      // Constrained like `percent` above rather than left a bare `z.number()`:
+      // an epoch-ms instant is a non-negative integer, and a fractional or
+      // negative one is a producer bug, not a countdown. Because the FIELD
+      // carries `.catch(null)`, a violation degrades to "no retry scheduled"
+      // instead of throwing the whole `providers.list` away.
+      retryAtMs: z.number().int().nonnegative().nullable(),
     }),
   ],
 );
@@ -1678,12 +1684,20 @@ export function downgradeProviderAuthV20ToV10(
 // pre-`codePaste` shape (`providerLoginCapabilitySchemaV10`), not the live
 // one - either is fine here since the strict v1.0 parse below only keeps
 // `oauthArgs`/`token` regardless.
+// Exported so `registry.ts` names the same shape instead of restating it: the
+// two definitions had already been written twice, identically, and the widened
+// `loginCapability` above is exactly the kind of detail that drifts when only
+// one copy gets updated.
+export type DowngradableToV10ProviderState = Omit<
+  ProviderCliState,
+  "profiles" | "loginCapability"
+> & {
+  profiles?: ProviderCliState["profiles"];
+  loginCapability: ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
+};
+
 export function downgradeProviderCliStateToV10(
-  state: Omit<ProviderCliState, "profiles" | "loginCapability"> & {
-    profiles?: ProviderCliState["profiles"];
-    loginCapability:
-      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
-  },
+  state: DowngradableToV10ProviderState,
 ): ProviderCliStateV10 | null {
   // `providerCliStateSchemaV10` is a `z.strictObject`, so it REJECTS any key it
   // doesn't model. Drop later-than-v1.0 fields (`availabilityPending`,
