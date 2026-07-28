@@ -241,7 +241,7 @@ export function GeneralSettingsPanel() {
               label="Agent roles"
               description={
                 featureSettings.isError
-                  ? "Couldn't read feature settings. Fix or delete ~/.traycer/cli/config.json, then reopen Settings."
+                  ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
                   : "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts."
               }
               control={

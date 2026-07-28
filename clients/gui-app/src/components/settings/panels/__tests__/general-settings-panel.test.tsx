@@ -274,11 +274,13 @@ describe("GeneralSettingsPanel", () => {
   });
 
   it("hydrates and updates Agent roles under Experimental", async () => {
+    let agentRoles = false;
     const bridge: TestFeatureSettingsBridge = {
-      get: vi.fn(() => Promise.resolve({ agentRoles: false })),
-      setAgentRolesEnabled: vi.fn((enabled) =>
-        Promise.resolve({ agentRoles: enabled }),
-      ),
+      get: vi.fn(() => Promise.resolve({ agentRoles })),
+      setAgentRolesEnabled: vi.fn((enabled) => {
+        agentRoles = enabled;
+        return Promise.resolve({ agentRoles });
+      }),
     };
     (globalThis as { runnerHost?: unknown }).runnerHost = {
       platform: { featureSettings: bridge },
@@ -297,6 +299,7 @@ describe("GeneralSettingsPanel", () => {
     await waitFor(() =>
       expect(toggle.getAttribute("aria-checked")).toBe("true"),
     );
+    await waitFor(() => expect(bridge.get).toHaveBeenCalledTimes(2));
   });
 
   it("surfaces feature-settings read failures and keeps Agent roles disabled", async () => {

@@ -22,8 +22,11 @@ export function useRunnerAgentRolesSet() {
       }
       return bridge.setAgentRolesEnabled(enabled);
     },
-    onSuccess: (snapshot: FeatureSettingsSnapshot) => {
-      queryClient.setQueryData(runnerQueryKeys.featureSettings(), snapshot);
+    onSuccess: async (snapshot: FeatureSettingsSnapshot) => {
+      const queryKey = runnerQueryKeys.featureSettings();
+      await queryClient.cancelQueries({ queryKey });
+      queryClient.setQueryData(queryKey, snapshot);
+      await queryClient.invalidateQueries({ queryKey });
     },
     onError: (error) =>
       toastFromRunnerError(error, "Couldn't update agent roles"),
