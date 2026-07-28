@@ -207,7 +207,9 @@ describe("<EpicConnectionPill />", () => {
     );
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
-    ).not.toContain("saved locally");
+    ).toBe(
+      "Offline. Some recent changes are still being saved on this device. Keep this window open.",
+    );
     await expectTooltip(OFFLINE_UNSAVED_TOOLTIP);
     expect(screen.getByRole("status").textContent).toContain(
       "Some recent changes are still being saved",
@@ -227,7 +229,9 @@ describe("<EpicConnectionPill />", () => {
     expect(screen.getByTestId("epic-connection-pill-dot").textContent).toBe("");
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
-    ).not.toContain("saved locally");
+    ).toBe(
+      "Offline. This device is still processing pending changes; keep it running.",
+    );
     await expectTooltip(
       "The cloud connection is down. This device is still processing pending changes; keep it running.",
     );
