@@ -298,7 +298,6 @@ function FillableSplitSlot(props: {
             splitId={props.splitId}
             side={props.side}
             slot={props.slot}
-            focused={props.focused}
             dropActive={dropActive}
           />
         </SurfacePresentationBoundary>

@@ -135,16 +135,22 @@ function historyItemDisplayTitle(item: HistoryItem): string {
       });
 }
 
-export type EpicsListPanelVariant = "page" | "embedded";
+export type EpicsListPanelVariant = "page" | "embedded" | "picker";
 
 interface EpicsListPanelProps {
   readonly variant: EpicsListPanelVariant;
+  readonly className: string | undefined;
   /**
-   * When set, row clicks invoke this callback instead of navigating
-   * via the embedded `<Link>`. Used by the system-tab modal to close
-   * the modal and route the user to the epic in one step.
+   * Called immediately before normal row navigation. The system-tab modal
+   * uses this to close its overlay in the same interaction.
    */
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  /**
+   * Replaces the row's normal navigation when this panel is embedded in a
+   * destination picker. The complete item is provided so callers can preserve
+   * the distinct Epic and legacy Phase activation paths.
+   */
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly routeSearch: HistorySearchState | null;
   readonly historyNowMs: number | null;
   /**
@@ -158,7 +164,9 @@ interface EpicsListPanelProps {
 
 interface RouteEpicsListPanelProps {
   readonly variant: EpicsListPanelVariant;
+  readonly className: string | undefined;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly routeSearch: HistorySearchState;
   readonly historyNowMs: number | null;
   readonly autoFocusSearch: boolean;
@@ -166,14 +174,18 @@ interface RouteEpicsListPanelProps {
 
 interface AmbientEpicsListPanelProps {
   readonly variant: EpicsListPanelVariant;
+  readonly className: string | undefined;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly historyNowMs: number | null;
   readonly autoFocusSearch: boolean;
 }
 
 interface EpicsListPanelBodyProps {
   readonly variant: EpicsListPanelVariant;
+  readonly className: string | undefined;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly historyNowMs: number | null;
   readonly historySearch: HistorySearchController;
   readonly autoFocusSearch: boolean;
@@ -195,7 +207,9 @@ export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
     return (
       <AmbientEpicsListPanel
         variant={props.variant}
+        className={props.className}
         onSelectEpic={props.onSelectEpic}
+        onOpenItem={props.onOpenItem}
         historyNowMs={props.historyNowMs}
         autoFocusSearch={props.autoFocusSearch}
       />
@@ -204,7 +218,9 @@ export function EpicsListPanel(props: EpicsListPanelProps): ReactNode {
   return (
     <RouteEpicsListPanel
       variant={props.variant}
+      className={props.className}
       onSelectEpic={props.onSelectEpic}
+      onOpenItem={props.onOpenItem}
       routeSearch={props.routeSearch}
       historyNowMs={props.historyNowMs}
       autoFocusSearch={props.autoFocusSearch}
@@ -217,7 +233,9 @@ function RouteEpicsListPanel(props: RouteEpicsListPanelProps): ReactNode {
   return (
     <EpicsListPanelBody
       variant={props.variant}
+      className={props.className}
       onSelectEpic={props.onSelectEpic}
+      onOpenItem={props.onOpenItem}
       historyNowMs={props.historyNowMs}
       historySearch={historySearch}
       autoFocusSearch={props.autoFocusSearch}
@@ -230,7 +248,9 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
   return (
     <EpicsListPanelBody
       variant={props.variant}
+      className={props.className}
       onSelectEpic={props.onSelectEpic}
+      onOpenItem={props.onOpenItem}
       historyNowMs={props.historyNowMs}
       historySearch={historySearch}
       autoFocusSearch={props.autoFocusSearch}
@@ -239,7 +259,7 @@ function AmbientEpicsListPanel(props: AmbientEpicsListPanelProps): ReactNode {
 }
 
 function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
-  const { variant, onSelectEpic, historySearch } = props;
+  const { variant, onSelectEpic, onOpenItem, historySearch } = props;
   // Destructure the stable `update`/`clear` functions (the hook returns a fresh
   // wrapper object each render, so closing over `historySearch.update` would
   // give the compiler an unstable dependency and re-create every handler each
@@ -473,7 +493,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     void refetch();
   };
 
-  const showChrome = variant === "page";
+  const showPageSearch = variant === "page";
+  const showToolbarSearch = variant === "picker";
 
   return (
     <TooltipProvider>
@@ -481,9 +502,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         className={cn(
           "flex min-h-0 w-full flex-col",
           variant === "page" ? "mx-auto max-w-3xl flex-1 px-6 pt-6" : "mt-8",
+          props.className,
         )}
       >
-        {showChrome ? (
+        {showPageSearch ? (
           <PanelSearchInput
             value={search.query}
             onChange={(next) => {
@@ -491,9 +513,23 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             }}
             isFetching={isFetching}
             focusOnMount={props.autoFocusSearch}
+            placement="page"
           />
         ) : null}
         <PanelChromeBar
+          leading={
+            showToolbarSearch ? (
+              <PanelSearchInput
+                value={search.query}
+                onChange={(next) => {
+                  updateSearch({ query: next });
+                }}
+                isFetching={isFetching}
+                focusOnMount={props.autoFocusSearch}
+                placement="toolbar"
+              />
+            ) : null
+          }
           filters={{ active: hasActiveFilters, onClear: handleClear }}
           selection={
             selectionMode
@@ -559,6 +595,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               isFetchingNextPage={isFetchingNextPage}
               onLoadMore={fetchNextPage}
               onSelectEpic={onSelectEpic}
+              onOpenItem={onOpenItem}
               onOpenInNewWindow={openInNewWindowFlow.requestOpen}
               openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
               worktreesByEpicId={worktreesByEpicId}
@@ -607,6 +644,7 @@ interface PanelSearchInputProps {
   readonly onChange: (next: string) => void;
   readonly isFetching: boolean;
   readonly focusOnMount: boolean;
+  readonly placement: "page" | "toolbar";
 }
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
@@ -626,7 +664,11 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
     };
   }, [focusOnMount]);
   return (
-    <div className="px-2 pb-3">
+    <div
+      className={cn(
+        props.placement === "page" ? "px-2 pb-3" : "min-w-0 flex-1 sm:max-w-sm",
+      )}
+    >
       <InputGroup>
         <InputGroupAddon align="inline-start">
           {props.isFetching ? (
@@ -701,6 +743,7 @@ interface PanelRefreshControls {
 }
 
 interface PanelChromeBarProps {
+  readonly leading: ReactNode;
   readonly filters: PanelFilterControls;
   readonly selection: PanelSelectionControls;
   readonly sort: HistorySortOption;
@@ -726,7 +769,8 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
 
   return (
     <div className="flex items-center justify-between gap-2 px-2 pb-2">
-      <div className="min-w-0">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {props.leading}
         {props.filters.active ? (
           <ClearFiltersButton onClick={props.filters.onClear} />
         ) : null}
@@ -876,6 +920,7 @@ interface EpicsListBodyProps {
   readonly isFetchingNextPage: boolean;
   readonly onLoadMore: () => void;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
   readonly worktreesByEpicId: ReadonlyMap<
@@ -904,6 +949,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     isFetchingNextPage,
     onLoadMore,
     onSelectEpic,
+    onOpenItem,
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktreesByEpicId,
@@ -945,6 +991,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               onSetPinned={onSetPinned}
               isPinPending={pendingSetPinnedEpicIds.has(item.epicId)}
               onSelectEpic={onSelectEpic}
+              onOpenItem={onOpenItem}
               onOpenInNewWindow={onOpenInNewWindow}
               openInNewWindowAvailable={openInNewWindowAvailable}
               worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
@@ -1015,6 +1062,7 @@ interface EpicsListRowProps {
   readonly onSetPinned: (epicId: string, pinned: boolean) => void;
   readonly isPinPending: boolean;
   readonly onSelectEpic: ((epicId: string) => void) | null;
+  readonly onOpenItem: ((item: HistoryItem) => void) | null;
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
@@ -1080,6 +1128,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     onSetPinned,
     isPinPending,
     onSelectEpic,
+    onOpenItem,
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktrees,
@@ -1159,6 +1208,10 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     [],
   );
   const openEpic = useCallback(() => {
+    if (onOpenItem !== null) {
+      onOpenItem(item);
+      return;
+    }
     onSelectEpic?.(item.epicId);
     if (isPhase) {
       // Route the Phase deep link through the canonical activation boundary so
@@ -1188,7 +1241,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       title: item.title,
       source: "direct_ui",
     });
-  }, [isPhase, item.epicId, item.title, navigate, onSelectEpic, pathname]);
+  }, [isPhase, item, navigate, onOpenItem, onSelectEpic, pathname]);
   const toggleEpicSelection = () => {
     if (!canDeleteItem) return;
     onToggleSelection(item.epicId);
