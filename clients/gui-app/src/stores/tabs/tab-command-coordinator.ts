@@ -627,10 +627,10 @@ export class TabCommandCoordinator {
       return false;
     }
     if (!sourceHasRef(command.ref)) return false;
+    if (isTabStructurallyLocked(command.ref)) return false;
     const layout = currentLayout();
     const existing = findStripItemForRef(layout, command.ref);
     if (existing?.kind === "split") return false;
-    if (existing !== null && isTabStructurallyLocked(command.ref)) return false;
     const withRef = createLayoutItem(layout, command.ref);
     const item = findStripItemForRef(withRef, command.ref);
     if (item?.kind !== "tab") return false;

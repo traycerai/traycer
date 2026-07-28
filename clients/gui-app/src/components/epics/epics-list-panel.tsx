@@ -598,6 +598,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               items={items}
               onRetry={handleRetry}
               selectionMode={selectionMode}
+              selectionEnabled={selectionEnabled}
               selectedIds={selectedIds}
               onToggleSelection={toggleSelection}
               onRequestDelete={requestDelete}
@@ -928,6 +929,7 @@ interface EpicsListBodyProps {
   readonly items: ReadonlyArray<HistoryItem>;
   readonly onRetry: () => void;
   readonly selectionMode: boolean;
+  readonly selectionEnabled: boolean;
   readonly selectedIds: ReadonlySet<string>;
   readonly onToggleSelection: (id: string) => void;
   readonly onRequestDelete: (ids: ReadonlyArray<string>) => void;
@@ -957,6 +959,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     items,
     onRetry,
     selectionMode,
+    selectionEnabled,
     selectedIds,
     onToggleSelection,
     onRequestDelete,
@@ -1002,6 +1005,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               key={item.id}
               item={item}
               selectionMode={selectionMode}
+              selectionEnabled={selectionEnabled}
               isSelected={selectedIds.has(item.epicId)}
               onToggleSelection={onToggleSelection}
               onRequestDelete={onRequestDelete}
@@ -1073,6 +1077,9 @@ function EpicsListFilteringLoading() {
 interface EpicsListRowProps {
   readonly item: HistoryItem;
   readonly selectionMode: boolean;
+  /** False for the read-only `variant="picker"` embed - disables the sweep
+   * affordance instead of leaving it live-looking but inert. */
+  readonly selectionEnabled: boolean;
   readonly isSelected: boolean;
   readonly onToggleSelection: (id: string) => void;
   readonly onRequestDelete: (ids: ReadonlyArray<string>) => void;
@@ -1139,6 +1146,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const {
     item,
     selectionMode,
+    selectionEnabled,
     isSelected,
     onToggleSelection,
     onRequestDelete,
@@ -1153,12 +1161,13 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     isOpen,
   } = props;
   const isPhase = item.taskType === "phase";
-  const rowSweep = useHistoryRowSweep(
+  const rowSweep = useHistoryRowSweep({
     item,
     worktrees,
     selectionMode,
+    selectionEnabled,
     onRequestSweep,
-  );
+  });
   const displayTitle = historyItemDisplayTitle(item);
   const canEditTitle = canEditHistoryItemTitle(item);
   const canDeleteItem = canDeleteHistoryItem(item);
@@ -1580,12 +1589,15 @@ interface HistoryRowSweepState {
  * Cheap and reactive - derived from the same enriched listing the PR pills
  * already join, with no extra host call to render the affordance.
  */
-function useHistoryRowSweep(
-  item: HistoryItem,
-  worktrees: readonly WorktreeHostEntryV12[],
-  selectionMode: boolean,
-  onRequestSweep: (epicId: string) => void,
-): HistoryRowSweepState {
+function useHistoryRowSweep(args: {
+  readonly item: HistoryItem;
+  readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly selectionMode: boolean;
+  readonly selectionEnabled: boolean;
+  readonly onRequestSweep: (epicId: string) => void;
+}): HistoryRowSweepState {
+  const { item, worktrees, selectionMode, selectionEnabled, onRequestSweep } =
+    args;
   const requestSweep = useCallback(() => {
     onRequestSweep(item.epicId);
   }, [item.epicId, onRequestSweep]);
@@ -1593,11 +1605,16 @@ function useHistoryRowSweep(
   // delete control and the bulk Sweep button behave: the affordance keeps its
   // place in the row instead of appearing and disappearing per row. Phases are
   // still skipped entirely - they never have worktrees, so a permanently dead
-  // control there would be noise rather than consistency.
+  // control there would be noise rather than consistency. The read-only picker
+  // embed (`selectionEnabled=false`) uses the same disabled treatment rather
+  // than a live-looking button whose click is silently neutered upstream.
   return {
     isVisible: !selectionMode && item.taskType !== "phase",
     canSweep:
-      !selectionMode && item.taskType !== "phase" && worktrees.length > 0,
+      selectionEnabled &&
+      !selectionMode &&
+      item.taskType !== "phase" &&
+      worktrees.length > 0,
     requestSweep,
   };
 }

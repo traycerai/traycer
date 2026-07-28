@@ -422,6 +422,25 @@ describe("<EpicsListPanel />", () => {
     expect(screen.queryByText("This action cannot be undone.")).toBeNull();
   });
 
+  it("disables the row sweep affordance in the read-only picker variant", async () => {
+    testState.worktreesByEpicId = new Map([
+      ["epic-from-history", [historyWorktree()]],
+    ]);
+    renderPanel("picker", "/");
+
+    await screen.findByRole("link", { name: "Open task Open from landing" });
+
+    // A worktree-owning task normally renders the LIVE sweep button (not the
+    // aria-disabled variant) - confirm the picker still shows the disabled
+    // treatment instead of a live-looking control whose click is neutered.
+    expect(screen.queryByTestId("epics-list-row-sweep")).toBeNull();
+    expect(
+      screen
+        .getByTestId("epics-list-row-sweep-disabled")
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+  });
+
   afterEach(() => {
     cleanup();
     __resetTabNavigationControllerForTesting();
