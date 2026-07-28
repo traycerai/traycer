@@ -1,5 +1,6 @@
 import { WorktreeDeleteStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "@traycer-clients/shared/host-transport/worktree-delete-batch-stream-client";
+import type { WorktreeDeletionSource } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { appLogger } from "@/lib/logger";
@@ -33,15 +34,17 @@ const EMPTY_OUTCOME: WorktreeCleanupOutcome = {
 const MAX_PARALLEL_CLEANUP_STREAMS = 2;
 
 /**
- * Runs the post-Task-deletion worktree cleanup for the paths whose owning Tasks
- * all deleted successfully, resolving once every path has an outcome.
+ * Runs one user-approved, multi-path worktree cleanup, resolving once every
+ * path has an observed outcome.
  *
  * On a current host this is ONE `worktree.deleteBatchByPath@1.0` command. That
  * is the point of the migration: the renderer used to be the only place that
- * knew a multi-Task cleanup was one user action, so the host could not attribute
- * a durable completion notification to it and could not finish the work if this
- * window went away. Now it can do both, and the `task_cleanup` source is what
- * lets the resulting row say where the deletion came from.
+ * knew the paths were one user action, so the host could not attribute a
+ * durable completion notification to it and could not finish the work if this
+ * window went away. Now it can do both. The caller supplies the durable source
+ * (`task_cleanup` after deleting Tasks, `task_sweep` for the standalone Sweep
+ * action) so telemetry and future presentation can distinguish the workflows
+ * without adding a notification kind.
  *
  * On an older host - one whose handshake rejects the batch method outright,
  * before any subscribe frame asks it to delete anything - the previous bounded
@@ -49,8 +52,8 @@ const MAX_PARALLEL_CLEANUP_STREAMS = 2;
  *
  * This is intentionally NOT wired into the Settings `useWorktreeDeleteRun`
  * store: that store owns the Settings progress modal / strip / backgrounding
- * UX. The Task-delete flow only needs a tally for its combined summary toast,
- * so it drives the stream clients directly with `scripts: null` (the host
+ * UX. Task deletion and Sweep only need a tally for their summary toasts, so
+ * they drive the stream clients directly with `scripts: null` (the host
  * resolves each worktree's own committed teardown scripts).
  *
  * The host-side busy-check stays intact on both paths: a path that became
@@ -61,11 +64,12 @@ export function runWorktreeCleanup(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
   hostId: string,
   paths: ReadonlyArray<string>,
+  source: WorktreeDeletionSource,
 ): Promise<WorktreeCleanupOutcome> {
   // No approved paths is not a command. Opening one would burn a `commandId`
   // and ask the host for a "you deleted nothing" notification row.
   if (paths.length === 0) return Promise.resolve(EMPTY_OUTCOME);
-  return runCleanupCommand(openStreamTransport, hostId, paths);
+  return runCleanupCommand(openStreamTransport, hostId, paths, source);
 }
 
 /**
@@ -83,6 +87,7 @@ function runCleanupCommand(
   openStreamTransport: (hostId: string) => DurableStreamTransport,
   hostId: string,
   paths: ReadonlyArray<string>,
+  source: WorktreeDeletionSource,
 ): Promise<WorktreeCleanupOutcome> {
   return new Promise<WorktreeCleanupOutcome>((resolve) => {
     const removed: string[] = [];
@@ -173,7 +178,7 @@ function runCleanupCommand(
           new WorktreeDeleteBatchStreamClient({
             wsStreamClient,
             commandId: crypto.randomUUID(),
-            source: "task_cleanup",
+            source,
             targets: paths.map((worktreePath) => ({
               worktreePath,
               scripts: null,

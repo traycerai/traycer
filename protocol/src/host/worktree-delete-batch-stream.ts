@@ -87,6 +87,7 @@ import { worktreeEntryScriptsSchema } from "@traycer/protocol/host/worktree-sche
 export const worktreeDeletionSourceSchema = z.enum([
   "settings",
   "task_cleanup",
+  "task_sweep",
   "cli",
   "legacy_client",
 ]);

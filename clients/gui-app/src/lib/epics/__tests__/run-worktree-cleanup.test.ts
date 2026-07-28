@@ -6,7 +6,10 @@ import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
-import { runWorktreeCleanup } from "@/lib/epics/run-worktree-cleanup";
+import {
+  runWorktreeCleanup,
+  type WorktreeCleanupOutcome,
+} from "@/lib/epics/run-worktree-cleanup";
 
 // The current-host path: ONE `worktree.deleteBatchByPath` command per cleanup.
 // Recording every construction is what lets a test assert the migration's core
@@ -140,6 +143,17 @@ function reachHost(): void {
   commandCallbacks().onConnectionStatus("open", null);
 }
 
+function runTaskCleanup(
+  paths: ReadonlyArray<string>,
+): Promise<WorktreeCleanupOutcome> {
+  return runWorktreeCleanup(
+    stubOpenStreamTransport(),
+    "host-1",
+    paths,
+    "task_cleanup",
+  );
+}
+
 /** Hands the whole cleanup to the older-host fan-out. */
 function reportUnsupported(): void {
   commandCallbacks().onUnsupported();
@@ -158,11 +172,7 @@ beforeEach(() => {
 
 describe("runWorktreeCleanup on a current host", () => {
   it("opens ONE task_cleanup command covering every approved path", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-      "/wt/b",
-      "/wt/c",
-    ]);
+    const promise = runTaskCleanup(["/wt/a", "/wt/b", "/wt/c"]);
 
     expect(commandMock.commands).toHaveLength(1);
     const command = commandMock.commands[0];
@@ -189,20 +199,41 @@ describe("runWorktreeCleanup on a current host", () => {
     await promise;
   });
 
+  it("preserves task_sweep as distinct durable command provenance", async () => {
+    const promise = runWorktreeCleanup(
+      stubOpenStreamTransport(),
+      "host-1",
+      ["/wt/sweep"],
+      "task_sweep",
+    );
+
+    expect(commandMock.commands).toHaveLength(1);
+    expect(commandMock.commands[0]?.source).toBe("task_sweep");
+    commandCallbacks().onTargetComplete("/wt/sweep", true);
+    commandCallbacks().onCommandComplete({
+      requestedCount: 1,
+      deletedCount: 1,
+      failedCount: 0,
+    });
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/sweep"],
+      failed: [],
+      uncertain: [],
+    });
+  });
+
   it("starts no command at all for an empty approved set", async () => {
-    await expect(
-      runWorktreeCleanup(stubOpenStreamTransport(), "host-1", []),
-    ).resolves.toEqual({ removed: [], failed: [], uncertain: [] });
+    await expect(runTaskCleanup([])).resolves.toEqual({
+      removed: [],
+      failed: [],
+      uncertain: [],
+    });
     expect(commandMock.commands).toEqual([]);
     expect(legacyMock.paths).toEqual([]);
   });
 
   it("tallies per-target outcomes independently of one another", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/removed",
-      "/wt/declined",
-      "/wt/busy",
-    ]);
+    const promise = runTaskCleanup(["/wt/removed", "/wt/declined", "/wt/busy"]);
     reachHost();
     const callbacks = commandCallbacks();
     callbacks.onTargetComplete("/wt/removed", true);
@@ -224,10 +255,7 @@ describe("runWorktreeCleanup on a current host", () => {
   });
 
   it("reports targets the host settled while detached as unconfirmed", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/seen",
-      "/wt/missed",
-    ]);
+    const promise = runTaskCleanup(["/wt/seen", "/wt/missed"]);
     reachHost();
     commandCallbacks().onTargetComplete("/wt/seen", true);
     // The host does not replay per-target frames to a late observer, so
@@ -246,10 +274,7 @@ describe("runWorktreeCleanup on a current host", () => {
   });
 
   it("reports a drop after the command reached the host as unconfirmed, without replaying it", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-      "/wt/b",
-    ]);
+    const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
     reachHost();
     commandCallbacks().onTargetComplete("/wt/a", true);
     commandCallbacks().onConnectionStatus("reconnecting", null);
@@ -268,9 +293,7 @@ describe("runWorktreeCleanup on a current host", () => {
   });
 
   it("reports a drop BEFORE the command reached the host as failed", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-    ]);
+    const promise = runTaskCleanup(["/wt/a"]);
     // No `open`: the subscribe frame never got to a live socket, so nothing was
     // attempted and there is nothing uncertain about it.
     commandCallbacks().onConnectionStatus("reconnecting", null);
@@ -284,10 +307,7 @@ describe("runWorktreeCleanup on a current host", () => {
   });
 
   it("reports a host-rejected command as failed", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-      "/wt/b",
-    ]);
+    const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
     reachHost();
     commandCallbacks().onCommandFailed("Worktree service is not ready.");
 
@@ -302,9 +322,7 @@ describe("runWorktreeCleanup on a current host", () => {
   });
 
   it("ignores normal startup statuses", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-    ]);
+    const promise = runTaskCleanup(["/wt/a"]);
     commandCallbacks().onConnectionStatus("connecting", null);
     reachHost();
     commandCallbacks().onTargetComplete("/wt/a", true);
@@ -324,11 +342,7 @@ describe("runWorktreeCleanup on a current host", () => {
 
 describe("runWorktreeCleanup on an older host", () => {
   it("falls back to the bounded per-target fan-out", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-      "/wt/b",
-      "/wt/c",
-    ]);
+    const promise = runTaskCleanup(["/wt/a", "/wt/b", "/wt/c"]);
     // Reported from the openAck compatibility check, BEFORE any subscribe frame
     // reached the host - which is what makes re-issuing the work safe.
     reportUnsupported();
@@ -357,9 +371,7 @@ describe("runWorktreeCleanup on an older host", () => {
   // settle so the summary toast + cache invalidation still fire. Unchanged by
   // the migration: an older host has no command to keep running without us.
   it("fails fast and settles when a per-target stream drops", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-    ]);
+    const promise = runTaskCleanup(["/wt/a"]);
     reportUnsupported();
     legacyCallbacksFor("/wt/a").onConnectionStatus("reconnecting", null);
 
@@ -373,9 +385,7 @@ describe("runWorktreeCleanup on an older host", () => {
   });
 
   it("treats a per-target close before a terminal frame as a failure", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-    ]);
+    const promise = runTaskCleanup(["/wt/a"]);
     reportUnsupported();
     legacyCallbacksFor("/wt/a").onConnectionStatus("closed", null);
 
@@ -404,10 +414,7 @@ describe("runWorktreeCleanup on an older host", () => {
       "[worktree-cleanup] failed to open delete stream",
     );
 
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-      "/wt/b",
-    ]);
+    const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
     reportUnsupported();
 
     // Both paths went out before the fan-out came apart.
@@ -424,9 +431,7 @@ describe("runWorktreeCleanup on an older host", () => {
   });
 
   it("ignores normal per-target startup statuses until a terminal frame arrives", async () => {
-    const promise = runWorktreeCleanup(stubOpenStreamTransport(), "host-1", [
-      "/wt/a",
-    ]);
+    const promise = runTaskCleanup(["/wt/a"]);
     reportUnsupported();
     legacyCallbacksFor("/wt/a").onConnectionStatus("connecting", null);
     legacyCallbacksFor("/wt/a").onConnectionStatus("open", null);

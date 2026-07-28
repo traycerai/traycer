@@ -4,6 +4,11 @@ import {
   parseNotificationPayload,
   routeNotification,
 } from "@/lib/notifications/payload";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  __resetTabSyncCoordinatorForTesting,
+  installTabSyncCoordinator,
+} from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useWorktreesSettingsViewStore } from "@/stores/settings/worktrees-settings-view-store";
 
@@ -12,7 +17,12 @@ import { useWorktreesSettingsViewStore } from "@/stores/settings/worktrees-setti
  * resource opens a host surface, not a document inside an epic.
  */
 describe("host surface notification routing", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    __resetTabNavigationControllerForTesting();
+    __resetTabSyncCoordinatorForTesting();
+    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+    await Promise.resolve();
+    await Promise.resolve();
     useTabsStore.getState().closeSystemTab("settings");
   });
 
@@ -24,7 +34,9 @@ describe("host surface notification routing", () => {
       1_000,
     );
 
-    expect(navigate).toHaveBeenCalledWith({ to: "/settings/worktrees" });
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "/settings/worktrees" }),
+    );
     expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
       "/settings/worktrees",
     );
@@ -69,7 +81,9 @@ describe("host surface notification routing", () => {
       1_000,
     );
 
-    expect(navigate).toHaveBeenCalledWith({ to: "/settings/worktrees" });
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "/settings/worktrees" }),
+    );
   });
 
   it("is routable with or without a focus hint", () => {

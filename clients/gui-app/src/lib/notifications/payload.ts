@@ -440,7 +440,7 @@ export function routeNotification(
  * has just been deleted, so the only honest destination is the list.
  */
 function routeHostSurfaceNotification(
-  navigate: NavigateFn,
+  navigate: NotificationNavigate,
   payload: HostSurfaceNotificationPayload,
 ): void {
   navigateToTabIntent(
@@ -449,6 +449,7 @@ function routeHostSurfaceNotification(
       subSection: HOST_SURFACE_SETTINGS_SECTION[payload.surface],
       resetToGeneral: false,
     }),
+    undefined,
   );
 }
 

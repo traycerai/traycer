@@ -172,6 +172,7 @@ export function useEpicBatchDelete(): UseMutationResult<
             openStreamTransport,
             hostId,
             eligibleWorktreePaths,
+            "task_cleanup",
           ).then((outcome) => {
             emitTaskDeleteSummaryToast(epicToast, outcome);
             invalidateWorktreeCachesForHost(queryClient, hostId);
