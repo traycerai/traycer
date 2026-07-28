@@ -23,8 +23,25 @@ import { cn } from "@/lib/utils";
  *   no Close action (the tab strip already offers close).
  */
 
+/**
+ * Which entity owns the dead tile. The two have opposite durability semantics
+ * and this banner is shared by both, so the copy has to vary by owner:
+ *
+ *   - `terminal` — a raw PTY. It really is gone; nothing returns when the Host
+ *     does.
+ *   - `agent` — an Agent using the Terminal interface. The Agent and its
+ *     transcript are durable and come back with the Host. Only the tab goes
+ *     away when it is closed.
+ *
+ * Telling an Agent's owner the session is "permanently closed" would say the
+ * opposite of the Edge-state contract, so this is a prop rather than one
+ * shared string.
+ */
+export type DeadTileOwnerKind = "terminal" | "agent";
+
 export interface TerminalDeadTileBannerProps {
   readonly hostLabel: string;
+  readonly ownerKind: DeadTileOwnerKind;
   readonly onClose: () => void;
   readonly testId: string;
 }
@@ -38,8 +55,18 @@ export function TerminalDeadTileBanner(
       data-testid={props.testId}
     >
       <p className="max-w-md">
-        Host &quot;{props.hostLabel}&quot; is unreachable. This terminal is
-        permanently closed.
+        {props.ownerKind === "agent" ? (
+          <>
+            Host &quot;{props.hostLabel}&quot; is unreachable, so this agent is
+            unavailable until that host is back. The agent and its transcript
+            are kept — closing this tab only removes it from the canvas.
+          </>
+        ) : (
+          <>
+            Host &quot;{props.hostLabel}&quot; is unreachable. This terminal is
+            permanently closed.
+          </>
+        )}
       </p>
       <div className="flex flex-wrap justify-center gap-2">
         <Button
@@ -51,12 +78,21 @@ export function TerminalDeadTileBanner(
           Close tab
         </Button>
         <ReportIssueAction
-          context={createReportIssueContext({
-            title: "Terminal host is unreachable",
-            message: "The terminal's bound host is unreachable.",
-            code: null,
-            source: "Terminal",
-          })}
+          context={createReportIssueContext(
+            props.ownerKind === "agent"
+              ? {
+                  title: "Agent host is unreachable",
+                  message: "The agent's bound host is unreachable.",
+                  code: null,
+                  source: "Agent",
+                }
+              : {
+                  title: "Terminal host is unreachable",
+                  message: "The terminal's bound host is unreachable.",
+                  code: null,
+                  source: "Terminal",
+                },
+          )}
           presentation="text"
           className={undefined}
         />
@@ -157,13 +193,13 @@ export function SnapshotDiffSourceUnavailableBanner(
       data-testid={props.testId}
     >
       <p className="max-w-md">
-        This change is no longer available. The chat edit it came from was
+        This change is no longer available. The agent edit it came from was
         reverted, removed, or is no longer loaded.
       </p>
       <ReportIssueAction
         context={createReportIssueContext({
           title: "Change is no longer available",
-          message: "The source chat edit could not be resolved.",
+          message: "The source agent edit could not be resolved.",
           code: null,
           source: "Snapshot diff",
         })}
@@ -230,8 +266,9 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
       )}
     >
       <span className="min-w-0 flex-1">
-        Bound host &quot;{props.hostLabel}&quot; is offline. Continue this
-        thread on the active host?
+        Bound host &quot;{props.hostLabel}&quot; is offline. Continuing here
+        creates a new agent on the active host; this one stays bound to &quot;
+        {props.hostLabel}&quot;.
       </span>
       <Button
         type="button"
@@ -240,14 +277,14 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
         disabled={props.cloning}
         onClick={props.onClone}
       >
-        Clone chat
+        Clone agent
       </Button>
       <ReportIssueAction
         context={createReportIssueContext({
-          title: "Chat host is offline",
-          message: "The chat's bound host is offline.",
+          title: "Agent host is offline",
+          message: "The agent's bound host is offline.",
           code: null,
-          source: "Chat",
+          source: "Agent",
         })}
         presentation="icon"
         className="shrink-0 text-warning-foreground"

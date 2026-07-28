@@ -122,6 +122,9 @@ function planBlockText(block: PlanBlock): string {
 }
 
 function compactionBlockText(block: CompactionBlock): string {
+  if (block.status === "errored") {
+    return block.error ?? "Context compaction failed";
+  }
   return block.summary ?? "Context compacted";
 }
 

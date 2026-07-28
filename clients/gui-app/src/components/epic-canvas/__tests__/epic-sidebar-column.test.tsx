@@ -10,7 +10,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { EpicSidebarColumn } from "@/components/epic-canvas/sidebar/epic-sidebar-column";
 import { pointerEvent } from "@/components/epic-canvas/canvas/__tests__/test-pointer-events";
-import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
   dispatchAction,
   type KeybindingRouter,
@@ -118,10 +118,21 @@ function renderColumn() {
   );
 }
 
+function renderColumnWithSession(handle: OpenEpicStoreHandle) {
+  return render(
+    <TooltipProvider>
+      <EpicSessionContext.Provider value={handle}>
+        <div className="flex">
+          <EpicSidebarColumn epicId={EPIC_ID} tabId={TAB_ID} />
+        </div>
+      </EpicSessionContext.Provider>
+    </TooltipProvider>,
+  );
+}
+
 describe("<EpicSidebarColumn />", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    __getOpenEpicRegistryForTests().disposeAll();
     useLeftPanelStore.setState({
       mainCollapsedByTabId: {},
       sidebarWidthPx: DEFAULT_SIDEBAR_WIDTH_PX,
@@ -130,7 +141,6 @@ describe("<EpicSidebarColumn />", () => {
 
   afterEach(() => {
     cleanup();
-    __getOpenEpicRegistryForTests().disposeAll();
   });
 
   it("renders the loading host and static rail while no session is registered", () => {
@@ -148,16 +158,8 @@ describe("<EpicSidebarColumn />", () => {
     expect(screen.queryByTestId("epic-sidebar-host-stub")).toBeNull();
   });
 
-  it("flips to the live host when the pane provider registers the session", () => {
-    renderColumn();
-    expect(screen.queryByTestId("epic-sidebar-host-stub")).toBeNull();
-
-    act(() => {
-      __getOpenEpicRegistryForTests().acquireMounted(
-        EPIC_ID,
-        buildSessionHandle,
-      );
-    });
+  it("uses the live host from its enclosing pane session provider", () => {
+    renderColumnWithSession(buildSessionHandle(EPIC_ID));
 
     const column = screen.getByTestId("epic-sidebar-column");
     expect(column.dataset.sessionReady).toBe("true");
@@ -168,22 +170,10 @@ describe("<EpicSidebarColumn />", () => {
       "horizontal",
     );
     expect(screen.queryByTestId("epic-sidebar-loading-stub")).toBeNull();
-
-    act(() => {
-      __getOpenEpicRegistryForTests().release(EPIC_ID);
-    });
-    expect(screen.queryByTestId("epic-sidebar-host-stub")).toBeNull();
-    expect(screen.getByTestId("epic-sidebar-loading-stub")).not.toBeNull();
   });
 
   it("collapses via CSS only: the panel column stays mounted and the rail goes vertical", () => {
-    renderColumn();
-    act(() => {
-      __getOpenEpicRegistryForTests().acquireMounted(
-        EPIC_ID,
-        buildSessionHandle,
-      );
-    });
+    renderColumnWithSession(buildSessionHandle(EPIC_ID));
 
     act(() => {
       useLeftPanelStore.getState().setMainCollapsed(TAB_ID, true);

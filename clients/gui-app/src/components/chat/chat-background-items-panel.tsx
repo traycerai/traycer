@@ -27,6 +27,7 @@ import { TreeGroupGuide } from "@/components/epic-canvas/sidebar/epic-sidebar-tr
 import { buildTreeFromFlatRecords } from "@/lib/tree-utils";
 import type { TreeNodeNested } from "@/lib/tree-types";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface RememberedBackgroundNode {
   readonly kind: BackgroundItem["kind"];
   readonly title: string;
@@ -52,8 +53,10 @@ interface BackgroundTreeNode {
 
 function backgroundKindLabel(kind: BackgroundItem["kind"]): string {
   switch (kind) {
+    // A nested execution inside this turn, NOT a durable Agent in the Task.
+    // Bare "Agent" collided with that; "Sub-agent" keeps the two apart.
     case "subagent":
-      return "Agent";
+      return "Sub-agent";
     case "command":
       return "Command";
     case "monitor":
@@ -181,23 +184,31 @@ function BackgroundStopButton(props: {
   readonly onClick: () => void;
 }) {
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="xs"
-      className="shrink-0"
-      disabled={props.disabled}
-      aria-label={props.iconOnly ? props.label : undefined}
-      title={props.iconOnly ? props.label : undefined}
-      data-testid={props.testId}
-      onClick={(event) => {
-        event.stopPropagation();
-        props.onClick();
-      }}
+    <TooltipWrapper
+      label={props.iconOnly ? props.label : undefined}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <Square aria-hidden className="size-3" />
-      {props.iconOnly ? null : props.label}
-    </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          className="shrink-0"
+          disabled={props.disabled}
+          aria-label={props.iconOnly ? props.label : undefined}
+          data-testid={props.testId}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onClick();
+          }}
+        >
+          <Square aria-hidden className="size-3" />
+          {props.iconOnly ? null : props.label}
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -401,37 +412,47 @@ function BackgroundTreeRow(props: {
         }}
       >
         {item === null ? (
-          <div
-            className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left"
-            title={displayTitle}
+          <TooltipWrapper
+            label={displayTitle}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <BackgroundKindIcon kind={node.kind} />
-            <span className="block min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
-              {displayTitle}
-            </span>
-            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
-              {backgroundKindLabel(node.kind)}
-            </span>
-          </div>
-        ) : (
-          <>
-            <button
-              type="button"
-              title={displayTitle}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              onClick={() => props.onItemClick(item)}
-            >
-              <BackgroundKindIcon kind={item.kind} />
-              <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
+            <div className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left">
+              <BackgroundKindIcon kind={node.kind} />
+              <span className="block min-w-0 flex-1 truncate text-ui-xs text-muted-foreground">
                 {displayTitle}
               </span>
-              {item.kind === "mcp" && item.startedAt !== null ? (
-                <LiveElapsed startedAt={item.startedAt} />
-              ) : null}
               <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
-                {backgroundKindLabel(item.kind)}
+                {backgroundKindLabel(node.kind)}
               </span>
-            </button>
+            </div>
+          </TooltipWrapper>
+        ) : (
+          <>
+            <TooltipWrapper
+              label={displayTitle}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <button
+                type="button"
+                className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                onClick={() => props.onItemClick(item)}
+              >
+                <BackgroundKindIcon kind={item.kind} />
+                <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
+                  {displayTitle}
+                </span>
+                {item.kind === "mcp" && item.startedAt !== null ? (
+                  <LiveElapsed startedAt={item.startedAt} />
+                ) : null}
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+                  {backgroundKindLabel(item.kind)}
+                </span>
+              </button>
+            </TooltipWrapper>
             <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               <BackgroundStopButton
                 label={backgroundStopLabel(item.kind)}

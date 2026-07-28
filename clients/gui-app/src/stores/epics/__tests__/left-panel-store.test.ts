@@ -75,6 +75,7 @@ function resetStore(): void {
     localRootCreatePendingByEpicPanel: {},
     acknowledgedRootCreatePendingByEpicPanel: {},
     chatFilterByEpicId: {},
+    chatShowArchivedByEpicId: {},
     artifactFilterByEpicId: {},
   });
 }
@@ -238,6 +239,7 @@ describe("useLeftPanelStore", () => {
         panelSectionCollapsedByPanelId: {},
         panelSectionWeightsByPanelId: {},
         chatFilterByEpicId: {},
+        chatShowArchivedByEpicId: {},
         artifactFilterByEpicId: {},
         chatSortByEpicId: {},
         artifactSortByEpicId: {},

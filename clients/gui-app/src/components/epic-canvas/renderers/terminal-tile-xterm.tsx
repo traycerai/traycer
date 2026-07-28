@@ -36,7 +36,11 @@ import {
   buildFontFamilyValue,
 } from "@/lib/default-font-stacks";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import {
+  dataTransferHasFiles,
+  resolveFileTransferPaths,
+  uniquePaths,
+} from "@/lib/files/file-transfer-paths";
 import { cn } from "@/lib/utils";
 import { appLogger } from "@/lib/logger";
 import { useTerminalTheme } from "@/lib/terminal-theme";
@@ -46,7 +50,8 @@ import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { registerActiveTerminalFindController } from "@/stores/find-in-page/terminal-find-store";
 import {
   useActivePaneEffect,
-  useVisiblePaneValue,
+  useFocusedPaneValue,
+  useVisiblePaneEffect,
 } from "@/components/epic-tabs/pane-visibility-context";
 import { markTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { registerTerminalFocus } from "@/lib/terminals/terminal-focus-registry";
@@ -155,6 +160,13 @@ export interface TerminalXtermHostProps {
    */
   readonly shouldFocusOnActivePane: boolean;
   /**
+   * Whether this host is an interactive focus target for explicit surface
+   * gestures. Measurement-only hosts reuse the real xterm engine before a
+   * session handle exists, but must leave a parked focus request untouched so
+   * the live host can fulfil it after taking ownership of input.
+   */
+  readonly registerImperativeFocus: boolean;
+  /**
    * Whether the underlying terminal session is still live. The host keeps the
    * persistent xterm engine cached across unmount when true, so splitting a
    * pane / switching tabs / reopening does not dispose the `Terminal` and lose
@@ -224,9 +236,10 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     codeFontFamily,
   );
   const runnerHost = useRunnerHost();
-  // Inactive panes unregister global find ownership. They stay mounted, but
-  // app-level find should only target the visible terminal.
-  const activeFindTargetId = useVisiblePaneValue(props.findTargetId, null);
+  // Unfocused panes unregister global find ownership. Both split halves stay
+  // mounted and visible, so app-level find is scoped to the FOCUSED terminal -
+  // visibility alone would leave two panes claiming it.
+  const activeFindTargetId = useFocusedPaneValue(props.findTargetId, null);
   const markSearchResultSource = useCallback(
     (source: TerminalSearchResultSource): void => {
       terminalSearchResultSourceRef.current = source;
@@ -419,13 +432,12 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
   // flip (the landing panel expanding around an always-mounted tile, or a tab
   // created before its engine exists) focus through the registry instead of
   // `shouldFocusOnActivePane`.
-  useEffect(
-    () =>
-      registerTerminalFocus(props.instanceId, () => {
-        termRef.current?.focus();
-      }),
-    [props.instanceId],
-  );
+  useEffect(() => {
+    if (!props.registerImperativeFocus) return;
+    return registerTerminalFocus(props.instanceId, () => {
+      termRef.current?.focus();
+    });
+  }, [props.instanceId, props.registerImperativeFocus]);
 
   const pastePaths = useCallback((paths: readonly string[]): void => {
     const input = terminalPathInput(uniquePaths(paths));
@@ -1040,132 +1052,6 @@ function handleTerminalCustomKeyEvent(
 // (existing renderer registry, tests) keep using the named export.
 export default TerminalXtermHost;
 
-function dataTransferHasFiles(dataTransfer: DataTransfer): boolean {
-  const types = Array.from(dataTransfer.types);
-  return (
-    types.includes("Files") ||
-    types.includes("text/uri-list") ||
-    types.includes("public.file-url") ||
-    dataTransferItems(dataTransfer).some((item) => item.kind === "file")
-  );
-}
-
-function collectDroppedFiles(dataTransfer: DataTransfer): readonly File[] {
-  const files = Array.from(dataTransfer.files);
-  if (files.length > 0) return files;
-  return dataTransferItems(dataTransfer).flatMap((item) => {
-    if (item.kind !== "file") return [];
-    const file = item.getAsFile();
-    return file === null ? [] : [file];
-  });
-}
-
-function resolveFileTransferPaths(
-  dataTransfer: DataTransfer,
-  fileDrops: IRunnerHost["fileDrops"],
-): Promise<readonly string[]> | null {
-  const files = collectDroppedFiles(dataTransfer);
-  // File URLs are a fallback for sources that expose no `File` object - notably
-  // macOS screenshot thumbnails. Their backing file can disappear after either
-  // a drag or paste, so copy it into an app-managed temporary location before
-  // insertion. Real Finder files can carry a duplicate URI list; favor their
-  // original path rather than a copied one.
-  const fileUrlPaths =
-    files.length === 0 ? collectDroppedFileUrlPaths(dataTransfer) : [];
-  if (files.length === 0 && fileUrlPaths.length === 0) return null;
-  const resolvedFilePaths =
-    files.length === 0
-      ? Promise.resolve([] as readonly string[])
-      : fileDrops.resolveDroppedFilePaths(files);
-  const stableUrlPaths =
-    fileUrlPaths.length === 0
-      ? Promise.resolve([] as readonly string[])
-      : fileDrops.copyDroppedFilePaths(fileUrlPaths);
-  return Promise.all([resolvedFilePaths, stableUrlPaths]).then(
-    ([paths, urlPaths]) => [...paths, ...urlPaths],
-  );
-}
-
-function collectDroppedFileUrlPaths(
-  dataTransfer: DataTransfer,
-): readonly string[] {
-  const uriList = readDataTransferData(dataTransfer, "text/uri-list");
-  const publicFileUrl = readDataTransferData(dataTransfer, "public.file-url");
-  return uniquePaths(
-    [...parseFileUriList(uriList), fileUriToPath(publicFileUrl)].filter(
-      isNonNullString,
-    ),
-  );
-}
-
-function readDataTransferData(
-  dataTransfer: DataTransfer,
-  type: string,
-): string {
-  try {
-    return dataTransfer.getData(type);
-  } catch {
-    return "";
-  }
-}
-
-function dataTransferItems(
-  dataTransfer: DataTransfer,
-): readonly DataTransferItem[] {
-  const indexedItems = Array.from(dataTransfer.items).filter(
-    isDataTransferItem,
-  );
-  if (indexedItems.length === dataTransfer.items.length) return indexedItems;
-  return Array.from({ length: dataTransfer.items.length }, (_value, index) => {
-    return dataTransfer.items[index];
-  }).filter(isDataTransferItem);
-}
-
-function isDataTransferItem(
-  value: DataTransferItem | null | undefined,
-): value is DataTransferItem {
-  return value !== null && value !== undefined;
-}
-
-function parseFileUriList(value: string): readonly string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"))
-    .map(fileUriToPath)
-    .filter(isNonNullString);
-}
-
-function fileUriToPath(value: string): string | null {
-  if (!value.startsWith("file://")) return null;
-  const withoutScheme = value.slice("file://".length);
-  const slashIndex = withoutScheme.indexOf("/");
-  if (slashIndex === -1) return null;
-  const host = withoutScheme.slice(0, slashIndex);
-  const rawPath = withoutScheme.slice(slashIndex);
-  const path = decodeFileUriPath(rawPath);
-  if (path === null) return null;
-  if (/^\/[A-Za-z]:\//.test(path)) return path.slice(1);
-  if (host.length === 0 || host === "localhost") return path;
-  return `//${host}${path}`;
-}
-
-function decodeFileUriPath(value: string): string | null {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return null;
-  }
-}
-
-function isNonNullString(value: string | null): value is string {
-  return value !== null;
-}
-
-function uniquePaths(paths: readonly string[]): readonly string[] {
-  return Array.from(new Set(paths.filter((path) => path.length > 0)));
-}
-
 function terminalPathInput(paths: readonly string[]): string {
   return paths.map(escapeTerminalPath).join(" ");
 }
@@ -1368,7 +1254,7 @@ function useVisibleTerminalRepair(input: {
     clearTerminalAtlasSafely(canvasRef.current);
     term.refresh(0, term.rows - 1);
   }, [controlsRef, termRef, canvasRef, theme]);
-  useActivePaneEffect(refitVisiblePane);
+  useVisiblePaneEffect(refitVisiblePane);
 }
 
 function clearTerminalAtlasSafely(canvas: CanvasAddon | null): void {

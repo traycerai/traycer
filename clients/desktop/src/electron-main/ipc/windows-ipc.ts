@@ -6,7 +6,10 @@ import {
   RunnerHostInvoke,
   RunnerHostSync,
 } from "../../ipc-contracts/ipc-channels";
-import type { OpenEpicInNewWindowResult } from "../../ipc-contracts/window-types";
+import type {
+  OpenEpicInNewWindowResult,
+  PerWindowEpicViewTab,
+} from "../../ipc-contracts/window-types";
 import {
   assertString,
   buildEpicInitialRoute,
@@ -182,10 +185,17 @@ async function openEpicInNewWindow(
   const sourceSnapshot = bridge.perWindowState.get(sourceWindowId);
   const sourceTab = sourceSnapshot.epicTabs.find((tab) => tab.id === tabId);
   const movedTabId = sourceTab?.id ?? tabId;
-  const destinationTab = {
+  const destinationTab: PerWindowEpicViewTab = {
     id: movedTabId,
     epicId,
     name: sourceTab?.name ?? title,
+    // A tab keeps the surface it was moved on. Dropping `surfaceMode` here
+    // restored a pending phase-migration tab as the normal Epic surface in the
+    // destination window. Older snapshots legitimately omit the field, so it is
+    // carried only when the source actually had one.
+    ...(sourceTab?.surfaceMode === undefined
+      ? {}
+      : { surfaceMode: sourceTab.surfaceMode }),
   };
   const destinationCanvas = sourceSnapshot.canvasByTabId[movedTabId];
   const remainingTabs = sourceSnapshot.epicTabs.filter(
@@ -209,16 +219,33 @@ async function openEpicInNewWindow(
         } else {
           bridge.ownership.claim(movedTabId, epicId, windowId);
         }
-        bridge.perWindowState.update(windowId, {
-          epicTabs: [destinationTab],
-          activeTabId: movedTabId,
-          canvasByTabId:
-            destinationCanvas === undefined
-              ? {}
-              : { [movedTabId]: destinationCanvas },
-          landingDrafts: [],
-          activeLandingDraftId: null,
-        });
+        // `IpcPerWindowState.update` is allowed to be synchronous, so it is
+        // invoked inside the `then` callback. Passed directly as the
+        // `Promise.resolve(...)` argument it runs before `.catch` is attached,
+        // and a synchronous throw would escape this handler and abort
+        // `beforeLoad` - failing the whole move over a persistence warning.
+        void Promise.resolve()
+          .then(() =>
+            bridge.perWindowState.update(windowId, {
+              epicTabs: [destinationTab],
+              activeTabId: movedTabId,
+              canvasByTabId:
+                destinationCanvas === undefined
+                  ? {}
+                  : { [movedTabId]: destinationCanvas },
+              landingDrafts: [],
+              activeLandingDraftId: null,
+            }),
+          )
+          .catch((error: unknown) => {
+            log.warn(
+              "[windows-ipc] destination move state persistence failed",
+              {
+                windowId,
+                error,
+              },
+            );
+          });
       },
     });
   } catch (err) {
@@ -232,11 +259,23 @@ async function openEpicInNewWindow(
     throw err;
   }
 
-  bridge.perWindowState.update(sourceWindowId, {
-    epicTabs: remainingTabs,
-    activeTabId: nextSourceActiveTabId,
-    canvasByTabId: { [movedTabId]: null },
-  });
+  // Deferred for the same reason as the destination write above: the move has
+  // already succeeded here, so a synchronous throw from a synchronous `update`
+  // implementation must not reject the completed move.
+  void Promise.resolve()
+    .then(() =>
+      bridge.perWindowState.update(sourceWindowId, {
+        epicTabs: remainingTabs,
+        activeTabId: nextSourceActiveTabId,
+        canvasByTabId: { [movedTabId]: null },
+      }),
+    )
+    .catch((error: unknown) => {
+      log.warn("[windows-ipc] source move state persistence failed", {
+        windowId: sourceWindowId,
+        error,
+      });
+    });
   bridge.windowRegistry.focusById(destinationWindowId);
   return { result: "moved", windowId: destinationWindowId };
 }

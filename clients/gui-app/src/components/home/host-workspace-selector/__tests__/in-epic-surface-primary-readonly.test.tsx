@@ -156,6 +156,7 @@ function renderBoundSurface(kind: "chat" | "terminal-agent"): void {
   render(
     <TooltipProvider>
       <HostWorkspaceSelector
+        disabled={false}
         surface={{
           kind,
           hostId: "host-test",

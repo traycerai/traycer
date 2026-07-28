@@ -52,8 +52,8 @@ export interface UseEpicCollaboratorsQueryResult {
 }
 
 export interface UseEpicCollaboratorsQueryOptions {
+  readonly poll: boolean | undefined;
   readonly staleTime: number | undefined;
-  readonly refetchInterval: number | false | undefined;
 }
 
 /**
@@ -62,12 +62,11 @@ export interface UseEpicCollaboratorsQueryOptions {
  * can mutate the actual grant source instead of flattening team access into
  * person rows.
  *
- * Pass a 5-minute `staleTime` and `refetchInterval` while the Sharing panel is
- * open so out-of-band collaborator changes converge on a gentle cadence; the
- * panel also exposes a manual refresh control for on-demand updates. Polling is
- * focus-gated - `refetchIntervalInBackground` is off, so an open-but-unfocused
- * window stops ticking. The default remains a relaxed 30 s stale window with no
- * polling.
+ * Pass `poll: true` while the Sharing panel is open so out-of-band collaborator
+ * changes converge on the table-owned five-minute cadence; the panel also
+ * exposes a manual refresh control for on-demand updates. The fixed builder
+ * keeps polling focus-gated. The default remains a relaxed 30 s stale window
+ * with no polling.
  */
 export function useEpicCollaboratorsQuery(
   epicId: string,
@@ -75,7 +74,7 @@ export function useEpicCollaboratorsQuery(
 ): UseEpicCollaboratorsQueryResult {
   const staleTime =
     options?.staleTime ?? EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS;
-  const refetchInterval = options?.refetchInterval ?? false;
+  const poll = options?.poll ?? false;
   const client = useHostClient();
   const query = useHostQuery({
     cacheKeyIdentity: undefined,
@@ -83,8 +82,7 @@ export function useEpicCollaboratorsQuery(
     method: "epic.listCollaborators",
     params: { epicId },
     options: {
-      refetchInterval,
-      refetchIntervalInBackground: false,
+      poll,
       staleTime,
     },
   });

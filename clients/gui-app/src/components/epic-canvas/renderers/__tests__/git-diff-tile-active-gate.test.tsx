@@ -68,6 +68,9 @@ class MockStreamSession implements IStreamSession {
   sendClientFrame(): void {
     // Not exercised here.
   }
+  requestReconnect(): void {
+    // Not exercised here.
+  }
   close(): void {
     this.closed = true;
   }

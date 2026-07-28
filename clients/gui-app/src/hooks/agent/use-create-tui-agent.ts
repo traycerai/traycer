@@ -22,7 +22,7 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { type HostRpcRegistry, useHostClient } from "@/lib/host";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
-import { tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import {
@@ -258,10 +258,7 @@ export function useCreateTuiAgentForClient(
           id: tuiAgentId,
           instanceId: uuidv4(),
           type: "terminal-agent" as const,
-          name: tuiAgentDisplayTitle({
-            title: input.title,
-            harnessId: input.harnessId,
-          }),
+          name: displayTitle(input.title, "agent"),
           hostId: placeholderHostId,
           pendingTuiHarnessId: input.harnessId,
         };
@@ -454,13 +451,28 @@ async function dispatchWorktreeIntent(
       failedPaths.length === 1
         ? `"${folder}"`
         : `${failedPaths.length} folders, starting with "${folder}"`;
+    // The reason must describe the SAME entry `scope` names, so read it off
+    // `failedPaths[0]` rather than the first entry that happens to carry one -
+    // a later entry's message would misattribute the failure. A failed entry
+    // rides `perEntry` with `ok: false` and the host's causal `errorMessage`
+    // (git stderr tail, checked-out-elsewhere, …); an entry the host reported
+    // nothing about has no row, so the headline stands alone.
+    const reason =
+      result.perEntry.find(
+        (entryResult) =>
+          entryResult.workspacePath === failedPaths[0] && !entryResult.ok,
+      )?.errorMessage ?? null;
     const message = `Couldn't prepare the workspace for ${scope}. The terminal agent was not launched.`;
-    reportableErrorToast(message, undefined, {
-      title: "Terminal agent launch aborted",
-      message: null,
-      code: null,
-      source: "Worktree create",
-    });
-    throw new Error(message);
+    reportableErrorToast(
+      message,
+      reason === null ? undefined : { description: reason },
+      {
+        title: "Terminal agent launch aborted",
+        message: reason,
+        code: null,
+        source: "Worktree create",
+      },
+    );
+    throw new Error(reason === null ? message : `${message} ${reason}`);
   }
 }

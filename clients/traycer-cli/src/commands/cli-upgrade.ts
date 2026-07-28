@@ -237,6 +237,21 @@ export function buildCliUpgradeCommand(args: CliUpgradeArgs): CommandFn {
                 bytes: downloadedBytes,
                 totalBytes,
               }),
+            onHeartbeat: (heartbeat) =>
+              ctx.progress({
+                stage: `registry-cli-${heartbeat.phase}`,
+                message:
+                  heartbeat.phase === "watchdog"
+                    ? "CLI download stalled; retrying"
+                    : `CLI download ${heartbeat.phase} ${heartbeat.attempt}`,
+                percent: null,
+                // Attempt counters are not a transfer measurement. Feeding
+                // them to the byte fields made the progress bar redraw as
+                // "1 of 200" on every retry; all three stay null so the
+                // renderer holds the last real download values.
+                bytes: null,
+                totalBytes: null,
+              }),
             signal: null,
           });
         } catch (cause) {

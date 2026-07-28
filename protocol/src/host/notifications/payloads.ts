@@ -39,6 +39,8 @@ export const HOST_NOTIFICATION_STOPPED_REASONS = [
   "model_unavailable",
   "provider_unavailable",
   "provider_connection_failed",
+  "context_exhausted",
+  "request_rejected",
   "turn_start_timeout",
   "missing_terminal_event",
   "background_work_failed",
@@ -75,7 +77,12 @@ export function deriveHostNotificationStoppedReason(
     case "server_error":
       return "provider_unavailable";
     case "claude_code_transport":
+    case "connection_failed":
       return "provider_connection_failed";
+    case "context_window_exceeded":
+      return "context_exhausted";
+    case "invalid_request":
+      return "request_rejected";
     case "turn_start_timeout":
       return "turn_start_timeout";
     case "missing_terminal_event":
@@ -112,7 +119,9 @@ export type HostNotificationChatStoppedPayload = z.infer<
 
 /**
  * TUI `agent.stopped` payload: the "epic" shape. `agentName` is the
- * terminal-agent name — NOT a chat title; these rows carry no chat binding.
+ * terminal-agent name — NOT a chat title. The row itself is chat-scoped to
+ * `tuiAgentId` (hosts minted these rows without a chat binding before that
+ * change, so entries from older rows may still carry a null `chatId`).
  */
 export const hostNotificationEpicStoppedPayloadSchema = z
   .object({
@@ -212,6 +221,92 @@ export type HostNotificationInterviewPayload = z.infer<
   typeof hostNotificationInterviewPayloadSchema
 >;
 
+/**
+ * The common field convention EVERY `host.operation.finished` payload arm
+ * must satisfy, read leniently as an open record.
+ *
+ * This is the middle degradation tier, and the whole reason the outer arm can
+ * stay frozen while operations keep being added: a client that knows
+ * `host.operation.finished` but not the newest operation's payload arm still
+ * gets host-composed, display-safe copy instead of "a host operation
+ * finished". `operation` is an open identifier (first value
+ * `worktree.deletion`), never a closed enum - the precedent is
+ * `workspace_operation_failed.operation`.
+ *
+ * Deliberately NOT a member of `hostNotificationKnownPayloadSchema`: this is a
+ * shape every arm conforms to, not an arm of its own, so it must never win a
+ * discriminated-union match against a real operation payload.
+ */
+export const hostOperationCommonPayloadSchema = z
+  .object({
+    operation: idSchema,
+    title: z.string().min(1),
+    message: z.string().min(1),
+  })
+  .catchall(z.unknown());
+export type HostOperationCommonPayload = z.infer<
+  typeof hostOperationCommonPayloadSchema
+>;
+
+/**
+ * Total lenient parse of the common fields, or `null` when the payload does
+ * not carry them. `null` means "fall through to generic copy" - never an
+ * error, since rows outlive code in both directions.
+ */
+export function parseHostOperationCommonPayload(
+  value: unknown,
+): HostOperationCommonPayload | null {
+  const parsed = hostOperationCommonPayloadSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * The stable `operation` identifier of the first (and so far only)
+ * `host.operation.finished` producer.
+ *
+ * Deliberately NOT the `worktree.delete` RPC method name: this names a
+ * user-authorized deletion COMMAND over N targets, which is a different thing
+ * from the released single-target endpoint, and a durable row must not read
+ * as if it were an RPC trace.
+ */
+export const HOST_OPERATION_WORKTREE_DELETION = "worktree.deletion";
+
+/**
+ * `host.operation.finished` payload for a worktree-deletion command - the
+ * first operation arm, and the template for every later one.
+ *
+ * Carries the common `operation`/`title`/`message` convention (so a client
+ * that knows the outer kind but not this arm still renders host-composed
+ * copy) plus exactly the structured fields presentation and routing need:
+ * the command's identity, where the user started it, and the aggregate
+ * counts.
+ *
+ * What it deliberately EXCLUDES is as much of the contract as what it
+ * carries: no worktree paths, no teardown output, no raw command text, no
+ * arbitrary error strings. A notification row is durable, is delivered to
+ * email and webhooks, and outlives the filesystem it describes - a path in it
+ * is both a leak and a lie. It is also why no retry action exists: a safe
+ * retry would need exactly the paths this must not persist.
+ */
+export const hostNotificationWorktreeDeletionPayloadSchema = z
+  .object({
+    kind: z.literal("worktree_deletion"),
+    operation: z.literal(HOST_OPERATION_WORKTREE_DELETION),
+    title: z.string().min(1),
+    message: z.string().min(1),
+    commandId: idSchema,
+    /** Open string, not the wire enum: a row minted by a newer host with a
+     * source this build has never heard of must still render and route. */
+    source: idSchema,
+    requestedCount: z.number().int().nonnegative(),
+    deletedCount: z.number().int().nonnegative(),
+    failedCount: z.number().int().nonnegative(),
+  })
+  .catchall(z.unknown());
+export type HostNotificationWorktreeDeletionPayload = z.infer<
+  typeof hostNotificationWorktreeDeletionPayloadSchema
+>;
+
 export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
   hostNotificationChatStoppedPayloadSchema,
   hostNotificationEpicStoppedPayloadSchema,
@@ -219,6 +314,7 @@ export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
   hostNotificationWorkspaceOperationFailedPayloadSchema,
   hostNotificationApprovalPayloadSchema,
   hostNotificationInterviewPayloadSchema,
+  hostNotificationWorktreeDeletionPayloadSchema,
 ]);
 export type HostNotificationKnownPayload = z.infer<
   typeof hostNotificationKnownPayloadSchema
@@ -274,5 +370,11 @@ function payloadKindMatchesNotificationKind(
       return payloadKind === "approval";
     case "interview.requested":
       return payloadKind === "interview";
+    // One operation arm exists so far. A FUTURE operation adds its arm above
+    // and its kind to this list; until a client learns that kind, its rows
+    // degrade to the common-field tier rather than failing - which is the
+    // property the whole payload tier exists to provide.
+    case "host.operation.finished":
+      return payloadKind === "worktree_deletion";
   }
 }

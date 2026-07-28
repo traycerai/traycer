@@ -167,6 +167,53 @@ describe("DeviceFlowController", () => {
     ]);
   });
 
+  it("decays the poll interval back to base after a compliant pending poll", async () => {
+    let tokenCalls = 0;
+    restoreFetch = installFetch((url) => {
+      if (url.endsWith("/device/authorize")) {
+        return authorizeOk();
+      }
+      if (url.endsWith("/device/token")) {
+        tokenCalls += 1;
+        if (tokenCalls === 1) {
+          // slow_down widens the 1s base interval to 6s (+5s, no Retry-After).
+          return new Response(JSON.stringify({ error: "slow_down" }), {
+            status: 429,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return tokenCalls === 2
+          ? new Response(null, { status: 428 }) // authorization-pending
+          : tokenAuthorized();
+      }
+      return new Response(null, { status: 500 });
+    });
+
+    const results: DeviceFlowResultPayload[] = [];
+    const controller = new DeviceFlowController(AUTHN, RETURN_SCHEME);
+    const outcome = await controller.start({
+      onResult: (_attemptId, result) => results.push(result),
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+
+    // Poll 1 resolves (429): the loop parks in the widened 6s sleep.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(tokenCalls).toBe(1);
+    await vi.advanceTimersByTimeAsync(6_000);
+    // Poll 2 (428 pending) was accepted, so the interval must be back at the
+    // 1s base - the widened 6s must NOT outlive the violation.
+    expect(tokenCalls).toBe(2);
+    expect(results).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(tokenCalls).toBe(3);
+    expect(results).toEqual([
+      { kind: "authorized", token: "tok", refreshToken: "tok-refresh" },
+    ]);
+  });
+
   it("ignores pollNow for an unknown or settled attempt", async () => {
     restoreFetch = installFetch((url) => {
       if (url.endsWith("/device/authorize")) {

@@ -29,6 +29,7 @@ import { evaluateReparent, reparentRejectionError } from "@/lib/reparent-rules";
 import { isUnavailableEpicReason } from "@/lib/epics/unavailable-epic";
 import { basePersistOptions, openEpicKey } from "@/lib/persist";
 import type {
+  AgentRolesSlice,
   ArtifactsSlice,
   ArtifactRoomsSlice,
   ChatsSlice,
@@ -38,7 +39,11 @@ import type {
   TerminalAgentsSlice,
   TreeSlice,
 } from "./types";
-import { EMPTY_ARTIFACT_ROOMS_SLICE, EMPTY_PROJECTED_SLICES } from "./types";
+import {
+  EMPTY_ARTIFACT_ROOM_DIRTY,
+  EMPTY_ARTIFACT_ROOMS_SLICE,
+  EMPTY_PROJECTED_SLICES,
+} from "./types";
 import {
   getArtifactEntry,
   getArtifactsMap,
@@ -267,6 +272,7 @@ export interface OpenEpicState {
   readonly deletedArtifacts: DeletedArtifactsSlice;
   readonly chats: ChatsSlice;
   readonly tuiAgents: TerminalAgentsSlice;
+  readonly agentRoles: AgentRolesSlice;
   readonly tree: TreeSlice;
   readonly contentRevByArtifactId: Readonly<Record<string, number>>;
   /**
@@ -276,11 +282,75 @@ export interface OpenEpicState {
    * absent from this slice are implicitly `unavailable`.
    */
   readonly artifactRooms: ArtifactRoomsSlice;
+  /**
+   * Per-artifact-room HOST-side sync state, mirrored from the current
+   * `epic.subscribe@1.1` `dirtySnapshot` and later `artifactRoomDirty`
+   * deltas: `true` means the host holds work for that room its cloud
+   * connection has not acknowledged.
+   *
+   * Deliberately separate from `artifactRooms` (availability) - artifact rooms
+   * are local-first, so a room stays `ready` and editable across a cloud drop
+   * while accumulating unsynced bodies. Once `hasDirtySnapshotForOpenCycle`
+   * is true, a room absent from this record is clean; before that snapshot,
+   * the entire record is unknown rather than implicitly clean.
+   *
+   * Also distinct from the `dirtyWatermark*` fields below, which track the
+   * RENDERER's local replica against the host. This is the leg further down
+   * the chain - host against cloud - and it is the one that was missing when
+   * the sync pill claimed "All changes synced" over bodies that existed
+   * nowhere but the host's SQLite.
+   */
+  readonly artifactRoomDirtyByArtifactRoomId: Readonly<Record<string, boolean>>;
+  /**
+   * Host-side root-doc cloud-durability state from @1.1. `null` means this
+   * open cycle has not received an atomic dirty snapshot (including a
+   * negotiated @1.0 session that cannot provide one).
+   */
+  readonly rootDirty: boolean | null;
+  /**
+   * `true` only after the atomic @1.1 `dirtySnapshot` for this exact open
+   * cycle. This is the authority boundary between unknown and clean: deltas
+   * never establish it because their ordering cannot prove completeness.
+   */
+  readonly hasDirtySnapshotForOpenCycle: boolean;
 
   // ── Connection / permissions / dirty-tracking ────────────────────────
   readonly snapshotMeta: SnapshotMetaEpic | null;
   readonly permissionRole: PermissionRole | null;
+  /**
+   * VISIBLE connection status: `deriveConnectionStatus(hostTransportStatus,
+   * cloudSyncStatus, hasConnectedOnce)`. Write-gating and "can this surface
+   * act right now" checks read this.
+   *
+   * It is a lossy blend by design - "host unreachable" and "host reachable,
+   * cloud link down" both collapse to `reconnecting`. Anything that needs to
+   * know WHERE unsynced work is sitting must read the three raw fields below
+   * instead; see `@/lib/epic-sync-pill-state`.
+   */
   readonly connectionStatus: StreamConnectionStatus;
+  /**
+   * Raw renderer↔host stream status, unblended. `open` means the host is
+   * reachable and local edits are reaching a process that persists them
+   * durably; anything else means unsent edits are held only in this window's
+   * memory.
+   */
+  readonly hostTransportStatus: StreamConnectionStatus;
+  /**
+   * Host-observed state of the host↔cloud link for this Epic, mirrored from
+   * `epic.subscribe@1.0` `cloudSyncStatus` frames. It remains optimistically
+   * `connected` for compatibility with functional connection gates; the
+   * separate freshness bit prevents that display default from becoming sync
+   * proof.
+   */
+  readonly cloudSyncStatus: EpicCloudSyncStatus;
+  /** `true` only after a cloud-status frame for this exact open cycle. */
+  readonly hasFreshCloudSyncStatus: boolean;
+  /**
+   * Latched by the first genuine cloud `connected` frame on this subscription
+   * (never by the optimistic default), and cleared on re-subscribe. Separates a
+   * first-time bootstrap from a real reconnect for display purposes only.
+   */
+  readonly hasConnectedOnce: boolean;
   readonly accessLost: boolean;
   /**
    * Set once when the host emits `epicDeleted` - a remote delete observed
@@ -414,8 +484,10 @@ export interface OpenEpicStoreHandle {
   readonly dispose: () => void;
   readonly requestFreshSnapshot: () => void;
   /**
-   * True when the snapshot meta has landed at least once since construction.
-   * Read by the registry when deciding eviction eligibility.
+   * True when this renderer has a loaded, locally clean snapshot and can
+   * still reach the host. Cloud acknowledgement is intentionally not part of
+   * this eviction/readiness predicate; it is a stricter concern owned by the
+   * sync pill's fresh cloud and host-dirty gates.
    */
   isClean: () => boolean;
 }
@@ -567,14 +639,11 @@ export function createOpenEpicStore(
   let disposed = false;
   const unsyncedQueue: Uint8Array[] = [];
   let transportStatus: StreamConnectionStatus = "connecting";
-  // Optimistic until the host's first cloudSyncStatus frame: a freshly-opened
-  // transport reads as "open"/synced right away so app-wide gates (the
-  // initial-chat handoff's `epicReady`, `isClean`) don't stall on the cloud
-  // link. `hasConnectedOnce` is latched ONLY by a genuine cloud "connected"
-  // frame (see onCloudSyncStatus), never by this default - so a new room's first
-  // real "reconnecting" catch-up still reads as the bootstrap-only "connecting"
-  // in the pill, not "reconnecting".
+  // Keep the historical optimistic value for functional users of the blended
+  // connection status. The sync pill must instead consult
+  // `hasFreshCloudSyncStatus`, which is the per-cycle acknowledgement proof.
   let cloudSyncStatus: EpicCloudSyncStatus = "connected";
+  let hasFreshCloudSyncStatus = false;
   let currentStatus: StreamConnectionStatus = "connecting";
   // Flips true on the first successful connect so a later drop reads as
   // "reconnecting" rather than the bootstrap-only "connecting".
@@ -939,6 +1008,53 @@ export function createOpenEpicStore(
           return currentStatus;
         };
 
+        // Publishes the blended status together with the raw legs it was
+        // blended from, so a reader that needs to know WHERE unsynced work is
+        // sitting can never observe the two out of step. Every site that
+        // moves `transportStatus` / `cloudSyncStatus` /
+        // `hasFreshCloudSyncStatus` / `hasConnectedOnce`
+        // must set through this.
+        const connectionStateSlice = (): Pick<
+          OpenEpicState,
+          | "connectionStatus"
+          | "hostTransportStatus"
+          | "cloudSyncStatus"
+          | "hasFreshCloudSyncStatus"
+          | "hasConnectedOnce"
+        > => ({
+          connectionStatus: currentStatus,
+          hostTransportStatus: transportStatus,
+          cloudSyncStatus,
+          hasFreshCloudSyncStatus,
+          hasConnectedOnce,
+        });
+
+        /**
+         * Returns the state patch that puts host dirtiness back to UNKNOWN for
+         * a new subscription cycle, and — as a side effect the return type
+         * cannot express — also clears the closure-local
+         * `hasFreshCloudSyncStatus`.
+         *
+         * Both halves have to move together. Cloud freshness lives outside the
+         * store because only the pill reads it, but a retained `true` from the
+         * previous cycle would let the pill claim `synced` off a stale cloud
+         * status the moment this cycle's snapshot arrives. Callers must apply
+         * the returned patch AND accept that reset; do not lift one out.
+         */
+        const resetDurabilityProofForOpenCycle = (): Pick<
+          OpenEpicState,
+          | "artifactRoomDirtyByArtifactRoomId"
+          | "rootDirty"
+          | "hasDirtySnapshotForOpenCycle"
+        > => {
+          hasFreshCloudSyncStatus = false;
+          return {
+            artifactRoomDirtyByArtifactRoomId: EMPTY_ARTIFACT_ROOM_DIRTY,
+            rootDirty: null,
+            hasDirtySnapshotForOpenCycle: false,
+          };
+        };
+
         const flushPendingRootUpdates = (): void => {
           if (unsyncedQueue.length === 0) return;
           const role = currentRole ?? get().permissionRole;
@@ -1276,6 +1392,45 @@ export function createOpenEpicStore(
                 };
               });
             },
+            onArtifactRoomDirty: (artifactRoomId, dirty) => {
+              if (disposed || generation !== streamGeneration) return;
+              set((prev) => {
+                const current =
+                  prev.artifactRoomDirtyByArtifactRoomId[artifactRoomId] ??
+                  false;
+                if (current === dirty) return prev;
+                return {
+                  artifactRoomDirtyByArtifactRoomId: {
+                    ...prev.artifactRoomDirtyByArtifactRoomId,
+                    [artifactRoomId]: dirty,
+                  },
+                };
+              });
+            },
+            onRootDirty: (dirty) => {
+              if (disposed || generation !== streamGeneration) return;
+              set((prev) => {
+                if (prev.rootDirty === dirty) return prev;
+                // A delta does not establish that this subscription has seen
+                // every room. Only the atomic dirtySnapshot can make
+                // dirtiness known for sync-pill purposes.
+                return { rootDirty: dirty };
+              });
+            },
+            onDirtySnapshot: (rootDirty, rooms) => {
+              if (disposed || generation !== streamGeneration) return;
+              const artifactRoomDirtyByArtifactRoomId: Record<string, boolean> =
+                {};
+              for (const room of rooms) {
+                artifactRoomDirtyByArtifactRoomId[room.artifactRoomId] =
+                  room.dirty;
+              }
+              set({
+                rootDirty,
+                hasDirtySnapshotForOpenCycle: true,
+                artifactRoomDirtyByArtifactRoomId,
+              });
+            },
             onPermissionChanged: (permissionRole) => {
               if (disposed || generation !== streamGeneration) return;
               if (permissionRole === null) {
@@ -1375,6 +1530,7 @@ export function createOpenEpicStore(
               if (disposed || generation !== streamGeneration) return;
               const previousCloudSyncStatus = cloudSyncStatus;
               cloudSyncStatus = status;
+              hasFreshCloudSyncStatus = true;
               if (
                 hasConnectedOnce &&
                 previousCloudSyncStatus !== "connected" &&
@@ -1397,14 +1553,16 @@ export function createOpenEpicStore(
               // room's pre-connect catch-up reads as the bootstrap "connecting"
               // while a drop AFTER a real connect reads as "reconnecting".
               if (status === "connected") hasConnectedOnce = true;
-              const nextStatus = syncCurrentConnectionStatus();
-              set({ connectionStatus: nextStatus });
+              syncCurrentConnectionStatus();
+              set(connectionStateSlice());
               flushPendingWritesAfterReconnect(client);
             },
             onConnectionStatus: (status, reason) => {
               if (disposed || generation !== streamGeneration) return;
               const previousTransportStatus = transportStatus;
               transportStatus = status;
+              const startedSubscriptionCycle =
+                previousTransportStatus !== "open" && status === "open";
               if (
                 hasConnectedOnce &&
                 previousTransportStatus !== "open" &&
@@ -1422,9 +1580,19 @@ export function createOpenEpicStore(
                   contextRegistered: true,
                 });
               }
+              const cycleDurabilityState = startedSubscriptionCycle
+                ? resetDurabilityProofForOpenCycle()
+                : null;
               const nextStatus = syncCurrentConnectionStatus();
               hasFreshRootSnapshotForOpenCycle = false;
-              set({ connectionStatus: nextStatus });
+              set(
+                cycleDurabilityState === null
+                  ? connectionStateSlice()
+                  : {
+                      ...cycleDurabilityState,
+                      ...connectionStateSlice(),
+                    },
+              );
               // Convert a fatal close into the modal's error state, but only
               // when a migration had actually started - a fatal close before
               // any `migrationStarted` is a normal connection error owned by
@@ -1482,6 +1650,7 @@ export function createOpenEpicStore(
           unsyncedQueue.length = 0;
           transportStatus = "connecting";
           cloudSyncStatus = "connected";
+          const cycleDurabilityState = resetDurabilityProofForOpenCycle();
           // A fresh re-subscribe bootstraps from scratch, so the next connect is
           // "connecting", not "reconnecting": clear the latch and let only a
           // genuine cloud "connected" frame re-arm it.
@@ -1500,11 +1669,14 @@ export function createOpenEpicStore(
             doc,
             awareness,
             bindingVersion: state.bindingVersion + 1,
-            connectionStatus: "connecting",
+            ...connectionStateSlice(),
             snapshotLoaded: false,
             snapshotFetchError: null,
             unsyncedQueueSize: 0,
             artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
+            // Reset eagerly for an explicit rebuild. Automatic reconnects
+            // repeat this reset at their next `open` transition.
+            ...cycleDurabilityState,
             // Re-subscribing is the moment the migration story restarts -
             // the host will re-emit `migrationStarted` if the new
             // subscription still hits the migration path.
@@ -1738,9 +1910,18 @@ export function createOpenEpicStore(
           bindingVersion: 0,
           ...EMPTY_PROJECTED_SLICES,
           artifactRooms: EMPTY_ARTIFACT_ROOMS_SLICE,
+          artifactRoomDirtyByArtifactRoomId: EMPTY_ARTIFACT_ROOM_DIRTY,
+          rootDirty: null,
+          hasDirtySnapshotForOpenCycle: false,
           snapshotMeta: null,
           permissionRole: null,
-          connectionStatus: "connecting",
+          // Through the helper like every other site, per the invariant above.
+          // Restating the five fields by hand agreed with the bootstrap locals
+          // only by coincidence, and this is the one place that could drift
+          // from them silently - the initial value of `cloudSyncStatus` in
+          // particular is load-bearing, since `deriveConnectionStatus` blends
+          // it into the `connectionStatus` that gates the chat handoff.
+          ...connectionStateSlice(),
           accessLost: false,
           epicDeleted: null,
           snapshotLoaded: false,
@@ -2032,7 +2213,7 @@ export function createOpenEpicStore(
       return (
         state.snapshotLoaded &&
         !state.isDirty &&
-        state.connectionStatus === "open"
+        state.hostTransportStatus === "open"
       );
     },
   };

@@ -136,6 +136,7 @@ import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { DEFAULT_AGENT_MODE } from "@/components/home/data/landing-options";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import {
   __getChatSessionRegistryForTests,
@@ -313,10 +314,14 @@ function createChatHarness(): ChatHarness {
           );
         }, 0);
       }
-      const client: Pick<ChatStreamClient, "sendAction" | "close"> = {
+      const client: Pick<
+        ChatStreamClient,
+        "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
+      > = {
         sendAction: (frame) => {
           sent.push(frame);
         },
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => undefined,
       };
       return client;
@@ -408,6 +413,7 @@ function emitChatSnapshotWithMessages(input: {
         claudePendingWakes: [],
         messages: [...input.messages],
         events: [],
+        archivedAt: null,
       },
       access: {
         role: input.access,
@@ -622,6 +628,7 @@ function skippedInterviewAssistantMessage(): Message {
 
 function runningActiveTurn(): ChatActiveTurn {
   return {
+    sameTurnSteeringSupported: false,
     turnId: "turn-active",
     status: "running",
     harnessId: "codex",
@@ -804,6 +811,9 @@ describe("<ChatTile />", () => {
     // host binding the catalog never resolves the empty default, so seed a
     // concrete default model so the composer reaches a sendable state.
     useSettingsStore.setState({
+      // Reset the mode alongside the model so a test that pins defaultAgentMode
+      // (see the epic-bucket toolbar test) can't leak into later tests.
+      defaultAgentMode: DEFAULT_AGENT_MODE,
       defaultSelection: {
         harnessId: "codex",
         modelSlug: "gpt-5-codex",
@@ -866,7 +876,9 @@ describe("<ChatTile />", () => {
     await waitFor(() => {
       expect(chatHarness.streamCreations()).toBe(1);
     });
-    expect(screen.getByRole("status", { name: "Loading chat" })).not.toBeNull();
+    expect(
+      screen.getByRole("status", { name: "Loading agent" }),
+    ).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByTestId("host-workspace-selector")).toBeNull();
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
@@ -896,7 +908,7 @@ describe("<ChatTile />", () => {
     await waitForChatTileLoaded();
     expect(chatHarness.streamCreations()).toBe(1);
     expect(loadingSurfaceTestState.unresolvedWorkspaceRenderCount).toBe(0);
-    expect(screen.queryByRole("status", { name: "Loading chat" })).toBeNull();
+    expect(screen.queryByRole("status", { name: "Loading agent" })).toBeNull();
     expect(
       screen
         .getByTestId("host-workspace-selector")
@@ -956,6 +968,7 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "claude",
@@ -1115,6 +1128,7 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
@@ -1208,7 +1222,7 @@ describe("<ChatTile />", () => {
     await screen.findByText("Implementation is complete.");
     fireEvent.click(screen.getByTestId("assistant-fork-chat"));
 
-    const titleInput = await screen.findByLabelText("Fork chat title");
+    const titleInput = await screen.findByLabelText("Fork agent title");
     if (!(titleInput instanceof HTMLInputElement)) {
       throw new Error("expected fork title input");
     }
@@ -1228,6 +1242,7 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
@@ -1438,7 +1453,7 @@ describe("<ChatTile />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cross Question" }));
 
-    const titleInput = await screen.findByLabelText("Fork chat title");
+    const titleInput = await screen.findByLabelText("Fork agent title");
     if (!(titleInput instanceof HTMLInputElement)) {
       throw new Error("expected fork title input");
     }
@@ -1665,6 +1680,13 @@ describe("<ChatTile />", () => {
   });
 
   it("toolbar changes inside an epic update that epic bucket immediately", async () => {
+    // This tile starts fresh (globalLastRunSettings stays null), so the composer
+    // seeds agentMode from the settings default. Pin it to the fixture's mode so
+    // the assertion doesn't ride on whatever the app-wide default happens to be.
+    useSettingsStore.setState({
+      defaultAgentMode: UPDATED_QUEUE_SETTINGS.agentMode,
+    });
+
     renderChatTile();
 
     await waitForChatTileLoaded();
@@ -2050,7 +2072,7 @@ describe("<ChatTile />", () => {
         clientActionId: frame.clientActionId,
         action: "send",
         status: "rejected",
-        reason: "Only the chat owner can perform this action.",
+        reason: "Only the agent owner can perform this action.",
         code: "NOT_OWNER",
         backgroundStopTaskIds: [],
       });
@@ -2071,7 +2093,7 @@ describe("<ChatTile />", () => {
       Object.values(useInitialChatHandoffStore.getState().handoffs)[0],
     ).toMatchObject({
       status: "failed",
-      failureReason: "Only the chat owner can perform this action.",
+      failureReason: "Only the agent owner can perform this action.",
     });
   });
 
@@ -2095,7 +2117,7 @@ describe("<ChatTile />", () => {
     });
     expect(
       await screen.findByText(
-        "Read-only viewer. The chat owner can send prompts and manage this queue.",
+        "Read-only viewer. The agent owner can send prompts and manage this queue.",
       ),
     ).not.toBeNull();
   });
@@ -2113,7 +2135,7 @@ describe("<ChatTile />", () => {
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(
       screen.getByText(
-        "Read-only viewer. The chat owner can send prompts and manage this queue.",
+        "Read-only viewer. The agent owner can send prompts and manage this queue.",
       ),
     ).not.toBeNull();
   });
@@ -2189,6 +2211,7 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: QUEUED_SETTINGS.harnessId,
@@ -2355,6 +2378,12 @@ describe("<ChatTile />", () => {
     expect(settingsFrame?.queueItemId).toBe("queue-1");
     expect(settingsFrame?.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
+
+  // Decision 14 save-and-steer routing (mod-enter → after_safe_point →
+  // queueEdit + queueSteerNow) lives in chat-tile-queue-edit-steer.test.tsx,
+  // which drives the real useChatComposerSubmit + the tile's edit-arm logic
+  // without depending on TipTap DOM key events under jsdom. Plain Enter edit
+  // → queueSettingsUpdate remains covered by the settings-update test above.
 
   it("cancels queued edit mode from the composer and clears the queued content when there was no previous draft", async () => {
     useComposerDraftStore.setState({ drafts: {} });

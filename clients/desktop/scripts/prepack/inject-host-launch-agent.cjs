@@ -19,6 +19,16 @@
  * directly against THIS package.json and never touches that script, so
  * without this file the real release build ships without the fix.
  *
+ * ONE DELIBERATE DIVERGENCE from that script, so a future reader does not
+ * "restore lockstep" by mistake: the compatibility launcher written here
+ * passes `--service-label` unconditionally, while the internal script's copy
+ * first probes `host capabilities --has service-label`. Both stage the CLI as
+ * a sibling of the launcher, but only here are the launcher and that CLI
+ * built from a single repo at a single commit. The internal script is
+ * internal-repo HEAD staging a CLI built from the `traycer/` submodule at the
+ * gitlink pin, so it can legitimately meet an N-1 CLI and must keep probing.
+ * See `writeHostStartCompatibilityLauncher` in both files.
+ *
  * afterPack runs BEFORE electron-builder signs anything, so it stages the
  * helper .app + writes the LaunchAgent plist and ad-hoc-signs the helper only
  * as a baseline (so the bundle is structurally valid if this is an unsigned
@@ -31,8 +41,8 @@
  * own pass would strip the hardened-runtime flag and run after
  * notarization, invalidating the already-sealed bundle.
  *
- * Path relocatability: `BundleProgram` (and `ProgramArguments[0]`) are
- * written as a path RELATIVE to the .app bundle root, never the absolute
+ * Path relocatability: `BundleProgram` (and the helper path passed to the
+ * compatibility launcher) are written as a path RELATIVE to the .app bundle root, never the absolute
  * `context.appOutDir` temp path electron-builder hands afterPack (that
  * directory is deleted once packaging finishes). Per Apple's guidance for
  * SMAppService-registered bundled helpers
@@ -56,14 +66,28 @@ const PRODUCT_NAME = pkg.build.productName;
 const APP_ID = pkg.build.appId;
 const CONFIG_PATH = path.resolve(__dirname, "..", "..", "src", "config.ts");
 const CLI_BINARY_NAME = "traycer";
+const HOST_START_COMPAT_LAUNCHER = "traycer-host-start";
 const HOST_NODE_OPTIONS = "--max-semi-space-size=16";
 const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
-// Matches `PRODUCTION_LABEL.id` in `src/electron-main/host/host-paths.ts` -
-// the desktop resolves the plist to register by this exact filename.
+// Matches `PRODUCTION_LABEL.id` in `src/electron-main/host/host-paths.ts`.
 // Production-only: `scripts/set-deploy-target.cjs --target=production` (run
 // by release-desktop.yml before packaging) is the only stamp this label is
 // valid for - see `isProductionStamped` below.
+//
+// Since the label split (`host-paths.ts:smAppServiceAgentLabelId`), the
+// desktop registers the AGENT label below - `<cli-label>.agent` - and
+// resolves the plist to register by that exact filename. The CLI label's
+// plist still ships, but INERT: never registered, present only so the
+// desktop's transition cleanup (`unregister` of the old serviceName in
+// `host-login-item.ts`) can resolve it and drop the old app-scoped BTM
+// record on machines that upgraded from a pre-split SMAppService install.
+// Time-boxed: remove the inert plist once the fleet has cycled through a
+// few post-split releases. The `.agent` derivation must stay in lockstep
+// with `host-paths.ts:smAppServiceAgentLabelId`, the CLI's
+// `service/label.ts:smAppServiceAgentLabelId`, and the internal repo's
+// `desktop-install-cloud.js:hostAgentLabel` (none can import this file).
 const PRODUCTION_LABEL = "ai.traycer.host";
+const PRODUCTION_AGENT_LABEL = `${PRODUCTION_LABEL}.agent`;
 
 // `set-deploy-target.cjs` rewrites `environment: "dev"` to
 // `environment: "production"` in place before packaging for release; an
@@ -98,7 +122,13 @@ function helperAppPathFor(appPath) {
   );
 }
 
-function buildLaunchAgentPlist(label, helperBinaryRelativePath) {
+// Stays in lockstep with `buildPlist` in
+// clients/traycer-cli/src/service/platforms/macos.ts, including
+// `ProcessType: Interactive` - the only launchd band that runs with app-
+// equivalent (i.e. no) resource limits. `Standard` is defined as "equivalent
+// to no ProcessType being set", which means launchd throttles CPU and I/O;
+// see the rationale comment on `installService` in that file.
+function buildLaunchAgentPlist(label, launcherRelativePath) {
   const hostPath = [
     "/opt/homebrew/bin",
     "/opt/homebrew/sbin",
@@ -108,7 +138,11 @@ function buildLaunchAgentPlist(label, helperBinaryRelativePath) {
     "/usr/sbin",
     "/sbin",
   ].join(":");
-  const programArgs = [helperBinaryRelativePath, "host", "start"];
+  // BundleProgram is the executable launchd actually execs. It is a real
+  // bundle-relative compatibility launcher, rather than a shell-shaped argv
+  // for the Traycer CLI: launchd does not interpret ProgramArguments[0] as
+  // the executable when BundleProgram is present.
+  const programArgs = [launcherRelativePath, label];
   const programArgsXml = programArgs
     .map((a) => `    <string>${escapeXml(a)}</string>`)
     .join("\n");
@@ -119,7 +153,7 @@ function buildLaunchAgentPlist(label, helperBinaryRelativePath) {
   <key>Label</key>
   <string>${escapeXml(label)}</string>
   <key>BundleProgram</key>
-  <string>${escapeXml(helperBinaryRelativePath)}</string>
+  <string>${escapeXml(launcherRelativePath)}</string>
   <key>ProgramArguments</key>
   <array>
 ${programArgsXml}
@@ -136,7 +170,7 @@ ${programArgsXml}
   <key>ThrottleInterval</key>
   <integer>10</integer>
   <key>ProcessType</key>
-  <string>Standard</string>
+  <string>Interactive</string>
   <key>SoftResourceLimits</key>
   <dict>
     <key>NumberOfFiles</key>
@@ -152,6 +186,40 @@ ${programArgsXml}
 </dict>
 </plist>
 `;
+}
+
+function writeHostStartCompatibilityLauncher(helperMacOSDir) {
+  const launcher = path.join(helperMacOSDir, HOST_START_COMPAT_LAUNCHER);
+  // `$0` is the executable path launchd resolved from BundleProgram, so this
+  // survives moving the outer .app after packaging.  The supplied label is
+  // data, never shell code; the launcher never evaluates it.
+  //
+  // `--service-label` is passed UNCONDITIONALLY, with no capability probe.
+  // The CLI this shim execs is not the user's slot symlink: `installHelperApp`
+  // copies it out of `Contents/Resources/cli/darwin-<arch>/` into this very
+  // directory moments before this file is written, in the same `afterPack`
+  // run of the same build, and both ship inside the same signed bundle. There
+  // is no mixed-version case here to probe for, so probing could only ever
+  // answer wrongly - which is exactly what it did: the previous
+  // `--help | grep` form silently dropped the label the moment the option was
+  // hidden from help output.
+  //
+  // The CLI's own emitters (service/platforms/*.ts) DO still probe, via
+  // `host capabilities --has service-label`, because their target genuinely
+  // can be an N-1 build.
+  fs.writeFileSync(
+    launcher,
+    `#!/bin/sh
+set -eu
+launcher_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+cli="$launcher_dir/${CLI_BINARY_NAME}"
+label="$1"
+exec "$cli" host start --service-label "$label"
+`,
+    "utf8",
+  );
+  fs.chmodSync(launcher, 0o755);
+  return launcher;
 }
 
 function installHelperApp(appPath, archName) {
@@ -179,6 +247,8 @@ function installHelperApp(appPath, archName) {
   fs.mkdirSync(helperResourcesDir, { recursive: true });
   fs.copyFileSync(sourceCli, helperBinary);
   fs.chmodSync(helperBinary, 0o755);
+  const compatibilityLauncher =
+    writeHostStartCompatibilityLauncher(helperMacOSDir);
   fs.copyFileSync(sourceIcon, path.join(helperResourcesDir, "icon.icns"));
 
   const helperName = `${PRODUCT_NAME} Host`;
@@ -220,7 +290,7 @@ function installHelperApp(appPath, archName) {
     infoPlist,
     "utf8",
   );
-  return { helperAppPath, helperBinary };
+  return { helperAppPath, helperBinary, compatibilityLauncher };
 }
 
 function codesign(identity, targetPath) {
@@ -237,7 +307,8 @@ exports.afterPack = async function afterPack(context) {
   if (!isProductionStamped()) return;
   const appPath = appPathFor(context);
   const archName = Arch[context.arch];
-  const { helperAppPath, helperBinary } = installHelperApp(appPath, archName);
+  const { helperAppPath, helperBinary, compatibilityLauncher } =
+    installHelperApp(appPath, archName);
   // Ad-hoc baseline so the bundle is structurally valid even before
   // electron-builder's own signing step runs. That step (which fires right
   // after afterPack) recursively deep-signs the whole bundle - including this
@@ -252,10 +323,9 @@ exports.afterPack = async function afterPack(context) {
     );
   }
 
-  const relativeHelperBinary = path.relative(appPath, helperBinary);
-  const plistBody = buildLaunchAgentPlist(
-    PRODUCTION_LABEL,
-    relativeHelperBinary,
+  const relativeCompatibilityLauncher = path.relative(
+    appPath,
+    compatibilityLauncher,
   );
   const launchAgentsDir = path.join(
     appPath,
@@ -264,9 +334,15 @@ exports.afterPack = async function afterPack(context) {
     "LaunchAgents",
   );
   fs.mkdirSync(launchAgentsDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(launchAgentsDir, `${PRODUCTION_LABEL}.plist`),
-    plistBody,
-    "utf8",
-  );
+  // The registered agent plist plus the inert old-label plist (see the
+  // label-split rationale above the label constants). Identical bodies
+  // apart from the Label; the old one is never loaded by anything - the
+  // desktop only ever `unregister`s its serviceName.
+  for (const label of [PRODUCTION_AGENT_LABEL, PRODUCTION_LABEL]) {
+    fs.writeFileSync(
+      path.join(launchAgentsDir, `${label}.plist`),
+      buildLaunchAgentPlist(label, relativeCompatibilityLauncher),
+      "utf8",
+    );
+  }
 };

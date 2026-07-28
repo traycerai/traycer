@@ -34,7 +34,7 @@ import type {
   WebSocketOpenEvent,
 } from "../ws-factory";
 import { WsRpcClient } from "../ws-rpc-client";
-import { HostRpcError } from "../host-messenger";
+import { HostRpcError, type HostRequestAuthority } from "../host-messenger";
 import type {
   IStreamWebSocketFactory,
   StreamWebSocketLike,
@@ -74,6 +74,17 @@ function loadBaselines(): { label: string; surfacePath: string }[] {
 }
 
 const baselines = loadBaselines();
+
+function authorityForContext(ctx: RequestContext): HostRequestAuthority {
+  return {
+    endpoint: {
+      hostId: mockLocalHostEntry.hostId,
+      websocketUrl: mockLocalHostEntry.websocketUrl,
+    },
+    bearer: ctx.credentials,
+    abortSignal: new AbortController().signal,
+  };
+}
 
 const baselineFallbackV10 = defineRpcContract({
   method: "synthetic.baselineFallback",
@@ -226,6 +237,133 @@ function intersectManifests(
   );
 }
 
+function createReleasedPeerClient(
+  bearer: string,
+  requestId: string,
+): {
+  readonly client: WsRpcClient<typeof hostRpcRegistry>;
+  readonly sockets: StubRpcWebSocket[];
+  readonly authority: HostRequestAuthority;
+} {
+  const sockets: StubRpcWebSocket[] = [];
+  const factory: IWebSocketFactory = {
+    create(): WebSocketLike {
+      const socket = new StubRpcWebSocket();
+      sockets.push(socket);
+      return socket;
+    },
+  };
+  const ctx = makeRequestContext(bearer);
+  return {
+    sockets,
+    authority: authorityForContext(ctx),
+    client: new WsRpcClient<typeof hostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => requestId,
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+    }),
+  };
+}
+
+describe("host-v1.1.7 permission-mode downgrade protection", () => {
+  it("rejects agent.create@3.0 before sending to released agent.create@2.0", async () => {
+    const { client, sockets, authority } = createReleasedPeerClient(
+      "token-v1.1.7-create",
+      "req-v1.1.7-create",
+    );
+
+    const pending = client.request(
+      "agent.create",
+      {
+        senderAgentId: "agent-parent",
+        epicId: "epic-1",
+        name: null,
+        surface: "gui",
+        harnessId: "cursor",
+        model: "cursor-test",
+        agentMode: null,
+        reasoningEffort: null,
+        fastMode: null,
+        permissionMode: "full_access",
+        workspace: null,
+        profileSelection: { kind: "ambient" },
+      },
+      authority,
+    );
+    await flush();
+    const stub = sockets[0];
+    stub.fireOpen();
+    await flush();
+    const open = stub.sentFrames[0];
+    if (open.kind !== "open") throw new Error("expected open frame");
+    stub.fireMessage({
+      kind: "openAck",
+      manifest: {
+        ...open.manifest,
+        "agent.create": { major: 2, minor: 0 },
+      },
+      optionalManifest: open.optionalManifest,
+    });
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        error.code === "DOWNGRADE_UNSUPPORTED" &&
+        error.message.includes("Upgrade the host")
+      );
+    });
+    expect(stub.sentFrames.map((frame) => frame.kind)).toEqual(["open"]);
+  });
+
+  it("rejects agent.configure@2.0 before sending to released agent.configure@1.0", async () => {
+    const { client, sockets, authority } = createReleasedPeerClient(
+      "token-v1.1.7-configure",
+      "req-v1.1.7-configure",
+    );
+
+    const pending = client.request(
+      "agent.configure",
+      {
+        epicId: "epic-1",
+        senderAgentId: "agent-parent",
+        agentId: "agent-target",
+        harnessId: "cursor",
+        model: "cursor-test",
+        profileSelection: { kind: "ambient" },
+        reasoningEffort: null,
+        fastMode: false,
+        permissionMode: "full_access",
+      },
+      authority,
+    );
+    await flush();
+    const stub = sockets[0];
+    stub.fireOpen();
+    await flush();
+    const open = stub.sentFrames[0];
+    if (open.kind !== "open") throw new Error("expected open frame");
+    stub.fireMessage({
+      kind: "openAck",
+      manifest: open.manifest,
+      optionalManifest: {
+        ...open.optionalManifest,
+        "agent.configure": { major: 1, minor: 0 },
+      },
+    });
+
+    await expect(pending).rejects.toSatisfy((error: unknown) => {
+      return (
+        error instanceof HostRpcError &&
+        error.code === "DOWNGRADE_UNSUPPORTED" &&
+        error.message.includes("Upgrade the host")
+      );
+    });
+    expect(stub.sentFrames.map((frame) => frame.kind)).toEqual(["open"]);
+  });
+});
+
 describe.skipIf(baselines.length === 0)(
   "released-baseline handshake smoke (real transports vs released manifests)",
   () => {
@@ -243,15 +381,17 @@ describe.skipIf(baselines.length === 0)(
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof hostRpcRegistry>({
           registry: hostRpcRegistry,
-          endpoint: () => mockLocalHostEntry,
-          bearer: () => ctx.credentials,
           requestId: () => "req-smoke",
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
         });
 
-        const pending = client.request("host.status", {});
+        const pending = client.request(
+          "host.status",
+          {},
+          authorityForContext(ctx),
+        );
         await flush();
         expect(sockets).toHaveLength(1);
         const stub = sockets[0];
@@ -300,17 +440,19 @@ describe.skipIf(baselines.length === 0)(
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof baselineFallbackRegistry>({
           registry: baselineFallbackRegistry,
-          endpoint: () => mockLocalHostEntry,
-          bearer: () => ctx.credentials,
           requestId: () => "req-fallback-smoke",
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
         });
 
-        const pending = client.request("synthetic.baselineFallback", {
-          label: "x",
-        });
+        const pending = client.request(
+          "synthetic.baselineFallback",
+          {
+            label: "x",
+          },
+          authorityForContext(ctx),
+        );
         await flush();
         expect(sockets).toHaveLength(1);
         const stub = sockets[0];
@@ -367,15 +509,17 @@ describe.skipIf(baselines.length === 0)(
         const ctx = makeRequestContext("token-smoke");
         const client = new WsRpcClient<typeof baselineUnsupportedRegistry>({
           registry: baselineUnsupportedRegistry,
-          endpoint: () => mockLocalHostEntry,
-          bearer: () => ctx.credentials,
           requestId: () => "req-unsupported-smoke",
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           frameTimeoutMs: 1000,
         });
 
-        const pending = client.request("synthetic.baselineUnsupported", {});
+        const pending = client.request(
+          "synthetic.baselineUnsupported",
+          {},
+          authorityForContext(ctx),
+        );
         await flush();
         expect(sockets).toHaveLength(1);
         const stub = sockets[0];

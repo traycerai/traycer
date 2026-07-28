@@ -1,0 +1,87 @@
+gui/501/ai.traycer.host.agent = {
+	active count = 1
+	path = (submitted by smd.93299)
+	type = Submitted
+	managed_by = com.apple.xpc.ServiceManagement
+	state = running
+
+	program identifier = Contents/Library/LaunchAgents/Traycer Host.app/Contents/MacOS/traycer (mode: 2)
+	parent bundle identifier = ai.traycer.desktop
+	parent bundle version = 0.0.0
+	BTM uuid = 2E0FA2B2-5AED-4B9D-9D29-518D9AF8A49F
+	arguments = {
+		Contents/Library/LaunchAgents/Traycer Host.app/Contents/MacOS/traycer
+		host
+		start
+	}
+
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.nZ4scYjk2n/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		PATH => /opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+		NODE_OPTIONS => --max-semi-space-size=16
+		XPC_SERVICE_NAME => ai.traycer.host.agent
+	}
+
+	domain = gui/501 [100023]
+	asid = 100023
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	pid = 98634
+	immediate reason = speculative
+	forks = 1
+	execs = 1
+	initialized = 1
+	trampolined = 1
+	started suspended = 0
+	proxy started suspended = 0
+	checked allocations = 0 (queried = 1)
+	checked allocations reason = no host
+	checked allocations flags = 0x0
+	last exit code = (never exited)
+
+	semaphores = {
+		successful exit => 0
+		after crash => 1
+	}
+
+	resource coalition = {
+		ID = 22092
+		type = resource
+		state = active
+		active count = 1
+		name = ai.traycer.host.agent
+	}
+
+	jetsam coalition = {
+		ID = 22093
+		type = jetsam
+		state = active
+		active count = 1
+		name = ai.traycer.host.agent
+	}
+
+	spawn type = interactive (4)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	submitted job. ignore execute allowed
+	jetsam thread limit = 32
+	cpumon = default
+	resource limits = {
+		maxfiles (soft) => 8192
+	}
+
+	job state = running
+
+	properties = partial import | runatload | resolve program | has LWCR
+}

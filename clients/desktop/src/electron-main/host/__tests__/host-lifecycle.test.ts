@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -6,7 +7,20 @@ import { join } from "node:path";
 
 function listenOnEphemeralPort(): Promise<{ server: Server; port: number }> {
   return new Promise((resolve, reject) => {
-    const server = createServer();
+    const server = createServer((socket) => {
+      socket.once("data", () => {
+        socket.write(
+          [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Accept: test",
+            "",
+            "",
+          ].join("\r\n"),
+        );
+      });
+    });
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
@@ -33,15 +47,11 @@ vi.mock("electron-log", () => ({
   },
 }));
 
-// `HostLifecycle` shells out to the CLI for `respawn` (`traycer host
-// restart`). Mock the helper so a test exercising that path can assert
-// on the captured argv without spawning a real CLI subprocess.
-const cliStreamCalls: { args: readonly string[] }[] = [];
-vi.mock("../../cli/traycer-cli", () => ({
-  streamTraycerCliJson: vi.fn(async (opts: { args: readonly string[] }) => {
-    cliStreamCalls.push({ args: opts.args });
-    return { data: {} };
-  }),
+const tlsConnect = vi.hoisted(() => vi.fn());
+
+vi.mock("node:tls", () => ({
+  connect: tlsConnect,
+  default: { connect: tlsConnect },
 }));
 
 import {
@@ -52,9 +62,21 @@ import {
   readPidMetadata,
   readPidMetadataState,
 } from "../host-lifecycle";
+import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
 import { DEV_LABEL } from "../host-paths";
 import { config } from "../../../config";
-import { streamTraycerCliJson } from "../../cli/traycer-cli";
+
+// These fixtures deliberately use synthetic PIDs. Their endpoint listener is
+// the positive readiness evidence under test; an OS liveness result is
+// unavailable for a synthetic pid, just as it can be unavailable for a real
+// host because of permissions or a failed platform probe. Model that state
+// locally, so no unrelated test can inherit the test-only global seam.
+function useIndeterminateProcessLiveness(): () => void {
+  const restore = __setAsyncProcessLivenessReaderForTest(
+    async () => "indeterminate",
+  );
+  return () => __setAsyncProcessLivenessReaderForTest(restore);
+}
 
 describe("isCurrentHostWebsocketUrl", () => {
   it("accepts the canonical ws URL shape", () => {
@@ -193,7 +215,7 @@ describe("readPidMetadataState", () => {
 // unreachable case - without the close/rebind-same-port race that made the
 // orchestration test flaky.
 describe("canReachHostWebsocketUrl", () => {
-  it("returns true when something is accepting connections on the port", async () => {
+  it("returns true when the endpoint completes a WebSocket handshake", async () => {
     const { server, port } = await listenOnEphemeralPort();
     try {
       expect(await canReachHostWebsocketUrl(`ws://127.0.0.1:${port}/rpc`)).toBe(
@@ -212,6 +234,68 @@ describe("canReachHostWebsocketUrl", () => {
       false,
     );
   });
+
+  it("returns false for an unrelated TCP listener that does not speak WebSocket", async () => {
+    const server = createServer((socket) => {
+      socket.once("data", () => {
+        socket.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("ephemeral listener has no port");
+    }
+    try {
+      expect(
+        await canReachHostWebsocketUrl(`ws://127.0.0.1:${address.port}/rpc`),
+      ).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("uses a completed TLS handshake before probing a wss endpoint", async () => {
+    class TestTlsSocket extends EventEmitter {
+      setTimeout = vi.fn();
+      destroy = vi.fn();
+
+      write(_request: string): boolean {
+        this.emit(
+          "data",
+          Buffer.from(
+            [
+              "HTTP/1.1 101 Switching Protocols",
+              "Upgrade: websocket",
+              "Connection: Upgrade",
+              "Sec-WebSocket-Accept: test",
+              "",
+              "",
+            ].join("\r\n"),
+          ),
+        );
+        return true;
+      }
+    }
+
+    const socket = new TestTlsSocket();
+    tlsConnect.mockImplementationOnce((options: unknown) => {
+      queueMicrotask(() => socket.emit("secureConnect"));
+      return socket;
+    });
+
+    expect(await canReachHostWebsocketUrl("wss://127.0.0.1:45678/rpc")).toBe(
+      true,
+    );
+    expect(tlsConnect).toHaveBeenCalledWith({
+      host: "127.0.0.1",
+      port: 45678,
+      rejectUnauthorized: false,
+    });
+  });
 });
 
 describe("HostLifecycle.bootstrap (metadata-first)", () => {
@@ -228,6 +312,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -252,6 +338,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       readyTimeoutMs: 5_000,
       reachabilityProbe: undefined,
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
@@ -266,8 +353,57 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(snapshot?.pid).toBe(12345);
       expect(snapshot?.version).toBe(config.version);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("A1: rejects a handshake-reachable legacy pid record when liveness proves its PID dead", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      environment: "production" as const,
+    };
+    const reachabilityProbe = vi.fn(async () => true);
+    const restoreLiveness = __setAsyncProcessLivenessReaderForTest(
+      async () => "dead",
+    );
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe,
+    });
+    try {
+      await writeFile(
+        layout.pidMetadataFile,
+        JSON.stringify({
+          hostId: "stale-host",
+          websocketUrl: "ws://127.0.0.1:55555/rpc",
+          version: "1.0.0",
+          pid: 999_999,
+        }),
+        "utf8",
+      );
+
+      await expect(lifecycle.reloadSnapshotFromDisk()).resolves.toBeNull();
+      expect(reachabilityProbe).toHaveBeenCalledOnce();
+    } finally {
+      lifecycle.dispose();
+      __setAsyncProcessLivenessReaderForTest(restoreLiveness);
       await rm(dir, { recursive: true, force: true });
     }
   });
@@ -280,6 +416,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -326,6 +464,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -350,6 +490,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       readyTimeoutMs: 300,
       reachabilityProbe: undefined,
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
@@ -365,6 +506,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.hostId).toBe("different-version-host");
       expect(lifecycle.getSnapshot()?.version).toBe(`${config.version}-stale`);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       server.close();
       await rm(dir, { recursive: true, force: true });
@@ -382,6 +524,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -406,6 +550,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       readyTimeoutMs: 5_000,
       reachabilityProbe: undefined,
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
@@ -416,6 +561,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(errors).toEqual([]);
       expect(lifecycle.getSnapshot()?.hostId).toBe("busy-mismatched-host");
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       server.close();
       await rm(dir, { recursive: true, force: true });
@@ -430,6 +576,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -454,6 +602,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       readyTimeoutMs: 5_000,
       reachabilityProbe: undefined,
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const errors: { code: string }[] = [];
     lifecycle.on("error", (err) => errors.push({ code: err.code }));
     try {
@@ -466,6 +615,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(errors).toEqual([]);
       expect(lifecycle.getSnapshot()?.version).toBe(config.version);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       server.close();
       await rm(dir, { recursive: true, force: true });
@@ -480,6 +630,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -529,6 +681,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -577,6 +731,8 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       logFile: join(dir, "host.log"),
       installDir: join(dir, "install"),
       installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
       pendingLoginItemRevisionFile: join(
         dir,
         "pending-login-item-revision.json",
@@ -606,6 +762,7 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       reachabilityProbe: (url) =>
         Promise.resolve(url === websocketUrl && reachable),
     });
+    const restoreLiveness = useIndeterminateProcessLiveness();
     const changes: Array<string | null> = [];
     lifecycle.on("change", (snapshot) => {
       changes.push(snapshot?.hostId ?? null);
@@ -626,147 +783,9 @@ describe("HostLifecycle.bootstrap (metadata-first)", () => {
       expect(lifecycle.getSnapshot()?.websocketUrl).toBe(websocketUrl);
       expect(changes).toEqual(["same-host", null, "same-host"]);
     } finally {
+      restoreLiveness();
       lifecycle.dispose();
       await rm(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("HostLifecycle.getServiceStatus", () => {
-  it("reads PID metadata rather than consulting a platform service-manager dispatch", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
-    const layout = {
-      rootDir: dir,
-      pidMetadataFile: join(dir, "host.pid.json"),
-      logFile: join(dir, "host.log"),
-      installDir: join(dir, "install"),
-      installRecordFile: join(dir, "install", "install.json"),
-      pendingLoginItemRevisionFile: join(
-        dir,
-        "pending-login-item-revision.json",
-      ),
-      environment: "production" as const,
-    };
-    await writeFile(
-      layout.pidMetadataFile,
-      JSON.stringify({
-        hostId: "live-host",
-        websocketUrl: "ws://127.0.0.1:55555/rpc",
-        version: "1.2.3",
-        pid: 77777,
-      }),
-      "utf8",
-    );
-    const lifecycle = new HostLifecycle({
-      layout,
-      bundledBinaryPath: null,
-      label: PRODUCTION_LABEL,
-      readyTimeoutMs: 5_000,
-      reachabilityProbe: undefined,
-    });
-    try {
-      const status = await lifecycle.getServiceStatus();
-      expect(status.state).toBe("running");
-      expect(status.version).toBe("1.2.3");
-      expect(status.pid).toBe(77777);
-    } finally {
-      lifecycle.dispose();
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("HostLifecycle.respawn (CLI subprocess)", () => {
-  // Ticket 7c890b39: user-driven restart now delegates to
-  // `traycer host restart` via CLI subprocess.
-
-  function makeChannelLifecycleForChannel(environment: "production" | "dev"): {
-    lifecycle: HostLifecycle;
-    cleanup: () => Promise<void>;
-  } {
-    const tmp = mkdtemp(join(tmpdir(), "lifecycle-test-"));
-    return {
-      lifecycle: new HostLifecycle({
-        layout: {
-          rootDir: "/tmp/no-such-dir",
-          pidMetadataFile: "/tmp/no-such-dir/pid.json",
-          logFile: "/tmp/no-such-dir/host.log",
-          installDir: "/tmp/no-such-dir/install",
-          installRecordFile: "/tmp/no-such-dir/install/install.json",
-          pendingLoginItemRevisionFile:
-            "/tmp/no-such-dir/pending-login-item-revision.json",
-          environment,
-        },
-        bundledBinaryPath: null,
-        label: environment === "dev" ? DEV_LABEL : PRODUCTION_LABEL,
-        // Short timeout - `respawn` calls `waitForReady` after the CLI
-        // step and we don't want the test to block waiting for pid.json.
-        readyTimeoutMs: 50,
-        reachabilityProbe: undefined,
-      }),
-      cleanup: async () => {
-        await tmp.then((d) => rm(d, { recursive: true, force: true }));
-      },
-    };
-  }
-
-  it("shells out to `traycer host restart`", async () => {
-    cliStreamCalls.length = 0;
-    const { lifecycle, cleanup } = makeChannelLifecycleForChannel("production");
-    // `respawn()` ends with a `waitForReady` against a deliberately missing
-    // pid.json, so the lifecycle both emits AND rejects with a
-    // `HOST_NOT_READY` error after the CLI step - it must not swallow that
-    // failure into a false success (the dialog-hang RCA's respawn-swallow
-    // bug). Subscribe a no-op listener so EventEmitter does not additionally
-    // throw the unhandled `error` event.
-    lifecycle.on("error", () => undefined);
-    try {
-      await expect(lifecycle.respawn()).rejects.toThrow();
-      expect(cliStreamCalls).toHaveLength(1);
-      // No --environment - the CLI resolves its slot from config.environment.
-      expect(cliStreamCalls[0]?.args).toEqual(["host", "restart"]);
-    } finally {
-      lifecycle.dispose();
-      await cleanup();
-    }
-  });
-
-  it("shells out to `traycer host restart` for the dev label", async () => {
-    cliStreamCalls.length = 0;
-    const { lifecycle, cleanup } = makeChannelLifecycleForChannel("dev");
-    // See sibling test - pid.json is intentionally absent, so the post-CLI
-    // `waitForReady` rejects with a `HOST_NOT_READY` error instead of
-    // resolving.
-    lifecycle.on("error", () => undefined);
-    try {
-      await expect(lifecycle.respawn()).rejects.toThrow();
-      expect(cliStreamCalls).toHaveLength(1);
-      // No --environment - the CLI resolves its slot from config.environment.
-      expect(cliStreamCalls[0]?.args).toEqual(["host", "restart"]);
-    } finally {
-      lifecycle.dispose();
-      await cleanup();
-    }
-  });
-
-  // The dialog-hang RCA's "swallowed respawn failure" defect was the CLI
-  // subprocess step itself throwing (not just the readiness poll timing
-  // out afterward) - `respawn()`'s catch block used to log + emit + resolve
-  // regardless of which step failed. Pin that the CLI-step failure alone
-  // (readiness never even reached) still rejects the returned promise.
-  it("rejects respawn() when the CLI restart subprocess itself throws, before the readiness poll ever runs", async () => {
-    const { lifecycle, cleanup } = makeChannelLifecycleForChannel("production");
-    lifecycle.on("error", () => undefined);
-    vi.mocked(streamTraycerCliJson).mockRejectedValueOnce(
-      new Error("traycer CLI exited with code 1"),
-    );
-    try {
-      await expect(lifecycle.respawn()).rejects.toThrow(
-        /traycer host restart failed/,
-      );
-    } finally {
-      lifecycle.dispose();
-      await cleanup();
     }
   });
 });

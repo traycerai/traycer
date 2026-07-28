@@ -12,6 +12,7 @@ import {
   useEpicCanvasStore,
   useEpicTab,
 } from "@/stores/epics/canvas/store";
+import { isTileRefRecordLive } from "@/stores/epics/canvas/canvas-selectors";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import {
   useEpicArtifactRecords,
@@ -22,7 +23,6 @@ import {
 import { resolveAutoOpenTarget } from "@/lib/epic-auto-open";
 import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
-import { isTileRefRecordBacked } from "@/stores/epics/canvas/tile-schema";
 import { getHistoryController } from "@/lib/persistent-history";
 import {
   areNestedFocusTargetsEqual,
@@ -32,6 +32,11 @@ import {
   resolveNestedFocusTarget,
   type NestedFocusTarget,
 } from "@/lib/epic-nested-focus-route";
+import { consumeNestedRoutePrimaryEditorFocus } from "@/lib/nested-route-dom-focus";
+
+const PRIMARY_CHAT_COMPOSER_SELECTOR =
+  "[data-chat-composer] [data-composer-editor]";
+const ARTIFACT_EDITOR_SELECTOR = "[data-artifact-editor]";
 
 type NavigateFn = UseNavigateResult<string>;
 
@@ -208,7 +213,10 @@ export function useEpicRouteSynchronization(
     const targetToFocus = resolvedNestedRouteTarget;
     const frame = window.requestAnimationFrame(() => {
       lastRestoredNestedTargetRef.current = targetToFocus;
-      focusNestedRouteTarget(targetToFocus);
+      focusNestedRouteTarget(
+        targetToFocus,
+        consumeNestedRoutePrimaryEditorFocus(epicId, tabId, targetToFocus),
+      );
     });
     return () => {
       window.cancelAnimationFrame(frame);
@@ -380,23 +388,21 @@ export function useEpicRouteSynchronization(
   // sidebar's optimistic Y.Doc delete unmounts the row before the mutation's
   // per-call `onSuccess` can fire (TanStack Query v5 drops observer-attached
   // callbacks on unmount), so the close has to be driven by record→canvas
-  // sync rather than by mutation callbacks. Plain `terminal` tabs and
-  // `git-diff` tiles aren't backed by Y.Doc records; pending-create ids cover
-  // the optimistic-open window where a tab exists before its record has
-  // projected. Those local/non-artifact tabs are excluded.
+  // sync rather than by mutation callbacks. `isTileRefRecordLive` is the same
+  // predicate back/forward's preview-reopen path uses before restoring a
+  // closed tile, so "is this tile's record gone" is answered in one place.
   useEffect(() => {
     if (!snapshotLoaded) return;
     if (canvas.root === null) return;
-    const liveIds = new Set(records.map((r) => r.id));
+    const liveIds = new Set(records.map((record) => record.id));
+    const hasLiveRecord = (id: string) => liveIds.has(id);
     for (const pane of collectPanes(canvas.root)) {
       for (const instanceId of pane.tabInstanceIds) {
         const tab = canvas.tilesByInstanceId[instanceId];
         if (tab === undefined) continue;
-        // Renderer-only tiles (terminal, workspace-file, git-diff) have no
-        // Y.Doc-backed record, so a `liveIds` miss is not a deletion.
-        if (!isTileRefRecordBacked(tab)) continue;
-        if (liveIds.has(tab.id)) continue;
-        if (pendingCreateArtifactIds.has(tab.id)) continue;
+        if (isTileRefRecordLive(tab, pendingCreateArtifactIds, hasLiveRecord)) {
+          continue;
+        }
         closeCanvasTab(tabId, pane.id, tab.instanceId);
       }
     }
@@ -491,13 +497,25 @@ function isNestedRouteTargetApplied(
   return areNestedFocusTargetsEqual(currentTarget, routeTarget);
 }
 
-function focusNestedRouteTarget(target: NestedFocusTarget): void {
+function focusNestedRouteTarget(
+  target: NestedFocusTarget,
+  focusPrimaryEditor: boolean,
+): void {
   const element =
     target.tileInstanceId === undefined
       ? findActivePaneElement(target.paneId)
       : findSelectedTileElement(target.tileInstanceId);
   if (element === null) {
     return;
+  }
+  if (focusPrimaryEditor) {
+    const editor =
+      element.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
+      element.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR);
+    if (editor !== null) {
+      editor.focus({ preventScroll: true });
+      return;
+    }
   }
   // The pane / tab container is an ancestor of the tile's editing surface, and
   // this effect re-runs on every canvas mutation (a title rename, for one). If

@@ -1,56 +1,17 @@
 import { useMemo } from "react";
-import { v4 as uuidv4 } from "uuid";
-import {
-  HostClient,
-  type IHostQueryInvalidator,
-} from "@traycer-clients/shared/host-client/host-client";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { WsRpcClient } from "@traycer-clients/shared/host-transport/ws-rpc-client";
-import {
-  createRetryingMessenger,
-  DEFAULT_TRANSPORT_RETRY_POLICY,
-} from "@traycer-clients/shared/host-transport/retrying-messenger";
-import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
-import { createWhatwgWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-ws-factory";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostClient } from "@/lib/host/runtime";
 
 /**
- * Per-request WS frame timeout. Mirrors the value the global
- * `HostRuntimeProvider` builds its `WsRpcClient` with (that constant is
- * module-private there) so a transient client behaves identically on the wire;
- * the dial timeout is the shared `DEFAULT_DIAL_TIMEOUT_MS`.
- */
-const FRAME_TIMEOUT_MS = 30_000;
-
-// Stateless and shareable - hoisted to module scope so each transient client
-// reuses one factory instead of allocating a throwaway per memo recompute
-// (mirrors `browserStreamWebSocketFactory` in `use-host-stream-client-for`).
-const browserWebSocketFactory = createWhatwgWebSocketFactory();
-
-/**
- * A transient client owns no host-scoped TanStack cache, so its invalidator
- * is inert: constructing or discarding one must never touch the global query
- * cache the active-host client manages.
- */
-const NO_OP_INVALIDATOR: IHostQueryInvalidator = {
-  invalidateHostScope: () => {},
-};
-
-/**
- * Builds a throwaway `HostClient` that issues RPCs against `target`
+ * Builds a stateless `HostRequester` facade that issues RPCs against `target`
  * WITHOUT `bind()`-ing it as the app-wide active host (which would reload the
  * Epic list and swap app-wide host state).
  *
- * Mechanics:
- *  - A fresh `WsRpcClient` dials `target.websocketUrl` per request (the
- *    transport holds no socket across calls), so a second instance is cheap
- *    and side-effect-free.
- *  - The bearer is the **shared** `RequestContext` from `globalClient` -
- *    auth is per-user, valid across hosts - so there is no separate sign-in.
- *  - Wrapped in a `HostClient` with a NO_OP invalidator, so `bind()` /
- *    `setRequestContext()` (needed only to satisfy the request preflight)
- *    stay inert beyond this instance's own state.
+ * The facade retains only `target`. Each request returns to `globalClient`,
+ * which revalidates the target against the directory and captures the shared
+ * binding/request authority plus its provider-lifetime coordinator.
  *
  * Returns `null` when `target` has no websocket URL, or there is no
  * authenticated request context / bound user on `globalClient`. Plain
@@ -70,29 +31,7 @@ export function buildTransientHostClient(
   const userId = globalClient.getRequestContextUserId();
   if (requestContext === null || userId === null) return null;
 
-  const registry = globalClient.getRegistry();
-  const messenger = createRetryingMessenger<HostRpcRegistry>(
-    new WsRpcClient<HostRpcRegistry>({
-      registry,
-      endpoint: () => target,
-      // Read the bearer live so a credential-context replacement (not just an
-      // in-place rotation) is picked up, matching the stream sibling hook.
-      bearer: () => globalClient.getRequestContext()?.credentials ?? null,
-      requestId: uuidv4,
-      webSocketFactory: browserWebSocketFactory,
-      dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
-      frameTimeoutMs: FRAME_TIMEOUT_MS,
-    }),
-    DEFAULT_TRANSPORT_RETRY_POLICY,
-  );
-  const client = new HostClient<HostRpcRegistry>({
-    registry,
-    messenger,
-    invalidator: NO_OP_INVALIDATOR,
-  });
-  client.bind(target);
-  client.setRequestContext(requestContext);
-  return client;
+  return globalClient.createRequester(target);
 }
 
 /**

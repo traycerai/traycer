@@ -31,6 +31,11 @@ export const ACTION_IDS = [
   "tab.close-all",
   "tab.next",
   "tab.prev",
+  "tab.split.add",
+  "tab.split.swap",
+  "tab.split.separate",
+  "tab.split.close-left",
+  "tab.split.close-right",
   "group.split.horizontal",
   "group.split.vertical",
   "group.split-right",
@@ -218,6 +223,47 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     kind: "chord",
     defaultChord: "mod+[",
   },
+  "tab.split.add": {
+    id: "tab.split.add",
+    label: "Add current tab to new split view",
+    description:
+      "Create a split with the current tab on the left and focus its fillable right side.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: { mac: "mod+alt+n", other: "ctrl+alt+n" },
+  },
+  "tab.split.swap": {
+    id: "tab.split.swap",
+    label: "Swap split sides",
+    description: "Swap the left and right members of the active split.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: null,
+  },
+  "tab.split.separate": {
+    id: "tab.split.separate",
+    label: "Separate split view",
+    description: "Return the active split members to adjacent ordinary tabs.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: null,
+  },
+  "tab.split.close-left": {
+    id: "tab.split.close-left",
+    label: "Close left split view",
+    description: "Close the left member through its normal close flow.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: null,
+  },
+  "tab.split.close-right": {
+    id: "tab.split.close-right",
+    label: "Close right split view",
+    description: "Close the right member through its normal close flow.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: null,
+  },
   "group.split.horizontal": {
     id: "group.split.horizontal",
     label: "Split group horizontally",
@@ -398,8 +444,9 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     category: "app",
     kind: "chord",
     // Control+Shift+M - uses the Control key specifically (the separate ⌃ key on
-    // macOS), avoiding the Command-based conflicts: ⌘Space (Spotlight),
-    // ⌘⇧Space (window summon), ⌘⇧V (split group vertically).
+    // macOS), avoiding the Command-based conflicts: ⌘Space (Spotlight), ⌘⇧V
+    // (split group vertically). The desktop global summon shortcut is checked
+    // live by conflict detection rather than hand-avoided here.
     defaultChord: "ctrl+shift+m",
   },
   "composer.model-picker.toggle": {

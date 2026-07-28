@@ -9,8 +9,9 @@ import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
-import { PROVIDER_INVALIDATIONS } from "@/hooks/providers/invalidations";
+import { getConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
 
 type ProvidersListRequest = RequestOfMethod<HostRpcRegistry, "providers.list">;
 type ProvidersListResponse = ResponseOfMethod<
@@ -35,22 +36,12 @@ export function useTabRefreshProviders(): () => Promise<void> {
     mapVariables: (variables: ProvidersListRequest) => variables,
     options: {
       mutationKey: providersMutationKeys.refresh(),
-      onSuccess: (data: ProvidersListResponse) => {
-        queryClient.setQueryData(
-          hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-            tabHostId,
-            "providers.list",
-            {},
-          ),
-          data,
-        );
-        for (const method of PROVIDER_INVALIDATIONS.filter(
-          (entry) => entry !== "providers.list",
-        )) {
-          void queryClient.invalidateQueries({
-            queryKey: hostQueryKeys.methodScope(tabHostId, method),
-          });
-        }
+      onSuccess: async (data: ProvidersListResponse) => {
+        await commitAuthoritativeProvidersList({
+          queryClient,
+          hostId: tabHostId,
+          update: () => data,
+        });
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't refresh providers."),
@@ -60,6 +51,13 @@ export function useTabRefreshProviders(): () => Promise<void> {
   const { mutateAsync } = mutation;
   return useCallback(async () => {
     if (client === null) return;
+    getConditionPollEpisodeCoordinator(queryClient).resetQueryByKey(
+      hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+        tabHostId,
+        "providers.list",
+        {},
+      ),
+    );
     await mutateAsync({ forceAuthRefresh: true });
-  }, [client, mutateAsync]);
+  }, [client, mutateAsync, queryClient, tabHostId]);
 }

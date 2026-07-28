@@ -82,6 +82,10 @@ describe("persist key builders — output-preserving against current source", ()
     expect(persistKey("settings-section")).toBe(
       "traycer-gui-app:settings-section",
     );
+    // Source: src/stores/settings/worktrees-settings-view-store.ts
+    expect(persistKey("worktrees-settings-view")).toBe(
+      "traycer-gui-app:worktrees-settings-view",
+    );
     // Source: src/stores/rate-limits/rate-limit-popover-store.ts
     expect(persistKey("rate-limit-popover")).toBe(
       "traycer-gui-app:rate-limit-popover",

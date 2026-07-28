@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { useState } from "react";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const PROFILE_DROPDOWN_KEYS = new Set([
   "ArrowDown",
   "ArrowUp",
@@ -186,6 +187,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           const entry = usagePresentation.entries.get(previewProfileId);
           if (
             entry === undefined ||
+            !entry.fetchEligible ||
             entry.refreshStatus !== "idle" ||
             !usagePresentation.isHostReady
           ) {
@@ -218,7 +220,7 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
                 }
               }}
               aria-label={accessibleLabel}
-              aria-keyshortcuts={usageEntry === undefined ? undefined : "R"}
+              aria-keyshortcuts={usageEntry?.fetchEligible ? "R" : undefined}
               aria-current={selected ? "true" : undefined}
               className={cn("pr-1.5", statusSuffix !== null && "opacity-60")}
               onFocus={(event) => preview(commitId, event.currentTarget)}
@@ -263,14 +265,25 @@ export function ProfileDropdown(props: ProfileDropdownProps) {
           );
         })}
         <DropdownMenuSeparator />
-        <DropdownMenuItem
-          disabled={createProfileDisabled}
-          title={createProfileDisabledReason}
-          onSelect={onCreateProfile}
+        <TooltipWrapper
+          label={createProfileDisabledReason}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          <Plus className="size-3.5" />
-          Create new profile
-        </DropdownMenuItem>
+          {/* `flex w-full`, not `inline-flex`: the guard becomes the menu
+              content's layout child, and a shrink-to-fit one would narrow the
+              row to its text. */}
+          <span className="flex w-full">
+            <DropdownMenuItem
+              disabled={createProfileDisabled}
+              onSelect={onCreateProfile}
+            >
+              <Plus className="size-3.5" />
+              Create new profile
+            </DropdownMenuItem>
+          </span>
+        </TooltipWrapper>
       </DropdownMenuContent>
       {usagePresentation !== null &&
       open &&

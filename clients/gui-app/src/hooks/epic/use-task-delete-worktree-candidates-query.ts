@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   WorktreeBranchStatus,
@@ -114,7 +114,7 @@ export function useTaskDeleteWorktreeCandidates(
   // queryFn so the closure is not mistaken for missing cache identity.
   const fetchWorktreePagesNormalized =
     (): Promise<WorktreeListAllForHostResponseV14> =>
-      withHostRpcErrorBoundary("worktree.listAllForHost", fetchWorktreePages);
+      withHostQueryErrorBoundary("worktree.listAllForHost", fetchWorktreePages);
   const { data, isError } = useQuery(
     queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
       queryKey: hostQueryKeys.method<

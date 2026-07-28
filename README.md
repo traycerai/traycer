@@ -19,18 +19,18 @@
 
 Traycer is an open-source AI orchestration app for advanced agent orchestration. Bring your existing provider subscriptions and run multiple agents in parallel without losing context, using shared memory across all models and providers. Structure your work with regular and Epic modes.
 
-Switch models instantly within the same chat, orchestrate agent-to-agent communication, and collaborate in real time.
+Switch models instantly within the same agent, orchestrate agent-to-agent communication, and collaborate in real time.
 
 [![Traycer Demo Video](https://github.com/user-attachments/assets/a5efda0c-16f2-453b-9f8d-50d09df25aa4)](https://youtu.be/doh2yz3ZFvU)
 
 ## Features
 
-- **Bring Your Own Agent (BYOA):** Connect your existing agents without paying twice, or use Traycer's own inference subscription.
-- **Unified Context:** Instantly switch to another model in the same chat. The context window is seamlessly shared across all providers.
-- **Agent-to-Agent Communication:** Create automated loops where agents talk among themselves to debate architecture or peer-review code.
+- **Bring Your Own Agent (BYOA):** Connect your existing coding agents without paying twice, or use Traycer's own inference subscription.
+- **Unified Context:** Instantly switch to another model within the same agent. The context window is seamlessly shared across all providers.
+- **Agent-to-Agent Communication:** Create automated loops where agents talk among themselves to debate architecture or peer-review code. Every agent can be referenced; reading a transcript and delivering a message are narrower and depend on user, Host, and runtime - see the [capability matrix](https://docs.traycer.ai/concepts/agent-to-agent).
 - **Regular and Epic Modes:** Run quick, one-off tasks in regular mode, or use Epic mode for structured, multi-step coding workflows.
 - **Collaboration:** Invite team members to collaborate using shareable boards, real-time editing, and ticket assignment features directly in the workspace.
-- **Cross-Device Sync:** Maintain the same chat and agent state in any device, any OS.
+- **Cross-Device Sync:** Maintain the same agent state on any device, any OS.
 
 ## Installation
 
@@ -45,11 +45,11 @@ Switch models instantly within the same chat, orchestrate agent-to-agent communi
 
 See the [latest release](https://github.com/traycerai/traycer/releases/latest) for all available builds.
 
-## Agents and Subscriptions
+## Coding Agents and Subscriptions
 
-Traycer connects seamlessly with the subscriptions you already own. We focus on providing high-quality orchestration features rather than locking you into an isolated ecosystem. Supported agents currently include:
+An **agent** is the durable session you create in a Task; you work with it through a **Chat** or **Terminal** interface. A **coding agent** is the underlying provider that powers it. Traycer connects seamlessly with the subscriptions you already own, rather than locking you into an isolated ecosystem. Supported coding agents currently include:
 
-| Agent                                                    | Status                        |
+| Coding agent                                                    | Status                        |
 | :------------------------------------------------------- | :---------------------------- |
 | [Claude Code](https://claude.com/product/claude-code)    | Fully supported               |
 | [Codex](https://openai.com/codex)                        | Fully supported               |

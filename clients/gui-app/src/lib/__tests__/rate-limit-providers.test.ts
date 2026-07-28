@@ -3,11 +3,14 @@ import type {
   ProviderAuthStatus,
   ProviderCliState,
   ProviderId,
+  ProviderProfile,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   isRateLimitCapableProvider,
+  isRateLimitProfileFetchEligible,
   isRateLimitProviderConfigured,
   rateLimitFetchLane,
+  resolveRateLimitFetchEligibility,
 } from "@/lib/rate-limit-providers";
 
 function state(
@@ -40,6 +43,12 @@ describe("rateLimitFetchLane", () => {
   it("maps codex and claude-code to the ephemeralProcess (subprocess) lane", () => {
     expect(rateLimitFetchLane("codex")).toBe("ephemeralProcess");
     expect(rateLimitFetchLane("claude-code")).toBe("ephemeralProcess");
+  });
+
+  it("maps grok to the ephemeralProcess (subprocess) lane", () => {
+    // Grok usage is read over the vendored CLI's `_x.ai/billing` ACP extension
+    // (a real subprocess spawn), not a cheap credential GET.
+    expect(rateLimitFetchLane("grok")).toBe("ephemeralProcess");
   });
 
   it("maps openrouter and kilocode to the httpFetch (cheap GET) lane", () => {
@@ -110,3 +119,74 @@ describe("isRateLimitProviderConfigured", () => {
 function authStatus(status: ProviderAuthStatus): ProviderCliState["auth"] {
   return { status, badgeText: null, label: null, detail: null };
 }
+
+function profile(
+  profileId: string,
+  kind: ProviderProfile["kind"],
+  status: ProviderAuthStatus,
+): ProviderProfile {
+  return {
+    profileId,
+    kind,
+    authType: "oauth",
+    label: profileId,
+    auth: authStatus(status),
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
+describe("resolveRateLimitFetchEligibility", () => {
+  it("uses a present ambient row as the definitive ambient verdict and keeps the no-profile fallback summary-based", () => {
+    for (const summaryStatus of ["authenticated", "configured"] as const) {
+      const ambientSignedOut = state({
+        providerId: "codex",
+        auth: authStatus(summaryStatus),
+        profiles: [profile("ambient", "ambient", "unauthenticated")],
+      });
+
+      expect(resolveRateLimitFetchEligibility(ambientSignedOut)).toEqual({
+        ambient: false,
+        managedProfiles: true,
+      });
+      expect(isRateLimitProviderConfigured(ambientSignedOut)).toBe(false);
+    }
+
+    expect(
+      isRateLimitProviderConfigured(
+        state({ providerId: "codex", auth: authStatus("authenticated") }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps an authenticated managed target eligible while another managed profile is pending, but still honors provider gates", () => {
+    const managed = profile("managed", "managed", "authenticated");
+    const pending = state({
+      providerId: "codex",
+      authPending: true,
+      profiles: [managed],
+    });
+
+    const pendingEligibility = resolveRateLimitFetchEligibility(pending);
+    expect(pendingEligibility.managedProfiles).toBe(true);
+    expect(isRateLimitProfileFetchEligible(pendingEligibility, managed)).toBe(
+      true,
+    );
+
+    for (const overrides of [
+      { enabled: false },
+      { availabilityPending: true },
+    ]) {
+      const gated = resolveRateLimitFetchEligibility(
+        state({ providerId: "codex", profiles: [managed], ...overrides }),
+      );
+      expect(gated.managedProfiles).toBe(false);
+      expect(isRateLimitProfileFetchEligible(gated, managed)).toBe(false);
+    }
+  });
+});

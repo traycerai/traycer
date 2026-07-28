@@ -21,12 +21,14 @@ interface CapturedDroppableInput {
 
 interface TestState {
   droppableInputs: CapturedDroppableInput[];
+  draggableInputs: CapturedDroppableInput[];
   activeArtifactId: string | null;
   activeArtifact: { readonly kind: "spec" } | null;
 }
 
 const testState = vi.hoisted<TestState>(() => ({
   droppableInputs: [],
+  draggableInputs: [],
   activeArtifactId: null,
   activeArtifact: null,
 }));
@@ -39,12 +41,15 @@ vi.mock("@dnd-kit/core", () => ({
       isOver: false,
     };
   },
-  useDraggable: () => ({
-    setNodeRef: () => undefined,
-    listeners: undefined,
-    attributes: {},
-    isDragging: false,
-  }),
+  useDraggable: (input: CapturedDroppableInput) => {
+    testState.draggableInputs.push(input);
+    return {
+      setNodeRef: () => undefined,
+      listeners: undefined,
+      attributes: {},
+      isDragging: false,
+    };
+  },
 }));
 
 vi.mock("@/stores/epics/canvas/store", () => ({
@@ -84,6 +89,7 @@ function setRailDragState(
 
 function resetTestState(): void {
   testState.droppableInputs = [];
+  testState.draggableInputs = [];
   testState.activeArtifactId = null;
   testState.activeArtifact = null;
 }
@@ -128,14 +134,40 @@ describe("<EpicLeftPanelRail />", () => {
     ).toBeUndefined();
     expect(
       testState.droppableInputs.find(
-        (input) => input.id === `left-panel-rail-list-target:${EPIC_ID}`,
+        (input) =>
+          input.id === `left-panel-rail-list-target:${EPIC_ID}:pane:${TAB_ID}`,
       ),
     ).not.toBeUndefined();
     expect(
       testState.droppableInputs.find(
-        (input) => input.id === "left-panel-rail-target:chats",
+        (input) => input.id === `left-panel-rail-target:chats:pane:${TAB_ID}`,
       ),
     ).not.toBeUndefined();
+  });
+
+  it("namespaces duplicate Epic rail registrations by view tab", () => {
+    render(
+      <>
+        <EpicLeftPanelRail
+          epicId={EPIC_ID}
+          tabId="pane-a"
+          orientation="vertical"
+        />
+        <EpicLeftPanelRail
+          epicId={EPIC_ID}
+          tabId="pane-b"
+          orientation="vertical"
+        />
+      </>,
+    );
+
+    const ids = [
+      ...testState.droppableInputs.map((input) => input.id),
+      ...testState.draggableInputs.map((input) => input.id),
+    ];
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.some((id) => id.endsWith(":pane:pane-a"))).toBe(true);
+    expect(ids.some((id) => id.endsWith(":pane:pane-b"))).toBe(true);
   });
 
   it("switches inactive rail icons and toggles collapse on the active group", () => {
@@ -206,10 +238,11 @@ describe("<EpicLeftPanelRail />", () => {
     setRailDragState(
       {
         kind: "left-panel-rail-item",
+        viewTabId: TAB_ID,
         panelId: "artifacts",
         origin: "panel-section",
       },
-      { kind: "left-panel-rail-list" },
+      { kind: "left-panel-rail-list", viewTabId: TAB_ID },
     );
 
     render(
@@ -232,11 +265,13 @@ describe("<EpicLeftPanelRail />", () => {
     setRailDragState(
       {
         kind: "left-panel-rail-item",
+        viewTabId: TAB_ID,
         panelId: "sharing",
         origin: "rail",
       },
       {
         kind: "left-panel-rail",
+        viewTabId: TAB_ID,
         panelId: "terminals",
         position: "after",
       },

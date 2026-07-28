@@ -958,6 +958,7 @@ describe("useRenderedMessages", () => {
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: {
+            sameTurnSteeringSupported: false,
             turnId: "turn-active-profile",
             status: "starting",
             harnessId: "claude",
@@ -1241,6 +1242,7 @@ describe("useRenderedMessages", () => {
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: {
+            sameTurnSteeringSupported: false,
             turnId: "turn-1",
             status: "running",
             harnessId: "claude",
@@ -2924,6 +2926,7 @@ describe("useRenderedMessages", () => {
   it("keeps persisted rows stable while only the live row streams", () => {
     const u1 = userMessage("m1");
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3115,6 +3118,7 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an approval is pending", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3180,6 +3184,7 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an interview is pending from snapshot state", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3225,6 +3230,7 @@ describe("useRenderedMessages", () => {
 
   it("keeps the assistant row id stable from live turn to completion", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3283,6 +3289,7 @@ describe("useRenderedMessages", () => {
 
   it("keeps an accepted pending user before the pre-turn assistant row", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-2",
       status: "running",
       harnessId: "claude",
@@ -3432,6 +3439,7 @@ describe("useRenderedMessages", () => {
       blocks: [fileChangeBlock("/repo/src/app.ts")],
     };
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3638,6 +3646,7 @@ describe("useRenderedMessages", () => {
             serviceTier: null,
           },
           activeTurn: {
+            sameTurnSteeringSupported: false,
             turnId: "turn-1",
             status: "running",
             harnessId: "claude",
@@ -3664,6 +3673,7 @@ describe("useRenderedMessages", () => {
 
   it("holds back the file change group for the streaming live assistant", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3764,6 +3774,7 @@ function forkEvent(input: {
 }
 
 const RUNNING_ACTIVE_TURN: ChatActiveTurn = {
+  sameTurnSteeringSupported: false,
   turnId: "turn-setup",
   status: "running",
   harnessId: "claude",
@@ -4887,7 +4898,7 @@ describe("useRenderedMessages head/tail partition", () => {
     ]);
   });
 
-  it("suppresses code:auth error segments while keeping surrounding content", () => {
+  it("renders code:auth error segments alongside other errors (no suppression)", () => {
     const assistant = {
       ...assistantMessage("turn-1", 2000),
       blocks: [
@@ -4906,14 +4917,17 @@ describe("useRenderedMessages head/tail partition", () => {
 
     const row = result.current.find((r) => r.id === "assistant:turn-1");
     expect(row?.segments.some((s) => s.kind === "text")).toBe(true);
-    // The auth error is gone; the non-auth error survives.
+    // Auth errors render like any other error: suppressing them made headless
+    // (A2A-triggered) auth failures invisible once the transient re-auth
+    // banner cleared.
     const errorSegments = row?.segments.filter((s) => s.kind === "error") ?? [];
-    expect(errorSegments).toHaveLength(1);
-    const onlyError = errorSegments[0];
-    expect(onlyError.code).toBe("RUNTIME_THROWN");
+    expect(errorSegments.map((segment) => segment.code)).toEqual([
+      "auth",
+      "RUNTIME_THROWN",
+    ]);
   });
 
-  it("collapses an auth-only turn to zero segments", () => {
+  it("keeps an auth-only turn's error segment as its durable record", () => {
     const assistant = {
       ...assistantMessage("turn-1", 2000),
       blocks: [turnErrorBlock("block-1", 2000, "auth")],
@@ -4927,7 +4941,9 @@ describe("useRenderedMessages head/tail partition", () => {
     );
 
     const row = result.current.find((r) => r.id === "assistant:turn-1");
-    expect(row?.segments ?? []).toHaveLength(0);
+    const segments = row?.segments ?? [];
+    expect(segments).toHaveLength(1);
+    expect(segments[0]?.kind).toBe("error");
   });
 });
 
@@ -5330,6 +5346,7 @@ describe("useRenderedMessages turn.stopped", () => {
 
   it("keeps an event-only stopped boundary behind the active-turn snapshot gate", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-pre-setup",
       status: "running",
       harnessId: "claude",
@@ -5625,6 +5642,7 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-1", 15_000, "Partial answer")],
     };
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",

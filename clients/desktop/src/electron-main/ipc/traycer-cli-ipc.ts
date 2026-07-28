@@ -4,11 +4,7 @@ import { dialog } from "electron";
 import { isShellExecutablePathSupported } from "@traycer/protocol/config/shell-executable";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import type { TraycerShellProbeResult } from "../../ipc-contracts/traycer-cli-types";
-import {
-  runTraycerCli,
-  runTraycerCliJson,
-  runTraycerCliWithStdin,
-} from "../cli/traycer-cli";
+import { runTraycerCli, runTraycerCliJson } from "../cli/traycer-cli";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -257,37 +253,4 @@ export function registerTraycerCliIpc(bridge: RunnerIpcBridge): void {
       });
     },
   );
-
-  // Seed the CLI's stored credentials from the renderer's captured bearer +
-  // refresh token so the CLI keeps using them for host comms (and can
-  // self-refresh on a 401). A JSON `{ token, refreshToken }` payload is piped
-  // over stdin (`--token -`) rather than passed in argv, so the secrets never
-  // appear in the process list. Rejects (via TraycerCliError) if authn rejected
-  // the token.
-  bridge.handleInvoke(
-    RunnerHostInvoke.traycerCliLogin,
-    async (_event, raw: unknown) => {
-      const token = requireString(raw, "token", "traycerCliLogin");
-      const refreshToken = requireString(
-        raw,
-        "refreshToken",
-        "traycerCliLogin",
-      );
-      await runTraycerCliWithStdin({
-        args: ["login", "--token", "-"],
-        stdin: JSON.stringify({ token, refreshToken }),
-        timeoutMs: 10_000,
-      });
-    },
-  );
-
-  // Delete the CLI's stored credentials at sign-out so the host's
-  // owner-binding gate falls back to deny-by-default on this machine.
-  bridge.handleInvoke(RunnerHostInvoke.traycerCliLogout, async () => {
-    await runTraycerCli({
-      args: ["logout"],
-      maxBuffer: 64 * 1024,
-      timeoutMs: 10_000,
-    });
-  });
 }

@@ -4,6 +4,7 @@ import { readHostPidMetadata } from "../../host/pid-metadata";
 import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
 import { isProcessAlive } from "../../store/cli-lock";
 import type { CliInvocation } from "../cli-binary";
+import { buildCompatibleHostStartScript } from "./host-start-script";
 import { fileExists } from "../install-binary";
 import { serviceManifestPath, type ServiceLabel } from "../label";
 import { ProcessRunError, runCommand } from "../process-runner";
@@ -38,6 +39,22 @@ export function createLinuxController(
     stop: (label) => stopService(label),
     start: (label) => startService(label),
     restart: (label) => restartService(label),
+    // There is no Desktop/SMAppService split on Linux, so the restart halves
+    // are exactly the stop and start the command already performed - the
+    // named seam only exists so `host restart` has one shape on every
+    // platform. `forcedRecycle` is never set: `stopService` is a real
+    // systemd stop, so the unit is genuinely down before the start.
+    stopForRestart: async (label) => {
+      await stopService(label);
+      return { forcedRecycle: false };
+    },
+    relaunchAfterRestart: (label) => startService(label),
+    // SMAppService is macOS-only, so there is no second registration path
+    // that could compete with systemd's user unit here.
+    retireCompetingRegistration: () =>
+      Promise.resolve({ kind: "not-applicable" }),
+    takeoverDesktopRegistration: () =>
+      Promise.resolve({ kind: "not-applicable" }),
   };
 }
 
@@ -207,10 +224,11 @@ interface BuildUnitOptions {
 
 function buildUnit(options: BuildUnitOptions): string {
   const programArgs = [
+    "/bin/sh",
+    "-c",
+    buildCompatibleHostStartScript(options.label.id),
     options.cli.command,
     ...options.cli.args,
-    "host",
-    "start",
   ];
   // systemd treats `%` as a specifier introducer and `;`/`\n`/`\t` as
   // line/argument separators inside an Exec= value. Reject any token

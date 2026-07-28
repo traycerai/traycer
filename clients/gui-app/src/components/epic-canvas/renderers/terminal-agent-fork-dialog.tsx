@@ -19,13 +19,14 @@ import { HarnessModelPicker } from "@/components/home/pickers/harness-model-pick
 import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import { useFocusedPaneModalOpen } from "@/components/epic-tabs/pane-visibility-context";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   type CreateTuiAgentStatus,
   useCreateTuiAgentForClient,
 } from "@/hooks/agent/use-create-tui-agent";
-import { tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { readSeededLaunchWorkspace } from "@/lib/worktree/seeded-launch-worktree-intent";
 import { useSeededWorkspaceSnapshotStore } from "@/stores/worktree/seeded-workspace-snapshot-store";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
@@ -64,8 +65,9 @@ interface TerminalAgentForkDialogProps {
 }
 
 export function TerminalAgentForkDialog(props: TerminalAgentForkDialogProps) {
+  const presentedOpen = useFocusedPaneModalOpen(props.open);
   return (
-    <SurfaceActivityProvider active={props.open}>
+    <SurfaceActivityProvider active={presentedOpen}>
       <TerminalAgentForkDialogBody {...props} />
     </SurfaceActivityProvider>
   );
@@ -339,11 +341,12 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 if (event.key === "Enter") submit();
               }}
               disabled={busy}
-              aria-label="Terminal agent additional arguments"
+              aria-label="Terminal interface CLI arguments"
               className="font-mono text-ui-xs"
             />
           </label>
           <ActiveHostWorkspaceControls
+            disabled={false}
             stagingKey={stagingKey}
             layout="stacked"
             workspaceSeed={target?.workspaceSeed.workspace ?? null}
@@ -437,10 +440,7 @@ function terminalForkSettingsSeed(agent: TuiAgentProjection): ChatRunSettings {
 }
 
 function terminalForkDefaultTitle(agent: TuiAgentProjection): string {
-  return `Fork - ${tuiAgentDisplayTitle({
-    title: agent.title,
-    harnessId: agent.harnessId,
-  })}`;
+  return `Fork - ${displayTitle(agent.title, "agent")}`;
 }
 
 function terminalForkModelPickerKey(

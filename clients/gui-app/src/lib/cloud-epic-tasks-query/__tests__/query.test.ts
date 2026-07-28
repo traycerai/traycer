@@ -32,4 +32,12 @@ describe("listCloudTasksRequestForHistorySearch", () => {
       },
     });
   });
+
+  it("requests central last-viewed sorting", () => {
+    const search = parseHistorySearch({ historySort: "last-viewed" });
+
+    expect(listCloudTasksRequestForHistorySearch(search).sort).toBe(
+      "last-viewed",
+    );
+  });
 });

@@ -23,6 +23,7 @@ import {
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
   isArtifactMentionStep,
@@ -33,9 +34,12 @@ import type { MentionPreview } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 
 import {
+  activePickerItemDisabledReason,
+  pickerItemDisabledReason,
   pickerItemPreview,
   type ComposerPickerItem,
   type ComposerPickerStore,
+  type ComposerSlashTrigger,
 } from "../picker/composer-picker-store";
 
 import { MentionMenuItem } from "./mention-menu-item";
@@ -43,10 +47,12 @@ import { MentionPreviewPanel } from "./mention-preview-panel";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const SLASH_MENU_COPY = {
   header: "Slash commands",
   empty: "No matching commands",
 };
+const LOAD_FAILED_LABEL = "Couldn't load commands";
 const COMPOSER_ARTIFACT_REFRESH_TIMEOUT_MS = 10_000;
 
 // Conservative bound for open-time placement decision; list is capped via
@@ -58,29 +64,35 @@ type LockedPlacement = Extract<Placement, "bottom-start" | "top-start">;
 interface MenuSlice {
   readonly open: boolean;
   readonly kind: "mention" | "slash" | null;
+  readonly slashTrigger: ComposerSlashTrigger | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
   readonly fetching: boolean;
+  readonly loadFailed: boolean;
   readonly step: MentionFlowStep;
 }
 
 function selectMenuSlice(state: {
   open: boolean;
   kind: "mention" | "slash" | null;
+  slashTrigger: ComposerSlashTrigger | null;
   items: ReadonlyArray<ComposerPickerItem>;
   activeIndex: number;
   loading: boolean;
   fetching: boolean;
+  loadFailed: boolean;
   step: MentionFlowStep;
 }): MenuSlice {
   return {
     open: state.open,
     kind: state.kind,
+    slashTrigger: state.slashTrigger,
     items: state.items,
     activeIndex: state.activeIndex,
     loading: state.loading,
     fetching: state.fetching,
+    loadFailed: state.loadFailed,
     step: state.step,
   };
 }
@@ -92,22 +104,35 @@ export interface ComposerMenuProps {
 export function ComposerMenu(props: ComposerMenuProps) {
   const { pickerStore } = props;
   const slice = useStore(pickerStore, useShallow(selectMenuSlice));
-  const { open, kind, items, activeIndex, loading, fetching, step } = slice;
+  const {
+    open,
+    kind,
+    slashTrigger,
+    items,
+    activeIndex,
+    loading,
+    fetching,
+    loadFailed,
+    step,
+  } = slice;
+  const paneFocused = usePaneFocused();
 
   const baseMenuId = useId();
   const menuId = `${baseMenuId}-menu`;
 
-  if (!open) return null;
+  if (!open || !paneFocused) return null;
   if (typeof document === "undefined") return null;
 
   return (
     <ComposerMenuPortal
       pickerStore={pickerStore}
       kind={kind}
+      slashTrigger={slashTrigger}
       items={items}
       activeIndex={activeIndex}
       loading={loading}
       fetching={fetching}
+      loadFailed={loadFailed}
       step={step}
       menuId={menuId}
     />
@@ -117,10 +142,12 @@ export function ComposerMenu(props: ComposerMenuProps) {
 interface ComposerMenuPortalProps {
   readonly pickerStore: ComposerPickerStore;
   readonly kind: "mention" | "slash" | null;
+  readonly slashTrigger: ComposerSlashTrigger | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
   readonly activeIndex: number;
   readonly loading: boolean;
   readonly fetching: boolean;
+  readonly loadFailed: boolean;
   readonly step: MentionFlowStep;
   readonly menuId: string;
 }
@@ -129,10 +156,12 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const {
     pickerStore,
     kind,
+    slashTrigger,
     items,
     activeIndex,
     loading,
     fetching,
+    loadFailed,
     step,
     menuId,
   } = props;
@@ -141,8 +170,11 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
 
   const renderedItems = useMemo<ReadonlyArray<RenderedItem>>(
-    () => items.map((item, index) => renderPickerItem(item, index, menuId)),
-    [items, menuId],
+    () =>
+      items.map((item, index) =>
+        renderPickerItem(item, index, menuId, slashTrigger ?? "/"),
+      ),
+    [items, menuId, slashTrigger],
   );
 
   const activePreview = useMemo<MentionPreview | null>(() => {
@@ -150,9 +182,15 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     return pickerItemPreview(items[activeIndex]);
   }, [items, activeIndex]);
 
+  const activeDisabledReason = useMemo<string | null>(
+    () => activePickerItemDisabledReason({ items, activeIndex }),
+    [items, activeIndex],
+  );
+
   const copy = useMemo(() => {
     if (kind === "mention") return mentionProviderRegistry.menuCopy(step);
-    if (kind === "slash") return SLASH_MENU_COPY;
+    // Both triggers list the same catalog, so the header does not vary with the
+    // trigger - only the row prefixes echo which character was typed.
     return SLASH_MENU_COPY;
   }, [kind, step]);
 
@@ -279,26 +317,34 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
             ) : null}
           </div>
           {refreshAvailable ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Refresh artifacts"
-              title="Refresh artifacts"
-              className="-my-1 text-muted-foreground/70 hover:text-foreground"
-              disabled={artifactRefresh.refreshing}
-              onMouseDown={(event) => {
-                event.preventDefault();
-              }}
-              onClick={artifactRefresh.trigger}
+            <TooltipWrapper
+              label="Refresh artifacts"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <RefreshCwIcon
-                className={cn(
-                  "size-3.5",
-                  artifactRefresh.refreshing && "animate-spin",
-                )}
-              />
-            </Button>
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Refresh artifacts"
+                  className="-my-1 text-muted-foreground/70 hover:text-foreground"
+                  disabled={artifactRefresh.refreshing}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                  }}
+                  onClick={artifactRefresh.trigger}
+                >
+                  <RefreshCwIcon
+                    className={cn(
+                      "size-3.5",
+                      artifactRefresh.refreshing && "animate-spin",
+                    )}
+                  />
+                </Button>
+              </span>
+            </TooltipWrapper>
           ) : null}
         </div>
         <div
@@ -310,6 +356,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
           <ComposerMenuBody
             renderedItems={renderedItems}
             loading={loading}
+            loadFailed={loadFailed}
             emptyLabel={emptyLabel}
             showEmptyLabelWithItems={showEmptyLabelWithItems}
             activeIndex={activeIndex}
@@ -328,6 +375,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
         listRef={listRef}
         activeIndex={activeIndex}
         preview={activePreview}
+        disabledReason={activeDisabledReason}
       />
     </>
   );
@@ -364,28 +412,43 @@ function activeDialogContentShard(): HTMLElement | null {
 interface RenderedItem {
   readonly id: string;
   readonly node: ReactNode;
+  readonly disabledReason: string | null;
 }
 
 function renderPickerItem(
   item: ComposerPickerItem,
   index: number,
   menuId: string,
+  trigger: ComposerSlashTrigger,
 ): RenderedItem {
   if (item.kind === "mention") {
     return {
       id: `${menuId}-item-${index}`,
       node: <MentionMenuItem entry={item.entry} />,
+      disabledReason: null,
     };
   }
   return {
     id: `${menuId}-item-${index}`,
-    node: <SlashMenuItem command={item.command} />,
+    node: <SlashMenuItem command={item.command} trigger={trigger} />,
+    disabledReason: pickerItemDisabledReason(item),
   };
+}
+
+/**
+ * Inert rows still take the highlight as you arrow past them - skipping them
+ * makes the selection look like it teleports - but at a weaker weight so
+ * "selected" never reads as "actionable".
+ */
+function rowHighlightClass(isActive: boolean, disabled: boolean): string {
+  if (!isActive) return "hover:bg-accent/40";
+  return disabled ? "bg-accent/25" : "bg-accent/60";
 }
 
 interface ComposerMenuBodyProps {
   readonly renderedItems: ReadonlyArray<RenderedItem>;
   readonly loading: boolean;
+  readonly loadFailed: boolean;
   readonly emptyLabel: string;
   readonly showEmptyLabelWithItems: boolean;
   readonly activeIndex: number;
@@ -396,6 +459,7 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
   const {
     renderedItems,
     loading,
+    loadFailed,
     emptyLabel,
     showEmptyLabelWithItems,
     activeIndex,
@@ -412,8 +476,33 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
     </div>
   );
   if (loading && renderedItems.length === 0) return loadingRow;
+  // A failed catalog load with nothing to show is an error state, not an
+  // empty result - "No matching commands" would misreport a provider failure
+  // as a legitimately empty catalog.
+  if (loadFailed && renderedItems.length === 0) {
+    return (
+      <div className="flex items-center justify-between gap-2 px-3 py-2 text-ui-xs text-muted-foreground/80">
+        <span className="min-w-0 truncate">{LOAD_FAILED_LABEL}</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          className="-my-1 shrink-0 text-muted-foreground/70 hover:text-foreground"
+          onMouseDown={(event) => {
+            event.preventDefault();
+          }}
+          onClick={() => {
+            pickerStore.getState().retryLoad?.();
+          }}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
   if (renderedItems.length === 0) return emptyRow(emptyLabel, false);
   const rows = renderedItems.map((item, index) => {
+    const disabled = item.disabledReason !== null;
     const isActive = index === activeIndex;
     return (
       <div
@@ -422,22 +511,33 @@ function ComposerMenuBody(props: ComposerMenuBodyProps): ReactNode {
         role="option"
         tabIndex={-1}
         aria-selected={isActive}
+        aria-disabled={disabled}
         data-active={isActive}
+        data-disabled={disabled}
         className={cn(
-          "cursor-pointer px-2 py-0.5 text-ui-sm outline-none",
-          isActive ? "bg-accent/60" : "hover:bg-accent/40",
+          "px-2 py-0.5 text-ui-sm outline-none",
+          disabled ? "cursor-default opacity-50" : "cursor-pointer",
+          rowHighlightClass(isActive, disabled),
         )}
         onMouseEnter={() => {
           pickerStore.getState().setActiveIndex(index);
         }}
         onMouseDown={(event) => {
           event.preventDefault();
+          if (disabled) return;
           const state = pickerStore.getState();
           state.setActiveIndex(index);
           state.commitActiveItem();
         }}
       >
         {item.node}
+        {item.disabledReason === null ? null : (
+          // `aria-disabled` says a row is unavailable but never why, and the
+          // preview panel that carries the reason is `aria-hidden` and drops
+          // out of view entirely when it cannot fit. Without this the reason
+          // reaches no screen reader at all.
+          <span className="sr-only">{`Disabled. ${item.disabledReason}`}</span>
+        )}
       </div>
     );
   });

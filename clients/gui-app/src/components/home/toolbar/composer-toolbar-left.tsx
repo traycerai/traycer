@@ -8,6 +8,7 @@ import type {
 } from "@/components/home/data/landing-options";
 import { AgentModeToggle } from "@/components/home/pickers/agent-mode-toggle";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ComposerToolbarLeftProps {
   onAttachImages: (files: ReadonlyArray<File>) => void;
   agentMode: AgentMode;
@@ -76,13 +77,19 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
         className="hidden"
         onChange={handleImageChange}
       />
-      <ToolbarIconButton
-        aria-label="Attach image"
-        title="Attach image"
-        onClick={handleOpenImagePicker}
+      <TooltipWrapper
+        label="Attach image"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <ImagePlus className="size-4" />
-      </ToolbarIconButton>
+        <ToolbarIconButton
+          aria-label="Attach image"
+          onClick={handleOpenImagePicker}
+        >
+          <ImagePlus className="size-4" />
+        </ToolbarIconButton>
+      </TooltipWrapper>
       <PermissionsPicker
         value={permission}
         disabled={settingsLocked}

@@ -23,9 +23,11 @@ export const STOP_EXIT_GRACE_MARGIN_MS = 2_000;
  * Per-step timeouts for the Windows Scheduled-Task restart sequence
  * (`traycer-cli/src/service/platforms/windows.ts`: `stopService` /
  * `killHostProcessTree` / `startService` / `restartService`). Windows has no
- * single graceful-stop signal like launchd SIGTERM - `restart` runs four
- * independently-capped steps in sequence: `schtasks /End`, a PowerShell
- * process-tree scan, `taskkill` on any surviving pids, then `schtasks /Run`.
+ * single graceful-stop signal like launchd SIGTERM - `restart` runs a
+ * sequence of independently-capped steps: `schtasks /End`, a PowerShell
+ * process-tree scan, `taskkill` on any surviving pids, then `schtasks /Run`,
+ * post-`/Run` spawn-evidence verification, and (on verification failure) a
+ * Last Run Result query.
  * Exported here (not left as local literals in `windows.ts`) so the outer
  * budget below can be derived from the platform's actual worst case instead
  * of duplicating these numbers as a second, driftable magic number.
@@ -34,6 +36,25 @@ export const WINDOWS_SCHTASKS_END_TIMEOUT_MS = 30_000;
 export const WINDOWS_PROCESS_SCAN_TIMEOUT_MS = 10_000;
 export const WINDOWS_TASKKILL_TIMEOUT_MS = 30_000;
 export const WINDOWS_SCHTASKS_RUN_TIMEOUT_MS = 30_000;
+export const WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS = 10_000;
+
+/**
+ * After `schtasks /Run`, how long `startService` polls for post-baseline
+ * spawn evidence (pid metadata written after the run baseline, or a
+ * post-baseline bootstrap marker) before reading Last Run Result and
+ * failing with `SERVICE_CONTROL_FAILED`. Exit 0 from `/Run` only means the
+ * scheduler accepted the request - not that anything spawned.
+ */
+export const WINDOWS_START_SPAWN_VERIFY_MS = 15_000;
+export const WINDOWS_START_SPAWN_POLL_MS = 250;
+
+/**
+ * Hard ceiling for host-readiness waits that extend past the base budget
+ * when post-baseline spawn evidence is present (slow first-exec of a freshly
+ * downloaded multi-GB host binary). Base budget remains 60s; this is only
+ * the extended absolute cap.
+ */
+export const HOST_READY_EXTENDED_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * Worst-case cumulative duration of a legitimate (non-failing) Windows
@@ -44,7 +65,9 @@ export const WINDOWS_RESTART_SEQUENCE_TIMEOUT_MS =
   WINDOWS_SCHTASKS_END_TIMEOUT_MS +
   WINDOWS_PROCESS_SCAN_TIMEOUT_MS +
   WINDOWS_TASKKILL_TIMEOUT_MS +
-  WINDOWS_SCHTASKS_RUN_TIMEOUT_MS;
+  WINDOWS_SCHTASKS_RUN_TIMEOUT_MS +
+  WINDOWS_START_SPAWN_VERIFY_MS +
+  WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS;
 
 /**
  * Budget for a full `traycer host restart` subprocess as invoked by Desktop

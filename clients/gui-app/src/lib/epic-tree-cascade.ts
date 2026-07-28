@@ -87,29 +87,30 @@ export function computeDescendantCountsFromTree(
 
 /**
  * Build a human-readable cascade summary string from counts, e.g.
- * "3 specs, 2 tickets, and 1 chat". Returns null when there are no
+ * "3 specs, 2 tickets, and 1 agent". Returns null when there are no
  * descendants (the confirm dialog omits the cascade line).
+ *
+ * Chat and terminal-agent descendants aggregate into a single **agent** bucket:
+ * Agent is the durable entity and Chat/Terminal are only the interfaces used to
+ * interact with it, so a mixed selection reads "2 agents" rather than the
+ * entity-splitting "1 chat and 1 terminal agent". Each entry therefore names a
+ * SET of node kinds rather than one.
  */
 const CASCADE_LABELS: ReadonlyArray<{
-  readonly key: keyof DescendantCounts;
+  readonly keys: ReadonlyArray<keyof DescendantCounts>;
   readonly singular: string;
   readonly plural: string;
 }> = [
-  { key: "spec", singular: "spec", plural: "specs" },
-  { key: "ticket", singular: "ticket", plural: "tickets" },
-  { key: "story", singular: "story", plural: "stories" },
-  { key: "review", singular: "review", plural: "reviews" },
-  { key: "chat", singular: "chat", plural: "chats" },
-  {
-    key: "terminal-agent",
-    singular: "terminal agent",
-    plural: "terminal agents",
-  },
+  { keys: ["spec"], singular: "spec", plural: "specs" },
+  { keys: ["ticket"], singular: "ticket", plural: "tickets" },
+  { keys: ["story"], singular: "story", plural: "stories" },
+  { keys: ["review"], singular: "review", plural: "reviews" },
+  { keys: ["chat", "terminal-agent"], singular: "agent", plural: "agents" },
 ];
 
 export function formatCascadeSummary(counts: DescendantCounts): string | null {
   const parts = CASCADE_LABELS.flatMap((label) => {
-    const n = counts[label.key];
+    const n = label.keys.reduce((total, key) => total + counts[key], 0);
     if (n <= 0) return [];
     return [`${n} ${n === 1 ? label.singular : label.plural}`];
   });

@@ -236,13 +236,15 @@ export const MAX_POLL_INTERVAL_SECONDS = 60;
 
 /**
  * Immutable poll schedule for one device authorization. Holds the current
- * inter-poll delay (`intervalMs`) and the absolute deadline (`expiresAtMs`)
- * past which the device_code is dead. Pure and clock-injected (callers pass
- * `startedAtMs` / `nowMs`) so it runs identically in the CLI process, in
- * Electron main, and in unit tests.
+ * inter-poll delay (`intervalMs`), the server-issued base delay
+ * (`baseIntervalMs`) the interval decays back to once polling is compliant
+ * again, and the absolute deadline (`expiresAtMs`) past which the device_code
+ * is dead. Pure and clock-injected (callers pass `startedAtMs` / `nowMs`) so
+ * it runs identically in the CLI process, in Electron main, and in unit tests.
  */
 export type DevicePollSchedule = {
   readonly intervalMs: number;
+  readonly baseIntervalMs: number;
   readonly expiresAtMs: number;
 };
 
@@ -252,8 +254,10 @@ export function createPollSchedule(params: {
   readonly expiresInSeconds: number;
   readonly startedAtMs: number;
 }): DevicePollSchedule {
+  const intervalMs = clampIntervalSeconds(params.intervalSeconds) * 1000;
   return {
-    intervalMs: clampIntervalSeconds(params.intervalSeconds) * 1000,
+    intervalMs,
+    baseIntervalMs: intervalMs,
     expiresAtMs: params.startedAtMs + params.expiresInSeconds * 1000,
   };
 }
@@ -278,6 +282,27 @@ export function applySlowDown(
     ...schedule,
     intervalMs: clampIntervalSeconds(bumpedSeconds) * 1000,
   };
+}
+
+/**
+ * Returns a schedule with the interval restored to the server-issued base.
+ * Callers apply this after an `authorization-pending` response: the server
+ * accepted the poll's pacing, so any earlier `slow_down` widening (e.g. from a
+ * premature browser-return nudge) should not outlive the violation and keep
+ * the user waiting a padded interval for the rest of the attempt.
+ *
+ * DELIBERATE deviation from RFC 8628 §3.5, which keeps a slow_down's +5s for
+ * "all subsequent requests". This client only ever talks to Traycer's own
+ * authn, whose gate is itself a fixed one-interval penalty (never ratcheting),
+ * so decaying after an accepted poll mirrors the server's actual policy - and
+ * without decay one spurious slow_down (e.g. clock skew between authn
+ * replicas) would pin a widened interval for the attempt's remaining life,
+ * delaying approval detection for clients with no browser-return nudge (CLI).
+ */
+export function resetPollInterval(
+  schedule: DevicePollSchedule,
+): DevicePollSchedule {
+  return { ...schedule, intervalMs: schedule.baseIntervalMs };
 }
 
 /** Whether the device_code has expired as of `nowMs`. */

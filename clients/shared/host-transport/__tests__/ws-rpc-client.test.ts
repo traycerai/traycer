@@ -10,10 +10,15 @@ import {
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
+  HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
   RetryableTransportError,
+  type HostRequestAuthority,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "../host-messenger";
+import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -143,24 +148,65 @@ function makeFactory(): {
   return { factory, sockets };
 }
 
+function authorityForToken(token: string | null): HostRequestAuthority {
+  return authorityForBearer(new MutableBearerLease(token ?? "", "test-user"));
+}
+
+function authorityForBearer(
+  bearer: HostRequestAuthority["bearer"],
+): HostRequestAuthority {
+  return {
+    endpoint: {
+      hostId: mockLocalHostEntry.hostId,
+      websocketUrl: mockLocalHostEntry.websocketUrl,
+    },
+    bearer,
+    abortSignal: new AbortController().signal,
+  };
+}
+
+class BoundWsRpcClient<Registry extends VersionedRpcRegistry> {
+  constructor(
+    private readonly inner: WsRpcClient<Registry>,
+    private readonly authority: HostRequestAuthority,
+  ) {}
+
+  request<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.inner.request(method, params, this.authority);
+  }
+
+  requestWithResponseTimeout<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    responseTimeoutMs: number,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.inner.requestWithResponseTimeout(
+      method,
+      params,
+      responseTimeoutMs,
+      this.authority,
+    );
+  }
+}
+
 function makeClient(options: {
   readonly factory: IWebSocketFactory;
   readonly authToken: string | null;
   readonly requestId: string;
   readonly dialTimeoutMs: number;
   readonly frameTimeoutMs: number;
-}): WsRpcClient<typeof testRegistry> {
-  const ctx =
-    options.authToken === null ? null : makeRequestContext(options.authToken);
-  return new WsRpcClient<typeof testRegistry>({
+}): BoundWsRpcClient<typeof testRegistry> {
+  const inner = new WsRpcClient<typeof testRegistry>({
     registry: testRegistry,
-    endpoint: () => mockLocalHostEntry,
-    bearer: () => ctx?.credentials ?? null,
     requestId: () => options.requestId,
     webSocketFactory: options.factory,
     dialTimeoutMs: options.dialTimeoutMs,
     frameTimeoutMs: options.frameTimeoutMs,
   });
+  return new BoundWsRpcClient(inner, authorityForToken(options.authToken));
 }
 
 function makeRequestContext(bearer: string): RequestContext {
@@ -286,6 +332,40 @@ describe("WsRpcClient", () => {
     expect(stub.closed).toEqual({ code: 1000, reason: "ok" });
   });
 
+  it("aborting the captured authority closes and settles the in-flight socket", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = new WsRpcClient<typeof testRegistry>({
+      registry: testRegistry,
+      requestId: () => "req-abort",
+      webSocketFactory: factory,
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+    });
+    const lifetime = new AbortController();
+    const pending = client.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        endpoint: {
+          hostId: mockLocalHostEntry.hostId,
+          websocketUrl: mockLocalHostEntry.websocketUrl,
+        },
+        bearer: new MutableBearerLease("token-abc", "test-user"),
+        abortSignal: lifetime.signal,
+      },
+    );
+    await flush();
+    expect(sockets).toHaveLength(1);
+
+    lifetime.abort("host-replaced");
+
+    await expect(pending).rejects.toBeInstanceOf(HostRequestAbortedError);
+    expect(sockets[0].socket.closed).toEqual({
+      code: 1000,
+      reason: "authority-aborted",
+    });
+  });
+
   it("rejects before dialing when no authenticated request context is available", async () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient({
@@ -303,7 +383,7 @@ describe("WsRpcClient", () => {
         error instanceof HostRpcError &&
         error.code === "RPC_ERROR" &&
         error.requestId === "req-no-auth" &&
-        error.message.includes("without an authenticated bearer source"),
+        error.message.includes("No bearer available for user 'test-user'"),
     );
     expect(sockets).toHaveLength(0);
   });
@@ -312,15 +392,16 @@ describe("WsRpcClient", () => {
     const { factory, sockets } = makeFactory();
     const ctx = makeRequestContext("token-abc");
     ctx.release();
-    const client = new WsRpcClient<typeof testRegistry>({
-      registry: testRegistry,
-      endpoint: () => mockLocalHostEntry,
-      bearer: () => ctx?.credentials ?? null,
-      requestId: () => "req-released",
-      webSocketFactory: factory,
-      dialTimeoutMs: 1000,
-      frameTimeoutMs: 1000,
-    });
+    const client = new BoundWsRpcClient(
+      new WsRpcClient<typeof testRegistry>({
+        registry: testRegistry,
+        requestId: () => "req-released",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+      }),
+      authorityForBearer(ctx.credentials),
+    );
 
     await expect(
       client.request("host.echo", { message: "hi" }),
@@ -899,15 +980,16 @@ describe("WsRpcClient", () => {
     );
     const { factory, sockets } = makeFactory();
     const ctx = makeRequestContext("t");
-    const client = new WsRpcClient<typeof fallbackRegistry>({
-      registry: fallbackRegistry,
-      endpoint: () => mockLocalHostEntry,
-      bearer: () => ctx.credentials,
-      requestId: () => "req-fallback",
-      webSocketFactory: factory,
-      dialTimeoutMs: 1000,
-      frameTimeoutMs: 1000,
-    });
+    const client = new BoundWsRpcClient(
+      new WsRpcClient<typeof fallbackRegistry>({
+        registry: fallbackRegistry,
+        requestId: () => "req-fallback",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+      }),
+      authorityForBearer(ctx.credentials),
+    );
 
     const pending = client.request("host.syntheticFallback", { label: "x" });
     await flush();
@@ -986,15 +1068,16 @@ describe("WsRpcClient", () => {
     );
     const { factory, sockets } = makeFactory();
     const ctx = makeRequestContext("t");
-    const client = new WsRpcClient<typeof unsupportedRegistry>({
-      registry: unsupportedRegistry,
-      endpoint: () => mockLocalHostEntry,
-      bearer: () => ctx.credentials,
-      requestId: () => "req-unsupported",
-      webSocketFactory: factory,
-      dialTimeoutMs: 1000,
-      frameTimeoutMs: 1000,
-    });
+    const client = new BoundWsRpcClient(
+      new WsRpcClient<typeof unsupportedRegistry>({
+        registry: unsupportedRegistry,
+        requestId: () => "req-unsupported",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        frameTimeoutMs: 1000,
+      }),
+      authorityForBearer(ctx.credentials),
+    );
 
     const pending = client.request("host.syntheticUnsupported", {});
     await flush();
@@ -1098,17 +1181,18 @@ describe("WsRpcClient", () => {
     function makeFallbackSkewClient(options: {
       readonly factory: IWebSocketFactory;
       readonly requestId: string;
-    }): WsRpcClient<typeof fallbackSkewRegistry> {
+    }): BoundWsRpcClient<typeof fallbackSkewRegistry> {
       const ctx = makeRequestContext("t");
-      return new WsRpcClient<typeof fallbackSkewRegistry>({
-        registry: fallbackSkewRegistry,
-        endpoint: () => mockLocalHostEntry,
-        bearer: () => ctx.credentials,
-        requestId: () => options.requestId,
-        webSocketFactory: options.factory,
-        dialTimeoutMs: 1000,
-        frameTimeoutMs: 1000,
-      });
+      return new BoundWsRpcClient(
+        new WsRpcClient<typeof fallbackSkewRegistry>({
+          registry: fallbackSkewRegistry,
+          requestId: () => options.requestId,
+          webSocketFactory: options.factory,
+          dialTimeoutMs: 1000,
+          frameTimeoutMs: 1000,
+        }),
+        authorityForBearer(ctx.credentials),
+      );
     }
 
     it("anchors fallback at degrade.to when the host has the older target minor", async () => {
@@ -1350,17 +1434,18 @@ describe("WsRpcClient", () => {
         readonly factory: IWebSocketFactory;
         readonly requestId: string;
       },
-    ): WsRpcClient<Registry> {
+    ): BoundWsRpcClient<Registry> {
       const ctx = makeRequestContext("t");
-      return new WsRpcClient<Registry>({
-        registry,
-        endpoint: () => mockLocalHostEntry,
-        bearer: () => ctx?.credentials ?? null,
-        requestId: () => options.requestId,
-        webSocketFactory: options.factory,
-        dialTimeoutMs: 1000,
-        frameTimeoutMs: 1000,
-      });
+      return new BoundWsRpcClient(
+        new WsRpcClient<Registry>({
+          registry,
+          requestId: () => options.requestId,
+          webSocketFactory: options.factory,
+          dialTimeoutMs: 1000,
+          frameTimeoutMs: 1000,
+        }),
+        authorityForBearer(ctx.credentials),
+      );
     }
 
     it("same major, client newer minor: strips request to older minor and upgrades response", async () => {

@@ -119,3 +119,79 @@ export function isWindowsLikePath(path: string): boolean {
     WINDOWS_UNC_PATH_PATTERN.test(normalized)
   );
 }
+
+/**
+ * Relativizes `path` against the most specific (longest) root in `roots`
+ * that contains it, mirroring the file-mention convention: when bound roots
+ * overlap (e.g. `/repo` and `/repo/sub`), the longest matching root wins.
+ * Returns a normalized POSIX-style relative path, or `null` when `path` is
+ * not under any root, or equals a root itself (a directory, not a file
+ * under it).
+ */
+export function relativizeToWorkspaceRoot(
+  roots: ReadonlyArray<string>,
+  path: string,
+): string | null {
+  const best = roots.reduce<{
+    readonly root: string;
+    readonly relative: string;
+  } | null>((acc, root) => {
+    const relative = stripRootPrefix(root, path);
+    if (relative === null) return acc;
+    if (
+      acc === null ||
+      normalizePath(root).length > normalizePath(acc.root).length
+    ) {
+      return { root, relative };
+    }
+    return acc;
+  }, null);
+  if (best === null || best.relative.length === 0) return null;
+  return best.relative;
+}
+
+/**
+ * Splits on `/` only and resolves `.`/`..` segments without touching `\` -
+ * unlike `pathe`'s `normalize`, which folds `\` into `/` on every platform.
+ * POSIX paths may legally contain a literal backslash in a filename, so this
+ * is used in place of `normalizePath` whenever neither side of a comparison
+ * is Windows-like (drive-letter or UNC form).
+ */
+function normalizePosixPreservingBackslashes(path: string): string {
+  const isAbsolute = path.startsWith("/");
+  const segments: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment.length === 0 || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length > 0 && segments[segments.length - 1] !== "..") {
+        segments.pop();
+      } else if (!isAbsolute) {
+        segments.push(segment);
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+  const joined = segments.join("/");
+  if (isAbsolute) return `/${joined}`;
+  return joined.length > 0 ? joined : ".";
+}
+
+function stripRootPrefix(root: string, path: string): string | null {
+  const windowsLike = isWindowsLikePath(root) || isWindowsLikePath(path);
+  const normalizedRoot = windowsLike
+    ? normalizePath(root)
+    : normalizePosixPreservingBackslashes(root);
+  const normalizedPath = windowsLike
+    ? normalizePath(path)
+    : normalizePosixPreservingBackslashes(path);
+  const rootKey = windowsLike ? normalizedRoot.toLowerCase() : normalizedRoot;
+  const pathKey = windowsLike ? normalizedPath.toLowerCase() : normalizedPath;
+  if (pathKey === rootKey) return "";
+  const prefixKey = rootKey.endsWith("/") ? rootKey : `${rootKey}/`;
+  if (!pathKey.startsWith(prefixKey)) return null;
+  const prefix = normalizedRoot.endsWith("/")
+    ? normalizedRoot
+    : `${normalizedRoot}/`;
+  return normalizedPath.slice(prefix.length);
+}

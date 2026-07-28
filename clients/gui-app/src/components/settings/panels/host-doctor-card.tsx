@@ -11,6 +11,7 @@ import {
 import {
   parseFreePortInput,
   runFixAction,
+  type FixActionResult,
 } from "@/components/settings/panels/host-doctor-actions";
 import {
   queryOptions,
@@ -25,8 +26,8 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
 import type {
   HostDoctorIssue,
   HostDoctorReport,
@@ -75,19 +76,6 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   const [freePortPrompt, setFreePortPrompt] =
     useState<FreePortAndRestartInput | null>(null);
 
-  // Same cross-surface single-flight signal Settings → Host reads (Ticket:
-  // host-update-race-conditions) - a tracked restart/install/update started
-  // from ANOTHER surface must gate Doctor's fix actions too, since a Doctor
-  // fix racing a tracked restart-class operation interleaves two independent
-  // stop/kill/start sequences (worst on Windows, where one can kill the
-  // other's freshly started host).
-  const { data: operationStatus } =
-    useRunnerHostOperationStatusQuery(management);
-  // Fail closed while the initial status read is unresolved: `null` is the
-  // only authoritative idle state. Otherwise Doctor could briefly enable a
-  // destructive fix while another surface's operation is still being read.
-  const sharedOperationActive = operationStatus !== null;
-
   const {
     data: report,
     isPending: reportPending,
@@ -101,7 +89,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
   );
 
   const fixMutation = useMutation<
-    void,
+    FixActionResult,
     Error,
     HostDoctorIssue,
     { readonly management: IHostManagement }
@@ -109,10 +97,17 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
     mutationKey: runnerMutationKeys.hostRunDoctor(),
     onMutate: () => ({ management }),
     mutationFn: async (issue) => {
-      if (issue.fixAction === null) return;
-      await runFixAction(management, issue);
+      if (issue.fixAction === null) return { kind: "applied" };
+      return runFixAction(management, issue);
     },
-    onSuccess: (_data, _issue, context) => {
+    onSuccess: (result, _issue, context) => {
+      // A declined restart fix is neither applied nor failed: the host
+      // refused for a self-clearing reason (busy work, lock contention).
+      // Announce it as information and leave the recurrence model alone.
+      if (result.kind === "declined") {
+        toastHostRestartDeclined(result.message);
+        return;
+      }
       toast.success("Fix applied");
       recurrenceModel.setRecurrence({ failures: [], locked: false });
       void queryClient.invalidateQueries({
@@ -222,9 +217,6 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       recurrence={recurrenceModel.recurrence}
       reportFetching={reportFetching}
       fixPendingCode={fixMutation.isPending ? fixMutation.variables.code : null}
-      externalOperationActive={
-        sharedOperationActive || freePortMutation.isPending
-      }
       freePortPrompt={freePortPrompt}
       freePortPending={freePortMutation.isPending}
       onFix={handleFix}
@@ -235,14 +227,7 @@ function HostDoctorCardInner(props: HostDoctorCardInnerProps) {
       }}
       onConfirmFreePort={() => {
         if (freePortPrompt !== null) {
-          // Capture the destructive target, then close optimistically before
-          // starting the restart. This operation shares the platform-wide
-          // restart budget and can legitimately run for minutes; keeping the
-          // dialog tied to `isPending` would lock every dismissal path for
-          // that entire window.
-          const input = freePortPrompt;
-          setFreePortPrompt(null);
-          freePortMutation.mutate(input);
+          freePortMutation.mutate(freePortPrompt);
         }
       }}
     />

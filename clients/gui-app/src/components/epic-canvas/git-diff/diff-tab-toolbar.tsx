@@ -29,6 +29,7 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 // @pierre/diffs gutter indicator styles, mapped to a representative icon.
 const INDICATOR_OPTIONS: ReadonlyArray<{
   readonly value: GitDiffIndicatorStyle;
@@ -104,76 +105,106 @@ export function DiffTabToolbar(props: DiffTabToolbarProps) {
   return (
     <div className="flex items-center gap-0.5">
       {collapseAll !== null ? (
+        <TooltipWrapper
+          label={collapseAll.allCollapsed ? "Expand all" : "Collapse all"}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            onClick={() =>
+              props.onViewPatch({
+                collapsedFilePaths: collapseAll.allCollapsed
+                  ? []
+                  : [...collapseAll.filePaths],
+              })
+            }
+            variant="ghost"
+            size="icon-sm"
+            aria-label={
+              collapseAll.allCollapsed ? "Expand all" : "Collapse all"
+            }
+            className="text-muted-foreground hover:text-foreground"
+          >
+            {collapseAll.allCollapsed ? (
+              <ChevronsUpDown className="size-4" />
+            ) : (
+              <ChevronsDownUp className="size-4" />
+            )}
+          </Button>
+        </TooltipWrapper>
+      ) : null}
+
+      <TooltipWrapper
+        label={isSplit ? "Split view" : "Unified view"}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
         <Button
           type="button"
           onClick={() =>
-            props.onViewPatch({
-              collapsedFilePaths: collapseAll.allCollapsed
-                ? []
-                : [...collapseAll.filePaths],
-            })
+            props.onViewPatch({ mode: isSplit ? "unified" : "split" })
           }
           variant="ghost"
           size="icon-sm"
-          aria-label={collapseAll.allCollapsed ? "Expand all" : "Collapse all"}
-          title={collapseAll.allCollapsed ? "Expand all" : "Collapse all"}
+          aria-label={
+            isSplit ? "Switch to unified view" : "Switch to split view"
+          }
           className="text-muted-foreground hover:text-foreground"
         >
-          {collapseAll.allCollapsed ? (
-            <ChevronsUpDown className="size-4" />
+          {isSplit ? (
+            <DiffSplitIcon className="size-4" />
           ) : (
-            <ChevronsDownUp className="size-4" />
+            <DiffUnifiedIcon className="size-4" />
           )}
         </Button>
-      ) : null}
-
-      <Button
-        type="button"
-        onClick={() =>
-          props.onViewPatch({ mode: isSplit ? "unified" : "split" })
-        }
-        variant="ghost"
-        size="icon-sm"
-        aria-label={isSplit ? "Switch to unified view" : "Switch to split view"}
-        title={isSplit ? "Split view" : "Unified view"}
-        className="text-muted-foreground hover:text-foreground"
-      >
-        {isSplit ? (
-          <DiffSplitIcon className="size-4" />
-        ) : (
-          <DiffUnifiedIcon className="size-4" />
-        )}
-      </Button>
+      </TooltipWrapper>
 
       {props.onRefresh !== null ? (
-        <Button
-          type="button"
-          onClick={props.onRefresh}
-          disabled={props.refreshing}
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Refresh diff"
-          title="Refresh diff"
-          className="text-muted-foreground hover:text-foreground"
+        <TooltipWrapper
+          label="Refresh diff"
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          <RotateCcw
-            className={cn("size-4", props.refreshing && "animate-spin")}
-          />
-        </Button>
+          <span className="inline-flex">
+            <Button
+              type="button"
+              onClick={props.onRefresh}
+              disabled={props.refreshing}
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Refresh diff"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <RotateCcw
+                className={cn("size-4", props.refreshing && "animate-spin")}
+              />
+            </Button>
+          </span>
+        </TooltipWrapper>
       ) : null}
 
       <Popover>
         <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Diff settings"
-            title="Diff settings"
-            className="text-muted-foreground hover:text-foreground"
+          <TooltipWrapper
+            label="Diff settings"
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <Settings2 className="size-4" />
-          </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Diff settings"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Settings2 className="size-4" />
+            </Button>
+          </TooltipWrapper>
         </PopoverTrigger>
         <PopoverContent align="end" className="w-[min(80vw,15rem)] gap-0 p-1">
           {settings.map((setting) => (
@@ -265,23 +296,29 @@ function IndicatorStyleControl(props: {
         const Icon = option.icon;
         const active = props.value === option.value;
         return (
-          <button
+          <TooltipWrapper
             key={option.value}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            aria-label={option.label}
-            title={option.label}
-            onClick={() => props.onChange(option.value)}
-            className={cn(
-              "relative z-10 flex size-7 items-center justify-center rounded-sm transition-colors",
-              active
-                ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
+            label={option.label}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <Icon className="size-3.5" />
-          </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={active}
+              aria-label={option.label}
+              onClick={() => props.onChange(option.value)}
+              className={cn(
+                "relative z-10 flex size-7 items-center justify-center rounded-sm transition-colors",
+                active
+                  ? "text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon className="size-3.5" />
+            </button>
+          </TooltipWrapper>
         );
       })}
     </div>

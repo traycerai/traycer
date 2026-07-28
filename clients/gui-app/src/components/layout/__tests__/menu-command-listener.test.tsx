@@ -18,9 +18,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { toast } from "sonner";
 import type {
-  HostInstallResult,
+  HostControllerStatus,
   IHostManagement,
   IRunnerHost,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -45,16 +44,34 @@ import {
   type TileFindStateSnapshot,
 } from "@/stores/tile-find";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabItemId } from "@/stores/tabs/layout";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { DesktopMenuCommandPayload } from "@/lib/windows/types";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
-const navigateMock = vi.hoisted(() => vi.fn());
+interface CapturedNavigate {
+  readonly to: string;
+  readonly params: unknown;
+  readonly replace: boolean;
+  readonly search: unknown;
+  readonly state: unknown;
+}
+
+const navigateMock = vi.hoisted(() =>
+  vi.fn<(options: CapturedNavigate) => void>(),
+);
 const routerState = vi.hoisted(() => ({ pathname: "/" }));
 const authMock = vi.hoisted(() => ({
   signIn: vi.fn(() => Promise.resolve()),
   signOut: vi.fn(() => Promise.resolve()),
 }));
+
+function latestNavigation(): CapturedNavigate {
+  const call = navigateMock.mock.calls.at(-1);
+  if (call === undefined) throw new Error("expected navigation");
+  return call[0];
+}
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
@@ -77,14 +94,6 @@ vi.mock("@tanstack/react-router", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useAuthService: () => authMock,
-}));
-
-vi.mock("sonner", () => ({
-  toast: {
-    success: vi.fn(),
-    error: vi.fn(),
-    message: vi.fn(),
-  },
 }));
 
 interface FakeDesktopMenu {
@@ -145,11 +154,8 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       signInUrl: "https://auth.example.invalid/sign-in",
       authnBaseUrl: "https://auth.example.invalid",
       hasLocalHost: true,
-      validateAuthToken: () => Promise.resolve({ kind: "rejected" as const }),
       validateAuthTokenIdentity: () =>
         Promise.resolve({ kind: "rejected" as const }),
-      refreshAuthToken: () =>
-        Promise.resolve({ kind: "network-error" as const }),
       openExternalLink: () => Promise.resolve(),
       getRegisteredUrlSchemes: () => Promise.resolve([]),
       requestMicrophoneAccess: () => Promise.resolve("granted" as const),
@@ -185,15 +191,23 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
       fileDrops: {
         resolveDroppedFilePaths: () => Promise.resolve([]),
         copyDroppedFilePaths: (paths) => Promise.resolve(paths),
+        readNativeClipboardFilePaths: () => Promise.resolve([]),
       },
       tokenStore: {
         get: () => Promise.resolve(null),
-        set: () => Promise.resolve(),
+        signIn: () => Promise.resolve(),
+        rotate: () =>
+          Promise.resolve({ outcome: "deleted" as const, pair: null }),
         delete: () => Promise.resolve(),
+        subscribe: () => ({ dispose: () => undefined }),
+        migrateLegacyCredentials: () =>
+          Promise.resolve("identity-unknown" as const),
       },
       onLocalHostChange: () => ({ dispose: () => undefined }),
       onSystemResumed: () => ({ dispose: () => undefined }),
-      requestHostRespawn: vi.fn(() => Promise.resolve()),
+      requestHostRespawn: vi.fn(() =>
+        Promise.resolve({ kind: "restarted" as const }),
+      ),
       service: null,
       traycerCli: null,
       migration: null,
@@ -221,19 +235,30 @@ function openEpicFixture(tab: EpicTab): string {
   const tabId = useEpicCanvasStore.getState().openEpicTab(tab.id, tab.name);
   useTabsStore.setState((state) => ({
     ...state,
+    version: 2,
+    items: useEpicCanvasStore.getState().openTabOrder.map((id) => ({
+      kind: "tab" as const,
+      id: tabItemId({ kind: "epic", id }),
+      ref: { kind: "epic" as const, id },
+    })),
+    activeItemId: tabItemId({ kind: "epic", id: tabId }),
     stripOrder: useEpicCanvasStore
       .getState()
-      .openTabOrder.map((id) => ({ kind: "epic", id })),
+      .openTabOrder.map((id) => ({ kind: "epic" as const, id })),
   }));
   return tabId;
 }
 
 function resetStores(): void {
+  __resetTabNavigationControllerForTesting();
   setEpicCanvasDesktopProjectionBridge(null);
   setLandingDraftDesktopProjectionBridge(null);
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({
+    version: 2,
+    items: [],
+    activeItemId: null,
     stripOrder: [],
     systemTabs: { history: null, settings: null },
   });
@@ -342,8 +367,6 @@ describe("<MenuCommandListener />", () => {
     navigateMock.mockClear();
     authMock.signIn.mockClear();
     authMock.signOut.mockClear();
-    vi.mocked(toast.success).mockClear();
-    vi.mocked(toast.error).mockClear();
     routerState.pathname = "/";
     resetStores();
     useDesktopDialogStore.getState().close();
@@ -378,7 +401,10 @@ describe("<MenuCommandListener />", () => {
       menu.emit("epic.newWindow");
     });
 
-    expect(navigateMock).toHaveBeenCalledWith({ to: "/settings/general" });
+    const navigation = latestNavigation();
+    expect(navigation.to).toBe("/settings/general");
+    expect(navigation.replace).toBe(false);
+    expect(navigation.state).toEqual(expect.any(Function));
     expect(authMock.signIn).toHaveBeenCalledTimes(1);
     expect(useDesktopDialogStore.getState().activeDialog).toBe(
       "open-epic-in-new-window",
@@ -553,30 +579,29 @@ describe("<MenuCommandListener />", () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
   });
 
-  it("invokes hostManagement.updateHost when host.installUpdate is dispatched", async () => {
-    const menu = createMenu();
-    const installResult: HostInstallResult = {
-      version: "1.2.3",
-      installedAt: "2026-05-15T00:00:00Z",
-      executablePath: "/tmp/fake/traycerd",
-      source: { kind: "registry", value: "1.2.3" },
-      archiveSha256: "",
-      signatureKeyId: "",
-      sizeBytes: 0,
-      previousVersion: null,
-      serviceLifecycle: {
-        priorServiceState: "not-installed",
-        stoppedBeforeSwap: false,
-        postSwapAction: "install",
-        postSwapError: null,
-      },
-    };
-    const updateHost = vi.fn(() => Promise.resolve(installResult));
-    const management: IHostManagement = {
-      installHost: vi.fn(() => Promise.reject(new Error("not used"))),
-      updateHost,
+  function makeHostManagementFixture(
+    status: HostControllerStatus,
+  ): IHostManagement {
+    return {
+      getHostControllerStatus: vi.fn(() => Promise.resolve(status)),
+      convergeReady: vi.fn(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          value: { running: true, version: status.installedVersion },
+        }),
+      ),
+      applyStaged: vi.fn(() =>
+        Promise.resolve({
+          kind: "ok" as const,
+          value: { appliedVersion: "1.2.3", runningActivated: true },
+        }),
+      ),
+      activateInstalled: vi.fn(() =>
+        Promise.resolve({ kind: "ok" as const, value: { activated: true } }),
+      ),
+      installVersion: vi.fn(() => Promise.reject(new Error("not used"))),
       uninstallHost: vi.fn(() => Promise.reject(new Error("not used"))),
-      restartHost: vi.fn(() => Promise.resolve()),
+      restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
       uninstallTraycer: vi.fn(() => Promise.reject(new Error("not used"))),
       getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
       clearRemoval: vi.fn(() => Promise.resolve()),
@@ -584,17 +609,11 @@ describe("<MenuCommandListener />", () => {
       runDoctor: vi.fn(() => Promise.reject(new Error("not used"))),
       availableVersions: vi.fn(() => Promise.reject(new Error("not used"))),
       installedRecord: vi.fn(() => Promise.resolve(null)),
-      registerService: vi.fn(() => Promise.resolve()),
-      ensureHost: vi.fn(() =>
-        Promise.resolve({
-          action: "already-ready" as const,
-          running: true,
-          version: null,
-        }),
+      registerService: vi.fn(() =>
+        Promise.resolve({ kind: "ok" as const, value: { registered: true } }),
       ),
       deregisterService: vi.fn(() => Promise.resolve()),
       registryCheck: vi.fn(() => Promise.reject(new Error("not used"))),
-      getOperationStatus: vi.fn(() => Promise.resolve(null)),
       freePortAndRestart: vi.fn(() => Promise.reject(new Error("not used"))),
       cliManifest: vi.fn(() => Promise.resolve(null)),
       getHostName: vi.fn(() =>
@@ -612,6 +631,25 @@ describe("<MenuCommandListener />", () => {
         }),
       ),
     };
+  }
+
+  it("submits applyStaged when host.installUpdate is dispatched and a stage is updateReady", async () => {
+    const menu = createMenu();
+    const status: HostControllerStatus = {
+      download: null,
+      mutation: null,
+      installedVersion: "1.1.0",
+      latestVersion: "1.2.3",
+      stagedVersion: "1.2.3",
+      installedRuntimeVersion: null,
+      runningRuntimeVersion: null,
+      updateReady: true,
+      activation: "activated",
+      reachable: true,
+      removedByUser: false,
+      checkedAt: "2026-05-15T00:00:00Z",
+    };
+    const management = makeHostManagementFixture(status);
     const baseHost = createRunnerHost(menu);
     const runnerHost: FakeRunnerHost = Object.assign(baseHost, {
       hostManagement: management,
@@ -625,19 +663,127 @@ describe("<MenuCommandListener />", () => {
       </QueryClientProvider>,
     );
 
+    await waitFor(() => {
+      expect(management.getHostControllerStatus).toHaveBeenCalled();
+    });
+    // Being *called* only proves the query fired - the component reads
+    // `status` from the query's *result*, so the resolved promise and its
+    // resulting re-render must also land before dispatching, or the command
+    // is evaluated against the still-`undefined` initial status.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
     act(() => {
       menu.emit("host.installUpdate");
     });
 
     await waitFor(() => {
-      expect(updateHost).toHaveBeenCalledTimes(1);
+      expect(management.applyStaged).toHaveBeenCalledWith("manual", false);
     });
-    expect(updateHost).toHaveBeenCalledWith({ onProgress: null });
+    expect(management.activateInstalled).not.toHaveBeenCalled();
+  });
+
+  it("submits activateInstalled when host.installUpdate is dispatched with only activation debt", async () => {
+    const menu = createMenu();
+    const status: HostControllerStatus = {
+      download: null,
+      mutation: null,
+      installedVersion: "1.1.0",
+      latestVersion: "1.1.0",
+      stagedVersion: null,
+      installedRuntimeVersion: null,
+      runningRuntimeVersion: null,
+      updateReady: false,
+      activation: "activationUnknown",
+      reachable: true,
+      removedByUser: false,
+      checkedAt: "2026-05-15T00:00:00Z",
+    };
+    const management = makeHostManagementFixture(status);
+    const baseHost = createRunnerHost(menu);
+    const runnerHost: FakeRunnerHost = Object.assign(baseHost, {
+      hostManagement: management,
+    });
+
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(management.getHostControllerStatus).toHaveBeenCalled();
+    });
+    // Being *called* only proves the query fired - the component reads
+    // `status` from the query's *result*, so the resolved promise and its
+    // resulting re-render must also land before dispatching, or the command
+    // is evaluated against the still-`undefined` initial status.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    act(() => {
+      menu.emit("host.installUpdate");
+    });
+
+    await waitFor(() => {
+      expect(management.activateInstalled).toHaveBeenCalledWith(false);
+    });
+    expect(management.applyStaged).not.toHaveBeenCalled();
+  });
+
+  it("does not treat an unavailable host as activation debt", async () => {
+    const menu = createMenu();
+    const status: HostControllerStatus = {
+      download: null,
+      mutation: null,
+      installedVersion: null,
+      latestVersion: null,
+      stagedVersion: null,
+      installedRuntimeVersion: null,
+      runningRuntimeVersion: null,
+      updateReady: false,
+      activation: "unavailable",
+      reachable: false,
+      removedByUser: false,
+      checkedAt: "2026-05-15T00:00:00Z",
+    };
+    const management = makeHostManagementFixture(status);
+    const runnerHost: FakeRunnerHost = Object.assign(createRunnerHost(menu), {
+      hostManagement: management,
+    });
+    render(
+      <QueryClientProvider client={makeQueryClient()}>
+        <RunnerHostProvider runnerHost={runnerHost}>
+          <MenuCommandListener />
+        </RunnerHostProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() =>
+      expect(management.getHostControllerStatus).toHaveBeenCalled(),
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    act(() => menu.emit("host.installUpdate"));
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(management.applyStaged).not.toHaveBeenCalled();
+    expect(management.activateInstalled).not.toHaveBeenCalled();
   });
 
   it("opens a confirmation dialog for host.restart and only respawns after confirm", async () => {
     const menu = createMenu();
-    const requestHostRespawn = vi.fn(() => Promise.resolve());
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
     const runnerHost = Object.assign(createRunnerHost(menu), {
       requestHostRespawn,
     });
@@ -660,153 +806,6 @@ describe("<MenuCommandListener />", () => {
 
     fireEvent.click(screen.getByTestId("confirm-action"));
 
-    await waitFor(() => {
-      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("closes the restart dialog optimistically on confirm - before the up-to-~180s respawn settles - and surfaces a later rejection via toast", async () => {
-    const menu = createMenu();
-    let rejectRespawn: (error: Error) => void = () => undefined;
-    const requestHostRespawn = vi.fn(
-      () =>
-        new Promise<void>((_resolve, reject) => {
-          rejectRespawn = reject;
-        }),
-    );
-    const runnerHost = Object.assign(createRunnerHost(menu), {
-      requestHostRespawn,
-    });
-
-    render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <RunnerHostProvider runnerHost={runnerHost}>
-          <MenuCommandListener />
-        </RunnerHostProvider>
-      </QueryClientProvider>,
-    );
-
-    act(() => {
-      menu.emit("host.restart");
-    });
-
-    await screen.findByTestId("confirm-destructive-dialog");
-    fireEvent.click(screen.getByTestId("confirm-action"));
-
-    // Closes synchronously at confirm time - this surface's mutation can
-    // legitimately run up to ~180s, so the dialog must not wait for it.
-    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
-    await waitFor(() => {
-      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
-    });
-
-    act(() => {
-      rejectRespawn(new Error("host did not become reachable after restart"));
-    });
-
-    await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(
-        "Couldn't restart host",
-        expect.objectContaining({
-          description: "host did not become reachable after restart",
-        }),
-      );
-    });
-  });
-
-  it("does not reopen the restart dialog while a restart is still pending, but does once it has settled", async () => {
-    const menu = createMenu();
-    let resolveRespawn: () => void = () => undefined;
-    const requestHostRespawn = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveRespawn = resolve;
-        }),
-    );
-    const runnerHost = Object.assign(createRunnerHost(menu), {
-      requestHostRespawn,
-    });
-
-    render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <RunnerHostProvider runnerHost={runnerHost}>
-          <MenuCommandListener />
-        </RunnerHostProvider>
-      </QueryClientProvider>,
-    );
-
-    act(() => {
-      menu.emit("host.restart");
-    });
-    await screen.findByTestId("confirm-destructive-dialog");
-    fireEvent.click(screen.getByTestId("confirm-action"));
-    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
-    await waitFor(() => {
-      expect(requestHostRespawn).toHaveBeenCalledTimes(1);
-    });
-
-    // The mutation is still pending here - a repeated command must not
-    // reopen the dialog, since it would mount with isPending=true and lock
-    // Cancel/Esc for the rest of the mutation's lifetime.
-    act(() => {
-      menu.emit("host.restart");
-    });
-    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
-    expect(requestHostRespawn).toHaveBeenCalledTimes(1);
-
-    act(() => {
-      resolveRespawn();
-    });
-    await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Host restart requested");
-    });
-
-    // Once settled, the guard is scoped to "pending", not permanent - the
-    // command must be able to reopen the dialog again.
-    act(() => {
-      menu.emit("host.restart");
-    });
-    await screen.findByTestId("confirm-destructive-dialog");
-    expect(requestHostRespawn).toHaveBeenCalledTimes(1);
-  });
-
-  // Review P2: the reopen guard must close the race BEFORE any render/effect
-  // runs - a native command queued in the same turn as confirm (no `await`
-  // between them) must still be blocked. Reading `queryClient.isMutating`
-  // (which reflects `mutate()` synchronously) rather than a ref synced from
-  // an effect is what closes this specific window.
-  it("does not reopen the restart dialog for a duplicate command delivered in the same turn as confirm", async () => {
-    const menu = createMenu();
-    const requestHostRespawn = vi.fn(() => new Promise<void>(() => {}));
-    const runnerHost = Object.assign(createRunnerHost(menu), {
-      requestHostRespawn,
-    });
-
-    render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <RunnerHostProvider runnerHost={runnerHost}>
-          <MenuCommandListener />
-        </RunnerHostProvider>
-      </QueryClientProvider>,
-    );
-
-    act(() => {
-      menu.emit("host.restart");
-    });
-    await screen.findByTestId("confirm-destructive-dialog");
-
-    act(() => {
-      // No `await`/`waitFor` between the confirm click and the duplicate
-      // command - both happen inside the same `act()` batch, before React
-      // has re-rendered or run any effect.
-      fireEvent.click(screen.getByTestId("confirm-action"));
-      menu.emit("host.restart");
-    });
-
-    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
-    // `mutate()` invokes the mutation function on a later microtask, so
-    // assert the eventual call count rather than immediately after the
-    // synchronous act() block above.
     await waitFor(() => {
       expect(requestHostRespawn).toHaveBeenCalledTimes(1);
     });
@@ -839,7 +838,19 @@ describe("<MenuCommandListener />", () => {
     });
     useTabsStore.setState((state) => ({
       ...state,
-      stripOrder: [...state.stripOrder, { kind: "draft", id: "draft-a" }],
+      items: [
+        ...state.items,
+        {
+          kind: "tab",
+          id: tabItemId({ kind: "draft", id: "draft-a" }),
+          ref: { kind: "draft", id: "draft-a" },
+        },
+      ],
+      activeItemId: tabItemId({ kind: "draft", id: "draft-a" }),
+      stripOrder: [
+        ...state.stripOrder,
+        { kind: "draft" as const, id: "draft-a" },
+      ],
     }));
     const menu = createMenu();
 
@@ -857,15 +868,23 @@ describe("<MenuCommandListener />", () => {
 
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([tabId]);
-    expect(navigateMock).toHaveBeenCalledWith({
-      to: "/epics/$epicId/$tabId",
-      params: { epicId: "e-a", tabId },
-      search: {
-        focusedAt: undefined,
-        focusArtifactId: undefined,
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
+    const navigation = latestNavigation();
+    expect(navigation.to).toBe("/epics/$epicId/$tabId");
+    expect(navigation.params).toEqual({ epicId: "e-a", tabId });
+    // T10: closing the draft now routes through
+    // `tabCommandCoordinator.closeRefAfterConfirmed`, which synchronously
+    // promotes the epic tab to `activeItemId` as part of the close itself
+    // (survivor-at-group-position). By the time the navigation controller
+    // runs, the epic is already the coordinator's active item, so it
+    // correctly resolves this as a replace (syncing the URL to already-
+    // settled layout state) rather than a push.
+    expect(navigation.replace).toBe(true);
+    expect(navigation.state).toEqual(expect.any(Function));
+    expect(navigation.search).toMatchObject({
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      migrationSource: undefined,
     });
   });
 });

@@ -14,7 +14,7 @@ export function NoGitWorktrees() {
         No git workspaces available
       </p>
       <p className="text-xs text-muted-foreground">
-        Add workspaces to the chat to get started
+        Add workspaces to the agent to get started
       </p>
     </div>
   );

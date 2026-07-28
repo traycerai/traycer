@@ -38,7 +38,7 @@ export function NextStepsActionGroup(props: NextStepsActionGroupProps) {
 
   return (
     <div
-      className="not-prose mt-2 flex flex-wrap items-center gap-2"
+      className="not-prose mt-2 flex flex-col items-stretch gap-2"
       data-testid="traycer-next-steps"
       data-next-steps-complete={props.complete ? "true" : "false"}
       data-quote-exclude=""
@@ -84,12 +84,12 @@ function NextStepAction(props: NextStepActionProps) {
   const copyLabel = copied ? "Copied" : `Copy next step: ${option.prompt}`;
 
   return (
-    <div className="group/next-step relative inline-flex max-w-full">
+    <div className="group/next-step relative flex w-full">
       <Button
         type="button"
         variant="outline"
         size="sm"
-        className="h-auto min-h-7 min-w-0 max-w-full shrink items-start justify-start whitespace-normal py-2 pr-10 pl-1 text-left"
+        className="h-auto min-h-7 w-full min-w-0 items-start justify-start whitespace-normal py-2 pr-10 pl-1 text-left"
         disabled={props.disabled}
         onClick={() => {
           if (props.actionHandler === null || props.disabled) return;

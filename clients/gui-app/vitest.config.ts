@@ -7,8 +7,8 @@ const availableParallelism =
     ? os.availableParallelism()
     : os.cpus().length;
 const MAX_TEST_WORKERS = Math.min(
-  4,
-  Math.max(2, Math.floor(availableParallelism / 2)),
+  2,
+  Math.max(1, Math.floor(availableParallelism / 2)),
 );
 
 export default defineConfig({
@@ -54,6 +54,8 @@ export default defineConfig({
     ],
     globals: false,
     pool: "forks",
+    // A few suites advance large fake-timer windows. Limiting concurrently
+    // running files keeps those timers responsive on CI's shared runners.
     maxWorkers: MAX_TEST_WORKERS,
     testTimeout: 20_000,
     hookTimeout: 20_000,

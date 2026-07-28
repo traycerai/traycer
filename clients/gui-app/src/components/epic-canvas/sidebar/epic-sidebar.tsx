@@ -10,14 +10,11 @@
 import { useDroppable } from "@dnd-kit/core";
 import {
   getLeftPanelGroupDropId,
+  getPaneScopedDndId,
   getSidebarReparentPanelDropId,
-  getWorkspaceFileDragId,
-  WORKSPACE_FILE_DND_TYPE,
-  type EpicCanvasDragSourceData,
   type EpicCanvasDropPreview,
   type EpicCanvasDropTargetData,
 } from "@/components/epic-canvas/dnd/dnd";
-import { usePierreCanvasDragBridge } from "@/components/epic-canvas/dnd/use-pierre-canvas-drag-bridge";
 import {
   useEpicDndStore,
   useSidebarReparentRootActive,
@@ -37,27 +34,16 @@ import {
   ChatFilterMenu,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-filter-menu";
 import { FileTreeWorkspacePicker } from "@/components/epic-canvas/sidebar/file-tree-workspace-picker";
+import { FileTreePanelBodyForWorkspace } from "@/components/epic-canvas/sidebar/epic-sidebar-file-tree";
 import { WorkspacePickerWithOpener } from "@/components/worktree/workspace-picker-with-opener";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { PIERRE_FILE_TREE_THEME_STYLE } from "@/components/epic-canvas/pierre-tree-theme";
-import { useWorkspaceListFileTree } from "@/hooks/workspace/use-list-file-tree-query";
 import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
 import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { requestArtifactEditorFocus } from "@/lib/artifacts/pending-editor-focus";
 import { openProjectedSidebarNodeInTabWhenAvailable } from "@/components/epic-canvas/sidebar/open-projected-sidebar-node";
-import { workspaceFileRefFromTreePath } from "@/components/epic-canvas/workspace-file/workspace-file-ref";
-import {
-  type EpicNodeRef,
-  type WorkspaceFileRef,
-} from "@/stores/epics/canvas/types";
-import type { WorkspaceFileTreeNode } from "@traycer/protocol/host/workspace/unary-schemas";
-import { extractPierreItemPathFromEvent } from "@/components/epic-canvas/pierre-tree-adapter";
-import { type GitStatusEntry } from "@pierre/trees";
-import {
-  getCurrentNestedFocusTarget,
-  type NestedFocusTarget,
-} from "@/lib/epic-nested-focus-route";
+import { type EpicNodeRef } from "@/stores/epics/canvas/types";
+import { getCurrentNestedFocusTarget } from "@/lib/epic-nested-focus-route";
 import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import { PanelGroupSectionHeader } from "@/components/epic-canvas/sidebar/epic-sidebar-header";
 import { PANEL_HEADER_ACTION_REVEAL_CLASS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
@@ -134,8 +120,9 @@ import {
   ARIA_DISABLED_TRIGGER_CLASS,
   resolveDisabledPresentation,
 } from "@/lib/disabled-presentation";
-import { displayTitle, tuiAgentDisplayTitle } from "@/lib/display-title";
+import { displayTitle } from "@/lib/display-title";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useChatArchiveSupported } from "@/hooks/epic/use-chat-archive-support";
 import {
   useEpicCreateArtifact,
   useEpicDeleteArtifact,
@@ -151,6 +138,8 @@ import {
   useArtifactReadStateStore,
 } from "@/stores/epics/artifact-read-state-store";
 import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
+import { useArtifactSearchAvailable } from "@/components/epic-canvas/sidebar/artifact-search-availability";
+import { usePanelHeaderSearchStore } from "@/stores/epics/panel-header-search-store";
 import { cn } from "@/lib/utils";
 import {
   CheckCheck,
@@ -158,6 +147,7 @@ import {
   Download,
   FolderOpen,
   ListChecks,
+  MoreHorizontal,
   Plus,
   Search,
   Trash2,
@@ -167,31 +157,21 @@ import { GitDiffPanelBodyLive } from "@/components/epic-canvas/git-diff/git-diff
 import { GitDiffPanelActions } from "@/components/epic-canvas/git-diff/git-diff-panel-actions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { createReportIssueContext } from "@/lib/report-issue-context";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group";
-import { FileTree, useFileTree } from "@pierre/trees/react";
 import {
   Fragment,
   useEffect,
   useMemo,
   useState,
   useCallback,
-  useRef,
-  type ChangeEvent,
   type ComponentType,
-  type MouseEvent,
   type ReactNode,
 } from "react";
 import { SplitResizeHandle } from "@/components/epic-canvas/canvas/resize-handle";
@@ -205,9 +185,8 @@ import {
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import { useShallow } from "zustand/react/shallow";
 
-const EMPTY_FILE_TREE_FILES: ReadonlyArray<WorkspaceFileTreeNode> =
-  Object.freeze([]);
-const EMPTY_GIT_STATUS: ReadonlyArray<GitStatusEntry> = Object.freeze([]);
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+const COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS = "@max-[21rem]:hidden";
 
 interface ArtifactReadTarget {
   readonly id: string;
@@ -671,22 +650,27 @@ function GroupedPanelBody(props: {
     panelIds[0] ?? DEFAULT_LEFT_PANEL_ID,
   );
   const groupDropData = useMemo<EpicCanvasDropTargetData>(
-    () => ({ kind: "left-panel-group", panelIds }),
-    [panelIds],
+    () => ({ kind: "left-panel-group", viewTabId: props.tabId, panelIds }),
+    [panelIds, props.tabId],
   );
   const { setNodeRef: groupDropRef } = useDroppable({
-    id: groupDropId,
+    id: getPaneScopedDndId(props.tabId, groupDropId),
     data: groupDropData,
   });
   // Narrow selector: only a left-panel-section preview tick re-renders this
   // group body; canvas strip/body preview ticks never reach it.
   const sectionDropPreview = useEpicDndStore((s) =>
-    s.dropPreview?.kind === "left-panel-section" ? s.dropPreview : null,
+    s.dropPreview?.kind === "left-panel-section" &&
+    s.dropPreview.viewTabId === props.tabId &&
+    s.activeSource?.kind === "left-panel-rail-item" &&
+    s.activeSource.viewTabId === props.tabId
+      ? s.dropPreview
+      : null,
   );
   return (
     <div
       ref={groupDropRef}
-      data-dnd-droppable-id={groupDropId}
+      data-dnd-droppable-id={getPaneScopedDndId(props.tabId, groupDropId)}
       className="flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       {sectionRuns.map((run, runIndex) => (
@@ -931,10 +915,10 @@ function SidebarReparentPanelDropZone(props: {
     [epicId, viewTabId, panelId],
   );
   const { setNodeRef } = useDroppable({
-    id: getSidebarReparentPanelDropId(panelId),
+    id: getPaneScopedDndId(viewTabId, getSidebarReparentPanelDropId(panelId)),
     data: dropData,
   });
-  const isRootTarget = useSidebarReparentRootActive(panelId);
+  const isRootTarget = useSidebarReparentRootActive(viewTabId, panelId);
   return (
     <div
       ref={setNodeRef}
@@ -1093,248 +1077,19 @@ function FileTreePanelBodyLive(props: LeftPanelBodyProps) {
   );
 }
 
-function FileTreePanelBodyForWorkspace(props: {
-  readonly epicId: string;
-  readonly tabId: string;
-  readonly workspacePath: string;
-}) {
-  // The file-tree panel resolves against the default host; opened tabs
-  // stamp this host id onto their `WorkspaceFileRef` so they keep
-  // resolving against the same host after a default-host swap or
-  // reload (CLAUDE.md: tabs are bound to a host for life).
-  const activeHostId = useReactiveActiveHostId();
-  const query = useWorkspaceListFileTree(props.workspacePath);
-  const files = query.data?.files ?? EMPTY_FILE_TREE_FILES;
-  const gitStatus = query.data?.gitStatus ?? EMPTY_GIT_STATUS;
-
-  // The host's `files` list is the source of truth for "what is an
-  // openable file and what is its display name". `treePaths` feeds
-  // Pierre (which builds the visual tree, synthesizing directory rows);
-  // `nameByTreePath` lets handlers resolve a clicked path to a file name
-  // without parsing the path string, and a path absent from the map is
-  // a directory row and not openable.
-  const treePaths = useMemo(() => files.map((file) => file.path), [files]);
-  const nameByTreePath = useMemo(
-    () => new Map(files.map((file) => [file.path, file.name])),
-    [files],
-  );
-
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTilePreviewInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTilePreviewInTabFocusTarget,
-  );
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
-
-  // Single source of truth for "tree row path -> workspace file ref". Reused by
-  // the open handlers and the drag bridge so a row that is not an openable file
-  // (no active host, or a synthesized directory row absent from the host
-  // file list) is non-openable everywhere.
-  const workspaceFileRefForTreePath = useCallback(
-    (treePath: string): WorkspaceFileRef | null => {
-      if (activeHostId === null) return null;
-      const name = nameByTreePath.get(treePath);
-      if (name === undefined) return null;
-      return workspaceFileRefFromTreePath(
-        activeHostId,
-        props.workspacePath,
-        treePath,
-        name,
-      );
-    },
-    [activeHostId, nameByTreePath, props.workspacePath],
-  );
-
-  // Pierre's useFileTree captures the onSelectionChange closure at mount,
-  // so we forward the latest props through a ref the closure reads at
-  // call time. Same trick for the double-click "open committed" handler.
-  const handlersRef = useRef({
-    onSelect(_treePath: string) {},
-    onOpen(_treePath: string) {},
-  });
-  useEffect(() => {
-    const openInTab = (
-      treePath: string,
-      open: (tabId: string, ref: WorkspaceFileRef) => NestedFocusTarget | null,
-    ) => {
-      const ref = workspaceFileRefForTreePath(treePath);
-      if (ref === null) return;
-      navigateNested(props.epicId, props.tabId, () => open(props.tabId, ref));
-    };
-    handlersRef.current.onSelect = (treePath) => {
-      openInTab(treePath, prepareOpenTilePreviewInTabFocusTarget);
-    };
-    handlersRef.current.onOpen = (treePath) => {
-      openInTab(treePath, prepareOpenTileInTabFocusTarget);
-    };
-  }, [
-    navigateNested,
-    workspaceFileRefForTreePath,
-    props.epicId,
-    props.tabId,
-    prepareOpenTilePreviewInTabFocusTarget,
-    prepareOpenTileInTabFocusTarget,
-  ]);
-
-  const { model } = useFileTree({
-    paths: treePaths,
-    initialExpansion: "closed",
-    density: "compact",
-    icons: "complete",
-    stickyFolders: true,
-    gitStatus,
-    // `hide-non-matches`: the filter input below drops every row whose
-    // name does not match, keeping only matches and their parents.
-    fileTreeSearchMode: "hide-non-matches",
-    onSelectionChange: (selectedPaths) => {
-      const selectedPath = selectedPaths.at(-1);
-      if (selectedPath === undefined) return;
-      handlersRef.current.onSelect(selectedPath);
-    },
-  });
-  const [searchQuery, setSearchQuery] = useState("");
-  const searchDebounceTimerRef = useRef<number | null>(null);
-  const clearPendingSearchDebounce = useCallback(() => {
-    if (searchDebounceTimerRef.current === null) return;
-    window.clearTimeout(searchDebounceTimerRef.current);
-    searchDebounceTimerRef.current = null;
-  }, []);
-  const applySearchQuery = useCallback(
-    (query: string) => {
-      model.setSearch(query.length > 0 ? query : null);
-      model.setGitStatus(gitStatus);
-    },
-    [model, gitStatus],
-  );
-  const handleSearchQueryChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const nextQuery = event.target.value;
-      setSearchQuery(nextQuery);
-      clearPendingSearchDebounce();
-      searchDebounceTimerRef.current = window.setTimeout(() => {
-        searchDebounceTimerRef.current = null;
-        applySearchQuery(nextQuery);
-      }, 150);
-    },
-    [applySearchQuery, clearPendingSearchDebounce],
-  );
-
-  useEffect(() => clearPendingSearchDebounce, [clearPendingSearchDebounce]);
-
-  // Paths and git status arrive from the host RPC asynchronously; push
-  // them into Pierre's imperative model whenever the query result
-  // changes. Pierre dedupes its own work on stable inputs.
-  useEffect(() => {
-    model.resetPaths(treePaths);
-  }, [model, treePaths]);
-  useEffect(() => {
-    model.setGitStatus(gitStatus);
-  }, [model, gitStatus]);
-
-  const handleDoubleClick = useCallback((event: MouseEvent<HTMLElement>) => {
-    const treePath = extractPierreItemPathFromEvent(event);
-    if (treePath === null) return;
-    handlersRef.current.onOpen(treePath);
-  }, []);
-
-  // Bridge Pierre's shadow-DOM rows into the canvas dnd-kit drag flow. The row
-  // under the activating pointer is recovered via the same `data-item-path`
-  // scrape used for open; directory rows (absent from the host file list)
-  // resolve to `null` and stay non-draggable.
-  const epicId = props.epicId;
-  const viewTabId = props.tabId;
-  const resolveDragSourceData = useCallback(
-    (event: PointerEvent): EpicCanvasDragSourceData | null => {
-      const treePath = extractPierreItemPathFromEvent({ nativeEvent: event });
-      if (treePath === null) return null;
-      const ref = workspaceFileRefForTreePath(treePath);
-      return ref === null
-        ? null
-        : { kind: WORKSPACE_FILE_DND_TYPE, epicId, viewTabId, ref };
-    },
-    [epicId, viewTabId, workspaceFileRefForTreePath],
-  );
-  const bridge = usePierreCanvasDragBridge({
-    id: getWorkspaceFileDragId(props.workspacePath),
-    resolveSourceData: resolveDragSourceData,
-  });
-
-  return (
-    <div
-      className="relative flex min-h-0 flex-1 flex-col px-2 pb-2"
-      onDoubleClickCapture={handleDoubleClick}
-    >
-      <InputGroup className="mb-1.5 h-7 shrink-0">
-        <InputGroupAddon align="inline-start">
-          <Search className="size-3.5" aria-hidden />
-        </InputGroupAddon>
-        <InputGroupInput
-          type="text"
-          value={searchQuery}
-          onChange={handleSearchQueryChange}
-          placeholder="Filter files by name…"
-          aria-label="Filter files by name"
-          className="text-ui-sm"
-        />
-      </InputGroup>
-      <div {...bridge.wrapperProps} className="relative min-h-0 flex-1">
-        <FileTree model={model} style={PIERRE_FILE_TREE_THEME_STYLE} />
-        {query.isLoading ? (
-          <output
-            aria-label="Loading files"
-            className="pointer-events-none absolute inset-0 flex items-center justify-center"
-          >
-            <AgentSpinningDots
-              className="text-muted-foreground"
-              testId={undefined}
-              variant={undefined}
-            />
-          </output>
-        ) : null}
-        {query.error !== null && files.length === 0 ? (
-          <div className="flex items-center justify-between gap-2 p-1 text-ui-xs text-destructive">
-            <span>Unable to load files.</span>
-            <ReportIssueAction
-              context={createReportIssueContext({
-                title: "Unable to load files",
-                message: "The workspace file tree could not be loaded.",
-                code: null,
-                source: "File tree",
-              })}
-              presentation="icon"
-              className={undefined}
-            />
-          </div>
-        ) : null}
-      </div>
-      {query.data?.truncated === true ? (
-        <p className="shrink-0 px-1 pt-1 text-ui-xs text-muted-foreground">
-          Showing the first {files.length.toLocaleString()} files - this
-          workspace exceeds the preview limit.
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
 function SharingPanelBody(props: LeftPanelBodyProps) {
   return <SharingPanel epicId={props.epicId} />;
 }
 
-// Display title for a projection, discriminated structurally: artifacts carry
-// `kind`, tui-agents `harnessId`, else chat.
+// Display title for a projection: artifacts carry a `kind`; every Agent
+// projection (Chat- or Terminal-interface) falls back to "Untitled agent" -
+// the durable Agent identity - when its stored title is empty, never
+// "Untitled chat" or the harness label.
 function epicArtifactRecordDisplayTitle(
   record: EpicArtifactProjection | EpicChatProjection | EpicTuiAgentProjection,
 ): string {
   if ("kind" in record) return displayTitle(record.title, record.kind);
-  if ("harnessId" in record) {
-    return tuiAgentDisplayTitle({
-      title: record.title,
-      harnessId: record.harnessId,
-    });
-  }
-  return displayTitle(record.title, "chat");
+  return displayTitle(record.title, "agent");
 }
 
 function CommentsPanelSubtitle(props: LeftPanelSlotProps) {
@@ -1539,8 +1294,24 @@ function describeSidebarBulkDeleteTitle(
       ? "Delete selected item?"
       : `Delete "${record.name}"?`;
   }
-  const noun = panelId === "chats" ? "chat items" : "artifacts";
-  return `Delete ${ids.length} selected ${noun}?`;
+  return `Delete ${ids.length} selected ${panelRowNoun(panelId, ids.length)}?`;
+}
+
+/**
+ * Plural noun naming a panel's rows in user-facing copy.
+ *
+ * Deliberately NOT the panel `id`: the id is an internal identifier on the
+ * compatibility boundary (`"chats"`), and interpolating it directly produced
+ * "Delete 3 selected chats" - copy that silently drifts from the panel's own
+ * title. A mixed Chat/Terminal selection summarizes as **agents**, because
+ * Agent is the durable entity being deleted and the interface is incidental.
+ *
+ * `count` selects number: the delete button is enabled from one row, so a
+ * plural-only noun produced "Delete 1 selected agents".
+ */
+function panelRowNoun(panelId: LeftPanelId, count: number): string {
+  if (panelId === "chats") return count === 1 ? "agent" : "agents";
+  return count === 1 ? "artifact" : "artifacts";
 }
 
 function describeSidebarBulkDeleteDescription(
@@ -1608,6 +1379,25 @@ class ProjectedOpenCancelRegistry {
     }
     this.cancels.clear();
   }
+}
+
+function useCollapseAllPanelAction(
+  tabId: string,
+  panelId: RootCreatePanelId,
+): () => void {
+  const rootIds = usePanelRootIds(panelId);
+  const activeArtifactId = useActiveEpicArtifactId(tabId);
+  const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
+  const expandedIds = useEpicSidebarEffectiveExpanded(
+    tabId,
+    panelId,
+    rootIds,
+    ancestorIdsOfActive,
+  );
+  const collapseAll = useEpicSidebarExpansionStore((s) => s.collapseAll);
+  return useCallback(() => {
+    collapseAll(tabId, panelId, expandedIds);
+  }, [collapseAll, expandedIds, panelId, tabId]);
 }
 
 function TreePanelActions(props: TreePanelActionsProps) {
@@ -1689,19 +1479,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
     props.epicId,
     props.panelId,
   );
-  const rootIds = usePanelRootIds(props.panelId);
-  const activeArtifactId = useActiveEpicArtifactId(props.tabId);
-  const ancestorIdsOfActive = useAncestorIds(activeArtifactId);
-  const expandedIds = useEpicSidebarEffectiveExpanded(
-    props.tabId,
-    props.panelId,
-    rootIds,
-    ancestorIdsOfActive,
-  );
-  const collapseAllAction = useEpicSidebarExpansionStore((s) => s.collapseAll);
-  const collapseAll = useCallback(() => {
-    collapseAllAction(props.tabId, props.panelId, expandedIds);
-  }, [props.tabId, props.panelId, expandedIds, collapseAllAction]);
+  const collapseAll = useCollapseAllPanelAction(props.tabId, props.panelId);
   const addIsPending =
     localRootPending !== null ||
     acknowledgedRootPending !== null ||
@@ -1765,22 +1543,31 @@ function TreePanelActions(props: TreePanelActionsProps) {
 
   return (
     <div className="flex items-center gap-0.5">
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        onClick={collapseAll}
-        aria-label="Collapse all"
-        title="Collapse all"
-        data-testid={`epic-sidebar-collapse-all-${props.panelId}`}
-        disabled={props.collapsed}
-        className={cn(
-          "text-muted-foreground hover:text-foreground",
-          PANEL_HEADER_ACTION_REVEAL_CLASS,
-        )}
+      <TooltipWrapper
+        label="Collapse all"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <CopyMinus className="size-4" />
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={collapseAll}
+            aria-label="Collapse all"
+            data-testid={`epic-sidebar-collapse-all-${props.panelId}`}
+            disabled={props.collapsed}
+            className={cn(
+              "text-muted-foreground hover:text-foreground",
+              PANEL_HEADER_ACTION_REVEAL_CLASS,
+              COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
+            )}
+          >
+            <CopyMinus className="size-4" />
+          </Button>
+        </span>
+      </TooltipWrapper>
       {props.panelId === "chats" ? (
         <NewConversationModalAction
           epicId={props.epicId}
@@ -1791,7 +1578,7 @@ function TreePanelActions(props: TreePanelActionsProps) {
           disabledTooltip={mutationDisabledHint(
             permissionRole,
             isDisconnected,
-            "create chats",
+            "create agents",
           )}
           triggerLabel={props.addLabel}
           triggerTestId={props.triggerTestId}
@@ -1851,20 +1638,31 @@ function TreePanelActions(props: TreePanelActionsProps) {
 
 function ChatsPanelActions(props: LeftPanelHeaderSlotProps) {
   const selection = useSidebarBulkSelection();
+  const canArchive = useChatArchiveSupported();
   if (selection.selectionMode) return <SidebarBulkSelectionActions />;
   return (
     <div className="flex items-center gap-0.5">
-      <ChatFilterMenu epicId={props.epicId} disabled={props.collapsed} />
-      <SidebarStartSelectionButton
-        label="Select chats"
+      <ChatFilterMenu
+        epicId={props.epicId}
         disabled={props.collapsed}
+        canArchive={canArchive}
+      />
+      <SidebarStartSelectionButton
+        label="Select agents"
+        disabled={props.collapsed}
+      />
+      <CompactPanelHeaderMoreMenu
+        epicId={props.epicId}
+        tabId={props.tabId}
+        panelId="chats"
+        collapsed={props.collapsed}
       />
       <TreePanelActions
         epicId={props.epicId}
         tabId={props.tabId}
         panelId="chats"
         collapsed={props.collapsed}
-        addLabel="Add chat or agent"
+        addLabel="Add agent"
         menuTestId="epic-sidebar-add-chat-root-menu"
         triggerTestId="epic-sidebar-add-chat-root"
         itemTestId={(type) => `epic-sidebar-add-chat-root-${type}`}
@@ -1905,6 +1703,172 @@ function useUnreadArtifactReadTargets(
   );
 }
 
+/**
+ * Compact-width home for secondary panel operations. Direct icon buttons stay
+ * in the DOM for wide sidebars, while container queries trade them for this
+ * single trigger before they can consume the title's space. The menu repeats
+ * search because the direct search icon also yields at the 200 px width floor.
+ */
+function CompactPanelHeaderMoreMenu(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly panelId: SidebarBulkSelectionPanelId;
+  readonly collapsed: boolean;
+}) {
+  if (props.panelId === "artifacts") {
+    return (
+      <CompactArtifactHeaderMoreMenu
+        epicId={props.epicId}
+        tabId={props.tabId}
+        collapsed={props.collapsed}
+      />
+    );
+  }
+  return (
+    <CompactChatHeaderMoreMenu
+      tabId={props.tabId}
+      collapsed={props.collapsed}
+    />
+  );
+}
+
+function CompactMoreMenuTrigger(props: {
+  readonly label: string;
+  readonly testId: string;
+  readonly collapsed: boolean;
+}) {
+  return (
+    // Tooltip OUTSIDE the menu trigger, with no span between them: both are
+    // `asChild`, so nesting this way merges the tooltip's and the menu's props
+    // onto the button itself. A guard span in between took delivery of them
+    // instead - which broke this button's own `aria-expanded:opacity-100` (the
+    // attribute landed on the span) and left the always-`inline-flex` span
+    // rendered in the header while its `@max-[21rem]:inline-flex` child stayed
+    // hidden at wider widths.
+    <TooltipWrapper
+      label={props.label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={props.label}
+          disabled={props.collapsed}
+          className={cn(
+            "hidden text-muted-foreground hover:text-foreground aria-expanded:opacity-100 @max-[21rem]:inline-flex",
+            PANEL_HEADER_ACTION_REVEAL_CLASS,
+          )}
+          data-testid={props.testId}
+        >
+          <MoreHorizontal className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+    </TooltipWrapper>
+  );
+}
+
+function CompactChatHeaderMoreMenu(props: {
+  readonly tabId: string;
+  readonly collapsed: boolean;
+}) {
+  const selection = useSidebarBulkSelection();
+  const permissionRole = useEpicPermissionRole();
+  const connectionStatus = useEpicConnectionStatus();
+  const collapseAll = useCollapseAllPanelAction(props.tabId, "chats");
+  const selectionEnabled =
+    !props.collapsed && selection.canSelect && connectionStatus !== "closed";
+
+  return (
+    <DropdownMenu>
+      <CompactMoreMenuTrigger
+        label="More agent actions"
+        testId="epic-sidebar-more-chats"
+        collapsed={props.collapsed}
+      />
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={collapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
+        {isEditableRole(permissionRole) ? (
+          <DropdownMenuItem
+            disabled={!selectionEnabled}
+            onSelect={selection.enterSelectionMode}
+          >
+            <ListChecks className="size-4" />
+            Start agent selection
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function CompactArtifactHeaderMoreMenu(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly collapsed: boolean;
+}) {
+  const selection = useSidebarBulkSelection();
+  const unreadArtifacts = useUnreadArtifactReadTargets(props.epicId);
+  const markRead = useArtifactReadStateStore((s) => s.markRead);
+  const collapseAll = useCollapseAllPanelAction(props.tabId, "artifacts");
+  const searchAvailable = useArtifactSearchAvailable();
+  const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
+  const selectionEnabled = !props.collapsed && selection.canSelect;
+  const handleMarkAllRead = useCallback(() => {
+    unreadArtifacts.forEach((artifact) => {
+      markRead(props.epicId, artifact.id, artifact.updatedAt);
+    });
+  }, [markRead, props.epicId, unreadArtifacts]);
+
+  return (
+    <DropdownMenu>
+      <CompactMoreMenuTrigger
+        label="More artifact actions"
+        testId="epic-sidebar-more-artifacts"
+        collapsed={props.collapsed}
+      />
+      <DropdownMenuContent align="end">
+        {searchAvailable ? (
+          <>
+            <DropdownMenuItem
+              onSelect={() => openSearch("artifacts", "")}
+              data-testid="epic-sidebar-more-search-artifacts"
+            >
+              <Search className="size-4" />
+              Search artifacts
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
+        <DropdownMenuItem onSelect={collapseAll}>
+          <CopyMinus className="size-4" />
+          Collapse all
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={unreadArtifacts.length === 0}
+          onSelect={handleMarkAllRead}
+        >
+          <CheckCheck className="size-4" />
+          Mark all as read
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={!selectionEnabled}
+          onSelect={selection.enterSelectionMode}
+        >
+          <ListChecks className="size-4" />
+          Start artifact selection
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function MarkAllArtifactsReadButton(props: {
   readonly epicId: string;
   readonly collapsed: boolean;
@@ -1918,22 +1882,68 @@ function MarkAllArtifactsReadButton(props: {
   }, [markRead, props.epicId, unreadArtifacts]);
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon-sm"
-      onClick={handleMarkAllRead}
-      aria-label="Mark all unread artifacts as read"
-      title="Mark all unread artifacts as read"
-      data-testid="epic-sidebar-mark-all-artifacts-read"
-      disabled={props.collapsed || unreadArtifacts.length === 0}
-      className={cn(
-        "text-muted-foreground hover:text-foreground",
-        PANEL_HEADER_ACTION_REVEAL_CLASS,
-      )}
+    <TooltipWrapper
+      label="Mark all unread artifacts as read"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <CheckCheck className="size-4" />
-    </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={handleMarkAllRead}
+          aria-label="Mark all unread artifacts as read"
+          data-testid="epic-sidebar-mark-all-artifacts-read"
+          disabled={props.collapsed || unreadArtifacts.length === 0}
+          className={cn(
+            "text-muted-foreground hover:text-foreground",
+            PANEL_HEADER_ACTION_REVEAL_CLASS,
+            COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
+          )}
+        >
+          <CheckCheck className="size-4" />
+        </Button>
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * Enters artifact search mode. Only rendered once the Epic holds enough
+ * artifacts for filtering to beat scanning - below that the header carries no
+ * search affordance at all.
+ */
+function ArtifactSearchButton(props: { readonly collapsed: boolean }) {
+  const available = useArtifactSearchAvailable();
+  const openSearch = usePanelHeaderSearchStore((s) => s.openSearch);
+  if (!available) return null;
+  return (
+    <TooltipWrapper
+      label="Search artifacts"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="inline-flex">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => openSearch("artifacts", "")}
+          aria-label="Search artifacts"
+          data-testid="epic-sidebar-search-artifacts"
+          disabled={props.collapsed}
+          className={cn(
+            "text-muted-foreground hover:text-foreground @max-[14rem]:hidden",
+            PANEL_HEADER_ACTION_REVEAL_CLASS,
+          )}
+        >
+          <Search className="size-4" />
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -1942,6 +1952,7 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
   if (selection.selectionMode) return <SidebarBulkSelectionActions />;
   return (
     <div className="flex items-center gap-0.5">
+      <ArtifactSearchButton collapsed={props.collapsed} />
       <ArtifactFilterMenu epicId={props.epicId} disabled={props.collapsed} />
       <MarkAllArtifactsReadButton
         epicId={props.epicId}
@@ -1950,6 +1961,12 @@ function ArtifactsPanelActions(props: LeftPanelHeaderSlotProps) {
       <SidebarStartSelectionButton
         label="Select artifacts"
         disabled={props.collapsed}
+      />
+      <CompactPanelHeaderMoreMenu
+        epicId={props.epicId}
+        tabId={props.tabId}
+        panelId="artifacts"
+        collapsed={props.collapsed}
       />
       <TreePanelActions
         epicId={props.epicId}
@@ -1988,6 +2005,7 @@ function SidebarStartSelectionButton(props: {
       className={cn(
         "text-muted-foreground hover:text-foreground",
         PANEL_HEADER_ACTION_REVEAL_CLASS,
+        COMPACT_PANEL_HEADER_DIRECT_ACTION_CLASS,
       )}
     >
       <ListChecks className="size-4" />
@@ -2037,16 +2055,25 @@ function SidebarBulkSelectionActions() {
       >
         {selection.allVisibleSelected ? "Deselect all" : "Select all"}
       </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="xs"
-        disabled={selection.deletePending}
-        onClick={selection.cancelSelection}
+      <TooltipWrapper
+        label="Cancel selection"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <X className="size-3.5" />
-        Cancel
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Cancel selection"
+            disabled={selection.deletePending}
+            onClick={selection.cancelSelection}
+          >
+            <X className="size-3.5" />
+          </Button>
+        </span>
+      </TooltipWrapper>
       {selection.panelId === "artifacts" ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -2096,8 +2123,8 @@ function SidebarBulkSelectionActions() {
         size="icon-sm"
         aria-label={
           selection.selectedCount > 0
-            ? `Delete ${selection.selectedCount} selected ${selection.panelId}`
-            : `Delete selected ${selection.panelId}`
+            ? `Delete ${selection.selectedCount} selected ${panelRowNoun(selection.panelId, selection.selectedCount)}`
+            : `Delete selected ${panelRowNoun(selection.panelId, 0)}`
         }
         data-testid={`epic-sidebar-delete-selected-${selection.panelId}`}
         disabled={

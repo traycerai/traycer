@@ -12,8 +12,9 @@ import { useHostClient } from "@/lib/host";
 import { useHostMutationWithResponseTimeout } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import { providersMutationKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
 
 type AwaitLoginRequest = RequestOfMethod<
   HostRpcRegistry,
@@ -22,10 +23,6 @@ type AwaitLoginRequest = RequestOfMethod<
 type AwaitLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.awaitLogin"
->;
-type ProvidersListResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "providers.list"
 >;
 type AwaitLoginContext = { readonly hostId: string | null };
 
@@ -104,16 +101,13 @@ export function useProvidersAwaitLoginForClient(args: {
     options: {
       mutationKey: providersMutationKeys.awaitLogin(),
       onMutate: () => ({ hostId: args.getCacheHostId() }),
-      onSuccess: (data: AwaitLoginResponse, _variables, context) => {
+      onSuccess: async (data: AwaitLoginResponse, _variables, context) => {
         const next = data.state;
         if (next === null || context.hostId === null) return;
-        queryClient.setQueryData<ProvidersListResponse>(
-          hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-            context.hostId,
-            "providers.list",
-            {},
-          ),
-          (prev) => {
+        await commitAuthoritativeProvidersList({
+          queryClient,
+          hostId: context.hostId,
+          update: (prev) => {
             if (prev === undefined) return prev;
             return {
               providers: prev.providers.map((p) =>
@@ -121,7 +115,7 @@ export function useProvidersAwaitLoginForClient(args: {
               ),
             };
           },
-        );
+        });
       },
       onError: (error) =>
         toastFromHostError(error, "Couldn't confirm sign-in."),

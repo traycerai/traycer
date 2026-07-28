@@ -1,5 +1,6 @@
 export {
   buildPayloadFromEvent,
+  isNotificationPayloadRoutable,
   parseNotificationPayload,
   routeNotification,
   type ApprovalNotificationPayload,
@@ -8,6 +9,7 @@ export {
   type EpicNotificationPayload,
   type NotificationPayload,
   type NotificationPayloadKind,
+  type NotificationNavigate,
   type SessionNotificationPayload,
 } from "./payload";
 export {

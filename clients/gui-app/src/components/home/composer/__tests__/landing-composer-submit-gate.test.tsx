@@ -17,7 +17,14 @@ const testState = vi.hoisted(() => ({
   submit: vi.fn(),
   bodySubmit: null as (() => void) | null,
   installEditor: null as (() => void) | null,
+  snapshot: null as (() => void) | null,
   ingesting: false,
+  createPending: false,
+  pasteDisabled: false,
+  resolvingPaths: false,
+  /** Captures the real-ish pending job runner used by in-place landing paste. */
+  runPendingImageJob: null as
+    ((job: (signal: AbortSignal) => Promise<void>) => void) | null,
 }));
 
 vi.mock("@/components/home/composer/composer-body", async () => {
@@ -28,34 +35,24 @@ vi.mock("@/components/home/composer/composer-body", async () => {
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
       };
+      testState.snapshot = () => {
+        props.onSnapshot(DIRTY_CONTENT, { from: 1, to: 1 });
+      };
       return React.createElement(
-        "button",
-        { type: "button", onClick: props.onSubmit },
-        "Submit landing",
+        React.Fragment,
+        null,
+        React.createElement(
+          "button",
+          {
+            type: "button",
+            disabled: props.isSubmitting,
+            onClick: props.onSubmit,
+          },
+          "Submit landing",
+        ),
+        props.workspaceControls,
       );
     },
-  };
-});
-
-vi.mock("@/stores/composer/landing-composer-store", () => {
-  const dirtyContent = {
-    type: "doc",
-    content: [
-      { type: "paragraph", content: [{ type: "text", text: "dirty" }] },
-    ],
-  };
-  const state = {
-    currentContent: dirtyContent,
-    setSnapshot: vi.fn(),
-    openDraft: () => dirtyContent,
-  };
-  const useLandingComposerStore = Object.assign(
-    (selector: (value: typeof state) => unknown) => selector(state),
-    { getState: () => state },
-  );
-  return {
-    useLandingComposerStore,
-    flushPendingLandingDraftContent: vi.fn(),
   };
 });
 
@@ -72,10 +69,19 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     drafts: [],
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
+    createDraft: vi.fn(() => "draft-for-test"),
+    // handleSnapshot's unbound-create branch now calls createDraftWithId
+    // (reusing a pre-minted pendingCreateId when present) rather than
+    // createDraft directly.
+    createDraftWithId: vi.fn(() => "draft-for-test"),
+    setDraftContent: vi.fn(),
   };
+  const useLandingDraftStore = Object.assign(
+    (selector: (value: typeof state) => unknown) => selector(state),
+    { getState: () => state },
+  );
   return {
-    useLandingDraftStore: (selector: (value: typeof state) => unknown) =>
-      selector(state),
+    useLandingDraftStore,
   };
 });
 
@@ -84,9 +90,12 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
     globalLastRunSettings: null,
     setGlobalRunSettings: vi.fn(),
   };
+  const useComposerRunSettingsStore = Object.assign(
+    (selector: (value: typeof state) => unknown) => selector(state),
+    { getState: () => state },
+  );
   return {
-    useComposerRunSettingsStore: (selector: (value: typeof state) => unknown) =>
-      selector(state),
+    useComposerRunSettingsStore,
   };
 });
 
@@ -112,18 +121,53 @@ vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
   }),
 }));
 
-vi.mock("@/hooks/composer/use-landing-composer-paste", () => ({
-  useLandingComposerPaste: () => ({
-    onPaste: vi.fn(),
-    onDrop: vi.fn(),
-    onDragOver: vi.fn(),
-    onDragEnter: vi.fn(),
-    onDragLeave: vi.fn(),
-    attachImageFiles: vi.fn(),
-    isDraggingFiles: false,
-    isIngestingImages: testState.ingesting,
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: () => Promise.resolve([]),
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve(paths),
+    },
   }),
 }));
+
+vi.mock("@/hooks/composer/use-landing-composer-paste", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/hooks/composer/use-landing-composer-paste")
+    >();
+  return {
+    ...actual,
+    useLandingComposerPaste: (params: { readonly disabled: boolean }) => {
+      testState.pasteDisabled = params.disabled;
+      // Mirror runPendingImageJob → isIngestingImages so submit gating covers
+      // the in-place paste path (not the deleted attach-at-anchor path).
+      const runPendingImageJob = (
+        job: (signal: AbortSignal) => Promise<void>,
+      ) => {
+        testState.ingesting = true;
+        const controller = new AbortController();
+        void job(controller.signal).finally(() => {
+          testState.ingesting = false;
+        });
+      };
+      testState.runPendingImageJob = runPendingImageJob;
+      return {
+        onPaste: vi.fn(),
+        onDrop: vi.fn(),
+        onDragOver: vi.fn(),
+        onDragEnter: vi.fn(),
+        onDragLeave: vi.fn(),
+        attachImageFiles: vi.fn(),
+        runPendingImageJob,
+        isDraggingFiles: false,
+        dragOverlayVariant: null,
+        isIngestingImages: testState.ingesting,
+        isResolvingFilePaths: testState.resolvingPaths,
+      };
+    },
+  };
+});
 
 vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
   useResolvedWorkspaceFolders: () => ({ folders: [], isLoading: false }),
@@ -155,7 +199,7 @@ vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
   useLandingImageFetcher: () => vi.fn(),
 }));
 vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
-  useEpicCreate: () => ({ isPending: false }),
+  useEpicCreate: () => ({ isPending: testState.createPending }),
 }));
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgent: () => ({ isPending: false }),
@@ -164,28 +208,76 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
 }));
+vi.mock(
+  "@/components/chat/composer/use-profile-rate-limit-switch-prompt",
+  () => ({
+    useProfileRateLimitSwitchPrompt: () => ({
+      kind: "hidden",
+      dismiss: vi.fn(),
+    }),
+  }),
+);
+vi.mock(
+  "@/hooks/providers/use-refresh-providers-list-on-turn-default-host",
+  () => ({
+    useRefreshProvidersListOnTurnDefaultHost: () => undefined,
+  }),
+);
 
 afterEach(() => {
   cleanup();
   testState.submit.mockClear();
   testState.bodySubmit = null;
   testState.installEditor = null;
+  testState.snapshot = null;
   testState.ingesting = false;
+  testState.createPending = false;
+  testState.pasteDisabled = false;
+  testState.resolvingPaths = false;
+  testState.runPendingImageJob = null;
 });
 
 describe("LandingComposer direct submit gate", () => {
+  it("locks editor input, paste ingestion, and workspace controls during a submission", () => {
+    testState.createPending = true;
+    render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={(disabled) => (
+          <button type="button" disabled={disabled}>
+            Change workspace
+          </button>
+        )}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Submit landing" }),
+    ).toHaveProperty("disabled", true);
+    expect(testState.pasteDisabled).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Change workspace" }),
+    ).toHaveProperty("disabled", true);
+  });
+
   it("blocks the actual landing submit path while image ingestion is pending", () => {
     testState.ingesting = true;
     const view = render(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
-        workspaceControls={null}
+        workspaceControls={() => null}
       />,
     );
     const installEditor = testState.installEditor;
     if (installEditor === null) throw new Error("expected ComposerBody seam");
     installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
     expect(testState.submit).not.toHaveBeenCalled();
@@ -194,8 +286,142 @@ describe("LandingComposer direct submit gate", () => {
     view.rerender(
       <LandingComposer
         draftId={null}
+        pendingCreateId={null}
         initialSettings={null}
-        workspaceControls={null}
+        workspaceControls={() => null}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    expect(testState.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("submits the draft handleSnapshot minted, not null, while props.draftId is still catching up", () => {
+    // The real race: the first submittable edit mints an unbound draft inside
+    // this component, but `props.draftId` only flips on the parent's next
+    // render - so a type-then-Enter submits with the prop still `null`. If that
+    // `null` reaches the action, `ensureSubmissionDraft` mints a SECOND draft
+    // and the one already holding the user's content is stranded. Nothing
+    // re-render carries a new `draftId`, so the prop is still `null` at submit
+    // time exactly as it is in the app.
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+    // Re-render so the composer observes the content it just snapshotted and
+    // opens the submit gate - still with `draftId={null}`, which is the point.
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+
+    expect(testState.submit).toHaveBeenCalledTimes(1);
+    expect(testState.submit.mock.calls[0][0]).toMatchObject({
+      draftId: "draft-for-test",
+    });
+  });
+
+  // Item 8: a live runPendingImageJob (landing in-place paste) holds submit closed
+  // until the job settles, then clears.
+  it("blocks submit while a runPendingImageJob is in flight and opens after it settles", async () => {
+    const gate: { release: (() => void) | null } = { release: null };
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+    const runPending = testState.runPendingImageJob;
+    if (runPending === null)
+      throw new Error("expected runPendingImageJob seam");
+
+    runPending(async () => {
+      await new Promise<void>((resolve) => {
+        gate.release = resolve;
+      });
+    });
+    // LandingComposer reads isIngestingImages on render; force a re-render.
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    expect(testState.submit).not.toHaveBeenCalled();
+
+    const release = gate.release;
+    if (release === null) throw new Error("expected pending job gate");
+    release();
+    // Allow the job finally to clear ingesting, then re-render.
+    await Promise.resolve();
+    await Promise.resolve();
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    expect(testState.submit).toHaveBeenCalledTimes(1);
+  });
+
+  // Finding 3: pure path-resolution must also hold submit open.
+  it("blocks the actual landing submit path while file-path resolution is pending", () => {
+    testState.resolvingPaths = true;
+    const view = render(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    const installEditor = testState.installEditor;
+    if (installEditor === null) throw new Error("expected ComposerBody seam");
+    installEditor();
+    const snapshot = testState.snapshot;
+    if (snapshot === null) throw new Error("expected snapshot seam");
+    snapshot();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
+    expect(testState.submit).not.toHaveBeenCalled();
+
+    testState.resolvingPaths = false;
+    view.rerender(
+      <LandingComposer
+        draftId={null}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Submit landing" }));
@@ -213,6 +439,8 @@ function editorHandle(): ComposerPromptEditorHandle {
     clear: () => undefined,
     setContent: () => undefined,
     insertImageAttachments: () => undefined,
+    beginPathInsertion: () => null,
+    rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,

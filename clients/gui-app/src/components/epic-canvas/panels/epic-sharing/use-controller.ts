@@ -116,7 +116,7 @@ export function useEpicSharingPanelController(
   const shareableTeams = useEpicShareableTeams();
 
   const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
-    refetchInterval: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+    poll: true,
     staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
   });
   const lastFetchedAt =

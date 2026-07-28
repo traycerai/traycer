@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
  */
 export function ActiveAgentsPanel(props: {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly self: AgentRow;
   readonly descendants: ReadonlyArray<AgentRow>;
   readonly scrollRegionMaxHeightClass: string;
@@ -94,6 +95,7 @@ export function ActiveAgentsPanel(props: {
         >
           <AgentStopList
             epicId={props.epicId}
+            viewTabId={props.viewTabId}
             self={props.self}
             descendants={props.descendants}
             surface="composer-panel"

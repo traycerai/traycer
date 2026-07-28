@@ -46,6 +46,11 @@ export function TerminalGridMeasureProbe(props: {
         onContainerResize={props.onMeasured}
         onWriterReady={ignoreWriter}
         shouldFocusOnActivePane={false}
+        // A landing-panel open can park focus before this probe mounts. Leave
+        // that request parked for the live host: focusing the probe would both
+        // route early keystrokes into `dropInput` and lose DOM focus when the
+        // persistent xterm container is reparented into the live host.
+        registerImperativeFocus={false}
         findTargetId={null}
         // The engine must survive the probe -> live-host swap (that is the
         // point); if the tab closes before a session ever registers, the

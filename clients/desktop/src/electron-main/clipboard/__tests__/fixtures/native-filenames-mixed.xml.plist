@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <array>
+    <string>/tmp/short</string>
+    <string>/repo/a long ASCII filename.txt</string>
+    <string>/repo/naïve 文件.txt</string>
+    <string>/repo/item-01.txt</string>
+    <string>/repo/item-02.txt</string>
+    <string>/repo/item-03.txt</string>
+    <string>/repo/item-04.txt</string>
+    <string>/repo/item-05.txt</string>
+    <string>/repo/item-06.txt</string>
+    <string>/repo/item-07.txt</string>
+    <string>/repo/item-08.txt</string>
+    <string>/repo/item-09.txt</string>
+    <string>/repo/item-10.txt</string>
+    <string>/repo/item-11.txt</string>
+    <string>/repo/item-12.txt</string>
+    <string>/repo/item-13.txt</string>
+    <string>/repo/item-14.txt</string>
+    <string>/repo/&amp;lt;literal.txt</string>
+  </array>
+</plist>

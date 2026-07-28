@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { tmpdir, platform as osPlatform } from "node:os";
 import { join } from "node:path";
@@ -97,7 +103,11 @@ describe("extractHostSource (tar)", () => {
     const archive = join(scratchRoot, "benign.tar");
     await tarCreate({ file: archive, cwd: sourceDir }, ["ok.txt"]);
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
-    await extractHostSource({ source: archive, targetDir });
+    await extractHostSource({
+      source: archive,
+      targetDir,
+      onEntry: () => undefined,
+    });
     const contents = await readFile(join(targetDir, "ok.txt"), "utf8");
     expect(contents).toBe("ok\n");
   });
@@ -124,7 +134,11 @@ describe("extractHostSource (tar)", () => {
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
     let caught: unknown = null;
     try {
-      await extractHostSource({ source: archive, targetDir });
+      await extractHostSource({
+        source: archive,
+        targetDir,
+        onEntry: () => undefined,
+      });
     } catch (err) {
       caught = err;
     }
@@ -144,7 +158,11 @@ describe("extractHostSource (tar)", () => {
     const archive = join(scratchRoot, "dotfile.tar");
     await tarCreate({ file: archive, cwd: sourceDir }, [".marker"]);
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
-    await extractHostSource({ source: archive, targetDir });
+    await extractHostSource({
+      source: archive,
+      targetDir,
+      onEntry: () => undefined,
+    });
     const markerStat = await stat(join(targetDir, ".marker"));
     expect(markerStat.isFile()).toBe(true);
   });
@@ -161,7 +179,11 @@ describe("extractHostSource (tar)", () => {
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
     let caught: unknown = null;
     try {
-      await extractHostSource({ source: archive, targetDir });
+      await extractHostSource({
+        source: archive,
+        targetDir,
+        onEntry: () => undefined,
+      });
     } catch (err) {
       caught = err;
     }
@@ -193,7 +215,11 @@ describe("extractHostSource (tar)", () => {
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
     let caught: unknown = null;
     try {
-      await extractHostSource({ source: archive, targetDir });
+      await extractHostSource({
+        source: archive,
+        targetDir,
+        onEntry: () => undefined,
+      });
     } catch (err) {
       caught = err;
     }
@@ -216,7 +242,11 @@ describe("extractHostSource (tar)", () => {
     const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
     let caught: unknown = null;
     try {
-      await extractHostSource({ source: archive, targetDir });
+      await extractHostSource({
+        source: archive,
+        targetDir,
+        onEntry: () => undefined,
+      });
     } catch (err) {
       caught = err;
     }
@@ -231,5 +261,101 @@ describe("extractHostSource (tar)", () => {
     }
     const targetEntries = await readdir(targetDir);
     expect(targetEntries).toEqual([]);
+  });
+});
+
+// `onEntry` is the only liveness signal during an extract that can run for
+// minutes: Desktop SIGKILLs a CLI whose NDJSON stream goes quiet, and the
+// download cache hands a slot whose archive stopped being touched to another
+// process. A callback that silently never fires - a mistyped `zip.on(...)`
+// event being the easiest way to get there - restores both failures with
+// every other test still green, so each unpack shape asserts it directly.
+describe("extractHostSource (onEntry liveness)", () => {
+  it("fires once per entry while unpacking a tar", async () => {
+    const sourceDir = mkdtempSync(join(scratchRoot, "src-"));
+    writeFileSync(join(sourceDir, "a.txt"), "a\n");
+    writeFileSync(join(sourceDir, "b.txt"), "b\n");
+    writeFileSync(join(sourceDir, "c.txt"), "c\n");
+    const archive = join(scratchRoot, "ticks.tar");
+    await tarCreate({ file: archive, cwd: sourceDir }, [
+      "a.txt",
+      "b.txt",
+      "c.txt",
+    ]);
+    const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
+    let ticks = 0;
+    await extractHostSource({
+      source: archive,
+      targetDir,
+      onEntry: () => {
+        ticks += 1;
+      },
+    });
+    expect(ticks).toBe(3);
+    expect((await readdir(targetDir)).sort()).toEqual([
+      "a.txt",
+      "b.txt",
+      "c.txt",
+    ]);
+  });
+
+  it("fires while unpacking a zip", async () => {
+    // Guards the `zip.on("extract", ...)` wiring specifically - the event
+    // name is a string the compiler cannot check.
+    const archive = join(scratchRoot, "ticks.zip");
+    writeFileSync(archive, buildZipWithEntry("host.txt", "host\n"));
+    const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
+    let ticks = 0;
+    await extractHostSource({
+      source: archive,
+      targetDir,
+      onEntry: () => {
+        ticks += 1;
+      },
+    });
+    expect(ticks).toBe(1);
+    expect(await readFile(join(targetDir, "host.txt"), "utf8")).toBe("host\n");
+  });
+
+  it("fires per top-level entry while copying a source directory", async () => {
+    const sourceDir = mkdtempSync(join(scratchRoot, "src-"));
+    writeFileSync(join(sourceDir, "host"), "binary\n");
+    mkdirSync(join(sourceDir, "resources"));
+    writeFileSync(join(sourceDir, "resources", "nested.txt"), "nested\n");
+    const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
+    let ticks = 0;
+    await extractHostSource({
+      source: sourceDir,
+      targetDir,
+      onEntry: () => {
+        ticks += 1;
+      },
+    });
+    expect(ticks).toBe(2);
+    // Per-entry copying must still reproduce the tree, subdirectories and
+    // all - it replaced a single recursive `cp` of the whole directory.
+    expect(await readFile(join(targetDir, "host"), "utf8")).toBe("binary\n");
+    expect(
+      await readFile(join(targetDir, "resources", "nested.txt"), "utf8"),
+    ).toBe("nested\n");
+  });
+
+  it("fires while copying a bare executable", async () => {
+    const sourceDir = mkdtempSync(join(scratchRoot, "src-"));
+    const source = join(sourceDir, "traycer-host");
+    writeFileSync(source, "binary\n");
+    const targetDir = mkdtempSync(join(scratchRoot, "tgt-"));
+    let ticks = 0;
+    await extractHostSource({
+      source,
+      targetDir,
+      onEntry: () => {
+        ticks += 1;
+      },
+    });
+    expect(ticks).toBe(1);
+    expect(await readFile(join(targetDir, "traycer-host"), "utf8")).toBe(
+      "binary\n",
+    );
   });
 });

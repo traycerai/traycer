@@ -54,6 +54,10 @@ import {
   profileCommitId,
   profileDisplayLabel,
 } from "@/components/providers/provider-profile-model";
+import {
+  isRateLimitProfileFetchEligible,
+  resolveRateLimitFetchEligibility,
+} from "@/lib/rate-limit-providers";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -84,6 +88,16 @@ function profileDriftKey(
   const notice = profile.ambientDriftNotice;
   if (notice === null) return null;
   return `${providerId}:${profile.profileId}:${notice.changedAt}`;
+}
+
+function profileRateLimitFetchEligible(
+  state: ProviderCliState,
+  profile: ProviderProfile,
+): boolean {
+  return isRateLimitProfileFetchEligible(
+    resolveRateLimitFetchEligibility(state),
+    profile,
+  );
 }
 
 interface ProviderProfileScopedSectionProps {
@@ -150,9 +164,11 @@ export function ProviderProfileScopedSection(
     ) ?? orderedProfiles[0];
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile || !isSelectedHostLocal;
+  // `TooltipWrapper` degrades to a passthrough Slot for both `null` and
+  // `undefined` labels; `null` here is just the plainer of the two spellings.
   const addProfileDisabledReason = addProfileDisabled
     ? "Add profiles from a local host with browser sign-in available."
-    : undefined;
+    : null;
   const duplicateLabel = duplicateProfileLabel(selectedProfile, profiles);
   const driftKey = profileDriftKey(state.providerId, selectedProfile);
   const driftDismissed =
@@ -181,22 +197,37 @@ export function ProviderProfileScopedSection(
         <div className="flex items-center justify-between gap-2">
           <div className="text-ui-sm font-medium text-foreground">Profiles</div>
           <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              className="shrink-0"
-              disabled={addProfileDisabled}
-              title={addProfileDisabledReason}
-              onClick={onAddProfile}
+            <TooltipWrapper
+              label={addProfileDisabledReason}
+              side="top"
+              sideOffset={6}
+              align="start"
             >
-              <Plus className="size-3.5" />
-              Add profile
-            </Button>
+              {/* Span between the tooltip and the button because a `disabled`
+                  button emits no pointer events for Radix to hover-detect -
+                  and the reason it is disabled is exactly what this says. */}
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={addProfileDisabled}
+                  onClick={onAddProfile}
+                >
+                  <Plus className="size-3.5" />
+                  Add profile
+                </Button>
+              </span>
+            </TooltipWrapper>
             <ProviderProfilesRefreshButton
               providerId={state.providerId}
               profileId={profileCommitId(selectedProfile)}
               usageUpdatedAt={selectedProfile.usageUpdatedAt}
+              fetchEligible={profileRateLimitFetchEligible(
+                state,
+                selectedProfile,
+              )}
             />
           </div>
         </div>
@@ -207,34 +238,46 @@ export function ProviderProfileScopedSection(
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
           createProfileDisabled={addProfileDisabled}
-          createProfileDisabledReason={addProfileDisabledReason}
+          createProfileDisabledReason={addProfileDisabledReason ?? undefined}
           // ⌘⇧-digit isn't wired to Settings - no picker leader scope here.
           shortcutHintForIndex={noProfileShortcutHint}
           contentContainer={null}
           onCloseAutoFocus={null}
           usagePresentation={null}
         />
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div
+          data-slot="profile-summary-actions"
+          className="flex min-w-0 items-center justify-end gap-2"
+        >
           <ProfileSummary
             key={selectedProfile.profileId}
             profile={selectedProfile}
           />
           {selectedProfile.auth.status === "unauthenticated" ? (
-            <Button
-              type="button"
-              size="xs"
-              variant="secondary"
-              disabled={!canAddProfile}
-              title={
+            <TooltipWrapper
+              label={
                 canAddProfile
-                  ? undefined
+                  ? null
                   : "Sign in requires a local host with browser sign-in available."
               }
-              onClick={openProfileSignIn}
+              side="top"
+              sideOffset={6}
+              align="start"
             >
-              <LogIn data-icon="inline-start" />
-              Sign in
-            </Button>
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="secondary"
+                  className="shrink-0"
+                  disabled={!canAddProfile}
+                  onClick={openProfileSignIn}
+                >
+                  <LogIn data-icon="inline-start" />
+                  Sign in
+                </Button>
+              </span>
+            </TooltipWrapper>
           ) : null}
           <TooltipWrapper
             label="Change the profile name and accent color, sign in again, or remove this profile."
@@ -246,6 +289,7 @@ export function ProviderProfileScopedSection(
               type="button"
               size="xs"
               variant="outline"
+              className="shrink-0"
               onClick={openProfileEditor}
             >
               <Settings2 data-icon="inline-start" />
@@ -313,6 +357,7 @@ export function ProviderProfileScopedSection(
           providerId={state.providerId}
           profileId={profileCommitId(selectedProfile)}
           usageUpdatedAt={selectedProfile.usageUpdatedAt}
+          fetchEligible={profileRateLimitFetchEligible(state, selectedProfile)}
         />
       </div>
 
@@ -347,14 +392,19 @@ function ProfileSummary({
   }
   const tier = profile.identity?.tier;
   const planText =
-    tier === null || tier === undefined || tier.length === 0 ? "No plan" : tier;
+    tier === null || tier === undefined || tier.length === 0 ? null : tier;
 
   return (
-    <div className="grid min-w-[75%] flex-1 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 text-ui-xs text-muted-foreground">
-      <div className="flex min-w-0 items-center gap-1">
-        <span className="min-w-0 truncate" title={email ?? undefined}>
-          {emailText}
-        </span>
+    <div className="flex min-w-0 flex-1 items-center gap-2 text-ui-xs text-muted-foreground">
+      <div className="flex min-w-0 flex-1 items-center gap-1">
+        <TooltipWrapper
+          label={emailRevealed ? email : null}
+          side="top"
+          sideOffset={undefined}
+          align="start"
+        >
+          <span className="min-w-0 truncate">{emailText}</span>
+        </TooltipWrapper>
         {email !== null ? (
           <button
             type="button"
@@ -375,16 +425,24 @@ function ProfileSummary({
           </button>
         ) : null}
       </div>
-      <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+      <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px]">
         {profileAuthStatusText(profile)}
       </Badge>
-      <Badge
-        variant="outline"
-        className="h-5 max-w-[min(28vw,14rem)] px-1.5 text-[10px]"
-        title={planText}
-      >
-        <span className="truncate">{planText}</span>
-      </Badge>
+      {planText !== null ? (
+        <TooltipWrapper
+          label={planText}
+          side="top"
+          sideOffset={undefined}
+          align="end"
+        >
+          <Badge
+            variant="outline"
+            className="h-5 max-w-[min(28vw,14rem)] shrink-0 px-1.5 text-[10px]"
+          >
+            <span className="truncate">{planText}</span>
+          </Badge>
+        </TooltipWrapper>
+      ) : null}
     </div>
   );
 }
@@ -614,31 +672,42 @@ function ProfileEditDialog({
                 onDone={() => setSwitchingAccount(false)}
               />
             ) : (
-              <button
-                type="button"
-                aria-label="Switch account"
-                className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!canOauth || savePending || invalid}
-                title={
+              <TooltipWrapper
+                label={
                   canOauth
-                    ? undefined
+                    ? null
                     : "Switch account requires a local host with browser sign-in available."
                 }
-                onClick={switchAccount}
+                side="top"
+                sideOffset={6}
+                align={undefined}
               >
-                <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
-                  <RefreshCw className="size-4" />
+                {/* `flex w-full` on the span, not `inline-flex`: the button it
+                    guards is full-width, and an inline-flex wrapper would
+                    collapse the row. */}
+                <span className="flex w-full">
+                  <button
+                    type="button"
+                    aria-label="Switch account"
+                    className="group flex w-full items-center gap-3 rounded-lg border border-border/60 bg-muted/20 p-3 text-left transition-colors hover:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!canOauth || savePending || invalid}
+                    onClick={switchAccount}
+                  >
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:text-foreground">
+                      <RefreshCw className="size-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-ui-sm font-medium text-foreground">
+                        Switch account
+                      </span>
+                      <span className="block text-ui-xs text-muted-foreground">
+                        Sign in with a different account for this profile.
+                      </span>
+                    </span>
+                    <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                  </button>
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-ui-sm font-medium text-foreground">
-                    Switch account
-                  </span>
-                  <span className="block text-ui-xs text-muted-foreground">
-                    Sign in with a different account for this profile.
-                  </span>
-                </span>
-                <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-              </button>
+              </TooltipWrapper>
             )}
 
             <ProfileEditErrors
@@ -662,10 +731,7 @@ function ProfileEditDialog({
                 sideOffset={6}
                 align="start"
               >
-                <span
-                  className="inline-flex"
-                  title={removeProfileDisabledReason ?? undefined}
-                >
+                <span className="inline-flex">
                   <Button
                     type="button"
                     size="sm"
@@ -713,7 +779,7 @@ function ProfileEditDialog({
         open={confirmRemoveOpen}
         onOpenChange={setConfirmRemoveOpen}
         title={`Remove ${profileDisplayLabel(profile)}?`}
-        description={`Chats that ran on ${profileDisplayLabel(profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
+        description={`Agents that ran on ${profileDisplayLabel(profile)} will show it as removed. Running sessions on this profile must be stopped first.`}
         cascadeSummary={null}
         actionLabel="Remove"
         isPending={removeProfile.isPending}

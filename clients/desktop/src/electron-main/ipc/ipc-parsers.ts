@@ -18,8 +18,13 @@ import type {
 } from "../../ipc-contracts/window-types";
 import {
   parseJsonRecord,
+  parseJsonValue,
   parseLandingDrafts,
 } from "../../ipc-contracts/window-state-parsers";
+import type {
+  StoredAuthTokens,
+  StoredCredentialsIdentity,
+} from "../../ipc-contracts/auth-types";
 
 export {
   parseJsonRecord,
@@ -36,6 +41,60 @@ export function assertString(
   if (typeof value !== "string") {
     throw new Error(`${context} requires a string argument`);
   }
+}
+
+/**
+ * Parses the `{ token, refreshToken }` pair the renderer hands to
+ * `tokenStore.signIn` over IPC. Fail-closed: a non-string field throws so a
+ * malformed payload never lands as credentials.
+ */
+export function parseStoredAuthTokens(value: unknown): StoredAuthTokens {
+  if (value === null || typeof value !== "object") {
+    throw new Error(
+      "tokenStore.signIn requires a { token, refreshToken } object",
+    );
+  }
+  const record = value as Record<string, unknown>;
+  assertString(record.token, "tokenStore.signIn.token");
+  assertString(record.refreshToken, "tokenStore.signIn.refreshToken");
+  return { token: record.token, refreshToken: record.refreshToken };
+}
+
+/**
+ * Parses the `{ id, email, name }` identity block the renderer hands to
+ * `tokenStore.signIn`. The main store stamps `authnBaseUrl` + `savedAt`, so only
+ * the user identity crosses here. Fail-closed on any non-string field.
+ */
+export function parseStoredCredentialsIdentity(
+  value: unknown,
+): StoredCredentialsIdentity {
+  if (value === null || typeof value !== "object") {
+    throw new Error(
+      "tokenStore.signIn requires an { id, email, name } identity",
+    );
+  }
+  const record = value as Record<string, unknown>;
+  assertString(record.id, "tokenStore.signIn.identity.id");
+  assertString(record.email, "tokenStore.signIn.identity.email");
+  assertString(record.name, "tokenStore.signIn.identity.name");
+  return { id: record.id, email: record.email, name: record.name };
+}
+
+/**
+ * Parses the `{ userId, token }` CAS guard the renderer hands to
+ * `tokenStore.rotate`. Fail-closed on any non-string field.
+ */
+export function parseTokenRotateExpected(value: unknown): {
+  readonly userId: string;
+  readonly token: string;
+} {
+  if (value === null || typeof value !== "object") {
+    throw new Error("tokenStore.rotate requires a { userId, token } object");
+  }
+  const record = value as Record<string, unknown>;
+  assertString(record.userId, "tokenStore.rotate.userId");
+  assertString(record.token, "tokenStore.rotate.token");
+  return { userId: record.userId, token: record.token };
 }
 
 export function parseEpics(value: unknown): readonly DesktopTrayEpic[] {
@@ -203,6 +262,16 @@ export function parsePerWindowStatePatch(value: unknown): PerWindowStatePatch {
           : null,
     });
   }
+  if ("tabStripLayout" in obj) {
+    Object.assign(patch, {
+      tabStripLayout: parseJsonValue(obj.tabStripLayout) ?? null,
+    });
+  }
+  if ("activeRoute" in obj) {
+    Object.assign(patch, {
+      activeRoute: typeof obj.activeRoute === "string" ? obj.activeRoute : null,
+    });
+  }
   return patch;
 }
 
@@ -235,8 +304,31 @@ export function parsePerWindowEpicTabs(
       return [];
     }
     seen.add(obj.id);
-    return [{ id: obj.id, epicId: obj.epicId, name: obj.name }];
+    const surfaceMode = parsePerWindowEpicSurfaceMode(obj.surfaceMode);
+    return [
+      surfaceMode === null
+        ? { id: obj.id, epicId: obj.epicId, name: obj.name }
+        : { id: obj.id, epicId: obj.epicId, name: obj.name, surfaceMode },
+    ];
   });
+}
+
+function parsePerWindowEpicSurfaceMode(
+  value: unknown,
+): { readonly kind: "phase-migration"; readonly phaseId: string } | null {
+  if (!isPlainRecord(value)) return null;
+  if (
+    value.kind === "phase-migration" &&
+    typeof value.phaseId === "string" &&
+    value.phaseId.length > 0
+  ) {
+    return { kind: "phase-migration", phaseId: value.phaseId };
+  }
+  return null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function parseDesktopAuthSession(
@@ -289,18 +381,6 @@ export function readSenderWebContentsId(
     return null;
   }
   return sender.id;
-}
-
-export function readEpicId(payload: unknown): string | null {
-  if (
-    payload === null ||
-    typeof payload !== "object" ||
-    Array.isArray(payload)
-  ) {
-    return null;
-  }
-  const obj = payload as Record<string, unknown>;
-  return typeof obj.epicId === "string" ? obj.epicId : null;
 }
 
 /**

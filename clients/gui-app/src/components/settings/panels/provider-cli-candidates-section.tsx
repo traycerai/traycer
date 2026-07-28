@@ -1,4 +1,4 @@
-import { useCallback, useId, useState, type ReactNode } from "react";
+import { use, useCallback, useId, useState, type ReactNode } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import type {
   ProviderCliCandidate,
@@ -14,6 +14,8 @@ import { useProvidersSetSelection } from "@/hooks/providers/use-providers-set-se
 import { useProvidersAddCustomPath } from "@/hooks/providers/use-providers-add-custom-path-mutation";
 import { useProvidersRemoveCustomPath } from "@/hooks/providers/use-providers-remove-custom-path-mutation";
 import { useProvidersDetectVersion } from "@/hooks/providers/use-providers-detect-version-query";
+import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +24,8 @@ import { cn } from "@/lib/utils";
 // table past the panel width.
 const TABLE_GRID =
   "grid grid-cols-[2.25rem_minmax(0,1fr)_minmax(5.5rem,auto)_2.25rem] items-center";
+const HERMES_INSTALLATION_URL =
+  "https://hermes-agent.nousresearch.com/docs/getting-started/installation";
 
 interface ProviderCandidateConfig {
   readonly selected: ProviderSelection;
@@ -80,6 +84,8 @@ export function ProviderCliCandidatesSection({
   const setSelection = useProvidersSetSelection();
   const addCustom = useProvidersAddCustomPath();
   const removeCustom = useProvidersRemoveCustomPath();
+  const openExternalLink = useRunnerOpenExternalLink();
+  const runnerHost = use(RunnerHostContext);
   // Debounce so we don't spawn a `<bin> --version` probe on every keystroke.
   const debouncedPath = useDebouncedValue(draftPath.trim(), 250);
   const probe = useProvidersDetectVersion({
@@ -108,78 +114,110 @@ export function ProviderCliCandidatesSection({
 
   if (!showCliCandidates) return null;
 
+  const isEmptyHermesState =
+    providerId === "hermes" && cliConfig.candidates.length === 0;
+
   return (
     <>
-      <div className="overflow-hidden rounded-lg border border-border/60">
-        <div
-          className={cn(
-            TABLE_GRID,
-            "border-b border-border/40 bg-muted/30 text-ui-xs font-medium text-muted-foreground",
-          )}
-        >
-          <span className="py-2" />
-          <span className="min-w-0 p-2">Path</span>
-          <span className="p-2">Version</span>
-          <span className="py-2" />
+      {isEmptyHermesState && !adding ? (
+        <div className="rounded-lg border border-border/60 bg-muted/10 p-3 text-ui-sm text-muted-foreground">
+          <p>
+            Hermes must be installed on this machine. It ships without a bundled
+            binary.
+          </p>
+          <a
+            href={HERMES_INSTALLATION_URL}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => {
+              // No RunnerHost bound (e.g. web): let the browser open the
+              // anchor natively; the desktop shell routes it through
+              // `openExternalLink` instead (mirrors PrChip in
+              // worktrees-settings-panel).
+              if (runnerHost === null) return;
+              // oxlint-disable-next-line react-doctor/no-prevent-default -- desktop shell opens external links via the Electron `openExternalLink` bridge, not renderer navigation; the null-guard above preserves native anchor nav in web builds.
+              event.preventDefault();
+              openExternalLink.mutate(HERMES_INSTALLATION_URL);
+            }}
+            className="mt-1 inline-flex text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded"
+          >
+            Hermes installation guide
+          </a>
         </div>
-        {cliConfig.candidates.map((candidate) => (
-          <CandidateRow
-            key={candidateKey(candidate)}
-            candidate={candidate}
-            radioName={radioName}
-            selected={isSelected(cliConfig.selected, candidate)}
-            busy={setSelection.isPending || removeCustom.isPending}
-            onSelect={onSelect}
-            onRemove={(path) => removeCustom.mutate({ providerId, path })}
-          />
-        ))}
-        {adding ? (
-          <div className="flex flex-col gap-2 border-t border-border/40 bg-muted/10 p-3">
-            <div className="flex items-center gap-2">
-              <Input
-                ref={focusDraftInput}
-                className="w-full font-mono text-ui-sm"
-                placeholder="/absolute/path/to/binary"
-                value={draftPath}
-                onChange={(e) => setDraftPath(e.target.value)}
-                disabled={addCustom.isPending}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") onSaveCustom();
-                  if (e.key === "Escape") {
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-border/60">
+          <div
+            className={cn(
+              TABLE_GRID,
+              "border-b border-border/40 bg-muted/30 text-ui-xs font-medium text-muted-foreground",
+            )}
+          >
+            <span className="py-2" />
+            <span className="min-w-0 p-2">Path</span>
+            <span className="p-2">Version</span>
+            <span className="py-2" />
+          </div>
+          {cliConfig.candidates.map((candidate) => (
+            <CandidateRow
+              key={candidateKey(candidate)}
+              candidate={candidate}
+              radioName={radioName}
+              selected={isSelected(cliConfig.selected, candidate)}
+              busy={setSelection.isPending || removeCustom.isPending}
+              onSelect={onSelect}
+              onRemove={(path) => removeCustom.mutate({ providerId, path })}
+            />
+          ))}
+          {adding ? (
+            <div className="flex flex-col gap-2 border-t border-border/40 bg-muted/10 p-3">
+              <div className="flex items-center gap-2">
+                <Input
+                  ref={focusDraftInput}
+                  className="w-full font-mono text-ui-sm"
+                  placeholder="/absolute/path/to/binary"
+                  value={draftPath}
+                  onChange={(e) => setDraftPath(e.target.value)}
+                  disabled={addCustom.isPending}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") onSaveCustom();
+                    if (e.key === "Escape") {
+                      setAdding(false);
+                      setDraftPath("");
+                    }
+                  }}
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={onSaveCustom}
+                  disabled={
+                    addCustom.isPending || draftPath.trim().length === 0
+                  }
+                >
+                  {addCustom.isPending ? <MutedAgentSpinner /> : null}
+                  Save
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
                     setAdding(false);
                     setDraftPath("");
-                  }
-                }}
+                  }}
+                  disabled={addCustom.isPending}
+                >
+                  Cancel
+                </Button>
+              </div>
+              <ProbeLine
+                probing={probe.isFetching}
+                executable={probe.data?.executable ?? null}
+                version={probe.data?.version ?? null}
               />
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={onSaveCustom}
-                disabled={addCustom.isPending || draftPath.trim().length === 0}
-              >
-                {addCustom.isPending ? <MutedAgentSpinner /> : null}
-                Save
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setAdding(false);
-                  setDraftPath("");
-                }}
-                disabled={addCustom.isPending}
-              >
-                Cancel
-              </Button>
             </div>
-            <ProbeLine
-              probing={probe.isFetching}
-              executable={probe.data?.executable ?? null}
-              version={probe.data?.version ?? null}
-            />
-          </div>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
+      )}
 
       {adding ? null : (
         <button
