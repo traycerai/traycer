@@ -203,11 +203,15 @@ function chatMessagesJsx(
   return (
     <div data-tile-find-scope="" data-active="true">
       <div data-group-id={TEST_PANE_GROUP_ID} data-testid="canvas-pane-root">
-        <div
-          data-group-id={TEST_PANE_GROUP_ID}
-          data-testid="canvas-tab-strip"
-          tabIndex={-1}
-        />
+        <div data-group-id={TEST_PANE_GROUP_ID} data-testid="canvas-tab-strip">
+          {/* Same shape as the real canvas tab root in `tab-strip.tsx`. */}
+          <div
+            role="tab"
+            aria-selected="true"
+            tabIndex={0}
+            data-testid="canvas-tab"
+          />
+        </div>
         <div
           data-chat-keyboard-scroll-scope=""
           data-active="true"
@@ -566,8 +570,9 @@ describe("ChatMessages Virtuoso renderer", () => {
     expect(scroller.scrollTop).toBe(1_000);
 
     // Editable targets keep the arrows for caret movement.
+    const tile = screen.getByTestId("chat-keyboard-scroll-scope");
     const composer = document.createElement("textarea");
-    screen.getByTestId("chat-keyboard-scroll-scope").appendChild(composer);
+    tile.appendChild(composer);
     composer.focus();
     fireEvent.keyDown(composer, { key: "ArrowUp" });
     expect(scroller.scrollTop).toBe(1_000);
@@ -575,6 +580,34 @@ describe("ChatMessages Virtuoso renderer", () => {
     // Modified arrows are editor/selection chords - never transcript scroll.
     fireEvent.keyDown(document.body, { key: "ArrowUp", shiftKey: true });
     expect(scroller.scrollTop).toBe(1_000);
+
+    // A focusable widget inside the tile (the composer's provider-reauth
+    // Select trigger, a profile dropdown) opens/navigates on the arrows
+    // itself - swallowing them as transcript scroll would break it.
+    const trigger = document.createElement("button");
+    trigger.setAttribute("role", "combobox");
+    tile.appendChild(trigger);
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(scroller.scrollTop).toBe(1_000);
+
+    // Inert canvas chrome (the pane tab layer focus is parked on) is not a
+    // widget, so it still scrolls.
+    const paneChrome = document.createElement("div");
+    paneChrome.tabIndex = -1;
+    tile.appendChild(paneChrome);
+    paneChrome.focus();
+    fireEvent.keyDown(paneChrome, { key: "ArrowUp" });
+    expect(scroller.scrollTop).toBe(1_000 - CHAT_ARROW_SCROLL_STEP_PX);
+
+    // A canvas tab is `role="tab"` + `tabIndex={0}` but has no arrow behaviour
+    // of its own, so arrows keep scrolling the transcript from there. Guards
+    // written in terms of "focusable" rather than "arrow-driven" break this.
+    scroller.scrollTop = 1_000;
+    const canvasTab = screen.getByTestId("canvas-tab");
+    canvasTab.focus();
+    fireEvent.keyDown(canvasTab, { key: "ArrowUp" });
+    expect(scroller.scrollTop).toBe(1_000 - CHAT_ARROW_SCROLL_STEP_PX);
   });
 
   it("keeps scrolling from a focused descendant when the tile is inactive", () => {

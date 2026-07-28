@@ -142,6 +142,50 @@ function isUnmodified(event: globalThis.KeyboardEvent): boolean {
   return !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
 }
 
+/**
+ * Controls whose own keyboard contract is bound to the arrows: text entry,
+ * value pickers, and anything that opens or steps a list on them (the
+ * composer's provider-reauth `SelectTrigger` is a `role="combobox"`; Radix
+ * dropdown triggers advertise `aria-haspopup` and open on ArrowDown). Arrows
+ * aimed at those must reach them, so the transcript does not claim them.
+ *
+ * Deliberately NOT listed: plain buttons, links, `role="tab"`, and focusable
+ * chrome in general. A canvas tab is a `role="tab"` div with `tabIndex={0}` and
+ * has no arrow behaviour of its own - focus parks there after a tab click, and
+ * that IS a transcript-scroll target.
+ */
+const ARROW_KEY_OWNER_SELECTOR = [
+  "input",
+  "select",
+  "textarea",
+  '[contenteditable="true"]',
+  '[role="combobox"]',
+  '[role="grid"]',
+  '[role="gridcell"]',
+  '[role="listbox"]',
+  '[role="menu"]',
+  '[role="menubar"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="option"]',
+  '[role="radio"]',
+  '[role="radiogroup"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="tablist"]',
+  '[role="textbox"]',
+  '[role="tree"]',
+  '[role="treeitem"]',
+  '[aria-haspopup]:not([aria-haspopup="false"])',
+].join(",");
+
+function ownsArrowKeys(target: EventTarget | null): boolean {
+  if (isEditableTarget(target)) return true;
+  if (!(target instanceof Element)) return false;
+  return target.closest(ARROW_KEY_OWNER_SELECTOR) !== null;
+}
+
 function canvasPaneIdOf(node: Node | null): string | null {
   const element = node instanceof Element ? node : node?.parentElement;
   return (
@@ -166,13 +210,13 @@ function chatKeyboardScrollAction(
   if (event.key === "PageDown") return "page-down";
   // Plain arrows step the transcript. The transcript rows are not focusable, so
   // the browser never adopts the scroller as its default keyboard scroller and
-  // would otherwise scroll nothing at all. Editable targets (the composer, a
-  // code editor in a message) keep the arrows for caret movement, and any
-  // modifier makes it an editor/selection chord we must not claim.
+  // would otherwise scroll nothing at all. Targets that own the arrows
+  // themselves keep them (see `ownsArrowKeys`), and any modifier makes it an
+  // editor/selection chord we must not claim.
   if (
     (event.key === "ArrowUp" || event.key === "ArrowDown") &&
     isUnmodified(event) &&
-    !isEditableTarget(event.target)
+    !ownsArrowKeys(event.target)
   ) {
     return event.key === "ArrowUp" ? "line-up" : "line-down";
   }
