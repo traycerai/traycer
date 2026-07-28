@@ -66,7 +66,7 @@ export function buildHostAvailableListing(
   const versions = filterHostAvailableVersions(
     args.manifest.versions,
     args.includePreReleases,
-  );
+  ).map((entry) => projectPlatformAsset(entry, args.platformKey));
   const manifest: HostVersionsManifest = {
     ...args.manifest,
     versions,
@@ -100,6 +100,42 @@ export function buildHostAvailableListing(
   return {
     manifest,
     human: lines.join("\n"),
+  };
+}
+
+// Emit only the asset for the platform this CLI is running on.
+//
+// The registry manifest carries one asset per supported platform on every
+// version entry - roughly 1.6 KB of a ~2.3 KB entry that no caller on this
+// machine can use. Both consumers of this payload already do a single-key
+// lookup and discard the rest: Desktop's `projectAvailableSnapshot`
+// (ipc/host-management-ipc.ts) and `host-controller.ts`, whose own comment
+// documents the expected shape as `versions[].platforms[platformKey]`.
+//
+// Dropping the other platforms cut the emitted line 3.2x - 70,331 to 21,689
+// bytes across 31 versions - with no rendered row changed. That matters
+// because this payload is one unsplittable JSON line whose growth is what
+// put it past the 64 KiB pipe buffer in the first place (see
+// runner/std-write.ts); the flush fixed the truncation, this keeps the line
+// from growing into other limits.
+//
+// Shape-compatible in both directions, which is why this needs no flag or
+// version negotiation: an older Desktop only ever looks up the key it
+// computed for its own platform and still finds it, and a newer Desktop
+// reading an older CLI's output ignores the extra platforms it is handed.
+//
+// An entry with no asset for this platform keeps an empty `platforms`
+// object rather than being dropped: the listing still reports it (tagged
+// `no-asset`), and callers distinguish "version exists but not for you"
+// from "version does not exist".
+function projectPlatformAsset(
+  entry: HostVersionEntry,
+  platformKey: HostPlatformKey,
+): HostVersionEntry {
+  const asset = entry.platforms[platformKey];
+  return {
+    ...entry,
+    platforms: asset === undefined ? {} : { [platformKey]: asset },
   };
 }
 
