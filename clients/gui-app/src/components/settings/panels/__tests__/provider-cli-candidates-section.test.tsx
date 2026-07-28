@@ -374,6 +374,12 @@ describe("ProviderCliCandidatesSection: managed install status cell", () => {
     });
     renderSection(state);
     expect(screen.getByText(/Setup failed/u)).toBeDefined();
+    // P2. The assertion this test's own name always claimed. "Setup failed" is
+    // the status CELL, which has one truncating grid column and can never carry
+    // more; for a year that was the whole of what this screen said, while the
+    // test read as though the reason were covered. The reason is a row-level
+    // notice now, and this is what fails if it goes away again.
+    expect(screen.getByText(/not enough disk space/iu)).toBeDefined();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
   });
 
@@ -417,6 +423,121 @@ describe("ProviderCliCandidatesSection: managed install status cell", () => {
       expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     },
   );
+});
+
+/**
+ * P2/P4. The branch that had no coverage, and could not have had any.
+ *
+ * This section used to construct its own `ProviderPackPreparing` with
+ * `fallbackRunnable: false` written in at both render sites, so
+ * `providerPackBlocksExecution` was true by construction on this screen. Every
+ * test above passes `candidates: [bundledCandidate({ available: false })]` and
+ * therefore agrees with the hardcode by accident - which is why the whole
+ * fabrication survived review twice. Mutation probing cannot find a branch that
+ * no fixture reaches; only a fixture that reaches it can.
+ *
+ * Every case here differs from its neighbour above in ONE way: a candidate that
+ * actually runs. That is the entire input to the derivation.
+ */
+describe("ProviderCliCandidatesSection: a pack that failed behind a working binary", () => {
+  function failedPackWithPathFallback(): ProviderCliState {
+    return providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: false }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: {
+        status: "error",
+        reason: "network",
+        message: "offline",
+        retryAtMs: null,
+      },
+    });
+  }
+
+  it("says the provider is ready rather than that setup failed", () => {
+    // The user's Claude Code runs fine from PATH. "Setup failed" in front of
+    // them is simply false, and on an offline first launch it was every
+    // pin-carrying provider on the machine at once.
+    renderSection(failedPackWithPathFallback());
+    expect(screen.getByText(/Ready · managed install failed/u)).toBeDefined();
+    expect(screen.queryByText(/^Setup failed$/u)).toBeNull();
+  });
+
+  it("still names the reason - a quiet failure is not a hidden one", () => {
+    // The provider working does not make the failure uninteresting. It makes it
+    // non-blocking, which is a different thing.
+    renderSection(failedPackWithPathFallback());
+    expect(screen.getByText(/could not be reached/iu)).toBeDefined();
+  });
+
+  it("does not paint the status cell as an error", () => {
+    // The contradiction P4 is really about: red is a claim, and the sentence
+    // inside the red was "Ready". Asserted on the class because that is what
+    // the user sees - there is no accessible role or text that carries colour.
+    renderSection(failedPackWithPathFallback());
+    const cell = screen.getByText(/Ready · managed install failed/u);
+    expect(cell.className).not.toMatch(/text-destructive/u);
+  });
+
+  it("keeps the blocking case red, so the assertion above is not vacuous", () => {
+    // The other half of the same predicate. Without this, deleting the
+    // conditional entirely would leave the test above green.
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [bundledCandidate({ available: false })],
+      managedInstallState: {
+        status: "error",
+        reason: "network",
+        message: "offline",
+        retryAtMs: null,
+      },
+    });
+    renderSection(state);
+    expect(screen.getByText(/Setup failed/u).className).toMatch(
+      /text-destructive/u,
+    );
+  });
+
+  it("reports the download as non-blocking too, not only the failure", () => {
+    // `fallbackRunnable` was fabricated at BOTH render sites. Fixing one and
+    // leaving the other would still show "Preparing…" - a wait the user does
+    // not have - on a provider they can use right now.
+    const state = providerState({
+      selected: { kind: "bundled" },
+      candidates: [
+        bundledCandidate({ available: false }),
+        pathCandidate({ available: true }),
+      ],
+      managedInstallState: { status: "downloading", percent: 40 },
+    });
+    renderSection(state);
+    expect(screen.getByText(/Ready · installing… 40%/u)).toBeDefined();
+  });
+
+  it("treats an unsettled availability probe as runnable", () => {
+    // `providerHasRunnableFallback` fails OPEN on `availabilityPending`: the
+    // shell-env PATH probe has not landed, so `candidates` under-reports, while
+    // the execute path awaits that same probe before deciding. Gating here
+    // would dim a working provider for a poll tick. Reached only through the
+    // derivation - the hardcode could never express it.
+    const state: ProviderCliState = {
+      ...providerState({
+        selected: { kind: "bundled" },
+        candidates: [bundledCandidate({ available: false })],
+        managedInstallState: {
+          status: "error",
+          reason: "network",
+          message: "offline",
+          retryAtMs: null,
+        },
+      }),
+      availabilityPending: true,
+    };
+    renderSection(state);
+    expect(screen.getByText(/Ready · managed install failed/u)).toBeDefined();
+  });
 });
 
 /**

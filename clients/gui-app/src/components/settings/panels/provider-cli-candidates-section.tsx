@@ -17,6 +17,9 @@ import { useProvidersRemoveCustomPath } from "@/hooks/providers/use-providers-re
 import { useProvidersDetectVersion } from "@/hooks/providers/use-providers-detect-version-query";
 import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import {
+  providerPackBlocksExecution,
+  providerPackErrorDetail,
+  providerPackPreparingForProvider,
   providerPackPreparingShortLabel,
   providerPackRetryable,
   type ProviderPackPreparing,
@@ -94,16 +97,45 @@ function CandidateNotices({
   showPathUnblockNotice,
   versionVisibility,
   advisory,
+  packPreparing,
 }: {
   readonly showPathUnblockNotice: boolean;
   readonly versionVisibility: ProviderCliState["versionVisibility"];
   readonly advisory: ProviderCliState["advisory"];
+  readonly packPreparing: ProviderPackPreparing | null;
 }): ReactNode {
   // An old host leaves the key genuinely absent, which reads the same here as
   // "no other session is on a different version".
   const differingSessionCount = versionVisibility?.differingSessionCount ?? 0;
   return (
     <>
+      {/*
+        P2. The reason a failed pack failed, on the screen every other surface
+        sends the user to. The status cell beside the bundled row has one
+        truncating grid column, so it can only ever carry the short label -
+        which for a blocking failure is the two words "Setup failed". A user who
+        followed the picker tooltip or the host's own RPC error here arrived
+        precisely to learn WHY, and found the least informative phrasing in the
+        module. This line is where the sentence fits, and it sits with the other
+        row-level notices rather than inside the table for the same reason those
+        do: the table's job is the binary choice, not the narration.
+
+        Shown for a non-blocking failure too. "Ready · managed install failed"
+        is a state a user is entitled to understand - the provider works, and
+        something they may want to fix quietly did not.
+      */}
+      {packPreparing?.kind === "error" ? (
+        <p
+          className={cn(
+            "mb-2 text-ui-xs",
+            providerPackBlocksExecution(packPreparing)
+              ? "text-destructive"
+              : "text-muted-foreground",
+          )}
+        >
+          {providerPackErrorDetail(packPreparing.reason)}
+        </p>
+      ) : null}
       {/*
         W10. The one advisory kind a Phase-1 host populates: this provider is
         paired with the exact build Traycer ships, so a version found on PATH is
@@ -233,6 +265,18 @@ export function ProviderCliCandidatesSection({
   // (`undefined`), which reads identically to an explicit `null` everywhere
   // below.
   const managedInstallState = state.managedInstallState ?? null;
+  // P2/P4. Derived from the WHOLE row, which is the only place the fallback
+  // candidates live - the point of `providerPackPreparingForProvider` taking a
+  // provider rather than a state. This section used to build its own
+  // `ProviderPackPreparing` at the two render sites with `fallbackRunnable:
+  // false` written in, on the argument that Settings shows the pack's lifecycle
+  // and not whether the provider can run. Those are the same object: every
+  // label and every colour in this module reads that field, so hardcoding it
+  // did not scope the display - it asserted "nothing runs" about a provider
+  // that may be running from PATH right now. On an offline first launch that is
+  // a red row and a blocking "Setup failed" for every pin-carrying provider on
+  // the machine, at the moment the user is least able to tell it is wrong.
+  const packPreparing = providerPackPreparingForProvider(state);
   const showPathUnblockNotice = pathUnblockActive(
     cliConfig.selected,
     managedInstallState,
@@ -247,6 +291,7 @@ export function ProviderCliCandidatesSection({
         showPathUnblockNotice={showPathUnblockNotice}
         versionVisibility={state.versionVisibility}
         advisory={state.advisory ?? null}
+        packPreparing={packPreparing}
       />
       {isEmptyHermesState && !adding ? (
         <HermesInstallNotice />
@@ -268,6 +313,7 @@ export function ProviderCliCandidatesSection({
               key={candidateKey(candidate)}
               candidate={candidate}
               managedInstallState={managedInstallState}
+              packPreparing={packPreparing}
               radioName={radioName}
               selected={isSelected(cliConfig.selected, candidate)}
               busy={setSelection.isPending || removeCustom.isPending}
@@ -344,6 +390,7 @@ export function ProviderCliCandidatesSection({
 function CandidateRow({
   candidate,
   managedInstallState,
+  packPreparing,
   radioName,
   selected,
   busy,
@@ -354,8 +401,13 @@ function CandidateRow({
 }: {
   readonly candidate: ProviderCliCandidate;
   // Provider-level (not per-candidate - see that schema's comment), so only
-  // meaningful for the bundled row; other candidates ignore it.
+  // meaningful for the bundled row; other candidates ignore it. Still the
+  // source for `bundledPathLabel`, which asks a different question than the
+  // status cell does: whether this build has a managed opinion at all, not what
+  // that opinion currently is.
   readonly managedInstallState: ProviderManagedInstallState | null;
+  /** The same state, derived against the row's fallbacks. See the call site. */
+  readonly packPreparing: ProviderPackPreparing | null;
   readonly radioName: string;
   readonly selected: boolean;
   readonly busy: boolean;
@@ -369,15 +421,27 @@ function CandidateRow({
   const pathLabel = isBundled
     ? bundledPathLabel(managedInstallState)
     : candidate.path;
-  const downloading =
-    isBundled && managedInstallState?.status === "downloading";
   // A resolved-but-missing binary (custom path the user typed that no longer
   // exists, or a bundled binary not installed). We keep the row and dim it so
   // the user sees the entry is retained but unavailable. An in-progress
   // managed install is not "unavailable" - it's actively working, so it stays
   // undimmed even though `available` is still false.
+  //
+  // A FAILED pack behind a working fallback gets the same exemption, and
+  // without it P4 survives the fix above: this flag also paints the status cell
+  // `text-destructive`, so the row would render "Ready · managed install
+  // failed" in red - the cell contradicting its own sentence. Dimming is a
+  // claim about the provider ("you cannot use this"), and the derived state is
+  // the only thing that knows whether that claim is true.
+  const packExcusesMissingBinary =
+    isBundled &&
+    packPreparing !== null &&
+    (packPreparing.kind === "downloading" ||
+      !providerPackBlocksExecution(packPreparing));
   const unavailable =
-    !candidate.available && !candidate.versionPending && !downloading;
+    !candidate.available &&
+    !candidate.versionPending &&
+    !packExcusesMissingBinary;
   return (
     <div
       className={cn(
@@ -418,7 +482,7 @@ function CandidateRow({
       >
         <CandidateStatus
           candidate={candidate}
-          managedInstallState={isBundled ? managedInstallState : null}
+          preparing={isBundled ? packPreparing : null}
           onRetry={onRetryPack}
           retrying={retryingPack}
         />
@@ -462,17 +526,23 @@ function bundledPathLabel(
 // The bundled row's status cell: the in-progress managed-install state takes
 // priority over the plain version/availability copy (`versionLabel`), which
 // takes priority over the version-probe spinner every candidate can show.
-// Path/custom candidates always pass `managedInstallState: null` here, so
-// they fall straight through to the existing versionPending/versionLabel
-// behavior, unchanged.
+// Path/custom candidates always pass `preparing: null` here, so they fall
+// straight through to the existing versionPending/versionLabel behavior,
+// unchanged.
+//
+// Takes the DERIVED `ProviderPackPreparing` rather than the raw wire state.
+// Both are one field apart, and that field is `fallbackRunnable` - the one this
+// component used to write itself. Passing the derived object is what makes the
+// fabrication impossible to reintroduce here: there is no longer a literal to
+// edit, only a value that arrived.
 function CandidateStatus({
   candidate,
-  managedInstallState,
+  preparing,
   onRetry,
   retrying,
 }: {
   readonly candidate: ProviderCliCandidate;
-  readonly managedInstallState: ProviderManagedInstallState | null;
+  readonly preparing: ProviderPackPreparing | null;
   readonly onRetry: () => void;
   readonly retrying: boolean;
 }): ReactNode {
@@ -484,7 +554,7 @@ function CandidateStatus({
       </>
     );
   }
-  if (managedInstallState?.status === "downloading") {
+  if (preparing?.kind === "downloading") {
     return (
       <>
         <MutedAgentSpinner />
@@ -498,37 +568,29 @@ function CandidateStatus({
           composer - all three now answer "unknown progress" the same way.
         */}
         <span className="text-ui-xs">
-          {providerPackPreparingShortLabel({
-            kind: "downloading",
-            percent: managedInstallState.percent,
-            retryAtMs: null,
-            reason: null,
-            // Settings shows the pack's OWN lifecycle, not whether the provider
-            // can run - the fallback story is the row beside it, and the
-            // path-unblock notice above the table. So this label is always the
-            // pack-centric one.
-            fallbackRunnable: false,
-          })}
+          {providerPackPreparingShortLabel(preparing)}
         </span>
       </>
     );
   }
-  if (managedInstallState?.status === "error") {
+  if (preparing?.kind === "error") {
     // The arm that did not exist. A failed managed pack rendered a bare red
     // "Not installed" with no reason and no way forward - while the recovery
     // copy everywhere else (the picker tooltip, the host's own RPC error)
     // points the user AT this screen. Whatever sent them here had to be
     // readable once they arrived.
-    const preparing: ProviderPackPreparing = {
-      kind: "error",
-      percent: null,
-      retryAtMs: managedInstallState.retryAtMs,
-      reason: managedInstallState.reason,
-      fallbackRunnable: false,
-    };
     return (
       <>
-        <span className="truncate text-ui-xs text-destructive">
+        <span
+          className={cn(
+            "truncate text-ui-xs",
+            // Red is a claim, and it is only true when the provider genuinely
+            // cannot run. A pack that failed behind a working PATH or bundled
+            // binary reads "Ready · managed install failed", and painting that
+            // destructive would contradict the sentence next to it.
+            providerPackBlocksExecution(preparing) ? "text-destructive" : "",
+          )}
+        >
           {providerPackPreparingShortLabel(preparing)}
         </span>
         {/*

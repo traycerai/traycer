@@ -257,7 +257,15 @@ export function providerPackRetryable(
   return PROVIDER_PACK_RETRYABLE_REASONS.has(preparing.reason);
 }
 
-function providerPackErrorDetail(
+/**
+ * Exported for the Settings CLI-candidates section, which is the screen every
+ * other surface's recovery copy points a stuck user AT. The rail and the
+ * composer have room for a phrase, so they take the assembled labels above;
+ * Settings has room for the sentence, and until now it showed the shortest
+ * string in this module - a bare "Setup failed" - on the one screen where the
+ * reason was the entire point of arriving.
+ */
+export function providerPackErrorDetail(
   reason: ProviderPackPreparing["reason"],
 ): string {
   switch (reason) {
