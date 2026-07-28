@@ -7,7 +7,10 @@ import {
   profileCommitId,
   type ProfileAccentDotInput,
 } from "@/components/providers/provider-profile-model";
-import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
+import {
+  providerPackBlocksExecution,
+  type ProviderPackPreparing,
+} from "@/components/providers/provider-pack-readiness";
 
 /** Shared empty map so callers that have no provider data don't allocate one. */
 export const EMPTY_PREPARING_BY_HARNESS_ID: ReadonlyMap<
@@ -178,11 +181,25 @@ export function visibleRailHarnesses(
   const visible = source.filter((harness) =>
     railHarnessVisible(harness, degradedHarnessIds, preparingByHarnessId),
   );
-  const deprioritized = (harness: HarnessOption): number =>
-    Number(
+  // Asks whether the pack state BLOCKS, not whether one exists. Bare map
+  // membership was coherent before the gate landed - a preparing tab was
+  // unselectable, so sorting it down with the signed-out ones was honest.
+  // Once a downloading pack stopped taking a runnable provider away, it made
+  // the rail reorder itself throughout convergence: every enabled provider
+  // sinks on a first boot and pops back up as its own install finishes, and
+  // `PickerLeaderBadge` reads the rail index, so the whole set of ⌘-digits
+  // reassigns once per completing pack. A user who learned that Codex is ⌘2
+  // gets a different provider a minute later.
+  //
+  // Same predicate the tab's own appearance and click handler ask
+  // (`railEntryPackGated`), so position cannot disagree with selectability.
+  const deprioritized = (harness: HarnessOption): number => {
+    const preparing = preparingByHarnessId.get(harness.id);
+    return Number(
       railHarnessDegraded(harness, degradedHarnessIds) ||
-        preparingByHarnessId.has(harness.id),
+        (preparing !== undefined && providerPackBlocksExecution(preparing)),
     );
+  };
   return sortGuiHarnessesByProviderOrder(visible).toSorted(
     (left, right) => deprioritized(left) - deprioritized(right),
   );
