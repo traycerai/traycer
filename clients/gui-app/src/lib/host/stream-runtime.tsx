@@ -21,6 +21,10 @@ import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useSurfaceReadiness } from "@/components/layout/host-readiness-controller-context";
 import { useStreamWakeReconnect } from "@/lib/host/stream-wake-reconnect";
+import {
+  AVAILABILITY_RECOVERY_COOLDOWN_MS,
+  wireAvailabilityRecovery,
+} from "@/lib/host/availability-recovery";
 import { appLogger } from "@/lib/logger";
 
 export interface HostStreamProviderProps {
@@ -137,6 +141,25 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     }
     return hostClient.onBearerRotated(() => {
       wsStreamClient.notifyBearerRotated();
+    });
+  }, [wsStreamClient, hostClient]);
+
+  // The app-wide stream heartbeats against the active host continuously, so
+  // its recovery evidence (session re-open after a drop, pong after a
+  // stall-length gap) drives `notifyAvailabilityRecovered()` - un-stranding
+  // every host-scoped query left in a terminal error state while the host
+  // was stalled or restarting. This is the production caller that method was
+  // designed for; the stream client and the host client are bound to the
+  // same active-host identity by construction here.
+  useEffect(() => {
+    if (wsStreamClient === null || hostClient === null) {
+      return;
+    }
+    return wireAvailabilityRecovery({
+      wsStreamClient,
+      target: hostClient,
+      cooldownMs: AVAILABILITY_RECOVERY_COOLDOWN_MS,
+      now: () => Date.now(),
     });
   }, [wsStreamClient, hostClient]);
 
