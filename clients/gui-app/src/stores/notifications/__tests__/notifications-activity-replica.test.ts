@@ -107,7 +107,13 @@ function encodeHostPresence(agentIds: readonly string[]): {
       [EPIC_ID]: { working: agentIds, turn: agentIds },
     },
   });
-  return { bytes: encodeAwarenessUpdate(producer, [producer.clientID]) };
+  const bytes = encodeAwarenessUpdate(producer, [producer.clientID]);
+  // One-shot: the bytes are captured, so the producer has no reason to outlive
+  // this call holding its renewal interval open. `createHostPresenceProducer`
+  // is the variant to reach for when a caller needs a persistent clientID.
+  producer.destroy();
+  doc.destroy();
+  return { bytes };
 }
 
 function workingIds(): ReadonlySet<string> {

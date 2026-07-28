@@ -68,8 +68,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function collectStringIds(value: unknown, into: Set<string>): void {
-  for (const id of value as readonly unknown[]) {
+function collectStringIds(value: readonly unknown[], into: Set<string>): void {
+  for (const id of value) {
     if (typeof id === "string") into.add(id);
   }
 }
@@ -127,12 +127,18 @@ export function readAgentActivityByEpic(
  */
 function mergeBucket(
   slot: MutableEpicActivity,
-  working: unknown,
+  working: readonly unknown[],
   turnField: unknown,
 ): void {
-  const classified = Array.isArray(turnField) ? new Set<string>() : null;
-  if (classified !== null) collectStringIds(turnField, classified);
-  for (const id of working as readonly unknown[]) {
+  // Narrow inside the guard: `Array.isArray` only refines `turnField` within
+  // this block, so collecting here is what lets `collectStringIds` take a typed
+  // array instead of re-asserting one.
+  let classified: Set<string> | null = null;
+  if (Array.isArray(turnField)) {
+    classified = new Set<string>();
+    collectStringIds(turnField, classified);
+  }
+  for (const id of working) {
     if (typeof id !== "string") continue;
     slot.working.add(id);
     if (classified === null || classified.has(id)) slot.turn.add(id);

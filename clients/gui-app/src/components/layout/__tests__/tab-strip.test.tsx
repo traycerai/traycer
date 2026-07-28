@@ -198,18 +198,24 @@ function registerEpicHeader(
  * handle only supplies the live projection (the liveness filter) while the
  * working set is published as host presence.
  */
+const headerActivityByEpic = new Map<string, ReadonlyArray<string>>();
+
 function publishHeaderActivity(
   tab: EpicTab,
   activeAgentIds: ReadonlyArray<string>,
 ): void {
-  publishAgentActivity([
-    {
-      hostId: "host-a",
-      byEpic: {
-        [tab.id]: { working: activeAgentIds, turn: activeAgentIds },
-      },
-    },
-  ]);
+  // Accumulate: one host publishes ONE entry carrying every epic it is working
+  // on, so republishing only the latest tab would silently clear the presence
+  // an earlier call established.
+  headerActivityByEpic.set(tab.id, activeAgentIds);
+  const byEpic: Record<
+    string,
+    { working: ReadonlyArray<string>; turn: ReadonlyArray<string> }
+  > = {};
+  for (const [epicId, ids] of headerActivityByEpic) {
+    byEpic[epicId] = { working: ids, turn: ids };
+  }
+  publishAgentActivity([{ hostId: "host-a", byEpic }]);
 }
 
 function registerActiveEpicHeader(
@@ -500,6 +506,7 @@ describe("<TabStrip />", () => {
   afterEach(() => {
     cleanup();
     queryClient.clear();
+    headerActivityByEpic.clear();
     resetAgentActivityPresence();
     resetStores();
   });
