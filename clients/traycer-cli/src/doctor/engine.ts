@@ -45,6 +45,10 @@ import {
   createRealLaunchdPrintRunner,
   probeMacosWedgedJob,
 } from "./launchd-wedge";
+import {
+  createRealSystemdProbeRunner,
+  probeLinuxSystemdHealth,
+} from "./systemd-health";
 import { isProcessAlive } from "../store/cli-lock";
 import {
   DOCTOR_ISSUE_CODES,
@@ -443,6 +447,22 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       runner: createRealLaunchdPrintRunner(),
     });
     if (wedgeIssue !== null) issues.push(wedgeIssue);
+  }
+
+  // ---- 4a-linux. systemd user-manager health ----
+  // The Linux counterpart of the launchd wedge probe. Reads the manager's
+  // actual run state: no reachable user bus (WSL without systemd, sudo su),
+  // a failed / restart-looping unit ("stopped" everywhere else, since
+  // liveness deliberately keys off pid metadata), a start skipped because
+  // the CLI binary is gone, and disabled lingering.
+  if (process.platform === "linux") {
+    const systemdIssues = await probeLinuxSystemdHealth({
+      labelId: label.id,
+      unitFileInstalled:
+        serviceStatus !== null && serviceStatus.state !== "not-installed",
+      runner: createRealSystemdProbeRunner(),
+    });
+    issues.push(...systemdIssues);
   }
 
   // ---- 4b. CLI slot binary health ----

@@ -56,6 +56,23 @@ export const DOCTOR_ISSUE_CODES = {
   // Doctor surfaces this so VDI/shared-machine users can lock the
   // file down manually until we add per-user ACL hardening.
   WINDOWS_CREDENTIALS_ACL_PERMISSIVE: "WINDOWS_CREDENTIALS_ACL_PERMISSIVE",
+  // Linux-only: `systemctl --user` cannot reach a user service manager
+  // (WSL without systemd, `sudo su`, SSH with no logind session). Every
+  // lifecycle operation fails in this state, and install errors steer
+  // users to doctor - which previously had no Linux probes at all.
+  SYSTEMD_USER_UNREACHABLE: "SYSTEMD_USER_UNREACHABLE",
+  // Linux-only: the unit is `failed` or cycling `auto-restart`.
+  // `service status` deliberately keys liveness off pid metadata, so this
+  // state reads there as plain "stopped"; doctor is where it surfaces.
+  SERVICE_UNIT_FAILED: "SERVICE_UNIT_FAILED",
+  // Linux-only: systemd skipped the last start because
+  // ConditionFileIsExecutable found the CLI binary the unit points at
+  // missing - a stranded service definition.
+  SERVICE_START_CONDITION_UNMET: "SERVICE_START_CONDITION_UNMET",
+  // Linux-only: lingering disabled - the host is torn down at last
+  // logout. Enable-linger is best-effort at install (polkit may refuse
+  // non-interactively); this is the promised follow-up surface.
+  LINGER_DISABLED: "LINGER_DISABLED",
 } as const;
 
 export type DoctorIssueCode =
