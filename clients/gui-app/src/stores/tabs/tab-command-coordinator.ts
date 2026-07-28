@@ -662,6 +662,7 @@ export class TabCommandCoordinator {
     createSource: () => TabRef | null,
   ): TabRef | null {
     if (!Number.isInteger(targetIndex) || targetIndex < 0) return null;
+    const knownBeforeCreate = new Set(tabSourceRefs().map(tabRefKey));
     let createdRef: TabRef | null = null;
     this.execute({
       layout: () => {
@@ -672,6 +673,14 @@ export class TabCommandCoordinator {
         if (item?.kind !== "tab") {
           // Placement failed - the created ref is not part of the
           // authoritative layout, so it must not be reported as placed.
+          // createSource() already minted it in the source store, so undo
+          // that here (before finalize's reconciliation runs) or it gets
+          // re-adopted as an orphaned, active tab on the next pass. Only
+          // roll back refs this call actually minted - a ref that already
+          // existed before createSource() ran must not be closed here.
+          if (!knownBeforeCreate.has(tabRefKey(createdRef))) {
+            this.removeSourceRef(createdRef);
+          }
           createdRef = null;
           return layout;
         }
