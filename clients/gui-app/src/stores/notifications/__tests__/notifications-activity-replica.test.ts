@@ -247,6 +247,21 @@ describe("notification-room activity replica", () => {
     // reader bound to it would leave one dead closure per reopen behind, each
     // retaining a retired instance's states and meta.
     const notificationsDoc = useNotificationsStore.getState().doc;
+
+    // Positive control. `_observers` is a lib0 `ObservableV2` implementation
+    // detail: if a yjs/lib0 update stopped tracking `destroy` there, every
+    // count below would read 0 and the leak assertion would pass vacuously.
+    // Proving the probe SEES a listener it just registered makes that failure
+    // mode loud instead of silent. There is no public API that distinguishes a
+    // fully retired reader from one whose closure is still held, so the
+    // internal read stays - guarded rather than trusted.
+    const probeDoc = new Y.Doc();
+    const probeBaseline = destroyListenerCount(probeDoc);
+    const probeAwareness = new Awareness(probeDoc);
+    expect(destroyListenerCount(probeDoc)).toBe(probeBaseline + 1);
+    probeAwareness.destroy();
+    probeDoc.destroy();
+
     const before = destroyListenerCount(notificationsDoc);
 
     for (let i = 0; i < 4; i += 1) {
