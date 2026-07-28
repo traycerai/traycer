@@ -280,16 +280,22 @@ function isHostStartInvocation(
   labelId: string | null,
 ): boolean {
   // Launcher-file form: [<...>/<label-id>/traycer-host-start, <cli>, ...].
-  // The label id sits in the launcher's parent directory, so a label match
-  // is still required when a label is known - mirroring the inline-script
-  // arm below, a launcher registered for a DIFFERENT label is not this
-  // label's invocation.
+  // The label id must be the launcher's IMMEDIATE parent directory - an
+  // exact `/<label-id>/traycer-host-start` suffix, not merely present
+  // somewhere earlier in the path. `.includes()` let a path like
+  // `/tmp/<label-id>/nested/traycer-host-start` attest for a label it never
+  // named as its parent, and a null label (no label context) accepted ANY
+  // path ending in the launcher basename - both are exactly the "path
+  // alone" / "looks like ours" evidence this module's header forbids for
+  // an eviction target. A label is now required for this arm, mirroring
+  // the inline-script arm below where a launcher registered for a
+  // DIFFERENT (or unknown) label is not this label's invocation.
   const launcher = args[0];
   if (
     args.length >= 2 &&
     launcher !== undefined &&
-    launcher.endsWith(`/${HOST_START_LAUNCHER_BASENAME}`) &&
-    (labelId === null || launcher.includes(`/${labelId}/`))
+    labelId !== null &&
+    launcher.endsWith(`/${labelId}/${HOST_START_LAUNCHER_BASENAME}`)
   ) {
     return true;
   }

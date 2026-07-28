@@ -127,6 +127,50 @@ describe("host-start script / identity attestation lockstep", () => {
     expect(isEvictableTraycerIdentity(attestation)).toBe(true);
   });
 
+  it("does not attest a launcher whose label sits ABOVE its immediate parent directory", () => {
+    // The label id must be the launcher's immediate parent, not merely
+    // present earlier in the path. A recognizer that used `.includes()`
+    // here would attest this path - the label is present, just not as the
+    // basename's parent - and treat an arbitrarily nested foreign launcher
+    // as this label's own registration.
+    const attestation = attestTraycerRegistration({
+      labelId,
+      knownLabels: null,
+      programArguments: [
+        `/Users/u/.traycer/service/${labelId}/nested/${HOST_START_LAUNCHER_BASENAME}`,
+        "/usr/local/bin/traycer",
+      ],
+      contentTag: null,
+      sourceText: null,
+    });
+
+    expect(attestation.kind).toBe("indeterminate");
+    expect(isEvictableTraycerIdentity(attestation)).toBe(false);
+  });
+
+  it("does not attest a launcher-shaped path with no label context", () => {
+    // `labelId: null` (no label known - e.g. a cross-environment scan) must
+    // not treat ANY path ending in the launcher basename as a positive
+    // signal. Requiring a label for this arm is what stops a foreign
+    // `.../traycer-host-start` from attesting as ours merely because no
+    // label was supplied to compare against. With no label signal and no
+    // recognised invocation shape, this is a positive refutation
+    // (`not-traycer`), not merely `indeterminate`.
+    const attestation = attestTraycerRegistration({
+      labelId: null,
+      knownLabels: null,
+      programArguments: [
+        `/tmp/unrelated/${HOST_START_LAUNCHER_BASENAME}`,
+        "/usr/local/bin/traycer",
+      ],
+      contentTag: null,
+      sourceText: null,
+    });
+
+    expect(attestation.kind).toBe("not-traycer");
+    expect(isEvictableTraycerIdentity(attestation)).toBe(false);
+  });
+
   it("does not attest a launcher registered for a DIFFERENT label as this label's invocation", () => {
     // The label id lives in the launcher's parent directory. A launcher
     // path for another environment's label must not count as this label's

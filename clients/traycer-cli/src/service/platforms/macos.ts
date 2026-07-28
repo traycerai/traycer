@@ -11,7 +11,6 @@ import { escapeXml } from "../escape-xml";
 import {
   buildHostStartLauncherScript,
   COMPATIBLE_HOST_START_SCRIPT_PREFIX,
-  HOST_START_LAUNCHER_BASENAME,
 } from "./host-start-script";
 import { fileExists } from "../install-binary";
 import {
@@ -1700,14 +1699,18 @@ ${programArgsXml}
  *
  * Only ever parses a plist this module's `buildPlist` wrote, so the shape is
  * closed at exactly three members: the current `<launcher-file> <cli>
- * <args...>` vector (the launcher's basename is `traycer-host-start`; see
- * `buildHostStartLauncherScript`), the prior inline `/bin/sh -c
- * <compat-script> <cli> <args...>` vector still on disk wherever the
- * definition has not been rewritten since, and the legacy vector that ends
- * at `host start`. There is deliberately no fourth branch for a plist whose
- * ProgramArguments end in `--service-label <label>` - no version of
- * `buildPlist` has ever emitted that shape, and a speculative parse arm on
- * a closed set is a liability, not tolerance.
+ * <args...>` vector - matched by exact equality against
+ * `serviceLauncherScriptPath(label)`, this label's own deterministic
+ * launcher path, not merely a `traycer-host-start` basename suffix, since a
+ * basename-only match would treat an attacker-writable plist pointing at
+ * ANY same-named file as this label's registration and preserve whatever
+ * command it named across the next `host update` - the prior inline
+ * `/bin/sh -c <compat-script> <cli> <args...>` vector still on disk
+ * wherever the definition has not been rewritten since, and the legacy
+ * vector that ends at `host start`. There is deliberately no fourth branch
+ * for a plist whose ProgramArguments end in `--service-label <label>` - no
+ * version of `buildPlist` has ever emitted that shape, and a speculative
+ * parse arm on a closed set is a liability, not tolerance.
  */
 async function readRegisteredCliInvocation(
   label: ServiceLabel,
@@ -1728,10 +1731,7 @@ async function readRegisteredCliInvocation(
     .map((m) => m[1])
     .filter((value): value is string => value !== undefined)
     .map(unescapeXml);
-  if (
-    args.length >= 2 &&
-    args[0]?.endsWith(`/${HOST_START_LAUNCHER_BASENAME}`) === true
-  ) {
+  if (args.length >= 2 && args[0] === serviceLauncherScriptPath(label)) {
     const command = args[1];
     if (command === undefined || !(await fileExists(command))) return null;
     return { command, args: args.slice(2) };

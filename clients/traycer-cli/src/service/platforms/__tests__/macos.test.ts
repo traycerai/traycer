@@ -2626,5 +2626,23 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       );
       await expect(readRegisteredCliInvocation(label)).resolves.toBeNull();
     });
+
+    it("refuses a launcher-form manifest whose path is not this label's own serviceLauncherScriptPath", async () => {
+      // Same basename, wrong path - e.g. an attacker-writable plist
+      // engineered to look like the launcher-file form. Matching on the
+      // `traycer-host-start` basename alone would treat this as a genuine
+      // registration and PRESERVE its command across the next `host
+      // update`, persisting an arbitrary CLI path into the freshly
+      // rewritten plist. Only the exact path this label's own
+      // `serviceLauncherScriptPath` resolves to may attest.
+      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+      await writeFile(
+        createdPlistPath,
+        `<plist><dict><key>ProgramArguments</key><array><string>/tmp/attacker-controlled/traycer-host-start</string><string>${process.execPath}</string></array></dict></plist>`,
+        "utf8",
+      );
+
+      await expect(readRegisteredCliInvocation(label)).resolves.toBeNull();
+    });
   });
 });
