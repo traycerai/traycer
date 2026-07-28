@@ -486,8 +486,14 @@ describe("the retryable `live-owner-stalled` reason", () => {
     expect(copy).not.toMatch(/online|connection|network/i);
     expect(copy).not.toBe(detailFor("network"));
     expect(copy).not.toBe(detailFor("unknown"));
-    // It names what actually happened, in the user's terms.
-    expect(copy).toContain("another Traycer process on this device");
+    // It names what actually happened, in the user's terms - and names the
+    // STORE rather than the machine, because the lease record carries no
+    // machine identity and "on this device" is false in the one topology that
+    // makes this reason common.
+    expect(copy).toContain(
+      "another Traycer process using this Traycer folder",
+    );
+    expect(copy).not.toContain("on this device");
     // Still the failed line, not a progress phrase.
     expect(copy).toContain("Claude Code setup failed");
     expect(copy).not.toContain("Preparing");

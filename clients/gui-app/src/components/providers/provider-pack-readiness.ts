@@ -278,14 +278,21 @@ export function providerPackErrorDetail(
       return "the downloaded files failed verification. Retry to fetch them again.";
     case "live-owner-stalled":
       // Not a network failure and not the user's to fix: another Traycer
-      // process on this machine owns the download and stopped making progress,
-      // so this one stopped waiting behind it. Naming the sibling is the whole
-      // value of the reason - "check your connection" would send the user after
-      // something that is working fine. The copy offers the retry (this IS a
-      // retryable reason, with a real `retryAtMs`) without promising a moment:
-      // the backoff makes an automatic attempt eligible again, it does not
-      // schedule one.
-      return "another Traycer process on this device stopped making progress on the download. Retry to pick it up here.";
+      // process sharing this store owns the download and stopped making
+      // progress, so this one stopped waiting behind it. Naming the sibling is
+      // the whole value of the reason - "check your connection" would send the
+      // user after something that is working fine. The copy offers the retry
+      // (this IS a retryable reason, with a real `retryAtMs`) without promising
+      // a moment: the backoff makes an automatic attempt eligible again, it
+      // does not schedule one.
+      //
+      // "using this Traycer folder", not "on this device". The lease record
+      // carries pid and process-start identity and NO machine identity, so
+      // nothing here knows where the sibling runs - and in the one topology
+      // that makes this reason common (a `~/.traycer` shared across machines)
+      // "on this device" is flatly false. See the host's matching arm and
+      // docs/provider-pack-store-support-boundary.md.
+      return "another Traycer process using this Traycer folder stopped making progress on the download. Retry to pick it up here.";
     case "unrepairable":
       // The one terminal reason. Re-downloading fetches the byte-identical
       // blob and fails in the same place, fleet-wide, so this copy must not
