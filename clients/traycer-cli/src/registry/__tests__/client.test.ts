@@ -186,6 +186,28 @@ const MANIFEST_DATA = {
 
 const MANIFEST_BODY = JSON.stringify(MANIFEST_DATA);
 
+/**
+ * A manifest whose only entry declares a client floor. Kept separate from
+ * `MANIFEST_DATA` rather than added to it: `latest` there is load-bearing for
+ * most of this file, and a floored entry alongside it would be resolvable only
+ * by explicit version - which is not the path an automatic update takes.
+ */
+const FLOORED_MANIFEST_BODY = JSON.stringify({
+  ...MANIFEST_DATA,
+  latest: "9.0.0",
+  versions: [
+    {
+      ...MANIFEST_DATA.versions[0],
+      version: "9.0.0",
+      requiredCliVersion: "2.0.0",
+    },
+  ],
+});
+
+function flooredTransport(): RegistryTransport {
+  return { ...fakeTransport(), fetchText: async () => FLOORED_MANIFEST_BODY };
+}
+
 function fakeTransport(): RegistryTransport {
   return {
     fetchText: async () => MANIFEST_BODY,
@@ -600,6 +622,60 @@ describe("registry client", () => {
     await expect(client.resolveAsset("1.4.0", "darwin-arm64")).rejects.toThrow(
       /yanked/,
     );
+  });
+
+  // The client floor, at the seam that matters: `resolveAsset` is the one
+  // place a host version is selected, and BOTH `install` and `download-stage`
+  // come through it. The unit tests above pin the decision; these pin that the
+  // decision is actually asked, and asked before anything is downloaded.
+  it("refuses a version whose client floor this CLI is below", async () => {
+    vi.stubEnv("TRAYCER_CLI_VERSION", "1.1.8");
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: flooredTransport(),
+      onProgress: null,
+      requireTrustedKeys: false,
+    });
+    let caught: unknown = null;
+    try {
+      await client.resolveAsset("latest", "darwin-arm64");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(CliError);
+    if (caught instanceof CliError) {
+      expect(caught.code).toBe("E_HOST_CLIENT_FLOOR_UNMET");
+      expect(caught.message).toContain("2.0.0");
+    }
+    vi.unstubAllEnvs();
+  });
+
+  it("resolves the same version once the CLI meets the floor", async () => {
+    vi.stubEnv("TRAYCER_CLI_VERSION", "2.0.0");
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: flooredTransport(),
+      onProgress: null,
+      requireTrustedKeys: false,
+    });
+    const { entry } = await client.resolveAsset("latest", "darwin-arm64");
+    expect(entry.version).toBe("9.0.0");
+    vi.unstubAllEnvs();
+  });
+
+  // The named dev exemption, exercised through the real path: with no injected
+  // version the CLI reports `0.0.0-local`, which is below every floor by
+  // SemVer. Refusing it would leave a local build unable to install a floored
+  // host at all.
+  it("waives the floor for an unreleased CLI build", async () => {
+    const client = await createRegistryClient({
+      environment: "production",
+      transport: flooredTransport(),
+      onProgress: null,
+      requireTrustedKeys: false,
+    });
+    const { entry } = await client.resolveAsset("latest", "darwin-arm64");
+    expect(entry.version).toBe("9.0.0");
   });
 
   it("refuses to resolve a platform marked unavailable", async () => {
