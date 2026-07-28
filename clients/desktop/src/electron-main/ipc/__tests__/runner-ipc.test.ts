@@ -2621,7 +2621,9 @@ describe("RunnerIpcBridge", () => {
     if (respawnHandler === undefined) {
       throw new Error("requestHostRespawn handler missing");
     }
-    await respawnHandler(bareEvent());
+    await expect(respawnHandler(bareEvent())).resolves.toEqual({
+      kind: "restarted",
+    });
     await respawnHandler(bareEvent());
     expect(hostController.respawnCalls).toBe(2);
     bridge.dispose();
@@ -2657,6 +2659,52 @@ describe("RunnerIpcBridge", () => {
     );
     bridge.dispose();
   });
+
+  // Field RCA 2026-07-28: the takeover fallback's host-busy denial resolves
+  // `deferred`, and the invoke must RESOLVE it as `declined` rather than
+  // reject - a rejected invoke lands on the renderer's reportable error
+  // toast, inviting "Report issue" for a self-recovering condition.
+  it.each([
+    {
+      kind: "deferred" as const,
+      message: "The host has work in progress, so it was not restarted.",
+    },
+    {
+      kind: "busy" as const,
+      continuation: "activate" as const,
+      message: "The host has work in progress; restart it to finish.",
+    },
+  ])(
+    "resolves requestHostRespawn as declined when respawn() resolves $kind",
+    async (outcome) => {
+      const mod = await import("../register-runner-ipc");
+      const hostController = new FakeHostController();
+      hostController.respawn = async () => outcome;
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController,
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        window: buildWindow(),
+      });
+      bridge.install();
+
+      const respawnHandler = ipcMainState.handlers.get(
+        RunnerHostInvoke.requestHostRespawn,
+      );
+      if (respawnHandler === undefined) {
+        throw new Error("requestHostRespawn handler missing");
+      }
+      await expect(respawnHandler(bareEvent())).resolves.toEqual({
+        kind: "declined",
+        message: outcome.message,
+      });
+      bridge.dispose();
+    },
+  );
 
   it("serves authnBaseUrl synchronously via ipcMain.on", async () => {
     const mod = await import("../register-runner-ipc");

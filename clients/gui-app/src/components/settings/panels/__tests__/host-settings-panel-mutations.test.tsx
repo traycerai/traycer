@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -33,6 +34,7 @@ vi.mock("sonner", () => ({
   toast: {
     success: vi.fn(),
     error: vi.fn(),
+    info: vi.fn(),
     message: vi.fn(),
   },
 }));
@@ -41,12 +43,15 @@ afterEach(() => {
   cleanup();
   vi.mocked(toast.success).mockClear();
   vi.mocked(toast.error).mockClear();
+  vi.mocked(toast.info).mockClear();
   vi.mocked(toast.message).mockClear();
 });
 
 describe("<HostSettingsPanel /> - mutation flows", () => {
   it("opens a confirmation dialog before restarting the host", async () => {
-    const restartHost = vi.fn(() => Promise.resolve());
+    const restartHost = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
     const { management } = makeManagement({ restartHost });
 
     renderPanel(makeHost(management, makeLocalHostSnapshot()));
@@ -64,6 +69,37 @@ describe("<HostSettingsPanel /> - mutation flows", () => {
       expect(restartHost).toHaveBeenCalledTimes(1);
     });
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");
+  });
+
+  // Field RCA 2026-07-28: a busy host denying the restart surfaced as a
+  // reportable "Couldn't restart host" error toast, inviting "Report
+  // issue" for a self-recovering condition. A declined result must render
+  // as plain information - never as a success and never as an error.
+  it("renders a declined restart as an informational toast, not success or a reportable error", async () => {
+    const restartHost = vi.fn(() =>
+      Promise.resolve({
+        kind: "declined" as const,
+        message: "The host has work in progress, so it was not restarted.",
+      }),
+    );
+    const { management } = makeManagement({ restartHost });
+
+    renderPanel(makeHost(management, makeLocalHostSnapshot()));
+
+    fireEvent.click(await waitForButton("Restart"));
+    fireEvent.click(
+      within(
+        await screen.findByTestId("confirm-destructive-dialog"),
+      ).getByTestId("confirm-action"),
+    );
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith("Host not restarted", {
+        description: "The host has work in progress, so it was not restarted.",
+      });
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it("saves a custom host name from the Host settings page", async () => {
@@ -748,7 +784,9 @@ function makeManagement(
       overrides.installVersion ?? vi.fn(notImplemented("installVersion")),
     uninstallHost:
       overrides.uninstallHost ?? vi.fn(notImplemented("uninstallHost")),
-    restartHost: overrides.restartHost ?? vi.fn(() => Promise.resolve()),
+    restartHost:
+      overrides.restartHost ??
+      vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
     getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     clearRemoval: vi.fn(() => Promise.resolve()),

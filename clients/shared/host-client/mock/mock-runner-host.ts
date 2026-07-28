@@ -4,6 +4,7 @@ import type {
   DeviceFlowAuthorization,
   DeviceFlowResult,
   DeviceFlowSession,
+  HostRestartRequestResult,
   IDeviceFlowHost,
   IHostPicker,
   IHostManagement,
@@ -363,8 +364,9 @@ export class MockRunnerHost implements IRunnerHost {
     });
   }
 
-  async requestHostRespawn(): Promise<void> {
+  async requestHostRespawn(): Promise<HostRestartRequestResult> {
     this.requestHostRespawnCalls += 1;
+    return { kind: "restarted" };
   }
 
   readonly notifications: INotificationHost = {
