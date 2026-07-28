@@ -37,9 +37,14 @@ describe("lazy surface modules are warmed at startup", () => {
     // Guards the extraction itself: if the `lazy(() => import(...))` shape is
     // refactored, every assertion below would pass against an empty list.
     const specifiers = lazyImportSpecifiers();
-    expect(specifiers.length).toBeGreaterThanOrEqual(4);
-    expect(specifiers.map((entry) => entry.specifier)).toContain(
-      "@/components/epic-tabs/epic-surface",
+    expect(specifiers.map((entry) => entry.specifier)).toEqual(
+      expect.arrayContaining([
+        "@/components/epic-tabs/epic-surface",
+        "@/components/home/landing-draft-surface",
+        "@/providers/draft-surface-provider",
+        "@/components/epics/history-surface",
+        "@/components/settings/settings-surface",
+      ]),
     );
   });
 

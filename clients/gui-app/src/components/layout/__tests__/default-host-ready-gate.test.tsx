@@ -54,7 +54,7 @@ vi.mock("@tanstack/react-router", () => ({
 // this gate is about, and all of which need their own provider stack.
 vi.mock("@/components/layout/header/app-header", () => ({
   AppHeader: (props: { readonly variant: string }) => (
-    <div data-testid="app-header" data-variant={props.variant} />
+    <header data-variant={props.variant} />
   ),
 }));
 
@@ -108,7 +108,7 @@ function renderGate(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  const children: ReactNode = <div data-testid="gated-app">app</div>;
+  const children: ReactNode = <main>app</main>;
   render(
     <QueryClientProvider client={client}>
       <RunnerHostProvider runnerHost={runnerHost}>
@@ -148,7 +148,7 @@ afterEach(() => {
 describe("<HostReadyGate />", () => {
   it("renders the app once the default host is ready", () => {
     renderGate({ kind: "ready" }, PRESENTATION);
-    expect(screen.getByTestId("gated-app")).toBeTruthy();
+    expect(screen.getByRole("main")).toBeTruthy();
     expect(screen.queryByTestId("host-ready-gate")).toBeNull();
   });
 
@@ -157,12 +157,10 @@ describe("<HostReadyGate />", () => {
     // stayed mounted, so the tab strip and every host-dependent affordance in
     // it remained reachable during setup.
     renderGate({ kind: "loading-host" }, PRESENTATION);
-    expect(screen.queryByTestId("gated-app")).toBeNull();
+    expect(screen.queryByRole("main")).toBeNull();
     const gate = screen.getByTestId("host-ready-gate");
     expect(gate.dataset.readiness).toBe("loading-host");
-    expect(screen.getByTestId("app-header").dataset.variant).toBe(
-      "host-loading",
-    );
+    expect(screen.getByRole("banner").dataset.variant).toBe("host-loading");
   });
 
   it("lets /settings through even while the host is not ready", () => {
@@ -171,7 +169,7 @@ describe("<HostReadyGate />", () => {
     // failure it exists to fix.
     routerState.pathname = "/settings/shell";
     renderGate({ kind: "loading-host" }, PRESENTATION);
-    expect(screen.getByTestId("gated-app")).toBeTruthy();
+    expect(screen.getByRole("main")).toBeTruthy();
     expect(screen.queryByTestId("host-ready-gate")).toBeNull();
   });
 
@@ -182,7 +180,7 @@ describe("<HostReadyGate />", () => {
     // arms, which is right for a surface fallback and wrong for a gate.
     useAuthStore.getState().setSignedOut();
     renderGate({ kind: "mobile-no-host" }, PRESENTATION);
-    expect(screen.getByTestId("gated-app")).toBeTruthy();
+    expect(screen.getByRole("main")).toBeTruthy();
     expect(screen.queryByTestId("host-ready-gate")).toBeNull();
   });
 
@@ -294,6 +292,9 @@ describe("<HostReadyGate />", () => {
     expect(
       screen.getByTestId("local-host-provisioning-retry-spinner"),
     ).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Retry" }).disabled,
+    ).toBe(true);
   });
 
   it("tells a user who removed Traycer how to finish", () => {
@@ -345,8 +346,8 @@ describe("<HostReadyGate />", () => {
       { kind: "provisioning-error" },
       { ...PRESENTATION, provisioningError: new Error("boom") },
     );
-    expect(screen.queryByTestId("gated-app")).toBeNull();
-    expect(screen.getByTestId("local-host-provisioning-retry")).toBeTruthy();
+    expect(screen.queryByRole("main")).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByText("boom")).toBeTruthy();
   });
 });
