@@ -613,10 +613,15 @@ aria-live="polite"` carrying the equivalent text for
     through a **transient per-host client** (`useHostClientFor`) so picking a
     host never swaps the app-wide active host or reloads the Epic list (and
     never affects the branch-prefix default above). Backed by the host
-    `worktree.listAllForHost` / `worktree.deleteByPath` RPCs through
-    `useHostQuery` / `useHostMutation`. Setup/teardown script editing is NOT
-    here - the create-worktree flow owns it, and scripts otherwise live in the
-    committed `.traycer/environment.json`.
+    `worktree.listAllForHost` RPC through `useHostQuery` / `useHostMutation`,
+    and by the `worktree.deleteBatchByPath` stream for deletion: a single or
+    bulk delete is ONE host-owned command that keeps running if this panel
+    unmounts and writes one completion notification when every target settles.
+    Against a host too old to know that method, the panel falls back to the
+    released per-target `worktree.deleteByPath` stream, metered two at a time
+    client-side. Setup/teardown script editing is NOT here - the create-
+    worktree flow owns it, and scripts otherwise live in the committed
+    `.traycer/environment.json`.
   - **Evidence tiers, not a safety verdict.** Each row leads with exactly one
     loud status pill (`WorktreeTierPill`, classification shared with the
     Task-delete dialog and the `traycer-housekeeping` skill via

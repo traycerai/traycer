@@ -312,6 +312,11 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
       return { icon: MessageCircle, colorClassName: PROMPT_COLOR };
     case "workspace.operation.failed":
       return { icon: CircleAlert, colorClassName: FAILURE_COLOR };
+    // Only reachable for an `info` row: the severity branches above already
+    // claim every `done`/`failure`/`needs_action` host-operation row, and the
+    // kind itself says nothing about how the operation ended.
+    case "host.operation.finished":
+      return { icon: Bell, colorClassName: NEUTRAL_COLOR };
     case null:
       return { icon: Bell, colorClassName: NEUTRAL_COLOR };
   }

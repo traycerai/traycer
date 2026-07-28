@@ -37,6 +37,8 @@ export interface EpicSweepWorktreeRow {
 }
 
 export interface EpicSweepWorktreeCandidatesResult {
+  /** Host on which these rows were freshly proven; null means no usable proof. */
+  readonly hostId: string | null;
   readonly rows: ReadonlyArray<EpicSweepWorktreeRow>;
   /** True while the act-time probe is in flight (first open OR a re-open). */
   readonly isPending: boolean;
@@ -162,11 +164,13 @@ export function useEpicSweepWorktreeCandidates(
     // not surface as offerable rows — the whole point is act-time proof.
     if (
       selectedEpicIds === null ||
+      readiness.hostId === null ||
+      !readiness.isReady ||
       worktrees === undefined ||
       isError ||
       isPending
     ) {
-      return { rows: EMPTY_ROWS, isPending, isError };
+      return { hostId: null, rows: EMPTY_ROWS, isPending, isError };
     }
     // The amalgamation: every worktree owned by ANY selected Task, listed once.
     const selected = new Set(selectedEpicIds);
@@ -175,8 +179,15 @@ export function useEpicSweepWorktreeCandidates(
         ? [classifySweepRow(selected, entry)]
         : [],
     );
-    return { rows, isPending: false, isError };
-  }, [selectedEpicIds, isError, isPending, worktrees]);
+    return { hostId: readiness.hostId, rows, isPending: false, isError };
+  }, [
+    selectedEpicIds,
+    isError,
+    isPending,
+    readiness.hostId,
+    readiness.isReady,
+    worktrees,
+  ]);
 }
 
 function classifySweepRow(
