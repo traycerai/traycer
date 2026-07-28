@@ -7,6 +7,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BackgroundItem,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
@@ -225,8 +226,9 @@ function queueState(
   return { status: "idle", items: [...items] };
 }
 
-function queuedItem(queueItemId: string, text: string): ChatQueuedItem {
+function queuedItem(queueItemId: string, text: string): ChatQueuedPromptItem {
   return {
+    kind: "prompt",
     queueItemId,
     messageId: `${queueItemId}-message`,
     message: {

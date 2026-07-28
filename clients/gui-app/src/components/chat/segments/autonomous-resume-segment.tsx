@@ -1,4 +1,4 @@
-import { AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
+import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -142,6 +142,12 @@ function ResumeCompletionCardBody(props: {
 
 function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   if (trigger.kind === "wakeup") return wakeupStatusTitle(trigger.status);
+  // A producer that is still running has no terminal outcome: `status` is
+  // carrying its least-wrong placeholder for readers that predate `live`, and
+  // showing it here would tell the user the command finished when it has not.
+  // Deliberately not "Monitor …" - the same trigger kind carries a backgrounded
+  // shell's mid-run output, which is not a monitor.
+  if (trigger.live) return "Command still running";
 
   const noun =
     trigger.mcp === null ? resumeKindTitle(trigger.kind) : "MCP tool";
@@ -181,6 +187,8 @@ function resumeKindTitle(kind: AutonomousResumeTrigger["kind"]): string {
 
 function resumeStatusIcon(trigger: AutonomousResumeTrigger): ReactNode {
   const className = "size-3.5 shrink-0 text-foreground/60";
+  // Neither a success check nor a failure cross: nothing has settled yet.
+  if (trigger.live) return <Activity className={className} aria-hidden />;
   if (trigger.status !== "completed") {
     return <XCircle className={className} aria-hidden />;
   }

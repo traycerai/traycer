@@ -2,6 +2,7 @@ import type {
   BackgroundItem,
   ChatActiveTurn,
   ChatQueuedItem,
+  ChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { PinnedStackSections } from "@/components/chat/chat-pinned-stack";
 import { hasChatPinnedStackContent } from "@/components/chat/chat-pinned-stack-utils";
@@ -34,14 +35,14 @@ export interface ChatLowerDockProps {
   readonly scrollRegionMaxHeightClass: string;
   readonly onQueuePause: () => string | null;
   readonly onQueueResume: () => string | null;
-  readonly onQueueEdit: (item: ChatQueuedItem) => void;
+  readonly onQueueEdit: (item: ChatQueuedPromptItem) => void;
   readonly onQueueCancel: (item: ChatQueuedItem) => void;
-  readonly onQueueAbortSteer: (item: ChatQueuedItem) => void;
+  readonly onQueueAbortSteer: (item: ChatQueuedPromptItem) => void;
   readonly onQueueReorder: (
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
-  readonly onQueueSteerNow: (item: ChatQueuedItem) => void;
+  readonly onQueueSteerNow: (item: ChatQueuedPromptItem) => void;
   readonly onBackgroundItemClick: (item: BackgroundItem) => void;
   readonly onBackgroundItemStop: (taskId: string) => string | null;
   readonly onBackgroundItemsStopAll: () => string | null;

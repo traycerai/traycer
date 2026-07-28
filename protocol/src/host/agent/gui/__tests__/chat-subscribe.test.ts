@@ -1,6 +1,7 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
   chatQueuedItemSchema,
+  chatQueuedManagedCommandItemSchema,
   chatSubscribeClientFrameSchema,
   chatSubscribeServerFrameSchema,
   chatSubscribeV10,
@@ -8,6 +9,7 @@ import {
   chatSubscribeV12,
   chatSubscribeV13,
   chatSubscribeV14,
+  chatSubscribeV15,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -165,6 +167,7 @@ describe("chat.subscribe@1.2 server frames", () => {
     });
 
     expect(parsed.status).toBe("steer_requested");
+    if (parsed.kind !== "prompt") throw new Error("expected prompt item");
     expect(parsed.steerRequest?.mode).toBe("safe_point");
   });
 
@@ -362,6 +365,7 @@ describe("chat.subscribe@1.2 server frames", () => {
       blockId: "wake-tool-1",
       outputFile: null,
       mcp: null,
+      live: false,
     });
   });
 
@@ -386,7 +390,10 @@ describe("chat.subscribe@1.2 server frames", () => {
       mcp: { serverName: "probe", toolName: "slow_op" },
     });
     expect(mcpTrigger.kind).toBe("command");
-    expect(mcpTrigger.mcp).toEqual({ serverName: "probe", toolName: "slow_op" });
+    expect(mcpTrigger.mcp).toEqual({
+      serverName: "probe",
+      toolName: "slow_op",
+    });
   });
 
   it("parses mcp background items on 1.4, defaulting startedAt for old-host frames", () => {
@@ -409,7 +416,9 @@ describe("chat.subscribe@1.2 server frames", () => {
       backgroundItems: [backgroundItem],
     });
 
-    expect(chatSubscribeV14.serverFrameSchema.parse(frame(mcpItem))).toMatchObject({
+    expect(
+      chatSubscribeV14.serverFrameSchema.parse(frame(mcpItem)),
+    ).toMatchObject({
       backgroundItems: [{ ...mcpItem, startedAt: null }],
     });
     expect(
@@ -1409,5 +1418,179 @@ describe("chat.subscribe@1.4 (inReplyTo on senders)", () => {
     if (parsed.kind !== "messageAccepted")
       throw new Error("expected messageAccepted");
     expect(parsed.message.sender).not.toHaveProperty("inReplyTo");
+  });
+});
+
+describe("chat.subscribe@1.5 (managed-command queue items)", () => {
+  const managedCommandItem = {
+    kind: "managed-command" as const,
+    queueItemId: "queue-managed-1",
+    commandId: "command-1",
+    description: "bun test --watch",
+    status: "pending" as const,
+    createdAt: 3000,
+    updatedAt: 3000,
+  };
+
+  // The exact shape a released 1.4 host persisted into `queue.added` metadata
+  // and put on the wire: no `kind` key at all.
+  const legacyKindlessItem = {
+    queueItemId: "queue-legacy-1",
+    messageId: "message-2",
+    message: { kind: "user", content: { type: "doc", content: [] } },
+    sender: { type: "user", userId: "user-1" },
+    settings: {
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      agentMode: "epic",
+    },
+    createdAt: 2001,
+    updatedAt: 2002,
+  };
+
+  function snapshotFrameWithQueueItems(
+    items: ReadonlyArray<unknown>,
+  ): Record<string, unknown> {
+    return {
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items },
+        activeTurn: null,
+        runStatus: "idle",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+      },
+    };
+  }
+
+  it("declares schemaVersion 1.5", () => {
+    expect(chatSubscribeV15.schemaVersion).toEqual({ major: 1, minor: 5 });
+  });
+
+  // The load-bearing compat guarantee: every payload a ≤1.4 host ever wrote
+  // carries no `kind`, and the defaulted prompt discriminant must adopt them
+  // with no migration. This is why the union is a plain `z.union` (a
+  // `z.discriminatedUnion` rejects a missing discriminant even when the
+  // literal is defaulted) with the managed-command arm listed first.
+  it("parses a legacy kind-less queued item as a prompt item", () => {
+    const parsed = chatQueuedItemSchema.parse(legacyKindlessItem);
+
+    expect(parsed.kind).toBe("prompt");
+    if (parsed.kind !== "prompt") throw new Error("expected prompt item");
+    expect(parsed.messageId).toBe("message-2");
+    expect(parsed.sender).toMatchObject({ type: "user", userId: "user-1" });
+  });
+
+  it("parses a managed-command queued item as its own variant", () => {
+    const parsed = chatQueuedItemSchema.parse(managedCommandItem);
+
+    expect(parsed.kind).toBe("managed-command");
+    if (parsed.kind !== "managed-command") {
+      throw new Error("expected managed-command item");
+    }
+    expect(parsed.commandId).toBe("command-1");
+    expect(parsed.description).toBe("bun test --watch");
+    expect(parsed.status).toBe("pending");
+    // The variant is content-free: no fabricated message/sender/settings ride
+    // along on the durable record.
+    expect(parsed).not.toHaveProperty("message");
+    expect(parsed).not.toHaveProperty("sender");
+    expect(parsed).not.toHaveProperty("messageId");
+    expect(parsed).not.toHaveProperty("settings");
+  });
+
+  it("defaults a managed-command item's status to pending", () => {
+    const parsed = chatQueuedManagedCommandItemSchema.parse({
+      kind: "managed-command",
+      queueItemId: "queue-managed-2",
+      commandId: "command-2",
+      description: "tail -f server.log",
+      createdAt: 3000,
+      updatedAt: 3000,
+    });
+
+    expect(parsed.status).toBe("pending");
+  });
+
+  it("rejects a managed-command item that omits its durable dispatch key", () => {
+    expect(
+      chatQueuedItemSchema.safeParse({
+        kind: "managed-command",
+        queueItemId: "queue-managed-3",
+        description: "no commandId",
+        createdAt: 3000,
+        updatedAt: 3000,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("carries a managed-command queue item through a 1.5 snapshot frame", () => {
+    const parsed = chatSubscribeV15.serverFrameSchema.parse(
+      snapshotFrameWithQueueItems([managedCommandItem]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.queue.items[0]).toMatchObject({
+      kind: "managed-command",
+      commandId: "command-1",
+    });
+  });
+
+  it("carries a managed-command queue item through a 1.5 queueChanged frame", () => {
+    const parsed = chatSubscribeV15.serverFrameSchema.parse({
+      kind: "queueChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      queue: { status: "idle", items: [managedCommandItem] },
+    });
+    if (parsed.kind !== "queueChanged")
+      throw new Error("expected queueChanged");
+    expect(parsed.queue.items[0]).toMatchObject({
+      kind: "managed-command",
+      commandId: "command-1",
+    });
+  });
+
+  // The frozen 1.4 line must not be able to absorb the new variant - this is
+  // what forces the host's per-minor frame projection to exist rather than
+  // relying on zod stripping unknown keys.
+  it("cannot parse a managed-command item on the frozen 1.4 line", () => {
+    expect(
+      chatSubscribeV14.serverFrameSchema.safeParse(
+        snapshotFrameWithQueueItems([managedCommandItem]),
+      ).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV14.serverFrameSchema.safeParse({
+        kind: "queueChanged",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        queue: { status: "idle", items: [managedCommandItem] },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("still parses ordinary prompt items on the frozen 1.4 line", () => {
+    const parsed = chatSubscribeV14.serverFrameSchema.parse(
+      snapshotFrameWithQueueItems([legacyKindlessItem]),
+    );
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.queue.items[0]).toMatchObject({
+      queueItemId: "queue-legacy-1",
+    });
+    // The 1.4 line predates the discriminant and must never grow one.
+    expect(parsed.snapshot.queue.items[0]).not.toHaveProperty("kind");
   });
 });

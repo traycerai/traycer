@@ -39,6 +39,12 @@ import type { AuthenticatedUser } from "@traycer/protocol/auth";
 export type RequestContextOrigin =
   | "host-rpc"
   | "host-stream"
+  // Minted by the host for its own background work, with no client request or
+  // stream behind it (e.g. the host-owner authority read from the machine-local
+  // credentials file to drive queue-native managed-command deliveries into cold
+  // chats). Distinguishes "the host acted on its own" from "the host acted for
+  // a caller", which the two `host-*` origins above both imply.
+  | "host-background"
   | "renderer"
   | "extension"
   | "test";

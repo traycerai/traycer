@@ -4164,6 +4164,10 @@ export const epicSchemaSurfaceBaseline = {
                                           },
                                         ],
                                       },
+                                      live: {
+                                        default: false,
+                                        type: "boolean",
+                                      },
                                     },
                                     required: [
                                       "kind",
@@ -10584,6 +10588,10 @@ export const epicSchemaSurfaceBaseline = {
                                           },
                                         ],
                                       },
+                                      live: {
+                                        default: false,
+                                        type: "boolean",
+                                      },
                                     },
                                     required: [
                                       "kind",
@@ -10593,6 +10601,7 @@ export const epicSchemaSurfaceBaseline = {
                                       "blockId",
                                       "outputFile",
                                       "mcp",
+                                      "live",
                                     ],
                                     additionalProperties: false,
                                   },

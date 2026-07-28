@@ -1,7 +1,11 @@
 import { ChevronDown, ChevronUp, Pause, Pencil, Play, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  ChatQueuedItem,
+  ChatQueuedPromptItem,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import { ManagedCommandBadge } from "@/components/chat/queued-message-surface";
 import { useQueuePauseState } from "@/components/chat/queued-message-utils";
 import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
@@ -12,7 +16,7 @@ interface ChatControlStripProps {
   readonly editingQueueItemId: string | null;
   readonly onQueuePause: () => string | null;
   readonly onResumeQueue: () => string | null;
-  readonly onQueueEdit: (item: ChatQueuedItem) => void;
+  readonly onQueueEdit: (item: ChatQueuedPromptItem) => void;
   readonly onQueueCancel: (item: ChatQueuedItem) => void;
   readonly onQueueReorder: (
     item: ChatQueuedItem,
@@ -54,7 +58,7 @@ function QueuePanel(props: {
   readonly editingQueueItemId: string | null;
   readonly onQueuePause: () => string | null;
   readonly onResumeQueue: () => string | null;
-  readonly onEdit: (item: ChatQueuedItem) => void;
+  readonly onEdit: (item: ChatQueuedPromptItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
   readonly onReorder: (
     item: ChatQueuedItem,
@@ -131,17 +135,36 @@ function QueueItemRow(props: {
   readonly items: ReadonlyArray<ChatQueuedItem>;
   readonly canAct: boolean;
   readonly editing: boolean;
-  readonly onEdit: (item: ChatQueuedItem) => void;
+  readonly onEdit: (item: ChatQueuedPromptItem) => void;
   readonly onCancel: (item: ChatQueuedItem) => void;
   readonly onReorder: (
     item: ChatQueuedItem,
     beforeQueueItemId: string | null,
   ) => void;
 }) {
-  const preview = previewFromJSONContent(props.item.message.content);
+  // A managed-command row stands in for output this chat has not received yet,
+  // so there is no message content to preview - its description is the label.
+  const promptItem = props.item.kind === "prompt" ? props.item : null;
+  const preview =
+    props.item.kind === "prompt"
+      ? previewFromJSONContent(props.item.message.content)
+      : props.item.description;
+  // Every action on the row names the row's own kind, matching the lower dock's
+  // copy for the same item - a screen reader must not hear "prompt" for a chip
+  // that stands in for a background command's output.
+  const actionNoun =
+    promptItem === null ? "queued command output" : "queued prompt";
   return (
-    <div className="flex items-center justify-between gap-3 px-3 py-2">
+    <div
+      className="flex items-center justify-between gap-3 px-3 py-2"
+      data-testid="queue-panel-row"
+    >
       <div className="min-w-0 text-ui-sm">
+        {promptItem === null ? (
+          <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1">
+            <ManagedCommandBadge />
+          </div>
+        ) : null}
         <div className="truncate">
           {preview.length > 0 ? preview : "Queued prompt"}
         </div>
@@ -157,7 +180,7 @@ function QueueItemRow(props: {
           size="icon"
           variant="ghost"
           disabled={!props.canAct || props.index === 0}
-          aria-label="Move queued prompt up"
+          aria-label={`Move ${actionNoun} up`}
           onClick={() => {
             props.onReorder(
               props.item,
@@ -172,7 +195,7 @@ function QueueItemRow(props: {
           size="icon"
           variant="ghost"
           disabled={!props.canAct || props.index === props.items.length - 1}
-          aria-label="Move queued prompt down"
+          aria-label={`Move ${actionNoun} down`}
           onClick={() => {
             props.onReorder(
               props.item,
@@ -182,24 +205,26 @@ function QueueItemRow(props: {
         >
           <ChevronDown className="size-4" />
         </Button>
+        {promptItem === null ? null : (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            disabled={!props.canAct}
+            aria-label="Edit queued prompt"
+            onClick={() => {
+              props.onEdit(promptItem);
+            }}
+          >
+            <Pencil className="size-4" />
+          </Button>
+        )}
         <Button
           type="button"
           size="icon"
           variant="ghost"
           disabled={!props.canAct}
-          aria-label="Edit queued prompt"
-          onClick={() => {
-            props.onEdit(props.item);
-          }}
-        >
-          <Pencil className="size-4" />
-        </Button>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          disabled={!props.canAct}
-          aria-label="Cancel queued prompt"
+          aria-label={`Cancel ${actionNoun}`}
           onClick={() => {
             props.onCancel(props.item);
           }}

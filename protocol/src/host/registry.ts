@@ -4,7 +4,10 @@ import {
   defineUpgradePath,
   type DowngradeResult,
 } from "@traycer/protocol/framework/index";
-import { defineVersionedStreamRpcRegistry } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  defineVersionedStreamRpcRegistry,
+  type VersionedStreamRpcRegistry,
+} from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   agentCreateV10,
   agentCreateV20,
@@ -94,6 +97,7 @@ import {
   chatSubscribeV12,
   chatSubscribeV13,
   chatSubscribeV14,
+  chatSubscribeV15,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -4401,183 +4405,239 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  *    background-items controls as an additive minor instead of a major, to
  *    stay compatible with host-v1.0.0).
  */
-export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
-  "epic.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: epicSubscribeV10,
-        },
+// Each stream method's version line is hoisted into its own `const` and the
+// definition below is EXPLICITLY annotated with `typeof` references to them.
+// Both halves are load-bearing for declaration emit: TypeScript inlines a
+// referenced const's type structurally unless the referencing declaration has
+// an explicit annotation, and the fully-inlined registry type exceeds the
+// length `tsc` will write into a `.d.ts` (TS7056) now that `chat.subscribe`
+// carries six minors, each embedding a large discriminated-union frame schema.
+// Annotated, each line serializes as its own bounded declaration node and the
+// registry as thirteen short references. Runtime behavior is unchanged.
+const EPIC_SUBSCRIBE_STREAM_LINE = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: epicSubscribeV10,
       },
     },
   },
-  "chat.subscribe": {
-    1: {
-      latestMinor: 4,
-      versions: {
-        0: {
-          contract: chatSubscribeV10,
-        },
-        1: {
-          contract: chatSubscribeV11,
-        },
-        2: {
-          contract: chatSubscribeV12,
-        },
-        3: {
-          contract: chatSubscribeV13,
-        },
-        4: {
-          contract: chatSubscribeV14,
-        },
+} as const;
+
+const CHAT_SUBSCRIBE_STREAM_LINE = {
+  1: {
+    latestMinor: 5,
+    versions: {
+      0: {
+        contract: chatSubscribeV10,
+      },
+      1: {
+        contract: chatSubscribeV11,
+      },
+      2: {
+        contract: chatSubscribeV12,
+      },
+      3: {
+        contract: chatSubscribeV13,
+      },
+      4: {
+        contract: chatSubscribeV14,
+      },
+      5: {
+        contract: chatSubscribeV15,
       },
     },
   },
-  "notifications.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: notificationsSubscribeV10,
-        },
+} as const;
+
+const NOTIFICATIONS_SUBSCRIBE_STREAM_LINE = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: notificationsSubscribeV10,
       },
     },
   },
-  "host.notifications.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsSubscribeV10,
-        },
+} as const;
+
+const HOST_NOTIFICATIONS_SUBSCRIBE_STREAM_LINE = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: hostNotificationsSubscribeV10,
       },
     },
   },
-  "host.notifications.feed.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsFeedSubscribeV10,
-        },
+} as const;
+
+const HOST_NOTIFICATIONS_FEED_SUBSCRIBE_STREAM_LINE = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: hostNotificationsFeedSubscribeV10,
       },
     },
   },
-  "terminal.subscribe": {
-    1: {
-      latestMinor: 4,
-      versions: {
-        0: {
-          contract: terminalSubscribeV10,
-        },
-        1: {
-          contract: terminalSubscribeV11,
-        },
-        2: {
-          contract: terminalSubscribeV12,
-        },
-        3: {
-          contract: terminalSubscribeV13,
-        },
-        4: {
-          contract: terminalSubscribeV14,
-        },
+} as const;
+
+const TERMINAL_SUBSCRIBE_STREAM_LINE = {
+  1: {
+    latestMinor: 4,
+    versions: {
+      0: {
+        contract: terminalSubscribeV10,
+      },
+      1: {
+        contract: terminalSubscribeV11,
+      },
+      2: {
+        contract: terminalSubscribeV12,
+      },
+      3: {
+        contract: terminalSubscribeV13,
+      },
+      4: {
+        contract: terminalSubscribeV14,
       },
     },
   },
-  "git.subscribeStatus": {
-    1: {
-      latestMinor: 2,
-      versions: {
-        0: {
-          contract: gitSubscribeStatusV10,
-        },
-        // Nested-snapshot minor: `submodules[]` + `nestedFingerprint` + v1.1
-        // file rows on server frames. Additive; the HOST resolver projects
-        // frames per negotiated minor (streams have no version bridges). See
-        // the COMPAT POSTURE note on `gitSubscribeStatusV11`.
-        1: {
-          contract: gitSubscribeStatusV11,
-        },
-        // Guaranteed-fresh stream replacement: required `freshNonce` on the
-        // v1.2 open and snapshot/updated frames. Lower-minor projection stays
-        // explicit in the host resolver because streams have no bridges.
-        2: {
-          contract: gitSubscribeStatusV12,
-        },
+} as const;
+
+const GIT_SUBSCRIBE_STATUS_STREAM_LINE = {
+  1: {
+    latestMinor: 2,
+    versions: {
+      0: {
+        contract: gitSubscribeStatusV10,
+      },
+      // Nested-snapshot minor: `submodules[]` + `nestedFingerprint` + v1.1
+      // file rows on server frames. Additive; the HOST resolver projects
+      // frames per negotiated minor (streams have no version bridges). See
+      // the COMPAT POSTURE note on `gitSubscribeStatusV11`.
+      1: {
+        contract: gitSubscribeStatusV11,
+      },
+      // Guaranteed-fresh stream replacement: required `freshNonce` on the
+      // v1.2 open and snapshot/updated frames. Lower-minor projection stays
+      // explicit in the host resolver because streams have no bridges.
+      2: {
+        contract: gitSubscribeStatusV12,
       },
     },
   },
-  "resources.subscribe": {
-    1: {
-      latestMinor: 3,
-      versions: {
-        0: {
-          contract: resourcesSubscribeV10,
-        },
-        1: {
-          contract: resourcesSubscribeV11,
-        },
-        2: {
-          contract: resourcesSubscribeV12,
-        },
-        3: {
-          contract: resourcesSubscribeV13,
-        },
+} as const;
+
+const RESOURCES_SUBSCRIBE_STREAM_LINE = {
+  1: {
+    latestMinor: 3,
+    versions: {
+      0: {
+        contract: resourcesSubscribeV10,
+      },
+      1: {
+        contract: resourcesSubscribeV11,
+      },
+      2: {
+        contract: resourcesSubscribeV12,
+      },
+      3: {
+        contract: resourcesSubscribeV13,
       },
     },
   },
-  "agent.inbox.subscribe": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: agentInboxSubscribeV10,
-        },
+} as const;
+
+const AGENT_INBOX_SUBSCRIBE_STREAM_LINE = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: agentInboxSubscribeV10,
       },
     },
   },
-  "migration.run": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: migrationRunV10,
-        },
+} as const;
+
+const MIGRATION_RUN_STREAM_LINE = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: migrationRunV10,
       },
     },
   },
-  "worktree.deleteByPath": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: worktreeDeleteByPathStreamV10,
-        },
+} as const;
+
+const WORKTREE_DELETE_BY_PATH_STREAM_LINE = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: worktreeDeleteByPathStreamV10,
       },
     },
   },
-  "worktree.changed": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: worktreeChangedV10,
-        },
+} as const;
+
+const WORKTREE_CHANGED_STREAM_LINE = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: worktreeChangedV10,
       },
     },
   },
-  "speech.dictate": {
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: speechDictateV10,
-        },
+} as const;
+
+const SPEECH_DICTATE_STREAM_LINE = {
+  1: {
+    latestMinor: 0,
+    versions: {
+      0: {
+        contract: speechDictateV10,
       },
     },
   },
-});
+} as const;
+
+const HOST_STREAM_RPC_REGISTRY_DEFINITION: {
+  readonly "epic.subscribe": typeof EPIC_SUBSCRIBE_STREAM_LINE;
+  readonly "chat.subscribe": typeof CHAT_SUBSCRIBE_STREAM_LINE;
+  readonly "notifications.subscribe": typeof NOTIFICATIONS_SUBSCRIBE_STREAM_LINE;
+  readonly "host.notifications.subscribe": typeof HOST_NOTIFICATIONS_SUBSCRIBE_STREAM_LINE;
+  readonly "host.notifications.feed.subscribe": typeof HOST_NOTIFICATIONS_FEED_SUBSCRIBE_STREAM_LINE;
+  readonly "terminal.subscribe": typeof TERMINAL_SUBSCRIBE_STREAM_LINE;
+  readonly "git.subscribeStatus": typeof GIT_SUBSCRIBE_STATUS_STREAM_LINE;
+  readonly "resources.subscribe": typeof RESOURCES_SUBSCRIBE_STREAM_LINE;
+  readonly "agent.inbox.subscribe": typeof AGENT_INBOX_SUBSCRIBE_STREAM_LINE;
+  readonly "migration.run": typeof MIGRATION_RUN_STREAM_LINE;
+  readonly "worktree.deleteByPath": typeof WORKTREE_DELETE_BY_PATH_STREAM_LINE;
+  readonly "worktree.changed": typeof WORKTREE_CHANGED_STREAM_LINE;
+  readonly "speech.dictate": typeof SPEECH_DICTATE_STREAM_LINE;
+} = {
+  "epic.subscribe": EPIC_SUBSCRIBE_STREAM_LINE,
+  "chat.subscribe": CHAT_SUBSCRIBE_STREAM_LINE,
+  "notifications.subscribe": NOTIFICATIONS_SUBSCRIBE_STREAM_LINE,
+  "host.notifications.subscribe": HOST_NOTIFICATIONS_SUBSCRIBE_STREAM_LINE,
+  "host.notifications.feed.subscribe": HOST_NOTIFICATIONS_FEED_SUBSCRIBE_STREAM_LINE,
+  "terminal.subscribe": TERMINAL_SUBSCRIBE_STREAM_LINE,
+  "git.subscribeStatus": GIT_SUBSCRIBE_STATUS_STREAM_LINE,
+  "resources.subscribe": RESOURCES_SUBSCRIBE_STREAM_LINE,
+  "agent.inbox.subscribe": AGENT_INBOX_SUBSCRIBE_STREAM_LINE,
+  "migration.run": MIGRATION_RUN_STREAM_LINE,
+  "worktree.deleteByPath": WORKTREE_DELETE_BY_PATH_STREAM_LINE,
+  "worktree.changed": WORKTREE_CHANGED_STREAM_LINE,
+  "speech.dictate": SPEECH_DICTATE_STREAM_LINE,
+};
+
+export const hostStreamRpcRegistry: VersionedStreamRpcRegistry<
+  typeof HOST_STREAM_RPC_REGISTRY_DEFINITION
+> = defineVersionedStreamRpcRegistry(HOST_STREAM_RPC_REGISTRY_DEFINITION);
 
 export type HostStreamRpcRegistry = typeof hostStreamRpcRegistry;
