@@ -26,6 +26,8 @@ import { cn } from "@/lib/utils";
 export function EpicConnectionPill() {
   const derived = useEpicSyncPillState();
   const state = useSyncPillDisplayState(derived);
+  // Visuals use the settled state to avoid strobing; the tooltip uses the raw
+  // verdict so it can truthfully say synced during the positive settle hold.
   const indicator = indicatorFor(state);
   const tooltip = indicatorFor(derived).tooltip;
 
