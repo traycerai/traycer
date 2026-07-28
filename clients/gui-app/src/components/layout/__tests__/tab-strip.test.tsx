@@ -16,7 +16,10 @@ import {
   ensureHistoryTab,
   ensureSettingsTab,
 } from "@/lib/commands/actions/open-system-tab";
-import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
+import {
+  publishAgentActivity,
+  resetAgentActivityPresence,
+} from "@/__tests__/agent-activity-presence-harness";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import type { PermissionRole } from "@/lib/epic-collaborator-roles";
@@ -186,8 +189,33 @@ function registerEpicHeader(
   permissionRole: PermissionRole,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, [], []),
+    buildHeaderEpicHandle(tab, permissionRole, []),
   );
+}
+
+/**
+ * Agent activity now arrives on the per-user notification room, so the epic
+ * handle only supplies the live projection (the liveness filter) while the
+ * working set is published as host presence.
+ */
+const headerActivityByEpic = new Map<string, ReadonlyArray<string>>();
+
+function publishHeaderActivity(
+  tab: EpicTab,
+  activeAgentIds: ReadonlyArray<string>,
+): void {
+  // Accumulate: one host publishes ONE entry carrying every epic it is working
+  // on, so republishing only the latest tab would silently clear the presence
+  // an earlier call established.
+  headerActivityByEpic.set(tab.id, activeAgentIds);
+  const byEpic: Record<
+    string,
+    { working: ReadonlyArray<string>; turn: ReadonlyArray<string> }
+  > = {};
+  for (const [epicId, ids] of headerActivityByEpic) {
+    byEpic[epicId] = { working: ids, turn: ids };
+  }
+  publishAgentActivity([{ hostId: "host-a", byEpic }]);
 }
 
 function registerActiveEpicHeader(
@@ -196,8 +224,9 @@ function registerActiveEpicHeader(
   activeAgentIds: ReadonlyArray<string>,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, activeAgentIds, activeAgentIds),
+    buildHeaderEpicHandle(tab, permissionRole, activeAgentIds),
   );
+  publishHeaderActivity(tab, activeAgentIds);
 }
 
 function registerLiveEpicHeader(
@@ -206,24 +235,29 @@ function registerLiveEpicHeader(
   liveAgentIds: ReadonlyArray<string>,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, [], liveAgentIds),
+    buildHeaderEpicHandle(tab, permissionRole, liveAgentIds),
   );
 }
 
+/**
+ * Presence naming an agent the epic's live projection no longer holds. The
+ * session IS registered, so its (empty) projection is authoritative and the
+ * liveness filter must drop the stale id.
+ */
 function registerStaleActiveEpicHeader(
   tab: EpicTab,
   permissionRole: PermissionRole,
   activeAgentIds: ReadonlyArray<string>,
 ): void {
   __getOpenEpicRegistryForTests().acquire(tab.id, () =>
-    buildHeaderEpicHandle(tab, permissionRole, activeAgentIds, []),
+    buildHeaderEpicHandle(tab, permissionRole, []),
   );
+  publishHeaderActivity(tab, activeAgentIds);
 }
 
 function buildHeaderEpicHandle(
   tab: EpicTab,
   permissionRole: PermissionRole,
-  activeAgentIds: ReadonlyArray<string>,
   liveAgentIds: ReadonlyArray<string>,
 ): OpenEpicStoreHandle {
   const liveChatsById = Object.fromEntries(
@@ -265,15 +299,7 @@ function buildHeaderEpicHandle(
     subscribe: () => () => undefined,
   });
   const awareness = {
-    getStates: () =>
-      new Map<number, Record<string, unknown>>([
-        [
-          1,
-          {
-            [AGENT_WORKING_AWARENESS_FIELD]: activeAgentIds,
-          },
-        ],
-      ]),
+    getStates: () => new Map<number, Record<string, unknown>>(),
     on: () => undefined,
     off: () => undefined,
   };
@@ -480,6 +506,8 @@ describe("<TabStrip />", () => {
   afterEach(() => {
     cleanup();
     queryClient.clear();
+    headerActivityByEpic.clear();
+    resetAgentActivityPresence();
     resetStores();
   });
 
