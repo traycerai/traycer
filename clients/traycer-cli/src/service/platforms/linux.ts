@@ -135,8 +135,24 @@ async function installService(
     // Roll the write back: a unit file systemd was never told about (or
     // refused to enable) must not outlive the failed install - it would sit
     // in ~/.config/systemd/user as an orphan that a later daemon-reload
-    // silently registers. Both cleanup steps are best-effort; the error the
+    // silently registers. All cleanup steps are best-effort; the error the
     // operator sees is the install failure, not the rollback's.
+    //
+    // `enable --now` is enable-then-start as two separate steps: a start
+    // failure after a successful enable leaves the enablement symlinks in
+    // place (systemd does not roll them back), so `disable` must run BEFORE
+    // the manifest is removed - otherwise the surviving symlinks point at a
+    // unit file that no longer exists.
+    await run(
+      "systemctl",
+      ["--user", "disable", "--now", unitName(options.label)],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: 10_000,
+        tolerateNonZeroExit: true,
+      },
+    ).catch(() => undefined);
     await rm(manifestPath, { force: true }).catch(() => undefined);
     await run("systemctl", ["--user", "daemon-reload"], {
       env: undefined,

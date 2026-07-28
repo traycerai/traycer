@@ -126,7 +126,7 @@ describe("linux service install flow", () => {
   });
 
   it("rolls the unit file back when daemon-reload fails", async () => {
-    const { runner } = recordingRunner(
+    const { calls, runner } = recordingRunner(
       (call) => call.args[1] === "daemon-reload",
     );
 
@@ -135,6 +135,15 @@ describe("linux service install flow", () => {
       message: expect.stringContaining("unit file was removed"),
     });
     expect(await fileExists(unitFile())).toBe(false);
+    // The rollback's own daemon-reload runs too (best-effort, tolerated),
+    // so systemd is told about the removal even though the initial reload
+    // is what failed.
+    expect(calls.map(verbOf)).toEqual([
+      "show-environment",
+      "daemon-reload",
+      "disable",
+      "daemon-reload",
+    ]);
   });
 
   it("rolls the unit file back - and re-reloads - when enable --now fails", async () => {
@@ -146,12 +155,16 @@ describe("linux service install flow", () => {
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
     });
     expect(await fileExists(unitFile())).toBe(false);
-    // The rollback daemon-reload runs AFTER the failed enable, so systemd
-    // forgets the removed unit rather than holding a loaded orphan.
+    // `disable --now` runs BEFORE the manifest is removed: `enable --now`
+    // failing on the start half still leaves the enablement symlinks in
+    // place, and removing the unit file first would leave them dangling.
+    // The rollback daemon-reload runs last, so systemd forgets the removed
+    // unit rather than holding a loaded orphan.
     expect(calls.map(verbOf)).toEqual([
       "show-environment",
       "daemon-reload",
       "enable",
+      "disable",
       "daemon-reload",
     ]);
   });

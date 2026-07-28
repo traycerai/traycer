@@ -73,6 +73,14 @@ export const DOCTOR_ISSUE_CODES = {
   // logout. Enable-linger is best-effort at install (polkit may refuse
   // non-interactively); this is the promised follow-up surface.
   LINGER_DISABLED: "LINGER_DISABLED",
+  // Windows-only: the host's Scheduled Task launches through Windows
+  // Script Host (wscript.exe), and enterprise hardening commonly disables
+  // WSH via the registry Enabled=0 policy. Probed live: with the policy
+  // set, the launcher never executes and NOTHING surfaces (`//B` batch
+  // mode suppresses the block dialog) - the host silently never starts at
+  // login. A policy applied after install is invisible to install-time
+  // verification, so doctor is the surface that has to say it.
+  WINDOWS_SCRIPT_HOST_DISABLED: "WINDOWS_SCRIPT_HOST_DISABLED",
 } as const;
 
 export type DoctorIssueCode =

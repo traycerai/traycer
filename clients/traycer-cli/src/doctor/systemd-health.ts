@@ -117,14 +117,22 @@ export async function probeLinuxSystemdHealth(
     reachability.timedOut ||
     reachability.exitCode !== 0
   ) {
+    // `spawnFailed` means `systemctl` itself could not be found/executed -
+    // a genuinely non-systemd distro (Alpine/OpenRC, Void, ...), not a
+    // systemd machine in an unreachable state. The WSL/headless-login
+    // guidance below is worded entirely around the latter and would
+    // misdirect a user on the former.
+    const message = reachability.spawnFailed
+      ? "systemctl could not be found or executed, so the host cannot be registered to start automatically. " +
+        "This machine may not be running systemd (e.g. Alpine/OpenRC, Void) - Traycer's Linux service install requires a systemd user manager."
+      : "systemctl --user cannot reach a user service manager, so the host cannot be registered to start automatically. " +
+        "If this is WSL, enable systemd ('[boot]' / 'systemd=true' in /etc/wsl.conf, then 'wsl --shutdown' from Windows). " +
+        "On a headless machine, log in through a systemd session or enable lingering.";
     issues.push({
       code: DOCTOR_ISSUE_CODES.SYSTEMD_USER_UNREACHABLE,
       severity: "error",
       title: "systemd user manager unreachable",
-      message:
-        "systemctl --user cannot reach a user service manager, so the host cannot be registered to start automatically. " +
-        "If this is WSL, enable systemd ('[boot]' / 'systemd=true' in /etc/wsl.conf, then 'wsl --shutdown' from Windows). " +
-        "On a headless machine, log in through a systemd session or enable lingering.",
+      message,
       fixAction: null,
       terminalCommand: "systemctl --user status",
       details: {

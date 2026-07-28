@@ -40,6 +40,17 @@ function fail(stderr: string): ProbeCommandResult {
   };
 }
 
+function spawnFailure(): ProbeCommandResult {
+  return {
+    exitCode: -1,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    spawnFailed: true,
+    signal: null,
+  };
+}
+
 interface RecordedProbe {
   readonly command: string;
   readonly args: readonly string[];
@@ -125,6 +136,26 @@ describe("probeLinuxSystemdHealth", () => {
     expect(issues[0]?.message).toContain("WSL");
     // Follow-on probes would only repeat the same failure.
     expect(calls).toHaveLength(1);
+  });
+
+  it("names systemctl itself as missing on a genuinely non-systemd distro, not WSL/headless-login", async () => {
+    // `spawnFailed` (ENOENT/EACCES launching `systemctl`) is a different
+    // machine than a systemd box that cannot reach its user manager - e.g.
+    // Alpine/OpenRC, Void. The WSL/headless-login guidance would misdirect
+    // a user here, since neither applies.
+    const { runner } = runnerWith((probe) =>
+      probe.args[1] === "show-environment" ? spawnFailure() : ok(""),
+    );
+    const issues = await probeLinuxSystemdHealth({
+      labelId: LABEL_ID,
+      unitFileInstalled: true,
+      runner,
+    });
+    expect(issues.map((issue) => issue.code)).toEqual([
+      DOCTOR_ISSUE_CODES.SYSTEMD_USER_UNREACHABLE,
+    ]);
+    expect(issues[0]?.message).toContain("could not be found or executed");
+    expect(issues[0]?.message).not.toContain("WSL");
   });
 
   it("reports a failed unit with the journal command to read", async () => {
