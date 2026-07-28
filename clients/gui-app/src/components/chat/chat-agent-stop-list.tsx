@@ -5,16 +5,12 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentStopButton } from "@/components/chat/agent-stop-button";
 import {
+  ACTIVE_AGENT_DND_TYPE,
   getActiveAgentDragId,
-  SIDEBAR_NODE_DND_TYPE,
-  type EpicCanvasSidebarNodeDragData,
+  type EpicCanvasActiveAgentDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
-import {
-  resolveTabIdForEpic,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
 import { cn } from "@/lib/utils";
 
 /**
@@ -64,9 +60,9 @@ function StopAffordance(props: {
 }
 
 /**
- * One openable active-agent row. It emits the same `sidebar-node` payload as
- * the navigator, so the root canvas DnD system supplies the established pane,
- * empty-canvas, and header-tab drop behavior without a parallel commit path.
+ * One openable active-agent row. Its self-describing payload keeps the same
+ * pane, empty-canvas, and header-tab behavior as the navigator while preserving
+ * the agent's tab-bound host instead of consulting the app's active device.
  *
  * The drag id is occurrence-scoped because this is another rendering of a node
  * that is usually mounted in the sidebar at the same time. The trailing stop
@@ -75,7 +71,7 @@ function StopAffordance(props: {
  */
 function AgentStopRow(props: {
   readonly epicId: string;
-  readonly viewTabId: string | null;
+  readonly viewTabId: string;
   readonly agent: AgentRow;
   readonly self: boolean;
   readonly compact: boolean;
@@ -83,15 +79,20 @@ function AgentStopRow(props: {
 }) {
   const { epicId, viewTabId, agent, self, compact, onOpen } = props;
   const occurrenceId = useId();
-  const dragData = useMemo<EpicCanvasSidebarNodeDragData | undefined>(() => {
-    if (viewTabId === null) return undefined;
-    return {
-      kind: SIDEBAR_NODE_DND_TYPE,
+  const dragData = useMemo<EpicCanvasActiveAgentDragData>(
+    () => ({
+      kind: ACTIVE_AGENT_DND_TYPE,
       epicId,
       viewTabId,
-      nodeId: agent.id,
-    };
-  }, [agent.id, epicId, viewTabId]);
+      agent: {
+        id: agent.id,
+        type: nodeKindForSurface(agent.surface),
+        name: agent.title,
+        hostId: agent.hostId,
+      },
+    }),
+    [agent.hostId, agent.id, agent.surface, agent.title, epicId, viewTabId],
+  );
   const {
     attributes,
     listeners,
@@ -99,13 +100,11 @@ function AgentStopRow(props: {
     isDragging,
   } = useDraggable({
     id: getActiveAgentDragId(occurrenceId),
-    disabled: dragData === undefined,
+    disabled: false,
     data: dragData,
   });
   const openAgent = useCallback(() => onOpen(agent), [agent, onOpen]);
-  let cursorClass = "cursor-grab";
-  if (dragData === undefined) cursorClass = "cursor-pointer";
-  else if (isDragging) cursorClass = "cursor-grabbing";
+  const cursorClass = isDragging ? "cursor-grabbing" : "cursor-grab";
 
   return (
     <li
@@ -191,21 +190,16 @@ function AgentStopRow(props: {
  */
 export function AgentStopList(props: {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly self: AgentRow;
   readonly descendants: ReadonlyArray<AgentRow>;
   readonly surface: "composer-panel" | "tui-popover";
 }) {
   const compact = props.surface === "composer-panel";
   const tileNavigation = useEpicTileNavigation();
-  // Resolve once for the whole list. Rendering drag sources must not create or
-  // switch a header tab; if this epic has none open, click-to-open still works
-  // while dragging is defensively disabled.
-  const viewTabId = useEpicCanvasStore((state) =>
-    resolveTabIdForEpic(state, props.epicId),
-  );
   const openAgent = useCallback(
     (agent: AgentRow) => {
-      tileNavigation.openTileInEpic(props.epicId, {
+      tileNavigation.openTileInTab(props.viewTabId, {
         id: agent.id,
         instanceId: uuidv4(),
         type: nodeKindForSurface(agent.surface),
@@ -213,13 +207,13 @@ export function AgentStopList(props: {
         hostId: agent.hostId,
       });
     },
-    [props.epicId, tileNavigation],
+    [props.viewTabId, tileNavigation],
   );
   return (
     <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5">
       <AgentStopRow
         epicId={props.epicId}
-        viewTabId={viewTabId}
+        viewTabId={props.viewTabId}
         agent={props.self}
         self
         compact={compact}
@@ -229,7 +223,7 @@ export function AgentStopList(props: {
         <AgentStopRow
           key={agent.id}
           epicId={props.epicId}
-          viewTabId={viewTabId}
+          viewTabId={props.viewTabId}
           agent={agent}
           self={false}
           compact={compact}

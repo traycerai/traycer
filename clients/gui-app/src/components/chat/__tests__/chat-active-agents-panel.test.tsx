@@ -14,22 +14,14 @@ interface CapturedDraggable {
   readonly data: unknown;
 }
 
-interface CanvasMockState {
-  resolvedTabId: string | null;
-}
-
 const dnd = vi.hoisted(() => ({
   draggables: [] as CapturedDraggable[],
 }));
 
 const navigation = vi.hoisted(() => ({
-  openTileInEpic: vi.fn<(epicId: string, node: EpicCanvasTileRef) => null>(
+  openTileInTab: vi.fn<(viewTabId: string, node: EpicCanvasTileRef) => null>(
     () => null,
   ),
-}));
-
-const canvas = vi.hoisted((): CanvasMockState => ({
-  resolvedTabId: "tab-1",
 }));
 
 vi.mock("@dnd-kit/core", async (importOriginal) => {
@@ -50,14 +42,8 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => ({
-    openTileInEpic: navigation.openTileInEpic,
+    openTileInTab: navigation.openTileInTab,
   }),
-}));
-
-vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: (selector: (state: typeof canvas) => unknown) =>
-    selector(canvas),
-  resolveTabIdForEpic: () => canvas.resolvedTabId,
 }));
 
 // Stub the host-coupled stop button so these render tests stay focused on the
@@ -94,8 +80,7 @@ function row(over: Partial<AgentRow> & Pick<AgentRow, "id">): AgentRow {
 
 beforeEach(() => {
   dnd.draggables = [];
-  navigation.openTileInEpic.mockClear();
-  canvas.resolvedTabId = "tab-1";
+  navigation.openTileInTab.mockClear();
 });
 
 afterEach(cleanup);
@@ -105,10 +90,16 @@ describe("ActiveAgentsPanel", () => {
     return render(
       <ActiveAgentsPanel
         epicId="epic-1"
+        viewTabId="tab-1"
         self={row({ id: "self", title: "Root chat", active: true })}
         descendants={[
           row({ id: "child-1", title: "Sub-agent one" }),
-          row({ id: "child-2", title: "Sub-agent two" }),
+          row({
+            id: "child-2",
+            title: "Sub-agent two",
+            surface: "tui",
+            hostId: "d2",
+          }),
         ]}
         scrollRegionMaxHeightClass="max-h-40"
         separated={false}
@@ -164,16 +155,16 @@ describe("ActiveAgentsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Sub-agent two" }));
 
     expect(
-      navigation.openTileInEpic.mock.calls.map(
-        ([epicId, { instanceId, ...node }]) => ({
-          epicId,
+      navigation.openTileInTab.mock.calls.map(
+        ([viewTabId, { instanceId, ...node }]) => ({
+          viewTabId,
           instanceIdType: typeof instanceId,
           node,
         }),
       ),
     ).toEqual([
       {
-        epicId: "epic-1",
+        viewTabId: "tab-1",
         instanceIdType: "string",
         node: {
           id: "self",
@@ -183,33 +174,33 @@ describe("ActiveAgentsPanel", () => {
         },
       },
       {
-        epicId: "epic-1",
+        viewTabId: "tab-1",
         instanceIdType: "string",
         node: {
           id: "child-2",
-          type: "chat",
+          type: "terminal-agent",
           name: "Sub-agent two",
-          hostId: "d1",
+          hostId: "d2",
         },
       },
     ]);
   });
 
-  it("registers every row as a unique sidebar-node drag source", () => {
+  it("registers every row as a unique, host-bound active-agent drag source", () => {
     renderPanel();
     fireEvent.click(screen.getByText("Active agents"));
 
-    const draggables = dnd.draggables.filter(
-      (draggable) =>
-        readEpicCanvasDragSourceData(draggable.data)?.kind === "sidebar-node",
+    expect(dnd.draggables).toHaveLength(3);
+    expect(new Set(dnd.draggables.map((draggable) => draggable.id)).size).toBe(
+      3,
     );
-    expect(draggables).toHaveLength(3);
-    expect(new Set(draggables.map((draggable) => draggable.id)).size).toBe(3);
     expect(
-      draggables.every((draggable) => draggable.id.startsWith("active-agent:")),
+      dnd.draggables.every((draggable) =>
+        draggable.id.startsWith("active-agent:"),
+      ),
     ).toBe(true);
     expect(
-      draggables.map((draggable) => ({
+      dnd.draggables.map((draggable) => ({
         disabled: draggable.disabled,
         source: readEpicCanvasDragSourceData(draggable.data),
       })),
@@ -217,28 +208,43 @@ describe("ActiveAgentsPanel", () => {
       {
         disabled: false,
         source: {
-          kind: "sidebar-node",
+          kind: "active-agent",
           epicId: "epic-1",
           viewTabId: "tab-1",
-          nodeId: "self",
+          agent: {
+            id: "self",
+            type: "chat",
+            name: "Root chat",
+            hostId: "d1",
+          },
         },
       },
       {
         disabled: false,
         source: {
-          kind: "sidebar-node",
+          kind: "active-agent",
           epicId: "epic-1",
           viewTabId: "tab-1",
-          nodeId: "child-1",
+          agent: {
+            id: "child-1",
+            type: "chat",
+            name: "Sub-agent one",
+            hostId: "d1",
+          },
         },
       },
       {
         disabled: false,
         source: {
-          kind: "sidebar-node",
+          kind: "active-agent",
           epicId: "epic-1",
           viewTabId: "tab-1",
-          nodeId: "child-2",
+          agent: {
+            id: "child-2",
+            type: "terminal-agent",
+            name: "Sub-agent two",
+            hostId: "d2",
+          },
         },
       },
     ]);
@@ -250,6 +256,7 @@ describe("AgentStopList (TUI popover surface)", () => {
     render(
       <AgentStopList
         epicId="epic-1"
+        viewTabId="tab-1"
         self={row({ id: "self", title: "Root chat" })}
         descendants={[row({ id: "child-1", title: "Sub-agent one" })]}
         surface="tui-popover"
