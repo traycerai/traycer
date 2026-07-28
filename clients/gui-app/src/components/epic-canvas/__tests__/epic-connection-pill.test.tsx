@@ -214,6 +214,28 @@ describe("<EpicConnectionPill />", () => {
     );
   });
 
+  it("shows host-pending offline work without claiming it is durable", async () => {
+    renderPill("offlineWithHostPending");
+
+    expect(screen.getByText("Offline — changes pending")).not.toBeNull();
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("offlineWithHostPending");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-amber-500",
+    );
+    expect(screen.getByTestId("epic-connection-pill-dot").textContent).toBe("");
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+    ).not.toContain("saved locally");
+    await expectTooltip(
+      "The cloud connection is down. This device is still processing pending changes; keep it running.",
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "still processing pending changes",
+    );
+  });
+
   it("preserves keyboard focus when a quiet save becomes an offline warning", () => {
     const { rerender } = renderPill("syncing");
     const before = screen.getByTestId("epic-connection-pill");
