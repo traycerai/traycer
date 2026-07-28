@@ -56,6 +56,25 @@ const HOST_START_WITH_LABEL_TAIL = [
   "start",
   "--service-label",
 ] as const;
+
+/**
+ * Basename of the launcher-file form of the macOS LaunchAgent (2026-07):
+ * `ProgramArguments = [<...>/<label-id>/traycer-host-start, <cli-command>,
+ * <cli-args...>]`. The wrapper moved from an inline `/bin/sh -c` program to
+ * an executable file because macOS background-task management names a raw
+ * login item after `ProgramArguments[0]` - the inline form surfaced as a
+ * bare "sh" from an "Unknown Developer" in System Settings on every
+ * CLI-registered install.
+ *
+ * Single source of truth for the same reason as
+ * `COMPATIBLE_HOST_START_SCRIPT_PREFIX` directly below: the emitter
+ * (`traycer-cli`'s service platform) builds the launcher path from this
+ * constant, and this recognizer attests plists by it. If either side moved
+ * alone, `attestTraycerRegistration` would degrade to `indeterminate` for
+ * plists this codebase just wrote, and `isEvictableTraycerIdentity`
+ * refuses eviction on `indeterminate` - a lockout surviving the repair.
+ */
+export const HOST_START_LAUNCHER_BASENAME = "traycer-host-start";
 /**
  * The invariant head of the `/bin/sh -c` program the macOS LaunchAgent plist
  * and the systemd user unit both run — everything up to and including the
@@ -260,6 +279,20 @@ function isHostStartInvocation(
   args: readonly string[],
   labelId: string | null,
 ): boolean {
+  // Launcher-file form: [<...>/<label-id>/traycer-host-start, <cli>, ...].
+  // The label id sits in the launcher's parent directory, so a label match
+  // is still required when a label is known - mirroring the inline-script
+  // arm below, a launcher registered for a DIFFERENT label is not this
+  // label's invocation.
+  const launcher = args[0];
+  if (
+    args.length >= 2 &&
+    launcher !== undefined &&
+    launcher.endsWith(`/${HOST_START_LAUNCHER_BASENAME}`) &&
+    (labelId === null || launcher.includes(`/${labelId}/`))
+  ) {
+    return true;
+  }
   const script = args[2];
   if (
     args.length >= 4 &&

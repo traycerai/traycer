@@ -22,6 +22,7 @@ export {
   isTraycerLabelShape,
   traycerLabelIdsForBase,
   COMPATIBLE_HOST_START_SCRIPT_PREFIX,
+  HOST_START_LAUNCHER_BASENAME,
   TRAYCER_HOST_CONTENT_TAG,
 } from "./identity";
 

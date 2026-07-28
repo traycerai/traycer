@@ -3,9 +3,14 @@ import {
   attestTraycerRegistration,
   isEvictableTraycerIdentity,
   COMPATIBLE_HOST_START_SCRIPT_PREFIX,
+  HOST_START_LAUNCHER_BASENAME,
 } from "@traycer-clients/shared/host-lifecycle";
 import { HOST_CAPABILITY_SERVICE_LABEL } from "../../../host/capabilities";
-import { buildCompatibleHostStartScript } from "../host-start-script";
+import {
+  buildCompatibleHostStartScript,
+  buildHostStartLauncherScript,
+} from "../host-start-script";
+import { serviceLauncherScriptPath } from "../../label";
 
 /**
  * The emitter and the recognizer must agree on one string.
@@ -93,6 +98,68 @@ describe("host-start script / identity attestation lockstep", () => {
     });
 
     expect(attestation.kind).toBe("attested");
+  });
+
+  it("attests a launcher-file registration built by the real path helper, on label shape alone", () => {
+    // The 2026-07 plist shape: ProgramArguments[0] is the launcher FILE
+    // (`~/.traycer/service/<label>/traycer-host-start`), so there is no
+    // inline script for the recognizer to read. The same regression class
+    // as the inline-prefix drift applies: if the emitter's path layout and
+    // the recognizer's basename/label matching moved apart, every
+    // launcher-form plist would attest `indeterminate` and stop being
+    // evictable. This row uses the REAL `serviceLauncherScriptPath` so the
+    // two cannot drift silently.
+    const launcherPath = serviceLauncherScriptPath({
+      id: labelId,
+      displayName: "Traycer Host (Dev)",
+      environment: "dev",
+      devSlot: null,
+    });
+    const attestation = attestTraycerRegistration({
+      labelId,
+      knownLabels: null,
+      programArguments: [launcherPath, "/usr/local/bin/traycer"],
+      contentTag: null,
+      sourceText: null,
+    });
+
+    expect(attestation.kind).toBe("attested");
+    expect(isEvictableTraycerIdentity(attestation)).toBe(true);
+  });
+
+  it("does not attest a launcher registered for a DIFFERENT label as this label's invocation", () => {
+    // The label id lives in the launcher's parent directory. A launcher
+    // path for another environment's label must not count as this label's
+    // invocation signal - same rule as the inline arm, which requires the
+    // script to name the label.
+    const attestation = attestTraycerRegistration({
+      labelId,
+      knownLabels: null,
+      programArguments: [
+        `/Users/u/.traycer/service/ai.traycer.host.staging/${HOST_START_LAUNCHER_BASENAME}`,
+        "/usr/local/bin/traycer",
+      ],
+      contentTag: null,
+      sourceText: null,
+    });
+
+    expect(attestation.kind).toBe("indeterminate");
+    expect(isEvictableTraycerIdentity(attestation)).toBe(false);
+  });
+
+  it("emits a launcher file whose basename macOS will surface, carrying the same capability probe", () => {
+    expect(
+      serviceLauncherScriptPath({
+        id: labelId,
+        displayName: "Traycer Host (Dev)",
+        environment: "dev",
+        devSlot: null,
+      }).endsWith(`/${labelId}/${HOST_START_LAUNCHER_BASENAME}`),
+    ).toBe(true);
+    const script = buildHostStartLauncherScript(labelId);
+    expect(script.startsWith("#!/bin/sh\n")).toBe(true);
+    expect(script).toContain(HOST_CAPABILITY_SERVICE_LABEL);
+    expect(script).toContain(`--service-label '${labelId}'`);
   });
 
   it("still refuses to evict a foreign script on the same label shape", () => {

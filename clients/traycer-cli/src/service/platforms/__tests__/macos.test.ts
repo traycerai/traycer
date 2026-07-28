@@ -26,10 +26,17 @@ import {
   readRegisteredCliInvocation,
   type ProcessRunner,
 } from "../macos";
-import { buildCompatibleHostStartScript } from "../host-start-script";
+import {
+  buildCompatibleHostStartScript,
+  buildHostStartLauncherScript,
+} from "../host-start-script";
 import { ProcessRunError, type RunResult } from "../../process-runner";
 import type { ServiceController } from "../../index";
-import { serviceLabelFor, smAppServiceAgentLabelId } from "../../label";
+import {
+  serviceLabelFor,
+  serviceLauncherScriptPath,
+  smAppServiceAgentLabelId,
+} from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
 
 const execFileAsync = promisify(execFile);
@@ -225,6 +232,82 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     } finally {
       await rm(work, { recursive: true, force: true });
     }
+  });
+
+  // The launcher-FILE form of the same contract: the macOS plist executes
+  // `~/.traycer/service/<label>/traycer-host-start <cli> <args...>` (so BTM
+  // names the login item after the file, not after /bin/sh), and BOTH CLI
+  // generations must still start. Executes the real emitted file, exactly
+  // like the inline-form row above.
+  it("launcher file: starts both an N-1 CLI without --service-label and a current CLI with it, preserving leading invocation args", async () => {
+    const work = mkdtempSync(join(tmpdir(), "traycer-host-start-launcher-"));
+    const launcher = join(work, "traycer-host-start");
+    const oldCli = join(work, "old-cli.sh");
+    const newCli = join(work, "new-cli.sh");
+    const oldArgs = join(work, "old-args.txt");
+    const newArgs = join(work, "new-args.txt");
+    try {
+      await writeFile(
+        launcher,
+        buildHostStartLauncherScript("ai.traycer.host.compat"),
+        "utf8",
+      );
+      await chmod(launcher, 0o755);
+      await writeFile(
+        oldCli,
+        `#!/bin/sh
+if [ "$1" = "host" ] && [ "$2" = "capabilities" ]; then
+  echo "error: unknown command 'capabilities'" >&2
+  exit 1
+fi
+printf '%s\\n' "$@" > ${JSON.stringify(oldArgs)}
+`,
+        "utf8",
+      );
+      await writeFile(
+        newCli,
+        `#!/bin/sh
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && [ "$5" = "service-label" ]; then exit 0; fi
+printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
+`,
+        "utf8",
+      );
+      await chmod(oldCli, 0o700);
+      await chmod(newCli, 0o700);
+
+      await execFileAsync(launcher, [oldCli]);
+      await execFileAsync(launcher, [newCli, "--entry=cli-entry.js"]);
+
+      expect(await readFile(oldArgs, "utf8")).toBe("host\nstart\n");
+      expect(await readFile(newArgs, "utf8")).toBe(
+        "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n",
+      );
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  // Field observation 2026-07-28 (sfltool dumpbtm): with `/bin/sh` as
+  // ProgramArguments[0], BTM recorded `Name: sh, Parent Identifier:
+  // Unknown Developer` for every CLI-registered install, and
+  // AssociatedBundleIdentifiers alone was probed and ignored for that
+  // shape. The plist must execute the per-label launcher file, whose
+  // basename is what macOS shows.
+  it("puts the per-label launcher file first in ProgramArguments so BTM names the item traycer-host-start", () => {
+    const plist = buildLaunchAgentPlist({
+      label,
+      cli: { command: "/usr/local/bin/traycer", args: ["--entry=e.js"] },
+    });
+
+    const launcherPath = serviceLauncherScriptPath(label);
+    expect(launcherPath.endsWith(`/${label.id}/traycer-host-start`)).toBe(true);
+    expect(plist).toContain(`<key>ProgramArguments</key>
+  <array>
+    <string>${launcherPath}</string>
+    <string>/usr/local/bin/traycer</string>
+    <string>--entry=e.js</string>
+  </array>`);
+    expect(plist).not.toContain("/bin/sh");
   });
 
   // The blocker this contract replaces: `--service-label` used to be passed
