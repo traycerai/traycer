@@ -669,7 +669,12 @@ export class TabCommandCoordinator {
         const layout = currentLayout();
         const withRef = createLayoutItem(layout, createdRef);
         const item = findStripItemForRef(withRef, createdRef);
-        if (item?.kind !== "tab") return layout;
+        if (item?.kind !== "tab") {
+          // Placement failed - the created ref is not part of the
+          // authoritative layout, so it must not be reported as placed.
+          createdRef = null;
+          return layout;
+        }
         return reorderStripItem(withRef, {
           itemId: item.id,
           targetIndex,

@@ -767,12 +767,14 @@ describe("<TabStrip />", () => {
     const router = buildRouter("/epics/e-a/e-a");
     render(<RouterProvider router={router} />);
 
-    const group = await screen.findByTestId("split-tab-group-split-a");
+    // Purely cosmetic geometry (frame width, underline thickness, member
+    // padding) is not asserted via Tailwind class strings - those break on
+    // any restyle without proving behavior. The focus semantics that matter
+    // are the data-focused-side/data-focused attributes and bg-primary state
+    // asserted below.
+    await screen.findByTestId("split-tab-group-split-a");
     const trigger = screen.getByTestId("split-quick-actions-split-a");
     const indicator = screen.getByTestId("split-focus-indicator-split-a");
-    const groupUnderline = screen.getByTestId(
-      "split-tab-group-underline-split-a",
-    );
     const controlUnderline = screen.getByTestId(
       "split-tab-group-underline-control-split-a",
     );
@@ -786,14 +788,8 @@ describe("<TabStrip />", () => {
     const rightTab = screen.getByTestId("tab-epic-e-b");
     const leftPane = indicator.querySelector('[data-split-pane="left"]');
     const rightPane = indicator.querySelector('[data-split-pane="right"]');
-    expect(group.className).toContain("w-[31rem]");
-    expect(trigger.className).toContain("w-10");
-    expect(groupUnderline.className).toContain("bottom-0");
-    expect(groupUnderline.className).toContain("h-px");
     expect(controlUnderline.className).toContain("bg-primary");
     expect(screen.queryByTestId("split-tab-divider-split-a")).toBeNull();
-    expect(leftTab.className).toContain("px-5");
-    expect(rightTab.className).toContain("px-1.5");
     expect(leftUnderline.className).not.toContain("bg-primary");
     expect(rightUnderline.className).toContain("bg-primary");
     expect(

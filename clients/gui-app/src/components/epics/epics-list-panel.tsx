@@ -369,15 +369,25 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     setWorktreeCheckOverrides(new Map());
   }, []);
 
+  // `variant="picker"` embeds this panel as a read-only destination browser
+  // (the split chooser's History section) - it must never expose the
+  // select/delete/sweep flow, so every entry point into it is gated here
+  // rather than in the chrome that merely renders it.
+  const selectionEnabled = variant !== "picker";
+
   // A sweep target is a SET: one id from a row action, the whole selection
   // from the bulk action. The set is load-bearing - a worktree shared between
   // two SELECTED tasks is no longer "shared" and becomes an ordinary
   // candidate.
   const [sweepEpicIds, setSweepEpicIds] =
     useState<ReadonlyArray<string> | null>(null);
-  const requestSweep = useCallback((epicId: string) => {
-    setSweepEpicIds([epicId]);
-  }, []);
+  const requestSweep = useCallback(
+    (epicId: string) => {
+      if (!selectionEnabled) return;
+      setSweepEpicIds([epicId]);
+    },
+    [selectionEnabled],
+  );
   const sweepTaskTitle = useMemo(() => {
     if (sweepEpicIds === null || sweepEpicIds.length !== 1) return null;
     const item = items.find(
@@ -400,20 +410,21 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
 
   const toggleSelection = useCallback(
     (id: string) => {
-      if (!selectableIdSet.has(id)) return;
+      if (!selectionEnabled || !selectableIdSet.has(id)) return;
       setSelectedIds((prev) => withMemberToggled(prev, id));
       setSelectionMode(true);
     },
-    [selectableIdSet],
+    [selectableIdSet, selectionEnabled],
   );
 
   const requestDelete = useCallback(
     (ids: ReadonlyArray<string>) => {
+      if (!selectionEnabled) return;
       const deletableIds = ids.filter((id) => selectableIdSet.has(id));
       if (deletableIds.length === 0) return;
       setPendingDeleteIds(deletableIds);
     },
-    [selectableIdSet],
+    [selectableIdSet, selectionEnabled],
   );
 
   const visibleSelectedIds = useMemo(() => {
@@ -433,9 +444,10 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     [visibleSelectedIds, worktreesByEpicId],
   );
   const enterSelectionMode = useCallback(() => {
+    if (!selectionEnabled) return;
     setSelectedIds(new Set());
     setSelectionMode(true);
-  }, []);
+  }, [selectionEnabled]);
   const selectAllVisible = useCallback(() => {
     setSelectedIds(new Set(selectableItemIds));
   }, [selectableItemIds]);
@@ -531,6 +543,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             ) : null
           }
           filters={{ active: hasActiveFilters, onClear: handleClear }}
+          showSelection={selectionEnabled}
           selection={
             selectionMode
               ? {
@@ -745,6 +758,9 @@ interface PanelRefreshControls {
 interface PanelChromeBarProps {
   readonly leading: ReactNode;
   readonly filters: PanelFilterControls;
+  /** False for the read-only `variant="picker"` embed: hides the entry point
+   * into bulk select/sweep/delete rather than merely disabling it. */
+  readonly showSelection: boolean;
   readonly selection: PanelSelectionControls;
   readonly sort: HistorySortOption;
   readonly onSortChange: (next: HistorySortOption) => void;
@@ -849,18 +865,20 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
               onSearchChange={props.onSearchChange}
               facets={props.facets}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-label="Select history items"
-              disabled={!props.selection.canSelect}
-              className="gap-1.5 overflow-visible text-ui-sm text-muted-foreground hover:text-foreground"
-              onClick={props.selection.onStart}
-            >
-              <ListChecks className="size-4" />
-              Select
-            </Button>
+            {props.showSelection ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label="Select history items"
+                disabled={!props.selection.canSelect}
+                className="gap-1.5 overflow-visible text-ui-sm text-muted-foreground hover:text-foreground"
+                onClick={props.selection.onStart}
+              >
+                <ListChecks className="size-4" />
+                Select
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="ghost"

@@ -107,8 +107,10 @@ export const SplitTabItem = memo(function SplitTabItem(
       data-testid={`split-tab-group-${props.item.id}`}
       data-active={props.isActive ? "true" : "false"}
       // Two ordinary tab footprints plus the leading quick-actions control.
-      // The extra width keeps that control from stealing either title's share.
-      className="relative flex w-[31rem] min-w-[276px] max-w-[31rem] flex-[1_1_31rem] items-end [container-type:inline-size]"
+      // The extra width keeps that control from stealing either title's
+      // share. Capped by viewport width (not just the rem ceiling) so the
+      // frame stays fluid on narrow windows instead of pinning to 31rem.
+      className="relative flex w-[min(60vw,31rem)] min-w-[276px] max-w-[min(60vw,31rem)] flex-[1_1_min(60vw,31rem)] items-end [container-type:inline-size]"
     >
       {/*
         The shared silhouette's end caps flare over the outer ~20px, so the

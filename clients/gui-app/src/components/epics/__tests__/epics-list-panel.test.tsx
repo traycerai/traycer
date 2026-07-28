@@ -407,6 +407,21 @@ describe("<EpicsListPanel />", () => {
     expect(router.state.location.pathname).toBe("/");
   });
 
+  it("hides the bulk select/delete flow in the read-only picker variant", async () => {
+    renderPanel("picker", "/");
+
+    await screen.findByRole("link", { name: "Open task Open from landing" });
+
+    expect(
+      screen.queryByRole("button", { name: "Select history items" }),
+    ).toBeNull();
+    // The per-row delete affordance stays rendered (matches the disabled
+    // hover-reveal treatment used elsewhere) but must be inert: clicking it
+    // must not open the destructive delete-confirmation flow.
+    fireEvent.click(await screen.findByTestId("epics-list-row-delete"));
+    expect(screen.queryByText("This action cannot be undone.")).toBeNull();
+  });
+
   afterEach(() => {
     cleanup();
     __resetTabNavigationControllerForTesting();
