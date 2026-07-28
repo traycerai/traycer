@@ -25,6 +25,7 @@ import { resolveHostAuth } from "../internal/host-auth";
 import { resolveEndpoint } from "../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
 import type { CommandContext, CommandFn } from "../runner/runner";
+import { writeStderr } from "../runner/std-write";
 
 // Stream timing knobs, mirroring `traycer monitor`. A worktree delete is a
 // one-shot: it runs a teardown script (which can be slow) then removes the
@@ -371,7 +372,7 @@ function relayStatus(ctx: CommandContext, message: string): void {
     });
     return;
   }
-  process.stderr.write(`[traycer worktree delete] ${message}\n`);
+  writeStderr(`[traycer worktree delete] ${message}\n`);
 }
 
 /**

@@ -84,6 +84,7 @@ import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
+import { flushStdio, writeStderr, writeStdout } from "./runner/std-write";
 
 // Helper: register a runner-aware action handler. The runner owns
 // process.exit, so anything composed via `withRunner` participates in
@@ -244,11 +245,11 @@ function applyRunnerErrorRouting(root: Command): void {
     cmd.exitOverride();
     cmd.configureOutput({
       writeErr: (str) => {
-        if (!argvRequestsJson(root)) process.stderr.write(str);
+        if (!argvRequestsJson(root)) writeStderr(str);
       },
       writeOut: (str) => {
         if (argvRequestsJson(root)) commanderStdoutBuffer += str;
-        else process.stdout.write(str);
+        else writeStdout(str);
       },
     });
     for (const sub of cmd.commands) route(sub);
@@ -435,7 +436,7 @@ function registerHostCommands(program: Command): void {
           : { kind: "list", json: opts.json === true },
       );
       if (response.stdout.length > 0) {
-        process.stdout.write(response.stdout);
+        writeStdout(response.stdout);
       }
       process.exitCode = response.exitCode;
     });
@@ -1994,11 +1995,12 @@ function registerMonitorCommand(program: Command): void {
         { exitCode: 1 },
         errorFromUnknown(err),
       );
-      process.stderr.write(
+      writeStderr(
         `[traycer monitor] fatal: ${
           err instanceof Error ? err.message : String(err)
         }\n`,
       );
+      await flushStdio();
       process.exit(1);
     }
   });
@@ -2020,7 +2022,7 @@ if (isTraycerCliEntrypoint(entryArgv)) {
     environment: config.environment,
     argvLength: process.argv.length,
   });
-  program.parseAsync(process.argv).catch((err) => {
+  program.parseAsync(process.argv).catch(async (err) => {
     if (err instanceof CommanderError) {
       const jsonMode = argvRequestsJson(program);
       // Help (`--help`) and version (`--version`) flow through exitOverride
@@ -2041,8 +2043,11 @@ if (isTraycerCliEntrypoint(entryArgv)) {
             data: { output: commanderStdoutBuffer.trimEnd() },
             timestamp: new Date().toISOString(),
           };
-          process.stdout.write(`${JSON.stringify(event)}\n`);
+          writeStdout(`${JSON.stringify(event)}\n`);
         }
+        // `--help` under `--json` wraps the whole help text in one line;
+        // long help easily clears the 64 KiB pipe buffer. See std-write.ts.
+        await flushStdio();
         process.exit(0);
       }
       // Parse failure. In --json mode emit the runner's NDJSON error
@@ -2068,8 +2073,9 @@ if (isTraycerCliEntrypoint(entryArgv)) {
           },
           timestamp: new Date().toISOString(),
         };
-        process.stdout.write(`${JSON.stringify(event)}\n`);
+        writeStdout(`${JSON.stringify(event)}\n`);
       }
+      await flushStdio();
       process.exit(err.exitCode || 1);
     }
     const error = errorFromUnknown(err);
@@ -2090,12 +2096,13 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         },
         timestamp: new Date().toISOString(),
       };
-      process.stdout.write(`${JSON.stringify(event)}\n`);
+      writeStdout(`${JSON.stringify(event)}\n`);
     } else {
-      process.stderr.write(
+      writeStderr(
         `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
       );
     }
+    await flushStdio();
     process.exit(1);
   });
 }
@@ -2127,7 +2134,7 @@ function exitAfterUnhandledFailure(
   const error = errorFromUnknown(cause);
   logger.error(message, { exitCode: 1 }, error);
   Sentry.captureException(cause);
-  process.stderr.write(
+  writeStderr(
     `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
   );
   void Sentry.flush(2000)
@@ -2137,6 +2144,7 @@ function exitAfterUnhandledFailure(
         errorMessage: errorFromUnknown(flushErr).message,
       });
     })
+    .then(() => flushStdio())
     .finally(() => {
       process.exit(1);
     });
