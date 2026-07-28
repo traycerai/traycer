@@ -18,6 +18,7 @@ import {
   CLI_CONFIG_VERSION,
   EMPTY_CLI_CONFIG,
   type CliConfig,
+  type FeatureSettings,
   type DetectedShell,
   type EnvOverrideValue,
   type EffectiveShellConfig,
@@ -475,13 +476,18 @@ export async function readCliConfig(): Promise<CliConfig> {
       "~/.traycer/cli/config.json is not valid JSON; refusing to overwrite. Fix or delete it.",
     );
   }
-  const result = cliConfigSchema.safeParse(migrateCliConfig(parsed));
+  const result = parseCliConfig(parsed);
   if (!result.success) {
     throw new Error(
       `~/.traycer/cli/config.json does not match the expected schema: ${result.error.message}`,
     );
   }
   return result.data;
+}
+
+/** Migrates and validates a parsed config document. */
+function parseCliConfig(parsed: unknown) {
+  return cliConfigSchema.safeParse(migrateCliConfig(parsed));
 }
 
 /**
@@ -746,10 +752,8 @@ export async function setShell(
     nextArgs = current.shell.args;
   }
   await writeCliConfig({
-    version: CLI_CONFIG_VERSION,
+    ...current,
     shell: { path: nextPath, args: nextArgs, entries },
-    envOverrides: current.envOverrides,
-    logs: current.logs,
   });
   return { path: nextPath, args: nextArgs };
 }
@@ -775,10 +779,8 @@ export async function addShell(
     isWindows,
   );
   await writeCliConfig({
-    version: CLI_CONFIG_VERSION,
+    ...current,
     shell: { path, args, entries },
-    envOverrides: current.envOverrides,
-    logs: current.logs,
   });
   return { path, entries };
 }
@@ -815,10 +817,8 @@ export async function revertShellArgs(
     ? [...defaultShellArgs(path)]
     : current.shell.args;
   await writeCliConfig({
-    version: CLI_CONFIG_VERSION,
+    ...current,
     shell: { path: current.shell.path, args: nextArgs, entries },
-    envOverrides: current.envOverrides,
-    logs: current.logs,
   });
   return { path, reverted: true };
 }
@@ -849,10 +849,8 @@ export async function removeShell(
   const nextPath = wasSelected ? null : current.shell.path;
   const nextArgs = wasSelected ? null : current.shell.args;
   await writeCliConfig({
-    version: CLI_CONFIG_VERSION,
+    ...current,
     shell: { path: nextPath, args: nextArgs, entries },
-    envOverrides: current.envOverrides,
-    logs: current.logs,
   });
   return { removed, path: nextPath };
 }
@@ -866,10 +864,8 @@ export async function removeShell(
 export async function resetShell(): Promise<void> {
   const current = await readConfigWithSeededEntries();
   await writeCliConfig({
-    version: CLI_CONFIG_VERSION,
+    ...current,
     shell: { path: null, args: null, entries: current.shell.entries },
-    envOverrides: current.envOverrides,
-    logs: current.logs,
   });
 }
 
@@ -884,9 +880,7 @@ export async function setLogLevels(
 ): Promise<void> {
   const current = await readCliConfig();
   await writeCliConfig({
-    version: CLI_CONFIG_VERSION,
-    shell: current.shell,
-    envOverrides: current.envOverrides,
+    ...current,
     logs: { cliLogLevel, hostLogLevel },
   });
 }
@@ -905,12 +899,41 @@ export async function readLogLevels(): Promise<LogsConfig> {
 export function readLogLevelsSync(): LogsConfig {
   try {
     const raw = readFileSync(cliConfigPath(), "utf8");
-    const result = cliConfigSchema.safeParse(migrateCliConfig(JSON.parse(raw)));
+    const result = parseCliConfig(JSON.parse(raw));
     if (result.success) return result.data.logs;
   } catch {
     // A logger must never crash on a config read — fall through to defaults.
   }
   return { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL };
+}
+
+/** The local experimental feature settings (defaults when unset). */
+export async function readFeatureSettings(): Promise<FeatureSettings> {
+  return (await readCliConfig()).features;
+}
+
+/**
+ * Best-effort synchronous feature read for command, prompt, tool, and operation
+ * gates. Feature checks fail closed when the config is absent or invalid.
+ */
+export function readFeatureSettingsSync(): FeatureSettings {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = parseCliConfig(JSON.parse(raw));
+    if (result.success) return result.data.features;
+  } catch {
+    // Feature gates must remain safe even when config cannot be read.
+  }
+  return { agentRoles: false };
+}
+
+/** Enables or disables agent roles while preserving the rest of the config. */
+export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
+  const current = await readCliConfig();
+  await writeCliConfig({
+    ...current,
+    features: { ...current.features, agentRoles: enabled },
+  });
 }
 
 export async function listEnvOverrides(): Promise<
@@ -931,10 +954,8 @@ export async function setEnvOverride(
 ): Promise<void> {
   const current = await readCliConfig();
   await writeCliConfig({
-    version: CLI_CONFIG_VERSION,
-    shell: current.shell,
+    ...current,
     envOverrides: { ...current.envOverrides, [key]: value },
-    logs: current.logs,
   });
 }
 
@@ -946,10 +967,8 @@ export async function deleteEnvOverride(key: string): Promise<boolean> {
   };
   delete nextOverrides[key];
   await writeCliConfig({
-    version: CLI_CONFIG_VERSION,
-    shell: current.shell,
+    ...current,
     envOverrides: nextOverrides,
-    logs: current.logs,
   });
   return true;
 }

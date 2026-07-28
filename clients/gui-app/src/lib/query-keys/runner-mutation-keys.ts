@@ -56,6 +56,8 @@ export const runnerMutationKeys = {
   // Settings → log level (desktop/cli/host). Machine-local config, not
   // host-scoped, so a single static key suffices.
   logLevelsSet: () => ["runner.logLevels.set"] as const,
+  agentRolesEnabledSet: () =>
+    ["runner.featureSettings.agentRoles.set"] as const,
   setAllowPrereleaseUpdates: () =>
     ["runner.appUpdates.setAllowPrerelease"] as const,
   globalShortcutsSet: (id: GlobalShortcutId) =>
@@ -121,6 +123,7 @@ export const runnerQueryKeys = {
   // The three configurable log thresholds, read together from the desktop
   // platform bridge. Machine-local, so not host-scoped.
   logLevels: () => ["runner.logLevels"] as const,
+  featureSettings: () => ["runner.featureSettings"] as const,
   // Fonts installed on this machine (Settings → Appearance font pickers).
   // Machine-local and effectively static for the session, so a single
   // static key suffices.

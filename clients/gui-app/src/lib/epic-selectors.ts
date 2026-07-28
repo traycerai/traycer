@@ -54,6 +54,7 @@ import { useEpicStore } from "@/hooks/use-epic-store";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-title";
+import { useAgentRolesEnabled } from "@/hooks/runner/use-runner-feature-settings-query";
 import {
   useMaybeOpenEpicHandle,
   useOpenEpicHandle,
@@ -127,6 +128,9 @@ const EMPTY_NODES_AS_ARTIFACTS: ReadonlyArray<ArtifactProjection> =
 const EMPTY_TREE_ID_ARRAY: readonly string[] = EMPTY_ARRAY;
 const EMPTY_TREE_ID_SET: ReadonlySet<string> = new Set<string>();
 const EMPTY_ROLE_CLAIMS: readonly RoleClaim[] = Object.freeze([]);
+const EMPTY_ROLE_CLAIMS_BY_AGENT_ID: Readonly<
+  Record<string, readonly RoleClaim[]>
+> = Object.freeze({});
 
 export { EMPTY_TREE_ID_ARRAY, EMPTY_TREE_ID_SET };
 
@@ -925,17 +929,21 @@ export function useEpicTreeNode(id: string): TreeNode | null {
 }
 
 export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
-  return useEpicStore((s) =>
+  const enabled = useAgentRolesEnabled();
+  const claims = useEpicStore((s) =>
     Object.hasOwn(s.agentRoles.byAgentId, agentId)
       ? s.agentRoles.byAgentId[agentId]
       : EMPTY_ROLE_CLAIMS,
   );
+  return enabled ? claims : EMPTY_ROLE_CLAIMS;
 }
 
 export function useEpicAgentRoleClaimsByAgentId(): Readonly<
   Record<string, readonly RoleClaim[]>
 > {
-  return useEpicStore((s) => s.agentRoles.byAgentId);
+  const enabled = useAgentRolesEnabled();
+  const claims = useEpicStore((s) => s.agentRoles.byAgentId);
+  return enabled ? claims : EMPTY_ROLE_CLAIMS_BY_AGENT_ID;
 }
 
 /**
