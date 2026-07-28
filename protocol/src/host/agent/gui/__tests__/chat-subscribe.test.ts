@@ -1,5 +1,6 @@
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import {
+  chatActiveTurnSchema,
   chatQueuedItemSchema,
   chatQueuedManagedCommandItemSchema,
   chatSubscribeClientFrameSchema,
@@ -10,6 +11,7 @@ import {
   chatSubscribeV13,
   chatSubscribeV14,
   chatSubscribeV15,
+  chatSubscribeV16,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { autonomousResumeTriggerSchema } from "@traycer/protocol/persistence/epic/content-blocks";
@@ -52,6 +54,7 @@ const chat: Chat = {
   claudePendingWakes: [],
   messages: [userMessage],
   events: [],
+  archivedAt: null,
 };
 
 const event: ChatEvent = {
@@ -1421,7 +1424,7 @@ describe("chat.subscribe@1.4 (inReplyTo on senders)", () => {
   });
 });
 
-describe("chat.subscribe@1.5 (managed-command queue items)", () => {
+describe("chat.subscribe@1.6 (managed-command queue items)", () => {
   const managedCommandItem = {
     kind: "managed-command" as const,
     queueItemId: "queue-managed-1",
@@ -1474,8 +1477,8 @@ describe("chat.subscribe@1.5 (managed-command queue items)", () => {
     };
   }
 
-  it("declares schemaVersion 1.5", () => {
-    expect(chatSubscribeV15.schemaVersion).toEqual({ major: 1, minor: 5 });
+  it("declares schemaVersion 1.6", () => {
+    expect(chatSubscribeV16.schemaVersion).toEqual({ major: 1, minor: 6 });
   });
 
   // The load-bearing compat guarantee: every payload a ≤1.4 host ever wrote
@@ -1535,8 +1538,8 @@ describe("chat.subscribe@1.5 (managed-command queue items)", () => {
     ).toBe(false);
   });
 
-  it("carries a managed-command queue item through a 1.5 snapshot frame", () => {
-    const parsed = chatSubscribeV15.serverFrameSchema.parse(
+  it("carries a managed-command queue item through a 1.6 snapshot frame", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse(
       snapshotFrameWithQueueItems([managedCommandItem]),
     );
     if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
@@ -1546,8 +1549,8 @@ describe("chat.subscribe@1.5 (managed-command queue items)", () => {
     });
   });
 
-  it("carries a managed-command queue item through a 1.5 queueChanged frame", () => {
-    const parsed = chatSubscribeV15.serverFrameSchema.parse({
+  it("carries a managed-command queue item through a 1.6 queueChanged frame", () => {
+    const parsed = chatSubscribeV16.serverFrameSchema.parse({
       kind: "queueChanged",
       hasBinaryPayload: false,
       epicId: "epic-1",
@@ -1592,5 +1595,106 @@ describe("chat.subscribe@1.5 (managed-command queue items)", () => {
     });
     // The 1.4 line predates the discriminant and must never grow one.
     expect(parsed.snapshot.queue.items[0]).not.toHaveProperty("kind");
+  });
+
+  // Same guarantee one line up: 1.5 shipped before the union existed, so it
+  // must reject the variant too, not just 1.4.
+  it("cannot parse a managed-command item on the frozen 1.5 line", () => {
+    expect(
+      chatSubscribeV15.serverFrameSchema.safeParse(
+        snapshotFrameWithQueueItems([managedCommandItem]),
+      ).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat.subscribe@1.5 sameTurnSteeringSupported rolling upgrade", () => {
+  // Pre-1.5 active turn shape: no sameTurnSteeringSupported field at all.
+  // A 1.5 client parsing frames from a 1.4 host (or persisted pre-field state)
+  // must still accept the carrier and default the capability to false.
+  const preV15ActiveTurn = {
+    turnId: "turn-1",
+    status: "running" as const,
+    harnessId: "claude" as const,
+    model: "claude-sonnet-4-5",
+    reasoningEffort: null,
+    serviceTier: null,
+    agentMode: "epic" as const,
+    profileId: null,
+    userMessageId: "message-1",
+    startedAt: 1000,
+    updatedAt: 1000,
+  };
+
+  const activeTurnWithCapability = {
+    ...preV15ActiveTurn,
+    sameTurnSteeringSupported: true,
+  };
+
+  it("defaults missing sameTurnSteeringSupported to false on the live schema", () => {
+    const parsed = chatActiveTurnSchema.parse(preV15ActiveTurn);
+    expect(parsed.sameTurnSteeringSupported).toBe(false);
+  });
+
+  it("defaults missing sameTurnSteeringSupported through a live snapshot frame", () => {
+    const parsed = chatSubscribeServerFrameSchema.parse({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      snapshot: {
+        chat,
+        access: { role: "owner", ownerUserId: "user-1", canAct: true },
+        queue: { status: "idle", items: [] },
+        activeTurn: preV15ActiveTurn,
+        runStatus: "running",
+        pendingApprovals: [],
+        pendingInterviews: [],
+        pendingFileEditApprovals: [],
+        worktreeBinding: null,
+        missingWorktreePaths: [],
+        accumulatedFileChanges: [],
+      },
+    });
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.activeTurn?.sameTurnSteeringSupported).toBe(false);
+  });
+
+  it("defaults missing sameTurnSteeringSupported through a live turnStateChanged frame", () => {
+    const parsed = chatSubscribeServerFrameSchema.parse({
+      kind: "turnStateChanged",
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running",
+      activeTurn: preV15ActiveTurn,
+    });
+    if (parsed.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(parsed.activeTurn?.sameTurnSteeringSupported).toBe(false);
+  });
+
+  it("strips sameTurnSteeringSupported for a 1.4 peer and retains it on 1.5", () => {
+    const frame = {
+      kind: "turnStateChanged" as const,
+      hasBinaryPayload: false,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      runStatus: "running" as const,
+      activeTurn: activeTurnWithCapability,
+    };
+
+    const v14 = chatSubscribeV14.serverFrameSchema.parse(frame);
+    if (v14.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(v14.activeTurn).not.toHaveProperty("sameTurnSteeringSupported");
+
+    const v15 = chatSubscribeV15.serverFrameSchema.parse(frame);
+    if (v15.kind !== "turnStateChanged") {
+      throw new Error("expected turnStateChanged");
+    }
+    expect(v15.activeTurn?.sameTurnSteeringSupported).toBe(true);
   });
 });

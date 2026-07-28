@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { HOST_CAPABILITY_SERVICE_LABEL } from "../../host/capabilities";
 import {
   readHostPidMetadata,
   removeHostPidMetadata,
@@ -55,6 +56,22 @@ export function createWindowsController(
     stop: (label) => stopService(label, run),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run),
+    // No Desktop/SMAppService split on Windows, so the restart halves are the
+    // stop and start `host restart` already performed - the named seam exists
+    // so the command has one shape on every platform. `forcedRecycle` is
+    // never set: `stopService` taskkills and waits, so nothing survives to
+    // need a recycle.
+    stopForRestart: async (label) => {
+      await stopService(label, run);
+      return { forcedRecycle: false };
+    },
+    relaunchAfterRestart: (label) => startService(label, run),
+    // SMAppService is macOS-only, so there is no second registration path
+    // that could compete with the Scheduled Task here.
+    retireCompetingRegistration: () =>
+      Promise.resolve({ kind: "not-applicable" }),
+    takeoverDesktopRegistration: () =>
+      Promise.resolve({ kind: "not-applicable" }),
   };
 }
 
@@ -562,6 +579,22 @@ interface TaskExecAction {
 // only the backslashes immediately before a quote (escaping the quote with one
 // extra) and those before the closing quote we append, leaving interior path
 // separators like the ones in `C:\Users\foo` untouched.
+//
+// SCOPE - two different quoting dialects live on Windows and they are NOT
+// interchangeable:
+//
+//   * THIS one (MSVCRT / CommandLineToArgvW argv rules, `"` -> `\"`) is for a
+//     command line a process receives directly: `WScript.Shell.Run`, the
+//     Scheduled Task `<Arguments>` line, `CreateProcess`.
+//   * A string handed to `cmd.exe /d /s /c` needs PLAIN `"` quoting instead -
+//     cmd.exe has never understood `\"` and treats the backslash as literal,
+//     mangling the command token. See `resolveSpawnInvocation` in
+//     commands/host-start.ts for that form.
+//
+// Passing a cmd.exe line through this function produces a line cmd cannot
+// resolve, which fails silently as a non-zero exit. Nothing in this file
+// shells through cmd.exe any more - the capability probe below runs the CLI
+// directly, precisely so there is only one dialect in play here.
 function quoteWindowsArg(arg: string): string {
   const escaped = arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1");
   return `"${escaped}"`;
@@ -579,16 +612,66 @@ function hiddenHostLauncherPath(label: ServiceLabel): string {
   return join(cliInstallHomeDir(label.environment), "host-start-hidden.vbs");
 }
 
-function buildHiddenHostLauncher(cli: CliInvocation): string {
-  const commandLine = [cli.command, ...cli.args, "host", "start"]
+/**
+ * The Scheduled Task's hidden launcher.
+ *
+ * The Task definition outlives the CLI binary it points at, so the launcher
+ * asks that binary whether it understands the identity flag before passing
+ * it. The probe is `host capabilities --has service-label` run DIRECTLY via
+ * `shell.Run` - same argv quoting as the line right beside it, no `cmd.exe`
+ * hop and no `findstr` pipe:
+ *
+ *   * the previous form wrapped a cmd.exe line with `quoteWindowsArg`, whose
+ *     `\"` escaping cmd.exe does not honour - cmd could never resolve the
+ *     command token, the probe always returned non-zero, and the task started
+ *     the host UNLABELLED on every login, permanently and silently;
+ *   * an exit code needs no output parsing, so there is no help-text layout
+ *     and no `findstr` availability to depend on.
+ *
+ * `shell.Run` raises a VBScript runtime error (rather than returning a code)
+ * when the image cannot be launched at all, so the probe is wrapped in
+ * `On Error Resume Next`: any failure to even ask degrades to the unlabelled
+ * start, never to an aborted script that leaves the machine hostless.
+ */
+function buildHiddenHostLauncher(
+  cli: CliInvocation,
+  label: ServiceLabel,
+): string {
+  const invocation = [cli.command, ...cli.args];
+  const commandLine = [...invocation, "host", "start"]
+    .map(quoteWindowsArg)
+    .join(" ");
+  const labelledCommandLine = [
+    commandLine,
+    quoteWindowsArg("--service-label"),
+    quoteWindowsArg(label.id),
+  ].join(" ");
+  const capabilityProbe = [
+    ...invocation,
+    "host",
+    "capabilities",
+    "--has",
+    HOST_CAPABILITY_SERVICE_LABEL,
+  ]
     .map(quoteWindowsArg)
     .join(" ");
   return [
     "Option Explicit",
     "Dim shell",
     "Dim exitCode",
+    "Dim commandLine",
+    "Dim probeStatus",
     'Set shell = CreateObject("WScript.Shell")',
-    `exitCode = shell.Run(${quoteVbsString(commandLine)}, 0, True)`,
+    `commandLine = ${quoteVbsString(commandLine)}`,
+    "On Error Resume Next",
+    `probeStatus = shell.Run(${quoteVbsString(capabilityProbe)}, 0, True)`,
+    "If Err.Number <> 0 Then probeStatus = 1",
+    "Err.Clear",
+    "On Error Goto 0",
+    "If probeStatus = 0 Then",
+    `  commandLine = ${quoteVbsString(labelledCommandLine)}`,
+    "End If",
+    "exitCode = shell.Run(commandLine, 0, True)",
     "WScript.Quit exitCode",
     "",
   ].join("\r\n");
@@ -599,7 +682,7 @@ async function writeHiddenHostLauncher(
 ): Promise<void> {
   const launcherPath = hiddenHostLauncherPath(options.label);
   await mkdir(dirname(launcherPath), { recursive: true });
-  const body = buildHiddenHostLauncher(options.cli);
+  const body = buildHiddenHostLauncher(options.cli, options.label);
   await writeFile(launcherPath, Buffer.from(`\uFEFF${body}`, "utf16le"));
 }
 
@@ -626,7 +709,10 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
   // Normal CPU + Low I/O priority) - the host does latency-sensitive RPC work
   // and its priority class is inherited by every child it spawns (git,
   // provider CLIs), so the throttled band starved the whole app. Windows
-  // counterpart of the macOS LaunchAgent ProcessType Background->Standard fix.
+  // counterpart of the macOS LaunchAgent `ProcessType: Interactive` fix in
+  // platforms/macos.ts (that one landed in two steps - Background->Standard,
+  // then Standard->Interactive once `Standard` turned out to be launchd's
+  // throttled default rather than an unthrottled middle band).
   const action = buildTaskAction(options.label);
   const userId = resolveTaskUserId();
   return `<?xml version="1.0" encoding="UTF-16"?>

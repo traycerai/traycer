@@ -21,6 +21,7 @@ const SORT_OPTIONS: ReadonlyArray<{
   label: string;
 }> = [
   { value: "recent", label: "Most recent" },
+  { value: "last-viewed", label: "Last viewed" },
   { value: "relevance", label: "Relevance" },
   { value: "oldest", label: "Oldest" },
   { value: "title-asc", label: "Title A → Z" },

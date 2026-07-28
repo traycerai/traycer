@@ -88,6 +88,34 @@ export const PiIcon: HarnessIcon = (props) => (
   </svg>
 );
 
+// omp (Oh My Pi, can1357/oh-my-pi) has no lobehub entry, so this is upstream's
+// own mark from `assets/icon.svg`: a Greek π whose short right leg ends in a
+// plug connector. Geometry and the brand orange are verbatim; the viewBox is
+// upstream's too, so the mark keeps its intended framing and renders wider than
+// tall next to the square sibling icons.
+//
+// One deliberate deviation: upstream fills the π strokes `#fafafa`, which is
+// near-white because its icon sits on a dark plate. Ours has no plate, so the
+// strokes use `currentColor` and follow the theme — `#fafafa` would be
+// invisible in light mode. The `#f97316` connector and dots stay literal: they
+// are the brand accent and read on both themes, and they are also what keeps
+// this distinguishable from `PiIcon` in the adjacent "Pi" / "Oh My Pi" provider
+// rows (the two products are unrelated despite the shared lineage).
+export const OmpIcon: HarnessIcon = (props) => (
+  <svg {...props} viewBox="0 0 120 90" fill="currentColor">
+    {/* π: horizontal bar, long left leg, short right leg */}
+    <rect x="10" y="8" width="100" height="12" rx="2" />
+    <rect x="25" y="20" width="12" height="62" rx="2" />
+    <rect x="75" y="20" width="12" height="45" rx="2" />
+    {/* Plug connector terminating the right leg */}
+    <rect x="71" y="55" width="20" height="16" rx="3" fill="#f97316" />
+    <rect x="76" y="59" width="3" height="8" rx="1" fill="#0d0d0d" />
+    <rect x="82" y="59" width="3" height="8" rx="1" fill="#0d0d0d" />
+    <circle cx="18" cy="14" r="2" fill="#f97316" opacity="0.8" />
+    <circle cx="102" cy="14" r="2" fill="#f97316" opacity="0.8" />
+  </svg>
+);
+
 // Traycer does not have a lobehub entry — hand-rolled from the brand mark.
 export const TraycerIcon: HarnessIcon = (props) => (
   <svg {...props} viewBox="0 0 211 218" fill="currentColor">

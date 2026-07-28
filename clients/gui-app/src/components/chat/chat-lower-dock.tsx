@@ -19,6 +19,7 @@ import type { ChatPinnedStackTopSpacing } from "@/components/chat/chat-pinned-st
 export interface ChatLowerDockProps {
   readonly snapshotLoaded: boolean;
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly selfAgent: AgentRow | null;
   readonly activeAgents: ReadonlyArray<AgentRow>;
   readonly todo: PinnedTodoSnapshot | null;
@@ -151,6 +152,7 @@ function AgentsSection(props: {
   return (
     <ActiveAgentsPanel
       epicId={dock.epicId}
+      viewTabId={dock.viewTabId}
       self={selfAgent}
       descendants={dock.activeAgents}
       scrollRegionMaxHeightClass={dock.scrollRegionMaxHeightClass}

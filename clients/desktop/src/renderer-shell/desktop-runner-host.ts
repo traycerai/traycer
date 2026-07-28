@@ -90,12 +90,16 @@ import type {
 } from "../ipc-contracts/global-shortcuts-types";
 import type {
   DesktopAuthSessionSnapshot,
+  DesktopRuntimePlatform,
+  DesktopTopLevelMenuId,
   MenuCommandPayload,
   OpenEpicInNewWindowResult,
   OwnershipClaimResult,
   OwnershipEntry,
   PerWindowSnapshot,
+  PerWindowStateCapabilities,
   PerWindowStatePatch,
+  PerWindowStateUpdateAcknowledgement,
   SupportLogTarget,
   SupportLogTailResult,
   SupportRevealLogResult,
@@ -343,6 +347,7 @@ export interface DesktopPlatformBridge {
   };
   windowEx: {
     setOverlayIcon(image: string | null, description: string): Promise<void>;
+    setTitleBarOverlay(color: string, symbolColor: string): Promise<void>;
   };
 }
 
@@ -395,9 +400,15 @@ export interface DesktopServiceBridge {
 }
 
 export interface DesktopMenuBridge {
+  readonly platform: DesktopRuntimePlatform;
   onCommand(handler: (payload: MenuCommandPayload) => void): {
     dispose: () => void;
   };
+  openTopLevel(
+    menuId: DesktopTopLevelMenuId,
+    anchorX: number,
+    anchorY: number,
+  ): Promise<void>;
 }
 
 export interface DesktopAppUpdatesBridge {
@@ -459,7 +470,10 @@ export interface DesktopWindowsBridge {
   };
   perWindowState: {
     get(): Promise<PerWindowSnapshot>;
-    update(patch: PerWindowStatePatch): Promise<void>;
+    capabilities?(): Promise<PerWindowStateCapabilities>;
+    update(
+      patch: PerWindowStatePatch,
+    ): Promise<PerWindowStateUpdateAcknowledgement | void>;
     clear(): Promise<void>;
     onChange(handler: (snapshot: PerWindowSnapshot) => void): {
       dispose: () => void;

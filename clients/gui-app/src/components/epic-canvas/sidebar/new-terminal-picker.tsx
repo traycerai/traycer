@@ -22,6 +22,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { WorktreeFolderListBody } from "@/components/worktree/worktree-folder-list-body";
 import { WorktreePickerHostSection } from "@/components/worktree/worktree-picker-host-section";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
@@ -29,6 +30,7 @@ import { useWorktreeListBindingsForEpic } from "@/hooks/worktree/use-worktree-li
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import { worktreeRowKey } from "@/lib/worktree/worktree-row-key";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 interface NewTerminalPickerProps {
@@ -38,6 +40,17 @@ interface NewTerminalPickerProps {
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
+  // The picker's `PopoverContent` (a modal Radix popover) un-presents by
+  // unmounting when its pane is backgrounded, which silently resets the cmdk
+  // folder-search query inside `WorktreeFolderListBody` while the root stays
+  // logically open. Dismiss the picker on focus loss (the approved semantic) so
+  // it never reappears as a logically-open root with reset content.
+  const paneFocused = usePaneFocused();
+  const [focusedLastRender, setFocusedLastRender] = useState(paneFocused);
+  if (paneFocused !== focusedLastRender) {
+    setFocusedLastRender(paneFocused);
+    if (!paneFocused) setIsOpen(false);
+  }
   // The user's explicit pick. Null means "follow the auto-selected default";
   // the effective selection is derived below so a default never has to be
   // written into state via an effect.
@@ -55,9 +68,18 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     epicId: props.epicId,
     enabled: isOpen,
   });
+  // Host-proven-missing rows are hidden here (a deleted worktree can't host a
+  // terminal); the explicit pick is exempt so a worktree deleted while this
+  // popover is open degrades to its disabled badge instead of vanishing.
   const rows = useMemo(
-    () => bindingsQuery.data?.rows ?? [],
-    [bindingsQuery.data?.rows],
+    () =>
+      withoutResolvedMissingRows(
+        bindingsQuery.data?.rows ?? [],
+        explicitRow === null
+          ? null
+          : { hostId: explicitRow.hostId, runningDir: explicitRow.runningDir },
+      ),
+    [bindingsQuery.data?.rows, explicitRow],
   );
   // Explicit pick wins while it stays selectable; otherwise auto-select the
   // default (primary, skipping disabled rows, falling back to the first

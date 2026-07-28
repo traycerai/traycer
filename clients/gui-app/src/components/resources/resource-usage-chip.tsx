@@ -12,6 +12,7 @@ import {
 } from "@/lib/resources/format-resource-usage";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 function pluralize(count: number, singular: string, plural: string): string {
   return count === 1 ? singular : plural;
 }
@@ -23,18 +24,24 @@ function ResourceChipFrame(props: {
   readonly children: ReactNode;
 }) {
   return (
-    <span
-      data-slot={props.slot}
-      title={props.description}
-      aria-label={props.description}
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 text-ui-xs tabular-nums text-muted-foreground",
-        props.className,
-      )}
+    <TooltipWrapper
+      label={props.description}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <Cpu aria-hidden className="size-3 shrink-0" />
-      {props.children}
-    </span>
+      <span
+        data-slot={props.slot}
+        aria-label={props.description}
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 text-ui-xs tabular-nums text-muted-foreground",
+          props.className,
+        )}
+      >
+        <Cpu aria-hidden className="size-3 shrink-0" />
+        {props.children}
+      </span>
+    </TooltipWrapper>
   );
 }
 

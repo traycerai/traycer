@@ -10,6 +10,7 @@ import {
   readHostLoginItemStatus,
   registerHostLoginItem,
   unregisterHostLoginItem,
+  type HostLoginItemStatus,
   type RegisterHostLoginItemResult,
 } from "../app/host-login-item";
 import { resolveBundledCliPath } from "../cli/cli-discovery";
@@ -46,6 +47,7 @@ import {
   probeHostBusyVerdict,
   readDesktopHostInstallRecord,
   readDesktopHostStagedRecord,
+  readReachableHostIdentity,
   readRunningHostIdentity,
   readRunningRuntimeVersion,
   type DesktopHostInstallRecord,
@@ -77,7 +79,18 @@ import {
 // directly now submits an intent here instead - see the ticket's "Single-
 // writer cutover" for the exhaustive list of call sites this replaces.
 
-const CLI_STREAM_TIMEOUT_MS = 10 * 60_000;
+// How long a streaming CLI child may stay SILENT before it is treated as
+// wedged and killed. Not a ceiling on how long the work may take: the timer
+// re-arms on every NDJSON event (`streamTraycerCliJson`), and the CLI emits
+// progress per downloaded chunk plus watchdog/backoff heartbeats while a
+// transfer is stalled.
+//
+// As an absolute cap this same 10 minutes made the host download
+// unfinishable below ~1.2 MB/s - the CLI was SIGKILLed mid-transfer and the
+// partial went with it (traycer#585/#589). Kept at 10 minutes as an idle
+// budget: comfortably longer than the CLI's own 30s transfer watchdog, so
+// only a child that has genuinely stopped reporting trips it.
+const CLI_STREAM_IDLE_TIMEOUT_MS = 10 * 60_000;
 // Fixup A9: the production desktop-held cli-lock wait/poll - matches the
 // CLI's own `waitMs: 30_000` at every `withCliLock` call site (fixup A8).
 // Exported (not just a local default) so `HostControllerOptions.desktopLockWaitMs`/
@@ -137,6 +150,16 @@ function progressFromNdjson(
     totalBytes: event.totalBytes,
     message: event.message,
   };
+}
+
+// The CLI names its network liveness ticks `registry-<resource>-<phase>`
+// (registry/client.ts, commands/cli-upgrade.ts). They report that a fetch is
+// still alive, not that the work moved to a new stage - see
+// `setMutationProgress`.
+const REGISTRY_LIVENESS_STAGE_PREFIX = "registry-";
+
+function isRegistryLivenessStage(stage: string | null): boolean {
+  return stage !== null && stage.startsWith(REGISTRY_LIVENESS_STAGE_PREFIX);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -419,6 +442,25 @@ interface AvailableSnapshotShape {
   }>;
 }
 
+// One attempt of the locked macOS activation cycle. The extra arm marks
+// the one failure class the wrapper may repair by re-running the cycle:
+// "register completed, host did not come up in time". Deliberately NOT a
+// MutationOutcome kind - it must never escape to a caller, and carrying
+// the message (not the built failure) defers `failedAfterServiceCycle`'s
+// reload side effect until the retry is truly exhausted.
+type MacActivationCycleAttempt =
+  | MutationOutcome<{ readonly activated: boolean }>
+  | {
+      readonly kind: "retryable-readiness-timeout";
+      readonly message: string;
+      // Carried so the retry decision can tell "the host came up late" from
+      // "a host is reachable": `prePid` is who was serving BEFORE this cycle
+      // tore it down, and `expectedRuntimeVersion` is what the cycle had to
+      // produce. Without both, a reachable outgoing host reads as success.
+      readonly prePid: number | null;
+      readonly expectedRuntimeVersion: string | null;
+    };
+
 interface EligibleStage {
   readonly version: string;
   readonly fingerprint: string;
@@ -590,15 +632,25 @@ export interface HostControllerOptions {
 /**
  * `runLockedMacActivationCycle`'s desktop-locked closure result (fixup A7).
  * `"terminal"` short-circuits with a final outcome decided under the lock
- * (no host installed, busy, registration failure). `"registered"` carries
- * just enough state for the CALLER to finish the choreography (stamp-runtime
- * CAS + readiness wait) AFTER the lock has released - those steps must never
- * run while still holding it, see the comment at the return site.
+ * (no host installed, busy). `"registered"` carries just enough state for
+ * the CALLER to finish the choreography (stamp-runtime CAS + readiness
+ * wait) AFTER the lock has released - those steps must never run while
+ * still holding it, see the comment at the return site.
+ * `"register-failed"` is the SMAppService refusal
+ * (`not-found`/`not-registered`/`not-supported`) - also resolved after the
+ * lock releases, because its recovery spawns the CLI, which re-acquires
+ * this same lock (lock rule 3).
  */
 type LockedMacActivationStep =
   | {
       readonly phase: "terminal";
       readonly outcome: MutationOutcome<{ readonly activated: boolean }>;
+    }
+  | {
+      readonly phase: "register-failed";
+      readonly status: HostLoginItemStatus;
+      readonly prePid: number | null;
+      readonly expectedRuntimeVersion: string | null;
     }
   | {
       readonly phase: "registered";
@@ -797,14 +849,26 @@ export class HostController {
     if (this.mutationStatus === null) return;
     // Mi-1: carry the last concrete percent/bytes/totalBytes forward so a bare
     // heartbeat (an event that omits them) holds the bar instead of blanking
-    // it; stage/message still track the incoming event so a genuine stage
-    // transition is honored. A later event with real numbers overrides.
+    // it; message still tracks the incoming event so the retry text is
+    // visible. A later event with real numbers overrides.
+    //
+    // `stage` is carried forward too, but only for a registry liveness tick.
+    // Those are emitted from INSIDE whatever stage is already running (the
+    // manifest fetch, the archive transfer, the signature fetch) rather than
+    // being stages in their own right, so letting one overwrite `stage` made
+    // the renderer's heading flip away from "Downloading Traycer Host…" and
+    // back on every retry. The progress-aware retry budget turned that from a
+    // rare blip into a constant flicker on exactly the throttled links it
+    // exists for. A genuine stage transition (resolve/download/extract/swap/
+    // …) still lands.
     const prior = this.mutationStatus.progress;
     const merged: MutationProgress =
       prior === null
         ? progress
         : {
-            stage: progress.stage,
+            stage: isRegistryLivenessStage(progress.stage)
+              ? prior.stage
+              : progress.stage,
             percent: progress.percent ?? prior.percent,
             bytes: progress.bytes ?? prior.bytes,
             totalBytes: progress.totalBytes ?? prior.totalBytes,
@@ -864,7 +928,7 @@ export class HostController {
     const result = await streamBundledTraycerCliJson<T>({
       args,
       env: null,
-      timeoutMs: CLI_STREAM_TIMEOUT_MS,
+      idleTimeoutMs: CLI_STREAM_IDLE_TIMEOUT_MS,
       // Every mutation-lane call goes through here - none of them are
       // cancellable (only the download lane's `runDownloadLane`, below, has
       // an `AbortController`).
@@ -1039,6 +1103,98 @@ export class HostController {
     }
   }
 
+  // The three `HostLoginItemStatus` values that mean SMAppService has
+  // definitively failed to register the LaunchAgent (as opposed to
+  // `requires-approval`, which means it IS registered and only needs the
+  // user's own toggle) - the CLI's raw-LaunchAgent takeover can recover from
+  // exactly these. Single source of truth for the three call sites below so
+  // a future `HostLoginItemStatus` member can't drift between them.
+  private isCliTakeoverRecoverableStatus(
+    status: RegisterHostLoginItemResult,
+  ): status is "not-registered" | "not-found" | "not-supported" {
+    return (
+      status === "not-registered" ||
+      status === "not-found" ||
+      status === "not-supported"
+    );
+  }
+
+  // Last-rung recovery for a macOS register cycle whose SMAppService calls
+  // failed (`not-found` / `not-registered` / `not-supported`) AFTER the
+  // cycle's own bootout already tore down the loaded agent. Field RCA
+  // (2026-07-28): SMAppService can answer `not-found` for a byte-correct
+  // in-bundle plist for the remainder of the app process's life (the BTM
+  // record's identity keyed to a previous build), so re-running the same
+  // cycle - which is all the gate card's Retry does - can never recover,
+  // and the machine is stranded with NOTHING registered and no way out.
+  //
+  // The CLI's raw LaunchAgent (`host service install --takeover`) does not
+  // go through SMAppService/BTM at all: takeover cooperatively stops a
+  // still-loaded agent first (aborting on live busy work, proceeding when
+  // it is unreachable), is a no-op when the agent is already gone (this
+  // path's common case - the failed cycle booted it out), and the desktop
+  // re-retires the CLI registration on its next healthy SMAppService
+  // cycle - so the fallback is temporary by construction.
+  //
+  // Must be called OUTSIDE `withDesktopCliLock` sections: the spawned CLI
+  // re-acquires that same lock (lock rule 3: CLI-locked and desktop-locked
+  // sections are sequenced, not nested).
+  private async recoverRegistrationViaCliTakeover(args: {
+    readonly failedStatus: HostLoginItemStatus;
+    readonly prePid: number | null;
+    readonly expectedRuntimeVersion: string | null;
+  }): Promise<
+    | { readonly recovered: true; readonly version: string | null }
+    | { readonly recovered: false; readonly message: string }
+  > {
+    // SMAppService is unusable for the rest of this session - quarantine the
+    // pending-revision refresh so it cannot boot the fallback host out for a
+    // plist revision it has just proven it cannot land. The on-disk marker
+    // deliberately survives for the next launch's fresh session.
+    this.pendingRevisionRefreshQuarantined = true;
+    log.warn(
+      "[host-controller] SMAppService registration failed - falling back to the CLI-owned LaunchAgent",
+      { status: args.failedStatus },
+    );
+    let raw: unknown;
+    try {
+      raw = await this.runBundled<unknown>([
+        "host",
+        "service",
+        "install",
+        "--takeover",
+        ...this.devServiceInstallExtras(),
+      ]);
+    } catch (err) {
+      return {
+        recovered: false,
+        message: `Failed to register the host login item (status=${args.failedStatus}), and the fallback service registration failed: ${describeError(err)} Run 'traycer host service uninstall' and relaunch Traycer, or run 'traycer host doctor' to recover.`,
+      };
+    }
+    const result = parseServiceStartResult(raw);
+    try {
+      await this.completeServiceStart(
+        args.prePid,
+        result.runtimeWasNull ? result.installGeneration : null,
+        result.runtimeVersion ?? args.expectedRuntimeVersion,
+      );
+    } catch (err) {
+      return {
+        recovered: false,
+        message: `Failed to register the host login item (status=${args.failedStatus}); the fallback service was registered but the host did not come up: ${describeError(err)}`,
+      };
+    }
+    const version = await readRunningRuntimeVersion(
+      this.layout,
+      this.reachabilityProbe,
+    );
+    log.info(
+      "[host-controller] CLI-owned LaunchAgent fallback recovered the host",
+      { status: args.failedStatus, version },
+    );
+    return { recovered: true, version };
+  }
+
   // Success paths which start, cycle, or otherwise claim a live host publish
   // through this one gate. A service manager acknowledgement or a readiness
   // handshake is not sufficient by itself: the renderer-facing snapshot must
@@ -1087,7 +1243,98 @@ export class HostController {
   // re-read state under the desktop-held lock, probe busy, cycle
   // SMAppService, wait for readiness, stamp if the record was null.
 
+  // Bounded self-repair around the activation cycle: a readiness timeout
+  // after a COMPLETED register cycle retries the full cycle exactly once
+  // before surfacing the gate card. The register cycle is itself the
+  // repair (bootout + re-register), so the automatic second attempt is
+  // precisely what the card's Retry button would ask the user to click -
+  // the machine must not outsource its own retry. Bounded at one: an
+  // unbounded loop would churn disruptive SMAppService cycles forever
+  // while the user never learns anything is wrong. `requires-approval`
+  // never auto-retries (only the user can act), and every other failure
+  // class surfaces immediately - the retry covers exactly "the cycle
+  // completed, the host did not come up in time".
   private async runLockedMacActivationCycle(
+    force: boolean,
+    postCommitContinuation: BusyContinuation,
+    isConvergeReady: boolean,
+  ): Promise<MutationOutcome<{ readonly activated: boolean }>> {
+    const first = await this.runLockedMacActivationCycleOnce(
+      force,
+      postCommitContinuation,
+      isConvergeReady,
+    );
+    if (first.kind !== "retryable-readiness-timeout") return first;
+    // Re-probe before paying for a second DISRUPTIVE cycle.
+    //
+    // `HOST_READY_TIMEOUT_MS` is a deadline, not proof of failure: a host that
+    // bound its endpoint a moment after it expired is up and serving. The
+    // retry leads with `registerHostLoginItem`'s bootout, so retrying
+    // unconditionally tears down the very recovery this code was waiting for,
+    // and then holds the caller's mutation lane for another full timeout
+    // (~120s in total) before any outcome reaches the user. The `force: false`
+    // busy probe inside the cycle does not cover this: "not busy" is not
+    // "not reachable".
+    //
+    // But "a host is reachable" is NOT the question. This cycle booted a host
+    // out; one that survived its own eviction is also reachable, and accepting
+    // it would report an activation that never happened - a strictly worse
+    // failure than the extra cycle, because it is silent. So the late host
+    // must be a DIFFERENT process from the one torn down, and must be running
+    // what the cycle set out to activate. Both, or retry.
+    if (await this.lateActivationSucceeded(first)) {
+      return { kind: "ok", value: { activated: true } };
+    }
+    log.warn(
+      "[host-controller] readiness timed out after a completed register cycle - auto-retrying the cycle once before surfacing the failure",
+    );
+    const second = await this.runLockedMacActivationCycleOnce(
+      force,
+      postCommitContinuation,
+      isConvergeReady,
+    );
+    if (second.kind !== "retryable-readiness-timeout") return second;
+    return this.failedAfterServiceCycle(second.message);
+  }
+
+  /**
+   * Did the host come up on its own between the readiness deadline expiring
+   * and now? Answered conservatively: `false` unless every condition holds,
+   * because a wrong `true` publishes a live-host outcome for a host that is
+   * not there.
+   */
+  private async lateActivationSucceeded(timeout: {
+    readonly prePid: number | null;
+    readonly expectedRuntimeVersion: string | null;
+  }): Promise<boolean> {
+    const running = await readReachableHostIdentity(
+      this.layout,
+      this.reachabilityProbe,
+    );
+    if (running === null) return false;
+    // The host we just booted out, still serving. Not evidence of anything
+    // except that the eviction has not finished.
+    if (timeout.prePid !== null && running.pid === timeout.prePid) return false;
+    // Same equality check the in-cycle readiness path applies. A late host
+    // running the wrong runtime is an activation failure, not a slow success.
+    if (
+      timeout.expectedRuntimeVersion !== null &&
+      running.version !== timeout.expectedRuntimeVersion
+    ) {
+      return false;
+    }
+    // Publication gates the success claim on every other live-host path; it
+    // gates this one too. If the snapshot will not derive as reachable we have
+    // not confirmed a live host, so fall through to the retry.
+    if (!(await this.publishReachableHostSnapshot())) return false;
+    log.info(
+      "[host-controller] host became reachable after the readiness deadline - accepting the completed cycle instead of cycling it again",
+      { pid: running.pid, version: running.version },
+    );
+    return true;
+  }
+
+  private async runLockedMacActivationCycleOnce(
     force: boolean,
     postCommitContinuation: BusyContinuation,
     // Fixup B3: lock-contention terminal contract - the desktop-held-lock
@@ -1098,7 +1345,7 @@ export class HostController {
     // `convergeReady`, `applyStaged`, `activateInstalled`, `installVersion`,
     // `respawn`, `recoverIfDown`, and `freePortAndRestart`.
     isConvergeReady: boolean,
-  ): Promise<MutationOutcome<{ readonly activated: boolean }>> {
+  ): Promise<MacActivationCycleAttempt> {
     const outcome = await withDesktopCliLock(
       {
         lockPath: this.lockPath,
@@ -1170,17 +1417,18 @@ export class HostController {
             ),
           };
         }
-        if (
-          registerResult === "not-registered" ||
-          registerResult === "not-found" ||
-          registerResult === "not-supported"
-        ) {
+        if (this.isCliTakeoverRecoverableStatus(registerResult)) {
+          // Not terminal: this cycle's own bootout already tore the loaded
+          // agent down, so failing here would strand the machine with no
+          // registration at all and a Retry that re-runs the same doomed
+          // SMAppService call in the same poisoned session. Recovery spawns
+          // the CLI, which re-acquires the lock this closure holds (lock
+          // rule 3), so hand the failure to the post-lock fallback.
           return {
-            phase: "terminal",
-            outcome: {
-              kind: "failed",
-              message: `Failed to register the host login item (status=${registerResult}).`,
-            },
+            phase: "register-failed",
+            status: registerResult,
+            prePid,
+            expectedRuntimeVersion: record.runtimeVersion,
           };
         }
         // Fixup A7: the desktop lock is released as soon as this closure
@@ -1207,6 +1455,17 @@ export class HostController {
     const step = outcome.result;
     if (step.phase === "terminal") {
       return step.outcome;
+    }
+    if (step.phase === "register-failed") {
+      const recovery = await this.recoverRegistrationViaCliTakeover({
+        failedStatus: step.status,
+        prePid: step.prePid,
+        expectedRuntimeVersion: step.expectedRuntimeVersion,
+      });
+      if (!recovery.recovered) {
+        return this.failedAfterServiceCycle(recovery.message);
+      }
+      return { kind: "ok", value: { activated: true } };
     }
     const {
       registerResult,
@@ -1237,11 +1496,20 @@ export class HostController {
         reason: readiness.reason,
         loginItemStatus: postWaitStatus,
       });
-      const message =
-        postWaitStatus === "requires-approval"
-          ? approvalRequiredMessage()
-          : `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms - run \`traycer host doctor\` to recover.`;
-      return this.failedAfterServiceCycle(message);
+      if (postWaitStatus === "requires-approval") {
+        return this.failedAfterServiceCycle(approvalRequiredMessage());
+      }
+      // Not a terminal failure yet: the wrapper retries the full cycle
+      // once before building the gate card from this message.
+      // `readiness.reason` belongs in the user string, not only the log:
+      // the sibling failure paths (`:992`, `:1533`) already include it,
+      // and this is the one card a locked-out user actually reads.
+      return {
+        kind: "retryable-readiness-timeout",
+        message: `Traycer Host did not start within ${HOST_READY_TIMEOUT_MS}ms (${readiness.reason}) - run \`traycer host doctor\` to recover.`,
+        prePid,
+        expectedRuntimeVersion,
+      };
     }
     if (
       expectedRuntimeVersion !== null &&
@@ -1474,15 +1742,30 @@ export class HostController {
       this.pendingRevisionRefreshQuarantined = true;
       return { kind: "failed", message: approvalRequiredMessage() };
     }
-    if (status !== "enabled") {
+    if (this.isCliTakeoverRecoverableStatus(status)) {
       this.pendingRevisionRefreshQuarantined = true;
       log.warn(
         "[host-controller] pending LaunchAgent revision refresh did not enable the agent",
         { status },
       );
+      // This cycle just booted out a host that was verified reachable and
+      // idle moments before - a bare failure here strands the machine with
+      // nothing running AND nothing registered (field RCA 2026-07-28: the
+      // installer restarted the host, this refresh tore it down,
+      // SMAppService answered `not-found`, and the session was locked
+      // out). Restore service via the CLI-owned fallback; the pending
+      // marker deliberately survives for the next launch.
+      const recovery = await this.recoverRegistrationViaCliTakeover({
+        failedStatus: status,
+        prePid,
+        expectedRuntimeVersion,
+      });
+      if (!recovery.recovered) {
+        return this.failedAfterServiceCycle(recovery.message);
+      }
       return {
-        kind: "failed",
-        message: `The host's macOS login item could not be enabled (status: ${status}). Open Doctor or run 'traycer host doctor' to recover.`,
+        kind: "ok",
+        value: { running: true, version: recovery.version ?? currentVersion },
       };
     }
     const readiness = await waitForHostReady(
@@ -1943,7 +2226,7 @@ export class HostController {
         await streamBundledTraycerCliJson<unknown>({
           args,
           env: null,
-          timeoutMs: CLI_STREAM_TIMEOUT_MS,
+          idleTimeoutMs: CLI_STREAM_IDLE_TIMEOUT_MS,
           // Fixup C4: this download's own `AbortController` - `abortInFlightDownload`
           // (only called by `removeTraycer`) now actually kills the spawned CLI
           // subprocess instead of only flipping `.aborted` on a signal nothing
@@ -2504,6 +2787,17 @@ export class HostController {
               );
             } catch (err) {
               return this.failedAfterServiceCycle(err);
+            }
+            return { kind: "ok", value: { registered: true } };
+          }
+          if (this.isCliTakeoverRecoverableStatus(registration.status)) {
+            const recovery = await this.recoverRegistrationViaCliTakeover({
+              failedStatus: registration.status,
+              prePid: registration.prePid,
+              expectedRuntimeVersion: registration.expectedRuntimeVersion,
+            });
+            if (!recovery.recovered) {
+              return this.failedAfterServiceCycle(recovery.message);
             }
             return { kind: "ok", value: { registered: true } };
           }

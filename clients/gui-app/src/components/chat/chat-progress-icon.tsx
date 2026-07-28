@@ -4,7 +4,7 @@ import { MessageSquareLock } from "lucide-react";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import {
-  useEpicActiveAgentIds,
+  useEpicAgentActivityTiers,
   useEpicPermissionRole,
 } from "@/lib/epic-selectors";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
@@ -16,6 +16,7 @@ import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface ChatProgressIconProps {
   readonly epicId: string;
   readonly chatId: string;
@@ -34,7 +35,16 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
   // session handle. An opened session adds run-status race smoothing and
   // authoritative chat access; notification rows own prompt and outcome
   // presentation.
-  const isActive = useEpicActiveAgentIds().has(props.chatId);
+  //
+  // Read as a TIER, not as membership of the active-id set. The two have
+  // identical membership, but the set alone cannot say whether an unopened
+  // chat is mid-turn or merely kept alive by background work, so it forced the
+  // turn spinner on both. The tier is the same awareness data the descendant
+  // rollup already reads, so a background-only chat now presents the same way
+  // whether you look at its own row or at the collapsed parent standing in
+  // for it. A host that has not classified its agents still reports `"turn"`.
+  const awarenessRunning: IndicatorRunningKind =
+    useEpicAgentActivityTiers().get(props.chatId) ?? false;
   const fallbackReadOnly = useEpicPermissionRole() === "viewer";
   const handle = useExistingChatSessionHandle(props.epicId, props.chatId);
   const indicatorState = useSurfaceNotificationIndicatorState({
@@ -45,11 +55,7 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
     return (
       <ChatProgressPresentation
         indicatorState={indicatorState}
-        // Without a session subscription the epic-activity signal is binary
-        // (it bridges the host's whole non-idle range, background included),
-        // so an unopened chat can't tell the two tiers apart. Presenting the
-        // turn spinner is the conservative read; opening the chat refines it.
-        running={isActive ? "turn" : false}
+        running={awarenessRunning}
         isReadOnly={fallbackReadOnly}
         subjectId={props.chatId}
         className={props.className}
@@ -62,7 +68,7 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
   return (
     <ChatProgressIconWithHandle
       handle={handle}
-      isActive={isActive}
+      awarenessRunning={awarenessRunning}
       indicatorState={indicatorState}
       className={props.className}
       mutedClassName={props.mutedClassName}
@@ -75,7 +81,7 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
 
 function ChatProgressIconWithHandle(props: {
   readonly handle: ChatSessionStoreHandle;
-  readonly isActive: boolean;
+  readonly awarenessRunning: IndicatorRunningKind;
   readonly indicatorState: NotificationIndicatorState;
   readonly className: string | undefined;
   readonly mutedClassName: string;
@@ -98,11 +104,10 @@ function ChatProgressIconWithHandle(props: {
     <ChatProgressPresentation
       indicatorState={props.indicatorState}
       // The session's own tri-state is authoritative when it reads any
-      // activity: the epic-activity bit also covers background-only phases,
-      // so letting it force the turn spinner would re-conflate the tiers.
-      // It only backfills the brief subscription-gap window where the store
-      // still reads idle.
-      running={activity ?? (props.isActive ? "turn" : false)}
+      // activity: it sees the queue and background items directly, while
+      // awareness reports what the HOST classified. Awareness only backfills
+      // the brief subscription-gap window where the store still reads idle.
+      running={activity ?? props.awarenessRunning}
       // A session's access snapshot is authoritative. Keep the icon neutral
       // while it is unknown so an owner never sees the unopened-chat fallback
       // lock flash before the snapshot arrives.
@@ -130,15 +135,21 @@ function ChatProgressPresentation(props: {
   let idleIcon: ReactNode;
   if (props.isReadOnly) {
     idleIcon = (
-      <span
-        role="status"
-        aria-label="Read-only agent"
-        className={icon.className}
-        style={icon.style}
-        title="Read-only agent"
+      <TooltipWrapper
+        label="Read-only agent"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <MessageSquareLock aria-hidden className="size-3.5" />
-      </span>
+        <span
+          role="status"
+          aria-label="Read-only agent"
+          className={icon.className}
+          style={icon.style}
+        >
+          <MessageSquareLock aria-hidden className="size-3.5" />
+        </span>
+      </TooltipWrapper>
     );
   } else if (props.defaultIcon !== undefined) {
     idleIcon = props.defaultIcon;

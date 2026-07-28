@@ -16,11 +16,14 @@ import {
 // `desktop-startup.ts` is the Electron main-process boot sequence: importing
 // it pulls in ~40 sibling modules (tray, updater, host lifecycle, IPC,
 // crash reporting, ...) that are only ever called from inside
-// `runDesktopStartup`/`runOnReady`/`runWindowPhase`/`runDeferred`, none of
-// which this suite invokes. Every one of those sibling imports is stubbed
-// below so the module loads without touching real Electron APIs, real
-// filesystem state, or third-party SDKs (e.g. `@sentry/electron`, pulled in
-// transitively by `../app/diagnostics`) - only `electron` itself and
+// `runDesktopStartup`/`runOnReady`/`runWindowPhase`/`runDeferred`/`runPreReady`,
+// none of which this suite invokes end-to-end (the "runPreReady - scheme/
+// crash-reporter ordering" suite below calls the real `runPreReady()`
+// directly, but only to assert call order on two already-stubbed sibling
+// mocks). Every one of those sibling imports is stubbed below so the module
+// loads without touching real Electron APIs, real filesystem state, or
+// third-party SDKs (e.g. `@sentry/electron`, pulled in transitively by
+// `../app/diagnostics`) - only `electron` itself and
 // `../windows/window-registry` need to behave like the real thing, and
 // `window-registry` is left completely real.
 
@@ -166,7 +169,7 @@ vi.mock("../../notifications", () => ({
   installNotificationActivationHandler: () => undefined,
 }));
 vi.mock("../../app/crash-reporter", () => ({
-  initCrashReporter: () => undefined,
+  initCrashReporter: vi.fn(),
   installGlobalErrorHandlers: () => undefined,
   installProcessGoneListeners: () => undefined,
   logGpuInfo: () => undefined,
@@ -196,7 +199,7 @@ vi.mock("../../app/cert-trust", () => ({
 }));
 vi.mock("../../app/app-protocol", () => ({
   installAppProtocolHandler: () => undefined,
-  registerAppScheme: () => undefined,
+  registerAppScheme: vi.fn(),
 }));
 vi.mock("../../app/gpu-acceleration", () => ({
   applyHardwareAccelerationPreference: () => undefined,
@@ -424,5 +427,33 @@ describe("createMruWindowProxy (decision 10) - real production proxy", () => {
 
     await registry.closeById(windowId);
     expect(proxy.isDestroyed()).toBe(true);
+  });
+});
+
+describe("runPreReady - scheme/crash-reporter ordering", () => {
+  it("registers the crash reporter before the app scheme, so Sentry's raw protocol.registerSchemesAsPrivileged call cannot discard app's privileges", async () => {
+    const { runPreReady } = await import("../desktop-startup");
+    const { initCrashReporter } = await import("../../app/crash-reporter");
+    const { registerAppScheme } = await import("../../app/app-protocol");
+
+    runPreReady({
+      config: {
+        environment: "dev",
+        isDev: true,
+        iconPath: "",
+        preloadPath: "",
+        authnBaseUrl: "",
+      },
+      pendingAuthReturnSignal: false,
+      bridge: null,
+    });
+
+    expect(initCrashReporter).toHaveBeenCalledTimes(1);
+    expect(registerAppScheme).toHaveBeenCalledTimes(1);
+    const crashReporterOrder =
+      vi.mocked(initCrashReporter).mock.invocationCallOrder[0];
+    const appSchemeOrder =
+      vi.mocked(registerAppScheme).mock.invocationCallOrder[0];
+    expect(crashReporterOrder).toBeLessThan(appSchemeOrder);
   });
 });

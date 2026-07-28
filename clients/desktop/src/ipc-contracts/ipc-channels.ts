@@ -64,6 +64,7 @@ export const RunnerHostInvoke = {
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",
   perWindowStateGet: "runnerHost:windows:perWindowState:get",
+  perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
   perWindowStateClear: "runnerHost:windows:perWindowState:clear",
   authSessionGet: "runnerHost:windows:authSession:get",
@@ -144,6 +145,10 @@ export const RunnerHostInvoke = {
   // Windows-only: repaints the native min/max/close controls (Chromium's
   // Window Controls Overlay) with the renderer's theme-derived colors.
   windowSetTitleBarOverlay: "runnerHost:window:setTitleBarOverlay",
+  // Windows frameless title bars cannot display Electron's native menu row.
+  // The renderer supplies the clicked top-level label's anchor point and main
+  // opens the corresponding submenu from the canonical application Menu.
+  menuOpenTopLevel: "runnerHost:menu:openTopLevel",
   displayList: "runnerHost:display:list",
   gpuAccelerationGet: "runnerHost:gpu:get",
   gpuAccelerationSet: "runnerHost:gpu:set",

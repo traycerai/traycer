@@ -55,6 +55,7 @@ import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 type ProviderId = ProviderCliState["providerId"];
 type ProvidersListQuery = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
@@ -100,6 +101,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
     "Devin agent - Cognition's coding CLI via Windsurf/Devin login or API key.",
   pi: "Pi agent - pi.dev coding agent via your configured model API key (BYOK).",
   hermes: "Hermes Agent - Nous Research's coding CLI via your Hermes account.",
+  omp: "Oh My Pi - can1357's coding CLI via your linked provider subscriptions.",
 };
 
 function hasPendingProviderProbe(
@@ -449,18 +451,26 @@ function ProviderEnableSwitch(props: {
   const { id, providerId, enabled, isPending, onSetEnabled } = props;
   const disablingLast = enabled && props.enabledProviderCount <= 1;
   return (
-    <Switch
-      id={id}
-      checked={enabled}
-      onCheckedChange={(next) => {
-        if (isPending || (!next && disablingLast)) return;
-        onSetEnabled(providerId, next);
-      }}
-      disabled={isPending || disablingLast}
-      title={
-        disablingLast ? "At least one provider must stay enabled." : undefined
-      }
-    />
+    <TooltipWrapper
+      label={disablingLast ? "At least one provider must stay enabled." : null}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* Guard span: the Switch is `disabled` in exactly the state this
+          explains, and a disabled control emits no pointer events. */}
+      <span className="inline-flex">
+        <Switch
+          id={id}
+          checked={enabled}
+          onCheckedChange={(next) => {
+            if (isPending || (!next && disablingLast)) return;
+            onSetEnabled(providerId, next);
+          }}
+          disabled={isPending || disablingLast}
+        />
+      </span>
+    </TooltipWrapper>
   );
 }
 

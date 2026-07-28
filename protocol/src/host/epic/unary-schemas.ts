@@ -75,12 +75,16 @@ export type TaskRepoMatchMode = z.infer<typeof taskRepoMatchModeSchema>;
 export const taskOwnershipScopeSchema = z.enum(["mine", "shared"]);
 export type TaskOwnershipScope = z.infer<typeof taskOwnershipScopeSchema>;
 
-export const listTasksSortSchema = z.enum([
+export const listTasksSortSchemaV11 = z.enum([
   "recent",
   "oldest",
   "title-asc",
   "title-desc",
   "relevance",
+]);
+export const listTasksSortSchema = z.enum([
+  ...listTasksSortSchemaV11.options,
+  "last-viewed",
 ]);
 export type ListTasksSort = z.infer<typeof listTasksSortSchema>;
 
@@ -496,13 +500,16 @@ export const listTaskLightSchema = taskLightSchema.extend({
 });
 export type ListTaskLight = z.infer<typeof listTaskLightSchema>;
 
-export const listTasksRequestSchema = z.object({
+export const listTasksRequestSchemaV11 = z.object({
   limit: z.number(),
   cursor: z.string().optional(),
   filters: taskFiltersSchema.nullable(),
-  sort: listTasksSortSchema.optional(),
+  sort: listTasksSortSchemaV11.optional(),
   extensionPhaseVersion: z.string(),
   extensionEpicVersion: z.string(),
+});
+export const listTasksRequestSchema = listTasksRequestSchemaV11.extend({
+  sort: listTasksSortSchema.optional(),
 });
 export type ListTasksRequest = z.infer<typeof listTasksRequestSchema>;
 
@@ -556,6 +563,22 @@ export const setEpicPinnedResponseSchema = z.object({
   pinned: z.boolean(),
 });
 export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
+
+// ─── Personal task view recency (epic.recordViewed@1.0) ─────────────────────
+
+export const recordEpicViewedRequestSchema = z.object({
+  epicId: z.string(),
+});
+export type RecordEpicViewedRequest = z.infer<
+  typeof recordEpicViewedRequestSchema
+>;
+
+export const recordEpicViewedResponseSchema = z.object({
+  viewedAt: z.number(),
+});
+export type RecordEpicViewedResponse = z.infer<
+  typeof recordEpicViewedResponseSchema
+>;
 
 // ─── Batch task context (epic.getTaskContexts@1.0) ───────────────────────────
 // Optional (non-floor) capability: resolve a small set of task ids to list-row
@@ -1037,6 +1060,33 @@ export type DeleteChatRequest = z.infer<typeof deleteChatRequestSchema>;
 
 export const deleteChatResponseSchema = z.object({ deleted: z.boolean() });
 export type DeleteChatResponse = z.infer<typeof deleteChatResponseSchema>;
+
+// Optional (non-floor) capability: durable host-backed archive toggle. Sets or
+// clears `archivedAt` on a single chat OR terminal-agent record, resolved by
+// `chatId` (one method keyed by id covers both the `chats` and `tuiAgents`
+// maps). Idempotent - archiving an already-archived record, or unarchiving an
+// active one, is a no-op. Old hosts lack it; callers get E_HOST_UNSUPPORTED for
+// this call only and hide the archive affordance.
+export const setChatArchivedRequestSchema = z.object({
+  epicId: z.string(),
+  // Names either a chat (in `chats`) or a terminal-agent (in `tuiAgents`)
+  // record; the host resolves the id across both maps.
+  chatId: z.string(),
+  archived: z.boolean(),
+});
+export type SetChatArchivedRequest = z.infer<
+  typeof setChatArchivedRequestSchema
+>;
+
+// `updated` is true when the record's `archivedAt` actually changed; false when
+// the record was already in the requested state (idempotent no-op) or no record
+// matched the id.
+export const setChatArchivedResponseSchema = z.object({
+  updated: z.boolean(),
+});
+export type SetChatArchivedResponse = z.infer<
+  typeof setChatArchivedResponseSchema
+>;
 
 export const reparentChatRequestSchema = z.object({
   epicId: z.string(),

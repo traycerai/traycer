@@ -276,15 +276,21 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
   const createProfileHostIsLocal =
     useCreateProfileHostIsLocal(createProfileHostId);
+  // Not gated on `activityEnabled`: the query's own `enabled`/`subscribed`
+  // already release the observer, and `enabled:false` keeps the cache. Blanking
+  // this list on blur only blanked the trigger a background split pane still
+  // shows - the harness label falls back to the raw provider id, and
+  // `selectedHarnessAvailable` reads false. The refetch gate below keeps its
+  // `activityEnabled` term, so nothing inactive fetches.
   const harnesses = useMemo(
     () =>
-      activityEnabled && harnessesQuery.data !== undefined
-        ? orderModelPickerHarnesses(
+      harnessesQuery.data === undefined
+        ? []
+        : orderModelPickerHarnesses(
             restrictToTui(harnessesQuery.data.harnesses, tuiOnly),
             degradedHarnessIds,
-          )
-        : [],
-    [activityEnabled, degradedHarnessIds, harnessesQuery.data, tuiOnly],
+          ),
+    [degradedHarnessIds, harnessesQuery.data, tuiOnly],
   );
   const selectedHarness = harnesses.find(
     (harness) => harness.id === selection.harnessId,
@@ -411,6 +417,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   );
   const refreshCatalog = useRefreshHarnessCatalog();
   const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
+  // "Pending" has to mean a fetch is actually coming. A disabled query with no
+  // cached data reports `isPending` forever, so reading it raw would leave an
+  // inactive surface spinning in place of its provider icon for a fetch it is
+  // deliberately not making.
+  const modelsPending =
+    selectedHarnessRefetchGate && selectedModelsQuery.isPending;
   const presentation = useMemo(
     () =>
       deriveHarnessModelPickerPresentation({
@@ -418,19 +430,20 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         models: selectedModels,
         reasoningFooter,
         serviceTierFooter,
-        harnessesPending: harnessesQuery.isPending,
-        modelsPending: selectedModelsQuery.isPending,
+        harnessesPending: activityEnabled && harnessesQuery.isPending,
+        modelsPending,
         selectedHarnessAvailable,
         selectedHarnessProfiles:
           profilesByHarnessId.get(selection.harnessId) ?? [],
       }),
     [
+      activityEnabled,
       harnessesQuery.isPending,
+      modelsPending,
       profilesByHarnessId,
       reasoningFooter,
       selectedHarnessAvailable,
       selectedModels,
-      selectedModelsQuery.isPending,
       selection,
       serviceTierFooter,
     ],

@@ -1,6 +1,7 @@
 import "../../../__tests__/test-browser-apis";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -35,6 +36,7 @@ import {
   createNotificationRoomEntryMap,
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
+import type { NotificationNavigate } from "@/lib/notifications";
 
 interface HostState {
   id: string | null;
@@ -89,6 +91,12 @@ const activateMock = vi.hoisted(() =>
     }) => void
   >(),
 );
+const notificationNavigateMock = vi.hoisted(() =>
+  vi.fn(() => Promise.resolve()),
+);
+const activationHookState = vi.hoisted<{
+  navigate: NotificationNavigate | null;
+}>(() => ({ navigate: null }));
 const markAsReadMock = vi.hoisted(() => vi.fn<(feedId: string) => void>());
 const lastHostDisplay = vi.hoisted(() => ({
   originHostId: null as string | null,
@@ -102,10 +110,13 @@ const lastHostDisplay = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/notifications/use-notification-activation", () => ({
-  useNotificationActivation: () => ({
-    activate: activateMock,
-    pendingFeedId: null,
-  }),
+  useNotificationActivationWithNavigate: (navigate: NotificationNavigate) => {
+    activationHookState.navigate = navigate;
+    return {
+      activate: activateMock,
+      pendingFeedId: null,
+    };
+  },
 }));
 
 vi.mock("@/stores/notifications/merged-notifications", async (importActual) => {
@@ -158,7 +169,7 @@ vi.mock("@/lib/notifications/notification-display", async (importActual) => {
   };
 });
 
-import { NotificationsSessionProvider } from "@/providers/notifications-session-provider";
+import { NotificationsSessionProvider as RoutedNotificationsSessionProvider } from "@/providers/notifications-session-provider";
 import { __setNotificationsStreamFactoryForTests } from "@/providers/notifications-stream-factory-override";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -181,6 +192,16 @@ import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import { selectNotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+
+function NotificationsSessionProvider(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <RoutedNotificationsSessionProvider navigate={notificationNavigateMock}>
+      {props.children}
+    </RoutedNotificationsSessionProvider>
+  );
+}
 
 interface ControlledStream {
   closeCount: number;
@@ -477,6 +498,7 @@ describe("<NotificationsSessionProvider />", () => {
         dispose: vi.fn(),
       }),
     );
+    activationHookState.navigate = null;
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().resetForTests();
@@ -933,7 +955,8 @@ describe("<NotificationsSessionProvider />", () => {
     expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
     expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
 
-    // (2) Disconnect → summary unknown, rows preserved, neutral unknown indicator.
+    // (2) Disconnect → summary unknown, rows preserved; unknown renders like clear
+    // (no indicator) so the bell stays quiet while status is unresolved.
     act(() => {
       streamClient.session.emitStatus("reconnecting");
     });
@@ -941,14 +964,12 @@ describe("<NotificationsSessionProvider />", () => {
     expect(
       useHostNotificationsStore.getState().byId["connected-host-row"],
     ).toBeDefined();
-    expect(
-      screen.getByTestId("notifications-unknown-indicator"),
-    ).not.toBeNull();
+    expect(screen.queryByTestId("notifications-unknown-indicator")).toBeNull();
     expect(screen.queryByTestId("notifications-quiet-dot")).toBeNull();
     expect(screen.queryByTestId("notifications-attention-badge")).toBeNull();
     expect(
-      screen.getByTestId("notifications-bell").getAttribute("aria-label"),
-    ).toBe("Notifications, task notification status unavailable");
+      screen.getByRole("button", { name: "Notifications" }),
+    ).not.toBeNull();
 
     // (3) Reconnect open + fresh atomic snapshot → exact summary + badge.
     act(() => {
@@ -1760,6 +1781,7 @@ describe("<NotificationsSessionProvider />", () => {
     const { AnalyticsEvent } = await import("@/lib/analytics");
 
     const { streamClient } = await renderHostNotificationsProvider();
+    expect(activationHookState.navigate).toBe(notificationNavigateMock);
 
     act(() => {
       streamClient.session.emitServerFrame({

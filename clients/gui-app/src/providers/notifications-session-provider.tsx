@@ -25,7 +25,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAuthService, useHostClient } from "@/lib/host";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useNotificationShow } from "@/hooks/notifications/use-notifications";
-import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
+import { useNotificationActivationWithNavigate } from "@/hooks/notifications/use-notification-activation";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import {
@@ -45,6 +45,7 @@ import {
   notificationEntitiesMatch,
   notificationEntityFromHostEntry,
   notificationPayloadBelongsToEntity,
+  type NotificationNavigate,
 } from "@/lib/notifications";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 import type { HostNotificationsEntityRef } from "@traycer/protocol/host/notifications/contracts";
@@ -56,6 +57,8 @@ import { activationResultHandler } from "@/lib/notifications/notification-activa
 
 export interface NotificationsSessionProviderProps {
   readonly children: ReactNode;
+  /** The live per-window router owns this provider's toast navigation. */
+  readonly navigate: NotificationNavigate;
 }
 
 /**
@@ -74,7 +77,7 @@ export function NotificationsSessionProvider(
   const authService = useAuthService();
   const hostClient = useHostClient();
   const showNotification = useNotificationShow();
-  const { activate } = useNotificationActivation();
+  const { activate } = useNotificationActivationWithNavigate(props.navigate);
   const mergedActions = useMergedNotificationsActions();
   const windowsBridge = useWindowsBridge();
   const status = useAuthStore((state) => state.status);

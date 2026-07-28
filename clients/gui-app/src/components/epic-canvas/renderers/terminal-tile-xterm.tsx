@@ -50,7 +50,8 @@ import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
 import { registerActiveTerminalFindController } from "@/stores/find-in-page/terminal-find-store";
 import {
   useActivePaneEffect,
-  useVisiblePaneValue,
+  useFocusedPaneValue,
+  useVisiblePaneEffect,
 } from "@/components/epic-tabs/pane-visibility-context";
 import { markTerminalLoad } from "@/lib/perf/terminal-load-perf";
 import { registerTerminalFocus } from "@/lib/terminals/terminal-focus-registry";
@@ -235,9 +236,10 @@ export function TerminalXtermHost(props: TerminalXtermHostProps) {
     codeFontFamily,
   );
   const runnerHost = useRunnerHost();
-  // Inactive panes unregister global find ownership. They stay mounted, but
-  // app-level find should only target the visible terminal.
-  const activeFindTargetId = useVisiblePaneValue(props.findTargetId, null);
+  // Unfocused panes unregister global find ownership. Both split halves stay
+  // mounted and visible, so app-level find is scoped to the FOCUSED terminal -
+  // visibility alone would leave two panes claiming it.
+  const activeFindTargetId = useFocusedPaneValue(props.findTargetId, null);
   const markSearchResultSource = useCallback(
     (source: TerminalSearchResultSource): void => {
       terminalSearchResultSourceRef.current = source;
@@ -1252,7 +1254,7 @@ function useVisibleTerminalRepair(input: {
     clearTerminalAtlasSafely(canvasRef.current);
     term.refresh(0, term.rows - 1);
   }, [controlsRef, termRef, canvasRef, theme]);
-  useActivePaneEffect(refitVisiblePane);
+  useVisiblePaneEffect(refitVisiblePane);
 }
 
 function clearTerminalAtlasSafely(canvas: CanvasAddon | null): void {

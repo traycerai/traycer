@@ -1,10 +1,15 @@
 import { createMemoryHistory } from "@tanstack/react-router";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   navigateNestedFocus,
+  navigateNestedFocusToPrimaryEditor,
   type NestedFocusLocation,
 } from "@/lib/epic-nested-focus-navigation";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
+import {
+  consumeNestedRoutePrimaryEditorFocus,
+  resetNestedRouteDomFocusForTests,
+} from "@/lib/nested-route-dom-focus";
 
 interface CapturedNavigateOptions {
   readonly search: (prev: Record<string, unknown>) => unknown;
@@ -33,6 +38,8 @@ function firstNavigateOptions(
 }
 
 describe("navigateNestedFocus", () => {
+  beforeEach(resetNestedRouteDomFocusForTests);
+
   it("pushes a nested search patch for persistent desktop history", () => {
     const history = createPersistentMemoryHistory(
       "/epics/epic-1/tab-1",
@@ -86,6 +93,36 @@ describe("navigateNestedFocus", () => {
     );
 
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("hands primary-editor focus to the scheduled route restoration", () => {
+    const history = createPersistentMemoryHistory(
+      "/epics/epic-1/tab-1",
+      "nested-focus-navigation-primary-editor",
+    );
+    const navigate = vi.fn();
+    const target = { paneId: "pane-1", tileInstanceId: "tile-1" };
+
+    navigateNestedFocusToPrimaryEditor(
+      {
+        history,
+        navigate,
+        getLocation: (): NestedFocusLocation => ({
+          pathname: "/epics/epic-1/tab-1",
+          search: {},
+        }),
+      },
+      { epicId: "epic-1", tabId: "tab-1" },
+      () => target,
+    );
+
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(
+      consumeNestedRoutePrimaryEditorFocus("epic-1", "tab-1", target),
+    ).toBe(true);
+    expect(
+      consumeNestedRoutePrimaryEditorFocus("epic-1", "tab-1", target),
+    ).toBe(false);
   });
 
   it("does not write nested params for memory history", () => {

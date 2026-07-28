@@ -37,6 +37,22 @@ export interface DesktopPerWindowEpicViewTab {
   readonly id: string;
   readonly epicId: string;
   readonly name: string;
+  readonly surfaceMode?:
+    | { readonly kind: "epic" }
+    | { readonly kind: "phase-migration"; readonly phaseId: string };
+}
+
+export type DesktopPerWindowStateFeature =
+  "tab-strip-layout-v2" | "active-route-v1";
+
+export interface DesktopPerWindowStateCapabilities {
+  readonly schemaVersion: number;
+  readonly features: readonly DesktopPerWindowStateFeature[];
+}
+
+export interface DesktopPerWindowStateUpdateAcknowledgement {
+  readonly capabilities: DesktopPerWindowStateCapabilities;
+  readonly revision: number;
 }
 
 export interface DesktopPerWindowLandingDraft {
@@ -56,11 +72,14 @@ export interface DesktopPerWindowLandingDraft {
 }
 
 export interface DesktopPerWindowSnapshot {
+  readonly revision?: number;
   readonly epicTabs: readonly DesktopPerWindowEpicViewTab[];
   readonly activeTabId: string | null;
   readonly canvasByTabId: Readonly<Record<string, DesktopJsonValue>>;
   readonly landingDrafts: readonly DesktopPerWindowLandingDraft[];
   readonly activeLandingDraftId: string | null;
+  readonly tabStripLayout?: DesktopJsonValue | null;
+  readonly activeRoute?: string | null;
 }
 
 export interface DesktopPerWindowStatePatch {
@@ -69,6 +88,8 @@ export interface DesktopPerWindowStatePatch {
   readonly canvasByTabId?: Readonly<Record<string, DesktopJsonValue>>;
   readonly landingDrafts?: readonly DesktopPerWindowLandingDraft[];
   readonly activeLandingDraftId?: string | null;
+  readonly tabStripLayout?: DesktopJsonValue | null;
+  readonly activeRoute?: string | null;
 }
 
 export type DesktopAuthSessionStatus =
@@ -115,6 +136,9 @@ export interface DesktopMenuCommandPayload {
   readonly command: DesktopMenuCommandId;
   readonly windowId: string;
 }
+
+export type DesktopTopLevelMenuId =
+  "file" | "edit" | "view" | "window" | "help";
 
 export interface DesktopZoomBridge {
   readonly ladder: readonly number[];
@@ -187,6 +211,14 @@ export interface DesktopMenuBridge {
   };
 }
 
+export interface DesktopMenuPopupBridge {
+  openTopLevel(
+    menuId: DesktopTopLevelMenuId,
+    anchorX: number,
+    anchorY: number,
+  ): Promise<void>;
+}
+
 export type DesktopAppUpdateStatus =
   | "idle"
   | "checking"
@@ -232,6 +264,11 @@ export interface DesktopAppUpdateSnapshot {
   // dialog with the steps instead of disabling it - the update can still be
   // applied, just not fully automatically.
   readonly installGuidance: DesktopAppUpdateGuidance | null;
+  // True from the moment the main process hands off to `quitAndInstall` until
+  // the install either ends the process or fails back to "error". The quit is
+  // not instant, so this is what every restart affordance reads to go pending -
+  // it's broadcast, so a second window can't fire a duplicate install either.
+  readonly installInFlight: boolean;
   readonly errorMessage: string | null;
   readonly lastCheckedAt: string | null;
   readonly lastCheckIntent: DesktopAppUpdateCheckIntent | null;
@@ -289,7 +326,10 @@ export interface DesktopReportIssueForm {
 }
 
 export interface DesktopSubmitReportResult {
-  readonly reportId: string;
+  // `null` when the diagnostics upload never reached Sentry. The issue is
+  // still filed, but without a Support Report row - there is nothing to look
+  // up, and advertising an id that resolves to nothing is the bug being fixed.
+  readonly reportId: string | null;
 }
 
 export interface DesktopSupportBridge {
@@ -334,7 +374,10 @@ export interface DesktopWindowsBridge {
   };
   perWindowState: {
     get(): Promise<DesktopPerWindowSnapshot>;
-    update(patch: DesktopPerWindowStatePatch): Promise<void>;
+    capabilities?(): Promise<DesktopPerWindowStateCapabilities>;
+    update(
+      patch: DesktopPerWindowStatePatch,
+    ): Promise<DesktopPerWindowStateUpdateAcknowledgement | void>;
     // Optional + capability-probed: a desktop shell built before the per-window
     // `clear` RPC was added has no `clear`. Keeping it optional lets the wipe
     // site probe `typeof clear === "function"` and degrade gracefully without

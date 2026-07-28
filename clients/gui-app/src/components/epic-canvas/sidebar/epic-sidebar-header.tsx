@@ -5,6 +5,7 @@
 import { useDraggable } from "@dnd-kit/core";
 import {
   getLeftPanelSectionDragId,
+  getPaneScopedDndId,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -17,6 +18,7 @@ import {
   useEpicLeftPanelStore,
   useLeftPanelSectionCollapsed,
 } from "@/stores/epics/left-panel-store";
+import { useMaybeSidebarBulkSelection } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import {
   usePanelHeaderSearchOpen,
   usePanelHeaderSearchStore,
@@ -61,20 +63,41 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
   const dragData = useMemo<EpicCanvasLeftPanelRailDragData>(
     () => ({
       kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+      viewTabId: props.tabId,
       panelId: props.panel.id,
       origin: "panel-section",
     }),
-    [props.panel.id],
+    [props.panel.id, props.tabId],
   );
   const {
     listeners,
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getLeftPanelSectionDragId(props.panel.id),
+    id: getPaneScopedDndId(
+      props.tabId,
+      getLeftPanelSectionDragId(props.panel.id),
+    ),
     data: dragData,
   });
   const searchOpen = usePanelHeaderSearchOpen(props.panel.id);
+  const bulkSelection = useMaybeSidebarBulkSelection();
+  // Selection is a panel-wide mode, so its controls own the row instead of
+  // competing horizontally with a title that no longer describes the mode.
+  if (bulkSelection?.selectionMode === true && Actions !== null) {
+    return (
+      <div
+        className="@container flex h-9 shrink-0 items-center justify-end px-2"
+        data-panel-header-mode="selection"
+      >
+        <Actions
+          epicId={props.epicId}
+          tabId={props.tabId}
+          collapsed={collapsed}
+        />
+      </div>
+    );
+  }
   // Search mode takes the whole row rather than adding one below it, so the
   // list keeps its vertical position and the panel spends no resting space on
   // a mode that is off most of the time.
@@ -89,7 +112,7 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
     <div
       ref={dragRef}
       className={cn(
-        "flex h-9 shrink-0 items-center justify-between gap-2 px-3",
+        "@container flex h-9 shrink-0 items-center justify-between gap-2 px-3",
         isDragging && "opacity-60",
       )}
     >
@@ -123,7 +146,7 @@ export function PanelGroupSectionHeader(props: PanelGroupSectionHeaderProps) {
           toggleCollapsed(props.panel.id);
         }}
       >
-        <Icon className="size-4 shrink-0 text-muted-foreground/80" />
+        <Icon className="size-4 shrink-0 text-muted-foreground/80 @max-[14rem]:hidden" />
         <div className="min-w-0">
           <p className="truncate text-ui-xs font-normal uppercase tracking-wide text-muted-foreground">
             {props.panel.title}

@@ -134,10 +134,10 @@ export function ComposerBody({
                 hasPastedImageBytes={hasPastedImageBytes}
                 ingestPastedComposerImages={ingestPastedComposerImages}
                 isActive={chatEditorIsActive}
-                disabled={false}
+                disabled={isSubmitting}
                 placeholder={COMPOSER_PLACEHOLDER}
                 editorClassName={editorClassName}
-                stabilizeImageAttachmentCaret={false}
+                stabilizeImageAttachmentCaret
                 onSnapshot={onSnapshot}
                 onSubmit={onSubmit}
                 onPaste={chatPasteActive ? paste.onPaste : NOOP}
@@ -178,7 +178,7 @@ export function ComposerBody({
                 composerDisabledHint={workspaceDisabledHint}
                 dictation={dictationControl}
                 dictationPreparing={dictationPreparing}
-                settingsLocked={false}
+                settingsLocked={isSubmitting}
                 // The landing composer has no tab yet - the app-wide default
                 // host applies.
                 createProfileHostId={null}

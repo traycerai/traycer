@@ -314,10 +314,14 @@ function createChatHarness(): ChatHarness {
           );
         }, 0);
       }
-      const client: Pick<ChatStreamClient, "sendAction" | "close"> = {
+      const client: Pick<
+        ChatStreamClient,
+        "sendAction" | "close" | "sameTurnSteeringProtocolSupported"
+      > = {
         sendAction: (frame) => {
           sent.push(frame);
         },
+        sameTurnSteeringProtocolSupported: () => true,
         close: () => undefined,
       };
       return client;
@@ -409,6 +413,7 @@ function emitChatSnapshotWithMessages(input: {
         claudePendingWakes: [],
         messages: [...input.messages],
         events: [],
+        archivedAt: null,
       },
       access: {
         role: input.access,
@@ -623,6 +628,7 @@ function skippedInterviewAssistantMessage(): Message {
 
 function runningActiveTurn(): ChatActiveTurn {
   return {
+    sameTurnSteeringSupported: false,
     turnId: "turn-active",
     status: "running",
     harnessId: "codex",
@@ -962,6 +968,7 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "claude",
@@ -1121,6 +1128,7 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
@@ -1234,6 +1242,7 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: "codex",
@@ -2204,6 +2213,7 @@ describe("<ChatTile />", () => {
         chatId: CHAT_ARTIFACT.id,
         runStatus: "running",
         activeTurn: {
+          sameTurnSteeringSupported: false,
           turnId: "turn-1",
           status: "running",
           harnessId: QUEUED_SETTINGS.harnessId,
@@ -2373,6 +2383,12 @@ describe("<ChatTile />", () => {
     expect(settingsFrame?.queueItemId).toBe("queue-1");
     expect(settingsFrame?.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
+
+  // Decision 14 save-and-steer routing (mod-enter → after_safe_point →
+  // queueEdit + queueSteerNow) lives in chat-tile-queue-edit-steer.test.tsx,
+  // which drives the real useChatComposerSubmit + the tile's edit-arm logic
+  // without depending on TipTap DOM key events under jsdom. Plain Enter edit
+  // → queueSettingsUpdate remains covered by the settings-update test above.
 
   it("cancels queued edit mode from the composer and clears the queued content when there was no previous draft", async () => {
     useComposerDraftStore.setState({ drafts: {} });

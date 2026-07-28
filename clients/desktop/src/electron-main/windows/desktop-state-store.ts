@@ -8,11 +8,12 @@ import type {
 } from "../../ipc-contracts/window-types";
 import {
   parseJsonRecord,
+  parseJsonValue,
   parseLandingDrafts,
 } from "../../ipc-contracts/window-state-parsers";
 import { environmentSubdir } from "../host/host-paths";
 
-const DESKTOP_STATE_VERSION = 1;
+const DESKTOP_STATE_VERSION = 2;
 
 interface DesktopStateStoreLogger {
   warn(message: string, meta: unknown): void;
@@ -72,6 +73,7 @@ export class DesktopStateStore {
     ownership: [],
   };
   private writeChain: Promise<void> = Promise.resolve();
+  private latestWrite: Promise<void> = Promise.resolve();
 
   constructor(options: DesktopStateStoreOptions) {
     this.filePath = options.filePath;
@@ -144,7 +146,7 @@ export class DesktopStateStore {
       JSON.stringify(this.payload) !== JSON.stringify(nextPayload);
     if (changed) {
       this.payload = nextPayload;
-      this.scheduleWrite();
+      void this.scheduleWrite().catch(() => undefined);
     }
 
     return {
@@ -158,12 +160,15 @@ export class DesktopStateStore {
     };
   }
 
-  setWindowSnapshot(windowId: string, snapshot: PerWindowSnapshot): void {
+  setWindowSnapshot(
+    windowId: string,
+    snapshot: PerWindowSnapshot,
+  ): Promise<void> {
     this.payload = {
       ...this.payload,
       windows: { ...this.payload.windows, [windowId]: snapshot },
     };
-    this.scheduleWrite();
+    return this.scheduleWrite();
   }
 
   deleteWindowSnapshot(windowId: string): void {
@@ -172,28 +177,32 @@ export class DesktopStateStore {
     };
     delete windows[windowId];
     this.payload = { ...this.payload, windows };
-    this.scheduleWrite();
+    void this.scheduleWrite().catch(() => undefined);
   }
 
   setOwnershipEntries(entries: readonly OwnershipEntry[]): void {
     this.payload = { ...this.payload, ownership: entries };
-    this.scheduleWrite();
+    void this.scheduleWrite().catch(() => undefined);
   }
 
   async flush(): Promise<void> {
-    await this.writeChain;
+    await this.latestWrite;
   }
 
-  private scheduleWrite(): void {
-    this.writeChain = this.writeChain.then(() => this.persistWithRetry());
+  private scheduleWrite(): Promise<void> {
+    const write = this.writeChain.then(() => this.persistWithRetry());
+    // A failed acknowledgement must reject its caller, but it must not poison
+    // later writes. The recovery chain is private; `write` remains the exact
+    // durable result returned to the renderer that authored this revision.
+    this.writeChain = write.catch(() => undefined);
+    this.latestWrite = write;
+    return write;
   }
 
-  // Persist policy: one immediate retry, then surrender with an error-level
-  // log. The chain itself never rejects - `flush()` resolving is what
-  // authorizes a quit, and a failed state write must never block it (the
-  // previous on-disk payload stays intact thanks to the tmp+rename swap; the
-  // cost of surrender is stale window state on the next launch, which the
-  // error log makes attributable).
+  // Persist policy: one immediate retry, then propagate the terminal failure.
+  // The renderer's layout acknowledgement is a move barrier, so it can only
+  // resolve after a durable write. The private write chain above still recovers
+  // for a later healthy write.
   private async persistWithRetry(): Promise<void> {
     try {
       await this.persist();
@@ -206,10 +215,11 @@ export class DesktopStateStore {
     try {
       await this.persist();
     } catch (err) {
-      this.logger.error(
-        "[desktop-state] persist retry failed - window state will be stale on next launch",
-        { err, filePath: this.filePath },
-      );
+      this.logger.error("[desktop-state] persist retry failed", {
+        err,
+        filePath: this.filePath,
+      });
+      throw err;
     }
   }
 
@@ -290,21 +300,32 @@ function parsePerWindowSnapshot(value: unknown): PerWindowSnapshot {
       ? obj.activeLandingDraftId
       : null;
   return {
+    revision:
+      typeof obj.revision === "number" &&
+      Number.isSafeInteger(obj.revision) &&
+      obj.revision >= 0
+        ? obj.revision
+        : 0,
     epicTabs: parseEpicTabs(obj.epicTabs),
     activeTabId: typeof obj.activeTabId === "string" ? obj.activeTabId : null,
     canvasByTabId: parseJsonRecord(obj.canvasByTabId),
     landingDrafts,
     activeLandingDraftId,
+    tabStripLayout: parseJsonValue(obj.tabStripLayout) ?? null,
+    activeRoute: typeof obj.activeRoute === "string" ? obj.activeRoute : null,
   };
 }
 
 function emptyPerWindowSnapshot(): PerWindowSnapshot {
   return {
+    revision: 0,
     epicTabs: [],
     activeTabId: null,
     canvasByTabId: {},
     landingDrafts: [],
     activeLandingDraftId: null,
+    tabStripLayout: null,
+    activeRoute: null,
   };
 }
 
@@ -396,6 +417,29 @@ function parseEpicTabs(value: unknown): PerWindowSnapshot["epicTabs"] {
       return [];
     }
     seen.add(obj.id);
-    return [{ id: obj.id, epicId: obj.epicId, name: obj.name }];
+    const surfaceMode = parseEpicSurfaceMode(obj.surfaceMode);
+    return [
+      surfaceMode === null
+        ? { id: obj.id, epicId: obj.epicId, name: obj.name }
+        : { id: obj.id, epicId: obj.epicId, name: obj.name, surfaceMode },
+    ];
   });
+}
+
+function parseEpicSurfaceMode(
+  value: unknown,
+): { readonly kind: "phase-migration"; readonly phaseId: string } | null {
+  if (!isPlainRecord(value)) return null;
+  if (
+    value.kind === "phase-migration" &&
+    typeof value.phaseId === "string" &&
+    value.phaseId.length > 0
+  ) {
+    return { kind: "phase-migration", phaseId: value.phaseId };
+  }
+  return null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

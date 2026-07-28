@@ -14,6 +14,8 @@ export const HEADER_TAB_SLOT_DND_TYPE = "header-tab-slot";
 
 export interface HeaderTabDragData {
   readonly kind: typeof HEADER_TAB_DND_TYPE;
+  /** Authoritative strip item id; a split group is always one source. */
+  readonly stripItemId: string;
   readonly tabKind: HeaderTabKind;
   readonly tabId: string;
   /** Rendered strip index at drag start - drives reorder noop suppression. */
@@ -40,6 +42,10 @@ export function getHeaderTabSlotDropId(
   id: string,
 ): string {
   return `header-tab-slot:${kind}:${id}`;
+}
+
+export function getHeaderStripItemSlotDropId(itemId: string): string {
+  return `header-tab-slot:item:${itemId}`;
 }
 
 export const HEADER_TAB_TRAILING_SLOT_DROP_ID = "header-tab-slot:trailing";
@@ -71,6 +77,13 @@ export function readHeaderTabDragData(
   }
   return {
     kind: HEADER_TAB_DND_TYPE,
+    // Older drag payloads carried only a member ref. Keep them readable so a
+    // drag begun before a hot reload is harmless; current sources always
+    // provide the authoritative item id.
+    stripItemId:
+      typeof value.stripItemId === "string" && value.stripItemId.length > 0
+        ? value.stripItemId
+        : `tab:${tabKind}:${value.tabId}`,
     tabKind,
     tabId: value.tabId,
     index: value.index,
@@ -95,6 +108,29 @@ export function readHeaderTabSlotDropData(
     index: value.index,
     isTrailing: value.isTrailing,
   };
+}
+
+/**
+ * Share of a tab's width, centred, reserved for the pair-into-split gesture.
+ * The outer thirds stay pure reorder, so the common gesture (slide a tab past
+ * its neighbours) never has to cross a splitting zone at its destination.
+ */
+export const HEADER_STRIP_PAIR_BAND_RATIO = 0.4;
+
+/**
+ * Whether the pointer is inside a tab's central pair band. Trailing slots cover
+ * empty strip space with no tab to pair against, so they are always reorder.
+ */
+export function isHeaderStripPairZone(input: {
+  readonly slot: HeaderTabSlotDropData;
+  readonly pointerX: number;
+  readonly slotRect: RectLike | null;
+}): boolean {
+  const { slot, pointerX, slotRect } = input;
+  if (slot.isTrailing || slotRect === null) return false;
+  const center = slotRect.left + slotRect.width / 2;
+  const halfBand = (slotRect.width * HEADER_STRIP_PAIR_BAND_RATIO) / 2;
+  return Math.abs(pointerX - center) <= halfBand;
 }
 
 /**

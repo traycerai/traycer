@@ -21,6 +21,11 @@ import { buildAgentActivityFromHookCommand } from "./commands/agent-activity-fro
 import { buildAgentListHarnessesCommand } from "./commands/agent-list-harnesses";
 import { buildAgentListHarnessModelsCommand } from "./commands/agent-list-harness-models";
 import { buildAgentListCommand } from "./commands/agent-list";
+import {
+  buildAgentRoleClaimCommand,
+  buildAgentRoleListCommand,
+  buildAgentRoleRelinquishCommand,
+} from "./commands/agent-role";
 import { buildAgentSelectionGuideCommand } from "./commands/agent-selection-guide";
 import { buildAgentSendCommand } from "./commands/agent-send";
 import { buildAgentTitleFromHookCommand } from "./commands/agent-title-from-hook";
@@ -60,8 +65,9 @@ import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-an
 import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
 import { buildHostRestartCommand } from "./commands/host-restart";
-import { runHostStart } from "./commands/host-start";
+import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
+import { runHostCapabilities } from "./host/capabilities";
 import { hostStatusCommand } from "./commands/host-status";
 import { hostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
@@ -353,6 +359,34 @@ function registerHostCommands(program: Command): void {
       .option(
         "--cwd <path>",
         "Working directory for the host (defaults to the install directory)",
+      )
+      // Identity binding for journal-authorised reclaim probes. Existing
+      // registrations remain valid without these options; a probe requires
+      // all three and otherwise produces no correlated marker.
+      //
+      // Hidden per the house convention for `"Internal:"` options - and
+      // deliberately so: the emitted service definitions gate on
+      // `host capabilities --has service-label`, never on help text, so
+      // hiding these cannot silently disable the identity binding. Adding
+      // `.hideHelp()` here IS the regression this decoupling exists to
+      // survive; see host/capabilities.ts.
+      .addOption(
+        new Option(
+          "--service-label <label>",
+          "Internal: owning service label",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--transition-id <id>",
+          "Internal: lifecycle transition id",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--probe-nonce <nonce>",
+          "Internal: lifecycle probe nonce",
+        ).hideHelp(),
       ),
   ).action(async (opts) => {
     const logger = createCliLogger(config.environment);
@@ -361,13 +395,50 @@ function registerHostCommands(program: Command): void {
       hasCwdOverride: typeof opts.cwd === "string",
     });
     await runHostStart(
-      {
+      hostStartOptionsFromCommand({
         environment: config.environment,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
-      },
+        serviceLabel:
+          typeof opts.serviceLabel === "string" ? opts.serviceLabel : null,
+        transitionId:
+          typeof opts.transitionId === "string" ? opts.transitionId : null,
+        probeNonce:
+          typeof opts.probeNonce === "string" ? opts.probeNonce : null,
+      }),
       {},
     );
   });
+
+  // The capability contract emitted service definitions probe before they
+  // pass an argument their (possibly N-1) CLI slot may not understand. NOT
+  // routed through `withRunner`: the output is a machine contract read by a
+  // `/bin/sh` script and a VBScript launcher, so it must stay raw stdout +
+  // exit code rather than the NDJSON envelope. Pure and side-effect free -
+  // see host/capabilities.ts.
+  host
+    .command("capabilities")
+    .description("Print the capability tokens this CLI supports")
+    .option("--json", "Print the capability document as JSON")
+    .option(
+      "--has <capability>",
+      "Exit 0 when this CLI supports <capability>, non-zero otherwise",
+    )
+    .action((...actionArgs: unknown[]) => {
+      // `optsWithGlobals()` rather than the local opts bag: `--json` is also
+      // declared globally by `addRunnerFlags(program)`, and commander binds
+      // the token to the root option, leaving the subcommand's copy unset.
+      const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
+      const opts = command.optsWithGlobals() as Record<string, unknown>;
+      const response = runHostCapabilities(
+        typeof opts.has === "string"
+          ? { kind: "has", capability: opts.has }
+          : { kind: "list", json: opts.json === true },
+      );
+      if (response.stdout.length > 0) {
+        process.stdout.write(response.stdout);
+      }
+      process.exitCode = response.exitCode;
+    });
 
   withRunner(
     host
@@ -837,6 +908,61 @@ function registerHostCommands(program: Command): void {
   );
 }
 
+export function hostStartOptionsFromCommand(input: {
+  readonly environment: typeof config.environment;
+  readonly cwd: string | null;
+  readonly serviceLabel: string | null;
+  readonly transitionId: string | null;
+  readonly probeNonce: string | null;
+}): RunHostStartOptions {
+  const probeValues = [
+    input.serviceLabel,
+    input.transitionId,
+    input.probeNonce,
+  ];
+  const probeValueCount = probeValues.filter((value) => value !== null).length;
+  if (probeValueCount === 0) {
+    return { environment: input.environment, cwd: input.cwd };
+  }
+  if (
+    input.serviceLabel !== null &&
+    input.transitionId === null &&
+    input.probeNonce === null
+  ) {
+    return {
+      environment: input.environment,
+      cwd: input.cwd,
+      serviceLabel: input.serviceLabel,
+    };
+  }
+  if (
+    input.serviceLabel === null ||
+    input.transitionId === null ||
+    input.probeNonce === null
+  ) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "host start probe requires --service-label, --transition-id, and --probe-nonce together",
+      details: {
+        serviceLabelProvided: input.serviceLabel !== null,
+        transitionIdProvided: input.transitionId !== null,
+        probeNonceProvided: input.probeNonce !== null,
+      },
+      exitCode: 1,
+    });
+  }
+  return {
+    environment: input.environment,
+    cwd: input.cwd,
+    probe: {
+      serviceLabel: input.serviceLabel,
+      transitionId: input.transitionId,
+      probeNonce: input.probeNonce,
+    },
+  };
+}
+
 function registerServiceCommands(host: Command): void {
   const service = host
     .command("service")
@@ -855,11 +981,16 @@ function registerServiceCommands(host: Command): void {
       .option(
         "--allow-self-invocation",
         "Dev only: register the current (non-packaged) CLI as the service command.",
+      )
+      .option(
+        "--takeover",
+        "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       ),
     (opts) =>
       buildServiceInstallCommand({
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
+        takeover: opts.takeover === true,
       }),
   );
 
@@ -1191,7 +1322,9 @@ function registerCommentsCommands(program: Command): void {
   withRunner(
     comments
       .command("list")
-      .description("List artifact comment threads")
+      .description(
+        "List artifact comment threads. Read them after reading an artifact, so human-authored feedback is visible before editing or responding. A thread may quote the artifact text it refers to: anchor=present means that quote is still located in the current artifact, while anchor=missing or anchor=unavailable means the quote is context only - verify it against the artifact before acting on it.",
+      )
       .argument("[artifactPaths...]", "Absolute artifact paths")
       .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
       .option("--status <status>", "Thread status: all, open, or resolved"),
@@ -1208,7 +1341,9 @@ function registerCommentsCommands(program: Command): void {
   withRunner(
     comments
       .command("set-status")
-      .description("Set artifact comment threads to open or resolved")
+      .description(
+        "Set artifact comment threads to open or resolved after addressing or reopening feedback. Prefer telling the user which threads look addressed and letting them decide, unless they have already asked you to resolve threads yourself.",
+      )
       .requiredOption("--artifact <path>", "Absolute artifact path")
       .requiredOption("--status <status>", "Thread status: open or resolved")
       .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
@@ -1371,7 +1506,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--fast",
-        "Request fast mode for supported models. Only available for gui surface.",
+        "Request fast mode for supported models. Only available for gui surface. May consume additional credits - set it only when the user asks for it or the agent selection guide recommends it.",
       )
       .option("--profile <ambient|id>", profileHelp)
       .option(
@@ -1539,7 +1674,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--fast",
-        "Enable fast mode for supported models. Omitting it disables fast mode.",
+        "Enable fast mode for supported models. Omitting it disables fast mode. May consume additional credits - turn it on only when the user asks for it or the agent selection guide recommends it.",
       )
       .option(
         "--permission-mode <mode>",
@@ -1577,7 +1712,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--expect-reply",
-        "Open or reuse a reply thread; the host returns a responseId",
+        "Open or reuse a reply thread; the host returns a responseId. Without it the peer processes your message and never reports back.",
       )
       .option(
         "--response-id <id>",
@@ -1606,6 +1741,74 @@ function registerAgentCommands(program: Command): void {
       buildAgentTranscriptCommand({
         epicId: typeof opts.epicId === "string" ? opts.epicId : null,
         agentId: typeof opts.agentId === "string" ? opts.agentId : "",
+      }),
+  );
+
+  const role = agent
+    .command("role")
+    .description(
+      "Claim, list, and relinquish durable Task-local roles for the calling agent",
+    );
+
+  withRunner(
+    role
+      .command("claim", readonlyHidden)
+      .description(
+        "Claim a durable role for the calling agent in this Task's role registry",
+      )
+      .requiredOption(
+        "--role <name>",
+        "Role name to claim. Short and memorable; disambiguate against existing roles.",
+      )
+      .requiredOption(
+        "--scope <scope>",
+        "Task-local scope of responsibility this role covers",
+      )
+      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+      .option(
+        "--agent-id <id>",
+        "Claiming agent (defaults to $TRAYCER_AGENT_ID)",
+      ),
+    (opts) =>
+      buildAgentRoleClaimCommand({
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+        role: typeof opts.role === "string" ? opts.role : null,
+        scope: typeof opts.scope === "string" ? opts.scope : null,
+      }),
+  );
+
+  withRunner(
+    role
+      .command("list")
+      .description(
+        "List the roles currently claimed in this Task (your account's live agents only)",
+      )
+      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
+    (opts) =>
+      buildAgentRoleListCommand({
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+      }),
+  );
+
+  withRunner(
+    role
+      .command("relinquish", readonlyHidden)
+      .description("Relinquish a role claim held by the calling agent")
+      .requiredOption(
+        "--claim-id <id>",
+        "Claim id to relinquish (see 'traycer agent role list')",
+      )
+      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+      .option(
+        "--agent-id <id>",
+        "Relinquishing agent (defaults to $TRAYCER_AGENT_ID)",
+      ),
+    (opts) =>
+      buildAgentRoleRelinquishCommand({
+        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+        claimId: typeof opts.claimId === "string" ? opts.claimId : null,
       }),
   );
 

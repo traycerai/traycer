@@ -21,7 +21,7 @@ function makeFixture(content: JsonContent): {
     element,
     extensions: buildComposerExtensions({
       pickerStore: createComposerPickerStore(),
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: {
         current: () => {
           submitCalls.count += 1;

@@ -511,6 +511,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useChildIds: (parentId: string) =>
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => new Set<string>(),
+  useEpicAgentRoleClaims: () => [],
   useEpicArtifact: (artifactId: string | null) => {
     if (artifactId === null) return null;
     const node = testState.tree.nodeById[artifactId];

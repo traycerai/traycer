@@ -87,6 +87,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  * A bound worktree/folder is gone from disk. The host's prepare-launch
  * resolver rejects with the typed `WORKTREE_MISSING` envelope instead of
@@ -818,6 +819,7 @@ function TerminalAgentPreLaunchToolbar(
       data-testid="terminal-agent-pre-launch-toolbar"
     >
       <HostWorkspaceSelector
+        disabled={false}
         surface={{
           kind: "terminal-agent",
           hostId: props.hostId,
@@ -841,22 +843,30 @@ function TerminalAgentPreLaunchToolbar(
         }}
       />
       <AgentModeReadonlyLabel value={props.agentMode} />
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-7 gap-1 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
-        disabled={forkDisabled}
-        title={
+      <TooltipWrapper
+        label={
           forkDisabled
             ? "Fork is available after the terminal agent session and workspace binding are ready."
             : "Fork terminal agent"
         }
-        onClick={openForkDialog}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <GitFork aria-hidden className="size-3.5" />
-        Fork
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
+            disabled={forkDisabled}
+            onClick={openForkDialog}
+          >
+            <GitFork aria-hidden className="size-3.5" />
+            Fork
+          </Button>
+        </span>
+      </TooltipWrapper>
       {/* Right-aligned status-bar group: the worktree-creation notice sits
           beside the agent controls. The notice's expanded detail opens as a
           downward Popover overlay, so it never reflows the terminal below. */}
@@ -869,6 +879,7 @@ function TerminalAgentPreLaunchToolbar(
         />
         <TerminalAgentHeaderControls
           epicId={props.epicId}
+          viewTabId={props.viewTabId}
           tuiAgentId={props.agent.id}
         />
       </div>
@@ -999,6 +1010,7 @@ function TerminalAgentTileShell(props: {
  */
 function TerminalAgentHeaderControls(props: {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly tuiAgentId: string;
 }) {
   const controls = useAgentStopControls({
@@ -1034,6 +1046,7 @@ function TerminalAgentHeaderControls(props: {
         <PopoverContent align="end" className="w-[min(90vw,22rem)] p-0">
           <AgentStopList
             epicId={props.epicId}
+            viewTabId={props.viewTabId}
             self={self}
             descendants={controls.descendants}
             surface="tui-popover"

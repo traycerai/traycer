@@ -45,6 +45,7 @@ import {
   getTaskContextsRequestSchema,
   getTaskContextsResponseSchema,
   listTasksRequestSchema,
+  listTasksRequestSchemaV11,
   listTasksResponseSchema,
   listTasksResponseSchemaV10,
   removeEpicRepoRequestSchema,
@@ -65,8 +66,12 @@ import {
   reparentChatResponseSchema,
   replyToCommentThreadRequestSchema,
   replyToCommentThreadResponseSchema,
+  recordEpicViewedRequestSchema,
+  recordEpicViewedResponseSchema,
   revokeEpicCollaboratorRequestSchema,
   revokeEpicCollaboratorResponseSchema,
+  setChatArchivedRequestSchema,
+  setChatArchivedResponseSchema,
   setCommentThreadResolvedRequestSchema,
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
@@ -81,15 +86,17 @@ import {
   updateEpicRequestSchema,
   updateEpicResponseSchema,
 } from "@traycer/protocol/host/epic/unary-schemas";
-import { epicSubscribeV10 } from "@traycer/protocol/host/epic/subscribe";
+import {
+  epicSubscribeV10,
+  epicSubscribeV11,
+} from "@traycer/protocol/host/epic/subscribe";
 
 // `epic.listTasks@1.0` - frozen pre-pinning host entry point for the CloudData
-// task-list query. The request remains shared with the latest contract while
-// the response preserves the released row shape.
+// task-list query. Both request and response preserve the released wire shape.
 export const epicListTasksV10 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaV11,
   responseSchema: listTasksResponseSchemaV10,
 });
 
@@ -99,7 +106,7 @@ export const epicListTasksV10 = defineRpcContract({
 export const epicListTasksV11 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 1 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaV11,
   responseSchema: listTasksResponseSchema,
 });
 
@@ -116,6 +123,25 @@ export const epicListTasksUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
+// `epic.listTasks@1.2` adds the centrally evaluated `last-viewed` sort. The
+// response is unchanged; older requests are already valid latest requests.
+export const epicListTasksV12 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV11ToV12 = defineUpgradePath<
+  typeof epicListTasksV11,
+  typeof epicListTasksV12
+>({
+  from: epicListTasksV11.schemaVersion,
+  to: epicListTasksV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
 // Personal cloud preference. Optional/non-floor so clients retain the released
 // unary handshake against older hosts and receive E_HOST_UNSUPPORTED only when
 // they try to change a pin.
@@ -124,6 +150,15 @@ export const epicSetPinnedV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setEpicPinnedRequestSchema,
   responseSchema: setEpicPinnedResponseSchema,
+});
+
+// Personal cloud recency. Optional/non-floor so older hosts remain compatible;
+// route activation silently skips the write when the capability is absent.
+export const epicRecordViewedV10 = defineRpcContract({
+  method: "epic.recordViewed",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: recordEpicViewedRequestSchema,
+  responseSchema: recordEpicViewedResponseSchema,
 });
 
 // Batch resolve task ids → list-row shapes (titles/context). Optional/non-floor
@@ -321,6 +356,18 @@ export const epicReparentChatV10 = defineRpcContract({
   responseSchema: reparentChatResponseSchema,
 });
 
+// Optional (non-floor) capability: durable host-backed archive toggle for a
+// chat or terminal-agent record. Registered with a `degrade: unsupported`
+// strategy (see registry.ts) so an old host that lacks it fails only this
+// call - it must never enter the released floor, which would be
+// handshake-fatal for existing peers. See the schema doc in `unary-schemas.ts`.
+export const epicSetChatArchivedV10 = defineRpcContract({
+  method: "epic.setChatArchived",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: setChatArchivedRequestSchema,
+  responseSchema: setChatArchivedResponseSchema,
+});
+
 export const epicCreateTuiAgentV10 = defineRpcContract({
   method: "epic.createTuiAgent",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -448,4 +495,4 @@ export const epicSearchArtifactsV10 = defineRpcContract({
   responseSchema: searchArtifactsResponseSchema,
 });
 
-export { epicSubscribeV10 };
+export { epicSubscribeV10, epicSubscribeV11 };

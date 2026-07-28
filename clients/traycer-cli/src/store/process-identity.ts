@@ -8,14 +8,19 @@
 // identity`, `./process-identity`) keeps working unchanged.
 export {
   __parseElapsedSecondsForTest,
+  __setAsyncProcessStartIdentityReaderForTest,
   __setProcessStartTimeReaderForTest,
   computeProcessIdentityVerdict,
   currentProcessIdentityToken,
+  getPublishedProcessIdentityVerdict,
   isProcessAlive,
   readLiveProcessStartTimeMs,
+  readProcessStartIdentity,
   readProcessStartTimeMs,
   verifyProcessIdentity,
+  verifyProcessIdentityAsync,
   type ProcessIdentityToken,
   type ProcessIdentityVerdict,
   type ProcessLivenessVerdict,
+  type PublishedProcessIdentityVerdict,
 } from "@traycer-clients/shared/host-lock/process-identity";

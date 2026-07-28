@@ -1,4 +1,8 @@
 import { readFile, rm } from "node:fs/promises";
+import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
 import type { Environment } from "../runner/environment";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
@@ -15,7 +19,45 @@ export interface HostPidMetadata {
   readonly version: string;
   readonly websocketUrl: string;
   readonly startedAt: string;
+  /**
+   * The publishing process's kernel-recorded creation stamp, `null` when this
+   * pid.json predates the field. Absence is "cannot compare identity" and
+   * must never be read as a mismatch.
+   */
+  readonly processStartIdentity: ProcessStartIdentity | null;
+  /**
+   * The host's Layer 0 single-writer (I1) verdict, `null` when this pid.json
+   * carries none. Absence is "not recorded" - every file written before the
+   * field shipped lacks it - and must never be read as "guaranteed".
+   */
+  readonly layer0: HostLayer0Record | null;
 }
+
+/**
+ * Mirror of the host's `HostLayer0Record`. A host that could not take the
+ * single-writer lock starts anyway (refusing would trade a rare corruption for
+ * a routine outage) and records why, because nothing else it writes survives:
+ * the framed status pipe usually has no reader, and the stderr line falls out
+ * of the log tail the support attachment captures.
+ *
+ * `unrecognized` exists so a CLI older than its host reports "I cannot confirm
+ * the guarantee" rather than dropping the record and reporting nothing, which
+ * is the same silence the field was added to remove.
+ */
+export type HostLayer0Record =
+  | { readonly status: "acquired"; readonly attemptId: string }
+  | {
+      readonly status: "degraded";
+      readonly attemptId: string;
+      /**
+       * Display form of the host's cause. String causes pass through verbatim;
+       * the structured `os-error` cause is JSON-rendered rather than dropped,
+       * so an unfamiliar shape still reaches the report.
+       */
+      readonly cause: string;
+      readonly evidence: string;
+    }
+  | { readonly status: "unrecognized"; readonly raw: string };
 
 export async function readHostPidMetadata(
   environment: Environment | undefined,
@@ -82,7 +124,44 @@ export async function readHostPidMetadata(
     version: obj.version,
     websocketUrl: obj.websocketUrl,
     startedAt: obj.startedAt,
+    processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
+      ? obj.processStartIdentity
+      : null,
+    layer0: decodeLayer0Record(obj.layer0),
   };
+}
+
+/**
+ * Additive and fail-open on shape: a malformed record must not make the whole
+ * pid.json unreadable (that would cost the user host discovery over a
+ * diagnostic field), but it must not read as healthy either - hence
+ * `unrecognized` rather than `null` for anything present and unexpected.
+ */
+export function decodeLayer0Record(value: unknown): HostLayer0Record | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { status: "unrecognized", raw: JSON.stringify(value) };
+  }
+  const record = value as Record<string, unknown>;
+  const attemptId =
+    typeof record.attemptId === "string" ? record.attemptId : "";
+  if (record.status === "acquired" && attemptId.length > 0) {
+    return { status: "acquired", attemptId };
+  }
+  if (record.status === "degraded" && attemptId.length > 0) {
+    return {
+      status: "degraded",
+      attemptId,
+      cause:
+        typeof record.cause === "string"
+          ? record.cause
+          : JSON.stringify(record.cause ?? null),
+      evidence: typeof record.evidence === "string" ? record.evidence : "",
+    };
+  }
+  return { status: "unrecognized", raw: JSON.stringify(record) };
 }
 
 /**

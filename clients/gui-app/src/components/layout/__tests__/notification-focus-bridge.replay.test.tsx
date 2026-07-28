@@ -34,6 +34,7 @@ import { NotificationFocusBridge } from "@/components/layout/bridges/notificatio
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 const navigateSpy = vi.fn();
 const markAsRead = vi.hoisted(() => vi.fn<(feedId: string) => void>());
@@ -172,7 +173,9 @@ describe("NotificationFocusBridge native-click replay guard (P0-2)", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(1_777_768_800_000);
+    __resetTabNavigationControllerForTesting();
     navigateSpy.mockReset();
+    navigateSpy.mockImplementation(() => undefined);
     markAsRead.mockReset();
     queryClient = createTestQueryClient();
     let requestSeq = 0;

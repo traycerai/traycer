@@ -8,12 +8,14 @@ import {
   useState,
 } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useShallow } from "zustand/react/shallow";
 import {
   ArrowDownToLine,
   Check,
   ExternalLink,
   Layers,
   ListChecks,
+  Paintbrush,
   Pencil,
   Pin,
   RefreshCwIcon,
@@ -35,9 +37,11 @@ import {
 } from "@/components/epics/use-history-open-in-new-window";
 import { UnsyncedEpicMoveDialog } from "@/components/layout/dialogs/unsynced-epic-move-dialog";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
+import { SweepWorktreesDialog } from "@/components/epics/sweep-worktrees-dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -90,7 +94,10 @@ import {
   type HistorySearchController,
 } from "@/hooks/home/use-history-search-state";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
-import { phaseMigrationRoute } from "@/lib/routes";
+import {
+  activateTabIntent,
+  openPhaseMigrationIntent,
+} from "@/lib/tab-navigation";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { openEpicFromList as openEpicFromCommand } from "@/lib/commands/actions/open-epic-from-list";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -117,7 +124,7 @@ const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
 // Single source of a row's display label for both visible text and accessible
 // names. `item.title` is the RAW title (epics can be empty); apply the
-// source-aware "Untitled epic" fallback for epics, while phases already carry
+// source-aware "Untitled task" fallback for epics, while phases already carry
 // their own baked fallback and render verbatim.
 function historyItemDisplayTitle(item: HistoryItem): string {
   return item.taskType === "phase"
@@ -242,6 +249,15 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // data actually changes.
   const { search, update: updateSearch, clear: clearSearch } = historySearch;
   const openInNewWindowFlow = useHistoryOpenInNewWindowFlow();
+  const openEpicIds = useEpicCanvasStore(
+    useShallow((state) =>
+      state.openTabOrder.flatMap((tabId) => {
+        const tab = state.tabsById[tabId];
+        return tab === undefined ? [] : [tab.epicId];
+      }),
+    ),
+  );
+  const openEpicIdSet = useMemo(() => new Set(openEpicIds), [openEpicIds]);
 
   const {
     data,
@@ -333,6 +349,23 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     setWorktreeCheckOverrides(new Map());
   }, []);
 
+  // A sweep target is a SET: one id from a row action, the whole selection
+  // from the bulk action. The set is load-bearing - a worktree shared between
+  // two SELECTED tasks is no longer "shared" and becomes an ordinary
+  // candidate.
+  const [sweepEpicIds, setSweepEpicIds] =
+    useState<ReadonlyArray<string> | null>(null);
+  const requestSweep = useCallback((epicId: string) => {
+    setSweepEpicIds([epicId]);
+  }, []);
+  const sweepTaskTitle = useMemo(() => {
+    if (sweepEpicIds === null || sweepEpicIds.length !== 1) return null;
+    const item = items.find(
+      (candidate) => candidate.epicId === sweepEpicIds[0],
+    );
+    return item === undefined ? null : historyItemDisplayTitle(item);
+  }, [items, sweepEpicIds]);
+
   const selectableItemIds = useMemo(
     () =>
       items
@@ -367,6 +400,18 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     return Array.from(selectedIds).filter((id) => selectableIdSet.has(id));
   }, [selectableIdSet, selectedIds]);
   const selectedCount = visibleSelectedIds.length;
+  // Delete-eligible and sweepable are different questions: a selection can be
+  // entirely tasks that own no worktrees, and opening Sweep on those shows a
+  // dialog with nothing to sweep. The row control already gates on this
+  // (`useHistoryRowSweep`); the bulk button has to ask the same question, of
+  // the SELECTION rather than of one task, so a mixed selection still sweeps.
+  const canSweepSelected = useMemo(
+    () =>
+      visibleSelectedIds.some(
+        (id) => (worktreesByEpicId.get(id) ?? EMPTY_WORKTREES).length > 0,
+      ),
+    [visibleSelectedIds, worktreesByEpicId],
+  );
   const enterSelectionMode = useCallback(() => {
     setSelectedIds(new Set());
     setSelectionMode(true);
@@ -460,11 +505,19 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                     selectableItemIds.length > 0 &&
                     selectedCount === selectableItemIds.length,
                   isDeletePending: deleteMutation.isPending,
+                  canSweepSelected,
                   onSelectAll: selectAllVisible,
                   onDeselectAll: deselectAllVisible,
                   onCancel: cancelSelection,
                   onDeleteSelected: () => {
                     requestDelete(visibleSelectedIds);
+                  },
+                  onSweepSelected: () => {
+                    // The whole selection goes in as ONE set so a worktree
+                    // shared between two selected tasks is judged against the
+                    // selection, not one task, and stops reading as "shared".
+                    if (!canSweepSelected) return;
+                    setSweepEpicIds(visibleSelectedIds);
                   },
                 }
               : {
@@ -499,6 +552,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               selectedIds={selectedIds}
               onToggleSelection={toggleSelection}
               onRequestDelete={requestDelete}
+              onRequestSweep={requestSweep}
               onSetPinned={handleSetPinned}
               pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
               hasNextPage={hasNextPage}
@@ -508,6 +562,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
               onOpenInNewWindow={openInNewWindowFlow.requestOpen}
               openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
               worktreesByEpicId={worktreesByEpicId}
+              openEpicIds={openEpicIdSet}
             />
           </div>
         </NotificationIndicatorsProvider>
@@ -524,6 +579,13 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         candidates={worktreeCandidates}
         isPathChecked={isWorktreePathChecked}
         onTogglePath={toggleWorktreePathChecked}
+      />
+      <SweepWorktreesDialog
+        epicIds={sweepEpicIds}
+        taskTitle={sweepTaskTitle}
+        onOpenChange={(open) => {
+          if (!open) setSweepEpicIds(null);
+        }}
       />
       <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
     </TooltipProvider>
@@ -585,7 +647,7 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
           onChange={(event) => {
             props.onChange(event.target.value);
           }}
-          placeholder="Search by title, repo, or PR"
+          placeholder="Search by title, repo, branch, or PR"
           aria-label="Search tasks"
         />
         {props.value.length > 0 ? (
@@ -623,10 +685,13 @@ type PanelSelectionControls =
       readonly selectedCount: number;
       readonly allVisibleSelected: boolean;
       readonly isDeletePending: boolean;
+      /** At least one selected task owns a worktree the dialog could list. */
+      readonly canSweepSelected: boolean;
       readonly onSelectAll: () => void;
       readonly onDeselectAll: () => void;
       readonly onCancel: () => void;
       readonly onDeleteSelected: () => void;
+      readonly onSweepSelected: () => void;
     };
 
 interface PanelRefreshControls {
@@ -699,6 +764,23 @@ function PanelChromeBar(props: PanelChromeBarProps): ReactNode {
               size="icon-sm"
               aria-label={
                 props.selection.selectedCount > 0
+                  ? `Sweep worktrees for ${props.selection.selectedCount} selected tasks`
+                  : "Sweep worktrees for selected tasks"
+              }
+              aria-haspopup="dialog"
+              data-testid="epics-list-sweep-selected"
+              disabled={!props.selection.canSweepSelected}
+              className="text-muted-foreground hover:text-foreground"
+              onClick={props.selection.onSweepSelected}
+            >
+              <Paintbrush />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={
+                props.selection.selectedCount > 0
                   ? `Delete ${props.selection.selectedCount} selected epics`
                   : "Delete selected epics"
               }
@@ -763,7 +845,7 @@ function describeDeleteTitle(
   if (ids.length > 1) return `Delete ${ids.length} epics?`;
   const match = items.find((item) => item.epicId === ids[0]);
   if (match === undefined) return "Delete 1 epic?";
-  // `match.title` is RAW; apply the source-aware "Untitled epic" fallback (prompt
+  // `match.title` is RAW; apply the source-aware "Untitled task" fallback (prompt
   // slice, else literal) for the rendered confirmation. Phases already carry
   // their own baked fallback.
   const matchTitle =
@@ -787,6 +869,7 @@ interface EpicsListBodyProps {
   readonly selectedIds: ReadonlySet<string>;
   readonly onToggleSelection: (id: string) => void;
   readonly onRequestDelete: (ids: ReadonlyArray<string>) => void;
+  readonly onRequestSweep: (epicId: string) => void;
   readonly onSetPinned: (epicId: string, pinned: boolean) => void;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly hasNextPage: boolean;
@@ -799,6 +882,7 @@ interface EpicsListBodyProps {
     string,
     readonly WorktreeHostEntryV12[]
   >;
+  readonly openEpicIds: ReadonlySet<string>;
 }
 
 function EpicsListBody(props: EpicsListBodyProps): ReactNode {
@@ -813,6 +897,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     selectedIds,
     onToggleSelection,
     onRequestDelete,
+    onRequestSweep,
     onSetPinned,
     pendingSetPinnedEpicIds,
     hasNextPage,
@@ -822,6 +907,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktreesByEpicId,
+    openEpicIds,
   } = props;
 
   if (error !== null) {
@@ -855,12 +941,14 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
               isSelected={selectedIds.has(item.epicId)}
               onToggleSelection={onToggleSelection}
               onRequestDelete={onRequestDelete}
+              onRequestSweep={onRequestSweep}
               onSetPinned={onSetPinned}
               isPinPending={pendingSetPinnedEpicIds.has(item.epicId)}
               onSelectEpic={onSelectEpic}
               onOpenInNewWindow={onOpenInNewWindow}
               openInNewWindowAvailable={openInNewWindowAvailable}
               worktrees={worktreesByEpicId.get(item.epicId) ?? EMPTY_WORKTREES}
+              isOpen={openEpicIds.has(item.epicId)}
             />
           ))}
         </ul>
@@ -923,12 +1011,14 @@ interface EpicsListRowProps {
   readonly isSelected: boolean;
   readonly onToggleSelection: (id: string) => void;
   readonly onRequestDelete: (ids: ReadonlyArray<string>) => void;
+  readonly onRequestSweep: (epicId: string) => void;
   readonly onSetPinned: (epicId: string, pinned: boolean) => void;
   readonly isPinPending: boolean;
   readonly onSelectEpic: ((epicId: string) => void) | null;
   readonly onOpenInNewWindow: HistoryNewWindowFlow["requestOpen"];
   readonly openInNewWindowAvailable: boolean;
   readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly isOpen: boolean;
 }
 
 function HistoryRowTrailingMetadata(props: {
@@ -963,6 +1053,22 @@ function HistoryRowTrailingMetadata(props: {
   );
 }
 
+function HistoryOpenBadge(props: {
+  readonly epicId: string;
+  readonly isOpen: boolean;
+}): ReactNode {
+  if (!props.isOpen) return null;
+  return (
+    <Badge
+      variant="secondary"
+      data-testid={`task-history-open-${props.epicId}`}
+      className="h-4 px-1 text-overline"
+    >
+      Open
+    </Badge>
+  );
+}
+
 const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const {
     item,
@@ -970,14 +1076,22 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     isSelected,
     onToggleSelection,
     onRequestDelete,
+    onRequestSweep,
     onSetPinned,
     isPinPending,
     onSelectEpic,
     onOpenInNewWindow,
     openInNewWindowAvailable,
     worktrees,
+    isOpen,
   } = props;
   const isPhase = item.taskType === "phase";
+  const rowSweep = useHistoryRowSweep(
+    item,
+    worktrees,
+    selectionMode,
+    onRequestSweep,
+  );
   const displayTitle = historyItemDisplayTitle(item);
   const canEditTitle = canEditHistoryItemTitle(item);
   const canDeleteItem = canDeleteHistoryItem(item);
@@ -1047,12 +1161,29 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const openEpic = useCallback(() => {
     onSelectEpic?.(item.epicId);
     if (isPhase) {
-      void navigate(phaseMigrationRoute(item.epicId));
+      // Route the Phase deep link through the canonical activation boundary so
+      // the controller snapshots first (a rejected navigation restores the prior
+      // tab) instead of a raw navigate over a route builder that mutated source
+      // selection. `migrationSource: "phase"` threads through the epic search.
+      activateTabIntent(
+        navigate,
+        openPhaseMigrationIntent({
+          phaseId: item.epicId,
+          name: item.title,
+          focus: {
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            migrationSource: "phase",
+          },
+        }),
+        undefined,
+      );
       return;
     }
     // Passing the row's title threads it through tab creation so the
     // cold-open canvas skeleton can render the real epic title at +0ms,
-    // not "Untitled epic" until the snapshot arrives.
+    // not "Untitled task" until the snapshot arrives.
     openEpicFromCommand(navigate, item.epicId, pathname, {
       title: item.title,
       source: "direct_ui",
@@ -1181,7 +1312,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       })}
     >
       {rowInteractionLayer}
-      <div className="pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm">
+      <div className={historyRowContentClassName(rowSweep.isVisible)}>
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
           <HistoryRowLeadingIcon item={item} />
           {isRenaming ? (
@@ -1197,6 +1328,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
               <span className="truncate font-medium text-foreground">
                 {displayTitle}
               </span>
+              <HistoryOpenBadge epicId={item.epicId} isOpen={isOpen} />
               {pinControl}
               {titleEditControl}
             </span>
@@ -1209,6 +1341,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           worktrees={worktrees}
         />
       </div>
+      <HistoryRowSweepControl sweep={rowSweep} displayTitle={displayTitle} />
       {deleteControl}
     </div>
   );
@@ -1246,6 +1379,9 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       {/* Skip the context menu entirely when no action qualifies (e.g. a phase
           row in the browser build with no windows bridge) so right-click never
           opens an empty popover. */}
+      {/* `canSweep` never holds when both are null: sweep requires a
+          non-phase row, and epic rows always qualify for background-open, so
+          the sweep menu item can never be the lone reason to mount a menu. */}
       {backgroundMenuItem === null && newWindowMenuItem === null ? (
         rowCard
       ) : (
@@ -1256,6 +1392,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           >
             {backgroundMenuItem}
             {newWindowMenuItem}
+            <HistorySweepMenuItem sweep={rowSweep} />
           </ContextMenuContent>
         </ContextMenu>
       )}
@@ -1355,6 +1492,118 @@ function historySelectedForDelete(args: {
   readonly canDeleteItem: boolean;
 }): boolean {
   return args.selectionMode && args.isSelected && args.canDeleteItem;
+}
+
+interface HistoryRowSweepState {
+  /** The control renders at all (hidden for phases / during selection). */
+  readonly isVisible: boolean;
+  /** There is something to open the dialog for. */
+  readonly canSweep: boolean;
+  readonly requestSweep: () => void;
+}
+
+/**
+ * Sweep is offered whenever the task owns worktrees on this host, eligible or
+ * not: the dialog lists every worktree with its proof state and pre-checks
+ * only the safe ones, so the affordance no longer pre-judges eligibility.
+ * Cheap and reactive - derived from the same enriched listing the PR pills
+ * already join, with no extra host call to render the affordance.
+ */
+function useHistoryRowSweep(
+  item: HistoryItem,
+  worktrees: readonly WorktreeHostEntryV12[],
+  selectionMode: boolean,
+  onRequestSweep: (epicId: string) => void,
+): HistoryRowSweepState {
+  const requestSweep = useCallback(() => {
+    onRequestSweep(item.epicId);
+  }, [item.epicId, onRequestSweep]);
+  // Visible-but-disabled when the Task owns no worktrees, matching how the
+  // delete control and the bulk Sweep button behave: the affordance keeps its
+  // place in the row instead of appearing and disappearing per row. Phases are
+  // still skipped entirely - they never have worktrees, so a permanently dead
+  // control there would be noise rather than consistency.
+  return {
+    isVisible: !selectionMode && item.taskType !== "phase",
+    canSweep:
+      !selectionMode && item.taskType !== "phase" && worktrees.length > 0,
+    requestSweep,
+  };
+}
+
+function HistoryRowSweepControl(props: {
+  readonly sweep: HistoryRowSweepState;
+  readonly displayTitle: string;
+}): ReactNode {
+  if (!props.sweep.isVisible) return null;
+  if (props.sweep.canSweep) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Sweep worktrees for ${props.displayTitle}`}
+            aria-haspopup="dialog"
+            data-testid="epics-list-row-sweep"
+            className="absolute right-11 top-1/2 -translate-y-1/2 opacity-0 transition-opacity hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
+            onClick={props.sweep.requestSweep}
+          >
+            <Paintbrush />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Sweep this task's worktrees</TooltipContent>
+      </Tooltip>
+    );
+  }
+  // `aria-disabled` rather than `disabled`, matching the delete control: a
+  // truly disabled button swallows pointer events, and the tooltip is the only
+  // place the reason is stated.
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-disabled="true"
+          aria-label={`No worktrees to sweep for ${props.displayTitle}`}
+          data-testid="epics-list-row-sweep-disabled"
+          className="absolute right-11 top-1/2 inline-flex size-8 -translate-y-1/2 cursor-not-allowed items-center justify-center rounded-md text-muted-foreground/50 opacity-0 transition-opacity outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          <Paintbrush className="size-4" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>This task has no worktrees on this host</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function HistorySweepMenuItem(props: {
+  readonly sweep: HistoryRowSweepState;
+}): ReactNode {
+  if (!props.sweep.canSweep) return null;
+  return (
+    <ContextMenuItem
+      onSelect={props.sweep.requestSweep}
+      data-testid="epics-list-row-sweep-menu"
+    >
+      <Paintbrush />
+      Sweep Worktrees…
+    </ContextMenuItem>
+  );
+}
+
+function historyRowContentClassName(hasSweepControl: boolean): string {
+  return cn(
+    "pointer-events-none relative z-10 flex items-center justify-between gap-3 p-3 pr-12 text-ui-sm",
+    // Reserve room for the second hover control so the sweep button never
+    // overlaps the trailing metadata / PR pills.
+    hasSweepControl && "pr-20",
+  );
 }
 
 function historyRowCardClassName(args: {

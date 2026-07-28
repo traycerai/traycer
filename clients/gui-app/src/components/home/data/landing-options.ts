@@ -161,6 +161,17 @@ export type ReasoningLevelOption = AgentReasoningEffortOption;
 export type ServiceTier = string;
 export type ServiceTierOption = AgentServiceTierOption;
 
+/**
+ * Whether a persisted service tier means "fast mode is on" - i.e. the value is
+ * a real non-default tier rather than the harness default. Per the `ServiceTier`
+ * contract above, both `null` (never set) and `""` ("use the harness default")
+ * mean off. The single definition shared by every surface that reports fast
+ * mode: the assistant turn footer and the sidebar hover card's settings header.
+ */
+export function isFastModeEnabled(serviceTier: string | null): boolean {
+  return serviceTier !== null && serviceTier.trim().length > 0;
+}
+
 export type AgentMode = ProtocolAgentMode;
 
 export interface AgentModeOption {

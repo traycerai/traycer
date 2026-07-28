@@ -16,6 +16,10 @@ import {
   type MessengerFactory,
 } from "@/lib/host";
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
+import {
+  HostReadinessControllerProvider,
+  HostScopeReady,
+} from "@/components/layout/host-readiness-controller";
 import { queryClient } from "@/lib/query-client";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
@@ -44,10 +48,6 @@ import { createAppRouter, type AppRouter } from "@/router";
 // load (mirrors `theme-applier.ts`). The class drives the `wco:`
 // Tailwind variant so titlebar insets toggle on fullscreen.
 import "@/lib/window-controls-overlay";
-// Side-effect import: keeps the Windows native min/max/close controls in
-// sync with the active theme by pushing theme-derived overlay colors to the
-// desktop shell on every theme change (no-op on web / mac / Linux).
-import "@/lib/title-bar-overlay-theme";
 import { startMainThreadBlockProbe } from "@/lib/perf/main-thread-block-probe";
 
 // Surface renderer main-thread stalls (Long Tasks) so slow-feeling RPCs caused
@@ -58,7 +58,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import type { RemoteHostFetcher } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { LazyMotion, domMax } from "motion/react";
-import { lazy, Suspense, useMemo, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useMemo, type ReactNode } from "react";
 
 const ReactQueryDevtools = import.meta.env.DEV
   ? lazy(() =>
@@ -123,6 +123,9 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
     ),
     [],
   );
+  const configureShell = useCallback(() => {
+    void router.navigate({ to: "/settings/shell" });
+  }, [router]);
 
   return (
     <RunnerHostProvider runnerHost={props.runnerHost}>
@@ -144,9 +147,13 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                     fallback={hostRuntimeFallback}
                   >
                     <HostCompatibilityProvider>
-                      <RootErrorBoundary router={router}>
-                        <TraycerAuthenticatedRuntime router={router} />
-                      </RootErrorBoundary>
+                      <HostReadinessControllerProvider
+                        onConfigureShell={configureShell}
+                      >
+                        <RootErrorBoundary router={router}>
+                          <TraycerAuthenticatedRuntime router={router} />
+                        </RootErrorBoundary>
+                      </HostReadinessControllerProvider>
                     </HostCompatibilityProvider>
                   </HostRuntimeProvider>
                 </KeybindingProvider>
@@ -195,9 +202,13 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                       <LandingTerminalTombstoneRecoveryBridge />
                       <EpicTabExistenceReconciler />
                       <HostStreamProvider>
-                        <WorktreeChangedStreamMount />
+                        <HostScopeReady scope="default-host">
+                          <WorktreeChangedStreamMount />
+                        </HostScopeReady>
                         <AppLocalNotificationsPersistLifecycleBridge>
-                          <NotificationsSessionProvider>
+                          <NotificationsSessionProvider
+                            navigate={props.router.navigate}
+                          >
                             <TraycerAppRuntimeSurface router={props.router} />
                           </NotificationsSessionProvider>
                         </AppLocalNotificationsPersistLifecycleBridge>

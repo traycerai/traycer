@@ -176,7 +176,9 @@ function buildFakeBridge(
       },
     },
     menu: {
+      platform: "darwin",
       onCommand: (_handler) => ({ dispose: () => undefined }),
+      openTopLevel: async () => undefined,
     },
     appUpdates: {
       getSnapshot: async () => ({
@@ -188,6 +190,7 @@ function buildFakeBridge(
         downloadProgress: null,
         installBlockedReason: null,
         installGuidance: null,
+        installInFlight: false,
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: null,
@@ -201,6 +204,7 @@ function buildFakeBridge(
         downloadProgress: null,
         installBlockedReason: null,
         installGuidance: null,
+        installInFlight: false,
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: "manual",
@@ -214,6 +218,7 @@ function buildFakeBridge(
         downloadProgress: null,
         installBlockedReason: null,
         installGuidance: null,
+        installInFlight: false,
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: null,
@@ -227,6 +232,7 @@ function buildFakeBridge(
         downloadProgress: 0,
         installBlockedReason: null,
         installGuidance: null,
+        installInFlight: false,
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: "manual",
@@ -240,6 +246,7 @@ function buildFakeBridge(
         downloadProgress: null,
         installBlockedReason: null,
         installGuidance: null,
+        installInFlight: false,
         errorMessage: null,
         lastCheckedAt: null,
         lastCheckIntent: null,
@@ -283,6 +290,7 @@ function buildFakeBridge(
           version: null,
           pid: null,
           hostId: null,
+          layer0: null,
         },
         logs: [],
         links: [],
@@ -449,6 +457,7 @@ function buildFakeBridge(
       },
       windowEx: {
         setOverlayIcon: async () => undefined,
+        setTitleBarOverlay: async () => undefined,
       },
     },
     power: {

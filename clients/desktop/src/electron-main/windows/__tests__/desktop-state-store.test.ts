@@ -60,18 +60,21 @@ afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
 });
 
-// Persist-failure policy: one immediate retry, then surrender with an
-// error-level log. `flush()` never rejects - a failed state write must never
-// block a quit; the cost of surrender is stale window state on the next
-// launch, kept attributable by the error log. The tmp+rename swap keeps the
-// previous on-disk payload intact through any failure.
+// Persist-failure policy: one immediate retry, then surface the terminal
+// failure to the caller. A renderer revision may only acknowledge after a
+// durable write; `flush()` reports the same failure while a later write still
+// starts from a healthy recovery chain. The tmp+rename swap keeps the previous
+// on-disk payload intact through any failure.
 describe("DesktopStateStore persist-failure policy", () => {
   it("retries a failed persist once and succeeds without escalating", async () => {
     const store = new DesktopStateStore({ filePath, logger });
     await store.load();
 
     persistFaults.writeFailuresRemaining = 1;
-    store.setWindowSnapshot("window-a", snapshotWithTab("tab-a", "Alpha"));
+    await store.setWindowSnapshot(
+      "window-a",
+      snapshotWithTab("tab-a", "Alpha"),
+    );
     await store.flush();
 
     expect(logger.warn).toHaveBeenCalledTimes(1);
@@ -80,15 +83,20 @@ describe("DesktopStateStore persist-failure policy", () => {
     expect(persisted.windows["window-a"].epicTabs[0].name).toBe("Alpha");
   });
 
-  it("surrenders after the retry fails: flush resolves, error is logged, prior payload survives", async () => {
+  it("rejects after the retry fails, logs the error, and preserves the prior payload", async () => {
     const store = new DesktopStateStore({ filePath, logger });
     await store.load();
-    store.setWindowSnapshot("window-a", snapshotWithTab("tab-a", "Alpha"));
+    await store.setWindowSnapshot(
+      "window-a",
+      snapshotWithTab("tab-a", "Alpha"),
+    );
     await store.flush();
 
     persistFaults.writeFailuresRemaining = 2;
-    store.setWindowSnapshot("window-a", snapshotWithTab("tab-a", "Beta"));
-    await expect(store.flush()).resolves.toBeUndefined();
+    await expect(
+      store.setWindowSnapshot("window-a", snapshotWithTab("tab-a", "Beta")),
+    ).rejects.toThrow("injected writeFile failure");
+    await expect(store.flush()).rejects.toThrow("injected writeFile failure");
 
     expect(logger.warn).toHaveBeenCalledTimes(1);
     expect(logger.error).toHaveBeenCalledTimes(1);
@@ -103,11 +111,16 @@ describe("DesktopStateStore persist-failure policy", () => {
     await store.load();
 
     persistFaults.writeFailuresRemaining = 2;
-    store.setWindowSnapshot("window-a", snapshotWithTab("tab-a", "Alpha"));
-    await store.flush();
+    await expect(
+      store.setWindowSnapshot("window-a", snapshotWithTab("tab-a", "Alpha")),
+    ).rejects.toThrow("injected writeFile failure");
+    await expect(store.flush()).rejects.toThrow("injected writeFile failure");
     expect(logger.error).toHaveBeenCalledTimes(1);
 
-    store.setWindowSnapshot("window-a", snapshotWithTab("tab-a", "Gamma"));
+    await store.setWindowSnapshot(
+      "window-a",
+      snapshotWithTab("tab-a", "Gamma"),
+    );
     await store.flush();
 
     const persisted = JSON.parse(await readFile(filePath, "utf8"));

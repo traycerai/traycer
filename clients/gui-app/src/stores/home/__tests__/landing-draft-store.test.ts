@@ -431,6 +431,18 @@ describe("useLandingDraftStore", () => {
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
   });
 
+  it("createDraftWithId uses a pre-minted id verbatim", () => {
+    const { createDraftWithId } = useLandingDraftStore.getState();
+    const preMintedId = "pre-minted-id-123";
+
+    const id = createDraftWithId(preMintedId, null);
+
+    expect(id).toBe(preMintedId);
+    expect(useLandingDraftStore.getState().activeDraftId).toBe(preMintedId);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0].id).toBe(preMintedId);
+  });
+
   it("setDraftContent stores content on the target draft and bails on no-op writes", () => {
     const { createDraft, setDraftContent } = useLandingDraftStore.getState();
 

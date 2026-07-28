@@ -6,6 +6,7 @@ import {
 import {
   providerIdSchema,
   providerIdSchemaV40,
+  providerIdSchemaV50,
 } from "@traycer/protocol/host/provider-schemas";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
@@ -389,7 +390,7 @@ export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
 // representation in any frozen provider union (grok was not a rate-limit-capable
 // provider then), so it degrades to the unavailable `unsupported_provider` shape
 // - the exact row a pre-grok host returns for grok today. `"grok"` is in every
-// frozen `provider` enum (it predates Hermes), so the result reparses cleanly
+// frozen `provider` enum (it predates Hermes/omp), so the result reparses cleanly
 // through the older union. Any other snapshot (or `null`) passes through
 // unchanged. Shared by the `host.getRateLimitUsage` 3 -> 2 / 3 -> 1 bridges
 // (`rate-limit/contracts.ts`) and the a2a `agent.getProviderProfileRateLimits`
@@ -413,9 +414,9 @@ export function mapGrokAvailableToUnavailable(
 
 // Frozen pre-Hermes unavailable arm: same v2 reason enum, but `provider` is
 // pinned to `providerIdSchemaV40` (the harness/provider id set as shipped in
-// host-v1.1.7, before Hermes) so an already-shipped
-// `agent.getProviderProfileRateLimits@1.0` caller's strict decode never sees
-// `provider: "hermes"` in the `available: false` arm.
+// host-v1.1.7, before Hermes/omp) so an already-shipped
+// `agent.getProviderProfileRateLimits@1.0` caller's strict decode never sees a
+// post-v4.0 `provider` (`"hermes"`, `"omp"`) in the `available: false` arm.
 const unavailableProviderRateLimitsSchemaV40 = z.object({
   provider: providerIdSchemaV40,
   available: z.literal(false),
@@ -427,11 +428,11 @@ const unavailableProviderRateLimitsSchemaV40 = z.object({
  * except the `available: false` arm's `provider` is pinned to `providerIdSchemaV40`.
  * Feeds only `agent.getProviderProfileRateLimits@1.0`'s frozen response (see
  * `host/agent/profiles.ts`) so that already-shipped v1.0 line never receives a
- * Hermes provider id; the v2.0 line of that method carries it via the live
- * `providerRateLimitsSchema` above, with a v2->v1 downgrade bridge that fails
- * closed for a Hermes rate-limit read instead of silently mis-decoding it. Do
- * NOT widen this schema - extend the latest schema and use that v2 bridge
- * instead.
+ * post-v4.0 provider id (Hermes, omp); the v2.0 line of that method carries
+ * them via the live `providerRateLimitsSchema` above, with a v2->v1 downgrade
+ * bridge that fails closed for such a rate-limit read instead of silently
+ * mis-decoding it. Do NOT widen this schema - extend the latest schema and use
+ * that v2 bridge instead.
  */
 export const providerRateLimitsSchemaV40 = z.union([
   codexRateLimitsSchema,
@@ -441,6 +442,42 @@ export const providerRateLimitsSchemaV40 = z.union([
   unavailableProviderRateLimitsSchemaV40,
 ]);
 export type ProviderRateLimitsV40 = z.infer<typeof providerRateLimitsSchemaV40>;
+
+// Frozen pre-omp unavailable arm: same v2 reason enum, but `provider` is
+// pinned to `providerIdSchemaV50` (the provider id set as shipped in
+// cli-v1.1.8 / host-v1.1.8, with Hermes and before omp) so an already-shipped
+// `agent.getProviderProfileRateLimits@2.0` caller's strict decode never sees
+// `"omp"` in the `available: false` arm.
+const unavailableProviderRateLimitsSchemaV50 = z.object({
+  provider: providerIdSchemaV50,
+  available: z.literal(false),
+  reason: rateLimitUnavailableReasonSchemaV2,
+});
+
+/**
+ * Frozen pre-omp provider union - identical to the latest
+ * `providerRateLimitsSchema` except the `available: false` arm's `provider` is
+ * pinned to `providerIdSchemaV50`. Unlike the v4.0 union above this one KEEPS
+ * the grok available arm: grok rate limits shipped before the v1.1.8 tags, so
+ * the released v2.0 line really does carry that arm and dropping it here would
+ * narrow an already-shipped contract.
+ *
+ * Feeds only `agent.getProviderProfileRateLimits@2.0`'s frozen response (see
+ * `host/agent/profiles.ts`) so that released line never receives `omp`; the
+ * v3.0 line carries it via the live `providerRateLimitsSchema` above, with a
+ * v3->v2 downgrade bridge that fails closed for such a rate-limit read instead
+ * of silently mis-decoding it. Do NOT widen this schema - extend the latest
+ * schema and use that v3 bridge instead.
+ */
+export const providerRateLimitsSchemaV50 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  grokRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV50,
+]);
+export type ProviderRateLimitsV50 = z.infer<typeof providerRateLimitsSchemaV50>;
 
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see

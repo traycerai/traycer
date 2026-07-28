@@ -23,6 +23,7 @@ import {
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useRefreshSpinner } from "@/hooks/use-refresh-spinner";
 import {
   isArtifactMentionStep,
@@ -46,6 +47,7 @@ import { MentionPreviewPanel } from "./mention-preview-panel";
 import { SlashMenuItem } from "./slash-menu-item";
 import { ZERO_DOM_RECT } from "./zero-dom-rect";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const SLASH_MENU_COPY = {
   header: "Slash commands",
   empty: "No matching commands",
@@ -113,11 +115,12 @@ export function ComposerMenu(props: ComposerMenuProps) {
     loadFailed,
     step,
   } = slice;
+  const paneFocused = usePaneFocused();
 
   const baseMenuId = useId();
   const menuId = `${baseMenuId}-menu`;
 
-  if (!open) return null;
+  if (!open || !paneFocused) return null;
   if (typeof document === "undefined") return null;
 
   return (
@@ -314,26 +317,34 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
             ) : null}
           </div>
           {refreshAvailable ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Refresh artifacts"
-              title="Refresh artifacts"
-              className="-my-1 text-muted-foreground/70 hover:text-foreground"
-              disabled={artifactRefresh.refreshing}
-              onMouseDown={(event) => {
-                event.preventDefault();
-              }}
-              onClick={artifactRefresh.trigger}
+            <TooltipWrapper
+              label="Refresh artifacts"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
             >
-              <RefreshCwIcon
-                className={cn(
-                  "size-3.5",
-                  artifactRefresh.refreshing && "animate-spin",
-                )}
-              />
-            </Button>
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Refresh artifacts"
+                  className="-my-1 text-muted-foreground/70 hover:text-foreground"
+                  disabled={artifactRefresh.refreshing}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                  }}
+                  onClick={artifactRefresh.trigger}
+                >
+                  <RefreshCwIcon
+                    className={cn(
+                      "size-3.5",
+                      artifactRefresh.refreshing && "animate-spin",
+                    )}
+                  />
+                </Button>
+              </span>
+            </TooltipWrapper>
           ) : null}
         </div>
         <div

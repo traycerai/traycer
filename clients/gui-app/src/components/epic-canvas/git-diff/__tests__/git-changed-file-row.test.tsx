@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { GitChangedFile } from "@traycer/protocol/host";
 import { GitChangedFileRow } from "@/components/epic-canvas/git-diff/git-changed-file-row";
 import { NO_HIGHLIGHT, type HighlightRanges } from "@/lib/git/path-highlight";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 afterEach(() => {
   cleanup();
 });
@@ -309,7 +310,25 @@ describe("GitChangedFileRow panel density", () => {
 });
 
 describe("GitChangedFileRow tile density", () => {
-  it("keeps the native title tooltip", () => {
+  it("keeps the full-path tooltip", () => {
+    renderRow({
+      file: makeFile({ path: "src/app.tsx", previousPath: null }),
+      density: "tile",
+      active: false,
+      pathRanges: NO_HIGHLIGHT,
+    });
+
+    // Scoped to the FILENAME, not the row: the row also carries the status
+    // badge, which owns its own tooltip at this density.
+    const row = screen.getByRole("button", { name: "Modified app.tsx" });
+    expect(tooltipTextNear(within(row).getByText("app.tsx"))).toBe(
+      "src/app.tsx",
+    );
+  });
+
+  it("keeps the status badge's own tooltip separate from the path", () => {
+    // One tooltip per hover target: hovering the badge must explain the STATUS,
+    // not repeat the path.
     renderRow({
       file: makeFile({ path: "src/app.tsx", previousPath: null }),
       density: "tile",
@@ -318,6 +337,8 @@ describe("GitChangedFileRow tile density", () => {
     });
 
     const row = screen.getByRole("button", { name: "Modified app.tsx" });
-    expect(row.getAttribute("title")).toBe("src/app.tsx");
+    expect(tooltipTextNear(within(row).getByLabelText("Modified"))).toBe(
+      "Modified",
+    );
   });
 });

@@ -959,6 +959,7 @@ describe("useRenderedMessages", () => {
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: {
+            sameTurnSteeringSupported: false,
             turnId: "turn-active-profile",
             status: "starting",
             harnessId: "claude",
@@ -1242,6 +1243,7 @@ describe("useRenderedMessages", () => {
           pendingUserMessages: [],
           liveAssistantMessage: null,
           activeTurn: {
+            sameTurnSteeringSupported: false,
             turnId: "turn-1",
             status: "running",
             harnessId: "claude",
@@ -2929,6 +2931,7 @@ describe("useRenderedMessages", () => {
   it("keeps persisted rows stable while only the live row streams", () => {
     const u1 = userMessage("m1");
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3120,6 +3123,7 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an approval is pending", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3185,6 +3189,7 @@ describe("useRenderedMessages", () => {
 
   it("freezes the live assistant timer while an interview is pending from snapshot state", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3230,6 +3235,7 @@ describe("useRenderedMessages", () => {
 
   it("keeps the assistant row id stable from live turn to completion", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3288,6 +3294,7 @@ describe("useRenderedMessages", () => {
 
   it("keeps an accepted pending user before the pre-turn assistant row", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-2",
       status: "running",
       harnessId: "claude",
@@ -3437,6 +3444,7 @@ describe("useRenderedMessages", () => {
       blocks: [fileChangeBlock("/repo/src/app.ts")],
     };
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3643,6 +3651,7 @@ describe("useRenderedMessages", () => {
             serviceTier: null,
           },
           activeTurn: {
+            sameTurnSteeringSupported: false,
             turnId: "turn-1",
             status: "running",
             harnessId: "claude",
@@ -3669,6 +3678,7 @@ describe("useRenderedMessages", () => {
 
   it("holds back the file change group for the streaming live assistant", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
@@ -3769,6 +3779,7 @@ function forkEvent(input: {
 }
 
 const RUNNING_ACTIVE_TURN: ChatActiveTurn = {
+  sameTurnSteeringSupported: false,
   turnId: "turn-setup",
   status: "running",
   harnessId: "claude",
@@ -5340,6 +5351,7 @@ describe("useRenderedMessages turn.stopped", () => {
 
   it("keeps an event-only stopped boundary behind the active-turn snapshot gate", () => {
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-pre-setup",
       status: "running",
       harnessId: "claude",
@@ -5635,6 +5647,7 @@ describe("useRenderedMessages turn.stopped", () => {
       blocks: [textBlock("block-1", 15_000, "Partial answer")],
     };
     const activeTurn: ChatActiveTurn = {
+      sameTurnSteeringSupported: false,
       turnId: "turn-1",
       status: "running",
       harnessId: "claude",
