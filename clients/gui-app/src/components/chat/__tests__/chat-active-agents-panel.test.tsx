@@ -119,7 +119,7 @@ describe("ActiveAgentsPanel", () => {
 
   it("moves 'Stop all' onto the current agent's row and reveals descendant stops on hover when expanded", () => {
     renderPanel();
-    fireEvent.click(screen.getByText("Active agents"));
+    fireEvent.click(screen.getByRole("button", { name: /active agents/i }));
 
     // "Stop all" now lives on the current agent's row (compact, icon-only) and
     // stays visible there - the header no longer shows a duplicate, and the
@@ -149,7 +149,7 @@ describe("ActiveAgentsPanel", () => {
 
   it("opens the current agent or a descendant from its row", () => {
     renderPanel();
-    fireEvent.click(screen.getByText("Active agents"));
+    fireEvent.click(screen.getByRole("button", { name: /active agents/i }));
 
     fireEvent.click(screen.getByRole("button", { name: "Open Root chat" }));
     fireEvent.click(screen.getByRole("button", { name: "Open Sub-agent two" }));
@@ -188,7 +188,7 @@ describe("ActiveAgentsPanel", () => {
 
   it("registers every row as a unique, host-bound active-agent drag source", () => {
     renderPanel();
-    fireEvent.click(screen.getByText("Active agents"));
+    fireEvent.click(screen.getByRole("button", { name: /active agents/i }));
 
     expect(dnd.draggables).toHaveLength(3);
     expect(new Set(dnd.draggables.map((draggable) => draggable.id)).size).toBe(
