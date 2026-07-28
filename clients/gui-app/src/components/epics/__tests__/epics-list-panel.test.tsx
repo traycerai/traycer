@@ -212,6 +212,7 @@ vi.mock("@/hooks/epic/use-task-delete-worktree-candidates-query", () => ({
 
 vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
   useEpicSweepWorktreeCandidates: () => ({
+    hostId: "host-test",
     rows: [],
     isPending: false,
     isError: false,

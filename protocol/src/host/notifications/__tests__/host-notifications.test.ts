@@ -16,7 +16,7 @@ import {
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListUpgradeV10ToV20,
-  hostNotificationsListDowngradeV20ToV10,
+  hostNotificationsListDowngradeV21ToV10,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsSetConfig,
@@ -328,7 +328,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
 
   it("downgrades recent/unreadRecent onto all/unread and strips cursor kind", () => {
     expect(
-      hostNotificationsListDowngradeV20ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV21ToV10.downgradeRequest({
         filter: "recent",
         limit: 25,
         cursor: CHRONOLOGICAL_CURSOR,
@@ -345,7 +345,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
       },
     });
     expect(
-      hostNotificationsListDowngradeV20ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV21ToV10.downgradeRequest({
         filter: "unreadRecent",
         limit: 10,
       }),
@@ -357,7 +357,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
 
   it("downgrades response cursors by stripping kind", () => {
     expect(
-      hostNotificationsListDowngradeV20ToV10.downgradeResponse({
+      hostNotificationsListDowngradeV21ToV10.downgradeResponse({
         entries: [STOPPED_ENTRY],
         nextCursor: CHRONOLOGICAL_CURSOR,
       }),
@@ -375,7 +375,7 @@ describe("host.notifications.list V10↔V20 upgrade/downgrade bridges", () => {
 
   it("rejects attention downgrade with a structured unsupported error", () => {
     expect(
-      hostNotificationsListDowngradeV20ToV10.downgradeRequest({
+      hostNotificationsListDowngradeV21ToV10.downgradeRequest({
         filter: "attention",
         limit: 25,
         cursor: ATTENTION_CURSOR,
@@ -736,7 +736,7 @@ describe("host.notifications registry membership", () => {
     ).toBe(hostNotificationsListUpgradeV10ToV20);
     expect(
       hostRpcRegistry["host.notifications.list"][2].downgradePathsFromLatest[1],
-    ).toBe(hostNotificationsListDowngradeV20ToV10);
+    ).toBe(hostNotificationsListDowngradeV21ToV10);
   });
 
   it("registers one flat unary contract per non-list method", () => {

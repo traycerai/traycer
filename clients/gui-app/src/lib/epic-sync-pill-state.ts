@@ -12,8 +12,14 @@ import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transp
 export type EpicSyncPillState =
   /** Every leg of the chain has acknowledged everything we know about. */
   | "synced"
-  /** Work exists, but this label makes no claim about where it is durable. */
+  /** Work has not yet been acknowledged by the host. */
   | "syncing"
+  /** The host reports pending work without asserting its durability stage. */
+  | "hostPending"
+  /** Cloud is down while renderer-only work still awaits host acknowledgement. */
+  | "offlineWithUnsavedChanges"
+  /** Cloud is down and the host reports pending work with unknown durability. */
+  | "offlineWithHostPending"
   /**
    * Host reachable and holding outstanding work durably, cloud link down.
    * The only state that claims local durability, and it is true because the
@@ -101,7 +107,8 @@ export interface EpicSyncPillInputs {
  * 3. An unknown cloud status or host-durability snapshot yields neutral
  *    `connected`, never `synced`.
  * 4. Link up + cloud up: `synced` requires a clean host snapshot and no local
- *    divergence. Host-durable outstanding work reads `syncing`.
+ *    divergence. Host-reported pending work stays quiet as `hostPending`; the
+ *    aggregate dirty bit does not prove whether the newest bytes are durable.
  * 5. Link up + cloud down: only known host-durable work with no renderer-only
  *    divergence may read "saved locally". With nothing outstanding the pill
  *    falls back to reporting the link.
@@ -113,15 +120,23 @@ export function deriveEpicSyncPillState(
   if (inputs.hostTransportStatus !== "open") {
     return linkComingUpState(inputs.hasConnectedOnce);
   }
-  if (inputs.hasUnsyncedLocalChanges) return "syncing";
+  if (inputs.hasUnsyncedLocalChanges) {
+    if (
+      inputs.hasFreshCloudSyncStatus &&
+      inputs.cloudSyncStatus !== "connected"
+    ) {
+      return "offlineWithUnsavedChanges";
+    }
+    return "syncing";
+  }
   if (!inputs.hasFreshCloudSyncStatus || inputs.hostDirtyState === "unknown") {
     return "connected";
   }
   if (inputs.cloudSyncStatus === "connected") {
-    return inputs.hostDirtyState === "dirty" ? "syncing" : "synced";
+    return inputs.hostDirtyState === "dirty" ? "hostPending" : "synced";
   }
   return inputs.hostDirtyState === "dirty"
-    ? "offlineChangesSavedLocally"
+    ? "offlineWithHostPending"
     : linkComingUpState(inputs.hasConnectedOnce);
 }
 

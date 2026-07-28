@@ -195,10 +195,10 @@ describe("useEpicSyncPillState", () => {
       wrapper: openEpicWrapper(handle),
     });
 
-    expect(result.current).toBe("syncing");
+    expect(result.current).toBe("hostPending");
   });
 
-  it("flips syncing -> synced live as a room's dirty flag flips true -> false", () => {
+  it("flips hostPending -> synced live as a room's dirty flag flips true -> false", () => {
     const handle = createHandle("epic-dirty-transition");
     healthyBaseline(handle);
     handle.store.setState({
@@ -209,7 +209,7 @@ describe("useEpicSyncPillState", () => {
       wrapper: openEpicWrapper(handle),
     });
 
-    expect(result.current).toBe("syncing");
+    expect(result.current).toBe("hostPending");
 
     act(() => {
       handle.store.setState({
@@ -229,7 +229,7 @@ describe("useEpicSyncPillState", () => {
       wrapper: openEpicWrapper(handle),
     });
 
-    expect(result.current).toBe("syncing");
+    expect(result.current).toBe("hostPending");
 
     act(() => {
       handle.store.setState({ rootDirty: false });

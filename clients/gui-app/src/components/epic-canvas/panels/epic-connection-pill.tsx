@@ -25,38 +25,55 @@ import { cn } from "@/lib/utils";
  */
 export function EpicConnectionPill() {
   const derived = useEpicSyncPillState();
-  const state = useSettledSyncPillState(derived);
+  const state = useSyncPillDisplayState(derived);
+  // Visuals use the settled state to avoid strobing; the tooltip uses the raw
+  // verdict so it can truthfully say synced during the positive settle hold.
   const indicator = indicatorFor(state);
-  // The tooltip reads the DERIVED verdict, not the settled display state. The
-  // two differ in exactly one case - the 750ms hold, where the display still
-  // says "Syncing…" after the verdict has already gone `synced` - and in that
-  // window the `syncing` tooltip's "some changes have not reached the cloud
-  // yet" is false. Holding a conservative LABEL is the anti-strobe trade; a
-  // tooltip that asserts an untrue fact is not part of it.
-  const tooltip = indicatorFor(derived).tooltip;
+  const rawIndicator = indicatorFor(derived);
+  const tooltip = rawIndicator.tooltip;
 
   return (
-    <TooltipWrapper
-      label={tooltip}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <button
-        type="button"
-        data-testid="epic-connection-pill"
-        data-status={state}
-        aria-label={indicator.ariaLabel}
-        className={cn(
-          "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          indicator.containerClassName,
-        )}
+    <>
+      <TooltipWrapper
+        label={tooltip}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <ConnectionPillDot indicator={indicator} />
-        {indicator.label}
-      </button>
-    </TooltipWrapper>
+        <button
+          type="button"
+          data-testid="epic-connection-pill"
+          data-status={state}
+          aria-label={rawIndicator.ariaLabel}
+          className={cn(
+            "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            indicator.containerClassName,
+          )}
+        >
+          <ConnectionPillDot indicator={indicator} />
+          {indicator.label}
+        </button>
+      </TooltipWrapper>
+      <span className="sr-only" role="status" aria-live="polite">
+        {warningAnnouncement(state, indicator)}
+      </span>
+    </>
   );
+}
+
+function warningAnnouncement(
+  state: EpicSyncPillState,
+  indicator: PillIndicator,
+): string | null {
+  switch (state) {
+    case "offlineWithUnsavedChanges":
+    case "offlineWithHostPending":
+    case "offlineChangesSavedLocally":
+    case "offline":
+      return indicator.ariaLabel;
+    default:
+      return null;
+  }
 }
 
 /**
@@ -76,12 +93,11 @@ export function EpicConnectionPill() {
 const SYNCED_SETTLE_MS = 750;
 
 /**
- * Smooths the settle into `synced` without ever smoothing the way out of it.
- * A verdict that is not `synced` is displayed the instant it is derived; the
- * `synced` verdict is displayed only after it has held for
- * {@link SYNCED_SETTLE_MS}, and reads as "Syncing…" until then.
+ * Keeps routine saving quiet and holds the positive `synced` claim long enough
+ * to prevent strobing. Actionable connection and durability warnings bypass
+ * this settle behavior and render immediately.
  */
-function useSettledSyncPillState(
+function useSyncPillDisplayState(
   derived: EpicSyncPillState,
 ): EpicSyncPillState {
   // A first render may happen before the current subscription has established
@@ -172,19 +188,43 @@ function indicatorFor(state: EpicSyncPillState): PillIndicator {
         tooltip: "All changes synced",
         ariaLabel: "All changes synced",
       };
-    // Same quiet treatment as `synced` rather than the amber alert styling:
-    // outstanding work is the normal steady state right after an edit, and an
-    // amber flash on every save would train users to ignore the pill. The
-    // difference that matters is that it no longer CLAIMS synced.
+    // Normal renderer→host and host→cloud churn stays icon-only. The neutral
+    // dot makes no durability claim and avoids a permanent spinner while an
+    // active agent continuously updates the Epic.
     case "syncing":
+    case "hostPending":
       return {
         containerClassName: QUIET_CONTAINER_CLASS,
-        dotClassName: "text-muted-foreground",
-        label: "Syncing…",
+        dotClassName: "",
+        label: null,
+        showAgentSpinner: false,
+        pulse: "idle",
+        tooltip: "Saving changes",
+        ariaLabel: "Saving changes",
+      };
+    case "offlineWithUnsavedChanges":
+      return {
+        containerClassName: AMBER_CONTAINER_CLASS,
+        dotClassName: "text-amber-500",
+        label: "Offline — saving changes…",
         showAgentSpinner: true,
         pulse: null,
-        tooltip: "Some changes have not reached the cloud yet.",
-        ariaLabel: "Syncing changes",
+        tooltip:
+          "The cloud connection is down, and some recent changes are still being saved on this device. Keep this window open.",
+        ariaLabel:
+          "Offline. Some recent changes are still being saved on this device. Keep this window open.",
+      };
+    case "offlineWithHostPending":
+      return {
+        containerClassName: AMBER_CONTAINER_CLASS,
+        dotClassName: "bg-amber-500",
+        label: "Offline — changes pending",
+        showAgentSpinner: false,
+        pulse: null,
+        tooltip:
+          "The cloud connection is down. This device is still processing pending changes; keep it running.",
+        ariaLabel:
+          "Offline. This device is still processing pending changes; keep it running.",
       };
     // No spinner: nothing is in flight while the host's cloud link is down.
     // The durability claim in this copy is load-bearing and true - the host
@@ -212,7 +252,7 @@ function indicatorFor(state: EpicSyncPillState): PillIndicator {
         label: "Connected",
         showAgentSpinner: false,
         pulse: null,
-        tooltip: null,
+        tooltip: "Connected",
         ariaLabel: "Connected",
       };
     // The three link states below make NO durability claim. While the
@@ -225,7 +265,7 @@ function indicatorFor(state: EpicSyncPillState): PillIndicator {
         label: "Connecting…",
         showAgentSpinner: true,
         pulse: null,
-        tooltip: null,
+        tooltip: "Connecting to server",
         ariaLabel: "Connecting to server",
       };
     case "reconnecting":
@@ -235,7 +275,7 @@ function indicatorFor(state: EpicSyncPillState): PillIndicator {
         label: "Reconnecting…",
         showAgentSpinner: true,
         pulse: null,
-        tooltip: null,
+        tooltip: "Reconnecting to server",
         ariaLabel: "Reconnecting to server",
       };
     case "offline":
