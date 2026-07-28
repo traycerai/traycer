@@ -217,6 +217,7 @@ function mountDeviceCodeProgress(host: MockRunnerHost): () => void {
               verificationUriComplete:
                 "https://app.traycer.ai/device?user_code=ABCDE-FGHIJ",
               expiresAtMs: 0,
+              phase: "waiting-approval",
             }}
           />
         </HostRuntimeProvider>

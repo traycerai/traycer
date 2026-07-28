@@ -25,7 +25,10 @@ export function DeviceCodeProgress(props: {
   const signInMutation = useAuthSignInMutation();
   const progress = props.progress;
   const remainingSeconds = useRemainingDeviceSeconds(progress.expiresAtMs);
-  const isExpired = remainingSeconds === 0;
+  const isFinalizing = progress.phase === "finalizing";
+  // A consumed (approved) code can no longer expire - finalizing wins over the
+  // countdown reaching zero while the token is validated.
+  const isExpired = !isFinalizing && remainingSeconds === 0;
   const expiryCopy = isExpired
     ? "Code expired"
     : `Expires in ${formatClockDuration(remainingSeconds)}`;
@@ -85,13 +88,19 @@ export function DeviceCodeProgress(props: {
                 className="ml-0.5 shrink-0"
                 testId="signin-device-spinner"
               />
-              <span className="shrink-0">Waiting for approval</span>
+              <span className="shrink-0">
+                {isFinalizing
+                  ? "Approved - finishing sign-in"
+                  : "Waiting for approval"}
+              </span>
             </div>
           )}
-          <div className="flex items-center gap-1">
-            <Clock className="size-3.5 shrink-0" aria-hidden="true" />
-            <span className="truncate">{expiryCopy}</span>
-          </div>
+          {!isFinalizing && (
+            <div className="flex items-center gap-1">
+              <Clock className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="truncate">{expiryCopy}</span>
+            </div>
+          )}
         </div>
 
         <DeviceCodeFallback progress={progress} isHero={props.isHero} />

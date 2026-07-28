@@ -741,6 +741,28 @@ describe("AuthService", () => {
     expect(calls).toEqual(["begin", "open"]);
   });
 
+  it("flips device progress to finalizing the moment the poll authorizes", async () => {
+    const { service, host } = makeService();
+    await service.start();
+    await service.signIn();
+    expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
+
+    host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "new-token",
+      refreshToken: "new-token-refresh",
+    });
+
+    // Synchronously after the authorized result - before validation/persist
+    // settle - the surface must stop claiming the approval hasn't arrived.
+    expect(service.getDeviceProgress()?.phase).toBe("finalizing");
+
+    await vi.waitFor(() => {
+      expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+    expect(service.getDeviceProgress()).toBeNull();
+  });
+
   it("hits /api/v3/user (NOT the legacy /api/user) when validating a token", async () => {
     const { service, host } = makeService();
     await host.tokenStore.signIn(
@@ -1628,6 +1650,66 @@ describe("AuthService", () => {
         expect(service.getCurrentSessionSnapshot().token).toBe("token-b");
       });
       expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+
+    it("an overlapping start() sharing the live generation cannot clobber an authorized sign-in", async () => {
+      const { service, host } = makeService();
+      // A stale, independently-valid stored session: if a straggling start()
+      // rehydration is not stopped, it has a real (different) identity to
+      // wrongly adopt.
+      await host.tokenStore.signIn(
+        { token: "stale-token", refreshToken: "stale-token-refresh" },
+        { id: "stale-user", email: "stale@example.com", name: "Stale User" },
+      );
+
+      let releaseStaleValidate: () => void = () => undefined;
+      const staleValidatePending = new Promise<void>((resolve) => {
+        releaseStaleValidate = resolve;
+      });
+      let signalStaleValidateStarted: () => void = () => undefined;
+      const staleValidateStarted = new Promise<void>((resolve) => {
+        signalStaleValidateStarted = resolve;
+      });
+      restoreFetch();
+      restoreFetch = installFetch(async (_input, init) => {
+        if (init?.headers?.Authorization === "Bearer stale-token") {
+          signalStaleValidateStarted();
+          await staleValidatePending;
+          return okWithProfileForUser("stale-user");
+        }
+        return okWithProfile();
+      });
+
+      await service.signIn();
+
+      // start() invoked AFTER signIn() has already bumped identityGeneration,
+      // with nothing bumping it again before the race below - it captures the
+      // SAME generation the live attempt is using, so only
+      // `authResolvedDuringStart` (not the generation fence) can stop it.
+      const overlappingStart = service.start();
+      await staleValidateStarted;
+
+      host.deviceFlow.emitResult({
+        kind: "authorized",
+        token: "fresh-token",
+        refreshToken: "fresh-token-refresh",
+      });
+      await vi.waitFor(() => {
+        expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token");
+      });
+
+      // Let the stale rehydration resolve now that the fresh identity is live.
+      releaseStaleValidate();
+      await overlappingStart;
+
+      expect(service.getCurrentSessionSnapshot().token).toBe("fresh-token");
+      expect(service.getCurrentSessionSnapshot().profile?.email).toBe(
+        "test@example.com",
+      );
+      expect(useAuthStore.getState().status).toBe("signed-in");
+      expect(await host.tokenStore.get()).toEqual(
+        expectedStored("fresh-token", "fresh-token-refresh"),
+      );
     });
 
     it("treats a rejected token save as a product sign-in failure and stays retryable", async () => {

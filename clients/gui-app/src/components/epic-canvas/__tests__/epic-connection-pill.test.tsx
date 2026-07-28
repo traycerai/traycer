@@ -21,7 +21,8 @@ vi.mock("@/lib/epic-selectors", () => ({
 
 const OFFLINE_COPY =
   "Disconnected. Unsent changes stay in this window until it reconnects — keep it open.";
-const SYNCING_TOOLTIP = "Some changes have not reached the cloud yet.";
+const OFFLINE_UNSAVED_TOOLTIP =
+  "The cloud connection is down, and some recent changes are still being saved on this device. Keep this window open.";
 
 function pillTree() {
   return (
@@ -103,7 +104,7 @@ describe("<EpicConnectionPill />", () => {
     await expectTooltip("All changes synced");
   });
 
-  it("renders connecting as the amber bootstrap pill with no tooltip", () => {
+  it("renders connecting as the amber bootstrap pill", async () => {
     renderPill("connecting");
 
     expect(screen.getByText("Connecting…")).not.toBeNull();
@@ -117,11 +118,10 @@ describe("<EpicConnectionPill />", () => {
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
     ).toBe("connecting");
-    fireEvent.focus(screen.getByTestId("epic-connection-pill"));
-    expect(screen.queryByRole("tooltip")).toBeNull();
+    await expectTooltip("Connecting to server");
   });
 
-  it("renders reconnecting as the amber pill with no tooltip", () => {
+  it("renders reconnecting as the amber pill", async () => {
     renderPill("reconnecting");
 
     expect(screen.getByText("Reconnecting…")).not.toBeNull();
@@ -134,8 +134,7 @@ describe("<EpicConnectionPill />", () => {
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
     ).toBe("reconnecting");
-    fireEvent.focus(screen.getByTestId("epic-connection-pill"));
-    expect(screen.queryByRole("tooltip")).toBeNull();
+    await expectTooltip("Reconnecting to server");
   });
 
   it("renders the offline state as a red pill with disconnect tooltip text", async () => {
@@ -169,10 +168,10 @@ describe("<EpicConnectionPill />", () => {
     await expectTooltip(OFFLINE_COPY);
   });
 
-  it("renders syncing with the Syncing… label, never claims synced, and shows no emerald pulse", async () => {
+  it("keeps normal renderer-to-host saving quiet and makes no synced claim", () => {
     renderPill("syncing");
 
-    expect(screen.getByText("Syncing…")).not.toBeNull();
+    expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
     expect(pillClaimsSynced()).toBe(false);
     expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
       "animate-ping",
@@ -183,7 +182,80 @@ describe("<EpicConnectionPill />", () => {
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
     ).toBe("syncing");
-    await expectTooltip(SYNCING_TOOLTIP);
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+    ).toBe("Saving changes");
+  });
+
+  it("keeps ordinary host-pending churn quiet indefinitely", () => {
+    renderPill("hostPending");
+    expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("hostPending");
+  });
+
+  it("shows the unsafe overlap warning immediately without a durability claim", async () => {
+    renderPill("offlineWithUnsavedChanges");
+
+    expect(screen.getByText("Offline — saving changes…")).not.toBeNull();
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("offlineWithUnsavedChanges");
+    expect(screen.getByTestId("epic-connection-pill").className).toContain(
+      "bg-amber-500/10",
+    );
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+    ).toBe(
+      "Offline. Some recent changes are still being saved on this device. Keep this window open.",
+    );
+    await expectTooltip(OFFLINE_UNSAVED_TOOLTIP);
+    expect(screen.getByRole("status").textContent).toContain(
+      "Some recent changes are still being saved",
+    );
+    expect(
+      screen
+        .getByTestId("epic-connection-pill")
+        .contains(screen.getByRole("status")),
+    ).toBe(false);
+  });
+
+  it("shows host-pending offline work without claiming it is durable", async () => {
+    renderPill("offlineWithHostPending");
+
+    expect(screen.getByText("Offline — changes pending")).not.toBeNull();
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("offlineWithHostPending");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-amber-500",
+    );
+    expect(screen.getByTestId("epic-connection-pill-dot").textContent).toBe("");
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+    ).toBe(
+      "Offline. This device is still processing pending changes; keep it running.",
+    );
+    await expectTooltip(
+      "The cloud connection is down. This device is still processing pending changes; keep it running.",
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "still processing pending changes",
+    );
+  });
+
+  it("preserves keyboard focus when a quiet save becomes an offline warning", () => {
+    const { rerender } = renderPill("syncing");
+    const before = screen.getByTestId("epic-connection-pill");
+    before.focus();
+
+    mocks.useEpicSyncPillState.mockReturnValue("offlineWithUnsavedChanges");
+    rerender(pillTree());
+
+    const after = screen.getByTestId("epic-connection-pill");
+    expect(after).toBe(before);
+    expect(document.activeElement).toBe(after);
   });
 
   it("renders neutral Connected without a synced or durability assertion", () => {
@@ -228,29 +300,38 @@ describe("<EpicConnectionPill />", () => {
   });
 
   describe("settle behavior (750ms hold before claiming synced)", () => {
-    it("first mount with a derived synced verdict waits through the settle delay", () => {
+    it("settles the synced visuals while exposing the raw accessible verdict", () => {
       vi.useFakeTimers();
       renderPill("synced");
 
-      expect(screen.getByText("Syncing…")).not.toBeNull();
-      expect(pillClaimsSynced()).toBe(false);
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
 
       act(() => {
         vi.advanceTimersByTime(750);
       });
       expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("synced");
     });
 
-    it("flips syncing -> synced only after holding for 750ms, reading Syncing… in between", () => {
+    it("flips syncing -> synced only after holding for 750ms, staying quiet in between", () => {
       vi.useFakeTimers();
       const { rerender } = renderPill("syncing");
-      expect(screen.getByText("Syncing…")).not.toBeNull();
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
 
       mocks.useEpicSyncPillState.mockReturnValue("synced");
       rerender(pillTree());
 
-      expect(screen.getByText("Syncing…")).not.toBeNull();
-      expect(pillClaimsSynced()).toBe(false);
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
 
       act(() => {
         vi.advanceTimersByTime(750);
@@ -259,7 +340,7 @@ describe("<EpicConnectionPill />", () => {
       expect(pillClaimsSynced()).toBe(true);
     });
 
-    it("never renders All changes synced for a synced window shorter than the settle delay", () => {
+    it("never renders synced visuals for a synced window shorter than the settle delay", () => {
       vi.useFakeTimers();
       const { rerender } = renderPill("syncing");
 
@@ -269,12 +350,15 @@ describe("<EpicConnectionPill />", () => {
       act(() => {
         vi.advanceTimersByTime(300);
       });
-      expect(pillClaimsSynced()).toBe(false);
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
 
       mocks.useEpicSyncPillState.mockReturnValue("syncing");
       rerender(pillTree());
       expect(pillClaimsSynced()).toBe(false);
-      expect(screen.getByText("Syncing…")).not.toBeNull();
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
 
       // The abandoned settle timer from the earlier synced window must not
       // fire later and flash the stale claim.
@@ -284,31 +368,17 @@ describe("<EpicConnectionPill />", () => {
       expect(pillClaimsSynced()).toBe(false);
     });
 
-    // The display holds "Syncing…" through the settle on purpose - a
-    // conservative LABEL is the anti-strobe trade. The tooltip is a different
-    // kind of statement: "some changes have not reached the cloud yet" is a
-    // fact, and during the hold the derived verdict already says it is false.
-    it("drops the syncing tooltip during the settle hold, where the derived verdict is already synced", () => {
+    it("exposes the truthful synced tooltip during the visual settle hold", () => {
       vi.useFakeTimers();
-      const pill = () => screen.getByTestId("epic-connection-pill");
       const { rerender } = renderPill("syncing");
-
-      // Control, so the assertion below can't pass vacuously: a genuinely
-      // syncing verdict shows the syncing tooltip.
-      fireEvent.focus(pill());
-      expect(screen.queryByRole("tooltip")?.textContent).toBe(SYNCING_TOOLTIP);
 
       mocks.useEpicSyncPillState.mockReturnValue("synced");
       rerender(pillTree());
 
-      // The LABEL still holds "Syncing…" (the anti-strobe trade), but the
-      // tooltip must not keep asserting a fact the verdict has already
-      // retracted. Every state now carries a tooltip, so the check is that the
-      // syncing copy is gone - not that the tooltip vanished.
-      expect(screen.getByText("Syncing…")).not.toBeNull();
-      fireEvent.focus(pill());
-      expect(screen.queryByRole("tooltip")?.textContent).not.toBe(
-        SYNCING_TOOLTIP,
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+      fireEvent.focus(screen.getByTestId("epic-connection-pill"));
+      expect(screen.queryByRole("tooltip")?.textContent).toBe(
+        "All changes synced",
       );
 
       // ...and once the hold expires the pill catches up to the verdict.
@@ -320,6 +390,9 @@ describe("<EpicConnectionPill />", () => {
 
     it.each<EpicSyncPillState>([
       "syncing",
+      "hostPending",
+      "offlineWithUnsavedChanges",
+      "offlineWithHostPending",
       "connected",
       "offline",
       "offlineChangesSavedLocally",

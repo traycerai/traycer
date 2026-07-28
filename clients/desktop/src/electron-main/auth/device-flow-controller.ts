@@ -6,6 +6,7 @@ import {
   DEFAULT_DEVICE_REQUEST_TIMEOUT_MS,
   isDeviceExpired,
   pollDeviceToken,
+  resetPollInterval,
   startDeviceAuthorization,
   type DeviceAuthorizationResult,
   type DevicePollSchedule,
@@ -312,6 +313,10 @@ async function runDevicePollLoop(
         schedule = applySlowDown(schedule, poll.retryAfterSeconds);
         break;
       case "authorization-pending":
+        // The server accepted this poll's pacing - drop any slow_down widening
+        // (a premature browser-return nudge earns one) back to the base
+        // interval instead of carrying it for the rest of the attempt.
+        schedule = resetPollInterval(schedule);
         break;
       case "network-error":
         // Transient (transport/5xx): keep polling until the device_code TTL.
