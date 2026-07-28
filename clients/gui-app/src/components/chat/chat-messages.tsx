@@ -177,7 +177,15 @@ const ARROW_KEY_OWNER_SELECTOR = [
   '[role="textbox"]',
   '[role="tree"]',
   '[role="treeitem"]',
-  '[aria-haspopup]:not([aria-haspopup="false"])',
+  // Only popups the arrows actually open/step. A `dialog` popup (Radix
+  // `PopoverTrigger`, e.g. the composer's context-usage chip) activates on
+  // Enter/Space, so it must not hold the arrows hostage. Bare `true` is the
+  // legacy spelling of `menu`.
+  '[aria-haspopup="true"]',
+  '[aria-haspopup="menu"]',
+  '[aria-haspopup="listbox"]',
+  '[aria-haspopup="tree"]',
+  '[aria-haspopup="grid"]',
 ].join(",");
 
 function ownsArrowKeys(target: EventTarget | null): boolean {

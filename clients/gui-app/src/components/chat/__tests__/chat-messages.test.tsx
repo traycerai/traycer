@@ -586,6 +586,17 @@ describe("ChatMessages Virtuoso renderer", () => {
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
     expect(scroller.scrollTop).toBe(1_000);
 
+    // ...but a popover trigger (`aria-haspopup="dialog"`, e.g. the composer's
+    // context-usage chip) opens on Enter/Space, so it holds no claim on the
+    // arrows and the transcript still scrolls.
+    const popover = document.createElement("button");
+    popover.setAttribute("aria-haspopup", "dialog");
+    tile.appendChild(popover);
+    popover.focus();
+    fireEvent.keyDown(popover, { key: "ArrowUp" });
+    expect(scroller.scrollTop).toBe(1_000 - CHAT_ARROW_SCROLL_STEP_PX);
+    scroller.scrollTop = 1_000;
+
     // Inert canvas chrome (the pane tab layer focus is parked on) is not a
     // widget, so it still scrolls.
     const paneChrome = document.createElement("div");
