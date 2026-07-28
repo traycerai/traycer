@@ -308,7 +308,20 @@ export function providerPackErrorDetail(
       // connection coming back (the host re-attempts on its own) and a
       // restart - and deliberately never says "retry", because the affordance
       // is withheld for exactly this reason.
-      return "this device could not verify the provider registry. It will try again once you're back online; restarting Traycer also retries immediately.";
+      //
+      // This used to end "It will try again once you're back online". No
+      // connectivity listener exists anywhere in the host - not in the
+      // keyring loader, not in the install manager, not in the runtime. The
+      // real triggers are the periodic reconvergence tick and a restart, so
+      // the sentence promised a mechanism nothing implements, in the commit
+      // written to remove exactly that. Worse operationally than cosmetically:
+      // the rollout's stage-0 abort criterion is "any trust-unavailable that
+      // does not clear on its own", and an operator who believes clearance
+      // arrives at reconnect aborts a healthy rollout when it takes the tick.
+      //
+      // What it names now is what exists, and it still never says "retry",
+      // because the allow-list deliberately draws no button here.
+      return "this device could not verify the provider registry's signing keys, so managed downloads are unavailable here. Traycer re-checks periodically; restarting Traycer checks straight away. A CLI you install yourself keeps working in the meantime.";
     default:
       return "retry to try again.";
   }
