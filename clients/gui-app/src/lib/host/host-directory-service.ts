@@ -187,10 +187,10 @@ export class HostDirectoryService implements IHostDirectoryService {
   /**
    * Returns the cardinality of the merged directory.
    *
-   * `<MobileHostGate />` consumes this to decide whether to render the
-   * no-host guidance state, let auto-bind proceed, or programmatically
-   * open the mounted `<HostPicker />`. Consumers can alternatively
-   * compute it from `list()`; this helper just centralises the mapping.
+   * The host-readiness controller consumes this as `hasMobileNoHost`, which
+   * resolves to the `mobile-no-host` readiness kind and its no-host guidance
+   * surface. Consumers can alternatively compute it from `list()`; this helper
+   * just centralises the mapping.
    */
   getCardinality(): "zero" | "one" | "many" {
     const total = this.snapshot().length;

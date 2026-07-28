@@ -8,6 +8,8 @@ import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabItemId } from "@/stores/tabs/layout";
+import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import {
@@ -39,6 +41,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   afterEach,
@@ -575,6 +578,66 @@ describe("<TabStrip />", () => {
       "group-has-[:focus-visible]/tab:opacity-100",
     );
     expect(hoverChrome?.querySelector("svg")).toBeNull();
+  });
+
+  it("separates a split group from the next strip item like any other tab", async () => {
+    // A split group is one strip item, so the separator rule ("hairline unless
+    // this item or the next one is active") has to apply to it too. It didn't:
+    // the rule was restated inside the plain-tab branch only, so a group drew
+    // no trailing hairline and the group-to-tab boundary read as a blank gap.
+    const tabD = epicFixture(4);
+    const tabE = epicFixture(5);
+    for (const epic of [EPIC_A, EPIC_B, EPIC_C, tabD, tabE]) {
+      openEpicFixture(epic);
+    }
+    const refA: TabRef = { kind: "epic", id: EPIC_A.id };
+    const refB: TabRef = { kind: "epic", id: EPIC_B.id };
+    const refC: TabRef = { kind: "epic", id: EPIC_C.id };
+    const refD: TabRef = { kind: "epic", id: tabD.id };
+    const refE: TabRef = { kind: "epic", id: tabE.id };
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-a",
+          left: { kind: "tab", ref: refA },
+          right: { kind: "tab", ref: refB },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+        { kind: "tab", id: tabItemId(refC), ref: refC },
+        { kind: "tab", id: tabItemId(refD), ref: refD },
+        { kind: "tab", id: tabItemId(refE), ref: refE },
+      ],
+      // Last item active, so the group and C both have an inactive successor -
+      // the only arrangement that exercises the positive and both negative
+      // branches of the rule in one render.
+      activeItemId: tabItemId(refE),
+      stripOrder: [refA, refB, refC, refD, refE],
+      systemTabs: { history: null, settings: null },
+    });
+    const router = buildRouter(`/epics/${tabE.id}/${tabE.id}`);
+    render(<RouterProvider router={router} />);
+
+    const group = await screen.findByTestId("split-tab-group-split-a");
+    // Exactly one: the group's own trailing hairline. The two halves inside
+    // must not draw their own, or a group would read as two tabs.
+    expect(within(group).queryAllByTestId("header-tab-separator")).toHaveLength(
+      1,
+    );
+    // Distinct from the unconditional divider between the halves - a fix that
+    // reused that divider would leave the group-to-tab boundary still blank.
+    expect(screen.getByTestId("split-tab-divider-split-a")).toBeDefined();
+
+    const plainC = screen.getByTestId(`tab-epic-${EPIC_C.id}`);
+    const plainD = screen.getByTestId(`tab-epic-${tabD.id}`);
+    const plainE = screen.getByTestId(`tab-epic-${tabE.id}`);
+    expect(within(plainC).queryByTestId("header-tab-separator")).not.toBeNull();
+    // Suppressed next to the active tab, and after the last item.
+    expect(within(plainD).queryByTestId("header-tab-separator")).toBeNull();
+    expect(within(plainE).queryByTestId("header-tab-separator")).toBeNull();
   });
 
   it("keeps the new-tab button after the tabs while preserving overflow", async () => {

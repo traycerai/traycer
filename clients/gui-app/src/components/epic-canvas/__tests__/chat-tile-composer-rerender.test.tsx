@@ -218,6 +218,7 @@ function props(
 ): ChatLowerInteractionSurfacesProps {
   return {
     epicId: "epic-1",
+    viewTabId: "tab-1",
     chatId: "chat-1",
     runtime: RUNTIME,
     access: ACCESS,

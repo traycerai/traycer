@@ -392,6 +392,34 @@ describe("tab command coordinator transactions", () => {
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(epicTabId);
   });
 
+  it("replaceDraftWithEpic re-reveals an epic tab that was closed but preserved", () => {
+    // Opening an epic from the history list resolves the epic's PRESERVED tab
+    // id (`closeTab` keeps the record and points `mostRecentTabIdByEpicId` at
+    // it), so the swap target is routinely a record that already exists while
+    // being absent from `openTabOrder`. If the source is not re-revealed here,
+    // reconciliation deletes the just-placed epic ref as unbacked and the
+    // draft's strip slot collapses instead of becoming the epic.
+    const { tabId, ref } = openEpicSource("epic-reopened", "Reopened");
+    expect(tabCommandCoordinator.closeRef(ref)).toBe(true);
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
+    expect(useEpicCanvasStore.getState().tabsById[tabId]).toBeDefined();
+
+    const draftRef = openDraftSource();
+    const nextRef = tabCommandCoordinator.replaceDraftWithEpic({
+      draftId: draftRef.id,
+      epicId: "epic-reopened",
+      epicTabId: tabId,
+      epicName: "Reopened",
+    });
+
+    expect(nextRef).toEqual(ref);
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual([
+      tabRefKey(ref),
+    ]);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
   it("closeRef keeps the closed source under pendingRemovals until removal settles", () => {
     const { ref } = openEpicSource("epic-close", "Close me");
     const session = captureSession();

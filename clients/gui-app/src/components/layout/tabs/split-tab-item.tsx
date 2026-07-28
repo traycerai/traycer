@@ -18,6 +18,7 @@ import type { SplitSide } from "@/stores/tabs/layout";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import {
+  HeaderTabSeparator,
   SplitMemberChrome,
   TabChrome,
   TabItem,
@@ -34,6 +35,13 @@ export interface SplitTabItemProps {
   readonly leftMemberIndex: number;
   readonly rightMemberIndex: number;
   readonly isActive: boolean;
+  /**
+   * Draws the strip hairline at the GROUP's right edge - the boundary between
+   * this group and whatever strip item follows it. Distinct from the internal
+   * divider between the two halves, which is unconditional and belongs to the
+   * group's own silhouette.
+   */
+  readonly showSeparatorAfter: boolean;
   readonly showDropIndicatorBefore: boolean;
   readonly showDropIndicatorAfter: boolean;
   readonly onClose: (tab: HeaderTab) => void;
@@ -158,6 +166,12 @@ export const SplitTabItem = memo(function SplitTabItem(
           onSetTaskPinned={props.onSetTaskPinned}
         />
       </div>
+      {/*
+        Outside the padded inner row so it lands on the group's own right edge,
+        where an ordinary tab's separator sits - not inset against the trailing
+        half's label.
+      */}
+      <HeaderTabSeparator visible={props.showSeparatorAfter} />
     </m.div>
   );
 });

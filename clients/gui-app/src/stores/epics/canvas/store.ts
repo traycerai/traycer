@@ -1131,7 +1131,16 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
       },
 
       openEpicTabWithId: (tabId, epicId, name) => {
-        if (get().tabsById[tabId] !== undefined) return tabId;
+        // `closeTab` preserves the record in `tabsById` so the tab can be
+        // reopened, which means an existing record is NOT the same thing as an
+        // open tab. Returning the id without revealing it hands the caller a
+        // ref that `tabSourceRefs()` does not back, and strip reconciliation
+        // then deletes the layout item the caller just placed. `setActiveTab`
+        // re-pushes onto `openTabOrder` and no-ops when already open + active.
+        if (get().tabsById[tabId] !== undefined) {
+          get().setActiveTab(tabId);
+          return tabId;
+        }
         const tab: EpicViewTab = {
           tabId,
           epicId,

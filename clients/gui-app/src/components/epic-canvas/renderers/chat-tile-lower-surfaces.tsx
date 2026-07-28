@@ -43,6 +43,7 @@ type ComposerSlotBottomSpacing = "normal" | "none";
 
 export interface ChatLowerInteractionSurfacesProps {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly chatId: string;
   readonly runtime: ChatLowerRuntimeState;
   readonly access: ChatLowerAccessState;
@@ -327,6 +328,7 @@ export function ChatLowerInteractionSurfaces(
       <ChatLowerDock
         snapshotLoaded={props.runtime.snapshotLoaded}
         epicId={props.epicId}
+        viewTabId={props.viewTabId}
         selfAgent={stopControls.self}
         activeAgents={activeAgents}
         todo={props.todo}
