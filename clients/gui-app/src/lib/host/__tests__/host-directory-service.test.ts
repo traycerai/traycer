@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import type { LocalHostSnapshot } from "@traycer-clients/shared/platform/runner-host";
@@ -34,6 +34,10 @@ function makeHost(localHost: LocalHostSnapshot | null): MockRunnerHost {
 }
 
 describe("HostDirectoryService", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("seeds the local entry from the runner-host onLocalHostChange subscription", async () => {
     const host = makeHost(localSnapshot);
     const directory = new HostDirectoryService({
@@ -538,7 +542,6 @@ describe("HostDirectoryService", () => {
           { source: "direct_ui", host_kind: "local" },
         ],
       ]);
-      track.mockRestore();
     });
   });
 });

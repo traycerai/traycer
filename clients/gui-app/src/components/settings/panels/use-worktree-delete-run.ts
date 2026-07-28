@@ -655,12 +655,18 @@ function startWorktreeDeleteCommand(
     command.settled = true;
     activeCommandCount = Math.max(0, activeCommandCount - 1);
     closeCommandClient(commandId);
-    enqueueFallbackDeletes(
-      input,
-      accepted.filter((item) =>
-        unsettled.has(keyFor(item.target.worktreePath)),
-      ),
+    const remaining = accepted.filter((item) =>
+      unsettled.has(keyFor(item.target.worktreePath)),
     );
+    if (remaining.length === 0) {
+      // A replacement host can report unsupported after every target already
+      // settled. There is then no fallback item that can add this callback,
+      // but the completed command still changed the worktree list and needs
+      // its usual invalidation once the system is idle.
+      pendingSettledCallbacks.add(input.onSettled);
+    } else {
+      enqueueFallbackDeletes(input, remaining);
+    }
     drainDeleteQueue();
     flushSettledCallbacksIfIdle();
   };

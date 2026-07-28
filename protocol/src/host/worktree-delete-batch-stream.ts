@@ -114,7 +114,7 @@ export type WorktreeDeleteBatchTarget = z.infer<
  * and have the single-flight map silently attach the second one to the first's
  * already-finished result.
  */
-const commandIdSchema = z.string().uuid();
+const commandIdSchema = z.uuid();
 
 export const worktreeDeleteBatchByPathOpenRequestSchema = z.discriminatedUnion(
   "mode",

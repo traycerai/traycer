@@ -10,7 +10,11 @@ import {
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useTabsStore } from "@/stores/tabs/store";
-import { useWorktreesSettingsViewStore } from "@/stores/settings/worktrees-settings-view-store";
+import {
+  DEFAULT_WORKTREE_SORT_MODE,
+  EMPTY_WORKTREE_TIER_FILTERS,
+  useWorktreesSettingsViewStore,
+} from "@/stores/settings/worktrees-settings-view-store";
 
 /**
  * The `hostSurface` destination family: a notification about a host-managed
@@ -24,6 +28,11 @@ describe("host surface notification routing", () => {
     await Promise.resolve();
     await Promise.resolve();
     useTabsStore.getState().closeSystemTab("settings");
+    useWorktreesSettingsViewStore.setState({
+      searchText: "",
+      sortMode: DEFAULT_WORKTREE_SORT_MODE,
+      tierFilters: EMPTY_WORKTREE_TIER_FILTERS,
+    });
   });
 
   it("opens Settings → Worktrees and remembers the section on the tab", () => {

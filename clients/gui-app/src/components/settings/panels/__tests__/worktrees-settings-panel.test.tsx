@@ -1800,6 +1800,44 @@ describe("WorktreesList delete flow", () => {
     expect(streamMock.legacyPaths).toEqual(["/wt/dirty"]);
   });
 
+  it("invalidates after a replacement host reports unsupported once every target already settled", () => {
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    renderList({
+      hostId: "host-a",
+      queryClient,
+      worktrees: WORKTREES,
+      enrichedByPath: undefined,
+      erroredPaths: undefined,
+      seededPaths: undefined,
+      onVisiblePathsChange: undefined,
+      taskTitlesByEpicId: undefined,
+    });
+
+    selectRows(["feat-clean", "feat-dirty"]);
+    fireEvent.click(screen.getByTestId("worktrees-list-delete-selected"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    const command = streamMock.commandCallbacks;
+
+    // A replacement host can make the reattached observer learn that the
+    // batch method disappeared after it already received both target frames,
+    // but before it receives the aggregate command frame.
+    act(() => {
+      command?.onTargetComplete("/wt/clean", true);
+      command?.onTargetComplete("/wt/dirty", true);
+    });
+    expect(invalidateSpy).not.toHaveBeenCalled();
+
+    act(() => {
+      command?.onUnsupported();
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-a", "worktree.listAllForHost"),
+      refetchType: "active",
+    });
+  });
+
   it("keeps fallback reservations in step with the queue, so drained and dismissed targets can be deleted again", () => {
     const multiRepoWorktrees = [
       ...WORKTREES,

@@ -67,7 +67,11 @@ export function formatHostNotificationPresentation(
         body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Question waiting", "Question resolved")}`,
       };
     case "host.operation.finished":
-      return hostOperationFinishedPresentation(entry.outcome, entry.payload);
+      return hostOperationFinishedPresentation(
+        entry.outcome,
+        entry.payload,
+        known,
+      );
   }
 }
 
@@ -96,11 +100,8 @@ export function formatHostNotificationPresentation(
 function hostOperationFinishedPresentation(
   outcome: HostNotificationOutcome,
   payload: Record<string, unknown>,
+  known: HostNotificationKnownPayload | null,
 ): HostNotificationPresentation {
-  const known = parseKnownHostNotificationPayloadForKind(
-    "host.operation.finished",
-    payload,
-  );
   const operationCopy = known === null ? null : hostOperationKnownCopy(known);
   const common = parseHostOperationCommonPayload(payload);
   return {
