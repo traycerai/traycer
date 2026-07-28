@@ -1623,6 +1623,15 @@ export class AuthService {
       return;
     }
     if (result.kind === "authorized") {
+      // Set BEFORE the first await, like every other terminal outcome below:
+      // an overlapping start() invoked after this attempt's signIn() shares
+      // its identityGeneration (nothing bumps it again until a fresh sign-in
+      // /out), so the generation fence alone cannot stop a straggling
+      // rehydration from clobbering the identity applyTokenInternal is about
+      // to establish. `authResolvedDuringStart` is the only guard for that.
+      if (this.starting) {
+        this.authResolvedDuringStart = true;
+      }
       // The approval has landed; only token validation/persistence remains.
       // Flip the surface off "Waiting for approval" NOW - validation can take
       // seconds (network retries, credentials-file lock), and through that
