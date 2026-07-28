@@ -205,7 +205,19 @@ function railButtonAriaLabel(entry: RailEntry): string {
   if (harnessAvailabilityUnsettled(entry.harness)) {
     return `${entry.harness.label} — loading…`;
   }
-  if (entry.preparing !== null) {
+  // Only a GATED tab carries the pack status in its NAME. An ungated one is an
+  // ordinary destination, and naming it "Claude Code is ready to use,
+  // installing managed copy, 43 percent" made every tab announce a nine-word
+  // sentence whose number changes every 1.5s under the install poll lane -
+  // thirteen tabs, for the length of a first-boot convergence. Before the gate
+  // landed these tabs were `aria-disabled` and arrow-skipped, so the long name
+  // was only ever read on purpose; now it is read on the way past.
+  //
+  // The detail is not lost: `PreparingDescription` renders it into the
+  // `aria-describedby` target for both cases, which is where a progress
+  // sentence belongs. A gated tab keeps it in the name too, because there the
+  // sentence IS the reason the tab cannot be used.
+  if (entry.preparing !== null && railEntryPackGated(entry)) {
     return providerPackPreparingLabel(entry.preparing, entry.harness.label);
   }
   return entry.harness.label;

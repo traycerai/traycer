@@ -1516,10 +1516,21 @@ describe("<HarnessModelPicker />", () => {
   // selectable" logic has only ever been exercised against packs that DO block.
   // The state below - downloading behind a runnable binary - is the common one
   // on a first boot, and it is the one the rail deliberately keeps selectable.
-  // The rail's own non-blocking copy: it leads with the fact that matters to the
-  // user (the provider works right now) and reports the download second.
-  const PREPARING_TAB_NAME =
-    "Claude is ready to use · installing managed copy… 30%";
+  // P6. An ungated tab is an ordinary destination, so its accessible NAME is
+  // the plain harness label - the progress sentence lives in its description,
+  // where a number that changes every 1.5s belongs. It used to be the name, so
+  // arrowing across a converging rail announced thirteen nine-word sentences.
+  const PREPARING_TAB_NAME = "Claude";
+  // The same fact, as the rail's non-blocking SHORT copy: it leads with what
+  // matters to the user (the provider works right now) and reports the
+  // download second.
+  const PREPARING_TAB_DESCRIPTION = "Ready · installing… 30%";
+
+  function tabDescription(tab: HTMLElement): string {
+    const id = tab.getAttribute("aria-describedby");
+    expect(id).not.toBeNull();
+    return document.getElementById(id ?? "")?.textContent ?? "";
+  }
 
   function downloadingBehindRunnableBinarySetup(): void {
     const codex = codexModels();
@@ -1572,6 +1583,10 @@ describe("<HarnessModelPicker />", () => {
     const claudeTab = screen.getByRole("tab", { name: PREPARING_TAB_NAME });
     expect(claudeTab.getAttribute("data-pack-preparing")).toBe("downloading");
     expect(claudeTab.getAttribute("aria-disabled")).toBeNull();
+    // ...and the detail is not lost by keeping it out of the name: the
+    // description still reports the install, which is the half that makes the
+    // shorter name a relocation rather than a deletion.
+    expect(tabDescription(claudeTab)).toContain(PREPARING_TAB_DESCRIPTION);
   });
 
   it("does not bounce the selection off a provider downloading behind a runnable binary", async () => {
