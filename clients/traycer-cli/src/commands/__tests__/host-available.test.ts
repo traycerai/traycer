@@ -254,3 +254,100 @@ describe("buildHostAvailableCommand's real data envelope against desktop's parse
     });
   });
 });
+
+// The registry manifest carries an asset per supported platform on every
+// version entry, but nothing downstream of this command can use an asset for
+// a platform it is not running on - both consumers do a single-key lookup and
+// discard the rest. `host available` therefore emits only the running
+// platform's asset, which cut the payload 3.2x (70,331 -> 21,689 bytes across
+// 31 real versions). This payload is ONE unsplittable JSON line, so its width
+// is a standing liability: it is what carried it past the 64 KiB pipe buffer
+// (see runner/std-write.ts).
+//
+// The fixtures above are single-platform, so they cannot observe scoping at
+// all - these use a genuinely multi-platform manifest.
+const OTHER_PLATFORM_ASSET: HostPlatformAsset = {
+  ...AVAILABLE_ASSET,
+  url: "https://github.com/traycerai/traycer/releases/download/host-v1.2.0/traycer-host-linux-x64.tar.gz",
+  sha256: "b".repeat(64),
+  signatureUrl:
+    "https://github.com/traycerai/traycer/releases/download/host-v1.2.0/traycer-host-linux-x64.tar.gz.minisig",
+};
+
+function createMultiPlatformManifest(
+  platforms: Readonly<Record<string, HostPlatformAsset>>,
+): HostVersionsManifest {
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-06-22T01:00:00.000Z",
+    latest: "1.2.0",
+    versions: [
+      {
+        version: "1.2.0",
+        releasedAt: "2026-06-22T00:00:00.000Z",
+        releaseNotesUrl: "https://example.com/1.2.0",
+        yanked: false,
+        deprecationReason: null,
+        requiredCliVersion: null,
+        platforms,
+      },
+    ],
+  };
+}
+
+describe("buildHostAvailableListing platform scoping", () => {
+  it("emits only the running platform's asset and drops every other platform", () => {
+    const listing = buildHostAvailableListing({
+      manifest: createMultiPlatformManifest({
+        "darwin-arm64": AVAILABLE_ASSET,
+        "linux-x64": OTHER_PLATFORM_ASSET,
+        "win32-x64": OTHER_PLATFORM_ASSET,
+      }),
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+    });
+
+    const entry = listing.manifest.versions[0];
+    expect(Object.keys(entry.platforms)).toEqual(["darwin-arm64"]);
+    // The surviving asset is the real one, not a stub: a projection that
+    // dropped the wrong key would still satisfy the key-count assertion.
+    expect(entry.platforms["darwin-arm64"]).toEqual(AVAILABLE_ASSET);
+  });
+
+  it("keeps a version with no asset for this platform, with an empty platforms map", () => {
+    const listing = buildHostAvailableListing({
+      manifest: createMultiPlatformManifest({
+        "linux-x64": OTHER_PLATFORM_ASSET,
+      }),
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+    });
+
+    // Dropped assets must not drop the VERSION - callers distinguish
+    // "exists but not for you" (rendered, tagged no-asset) from "does not
+    // exist at all".
+    expect(listing.manifest.versions.map((e) => e.version)).toEqual(["1.2.0"]);
+    expect(listing.manifest.versions[0].platforms).toEqual({});
+    expect(listing.human).toContain("no-asset");
+  });
+
+  it("still resolves availability through desktop's parser after scoping", async () => {
+    mocks.fetchManifestMock.mockResolvedValue(
+      createMultiPlatformManifest({
+        "darwin-arm64": AVAILABLE_ASSET,
+        "linux-x64": OTHER_PLATFORM_ASSET,
+      }),
+    );
+
+    const command = buildHostAvailableCommand({ includePreReleases: false });
+    const result = await command(fakeCtx());
+
+    // The whole point of the projection is that this is unchanged.
+    expect(parseAvailableSnapshotLikeDesktop(result.data)).toEqual({
+      latest: "1.2.0",
+      versions: [{ version: "1.2.0", available: true }],
+    });
+  });
+});
