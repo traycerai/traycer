@@ -697,10 +697,14 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // A downward user gesture (wheel/keys/touch toward the tail) also takes over
   // from an in-flight restore: cancel the defend loop so it can't re-assert the
   // saved offset against the user's own scroll during the post-show window.
-  // No-op outside that window (no retry in flight).
+  // No-op outside that window (no retry in flight). It cancels an in-flight
+  // SMOOTH scroll for the same reason the unpin path does - a minimap jump
+  // rewrites `scrollTop` for ~50 frames, and a downward key pressed during that
+  // window would otherwise be painted over and read as a dead key.
   const markDownwardUserGesture = useCallback((): void => {
     cancelScrollRestorationRetry();
     lastScrollGestureRef.current = "down";
+    virtuosoRef.current?.cancelSmoothScroll();
   }, [cancelScrollRestorationRetry]);
 
   const handleScroll = useCallback(
