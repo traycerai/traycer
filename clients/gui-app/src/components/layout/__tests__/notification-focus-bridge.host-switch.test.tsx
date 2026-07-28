@@ -89,6 +89,11 @@ import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  __resetTabSyncCoordinatorForTesting,
+  installTabSyncCoordinator,
+} from "@/lib/tab-sync/tab-sync-coordinator";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
@@ -283,7 +288,15 @@ function clickNative(route: NotificationPayload, feedSourceId: string): void {
 }
 
 describe("NotificationFocusBridge origin-host activation", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // `hostSurface` routing activates a Settings tab through the shared tab
+    // navigation controller. The app installs this above the bridge; make the
+    // suite self-contained instead of relying on test-file execution order.
+    __resetTabNavigationControllerForTesting();
+    __resetTabSyncCoordinatorForTesting();
+    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+    await Promise.resolve();
+    await Promise.resolve();
     order.length = 0;
     navigateSpy.mockReset();
     navigateSpy.mockImplementation(() => {

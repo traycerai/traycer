@@ -66,6 +66,11 @@ import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { buildNotificationActivationEnvelope } from "@/lib/notifications/notification-activation-envelope";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  __resetTabSyncCoordinatorForTesting,
+  installTabSyncCoordinator,
+} from "@/lib/tab-sync/tab-sync-coordinator";
 import { __resetHostNotificationsStoreForTests } from "@/stores/notifications/host-notifications-store";
 import { useNotificationEventsStore } from "@/stores/notifications/notification-events-store";
 import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
@@ -218,7 +223,16 @@ async function settle(): Promise<void> {
 }
 
 describe("NotificationFocusBridge origin acknowledgment on the wire", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // `hostSurface` routing activates a Settings tab through the shared tab
+    // navigation controller. The real app installs this coordinator above the
+    // bridge; make that production prerequisite explicit here so this suite
+    // does not accidentally depend on another test having installed it.
+    __resetTabNavigationControllerForTesting();
+    __resetTabSyncCoordinatorForTesting();
+    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+    await Promise.resolve();
+    await Promise.resolve();
     navigateSpy.mockReset();
     toastSpy.success.mockReset();
     toastFromHostError.mockReset();
