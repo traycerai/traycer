@@ -231,9 +231,15 @@ function chatKeyboardScrollAction(
   return event.key === "Home" ? "top" : "bottom";
 }
 
+/** The relative steps - `top`/`bottom` are absolute and carry no delta. */
+type ChatKeyboardScrollStep = Exclude<
+  ChatKeyboardScrollAction,
+  "top" | "bottom"
+>;
+
 function chatKeyboardScrollDelta(
   scroller: HTMLElement,
-  action: ChatKeyboardScrollAction,
+  action: ChatKeyboardScrollStep,
 ): number {
   if (action === "page-up") return -scroller.clientHeight;
   if (action === "page-down") return scroller.clientHeight;

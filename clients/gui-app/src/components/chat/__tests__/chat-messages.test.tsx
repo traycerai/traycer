@@ -205,12 +205,7 @@ function chatMessagesJsx(
       <div data-group-id={TEST_PANE_GROUP_ID} data-testid="canvas-pane-root">
         <div data-group-id={TEST_PANE_GROUP_ID} data-testid="canvas-tab-strip">
           {/* Same shape as the real canvas tab root in `tab-strip.tsx`. */}
-          <div
-            role="tab"
-            aria-selected="true"
-            tabIndex={0}
-            data-testid="canvas-tab"
-          />
+          <div role="tab" aria-selected="true" tabIndex={0} />
         </div>
         <div
           data-chat-keyboard-scroll-scope=""
@@ -604,7 +599,7 @@ describe("ChatMessages Virtuoso renderer", () => {
     // of its own, so arrows keep scrolling the transcript from there. Guards
     // written in terms of "focusable" rather than "arrow-driven" break this.
     scroller.scrollTop = 1_000;
-    const canvasTab = screen.getByTestId("canvas-tab");
+    const canvasTab = screen.getByRole("tab");
     canvasTab.focus();
     fireEvent.keyDown(canvasTab, { key: "ArrowUp" });
     expect(scroller.scrollTop).toBe(1_000 - CHAT_ARROW_SCROLL_STEP_PX);
