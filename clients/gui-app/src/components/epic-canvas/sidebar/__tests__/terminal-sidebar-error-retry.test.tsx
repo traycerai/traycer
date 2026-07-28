@@ -73,29 +73,27 @@ describe("terminal sidebar error-state Retry", () => {
   });
 
   it("shows the error with a Retry button that refetches the list", () => {
-    const { getByTestId } = render(
+    const { getByRole, getByText } = render(
       wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
     );
 
-    expect(getByTestId("epic-terminal-sidebar-error").textContent).toContain(
-      "WebSocket dial timed out after 10000ms",
-    );
+    getByText("WebSocket dial timed out after 10000ms");
 
-    const retry = getByTestId("epic-terminal-sidebar-retry");
-    expect(retry.textContent).toContain("Retry");
+    const retry = getByRole("button", { name: "Retry" });
     fireEvent.click(retry);
     expect(refetch).toHaveBeenCalledTimes(1);
   });
 
   it("disables Retry while the refetch is in flight, keeping the label", () => {
     listState.isFetching = true;
-    const { getByTestId } = render(
+    const { getByRole } = render(
       wrapper(<TerminalsPanelBody epicId="epic-1" tabId={TAB_ID} />),
     );
 
-    const retry = getByTestId("epic-terminal-sidebar-retry");
+    // The accessible name stays "Retry" mid-flight - the spinner is
+    // `aria-hidden`, so the label never swaps to "Retrying...".
+    const retry = getByRole("button", { name: "Retry" });
     expect(retry).toHaveProperty("disabled", true);
-    expect(retry.textContent).toContain("Retry");
     fireEvent.click(retry);
     expect(refetch).not.toHaveBeenCalled();
   });

@@ -96,6 +96,44 @@ describe("wireAvailabilityRecovery", () => {
     expect(h.notify).toHaveBeenCalledTimes(2);
   });
 
+  it("a leading edge taken while a catch-up is armed cancels it instead of notifying twice", () => {
+    const now = { value: 1_000 };
+    const h = harness(now);
+
+    h.emit();
+    now.value = 4_000;
+    h.emit();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+
+    // The event loop stalls - this feature's own scenario. The injected clock
+    // moves past the cooldown while the armed timer is still overdue, so the
+    // next evidence message is dispatched BEFORE the timer it already owes.
+    now.value = 20_000;
+    h.emit();
+    expect(h.notify).toHaveBeenCalledTimes(2);
+
+    // The superseded catch-up must not fire a duplicate invalidation.
+    vi.runAllTimers();
+    expect(h.notify).toHaveBeenCalledTimes(2);
+  });
+
+  it("a clock rollback with a catch-up armed notifies once, not twice", () => {
+    const now = { value: 100_000 };
+    const h = harness(now);
+
+    h.emit();
+    now.value = 103_000;
+    h.emit();
+    expect(h.notify).toHaveBeenCalledTimes(1);
+
+    now.value = 50_000;
+    h.emit();
+    expect(h.notify).toHaveBeenCalledTimes(2);
+
+    vi.runAllTimers();
+    expect(h.notify).toHaveBeenCalledTimes(2);
+  });
+
   it("disposing cancels an armed trailing notify and the transport subscription", () => {
     const now = { value: 1_000 };
     const h = harness(now);

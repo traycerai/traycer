@@ -44,7 +44,9 @@ export interface AvailabilityRecoveryTarget {
  * recover → notify, then stall again → recover at t+3s) whose newly-stranded
  * queries have no other automatic signal - swallowing it would strand them
  * until the next stall. A backwards `now` step (clock adjustment) resets the
- * gate rather than suppressing under a future-dated watermark.
+ * gate rather than suppressing under a future-dated watermark. Whenever the
+ * leading edge is taken, any armed catch-up is cancelled, so the two halves
+ * can never both deliver the same episode.
  */
 export function wireAvailabilityRecovery(args: {
   readonly wsStreamClient: AvailabilityEvidenceSource;
@@ -55,6 +57,17 @@ export function wireAvailabilityRecovery(args: {
   let lastNotifiedAt: number | null = null;
   let trailingTimer: number | null = null;
   const notify = (): void => {
+    // Any notify supersedes an armed catch-up: the trailing timer exists only
+    // to deliver an episode that was suppressed, and this call just delivered
+    // one. Two paths reach the leading edge with a timer still armed - a clock
+    // rollback resetting the gate, and (in this feature's own scenario) a
+    // stalled event loop dispatching an evidence message before the timer it
+    // already owes. Leaving the timer armed fires a duplicate invalidation
+    // moments later, which is exactly the churn the cooldown exists to stop.
+    if (trailingTimer !== null) {
+      window.clearTimeout(trailingTimer);
+      trailingTimer = null;
+    }
     lastNotifiedAt = args.now();
     appLogger.info(
       "[stream] host availability recovered - refetching host-scoped queries",
