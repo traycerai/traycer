@@ -191,17 +191,22 @@ export function useComposerToolbarStore(
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
-  const harnesses = activityEnabled
-    ? harnessesQuery.data?.harnesses
-    : undefined;
-  const models = activityEnabled
-    ? (modelsQuery.data?.models ?? EMPTY_MODELS)
-    : EMPTY_MODELS;
+  // Read the cache regardless of `activityEnabled`. The gate above already does
+  // the whole job it exists for - an inactive surface fetches nothing and holds
+  // no observer - and `enabled:false` does not evict what is already cached.
+  // Blanking the catalog on top of that is not a narrower subscription, it is
+  // this composer throwing away its own resolved state: `selectedModel` goes
+  // null, and with it the reasoning-effort and fast-mode chips (both derived
+  // from the model's advertised options) plus `supportedPermissionModes`. That
+  // was invisible while an inactive surface was also a hidden one, and became a
+  // visible defect with split panes, where the unfocused pane stays on screen.
+  const harnesses = harnessesQuery.data?.harnesses;
+  const models = modelsQuery.data?.models ?? EMPTY_MODELS;
   // Explicit load status for the CURRENT `harnessId`'s models query, threaded to
   // the store so it can tell "loading" from "loaded empty" (the query is keyed
   // on `harnessId`, so `data` resets to undefined during a cross-harness switch
   // until the new harness's models land). Never inferred from `models.length`.
-  const modelsLoaded = activityEnabled && modelsQuery.data !== undefined;
+  const modelsLoaded = modelsQuery.data !== undefined;
   useEffect(() => {
     store.getState().setCatalog({
       harnesses,
