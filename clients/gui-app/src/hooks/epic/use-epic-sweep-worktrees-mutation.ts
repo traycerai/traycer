@@ -6,11 +6,13 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { useHostClient } from "@/lib/host";
 import { epicMutationKeys } from "@/lib/query-keys";
 import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
-import { runWorktreeCleanup } from "@/lib/epics/run-worktree-cleanup";
+import {
+  runWorktreeCleanup,
+  type WorktreeCleanupOutcome,
+} from "@/lib/epics/run-worktree-cleanup";
 import { reportableWarningToast } from "@/lib/reportable-error-toast";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
@@ -36,24 +38,27 @@ export interface SweepTargetWorktree {
 }
 
 export interface SweepWorktreesVariables {
+  /** Host on which the dialog's act-time safety proof was computed. */
+  readonly hostId: string;
   readonly worktrees: ReadonlyArray<SweepTargetWorktree>;
 }
 
 export interface SweepWorktreesResult {
   readonly removed: ReadonlyArray<string>;
   readonly failed: ReadonlyArray<string>;
+  readonly uncertain: ReadonlyArray<string>;
   readonly hostId: string;
 }
 
 /**
- * The Sweep action: streams one `worktree.deleteByPath` per approved path via
- * the shared cleanup runner (host-side busy-check intact, headless teardown
- * best-effort), then refreshes the worktree listing/binding caches so the
+ * The Sweep action: streams one host-owned batch command for every approved
+ * path via the shared cleanup runner (host-side busy-check intact, headless
+ * teardown best-effort), then refreshes the worktree listing/binding caches so the
  * history PR pills, task rollups, and the task-status strip converge. A bare
  * `useMutation` rather than `useHostMutation`: there is no single host RPC
- * here - the whole mutation is the streamed multi-path run. `hostId` is
- * captured once at mutate time inside the mutationFn, so a host swap
- * mid-flight can't redirect the tail of the run or its cache invalidation.
+ * here - the whole mutation is the streamed multi-path run. `hostId` comes
+ * from the candidate query's settled act-time proof, so a host swap between
+ * proof and confirm cannot redirect the command or its cache invalidation.
  *
  * Runs in the BACKGROUND (matching Settings worktree deletion): the dialog
  * closes at confirm, the kickoff is acknowledged once the host-connection
@@ -65,33 +70,28 @@ export function useEpicSweepWorktrees(): UseMutationResult<
   Error,
   SweepWorktreesVariables
 > {
-  const client = useHostClient();
   const queryClient = useQueryClient();
   const openStreamTransport = useWorktreeDeleteStreamTransportFactory();
   return useMutation<SweepWorktreesResult, Error, SweepWorktreesVariables>({
     mutationKey: epicMutationKeys.sweepWorktrees(),
     mutationFn: async (variables) => {
-      const hostId = client.getActiveHostId();
-      if (hostId === null) {
-        throw new Error("No host connection - can't sweep worktrees.");
-      }
-      // Acknowledged here rather than in `onMutate`: the connection guard
-      // above runs first, so a disconnected host shows ONLY its error toast
-      // instead of "Sweeping 2 worktrees…" immediately contradicted by "No
-      // host connection".
+      // Acknowledged here rather than in `onMutate`: the proof's host identity
+      // is already frozen in the variables, so the command cannot move onto
+      // whichever host happens to be active now.
       const count = variables.worktrees.length;
       toast.info(
         `Sweeping ${count} worktree${count === 1 ? "" : "s"} in the background…`,
       );
       const outcome = await runWorktreeCleanup(
         openStreamTransport,
-        hostId,
+        variables.hostId,
         variables.worktrees.map((target) => target.worktreePath),
+        "task_sweep",
       );
-      return { ...outcome, hostId };
+      return { ...outcome, hostId: variables.hostId };
     },
     onSuccess: (result, variables) => {
-      emitSweepSummaryToast(result.removed.length, result.failed.length);
+      emitSweepSummaryToast(result);
       purgeIntentsForRemovedWorktrees(variables.worktrees, result.removed);
       invalidateWorktreeListingAndBindingCaches(queryClient, result.hostId);
     },
@@ -134,7 +134,9 @@ function purgeIntentsForRemovedWorktrees(
  * run IT started - reopening from the other surface would happily re-stream
  * the same paths. Mirrors `usePendingSetPinnedEpicIds`.
  */
-export function useSweepingWorktreePaths(): ReadonlySet<string> {
+export function useSweepingWorktreePaths(
+  hostId: string | null,
+): ReadonlySet<string> {
   const pendingVariables = useMutationState({
     filters: {
       mutationKey: epicMutationKeys.sweepWorktrees(),
@@ -143,15 +145,21 @@ export function useSweepingWorktreePaths(): ReadonlySet<string> {
     select: (mutation) => mutation.state.variables,
   });
   return useMemo(
-    () =>
-      new Set(
-        pendingVariables.flatMap((variables) =>
-          isSweepWorktreesVariables(variables)
-            ? variables.worktrees.map((target) => target.worktreePath)
-            : [],
-        ),
-      ),
-    [pendingVariables],
+    () => sweepingWorktreePathsForHost(pendingVariables, hostId),
+    [hostId, pendingVariables],
+  );
+}
+
+export function sweepingWorktreePathsForHost(
+  pendingVariables: ReadonlyArray<unknown>,
+  hostId: string | null,
+): ReadonlySet<string> {
+  return new Set(
+    pendingVariables.flatMap((variables) =>
+      isSweepWorktreesVariables(variables) && variables.hostId === hostId
+        ? variables.worktrees.map((target) => target.worktreePath)
+        : [],
+    ),
   );
 }
 
@@ -159,8 +167,9 @@ function isSweepWorktreesVariables(
   value: unknown,
 ): value is SweepWorktreesVariables {
   if (value === null || typeof value !== "object") return false;
-  if (!("worktrees" in value)) return false;
-  const { worktrees } = value;
+  if (!("hostId" in value) || !("worktrees" in value)) return false;
+  const { hostId, worktrees } = value;
+  if (typeof hostId !== "string") return false;
   if (!Array.isArray(worktrees)) return false;
   return worktrees.every(isSweepTargetWorktree);
 }
@@ -171,21 +180,51 @@ function isSweepTargetWorktree(value: unknown): value is SweepTargetWorktree {
   return typeof value.worktreePath === "string";
 }
 
-function emitSweepSummaryToast(removed: number, failed: number): void {
-  const removedPart = `${removed} worktree${removed === 1 ? "" : "s"} swept`;
-  if (failed === 0) {
-    toast.success(removedPart);
+export interface SweepWorktreeSummary {
+  readonly level: "success" | "warning";
+  readonly message: string;
+}
+
+export function sweepWorktreeSummary(
+  outcome: WorktreeCleanupOutcome,
+): SweepWorktreeSummary | null {
+  const removed = outcome.removed.length;
+  const failed = outcome.failed.length;
+  const uncertain = outcome.uncertain.length;
+  if (removed === 0 && failed === 0 && uncertain === 0) return null;
+  const parts: string[] = [];
+  if (removed > 0) {
+    parts.push(`${removed} worktree${removed === 1 ? "" : "s"} swept`);
+  }
+  if (failed > 0) {
+    parts.push(
+      `${failed} worktree${failed === 1 ? "" : "s"} couldn't be removed`,
+    );
+  }
+  // A dropped observation is not a filesystem failure. The host still owns
+  // the command and its durable completion row will carry the actual counts.
+  if (uncertain > 0) {
+    parts.push(
+      `${uncertain} worktree${uncertain === 1 ? "" : "s"} unconfirmed`,
+    );
+  }
+  return {
+    level: failed === 0 && uncertain === 0 ? "success" : "warning",
+    message: parts.join(", "),
+  };
+}
+
+function emitSweepSummaryToast(outcome: WorktreeCleanupOutcome): void {
+  const summary = sweepWorktreeSummary(outcome);
+  if (summary === null) return;
+  if (summary.level === "success") {
+    toast.success(summary.message);
     return;
   }
-  const failedPart = `${failed} couldn't be removed`;
-  reportableWarningToast(
-    removed > 0 ? `${removedPart}, ${failedPart}` : `Sweep: ${failedPart}`,
-    undefined,
-    {
-      title: "Sweep incomplete",
-      message: null,
-      code: null,
-      source: "Worktree sweep",
-    },
-  );
+  reportableWarningToast(summary.message, undefined, {
+    title: "Sweep incomplete",
+    message: null,
+    code: null,
+    source: "Worktree sweep",
+  });
 }

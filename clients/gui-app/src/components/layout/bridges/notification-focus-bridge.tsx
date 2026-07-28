@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef } from "react";
-import { isNotificationPayloadRoutable } from "@/lib/notifications";
+import { toast } from "sonner";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  isNotificationPayloadRoutable,
+  type NotificationPayload,
+} from "@/lib/notifications";
 import {
   feedIdFromEnvelopeFeed,
   parseNotificationActivationPayload,
@@ -7,6 +12,12 @@ import {
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
+import {
+  useHostBinding,
+  type HostDirectoryService,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import { dialableHostEndpoint } from "@/lib/host/transport-key";
 import {
   useMergedNotificationRow,
   useMergedNotificationsActions,
@@ -27,7 +38,10 @@ import { activationResultHandler } from "@/lib/notifications/notification-activa
  * route payload (no feed identity), or unknown.
  *
  * - V1 with a non-null `originHostId` that no longer matches the active host:
- *   never route, switch hosts, or acknowledge - open the center once in the
+ *   a `hostSurface` route may switch to a reachable origin first (see
+ *   `switchToOriginHost`) and then route/acknowledge against it; every other
+ *   route kind, and any origin that cannot be switched to, never routes,
+ *   switches, or acknowledges - the center opens once in the
  *   origin-unavailable state instead.
  * - V1 (origin-valid or host-less) or legacy, and the route actually goes
  *   somewhere (`isNotificationPayloadRoutable`): activate directly through
@@ -42,6 +56,12 @@ export function NotificationFocusBridge(): null {
     (state) => state.notificationEvent,
   );
   const activeHostId = useReactiveActiveHostId();
+  const binding = useHostBinding();
+  // Only consulted on the origin-mismatch branch below, but unwrapped here so
+  // the effect depends on the two things it actually uses rather than on the
+  // whole binding.
+  const hostDirectory = binding?.directory ?? null;
+  const hostClient = binding?.hostClient ?? null;
   const { activate } = useNotificationActivation();
   const actions = useMergedNotificationsActions();
 
@@ -105,7 +125,13 @@ export function NotificationFocusBridge(): null {
     }
     if (
       envelope.originHostId !== null &&
-      envelope.originHostId !== activeHostId
+      envelope.originHostId !== activeHostId &&
+      !switchToOriginHost({
+        route: envelope.route,
+        originHostId: envelope.originHostId,
+        directory: hostDirectory,
+        client: hostClient,
+      })
     ) {
       useNotificationsPopoverStore
         .getState()
@@ -133,7 +159,84 @@ export function NotificationFocusBridge(): null {
     candidateRow,
     activate,
     actions,
+    hostDirectory,
+    hostClient,
   ]);
 
   return null;
+}
+
+/**
+ * Reachability-gated switch to the host a native notification came from.
+ *
+ * Returns `true` ONLY when the app-wide active host IS the origin host by the
+ * time it returns, so the caller can treat it as the single gate for "route
+ * and acknowledge against the origin feed". A `false` return has not bound
+ * anything and lands on the existing origin-unavailable center.
+ *
+ * The gates, in order:
+ *
+ * 1. `hostSurface` routes only. Switching hosts is a narrow policy for a
+ *    host-owned surface (Settings ▸ Worktrees today), NOT a global rule for
+ *    every notification: an epic/chat row that names a foreign host keeps its
+ *    released behavior, and existing chat/terminal tabs stay bound to their
+ *    lifetime `hostId` either way - only the app-wide scope moves.
+ * 2. Already on the origin - re-read LIVE from the client. The caller
+ *    compares against a React-rendered host id, which can lag a bind that
+ *    landed in the same tick; without this the bridge would announce a switch
+ *    it never made and emit a selection event for a host it was already on.
+ * 3. An authenticated client. Without a usable credential lease the switch
+ *    would bind a host we cannot talk to; app-wide authentication handling
+ *    owns that recovery, so this declines ONCE (the caller's processed-event
+ *    guard means a declined click is never retried) rather than binding and
+ *    letting an unauthorized RPC fail.
+ * 4. A LIVE, dialable directory entry - re-read here rather than taken from
+ *    the render snapshot, and with no `await` in between, so the entry cannot
+ *    have gone stale by the time we select it.
+ *
+ * Binding goes through the directory rather than `HostClient.bind` directly:
+ * the directory owns selection, and `HostRuntime` turns one `setSelected`
+ * into exactly one synchronous `hostClient.bind(entry)`. Binding the client
+ * behind the directory's back would leave the two disagreeing, and the next
+ * directory reconcile would snap the app back to the old host.
+ *
+ * It uses `selectTransientById`, not `selectById`, because a notification
+ * click is not the user answering "which host do you work on". The durable
+ * explicit-selection intent stays unwritten, so if this origin later leaves
+ * the directory the normal default-host promotion still recovers the app.
+ *
+ * AFTER the bind, this feature is done. `status: "available"` is a claim from
+ * the last published snapshot, not proof the dial or the bearer will be
+ * accepted, so a switched-to host can still fail on the very next request.
+ * That is deliberately owned by existing app-wide host/auth handling: the
+ * selection stays put, the user stays on the surface they navigated to, and
+ * the click neither retries nor rolls the app back out from under them.
+ */
+function switchToOriginHost(input: {
+  readonly route: NotificationPayload;
+  readonly originHostId: string;
+  readonly directory: HostDirectoryService | null;
+  readonly client: HostClient<HostRpcRegistry> | null;
+}): boolean {
+  if (input.route.kind !== "hostSurface") return false;
+  const { directory, client } = input;
+  if (directory === null || client === null) return false;
+  if (client.getActiveHostId() === input.originHostId) return true;
+  if (client.getRequestContextUserId() === null) return false;
+
+  const entry = directory.findById(input.originHostId);
+  if (entry === null || dialableHostEndpoint(entry) === null) return false;
+
+  directory.selectTransientById(entry.hostId, "notification");
+  // The bind is synchronous through the selection listener; anything else
+  // means the app-wide host did not actually move, and routing now would
+  // acknowledge against the wrong feed.
+  if (client.getActiveHostId() !== entry.hostId) return false;
+
+  // Binding changes the app-wide host context, which is a bigger consequence
+  // than the click asked for - say so before the destination appears.
+  toast.success(
+    `Switched to ${entry.label.length > 0 ? entry.label : entry.hostId}`,
+  );
+  return true;
 }

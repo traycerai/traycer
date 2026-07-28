@@ -12,6 +12,7 @@ import {
   hostNotificationInterviewPayloadSchema,
   hostNotificationKnownPayloadSchema,
   hostNotificationWorkspaceOperationFailedPayloadSchema,
+  hostNotificationWorktreeDeletionPayloadSchema,
   type HostNotificationKnownPayloadKind,
 } from "@traycer/protocol/host/notifications/payloads";
 import { PAYLOAD_FINGERPRINT_BASELINE } from "./payload-additivity-baseline";
@@ -32,6 +33,7 @@ const LIVE_PAYLOAD_SCHEMAS: Record<HostNotificationKnownPayloadKind, z.ZodType> 
       hostNotificationWorkspaceOperationFailedPayloadSchema,
     approval: hostNotificationApprovalPayloadSchema,
     interview: hostNotificationInterviewPayloadSchema,
+    worktree_deletion: hostNotificationWorktreeDeletionPayloadSchema,
   };
 
 const KINDS = [
@@ -41,6 +43,7 @@ const KINDS = [
   "workspace_operation_failed",
   "approval",
   "interview",
+  "worktree_deletion",
 ] as const satisfies readonly HostNotificationKnownPayloadKind[];
 
 describe("host notification payload additivity", () => {
