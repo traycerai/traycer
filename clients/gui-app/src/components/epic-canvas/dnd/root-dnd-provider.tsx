@@ -43,6 +43,7 @@ import {
   isLeftPanelDropNoop,
   resolveCanvasDropPreview,
   resolveOverlayTileForSource,
+  type HeaderStripDropResult,
   type ResolvedEpicCanvasDrop,
 } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import {
@@ -459,6 +460,29 @@ function commitHeaderEdgeSplit(
   );
 }
 
+/**
+ * Canvas tear-off onto the header strip. Source creation and authoritative
+ * placement run inside ONE suppressed coordinator transaction: the source
+ * store's synchronous reconciliation subscriber fires between them otherwise,
+ * and with a stale legacy `stripOrder` it would rebuild the flat layout and
+ * dissolve existing split groups before placement. Returns the committed drop
+ * only when the new ref was also placed.
+ */
+function commitHeaderStripDropAtIndex(
+  source: EpicCanvasDragSourceData,
+  headerStripIndex: number,
+): HeaderStripDropResult | null {
+  let dropped: HeaderStripDropResult | null = null;
+  const placedRef = tabCommandCoordinator.createSourceRefAtStripIndex(
+    headerStripIndex,
+    () => {
+      dropped = commitHeaderStripDrop(source, headerStripIndex);
+      return dropped === null ? null : { kind: "epic", id: dropped.tabId };
+    },
+  );
+  return placedRef === null ? null : dropped;
+}
+
 interface RootDndProviderProps {
   readonly children: ReactNode;
 }
@@ -621,7 +645,7 @@ export function RootDndProvider(props: RootDndProviderProps) {
       const source = readActiveDragSource(event.active);
       if (source !== null) {
         if (headerStripIndex !== null && canDropOnHeaderStrip(source)) {
-          const result = commitHeaderStripDrop(source, headerStripIndex);
+          const result = commitHeaderStripDropAtIndex(source, headerStripIndex);
           if (result !== null) {
             navigateToTabIntent(
               navigate,

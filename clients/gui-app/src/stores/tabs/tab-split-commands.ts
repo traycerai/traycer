@@ -44,14 +44,6 @@ export const TAB_SPLIT_COMMANDS = {
   },
 } as const;
 
-/**
- * The four group-scoped commands live behind one submenu rather than loose in
- * the tab menu, so an ungrouped tab's menu stays short and the split verbs read
- * as one arrangement surface. Labels deliberately match the platform browser
- * vocabulary users already carry over.
- */
-export const TAB_SPLIT_ARRANGE_MENU_LABEL = "Arrange split view";
-
 export type TabSplitCommandId =
   (typeof TAB_SPLIT_COMMANDS)[keyof typeof TAB_SPLIT_COMMANDS]["id"];
 

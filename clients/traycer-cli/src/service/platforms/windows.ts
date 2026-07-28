@@ -162,6 +162,14 @@ async function installService(
       },
     );
   } catch (cause) {
+    // Roll the launcher back: `stageTaskDefinition` wrote the persistent
+    // VBS before /Create ran, and a launcher without a task is an orphan
+    // that outlives the failed install (only a later uninstall would
+    // collect it). Best-effort - the error the operator sees is the
+    // install failure, not the rollback's.
+    await rm(hiddenHostLauncherPath(options.label), { force: true }).catch(
+      () => undefined,
+    );
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: `schtasks /Create failed for ${taskName}: ${describeCause(cause)}`,
@@ -198,6 +206,30 @@ async function uninstallService(
     tolerateNonZeroExit: true,
   });
   await rm(hiddenHostLauncherPath(options.label), { force: true });
+  // `schtasks /Delete` removes only the task; the `\Traycer` FOLDER it was
+  // auto-created in stays behind forever (probed live on Windows 11: the
+  // empty folder remains visible in Task Scheduler Library - and folders
+  // show even though the task itself was hidden). schtasks has no verb for
+  // folders, so ask the Schedule.Service COM API - and ONLY when the
+  // folder is genuinely empty: other environments' tasks (`Host-Dev`,
+  // `Host-Staging`) live in the same folder and must survive this
+  // uninstall. Best-effort: a missing folder or denied delete changes
+  // nothing about the uninstall's outcome.
+  await run(
+    "powershell",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "$s=New-Object -ComObject Schedule.Service;$s.Connect();$f=$s.GetFolder('\\Traycer');if((@($f.GetTasks(1)).Count -eq 0) -and (@($f.GetFolders(0)).Count -eq 0)){$s.GetFolder('\\').DeleteFolder('Traycer',0)}",
+    ],
+    {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: 30_000,
+      tolerateNonZeroExit: true,
+    },
+  ).catch(() => undefined);
   // Same rationale as stopService: the force-kill above skips the host's
   // graceful pid.json cleanup, and metadata surviving an uninstall reads as
   // a crashed (rather than removed) host to anything that finds it later.
@@ -718,6 +750,7 @@ function buildTaskXml(options: BuildTaskXmlOptions): string {
   return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
+    <Author>Traycer</Author>
     <Description>${escapeXml(options.label.displayName)}</Description>
   </RegistrationInfo>
   <Triggers>

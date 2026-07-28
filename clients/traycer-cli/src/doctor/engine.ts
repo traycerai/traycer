@@ -45,6 +45,10 @@ import {
   createRealLaunchdPrintRunner,
   probeMacosWedgedJob,
 } from "./launchd-wedge";
+import {
+  createRealSystemdProbeRunner,
+  probeLinuxSystemdHealth,
+} from "./systemd-health";
 import { isProcessAlive } from "../store/cli-lock";
 import {
   DOCTOR_ISSUE_CODES,
@@ -445,6 +449,22 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     if (wedgeIssue !== null) issues.push(wedgeIssue);
   }
 
+  // ---- 4a-linux. systemd user-manager health ----
+  // The Linux counterpart of the launchd wedge probe. Reads the manager's
+  // actual run state: no reachable user bus (WSL without systemd, sudo su),
+  // a failed / restart-looping unit ("stopped" everywhere else, since
+  // liveness deliberately keys off pid metadata), a start skipped because
+  // the CLI binary is gone, and disabled lingering.
+  if (process.platform === "linux") {
+    const systemdIssues = await probeLinuxSystemdHealth({
+      labelId: label.id,
+      unitFileInstalled:
+        serviceStatus !== null && serviceStatus.state !== "not-installed",
+      runner: createRealSystemdProbeRunner(),
+    });
+    issues.push(...systemdIssues);
+  }
+
   // ---- 4b. CLI slot binary health ----
   // The manifest's binaryPath may be a symlink into the Desktop app
   // bundle; a bundle remove/replace leaves it dangling, and the only
@@ -460,6 +480,21 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   if (process.platform === "win32") {
     const aclIssue = await probeWindowsCredentialsAcl(opts.environment);
     if (aclIssue !== null) issues.push(aclIssue);
+  }
+
+  // ---- 5b. Windows Script Host policy ----
+  // The scheduled task launches the host through wscript.exe. With the WSH
+  // Enabled=0 policy set (common enterprise hardening), the launcher never
+  // executes and nothing surfaces - probed live: `//B` suppresses even the
+  // block dialog, so the host silently never starts at login. Install-time
+  // verification can't see a policy applied later; this can.
+  if (
+    process.platform === "win32" &&
+    serviceStatus !== null &&
+    serviceStatus.state !== "not-installed"
+  ) {
+    const wshIssue = probeWindowsScriptHostPolicy();
+    if (wshIssue !== null) issues.push(wshIssue);
   }
 
   // ---- 6. Recent bootstrap markers ----
@@ -575,6 +610,48 @@ function formatMarkerMessage(entry: BootstrapLogEntry): string {
 // principal other than the file owner / well-known system principals
 // has read access. Returns null when the file is owner-only or when
 // the probe itself fails (icacls missing, transient error).
+/**
+ * Reads the Windows Script Host Enabled policy from both hives. `0` in
+ * either disables wscript.exe for this user, which kills the host's
+ * scheduled-task launch chain silently. HKCU wins over HKLM only in the
+ * sense that EITHER being 0 blocks; a missing value means enabled.
+ */
+function probeWindowsScriptHostPolicy(): DoctorIssue | null {
+  const disabledIn: string[] = [];
+  for (const hive of ["HKLM", "HKCU"]) {
+    let stdout: string;
+    try {
+      stdout = execFileSync(
+        "reg",
+        [
+          "query",
+          `${hive}\\Software\\Microsoft\\Windows Script Host\\Settings`,
+          "/v",
+          "Enabled",
+        ],
+        { encoding: "utf8", windowsHide: true, timeout: 5000 },
+      );
+    } catch {
+      // Key or value absent - WSH enabled by default.
+      continue;
+    }
+    if (/Enabled\s+REG_DWORD\s+0x0\b/i.test(stdout)) disabledIn.push(hive);
+  }
+  if (disabledIn.length === 0) return null;
+  return {
+    code: DOCTOR_ISSUE_CODES.WINDOWS_SCRIPT_HOST_DISABLED,
+    severity: "error",
+    title: "Windows Script Host is disabled by policy",
+    message:
+      `The host's scheduled task starts through wscript.exe, and the Windows Script Host Enabled=0 policy is set in ${disabledIn.join(" and ")}. ` +
+      "The launcher never executes and nothing surfaces an error, so the host silently never starts at login. " +
+      "Remove the policy (or have your administrator exempt this machine) to restore host auto-start.",
+    fixAction: null,
+    terminalCommand: `reg query "${disabledIn[0]}\\Software\\Microsoft\\Windows Script Host\\Settings" /v Enabled`,
+    details: { disabledIn },
+  };
+}
+
 async function probeWindowsCredentialsAcl(
   environment: Environment,
 ): Promise<DoctorIssue | null> {

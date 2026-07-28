@@ -112,7 +112,6 @@ export function resolveValidatedTopLevelTabDrop(
   target: TopLevelTabDropTarget,
   layout: PersistedTabStripLayout,
 ): ValidatedTopLevelTabDrop | null {
-  if (!canMutateTabSplits()) return null;
   const ledger = getTabCommandLedger();
   if (ledger.suppressionDepth > 0) return null;
   const source = resolveUnpairedHeaderEdgeSource(headerTab, layout);
@@ -125,9 +124,11 @@ export function resolveValidatedTopLevelTabDrop(
     return null;
   }
   if (target.kind === TOP_LEVEL_EDGE_SPLIT_TARGET) {
+    if (!canMutateTabSplits()) return null;
     return edgeTargetIsLive(source, target, layout) ? { source, target } : null;
   }
   if (target.kind === TOP_LEVEL_STRIP_PAIR_TARGET) {
+    if (!canMutateTabSplits()) return null;
     return stripPairTargetIsLive(source, target, layout)
       ? { source, target }
       : null;
