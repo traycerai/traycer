@@ -11,8 +11,12 @@ import type {
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { ListUserSessionsResponse } from "@traycer/protocol/auth/devices-sessions";
 import type {
+  ListUserSessionsResponse,
+  MintHostCredentialRequest,
+} from "@traycer/protocol/auth/devices-sessions";
+import type {
+  MintHostCredentialFetchResult,
   RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
@@ -1124,6 +1128,27 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.revokeAllSessions(this.currentBearer);
+  }
+
+  /**
+   * Mints a device credential for a connected host. Same two-attempt shape as
+   * `revokeUserSession` - the first call runs without step-up and the caller
+   * retries with `useStepUpCredential` after verifying an OTP - because the
+   * mint is always step-up gated server-side, including for a host that already
+   * holds one.
+   */
+  async mintHostCredential(
+    request: MintHostCredentialRequest,
+    useStepUpCredential: boolean,
+  ): Promise<MintHostCredentialFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintHostCredential(
+      this.currentBearer,
+      request,
+      useStepUpCredential,
+    );
   }
 
   async requestStepUpChallenge(): Promise<StepUpChallengeFetchResult> {

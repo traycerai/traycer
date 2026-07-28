@@ -2,11 +2,13 @@ import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
 import type {
   ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
   RetainedStepUpVerifyFetchResult,
 } from "../auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -101,6 +103,25 @@ export interface IRunnerHost {
    * credential internally.
    */
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+
+  /**
+   * Mints a device credential for a connected host, so the host can keep
+   * working on the user's behalf after this client disconnects. Same step-up
+   * shape as `revokeUserSession`: the renderer passes its ordinary bearer plus
+   * whether the boundary should swap in the retained step-up credential, and
+   * never handles the raw step-up bearer itself.
+   *
+   * Unlike the revoke calls, the RESULT here carries live credentials (a
+   * host-audience access JWS and a refresh JWE). They necessarily cross back
+   * into the renderer, because the stream socket that must carry them to the
+   * host lives there.
+   */
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+    useStepUpCredential: boolean,
+  ): Promise<MintHostCredentialFetchResult>;
+
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;

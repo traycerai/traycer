@@ -217,6 +217,8 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     revokeAllSessions: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    mintHostCredential: () =>
+      Promise.resolve({ kind: "network-error" as const }),
     requestStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>

@@ -33,16 +33,19 @@ import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import {
   listUserSessionsViaHttp,
   requestStepUpChallengeViaHttp,
+  mintHostCredentialViaHttp,
   revokeAllSessionsViaHttp,
   revokeUserSessionViaHttp,
   toRetainedStepUpVerifyResult,
   verifyStepUpChallengeViaHttp,
   type ListUserSessionsFetchResult,
+  type MintHostCredentialFetchResult,
   type RetainedStepUpVerifyFetchResult,
   type RevokeAllSessionsFetchResult,
   type RevokeUserSessionFetchResult,
   type StepUpChallengeFetchResult,
 } from "../../auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import {
   credentialsIdentityFromAuthenticatedUser,
   refreshOnceAbortable,
@@ -234,6 +237,25 @@ export class MockRunnerHost implements IRunnerHost {
       this.activeRetainedStepUpToken() ?? bearerToken,
     );
     this.retainedStepUpCredential = null;
+    return result;
+  }
+
+  async mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+    useStepUpCredential: boolean,
+  ): Promise<MintHostCredentialFetchResult> {
+    const stepUpToken = useStepUpCredential
+      ? this.activeRetainedStepUpToken()
+      : null;
+    const result = await mintHostCredentialViaHttp(
+      this.authnBaseUrl,
+      stepUpToken ?? bearerToken,
+      request,
+    );
+    if (result.kind === "step-up-required" && useStepUpCredential) {
+      this.retainedStepUpCredential = null;
+    }
     return result;
   }
 

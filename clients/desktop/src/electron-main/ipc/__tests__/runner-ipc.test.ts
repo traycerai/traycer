@@ -610,6 +610,7 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.listUserSessions,
         RunnerHostInvoke.revokeUserSession,
         RunnerHostInvoke.revokeAllSessions,
+        RunnerHostInvoke.mintHostCredential,
         RunnerHostInvoke.requestStepUpChallenge,
         RunnerHostInvoke.verifyStepUpChallenge,
         RunnerHostInvoke.notificationShow,
@@ -2203,6 +2204,168 @@ describe("RunnerIpcBridge", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("mints a host credential with the retained step-up token and never returns it to the renderer", async () => {
+    // The renderer only ever sees { expires_in } from verify and the mint
+    // result — the step-up bearer stays in main and is swapped in when
+    // useStepUpCredential is true.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
+      const url = input.toString();
+      if (url.endsWith("/api/v3/user/step-up/verify")) {
+        return jsonResponse(200, {
+          access_token: "step-up-secret",
+          token_type: "Bearer",
+          expires_in: 900,
+        });
+      }
+      if (url.endsWith("/api/v3/hosts/token")) {
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          "Bearer step-up-secret",
+        );
+        return jsonResponse(200, {
+          token: "host-access-jws",
+          refreshToken: "host-refresh-jwe",
+          familyId: "family-host-1",
+          hostId: "host-abc",
+          expiresIn: 900,
+          provisionedAt: "2026-07-08T12:00:00.000Z",
+        });
+      }
+      throw new Error(`unexpected authn URL ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const verifyHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.verifyStepUpChallenge,
+    );
+    const mintHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.mintHostCredential,
+    );
+    if (verifyHandler === undefined || mintHandler === undefined) {
+      throw new Error("mintHostCredential step-up handlers missing");
+    }
+
+    const verifyResult = await verifyHandler(bareEvent(), "user-jwt", "123456");
+    expect(verifyResult).toEqual({
+      kind: "ok",
+      response: { expires_in: 900 },
+    });
+    // Renderer must never observe the step-up bearer.
+    expect(JSON.stringify(verifyResult)).not.toContain("step-up-secret");
+
+    const mintResult = await mintHandler(
+      bareEvent(),
+      "user-jwt",
+      { hostId: "host-abc", hostLabel: "Mac", platform: null },
+      true,
+    );
+    expect(mintResult).toEqual({
+      kind: "ok",
+      response: {
+        token: "host-access-jws",
+        refreshToken: "host-refresh-jwe",
+        familyId: "family-host-1",
+        hostId: "host-abc",
+        expiresIn: 900,
+        provisionedAt: "2026-07-08T12:00:00.000Z",
+      },
+    });
+    expect(JSON.stringify(mintResult)).not.toContain("step-up-secret");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("clears the retained step-up credential when mint still answers step-up-required", async () => {
+    // Stale retained credential: server rejects it, main must drop it so the
+    // next attempt re-challenges instead of replaying a dead token.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
+      const url = input.toString();
+      if (url.endsWith("/api/v3/user/step-up/verify")) {
+        return jsonResponse(200, {
+          access_token: "step-up-stale",
+          token_type: "Bearer",
+          expires_in: 900,
+        });
+      }
+      if (url.endsWith("/api/v3/hosts/token")) {
+        const auth = (init?.headers as Record<string, string>).Authorization;
+        if (auth === "Bearer step-up-stale") {
+          return jsonResponse(401, { reason: "step_up_required" });
+        }
+        if (auth === "Bearer user-jwt") {
+          return jsonResponse(401, { reason: "step_up_required" });
+        }
+        throw new Error(`unexpected Authorization ${auth}`);
+      }
+      throw new Error(`unexpected authn URL ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const verifyHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.verifyStepUpChallenge,
+    );
+    const mintHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.mintHostCredential,
+    );
+    if (verifyHandler === undefined || mintHandler === undefined) {
+      throw new Error("mintHostCredential step-up handlers missing");
+    }
+
+    await verifyHandler(bareEvent(), "user-jwt", "123456");
+    await expect(
+      mintHandler(
+        bareEvent(),
+        "user-jwt",
+        { hostId: "host-abc", hostLabel: null, platform: null },
+        true,
+      ),
+    ).resolves.toEqual({ kind: "step-up-required" });
+
+    // Retained credential was cleared: a subsequent mint with
+    // useStepUpCredential=true falls back to the user bearer.
+    await expect(
+      mintHandler(
+        bareEvent(),
+        "user-jwt",
+        { hostId: "host-abc", hostLabel: null, platform: null },
+        true,
+      ),
+    ).resolves.toEqual({ kind: "step-up-required" });
+
+    const hostTokenCalls = fetchMock.mock.calls.filter((call) =>
+      call[0].toString().endsWith("/api/v3/hosts/token"),
+    );
+    expect(hostTokenCalls).toHaveLength(2);
+    const secondAuth = (
+      hostTokenCalls[1]?.[1]?.headers as Record<string, string> | undefined
+    )?.Authorization;
+    expect(secondAuth).toBe("Bearer user-jwt");
     bridge.dispose();
   });
 

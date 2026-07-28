@@ -32,8 +32,10 @@ export type DesktopTrayIndicatorState = "idle" | "active" | "attention";
  */
 export type {
   ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
   RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+export type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";

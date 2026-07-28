@@ -33,6 +33,7 @@ import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
 } from "../host/pid-metadata";
+import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
 import {
   createCliCredentialsStore,
@@ -195,6 +196,17 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // back off and re-subscribe on `network-error`), so wiring the client
     // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
     auth: null,
+    // Delegated host-credential provisioning. `monitor` is the CLI command that
+    // most needs it - the host it watches should keep serving after this process
+    // exits - but it usually runs as a BACKGROUND command inside a TUI session,
+    // where an OTP prompt would be written to a stream nobody reads. So the flow
+    // is interactive only on a real terminal, and declines everywhere else.
+    hostCredentialMint: createCliHostCredentialMintFlow({
+      authnBaseUrl: auth.authnBaseUrl,
+      bearer: () => readLeaseBearer(lease),
+      interactive: isInteractiveTerminal(),
+      diag: (message) => diag(message),
+    }),
     webSocketFactory: createWhatwgStreamWebSocketFactory(),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
@@ -686,4 +698,22 @@ function printReceiverCancelledNotice(
 
 function diag(message: string): void {
   process.stderr.write(`[traycer monitor] ${message}\n`);
+}
+
+/**
+ * Whether a human is present to answer a prompt. Both streams must be a TTY -
+ * a background command inherits pipes, not a terminal - and the standard CI /
+ * `TRAYCER_NONINTERACTIVE` opt-outs are honoured the same way `RuntimeContext`
+ * reads them, so an automated run never blocks on stdin.
+ */
+function isInteractiveTerminal(): boolean {
+  if (envFlag(process.env.CI) || envFlag(process.env.TRAYCER_NONINTERACTIVE)) {
+    return false;
+  }
+  return process.stdin.isTTY === true && process.stderr.isTTY === true;
+}
+
+function envFlag(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  return value !== "" && value !== "0" && value !== "false";
 }

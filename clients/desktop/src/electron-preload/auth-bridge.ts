@@ -14,6 +14,8 @@ import type {
 } from "../ipc-contracts/auth-types";
 import type {
   ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  MintHostCredentialRequest,
   RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
@@ -74,6 +76,11 @@ export interface AuthBridgeSurface {
     useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult>;
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+    useStepUpCredential: boolean,
+  ): Promise<MintHostCredentialFetchResult>;
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;
@@ -112,6 +119,14 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.revokeAllSessions,
         bearerToken,
       ) as Promise<RevokeAllSessionsFetchResult>,
+
+    mintHostCredential: (bearerToken, request, useStepUpCredential) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintHostCredential,
+        bearerToken,
+        request,
+        useStepUpCredential,
+      ) as Promise<MintHostCredentialFetchResult>,
 
     requestStepUpChallenge: (bearerToken) =>
       ipcRenderer.invoke(

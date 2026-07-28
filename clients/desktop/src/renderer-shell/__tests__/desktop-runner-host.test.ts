@@ -100,6 +100,7 @@ function buildFakeBridge(
     listUserSessions: async () => ({ kind: "network-error" as const }),
     revokeUserSession: async () => ({ kind: "network-error" as const }),
     revokeAllSessions: async () => ({ kind: "network-error" as const }),
+    mintHostCredential: async () => ({ kind: "network-error" as const }),
     requestStepUpChallenge: async () => ({ kind: "network-error" as const }),
     verifyStepUpChallenge: async () => ({ kind: "network-error" as const }),
     openExternalLink: async () => undefined,

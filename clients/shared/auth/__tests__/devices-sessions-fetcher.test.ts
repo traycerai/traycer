@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listUserSessionsViaHttp,
+  mintHostCredentialViaHttp,
   revokeAllSessionsViaHttp,
   revokeUserSessionViaHttp,
   toRetainedStepUpVerifyResult,
@@ -122,6 +123,97 @@ describe("devices/sessions authn fetcher", () => {
     ).toEqual({
       kind: "ok",
       response: { expires_in: 900 },
+    });
+  });
+
+  describe("mintHostCredentialViaHttp", () => {
+    const request = {
+      hostId: "host-abc",
+      hostLabel: "Mac",
+      platform: null,
+    };
+
+    const okBody = {
+      token: "host-access-jws",
+      refreshToken: "host-refresh-jwe",
+      familyId: "family-host-1",
+      hostId: "host-abc",
+      expiresIn: 900,
+      provisionedAt: "2026-07-08T12:00:00.123Z",
+    };
+
+    it("POSTs /api/v3/hosts/token and parses a provisioned response", async () => {
+      const fetchMock = vi.fn(
+        async (_url: string, _init: RequestInit | undefined) =>
+          jsonResponse(200, okBody),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await mintHostCredentialViaHttp(
+        AUTHN,
+        "step-up-jwt",
+        request,
+      );
+
+      expect(result).toEqual({ kind: "ok", response: okBody });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("https://authn.example.test/api/v3/hosts/token");
+      expect(init?.method).toBe("POST");
+      expect((init?.headers as Record<string, string>).Authorization).toBe(
+        "Bearer step-up-jwt",
+      );
+      expect(JSON.parse(String(init?.body))).toEqual(request);
+    });
+
+    it("maps 409 to superseded so the caller retries WITHOUT handoff", async () => {
+      // 409 means another client won the race and its credential is already on
+      // the way. Returning a body (or ok) would hand the host a retired row.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => jsonResponse(409, { error: "superseded" })),
+      );
+
+      const result = await mintHostCredentialViaHttp(AUTHN, "jwt", request);
+
+      expect(result).toEqual({ kind: "superseded" });
+    });
+
+    it("maps 401 step_up_required to step-up-required", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => jsonResponse(401, { reason: "step_up_required" })),
+      );
+
+      const result = await mintHostCredentialViaHttp(AUTHN, "jwt", request);
+
+      expect(result).toEqual({ kind: "step-up-required" });
+    });
+
+    it("fails closed when provisionedAt is unparseable (network-error, not ok)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          jsonResponse(200, {
+            ...okBody,
+            provisionedAt: "yesterday-ish",
+          }),
+        ),
+      );
+
+      const result = await mintHostCredentialViaHttp(AUTHN, "jwt", request);
+
+      expect(result).toEqual({ kind: "network-error" });
+    });
+
+    it("maps 400 to rejected (unmintable hostId)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => jsonResponse(400, { error: "invalid hostId" })),
+      );
+
+      const result = await mintHostCredentialViaHttp(AUTHN, "jwt", request);
+
+      expect(result).toEqual({ kind: "rejected" });
     });
   });
 });

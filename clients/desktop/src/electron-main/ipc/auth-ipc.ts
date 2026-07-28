@@ -4,6 +4,7 @@ import {
 } from "../../ipc-contracts/ipc-channels";
 import {
   listUserSessionsViaHttp,
+  mintHostCredentialViaHttp,
   requestStepUpChallengeViaHttp,
   revokeAllSessionsViaHttp,
   revokeUserSessionViaHttp,
@@ -15,6 +16,7 @@ import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-type
 import {
   assertString,
   parseDesktopAuthSession,
+  parseMintHostCredentialRequest,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
   parseTokenRotateExpected,
@@ -169,6 +171,38 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         stepUpToken ?? bearerToken,
       );
       retainedStepUpCredential = null;
+      return result;
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.mintHostCredential,
+    async (
+      _event,
+      bearerToken: unknown,
+      request: unknown,
+      useStepUpCredential: unknown,
+    ) => {
+      assertString(bearerToken, "mintHostCredential.bearerToken");
+      assertBoolean(
+        useStepUpCredential,
+        "mintHostCredential.useStepUpCredential",
+      );
+      const stepUpToken = useStepUpCredential
+        ? activeRetainedStepUpToken(retainedStepUpCredential, Date.now())
+        : null;
+      const result = await mintHostCredentialViaHttp(
+        bridge.options.authnBaseUrl,
+        stepUpToken ?? bearerToken,
+        parseMintHostCredentialRequest(request),
+      );
+      // Same drop rule as `revokeUserSession`: if the server says step-up is
+      // still required while we believed we held a fresh credential, the one we
+      // held is stale - clear it so the retry actually re-challenges instead of
+      // replaying a dead token.
+      if (result.kind === "step-up-required" && useStepUpCredential) {
+        retainedStepUpCredential = null;
+      }
       return result;
     },
   );

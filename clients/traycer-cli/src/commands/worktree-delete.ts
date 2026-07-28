@@ -111,6 +111,11 @@ async function runWorktreeDeleteStream(
     endpoint: () => endpoint,
     bearer: () => lease,
     auth: null,
+    // No provisioning here: this is a one-shot command, and interrupting
+    // `traycer worktree delete` with an email-OTP challenge would be a
+    // surprise the user did not ask for. `traycer monitor` is the CLI's
+    // provisioning surface.
+    hostCredentialMint: null,
     webSocketFactory: createWhatwgStreamWebSocketFactory(),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,

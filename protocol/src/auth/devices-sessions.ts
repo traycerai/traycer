@@ -42,6 +42,48 @@ export type RevokeAllSessionsResponse = {
   };
 };
 
+/**
+ * `POST /api/v3/hosts/token` request - the delegated host-credential mint. The
+ * CLIENT calls this with its own step-up-fresh bearer on behalf of the host it
+ * is connected to; the host never calls it for itself.
+ */
+export type MintHostCredentialRequest = {
+  /** The host's durable id, taken from the endpoint this connection dialed. */
+  hostId: string;
+  /** Human label for the machine, shown in Devices & Sessions. */
+  hostLabel: string | null;
+  /** OS/platform string; the server falls back to a UA-derived value on null. */
+  platform: string | null;
+};
+
+/**
+ * The minted host credential, relayed straight to the host over the stream. The
+ * refresh token is a single-use JWE that is OPAQUE to both the client and the
+ * host - only authn-v3 can decrypt it - so neither can validate it locally.
+ */
+export type MintHostCredentialResponse = {
+  /** Host-audience access JWS (`aud: "host"`), hard-capped at 15 minutes. */
+  token: string;
+  refreshToken: string;
+  /** The credential's own refresh family - also its Devices & Sessions row id. */
+  familyId: string;
+  hostId: string;
+  expiresIn: number;
+  /**
+   * When the server recorded this credential, ISO-8601 at millisecond
+   * resolution.
+   *
+   * **A host deciding which of two provisioned credentials to keep must compare
+   * the tuple `(provisionedAt, familyId)` - never the access token's `iat`.**
+   * That tuple is the same total order the server's supersede sweep uses, and
+   * `familyId` is the server's own tie-break when two rows share a timestamp.
+   * Signing order and row order are NOT the same order (a mint records its row
+   * before it signs), so a host ordering by `iat` can adopt the credential the
+   * server retired and then sit tokenless.
+   */
+  provisionedAt: string;
+};
+
 export type StepUpChallengeResponse = {
   ok: true;
   expires_in: number;
@@ -96,6 +138,26 @@ export const revokeAllSessionsResponseSchema: z.ZodType<RevokeAllSessionsRespons
           githubProviderTokenHours: z.number().nonnegative(),
         })
         .strict(),
+    })
+    .strict();
+
+export const mintHostCredentialResponseSchema: z.ZodType<MintHostCredentialResponse> =
+  z
+    .object({
+      token: z.string().min(1),
+      refreshToken: z.string().min(1),
+      familyId: z.string().min(1),
+      hostId: z.string().min(1),
+      expiresIn: z.number().int().positive(),
+      // Parseability is checked here rather than left to the host: the host's
+      // adoption rule ORDERS by this value, and an unparseable one degrades to
+      // `NaN` comparisons that silently answer "neither is newer". Failing at
+      // the HTTP boundary keeps that from becoming a stuck-tokenless host.
+      provisionedAt: z
+        .string()
+        .refine((value) => !Number.isNaN(Date.parse(value)), {
+          message: "provisionedAt must be a parseable timestamp",
+        }),
     })
     .strict();
 

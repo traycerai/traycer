@@ -35,6 +35,10 @@ export const RunnerHostInvoke = {
   listUserSessions: "runnerHost:auth:sessions:list",
   revokeUserSession: "runnerHost:auth:sessions:revoke",
   revokeAllSessions: "runnerHost:auth:sessions:revokeAll",
+  // Delegated host-credential mint. Same main-process placement as the revoke
+  // calls, with the added reason that the retained step-up bearer must never
+  // reach the renderer.
+  mintHostCredential: "runnerHost:auth:hosts:mintCredential",
   requestStepUpChallenge: "runnerHost:auth:stepUp:challenge",
   verifyStepUpChallenge: "runnerHost:auth:stepUp:verify",
   openExternalLink: "runnerHost:openExternalLink",

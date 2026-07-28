@@ -1,10 +1,13 @@
 import {
   listUserSessionsResponseSchema,
+  mintHostCredentialResponseSchema,
   revokeAllSessionsResponseSchema,
   revokeUserSessionResponseSchema,
   stepUpChallengeResponseSchema,
   verifyStepUpResponseSchema,
   type ListUserSessionsResponse,
+  type MintHostCredentialRequest,
+  type MintHostCredentialResponse,
   type RevokeAllSessionsResponse,
   type RevokeUserSessionResponse,
   type StepUpChallengeResponse,
@@ -30,6 +33,24 @@ export type RevokeUserSessionFetchResult =
 export type RevokeAllSessionsFetchResult =
   | { readonly kind: "ok"; readonly response: RevokeAllSessionsResponse }
   | { readonly kind: "step-up-required" }
+  | { readonly kind: "unauthorized" }
+  | { readonly kind: "network-error" };
+
+/**
+ * Outcomes of the delegated host-credential mint.
+ *
+ * `superseded` is the 409: another client provisioned this same host
+ * concurrently and won the server's ordering, so THIS request's row was retired
+ * server-side. There is no credential to hand over - the caller must treat it as
+ * retry-WITHOUT-handoff and never pass a 409 body to a host. The winner's
+ * credential is already on its way, so the honest recovery is to do nothing and
+ * let the next connection's `hostCredentialState` report `active`.
+ */
+export type MintHostCredentialFetchResult =
+  | { readonly kind: "ok"; readonly response: MintHostCredentialResponse }
+  | { readonly kind: "step-up-required" }
+  | { readonly kind: "superseded" }
+  | { readonly kind: "rejected" }
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error" };
 
@@ -201,6 +222,60 @@ export async function revokeAllSessionsViaHttp(
     return { kind: "network-error" };
   }
   const parsed = await parseOk(response, revokeAllSessionsResponseSchema);
+  return parsed === null
+    ? { kind: "network-error" }
+    : { kind: "ok", response: parsed };
+}
+
+/**
+ * Mints a device credential for `hostId` on the caller's behalf. Always
+ * step-up-gated server-side, including for a host that already has one - the
+ * re-mint path is exactly the shape a stolen bearer's attack takes, so it is not
+ * exempted.
+ *
+ * `bearerToken` must be the step-up-fresh token when one is held; on desktop
+ * that swap happens in the main process, so the renderer never sees it.
+ */
+export async function mintHostCredentialViaHttp(
+  authnBaseUrl: string,
+  bearerToken: string,
+  request: MintHostCredentialRequest,
+): Promise<MintHostCredentialFetchResult> {
+  const response = await fetchAuthn(
+    authnBaseUrl,
+    "api/v3/hosts/token",
+    bearerToken,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    },
+  );
+  if (response === null) {
+    return { kind: "network-error" };
+  }
+  if (await isStepUpRequired(response)) {
+    return { kind: "step-up-required" };
+  }
+  if (response.status === 409) {
+    return { kind: "superseded" };
+  }
+  if (response.status === 401 || response.status === 403) {
+    return { kind: "unauthorized" };
+  }
+  if (response.status === 400) {
+    // The server refused this hostId outright (not a UUID, or oversized). No
+    // retry can fix it, and a host that cannot hold a delegated credential is
+    // meant to stay on the client-lease fallback - so this is terminal for the
+    // host, not an error to surface to the user.
+    return { kind: "rejected" };
+  }
+  if (response.status < 200 || response.status >= 300) {
+    // Includes 429 (the per-user mint budget): transient from the client's
+    // point of view, and the fallback while it lasts is simply no host
+    // credential.
+    return { kind: "network-error" };
+  }
+  const parsed = await parseOk(response, mintHostCredentialResponseSchema);
   return parsed === null
     ? { kind: "network-error" }
     : { kind: "ok", response: parsed };

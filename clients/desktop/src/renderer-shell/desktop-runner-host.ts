@@ -79,11 +79,13 @@ export type {
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
 import type {
   ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
   RetainedStepUpVerifyFetchResult,
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
@@ -140,6 +142,11 @@ export interface DesktopPreloadBridge {
     useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult>;
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+    useStepUpCredential: boolean,
+  ): Promise<MintHostCredentialFetchResult>;
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;
@@ -762,6 +769,18 @@ export class DesktopRunnerHost implements IRunnerHost {
     bearerToken: string,
   ): Promise<RevokeAllSessionsFetchResult> {
     return this.bridge.revokeAllSessions(bearerToken);
+  }
+
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+    useStepUpCredential: boolean,
+  ): Promise<MintHostCredentialFetchResult> {
+    return this.bridge.mintHostCredential(
+      bearerToken,
+      request,
+      useStepUpCredential,
+    );
   }
 
   requestStepUpChallenge(
