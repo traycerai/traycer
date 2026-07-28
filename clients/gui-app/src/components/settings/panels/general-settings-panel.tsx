@@ -44,6 +44,9 @@ import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-cle
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
 import { modLabel } from "@/lib/keybindings/platform";
+import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
+import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
+import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 const SNAPSHOTS_LOCAL_STORAGE_PARAMS = {};
@@ -115,6 +118,9 @@ export function GeneralSettingsPanel() {
     (s) => s.setSteerOnModEnterEnabled,
   );
   const compact = useSettingsDensity() === "compact";
+  const featureSettings = useRunnerFeatureSettingsQuery();
+  const setAgentRoles = useRunnerAgentRolesSet();
+  const featureSettingsAvailable = getFeatureSettingsBridge() !== null;
 
   return (
     <SettingsPanelShell
@@ -223,6 +229,37 @@ export function GeneralSettingsPanel() {
             }
           />
         </SettingsGroup>
+
+        {featureSettingsAvailable ? (
+          <SettingsGroup
+            title="Experimental"
+            tone="default"
+            dataTestId={undefined}
+            fill={false}
+          >
+            <SettingsRow
+              label="Agent roles"
+              description={
+                featureSettings.isError
+                  ? "Couldn't read feature settings. Fix or delete ~/.traycer/cli/config.json, then reopen Settings."
+                  : "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts."
+              }
+              control={
+                <Switch
+                  checked={featureSettings.data?.agentRoles === true}
+                  disabled={
+                    featureSettings.data === undefined ||
+                    setAgentRoles.isPending
+                  }
+                  onCheckedChange={(enabled) => {
+                    setAgentRoles.mutate(enabled);
+                  }}
+                  aria-label="Agent roles"
+                />
+              }
+            />
+          </SettingsGroup>
+        ) : null}
 
         <SettingsGroup
           title="Setup & migration"

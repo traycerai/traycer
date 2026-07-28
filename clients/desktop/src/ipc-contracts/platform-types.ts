@@ -99,6 +99,10 @@ export interface LogLevelsSnapshot {
   readonly desktopLogLevel: LogLevel;
 }
 
+export interface FeatureSettingsSnapshot {
+  readonly agentRoles: boolean;
+}
+
 /** A font family installed on this machine, offered by the Appearance font pickers. */
 export interface InstalledFont {
   readonly family: string;

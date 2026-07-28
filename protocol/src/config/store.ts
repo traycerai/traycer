@@ -18,6 +18,7 @@ import {
   CLI_CONFIG_VERSION,
   EMPTY_CLI_CONFIG,
   type CliConfig,
+  type FeatureSettings,
   type DetectedShell,
   type EnvOverrideValue,
   type EffectiveShellConfig,
@@ -750,6 +751,7 @@ export async function setShell(
     shell: { path: nextPath, args: nextArgs, entries },
     envOverrides: current.envOverrides,
     logs: current.logs,
+    features: current.features,
   });
   return { path: nextPath, args: nextArgs };
 }
@@ -779,6 +781,7 @@ export async function addShell(
     shell: { path, args, entries },
     envOverrides: current.envOverrides,
     logs: current.logs,
+    features: current.features,
   });
   return { path, entries };
 }
@@ -819,6 +822,7 @@ export async function revertShellArgs(
     shell: { path: current.shell.path, args: nextArgs, entries },
     envOverrides: current.envOverrides,
     logs: current.logs,
+    features: current.features,
   });
   return { path, reverted: true };
 }
@@ -853,6 +857,7 @@ export async function removeShell(
     shell: { path: nextPath, args: nextArgs, entries },
     envOverrides: current.envOverrides,
     logs: current.logs,
+    features: current.features,
   });
   return { removed, path: nextPath };
 }
@@ -870,6 +875,7 @@ export async function resetShell(): Promise<void> {
     shell: { path: null, args: null, entries: current.shell.entries },
     envOverrides: current.envOverrides,
     logs: current.logs,
+    features: current.features,
   });
 }
 
@@ -888,6 +894,7 @@ export async function setLogLevels(
     shell: current.shell,
     envOverrides: current.envOverrides,
     logs: { cliLogLevel, hostLogLevel },
+    features: current.features,
   });
 }
 
@@ -913,6 +920,35 @@ export function readLogLevelsSync(): LogsConfig {
   return { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL };
 }
 
+/** The local experimental feature settings (defaults when unset). */
+export async function readFeatureSettings(): Promise<FeatureSettings> {
+  return (await readCliConfig()).features;
+}
+
+/**
+ * Best-effort synchronous feature read for command, prompt, tool, and operation
+ * gates. Feature checks fail closed when the config is absent or invalid.
+ */
+export function readFeatureSettingsSync(): FeatureSettings {
+  try {
+    const raw = readFileSync(cliConfigPath(), "utf8");
+    const result = cliConfigSchema.safeParse(migrateCliConfig(JSON.parse(raw)));
+    if (result.success) return result.data.features;
+  } catch {
+    // Feature gates must remain safe even when config cannot be read.
+  }
+  return { agentRoles: false };
+}
+
+/** Enables or disables agent roles while preserving the rest of the config. */
+export async function setAgentRolesEnabled(enabled: boolean): Promise<void> {
+  const current = await readCliConfig();
+  await writeCliConfig({
+    ...current,
+    features: { ...current.features, agentRoles: enabled },
+  });
+}
+
 export async function listEnvOverrides(): Promise<
   Readonly<Record<string, EnvOverrideValue>>
 > {
@@ -935,6 +971,7 @@ export async function setEnvOverride(
     shell: current.shell,
     envOverrides: { ...current.envOverrides, [key]: value },
     logs: current.logs,
+    features: current.features,
   });
 }
 
@@ -950,6 +987,7 @@ export async function deleteEnvOverride(key: string): Promise<boolean> {
     shell: current.shell,
     envOverrides: nextOverrides,
     logs: current.logs,
+    features: current.features,
   });
   return true;
 }

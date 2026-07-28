@@ -122,6 +122,13 @@ interface TestRunnerHost {
   hostManagement: { uninstallTraycer: Mock } | null;
 }
 
+interface TestFeatureSettingsBridge {
+  readonly get: Mock<() => Promise<{ readonly agentRoles: boolean }>>;
+  readonly setAgentRolesEnabled: Mock<
+    (enabled: boolean) => Promise<{ readonly agentRoles: boolean }>
+  >;
+}
+
 const runnerHostMock = vi.hoisted((): { current: TestRunnerHost } => ({
   current: { hostManagement: null },
 }));
@@ -263,6 +270,80 @@ describe("GeneralSettingsPanel", () => {
     useAuthStore.getState().setSignedOut();
     useLocalSnapshotClearStore.setState({ clearedAtByScope: {} });
     useOnboardingStore.setState({ completedAt: null, step: 0 });
+    delete (globalThis as { runnerHost?: unknown }).runnerHost;
+  });
+
+  it("hydrates and updates Agent roles under Experimental", async () => {
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+      setAgentRolesEnabled: vi.fn((enabled) =>
+        Promise.resolve({ agentRoles: enabled }),
+      ),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    expect(screen.getByText("Experimental")).toBeTruthy();
+    const toggle = screen.getByRole("switch", { name: "Agent roles" });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(bridge.setAgentRolesEnabled).toHaveBeenCalledWith(true),
+    );
+    await waitFor(() =>
+      expect(toggle.getAttribute("aria-checked")).toBe("true"),
+    );
+  });
+
+  it("surfaces feature-settings read failures and keeps Agent roles disabled", async () => {
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.reject(new Error("invalid config"))),
+      setAgentRolesEnabled: vi.fn((enabled) =>
+        Promise.resolve({ agentRoles: enabled }),
+      ),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    expect(
+      await screen.findByText(/Couldn't read feature settings/),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByRole("switch", { name: "Agent roles" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    expect(bridge.setAgentRolesEnabled).not.toHaveBeenCalled();
+  });
+
+  it("preserves the Agent roles value when the settings write fails", async () => {
+    const bridge: TestFeatureSettingsBridge = {
+      get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+      setAgentRolesEnabled: vi.fn(() =>
+        Promise.reject(new Error("write failed")),
+      ),
+    };
+    (globalThis as { runnerHost?: unknown }).runnerHost = {
+      platform: { featureSettings: bridge },
+    };
+
+    renderPanel();
+
+    const toggle = screen.getByRole("switch", { name: "Agent roles" });
+    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(bridge.setAgentRolesEnabled).toHaveBeenCalledWith(true),
+    );
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
   it("renders the Data migration row and starts the stream on click", () => {
