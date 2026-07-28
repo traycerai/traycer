@@ -33,29 +33,31 @@ export function EpicConnectionPill() {
   const tooltip = rawIndicator.tooltip;
 
   return (
-    <TooltipWrapper
-      label={tooltip}
-      side="top"
-      sideOffset={undefined}
-      align={undefined}
-    >
-      <button
-        type="button"
-        data-testid="epic-connection-pill"
-        data-status={state}
-        aria-label={rawIndicator.ariaLabel}
-        className={cn(
-          "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-          indicator.containerClassName,
-        )}
+    <>
+      <TooltipWrapper
+        label={tooltip}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <ConnectionPillDot indicator={indicator} />
-        {indicator.label}
-        <span className="sr-only" role="status" aria-live="polite">
-          {warningAnnouncement(state, indicator)}
-        </span>
-      </button>
-    </TooltipWrapper>
+        <button
+          type="button"
+          data-testid="epic-connection-pill"
+          data-status={state}
+          aria-label={rawIndicator.ariaLabel}
+          className={cn(
+            "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            indicator.containerClassName,
+          )}
+        >
+          <ConnectionPillDot indicator={indicator} />
+          {indicator.label}
+        </button>
+      </TooltipWrapper>
+      <span className="sr-only" role="status" aria-live="polite">
+        {warningAnnouncement(state, indicator)}
+      </span>
+    </>
   );
 }
 

@@ -214,6 +214,11 @@ describe("<EpicConnectionPill />", () => {
     expect(screen.getByRole("status").textContent).toContain(
       "Some recent changes are still being saved",
     );
+    expect(
+      screen
+        .getByTestId("epic-connection-pill")
+        .contains(screen.getByRole("status")),
+    ).toBe(false);
   });
 
   it("shows host-pending offline work without claiming it is durable", async () => {
