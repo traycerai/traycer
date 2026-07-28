@@ -741,6 +741,28 @@ describe("AuthService", () => {
     expect(calls).toEqual(["begin", "open"]);
   });
 
+  it("flips device progress to finalizing the moment the poll authorizes", async () => {
+    const { service, host } = makeService();
+    await service.start();
+    await service.signIn();
+    expect(service.getDeviceProgress()?.phase).toBe("waiting-approval");
+
+    host.deviceFlow.emitResult({
+      kind: "authorized",
+      token: "new-token",
+      refreshToken: "new-token-refresh",
+    });
+
+    // Synchronously after the authorized result - before validation/persist
+    // settle - the surface must stop claiming the approval hasn't arrived.
+    expect(service.getDeviceProgress()?.phase).toBe("finalizing");
+
+    await vi.waitFor(() => {
+      expect(useAuthStore.getState().status).toBe("signed-in");
+    });
+    expect(service.getDeviceProgress()).toBeNull();
+  });
+
   it("hits /api/v3/user (NOT the legacy /api/user) when validating a token", async () => {
     const { service, host } = makeService();
     await host.tokenStore.signIn(
