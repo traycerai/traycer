@@ -1629,7 +1629,6 @@ describe("WorktreesList delete flow", () => {
     expect(invalidateSpy).toHaveBeenCalledTimes(
       WORKTREE_BINDING_INVALIDATIONS.length + 2,
     );
-    expect(invalidateSpy).toHaveBeenCalledTimes(1);
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-a", "worktree.listAllForHost"),
       refetchType: "active",
