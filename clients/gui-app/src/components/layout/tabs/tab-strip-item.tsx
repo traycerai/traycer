@@ -337,7 +337,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             // A split half shares the group's silhouette and only has half the
             // width, so it trades the tab's generous side padding for enough
             // room to still show an icon plus a readable title.
-            chrome === "member" && "gap-1 px-1.5",
+            chrome === "member" && cn("gap-1", isActive ? "px-5" : "px-1.5"),
             tabStateClass(isActive),
             NO_DRAG_CLASS,
             "cursor-pointer",
@@ -724,32 +724,26 @@ function StripPairPreview(props: {
 }
 
 /**
- * Focus treatment for one half of a split group.
- *
- * A filled panel was tried first and read as a control pasted inside the tab:
- * the halves sit inside the group's side padding, so any fill floats short of
- * the tab edges instead of looking like a region of it. The focused side is
- * marked with the same accent rule the canvas strip uses for its active tab,
- * spanning exactly that half - a deliberate marker rather than a shape - and
- * carried by the weight/colour split `tabStateClass` already applies. The
- * remaining wash is hover affordance only, so it stays soft and inset.
+ * Selection treatment for one member of a split group. The focused member uses
+ * the same raised silhouette as an ordinary selected tab; group membership is
+ * communicated independently by the split group's accent underline.
  */
 export function SplitMemberChrome(props: { readonly focused: boolean }) {
-  return (
-    <>
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
+  if (props.focused) {
+    return (
+      <TabChromeBackground
+        fill="var(--color-background)"
+        borderColor="var(--color-primary)"
+        coversBaseline
       />
-      {props.focused ? (
-        <DropLine
-          orientation="horizontal"
-          glow={false}
-          className="absolute inset-x-0 top-0 z-20 animate-in fade-in slide-in-from-bottom-1 duration-200 ease-spring"
-          testId="split-member-focus-accent"
-        />
-      ) : null}
-    </>
+    );
+  }
+
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
+    />
   );
 }
 

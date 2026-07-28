@@ -7,6 +7,7 @@ import type {
   AccessibilityThemeSnapshot,
   BackgroundMaterial,
   DisplayTopology,
+  FeatureSettingsSnapshot,
   InstalledFont,
   LogLevel,
   LogLevelScope,
@@ -107,6 +108,10 @@ export interface PlatformBridgeSurface {
   logLevels: {
     get(): Promise<LogLevelsSnapshot>;
     set(scope: LogLevelScope, level: LogLevel): Promise<LogLevelsSnapshot>;
+  };
+  featureSettings: {
+    get(): Promise<FeatureSettingsSnapshot>;
+    setAgentRolesEnabled(enabled: boolean): Promise<FeatureSettingsSnapshot>;
   };
   fonts: {
     list(): Promise<readonly InstalledFont[]>;
@@ -298,6 +303,17 @@ export function buildPlatformBridge(): PlatformBridgeSurface {
           scope,
           level,
         }) as Promise<LogLevelsSnapshot>,
+    },
+    featureSettings: {
+      get: () =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.featureSettingsGet,
+        ) as Promise<FeatureSettingsSnapshot>,
+      setAgentRolesEnabled: (enabled) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.agentRolesEnabledSet,
+          enabled,
+        ) as Promise<FeatureSettingsSnapshot>,
     },
     fonts: {
       list: () =>

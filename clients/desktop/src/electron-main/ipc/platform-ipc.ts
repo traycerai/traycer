@@ -64,11 +64,17 @@ import {
   getDesktopLogLevel,
   setDesktopLogLevel,
 } from "../app/desktop-log-level";
-import { readLogLevels, setLogLevels } from "@traycer/protocol/config/store";
+import {
+  readFeatureSettings,
+  readLogLevels,
+  setAgentRolesEnabled,
+  setLogLevels,
+} from "@traycer/protocol/config/store";
 import { isLogLevel, type LogLevel } from "@traycer/protocol/config/log-level";
 import type {
   LogLevelScope,
   LogLevelsSnapshot,
+  FeatureSettingsSnapshot,
 } from "../../ipc-contracts/platform-types";
 
 /**
@@ -416,6 +422,22 @@ export function registerPlatformIpc(bridge: RunnerIpcBridge): void {
         );
       }
       return readLogLevelsSnapshot();
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.featureSettingsGet,
+    (): Promise<FeatureSettingsSnapshot> => readFeatureSettings(),
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.agentRolesEnabledSet,
+    async (_event, enabled: unknown): Promise<FeatureSettingsSnapshot> => {
+      if (typeof enabled !== "boolean") {
+        throw new Error("featureSettings:agentRoles:set requires a boolean");
+      }
+      await setAgentRolesEnabled(enabled);
+      return readFeatureSettings();
     },
   );
 
