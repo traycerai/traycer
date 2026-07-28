@@ -289,17 +289,18 @@ describe("useProfileRateLimitSwitchPrompt", () => {
     expect(
       result.current.destinations.map((entry) => entry.profile.label),
     ).toEqual(["Blocked", "Unknown", "Healthy", "Signed out"]);
-    // Unknown is NOT weakly healthy: absence of gauge evidence never powers
-    // the one-click switch. The proven-ok profile is the first selectable.
+    // Unknown is a deliberate menu option, but absence of gauge evidence
+    // never powers the one-click recommendation. The proven-ok profile is
+    // still the primary target.
     expect(
       result.current.destinations.map((entry) => entry.selectable),
-    ).toEqual([false, false, true, false]);
+    ).toEqual([false, true, true, false]);
     expect(result.current.primaryTarget?.profile.label).toBe("Healthy");
     // A known primary exists, so no automatic check is spent on the unknown.
     expect(result.current.probeTarget).toBeNull();
   });
 
-  it("keeps an unknown destination unselectable and nominates it as the probe target when no known primary exists", () => {
+  it("allows an authenticated unknown destination as an explicit choice without recommending it", () => {
     const current = profile({
       profileId: "ambient",
       kind: "ambient",
@@ -328,9 +329,13 @@ describe("useProfileRateLimitSwitchPrompt", () => {
 
     const { result } = currentPrompt(null);
     const prompt = visiblePrompt(result.current);
-    // Even against a HARD-limited current profile, unknown is incomparable -
-    // never strictly better, never the confident one-click button.
-    expect(prompt.destinations.every((entry) => !entry.selectable)).toBe(true);
+    // Unknown remains incomparable and therefore never becomes the confident
+    // one-click target. It is still available as a deliberate menu choice;
+    // the signed-out unknown profile is not.
+    expect(prompt.destinations.map((entry) => entry.selectable)).toEqual([
+      false,
+      true,
+    ]);
     expect(prompt.primaryTarget).toBeNull();
     // The single automatic check goes to the first AUTHENTICATED unknown.
     expect(prompt.probeTarget?.profile.label).toBe("Unknown");
@@ -519,6 +524,82 @@ describe("useProfileRateLimitSwitchPrompt", () => {
     const resurfaced = visiblePrompt(result.current);
     expect(resurfaced.severity).toBe("near_limit");
     expect(resurfaced.warningKey).not.toBe(firstWarningKey);
+  });
+
+  describe("dismissal re-arming around probe results", () => {
+    const source = profile({
+      profileId: "ambient",
+      kind: "ambient",
+      label: "Company",
+      rateLimitStatus: "near_limit",
+      rateLimitLimitedScopes: null,
+      authenticated: true,
+    });
+    const unknownA = profile({
+      profileId: "unknown-a",
+      kind: "managed",
+      label: "Unknown A",
+      rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      authenticated: true,
+    });
+    const unknownB = profile({
+      profileId: "unknown-b",
+      kind: "managed",
+      label: "Unknown B",
+      rateLimitStatus: "unknown",
+      rateLimitLimitedScopes: null,
+      authenticated: true,
+    });
+
+    it("re-arms a dismissed warning once an unknown destination is proven the recommended target", () => {
+      mocks.providers = [claudeState([source, unknownA, unknownB])];
+      const { result, rerender } = currentPrompt(null);
+      expect(result.current.kind).toBe("visible");
+      if (result.current.kind !== "visible") return;
+      expect(result.current.primaryTarget).toBeNull();
+      const dismissedKey = result.current.warningKey;
+      act(() => result.current.dismiss());
+      expect(result.current.kind).toBe("hidden");
+
+      // Probe proves unknown-a strictly better: it flips false -> true on
+      // its own `recommended` flag, so the key changes and the earlier
+      // dismissal doesn't carry over to the resurfaced, more confident
+      // warning.
+      mocks.providers = [
+        claudeState([source, { ...unknownA, rateLimitStatus: "ok" }, unknownB]),
+      ];
+      rerender();
+      const resurfaced = visiblePrompt(result.current);
+      expect(resurfaced.warningKey).not.toBe(dismissedKey);
+      expect(resurfaced.primaryTarget?.profile.label).toBe("Unknown A");
+    });
+
+    it("keeps a dismissed warning hidden once an unknown destination is proven known-limited (no cascade)", () => {
+      mocks.providers = [claudeState([source, unknownA, unknownB])];
+      const { result, rerender } = currentPrompt(null);
+      expect(result.current.kind).toBe("visible");
+      if (result.current.kind !== "visible") return;
+      // Only the first authenticated unknown gets the automatic probe.
+      expect(result.current.probeTarget?.profile.label).toBe("Unknown A");
+      act(() => result.current.dismiss());
+      expect(result.current.kind).toBe("hidden");
+
+      // Probe proves unknown-a known-but-not-better: it drops out of the
+      // selectable set entirely, but it was never `recommended` (false in
+      // both states), so the key stays identical - no fresh warning
+      // episode, and (because the composer keys the banner by this key) no
+      // remount to re-arm a second automatic probe onto unknown-b.
+      mocks.providers = [
+        claudeState([
+          source,
+          { ...unknownA, rateLimitStatus: "hard_limit" },
+          unknownB,
+        ]),
+      ];
+      rerender();
+      expect(result.current.kind).toBe("hidden");
+    });
   });
 
   it("shares dismissal across hook instances for the same warning", () => {

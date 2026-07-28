@@ -40,9 +40,10 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
 import { cn } from "@/lib/utils";
-import type {
-  ProfileRateLimitDestination,
-  ProfileRateLimitSeverity,
+import {
+  initialPreviewProfileId,
+  type ProfileRateLimitDestination,
+  type ProfileRateLimitSeverity,
 } from "./use-profile-rate-limit-switch-prompt";
 
 interface ProfileRateLimitSwitchBannerProps {
@@ -117,7 +118,8 @@ function profileMenuRows(
   destinations: ReadonlyArray<ProfileRateLimitDestination>,
   primaryTarget: ProfileRateLimitDestination | null,
 ): ReadonlyArray<ProfileMenuRow> {
-  if (primaryTarget === null) {
+  const readOnly = !destinations.some((destination) => destination.selectable);
+  if (readOnly) {
     return profiles.map((profile) => ({
       profile,
       destination: null,
@@ -130,17 +132,9 @@ function profileMenuRows(
     destination,
     selectable: destination.selectable,
     isPrimaryTarget:
+      primaryTarget !== null &&
       destination.profile.profileId === primaryTarget.profile.profileId,
   }));
-}
-
-function initialPreviewProfileId(
-  primaryTarget: ProfileRateLimitDestination | null,
-  current: ProviderProfile,
-): string | null {
-  return primaryTarget === null
-    ? profileCommitId(current)
-    : primaryTarget.profileId;
 }
 
 function profileMenuStatus(
@@ -211,9 +205,11 @@ export function ProfileRateLimitSwitchBanner(
 ) {
   const [includeOtherChats, setIncludeOtherChats] = useState(false);
   const checkboxId = useId();
-  const canIncludeOtherChats = props.affectedChatCount > 1;
+  const readOnly = !props.destinations.some(
+    (destination) => destination.selectable,
+  );
+  const canIncludeOtherChats = !readOnly && props.affectedChatCount > 1;
   const effectiveTaskScope = canIncludeOtherChats && includeOtherChats;
-  const readOnly = props.primaryTarget === null;
   const usagePresentation = useProfileUsagePresentation({
     runTargetHostId: props.runTargetHostId,
     providerId: props.providerId,
@@ -329,14 +325,20 @@ export function ProfileRateLimitSwitchBanner(
 function ProfileRateLimitDestinationMenu(
   props: ProfileRateLimitDestinationMenuProps,
 ) {
+  const readOnly = !props.destinations.some(
+    (destination) => destination.selectable,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [previewProfileId, setPreviewProfileId] = useState<string | null>(() =>
-    initialPreviewProfileId(props.primaryTarget, props.current),
+    initialPreviewProfileId(
+      props.primaryTarget,
+      props.current,
+      props.destinations,
+    ),
   );
   const [previewAnchor, setPreviewAnchor] = useState<HTMLElement | null>(null);
   const keyboardPreviewEnabledRef = useRef(false);
   const usagePresentation = props.usagePresentation;
-  const readOnly = props.primaryTarget === null;
   const rows = profileMenuRows(
     props.profiles,
     props.destinations,
@@ -358,7 +360,11 @@ function ProfileRateLimitDestinationMenu(
       return;
     }
     setPreviewProfileId(
-      initialPreviewProfileId(props.primaryTarget, props.current),
+      initialPreviewProfileId(
+        props.primaryTarget,
+        props.current,
+        props.destinations,
+      ),
     );
   };
   const preview = (profile: ProviderProfile, anchor: HTMLElement): void => {
@@ -378,6 +384,7 @@ function ProfileRateLimitDestinationMenu(
       <ProfileRateLimitMenuTrigger
         harnessId={props.harnessId}
         primaryTarget={props.primaryTarget}
+        readOnly={readOnly}
         onSwitchProfile={props.onSwitchProfile}
       />
       <ProfileRateLimitMenuContent
@@ -410,23 +417,26 @@ function ProfileRateLimitDestinationMenu(
 function ProfileRateLimitMenuTrigger({
   harnessId,
   primaryTarget,
+  readOnly,
   onSwitchProfile,
 }: {
   readonly harnessId: GuiHarnessId;
   readonly primaryTarget: ProfileRateLimitDestination | null;
+  readonly readOnly: boolean;
   readonly onSwitchProfile: (profileId: string | null) => void;
 }): ReactNode {
   if (primaryTarget === null) {
+    const label = readOnly ? "View profile limits" : "Choose a profile";
     return (
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
           size="sm"
           variant="outline"
-          aria-label="View profile limits"
+          aria-label={label}
           className="w-full min-w-0 sm:w-auto sm:justify-self-end"
         >
-          <span className="min-w-0 truncate">View profile limits</span>
+          <span className="min-w-0 truncate">{label}</span>
         </Button>
       </DropdownMenuTrigger>
     );
