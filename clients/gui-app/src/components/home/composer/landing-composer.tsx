@@ -438,10 +438,15 @@ export function LandingComposer(props: LandingComposerProps) {
   // turn and failing it. Fails open while `providers.list` is loading; the
   // host resolver is the authoritative backstop either way.
   const packGate = useProviderPackGate(harnessId);
+  const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
+    workspaceDisabledHint: workspaceAvailability.disabledHint,
+    packPreparingHint: packGate.hint,
+    packBlocked: packGate.blocked,
+  });
   const canSubmit =
     !isSubmitting &&
     !attachmentPending &&
-    !packGate.blocked &&
+    !submitBlocked &&
     workspaceCanStart &&
     hasSubmittableContent;
 
@@ -567,9 +572,7 @@ export function LandingComposer(props: LandingComposerProps) {
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
       attachmentPending={attachmentPending}
-      workspaceDisabledHint={
-        packGate.hint ?? workspaceAvailability.disabledHint
-      }
+      workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-end">{switcher}</div>}
       topBanner={
         rateLimitPrompt.kind === "visible" ? (
@@ -614,6 +617,33 @@ export function LandingComposer(props: LandingComposerProps) {
       onSnapshot={handleSnapshot}
     />
   );
+}
+
+/**
+ * Whether submit is blocked by a gate that owes the user copy, and that copy.
+ * Returned as a pair for the same reason `resolveSendBlock` does it in
+ * `chat-composer.tsx`: a reason that kills the button without supplying its
+ * hint leaves a grey button that reads as broken.
+ *
+ * Priority matches the chat composer's, and mirrors severity: the workspace
+ * gate first (nothing can run, and the user has to fix it), then the
+ * managed-pack gate (self-resolving, and it says so). Ordered the other way, a
+ * user with an unusable workspace would sit through `Preparing… 40%` and find
+ * the button still dead once the download finished, with the real reason only
+ * appearing then.
+ */
+function resolveLandingSubmitBlock(args: {
+  readonly workspaceDisabledHint: string | null;
+  readonly packPreparingHint: string | null;
+  readonly packBlocked: boolean;
+}): {
+  readonly submitBlocked: boolean;
+  readonly submitBlockedHint: string | null;
+} {
+  return {
+    submitBlocked: args.packBlocked,
+    submitBlockedHint: args.workspaceDisabledHint ?? args.packPreparingHint,
+  };
 }
 
 function noopSwitchProfileForTask(): void {}
