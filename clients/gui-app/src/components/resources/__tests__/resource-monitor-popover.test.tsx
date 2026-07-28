@@ -142,6 +142,14 @@ const canvasMock = vi.hoisted(() => {
   const prepareOpenTileInTabFocusTarget = vi.fn();
   const prepareSetActiveTileTabFocusTarget = vi.fn();
   const resolveTargetTabForEpic = vi.fn(() => "tab-2");
+  const closedTilePayloadsByTabId: Record<
+    string,
+    | Record<
+        string,
+        { node: Record<string, unknown>; pendingCreate: boolean } | undefined
+      >
+    | undefined
+  > = {};
   const state = {
     openTabOrder: ["tab-1", "tab-2"],
     tabsById: {
@@ -224,6 +232,7 @@ const canvasMock = vi.hoisted(() => {
         sizesByGroupId: {},
       },
     },
+    closedTilePayloadsByTabId,
     artifactTreeByEpicId: {
       "epic-1": [
         {
@@ -446,6 +455,9 @@ afterEach(() => {
     ...canvasMock.state.artifactTreeByEpicId["epic-1"][0],
     name: "Agent Chat",
   };
+  for (const key of Object.keys(canvasMock.state.closedTilePayloadsByTabId)) {
+    Reflect.deleteProperty(canvasMock.state.closedTilePayloadsByTabId, key);
+  }
   tabNavigationMock.resourceEpicTabIntent.mockClear();
   tabNavigationMock.activateTabIntent.mockClear();
   canvasMock.prepareOpenTileInTabFocusTarget.mockReset();
@@ -1233,6 +1245,141 @@ describe("ResourceMonitorPopover", () => {
       expect.objectContaining({ tabId: "tab-closed" }),
       undefined,
     );
+  });
+
+  it("reopens a CLOSED terminal tile from its preserved payload via cross-route navigation", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.state.closedTilePayloadsByTabId["tab-closed"] = {
+      "tile-term-bg": {
+        node: {
+          id: "term-bg",
+          instanceId: "tile-term-bg",
+          type: "terminal",
+          name: "Background Build",
+          titleSource: "manual",
+          hostId: "host-1",
+          cwd: "/work/background",
+        },
+        pendingCreate: false,
+      },
+    };
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-2",
+                ownerId: "term-bg",
+              },
+              harnessId: null,
+              activeProcessName: "make",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    // The row label comes from the preserved ref's manual title, not the
+    // running process name.
+    fireEvent.click(await screen.findByText("Background Build"));
+
+    expect(navigateNestedMock).not.toHaveBeenCalled();
+    expect(tabNavigationMock.resourceEpicTabIntent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "epic-2",
+        tabId: "tab-closed",
+        preparation: {
+          kind: "open-tile",
+          node: {
+            id: "term-bg",
+            instanceId: "tile-term-bg",
+            type: "terminal",
+            name: "Background Build",
+            titleSource: "manual",
+            hostId: "host-1",
+            cwd: "/work/background",
+          },
+        },
+      }),
+    );
+    expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledWith(
+      routerMock.navigate,
+      expect.objectContaining({ tabId: "tab-closed" }),
+      undefined,
+    );
+  });
+
+  it("reopens a closed terminal tile of the CURRENT tab through the same-route boundary", async () => {
+    routerMock.pathname = "/epics/epic-1/tab-1";
+    canvasMock.state.closedTilePayloadsByTabId["tab-1"] = {
+      "tile-term-gone": {
+        node: {
+          id: "term-gone",
+          instanceId: "tile-term-gone",
+          type: "terminal",
+          name: "Terminal Gamma",
+          titleSource: "manual",
+          hostId: "host-1",
+          cwd: "/work",
+        },
+        pendingCreate: false,
+      },
+    };
+    canvasMock.prepareOpenTileInTabFocusTarget.mockReturnValue({
+      paneId: "pane-1",
+      tileInstanceId: "tile-term-gone",
+    });
+    const stub = installStubFactory();
+    renderPopover();
+
+    act(() => {
+      stub.emit().onSnapshot(
+        projection({
+          owners: [
+            owner({
+              owner: {
+                kind: "terminal",
+                hostId: "host-1",
+                epicId: "epic-1",
+                ownerId: "term-gone",
+              },
+              harnessId: null,
+              activeProcessName: "node",
+            }),
+          ],
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+    fireEvent.click(await screen.findByText("Terminal Gamma"));
+
+    expect(navigateNestedMock).toHaveBeenCalledWith(
+      "epic-1",
+      "tab-1",
+      expect.any(Function),
+    );
+    expect(canvasMock.prepareOpenTileInTabFocusTarget).toHaveBeenCalledWith(
+      "tab-1",
+      {
+        id: "term-gone",
+        instanceId: "tile-term-gone",
+        type: "terminal",
+        name: "Terminal Gamma",
+        titleSource: "manual",
+        hostId: "host-1",
+        cwd: "/work",
+      },
+    );
+    expect(tabNavigationMock.resourceEpicTabIntent).not.toHaveBeenCalled();
+    expect(tabNavigationMock.activateTabIntent).not.toHaveBeenCalled();
   });
 
   it("commits a not-yet-open owner through prepareOpenTileInTabFocusTarget + cross-route navigation", async () => {
