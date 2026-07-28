@@ -32,6 +32,7 @@ import {
   writeHostNameSettings,
 } from "../host/host-display-name";
 import type { IpcHostController, RunnerIpcBridge } from "./runner-ipc-bridge";
+import { restartRequestResultFromOutcome } from "./host-ipc";
 
 export const LONG_OP_TIMEOUT_MS = 10 * 60_000;
 const REGISTRY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -764,8 +765,13 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
     return readInstalledHostRecord();
   });
 
+  // Deliberately NOT `okOrThrow`: a busy/deferred respawn outcome resolves
+  // as a `declined` result the renderer presents as information - see
+  // `restartRequestResultFromOutcome`.
   bridge.handleInvoke(RunnerHostInvoke.traycerHostRestart, async () => {
-    okOrThrow(await bridge.options.hostController.respawn());
+    return restartRequestResultFromOutcome(
+      await bridge.options.hostController.respawn(),
+    );
   });
 
   bridge.handleInvoke(

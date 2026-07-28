@@ -137,6 +137,7 @@ function buildFakeBridge(
     }),
     requestHostRespawn: async () => {
       respawnCounter.count += 1;
+      return { kind: "restarted" as const };
     },
     trayState: {
       setEpics: async (_epics: readonly TrayEpic[]) => undefined,
@@ -496,7 +497,7 @@ function buildFakeBridge(
       },
       getRemovalState: async () => ({ removedByUser: false }),
       clearRemoval: async () => undefined,
-      restartHost: async () => undefined,
+      restartHost: async () => ({ kind: "restarted" as const }),
       getHostLogs: async () => ({ path: null, tail: "" }),
       runDoctor: async () => ({ issues: [], ranAt: "" }),
       availableVersions: async () => {

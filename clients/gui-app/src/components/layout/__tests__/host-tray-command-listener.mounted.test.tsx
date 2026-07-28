@@ -137,7 +137,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
         deregisteredService: true,
       }),
     ),
-    restartHost: vi.fn(() => Promise.resolve()),
+    restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     uninstallTraycer: vi.fn(() =>
       Promise.resolve({
         removedHost: true,
@@ -251,7 +251,7 @@ function makeHost(tray: IHostTray, management: IHostManagement): IRunnerHost {
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
-    requestHostRespawn: () => Promise.resolve(),
+    requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     service: null,
     traycerCli: null,
     migration: null,

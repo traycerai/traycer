@@ -319,7 +319,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const taskProfileSwitch = useTaskProfileRateLimitSwitch({
     enabled:
       rateLimitPrompt.kind === "visible" &&
-      rateLimitPrompt.primaryTarget !== null,
+      rateLimitPrompt.destinations.some(
+        (destination) => destination.selectable,
+      ),
     harnessId,
     profileId,
     selectedModel,

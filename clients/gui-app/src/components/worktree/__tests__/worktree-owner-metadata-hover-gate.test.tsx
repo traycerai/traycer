@@ -65,6 +65,7 @@ function renderTooltip(onClick: (() => void) | undefined): HTMLElement {
           Chat row
         </button>
       }
+      title="A complete chat title that should remain visible"
       hostId="host-1"
       epicId="epic-1"
       ownerId="owner-1"
@@ -95,6 +96,17 @@ describe("WorktreeOwnerMetadataTooltip hover gate", () => {
     settleOpenDelay();
 
     expect(cardIsOpen()).toBe(true);
+  });
+
+  it("shows the owner's full title in the opened card", () => {
+    const trigger = renderTooltip(undefined);
+
+    hoverIn(trigger);
+    settleOpenDelay();
+
+    expect(
+      screen.getByTestId("chat-navigator-hover-title-owner-1").textContent,
+    ).toBe("A complete chat title that should remain visible");
   });
 
   it("swallows an open that lands after the press (the reported race)", () => {

@@ -147,7 +147,7 @@ interface PreloadBridge {
     copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
     saveFile(input: unknown): Promise<string | null>;
   };
-  requestHostRespawn(): Promise<void>;
+  requestHostRespawn(): Promise<unknown>;
   hostManagement: {
     convergeReady(force: boolean): Promise<unknown>;
     applyStaged(trigger: "launch" | "manual", force: boolean): Promise<unknown>;

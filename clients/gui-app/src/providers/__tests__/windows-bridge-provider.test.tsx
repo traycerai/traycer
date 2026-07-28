@@ -208,7 +208,7 @@ function createBaseRunnerHost(): IRunnerHost {
       return { dispose: () => undefined };
     },
     onSystemResumed: () => ({ dispose: () => undefined }),
-    requestHostRespawn: () => Promise.resolve(),
+    requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     service: null,
     traycerCli: null,
     migration: null,
