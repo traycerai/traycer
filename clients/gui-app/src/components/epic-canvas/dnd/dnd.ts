@@ -290,6 +290,16 @@ export function getSidebarNodeDragId(nodeId: string): string {
   return `sidebar-node:${nodeId}`;
 }
 
+/**
+ * Active-agent rows are a second rendering of nodes already registered by the
+ * sidebar. Key them by occurrence rather than node id so dnd-kit's registry
+ * never collides with the sidebar row (or another open tile showing the same
+ * active-agent list).
+ */
+export function getActiveAgentDragId(occurrenceKey: string): string {
+  return `active-agent:${occurrenceKey}`;
+}
+
 export function getTerminalTileDragId(sessionId: string): string {
   return `terminal-tile:${sessionId}`;
 }

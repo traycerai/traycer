@@ -1,11 +1,22 @@
-import { useCallback, type ReactNode } from "react";
+import { useDraggable } from "@dnd-kit/core";
+import { useCallback, useId, useMemo, type ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentStopButton } from "@/components/chat/agent-stop-button";
+import {
+  getActiveAgentDragId,
+  SIDEBAR_NODE_DND_TYPE,
+  type EpicCanvasSidebarNodeDragData,
+} from "@/components/epic-canvas/dnd/dnd";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import {
+  resolveTabIdForEpic,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
+import { cn } from "@/lib/utils";
 
-import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  * A row's `surface` is UI copy ("gui"/"tui"); opening a tile needs the
  * record-backed node kind. The two map 1:1 (the inverse of `surfaceOf` in
@@ -53,6 +64,117 @@ function StopAffordance(props: {
 }
 
 /**
+ * One openable active-agent row. It emits the same `sidebar-node` payload as
+ * the navigator, so the root canvas DnD system supplies the established pane,
+ * empty-canvas, and header-tab drop behavior without a parallel commit path.
+ *
+ * The drag id is occurrence-scoped because this is another rendering of a node
+ * that is usually mounted in the sidebar at the same time. The trailing stop
+ * action stays outside the drag/open button so stopping never starts a drag or
+ * opens the tile.
+ */
+function AgentStopRow(props: {
+  readonly epicId: string;
+  readonly viewTabId: string | null;
+  readonly agent: AgentRow;
+  readonly self: boolean;
+  readonly compact: boolean;
+  readonly onOpen: (agent: AgentRow) => void;
+}) {
+  const { epicId, viewTabId, agent, self, compact, onOpen } = props;
+  const occurrenceId = useId();
+  const dragData = useMemo<EpicCanvasSidebarNodeDragData | undefined>(() => {
+    if (viewTabId === null) return undefined;
+    return {
+      kind: SIDEBAR_NODE_DND_TYPE,
+      epicId,
+      viewTabId,
+      nodeId: agent.id,
+    };
+  }, [agent.id, epicId, viewTabId]);
+  const {
+    attributes,
+    listeners,
+    setNodeRef: dragRef,
+    isDragging,
+  } = useDraggable({
+    id: getActiveAgentDragId(occurrenceId),
+    disabled: dragData === undefined,
+    data: dragData,
+  });
+  const openAgent = useCallback(() => onOpen(agent), [agent, onOpen]);
+  let cursorClass = "cursor-grab";
+  if (dragData === undefined) cursorClass = "cursor-pointer";
+  else if (isDragging) cursorClass = "cursor-grabbing";
+
+  return (
+    <li
+      className={cn(
+        "group flex min-w-0 items-center gap-2 rounded-md",
+        self ? "bg-muted/50 px-2" : "pl-5 pr-2 hover:bg-muted/40",
+        isDragging && "opacity-60",
+      )}
+    >
+      <TooltipWrapper
+        label={`Open ${agent.title}`}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <button
+          ref={dragRef}
+          {...attributes}
+          {...listeners}
+          type="button"
+          aria-label={`Open ${agent.title}`}
+          onClick={openAgent}
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
+            cursorClass,
+          )}
+        >
+          <ActivityDot active={agent.active} />
+          <span
+            className={cn(
+              "block min-w-0 flex-1 truncate text-ui-xs text-foreground/85",
+              self && "font-medium",
+            )}
+          >
+            {agent.title}
+          </span>
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
+            {agent.surface}
+          </span>
+        </button>
+      </TooltipWrapper>
+      {self ? (
+        // The current agent's "Stop all" stays visible - it is the primary
+        // action and keeps the parent row from looking stop-less.
+        <AgentStopButton
+          epicId={epicId}
+          agentId={agent.id}
+          hostId={agent.hostId}
+          label="Stop all"
+          iconOnly={compact}
+          testId="agent-stop-all"
+        />
+      ) : (
+        <StopAffordance revealOnHover={compact}>
+          <AgentStopButton
+            epicId={epicId}
+            agentId={agent.id}
+            hostId={agent.hostId}
+            label="Stop"
+            iconOnly={compact}
+            testId={undefined}
+          />
+        </StopAffordance>
+      )}
+    </li>
+  );
+}
+
+/**
  * Shared row list for both agent-stop surfaces. The current agent is the
  * topmost row; its active descendants follow, indented, each individually
  * stoppable. Keeping this in one place is what guarantees the two surfaces stay
@@ -75,8 +197,12 @@ export function AgentStopList(props: {
 }) {
   const compact = props.surface === "composer-panel";
   const tileNavigation = useEpicTileNavigation();
-  // Opening a sub-agent reuses the same path as the agent-reference chip:
-  // resolve the epic's target tab and open (or focus) the agent's tile there.
+  // Resolve once for the whole list. Rendering drag sources must not create or
+  // switch a header tab; if this epic has none open, click-to-open still works
+  // while dragging is defensively disabled.
+  const viewTabId = useEpicCanvasStore((state) =>
+    resolveTabIdForEpic(state, props.epicId),
+  );
   const openAgent = useCallback(
     (agent: AgentRow) => {
       tileNavigation.openTileInEpic(props.epicId, {
@@ -91,61 +217,24 @@ export function AgentStopList(props: {
   );
   return (
     <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5">
-      <li className="flex min-w-0 items-center gap-2 rounded-md bg-muted/50 px-2 py-1">
-        <ActivityDot active={props.self.active} />
-        <span className="block min-w-0 flex-1 truncate text-ui-xs font-medium text-foreground/85">
-          {props.self.title}
-        </span>
-        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
-          {props.self.surface}
-        </span>
-        {/* The current agent's "Stop all" stays visible - it is the primary
-            action and keeps the parent row from looking stop-less. */}
-        <AgentStopButton
-          epicId={props.epicId}
-          agentId={props.self.id}
-          hostId={props.self.hostId}
-          label="Stop all"
-          iconOnly={compact}
-          testId="agent-stop-all"
-        />
-      </li>
+      <AgentStopRow
+        epicId={props.epicId}
+        viewTabId={viewTabId}
+        agent={props.self}
+        self
+        compact={compact}
+        onOpen={openAgent}
+      />
       {props.descendants.map((agent) => (
-        <li
+        <AgentStopRow
           key={agent.id}
-          className="group flex min-w-0 items-center gap-2 rounded-md pl-5 pr-2 hover:bg-muted/40"
-        >
-          <TooltipWrapper
-            label={`Open ${agent.title}`}
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <button
-              type="button"
-              onClick={() => openAgent(agent)}
-              className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
-            >
-              <ActivityDot active={agent.active} />
-              <span className="block min-w-0 flex-1 truncate text-ui-xs text-foreground/85">
-                {agent.title}
-              </span>
-              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-ui-xs uppercase text-muted-foreground">
-                {agent.surface}
-              </span>
-            </button>
-          </TooltipWrapper>
-          <StopAffordance revealOnHover={compact}>
-            <AgentStopButton
-              epicId={props.epicId}
-              agentId={agent.id}
-              hostId={agent.hostId}
-              label="Stop"
-              iconOnly={compact}
-              testId={undefined}
-            />
-          </StopAffordance>
-        </li>
+          epicId={props.epicId}
+          viewTabId={viewTabId}
+          agent={agent}
+          self={false}
+          compact={compact}
+          onOpen={openAgent}
+        />
       ))}
     </ul>
   );
