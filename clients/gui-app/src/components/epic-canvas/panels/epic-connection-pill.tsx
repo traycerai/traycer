@@ -29,7 +29,8 @@ export function EpicConnectionPill() {
   // Visuals use the settled state to avoid strobing; the tooltip uses the raw
   // verdict so it can truthfully say synced during the positive settle hold.
   const indicator = indicatorFor(state);
-  const tooltip = indicatorFor(derived).tooltip;
+  const rawIndicator = indicatorFor(derived);
+  const tooltip = rawIndicator.tooltip;
 
   return (
     <TooltipWrapper
@@ -42,7 +43,7 @@ export function EpicConnectionPill() {
         type="button"
         data-testid="epic-connection-pill"
         data-status={state}
-        aria-label={indicator.ariaLabel}
+        aria-label={rawIndicator.ariaLabel}
         className={cn(
           "inline-flex items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           indicator.containerClassName,

@@ -295,17 +295,23 @@ describe("<EpicConnectionPill />", () => {
   });
 
   describe("settle behavior (750ms hold before claiming synced)", () => {
-    it("first mount with a derived synced verdict waits through the settle delay", () => {
+    it("settles the synced visuals while exposing the raw accessible verdict", () => {
       vi.useFakeTimers();
       renderPill("synced");
 
       expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
-      expect(pillClaimsSynced()).toBe(false);
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
 
       act(() => {
         vi.advanceTimersByTime(750);
       });
       expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("synced");
     });
 
     it("flips syncing -> synced only after holding for 750ms, staying quiet in between", () => {
@@ -317,7 +323,10 @@ describe("<EpicConnectionPill />", () => {
       rerender(pillTree());
 
       expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
-      expect(pillClaimsSynced()).toBe(false);
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
 
       act(() => {
         vi.advanceTimersByTime(750);
@@ -326,7 +335,7 @@ describe("<EpicConnectionPill />", () => {
       expect(pillClaimsSynced()).toBe(true);
     });
 
-    it("never renders All changes synced for a synced window shorter than the settle delay", () => {
+    it("never renders synced visuals for a synced window shorter than the settle delay", () => {
       vi.useFakeTimers();
       const { rerender } = renderPill("syncing");
 
@@ -336,7 +345,10 @@ describe("<EpicConnectionPill />", () => {
       act(() => {
         vi.advanceTimersByTime(300);
       });
-      expect(pillClaimsSynced()).toBe(false);
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
 
       mocks.useEpicSyncPillState.mockReturnValue("syncing");
       rerender(pillTree());
