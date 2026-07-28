@@ -879,6 +879,7 @@ function TerminalAgentPreLaunchToolbar(
         />
         <TerminalAgentHeaderControls
           epicId={props.epicId}
+          viewTabId={props.viewTabId}
           tuiAgentId={props.agent.id}
         />
       </div>
@@ -1009,6 +1010,7 @@ function TerminalAgentTileShell(props: {
  */
 function TerminalAgentHeaderControls(props: {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly tuiAgentId: string;
 }) {
   const controls = useAgentStopControls({
@@ -1044,6 +1046,7 @@ function TerminalAgentHeaderControls(props: {
         <PopoverContent align="end" className="w-[min(90vw,22rem)] p-0">
           <AgentStopList
             epicId={props.epicId}
+            viewTabId={props.viewTabId}
             self={self}
             descendants={controls.descendants}
             surface="tui-popover"

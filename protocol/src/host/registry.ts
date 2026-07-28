@@ -266,15 +266,18 @@ import {
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
-  hostNotificationsListDowngradeV20ToV10,
+  hostNotificationsListDowngradeV21ToV10,
   hostNotificationsListUpgradeV10ToV20,
+  hostNotificationsListUpgradeV20ToV21,
   hostNotificationsListV10,
   hostNotificationsListV20,
+  hostNotificationsListV21,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
   hostNotificationsFeedSubscribeV10,
+  hostNotificationsFeedSubscribeV11,
   hostNotificationsSubscribeV10,
   notificationsSubscribeV10,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -295,6 +298,7 @@ import {
   migrationRunV10,
   phaseMigrateToEpicV10,
 } from "@traycer/protocol/host/migration/contracts";
+import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
@@ -2507,15 +2511,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostNotificationsListV20,
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV20,
         },
+        1: {
+          contract: hostNotificationsListV21,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV20ToV21,
+        },
       },
       downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV20ToV10,
+        1: hostNotificationsListDowngradeV21ToV10,
       },
     },
   },
@@ -4922,10 +4930,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
+        },
+        1: {
+          contract: hostNotificationsFeedSubscribeV11,
         },
       },
     },
@@ -5040,6 +5051,23 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: worktreeDeleteByPathStreamV10,
+        },
+      },
+    },
+  },
+  // Separate method, not a minor of `worktree.deleteByPath`: its request and
+  // frames are released and frozen, and a client that lands on the batch
+  // method must be able to discover THAT, not negotiate down to a per-target
+  // stream it would then have to drive N times. An older host simply omits
+  // this method from its manifest, so the compatibility check rejects it at
+  // openAck - before the subscribe frame, therefore before any host work -
+  // which is what makes fallback safe for a destructive operation.
+  "worktree.deleteBatchByPath": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeDeleteBatchByPathStreamV10,
         },
       },
     },

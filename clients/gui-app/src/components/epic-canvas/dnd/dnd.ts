@@ -39,6 +39,7 @@ export const TERMINAL_TILE_DND_TYPE = "terminal-tile";
 export const GIT_DIFF_TILE_DND_TYPE = "git-diff-tile";
 export const WORKSPACE_FILE_DND_TYPE = "workspace-file";
 export const CHAT_ARTIFACT_DND_TYPE = "chat-artifact";
+export const ACTIVE_AGENT_DND_TYPE = "active-agent";
 export const LEFT_PANEL_RAIL_ITEM_DND_TYPE = "left-panel-rail-item";
 export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   ARTIFACT_TAB_DND_TYPE,
@@ -47,6 +48,7 @@ export const EPIC_CANVAS_DND_SOURCE_TYPES = [
   GIT_DIFF_TILE_DND_TYPE,
   WORKSPACE_FILE_DND_TYPE,
   CHAT_ARTIFACT_DND_TYPE,
+  ACTIVE_AGENT_DND_TYPE,
 ];
 
 export interface RectLike {
@@ -141,6 +143,24 @@ export interface EpicCanvasChatArtifactDragData {
   };
 }
 
+/**
+ * An agent row rendered outside the sidebar tree. Unlike `sidebar-node`, this
+ * source carries its bound host explicitly: chat projections do not own host
+ * identity, and resolving against the app's active host would violate the
+ * tab-for-life host binding when another device is selected.
+ */
+export interface EpicCanvasActiveAgentDragData {
+  readonly kind: typeof ACTIVE_AGENT_DND_TYPE;
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly agent: {
+    readonly id: string;
+    readonly type: "chat" | "terminal-agent";
+    readonly name: string;
+    readonly hostId: string;
+  };
+}
+
 export type EpicCanvasDragSourceData =
   | EpicCanvasArtifactTabDragData
   | EpicCanvasSidebarNodeDragData
@@ -148,6 +168,7 @@ export type EpicCanvasDragSourceData =
   | EpicCanvasGitDiffTileDragData
   | EpicCanvasWorkspaceFileDragData
   | EpicCanvasChatArtifactDragData
+  | EpicCanvasActiveAgentDragData
   | EpicCanvasLeftPanelRailDragData;
 
 export type LeftPanelRailDropPosition = "before" | "after" | "combine";
@@ -288,6 +309,16 @@ export function getArtifactTabGroupBodyDropId(groupId: string): string {
 
 export function getSidebarNodeDragId(nodeId: string): string {
   return `sidebar-node:${nodeId}`;
+}
+
+/**
+ * Active-agent rows are a second rendering of nodes already registered by the
+ * sidebar. Key them by occurrence rather than node id so dnd-kit's registry
+ * never collides with the sidebar row (or another open tile showing the same
+ * active-agent list).
+ */
+export function getActiveAgentDragId(occurrenceKey: string): string {
+  return `active-agent:${occurrenceKey}`;
 }
 
 export function getTerminalTileDragId(sessionId: string): string {
@@ -483,6 +514,32 @@ function readChatArtifactSource(
   };
 }
 
+function readActiveAgentSource(
+  value: Record<string, unknown>,
+): EpicCanvasDragSourceData | null {
+  const scope = readCanvasSourceScope(value);
+  if (scope === null || !isRecord(value.agent)) return null;
+  const agent = value.agent;
+  if (
+    !isNonEmptyString(agent.id) ||
+    !isNonEmptyString(agent.name) ||
+    !isNonEmptyString(agent.hostId) ||
+    (agent.type !== "chat" && agent.type !== "terminal-agent")
+  ) {
+    return null;
+  }
+  return {
+    kind: ACTIVE_AGENT_DND_TYPE,
+    ...scope,
+    agent: {
+      id: agent.id,
+      type: agent.type,
+      name: agent.name,
+      hostId: agent.hostId,
+    },
+  };
+}
+
 function readLeftPanelRailItemSource(
   value: Record<string, unknown>,
 ): EpicCanvasDragSourceData | null {
@@ -511,6 +568,7 @@ export function readEpicCanvasDragSourceData(
     return readWorkspaceFileSource(value);
   if (value.kind === CHAT_ARTIFACT_DND_TYPE)
     return readChatArtifactSource(value);
+  if (value.kind === ACTIVE_AGENT_DND_TYPE) return readActiveAgentSource(value);
   if (value.kind === LEFT_PANEL_RAIL_ITEM_DND_TYPE)
     return readLeftPanelRailItemSource(value);
   return null;

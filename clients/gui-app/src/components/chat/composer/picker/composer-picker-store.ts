@@ -261,6 +261,36 @@ function wrapIndex(index: number, length: number): number {
 }
 
 /**
+ * Active index to carry across an item-list replacement. A refresh of the same
+ * query can reorder rows as slower sources land (root mention search ranks all
+ * sources into one flat list); once the user has moved the highlight off the
+ * top row, it follows the item they chose - matched by id - rather than the
+ * index it happened to sit at. At index 0 the highlight stays on the top row,
+ * so the best match keeps the selection as better results arrive.
+ */
+function carriedActiveIndex(
+  previous: ComposerPickerState,
+  items: ReadonlyArray<ComposerPickerItem>,
+): number {
+  if (
+    previous.activeIndex > 0 &&
+    previous.activeIndex < previous.items.length
+  ) {
+    const activeId = previous.items[previous.activeIndex].id;
+    // Carry the id match even onto a DISABLED row: navigation deliberately
+    // highlights disabled slash rows (their disabled reason stays visible and
+    // commit refuses), so skipping them here would silently move the highlight
+    // to a different enabled command and a following Enter could commit it.
+    const carried = items.findIndex((item) => item.id === activeId);
+    if (carried >= 0) return carried;
+  }
+  return (
+    findEnabledIndex(items, previous.activeIndex, 1) ??
+    clampIndex(previous.activeIndex, items.length)
+  );
+}
+
+/**
  * First selectable index starting at `start` and scanning in `direction`,
  * wrapping once. Null when every row is disabled, which callers treat as
  * "leave the selection where it is" rather than highlighting a dead row.
@@ -405,9 +435,7 @@ export function createComposerPickerStore(): ComposerPickerStore {
         loading,
         loadFailed,
         retryLoad,
-        activeIndex:
-          findEnabledIndex(items, previous.activeIndex, 1) ??
-          clampIndex(previous.activeIndex, items.length),
+        activeIndex: carriedActiveIndex(previous, items),
       });
     },
 

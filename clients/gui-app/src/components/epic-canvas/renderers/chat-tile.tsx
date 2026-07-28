@@ -704,6 +704,7 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
             <SurfaceActivityProvider active={view.surfaceFocused}>
               <ChatLowerInteractionSurfaces
                 epicId={view.currentEpicId}
+                viewTabId={view.viewTabId}
                 chatId={view.node.id}
                 runtime={view.lower.runtime}
                 access={view.lower.access}

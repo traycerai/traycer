@@ -84,7 +84,8 @@ const NOTE_COPY: Record<NonNullable<EpicSweepWorktreeRow["note"]>, string> = {
  */
 export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const { epicIds, taskTitle, onOpenChange } = props;
-  const { rows, isPending, isError } = useEpicSweepWorktreeCandidates(epicIds);
+  const { hostId, rows, isPending, isError } =
+    useEpicSweepWorktreeCandidates(epicIds);
   const taskCount = epicIds?.length ?? 0;
   const sweepMutation = useEpicSweepWorktrees();
   // Explicit user toggles, cleared whenever the dialog retargets so a
@@ -107,7 +108,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   // per surface (History row and task-status strip each render their own), so
   // a component-local `isPending` would miss a run started from the other one
   // and happily re-stream the same paths.
-  const sweepingPaths = useSweepingWorktreePaths();
+  const sweepingPaths = useSweepingWorktreePaths(hostId);
   const isRowSweeping = (row: EpicSweepWorktreeRow): boolean =>
     sweepingPaths.has(row.entry.worktreePath);
   const isRowChecked = (row: EpicSweepWorktreeRow): boolean => {
@@ -120,12 +121,13 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
   const isSweeping = sweepMutation.isPending;
 
   const handleConfirm = () => {
-    if (checkedRows.length === 0) return;
+    if (hostId === null || checkedRows.length === 0) return;
     // Background model, matching Settings worktree deletion: confirm hands
     // the streamed run off and closes immediately. The mutation acknowledges
     // the kickoff and reports the outcome via toasts; re-opening while the
     // run is live keeps Sweep disabled so the same paths can't double-stream.
     sweepMutation.mutate({
+      hostId,
       worktrees: checkedRows.map((row) => ({
         worktreePath: row.entry.worktreePath,
         branch: row.entry.branch,
@@ -198,7 +200,7 @@ export function SweepWorktreesDialog(props: SweepWorktreesDialogProps) {
             variant="destructive"
             size="sm"
             className="w-full sm:w-auto"
-            disabled={isSweeping || checkedRows.length === 0}
+            disabled={hostId === null || isSweeping || checkedRows.length === 0}
             onClick={handleConfirm}
             data-testid="sweep-worktrees-confirm"
           >

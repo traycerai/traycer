@@ -9,11 +9,11 @@ import type {
 import type { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  hostNotificationsSubscribeServerFrameSchema,
-  type HostNotificationEntry,
+  hostNotificationsSubscribeServerFrameSchemaV11,
+  type HostNotificationEntryV21,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsSubscribeServerFrame,
+  type HostNotificationsSubscribeServerFrameV11,
   type HostNotificationsSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -37,10 +37,20 @@ export const HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT = 50;
  */
 export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
 
-export type HostNotificationFeedEntry = HostNotificationEntry;
+/**
+ * The feed parses against the `@1.1` frame union, not the released `@1.0`
+ * one. Stream versions negotiate to `min(client, host)` per method, so a GUI
+ * built from this protocol tree lands on `@1.1` against a host built from it
+ * too - and parsing those frames with the `@1.0` schema would reject any
+ * `host.operation.finished` row, which this store treats as connection
+ * corruption and answers with a reconnect into a snapshot carrying the same
+ * row. Against an older host the negotiated version drops back to `@1.0`,
+ * whose frames are a strict subset of this union and still parse.
+ */
+export type HostNotificationFeedEntry = HostNotificationEntryV21;
 
 export type HostNotificationsFeedFrame = Extract<
-  HostNotificationsSubscribeServerFrame,
+  HostNotificationsSubscribeServerFrameV11,
   | { readonly kind: "snapshot" }
   | { readonly kind: "upserted" }
   | { readonly kind: "readStateChanged" }
@@ -556,7 +566,7 @@ export function openHostNotificationsStream(
         return;
       }
       const parsed =
-        hostNotificationsSubscribeServerFrameSchema.safeParse(envelope);
+        hostNotificationsSubscribeServerFrameSchemaV11.safeParse(envelope);
       if (!parsed.success) {
         reconnect();
         return;
