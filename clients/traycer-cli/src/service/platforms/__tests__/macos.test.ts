@@ -160,6 +160,23 @@ describe("macOS service lifecycle", () => {
     expect(plist).not.toContain("HardResourceLimits");
   });
 
+  // Without this key, background-task management names the login item
+  // after ProgramArguments[0] - literally "sh" from an "Unknown
+  // Developer" - on every CLI-registered install (dev machines and the
+  // desktop's takeover fallback alike). The association groups it under
+  // the Traycer app in System Settings → Login Items.
+  it("associates the LaunchAgent with the Traycer desktop app so Login Items does not show it as 'sh'", () => {
+    const plist = buildLaunchAgentPlist({
+      label,
+      cli: { command: "/usr/local/bin/traycer", args: [] },
+    });
+
+    expect(plist).toContain(`<key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>ai.traycer.desktop</string>
+  </array>`);
+  });
+
   it("starts both an N-1 CLI without --service-label and a current CLI with it, preserving leading invocation args", async () => {
     const work = mkdtempSync(join(tmpdir(), "traycer-host-start-compat-"));
     const oldCli = join(work, "old-cli.sh");
