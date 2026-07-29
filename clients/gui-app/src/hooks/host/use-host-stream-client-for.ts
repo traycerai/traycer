@@ -12,6 +12,7 @@ import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-s
 import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { appHostCredentialMintFlow } from "@/lib/auth/host-credential-provisioning";
 import { useHostClient } from "@/lib/host/runtime";
 import { hostTransportKey } from "@/lib/host/transport-key";
 import { useCloseWsStreamClientOnReplace } from "@/lib/host/use-close-ws-stream-client-on-replace";
@@ -96,6 +97,11 @@ export function buildHostStreamClient(params: {
     endpoint: params.endpoint,
     bearer: params.bearer,
     auth: params.auth,
+    // Always the app-wide flow, never a per-caller one: the renderer holds
+    // several clients against one host, and the shared module is what keeps
+    // that from becoming several OTP dialogs. It resolves `declined` until the
+    // provisioning provider is mounted, so dev shells and tests are unaffected.
+    hostCredentialMint: appHostCredentialMintFlow,
     webSocketFactory: browserStreamWebSocketFactory,
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,

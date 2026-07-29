@@ -325,13 +325,15 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
 
   it("downgradeProviderCliStateListToV20 never leaks profile identity to a v2.0 caller", () => {
     // Latest major carries profiles[]; the path from latest → v2.0 must strip
-    // them. Use 6 explicitly - providers.list latest after the omp freeze is
-    // v6.0 (`cli-v1.1.8` shipped v5.0, so that line is frozen). The latest
-    // major also carries `nativeCapabilities`, which this downgrade strips
-    // alongside `profiles`.
+    // them. The major is spelled out because `downgradeResponseAcrossMajors`
+    // resolves it at the type level, so it cannot be read off the registry at
+    // runtime - it has to be bumped by hand every time a release freezes the
+    // current line (v5.0 at `cli-v1.1.8`, v6.0 at `cli-v1.1.9`, so v7.0 now).
+    // The latest major also carries `nativeCapabilities` and `native`, which
+    // this downgrade strips alongside `profiles`.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       2,
       { providers: [stateWithProfile], native: null },
     );
@@ -388,7 +390,7 @@ describe("providers.list v3.0 line predates profiles[]", () => {
   it("latest -> v3.0 downgrade never leaks profile identity to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      6,
+      7,
       3,
       { providers: [stateWithProfile], native: null },
     );
@@ -622,7 +624,12 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
       hostRpcRegistry["providers.setEnabled"],
       2,
       1,
-      { providerId: "codex", enabled: false, profileAction: null, native: null },
+      {
+        providerId: "codex",
+        enabled: false,
+        profileAction: null,
+        native: null,
+      },
     );
     expect(downgraded).toEqual({
       ok: true,

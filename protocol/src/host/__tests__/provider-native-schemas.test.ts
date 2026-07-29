@@ -23,6 +23,7 @@ import {
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV50,
+  providersListResponseSchemaV60,
   providersRemoveCustomPathRequestSchema,
   providersRemoveCustomPathResponseSchemaV20,
   providersSetApiKeyRequestSchema,
@@ -44,11 +45,13 @@ import {
 } from "@traycer/protocol/host/provider-schemas";
 import {
   hostRpcRegistry,
-  providersListDowngradeV6ToV1,
-  providersListDowngradeV6ToV2,
-  providersListDowngradeV6ToV3,
+  providersListDowngradeV7ToV1,
+  providersListDowngradeV7ToV2,
+  providersListDowngradeV7ToV3,
+  providersListDowngradeV7ToV6,
   providersListUpgradeV3ToV4,
   providersListUpgradeV5ToV6,
+  providersListUpgradeV6ToV7,
   providersSetEnabledDowngradeV21ToV20,
   providersSetEnabledUpgradeV20ToV21,
   providersStartLoginUpgradeV10ToV11,
@@ -67,7 +70,10 @@ import {
   providerNativeErrorCodeSchema,
   providerNativeScopeSchema,
 } from "@traycer/protocol/host/provider-native-schemas";
-import { providerIdSchema, providerIdSchemaV20 } from "@traycer/protocol/host/provider-ids";
+import {
+  providerIdSchema,
+  providerIdSchemaV20,
+} from "@traycer/protocol/host/provider-ids";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -252,12 +258,28 @@ describe("nativeCapabilities on ProviderCliState", () => {
   });
 });
 
-describe("providers.list@6.0 upgrade/downgrade bridges", () => {
-  it("upgrades v5.0 responses with the default descriptor and native:null", () => {
+describe("providers.list@7.0 upgrade/downgrade bridges", () => {
+  // `cli-v1.1.9` froze v6.0, so its schema models neither `nativeCapabilities`
+  // nor `native`. `upgradeResponseToVersion` chains these callbacks by cast
+  // with no re-parse, so filling here would not fail loudly - it would put the
+  // fields on a released wire that never carried them. The fill has to wait
+  // for v6.0 -> v7.0, and this pins the hop as a pass-through so a future
+  // "helpful" fill here has to argue with a red test first.
+  it("fills nothing on the v5.0 -> v6.0 hop (target is frozen)", () => {
     const v50 = providersListResponseSchemaV50.parse({
       providers: [baseState("amp")],
     });
     const upgraded = providersListUpgradeV5ToV6.upgradeResponse(v50);
+    expect(upgraded.providers[0]).not.toHaveProperty("nativeCapabilities");
+    expect(upgraded).not.toHaveProperty("native");
+    expect(() => providersListResponseSchemaV60.parse(upgraded)).not.toThrow();
+  });
+
+  it("upgrades v6.0 responses with the default descriptor and native:null", () => {
+    const v60 = providersListResponseSchemaV60.parse({
+      providers: [baseState("amp")],
+    });
+    const upgraded = providersListUpgradeV6ToV7.upgradeResponse(v60);
     expect(upgraded.providers[0]?.nativeCapabilities).toEqual(
       DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
     );
@@ -270,7 +292,30 @@ describe("providers.list@6.0 upgrade/downgrade bridges", () => {
     expect(upgraded.native).toBeNull();
   });
 
-  it("downgrades v6.0 → v3.0 by stripping nativeCapabilities and native", () => {
+  // The adjacent hop, and the one most likely to rot: v6.0 is a RELEASED line
+  // (`cli-v1.1.9`) that never carried either field, so it is the first client
+  // a leak would actually reach. The far downgrades below cover v3/v2/v1.
+  it("downgrades v7.0 → v6.0 by stripping nativeCapabilities and native", () => {
+    const v70 = providersListResponseSchema.parse({
+      providers: [
+        {
+          ...baseState("amp"),
+          nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+        },
+      ],
+      native: { ok: true, kind: "mcp", servers: [] },
+    });
+    const result = providersListDowngradeV7ToV6.downgradeResponse(v70);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.providers[0]).not.toHaveProperty("nativeCapabilities");
+    expect(result.value).not.toHaveProperty("native");
+    expect(() =>
+      providersListResponseSchemaV60.parse(result.value),
+    ).not.toThrow();
+  });
+
+  it("downgrades v7.0 → v3.0 by stripping nativeCapabilities and native", () => {
     const v31 = providersListResponseSchema.parse({
       providers: [
         {
@@ -295,7 +340,7 @@ describe("providers.list@6.0 upgrade/downgrade bridges", () => {
       ],
       native: null,
     });
-    const result = providersListDowngradeV6ToV3.downgradeResponse(v31);
+    const result = providersListDowngradeV7ToV3.downgradeResponse(v31);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.providers[0]).not.toHaveProperty("nativeCapabilities");
@@ -305,7 +350,7 @@ describe("providers.list@6.0 upgrade/downgrade bridges", () => {
     ).not.toThrow();
   });
 
-  it("downgrades v6.0 → v2.0 dropping Amp and nativeCapabilities", () => {
+  it("downgrades v7.0 → v2.0 dropping Amp and nativeCapabilities", () => {
     const v31 = providersListResponseSchema.parse({
       providers: [
         {
@@ -319,7 +364,7 @@ describe("providers.list@6.0 upgrade/downgrade bridges", () => {
       ],
       native: null,
     });
-    const result = providersListDowngradeV6ToV2.downgradeResponse(v31);
+    const result = providersListDowngradeV7ToV2.downgradeResponse(v31);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(
@@ -352,7 +397,7 @@ describe("providers.list@6.0 upgrade/downgrade bridges", () => {
       providers: [latest],
       native: null,
     });
-    const listResult = providersListDowngradeV6ToV1.downgradeResponse(list);
+    const listResult = providersListDowngradeV7ToV1.downgradeResponse(list);
     expect(listResult.ok).toBe(true);
     if (!listResult.ok) return;
     expect(listResult.value.providers[0]).not.toHaveProperty(
@@ -922,9 +967,9 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
       const entry = MUTATION_V20_RESPONSE_SCHEMA_BY_METHOD[method];
       expect(entry, method).toBeDefined();
       const parsed = entry.schema.parse({ state: ampState });
-      expect(
-        (parsed.state as { providerId: string } | null)?.providerId,
-      ).toBe("amp");
+      expect((parsed.state as { providerId: string } | null)?.providerId).toBe(
+        "amp",
+      );
       if (entry.nullableState) {
         const nullParsed = entry.schema.parse({ state: null });
         expect(nullParsed.state).toBeNull();
@@ -956,9 +1001,9 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
   it("list@2.0 remains pre-amp (providerIdSchemaV20 freeze from tag)", () => {
     // amp is in the mutation enum (tag latest) but not list@2.0's frozen set
     expect(fixtures.listV20ProviderIds).not.toContain("amp");
-    expect(
-      providerCliStateSchemaV20.safeParse(baseState("amp")).success,
-    ).toBe(false);
+    expect(providerCliStateSchemaV20.safeParse(baseState("amp")).success).toBe(
+      false,
+    );
     const preAmpId = fixtures.listV20ProviderIds[0];
     expect(
       providerCliStateSchemaV20.safeParse(baseState(preAmpId)).success,

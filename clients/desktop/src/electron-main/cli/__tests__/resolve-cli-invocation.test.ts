@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 
 // Native-packaging ticket - `resolveTraycerCliInvocation` in packaged
 // mode must use the CLI discovery model (Tech Plan Decision 6):
@@ -109,10 +110,7 @@ beforeEach(() => {
   mkdirSync(resourcesDir, { recursive: true });
   cliBinDir = join(homeDir, ".traycer", "cli", "bin");
   manifestPath = join(homeDir, ".traycer", "cli", "manifest.json");
-  process.env.HOME = homeDir;
-  if (process.platform === "win32") {
-    process.env.USERPROFILE = homeDir;
-  }
+  sandboxHome(homeDir);
   Object.defineProperty(process, "resourcesPath", {
     value: resourcesDir,
     configurable: true,
