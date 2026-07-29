@@ -100,7 +100,7 @@ jobs:
             fetched=""
             read -r -a group_tags <<< "$tags"
             for tag in "${group_tags[@]}"; do
-              if curl -sfL --retry 3 --connect-timeout 10 --max-time 60 \
+              if curl -sSfL --retry 3 --connect-timeout 10 --max-time 60 \
                 "${release_repo_url}/releases/download/${tag}/protocol-surface.json" -o "$out" \
                 && jq -e 'has("formatVersion") and has("unary") and has("stream")' "$out" >/dev/null 2>&1; then
                 fetched="$tag"
