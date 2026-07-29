@@ -7,10 +7,12 @@ import {
   it,
   vi,
 } from "vitest";
+import { execFile } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
 import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import {
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
@@ -24,15 +26,35 @@ import {
   readRegisteredCliInvocation,
   type ProcessRunner,
 } from "../macos";
+import {
+  buildCompatibleHostStartScript,
+  buildHostStartLauncherScript,
+} from "../host-start-script";
 import { ProcessRunError, type RunResult } from "../../process-runner";
-import { serviceLabelFor, smAppServiceAgentLabelId } from "../../label";
+import type { ServiceController } from "../../index";
+import {
+  serviceLabelFor,
+  serviceLauncherScriptPath,
+  smAppServiceAgentLabelId,
+} from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
+
+const execFileAsync = promisify(execFile);
 
 const MOCKS = vi.hoisted(() => ({
   readHostPidMetadata: vi.fn(),
   isProcessAlive: vi.fn(),
   cliLoggerWarn: vi.fn(),
   cliLoggerInfo: vi.fn(),
+  requestCooperativeShutdown: vi.fn(),
+}));
+
+// The cooperative-shutdown RPC flow has its own unit suite
+// (`desktop-agent-shutdown.test.ts`); here it is a seam so the controller
+// tests pin the ROUTING (which outcome leads to which launchd calls and
+// which error) without dialing a WebSocket.
+vi.mock("../desktop-agent-shutdown", () => ({
+  requestCooperativeShutdown: MOCKS.requestCooperativeShutdown,
 }));
 
 // `uninstallService` warns through the real CLI logger when it boots out an
@@ -145,6 +167,169 @@ describe("macOS service lifecycle", () => {
     expect(plist).not.toContain("HardResourceLimits");
   });
 
+  // Without this key, background-task management names the login item
+  // after ProgramArguments[0] - literally "sh" from an "Unknown
+  // Developer" - on every CLI-registered install (dev machines and the
+  // desktop's takeover fallback alike). The association groups it under
+  // the Traycer app in System Settings → Login Items.
+  it("associates the LaunchAgent with the Traycer desktop app so Login Items does not show it as 'sh'", () => {
+    const plist = buildLaunchAgentPlist({
+      label,
+      cli: { command: "/usr/local/bin/traycer", args: [] },
+    });
+
+    expect(plist).toContain(`<key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>ai.traycer.desktop</string>
+  </array>`);
+  });
+
+  it("starts both an N-1 CLI without --service-label and a current CLI with it, preserving leading invocation args", async () => {
+    const work = mkdtempSync(join(tmpdir(), "traycer-host-start-compat-"));
+    const oldCli = join(work, "old-cli.sh");
+    const newCli = join(work, "new-cli.sh");
+    const oldArgs = join(work, "old-args.txt");
+    const newArgs = join(work, "new-args.txt");
+    const script = buildCompatibleHostStartScript("ai.traycer.host.compat");
+    try {
+      // An N-1 CLI has no `host capabilities` subcommand at all: commander
+      // prints "unknown command" on stderr and exits 1. Reproduced exactly,
+      // including the non-empty stderr the emitted script must swallow.
+      await writeFile(
+        oldCli,
+        `#!/bin/sh
+if [ "$1" = "host" ] && [ "$2" = "capabilities" ]; then
+  echo "error: unknown command 'capabilities'" >&2
+  exit 1
+fi
+printf '%s\\n' "$@" > ${JSON.stringify(oldArgs)}
+`,
+        "utf8",
+      );
+      await writeFile(
+        newCli,
+        `#!/bin/sh
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && [ "$5" = "service-label" ]; then exit 0; fi
+printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
+`,
+        "utf8",
+      );
+      await chmod(oldCli, 0o700);
+      await chmod(newCli, 0o700);
+
+      await execFileAsync("/bin/sh", ["-c", script, oldCli]);
+      await execFileAsync("/bin/sh", [
+        "-c",
+        script,
+        newCli,
+        "--entry=cli-entry.js",
+      ]);
+
+      expect(await readFile(oldArgs, "utf8")).toBe("host\nstart\n");
+      expect(await readFile(newArgs, "utf8")).toBe(
+        "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n",
+      );
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  // The launcher-FILE form of the same contract: the macOS plist executes
+  // `~/.traycer/service/<label>/traycer-host-start <cli> <args...>` (so BTM
+  // names the login item after the file, not after /bin/sh), and BOTH CLI
+  // generations must still start. Executes the real emitted file, exactly
+  // like the inline-form row above.
+  it("launcher file: starts both an N-1 CLI without --service-label and a current CLI with it, preserving leading invocation args", async () => {
+    const work = mkdtempSync(join(tmpdir(), "traycer-host-start-launcher-"));
+    const launcher = join(work, "traycer-host-start");
+    const oldCli = join(work, "old-cli.sh");
+    const newCli = join(work, "new-cli.sh");
+    const oldArgs = join(work, "old-args.txt");
+    const newArgs = join(work, "new-args.txt");
+    try {
+      await writeFile(
+        launcher,
+        buildHostStartLauncherScript("ai.traycer.host.compat"),
+        "utf8",
+      );
+      await chmod(launcher, 0o755);
+      await writeFile(
+        oldCli,
+        `#!/bin/sh
+if [ "$1" = "host" ] && [ "$2" = "capabilities" ]; then
+  echo "error: unknown command 'capabilities'" >&2
+  exit 1
+fi
+printf '%s\\n' "$@" > ${JSON.stringify(oldArgs)}
+`,
+        "utf8",
+      );
+      await writeFile(
+        newCli,
+        `#!/bin/sh
+if [ "$1" = "--entry=cli-entry.js" ] && [ "$2" = "host" ] && [ "$3" = "capabilities" ] && [ "$4" = "--has" ] && [ "$5" = "service-label" ]; then exit 0; fi
+printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
+`,
+        "utf8",
+      );
+      await chmod(oldCli, 0o700);
+      await chmod(newCli, 0o700);
+
+      await execFileAsync(launcher, [oldCli]);
+      await execFileAsync(launcher, [newCli, "--entry=cli-entry.js"]);
+
+      expect(await readFile(oldArgs, "utf8")).toBe("host\nstart\n");
+      expect(await readFile(newArgs, "utf8")).toBe(
+        "--entry=cli-entry.js\nhost\nstart\n--service-label\nai.traycer.host.compat\n",
+      );
+    } finally {
+      await rm(work, { recursive: true, force: true });
+    }
+  });
+
+  // Field observation 2026-07-28 (sfltool dumpbtm): with `/bin/sh` as
+  // ProgramArguments[0], BTM recorded `Name: sh, Parent Identifier:
+  // Unknown Developer` for every CLI-registered install, and
+  // AssociatedBundleIdentifiers alone was probed and ignored for that
+  // shape. The plist must execute the per-label launcher file, whose
+  // basename is what macOS shows.
+  it("puts the per-label launcher file first in ProgramArguments so BTM names the item traycer-host-start", () => {
+    const plist = buildLaunchAgentPlist({
+      label,
+      cli: { command: "/usr/local/bin/traycer", args: ["--entry=e.js"] },
+    });
+
+    const launcherPath = serviceLauncherScriptPath(label);
+    expect(launcherPath.endsWith(`/${label.id}/traycer-host-start`)).toBe(true);
+    expect(plist).toContain(`<key>ProgramArguments</key>
+  <array>
+    <string>${launcherPath}</string>
+    <string>/usr/local/bin/traycer</string>
+    <string>--entry=e.js</string>
+  </array>`);
+    expect(plist).not.toContain("/bin/sh");
+  });
+
+  // The blocker this contract replaces: `--service-label` used to be passed
+  // only when it appeared in `host start --help` output, so applying the
+  // file's own `.hideHelp()` convention to an "Internal:" option silently
+  // dropped the identity binding with every test still green. Pin that the
+  // emitted script asks the machine contract and nothing else.
+  it("probes the capability subcommand, never help output", () => {
+    const script = buildCompatibleHostStartScript("ai.traycer.host.compat");
+    expect(script).toContain("host capabilities --has service-label");
+    expect(script).not.toContain("--help");
+    expect(script).not.toContain("grep");
+  });
+
+  // systemd's ExecStart guard rejects these characters outright, and the
+  // macOS plist shares this exact script - keep the one emitter honest for
+  // both consumers.
+  it("emits a single-line script free of characters systemd mis-parses", () => {
+    const script = buildCompatibleHostStartScript("ai.traycer.host.compat");
+    expect(script).not.toMatch(/[%;\n\t]/);
+  });
+
   beforeEach(() => {
     createdPlistPath = null;
     MOCKS.readHostPidMetadata.mockReset();
@@ -153,6 +338,13 @@ describe("macOS service lifecycle", () => {
     MOCKS.isProcessAlive.mockReturnValue(false);
     MOCKS.cliLoggerWarn.mockReset();
     MOCKS.cliLoggerInfo.mockReset();
+    MOCKS.requestCooperativeShutdown.mockReset();
+    // No test may reach the cooperative flow without staging an explicit
+    // outcome - an unstaged call resolving `undefined` would satisfy
+    // loosely-written assertions by accident.
+    MOCKS.requestCooperativeShutdown.mockRejectedValue(
+      new Error("requestCooperativeShutdown outcome not staged in this test"),
+    );
   });
 
   afterEach(async () => {
@@ -1100,15 +1292,27 @@ describe("macOS service lifecycle", () => {
     const controller = createMacosController(runner);
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
-    await expect(
-      controller.install({
+    const rejection: unknown = await controller
+      .install({
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
-      }),
-    ).rejects.toMatchObject({
+      })
+      .then(() => null)
+      .catch((error: unknown) => error);
+    expect(rejection).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: expect.stringContaining("SMAppService"),
+    });
+    // The advice must work from this exact state: `service uninstall`
+    // deliberately never refuses. `host ensure --no-service-register` is a
+    // bytes-only no-op on an installed, satisfied machine and must never
+    // reappear as the suggested fix.
+    expect(rejection).toMatchObject({
+      message: expect.stringContaining("traycer host service uninstall"),
+    });
+    expect(rejection).not.toMatchObject({
+      message: expect.stringContaining("no-service-register"),
     });
     // Must not bootout/bootstrap or rewrite the label under SMAppService.
     expect(calls.map((c) => c.args[0])).toEqual(["print"]);
@@ -1140,15 +1344,25 @@ describe("macOS service lifecycle", () => {
     const controller = createMacosController(runner);
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
-    await expect(
-      controller.install({
+    const rejection: unknown = await controller
+      .install({
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
-      }),
-    ).rejects.toMatchObject({
+      })
+      .then(() => null)
+      .catch((error: unknown) => error);
+    expect(rejection).toMatchObject({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
       message: expect.stringContaining(`${label.id}.agent`),
+    });
+    // The refusal must route to the working consent path (`--takeover`),
+    // never the `--no-service-register` no-op.
+    expect(rejection).toMatchObject({
+      message: expect.stringContaining("--takeover"),
+    });
+    expect(rejection).not.toMatchObject({
+      message: expect.stringContaining("no-service-register"),
     });
     // Both probes ran; nothing was booted out, bootstrapped, or written.
     expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
@@ -1188,39 +1402,557 @@ describe("macOS service lifecycle", () => {
     expect(MOCKS.readHostPidMetadata).not.toHaveBeenCalled();
   });
 
-  it("stop/start/restart fail fast with a Desktop routing when the AGENT label is SMAppService-loaded, instead of signalling a job that doesn't exist", async () => {
-    // On a migrated machine the host runs under `<label>.agent`; the CLI
-    // label has no job. Without the guard, `stop` signals nothing, waits
-    // out the full shutdown grace, and reports a misleading "stop did not
-    // take effect"; `start`/`restart` surface raw kickstart errors.
+  describe("Desktop-managed stop/start/restart (cooperative, never a refusal)", () => {
+    // On a migrated machine the host runs under `<label>.agent` and the CLI
+    // label has no job. These operations used to refuse outright ("use the
+    // Traycer app") - which cornered exactly the users whose Desktop app
+    // was the broken part. Now: stop/restart ask the RUNNING HOST to stand
+    // down over its lifecycle-claim RPCs, start/restart relaunch via
+    // kickstart of the AGENT label, and no arm ever bootouts/bootstraps
+    // the registration Desktop owns.
     const smAgentPath =
       "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
-    const calls: RecordedCall[] = [];
-    const runner: ProcessRunner = async (command, args) => {
-      calls.push({ command, args });
-      if (args[0] === "print" && args[1]?.endsWith(".agent") === true) {
-        return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
-      }
-      return buildSuccessResult();
-    };
-    const controller = createMacosController(runner);
-    MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
-    MOCKS.isProcessAlive.mockReturnValue(true);
+    const agentTarget = `gui/${process.getuid?.() ?? 0}/${label.id}.agent`;
 
-    for (const operation of [
-      () => controller.stop(label),
-      () => controller.start(label),
-      () => controller.restart(label),
-    ]) {
-      calls.length = 0;
-      await expect(operation()).rejects.toMatchObject({
+    function stageDesktopManagedRunner(): {
+      calls: RecordedCall[];
+      controller: ServiceController;
+    } {
+      const calls: RecordedCall[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print" && args[1]?.endsWith(".agent") === true) {
+          return { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 };
+        }
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
+    }
+
+    it("stop asks the host to stand down and touches no launchd job", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(controller.stop(label)).resolves.toBeUndefined();
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
+        label.environment,
+        "stop",
+      );
+      // Only the advisory ownership probe ran - no kill, no bootout.
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("stop surfaces a busy denial instead of escalating over live work", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
+
+      await expect(controller.stop(label)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: expect.stringContaining("work in progress"),
+      });
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("stop names the takeover escape hatch when the host RPC is unreachable", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "dial timeout",
+      });
+
+      const rejection: unknown = await controller
+        .stop(label)
+        .then(() => null)
+        .catch((error: unknown) => error);
+      expect(rejection).toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
         message: expect.stringContaining(`${label.id}.agent`),
       });
-      // Only the advisory probe ran - no kill/kickstart was ever issued
-      // against either label.
+      // The routing must include a path the user can take when the Desktop
+      // app itself is the thing that is broken - and never the
+      // `--no-service-register` no-op.
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining("traycer host service uninstall"),
+      });
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining("dial timeout"),
+      });
+      expect(rejection).not.toMatchObject({
+        message: expect.stringContaining("no-service-register"),
+      });
       expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("start kickstarts the AGENT label - the job launchd can actually start", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+
+      await expect(controller.start(label)).resolves.toBeUndefined();
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "kickstart"]);
+      expect(calls[1]?.args).toEqual(["kickstart", agentTarget]);
+    });
+
+    it("restart cooperatively stops, then plain-kickstarts the agent label", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(controller.restart(label)).resolves.toBeUndefined();
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
+        label.environment,
+        "restart",
+      );
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "kickstart"]);
+      // Plain kickstart - the host already exited; `-k` would be a
+      // gratuitous kill of nothing.
+      expect(calls[1]?.args).toEqual(["kickstart", agentTarget]);
+    });
+
+    it("restart of an unreachable host recycles the job with kickstart -k", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "dial timeout",
+      });
+
+      await expect(controller.restart(label)).resolves.toBeUndefined();
+      // The host cannot be asked nicely (RPC dead); an explicit restart
+      // recycles at the launchd level - still no registration mutation.
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "kickstart"]);
+      expect(calls[1]?.args).toEqual(["kickstart", "-k", agentTarget]);
+    });
+
+    it("restart surfaces a busy denial without killing the job", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
+
+      await expect(controller.restart(label)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: expect.stringContaining("work in progress"),
+      });
+      // No kickstart of any kind was issued over live work.
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    /*
+     * The restart HALVES, which is what `traycer host restart` actually calls.
+     *
+     * `restart()` above has always recycled an unreachable host, but the
+     * command could never reach it: it was spelled `stop()` then `start()`,
+     * and `stop()` throws on exactly the unreachable/hung outcomes the
+     * recycle exists for. So the command died on the broken-host state it
+     * was added to repair while these platform tests stayed green against a
+     * primitive production never called. These rows pin the halves instead.
+     */
+    it("stopForRestart does NOT throw where stop does - an unreachable host reports forcedRecycle so the command reaches its relaunch", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "dial timeout",
+      });
+
+      await expect(controller.stopForRestart(label)).resolves.toEqual({
+        forcedRecycle: true,
+      });
+      // Contrast, on the identical staged outcome: `stop` is terminal here.
+      // If this ever stops throwing, the two are the same operation and the
+      // finding this row exists for has been re-introduced by convergence.
+      await expect(controller.stop(label)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      });
+      // Neither half mutates launchd - only the advisory ownership probe.
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
+    });
+
+    /*
+     * Unreadable pid metadata is not proof the host is gone, and each half
+     * takes the safe direction for its own operation.
+     */
+    it("stop refuses rather than reporting success when no endpoint is published", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "no-metadata",
+      });
+
+      await expect(controller.stop(label)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("cannot be asked to stand down"),
+      });
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("stopForRestart forces a recycle when no endpoint is published - a plain kickstart of a job launchd still thinks is running is a no-op", async () => {
+      const { controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "no-metadata",
+      });
+
+      await expect(controller.stopForRestart(label)).resolves.toEqual({
+        forcedRecycle: true,
+      });
+    });
+
+    it("stopForRestart reports no forced recycle when the host really stood down", async () => {
+      const { controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(controller.stopForRestart(label)).resolves.toEqual({
+        forcedRecycle: false,
+      });
+    });
+
+    it("stopForRestart still refuses over live work", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
+
+      await expect(controller.stopForRestart(label)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+      });
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("relaunchAfterRestart recycles the agent job when the stop half could not ask the host to exit", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+
+      await expect(
+        controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+      ).resolves.toBeUndefined();
+      // `-k` is load-bearing: the old process was never asked to leave, and
+      // launchd treats a plain kickstart of a running job as satisfied - the
+      // host would keep serving the old bytes after a "successful" restart.
+      expect(calls[1]?.args).toEqual(["kickstart", "-k", agentTarget]);
+    });
+
+    it("relaunchAfterRestart plain-kickstarts when the host already exited", async () => {
+      const { calls, controller } = stageDesktopManagedRunner();
+
+      await expect(
+        controller.relaunchAfterRestart(label, { forcedRecycle: false }),
+      ).resolves.toBeUndefined();
+      expect(calls[1]?.args).toEqual(["kickstart", agentTarget]);
+    });
+  });
+
+  describe("takeoverDesktopRegistration", () => {
+    // `service install --takeover`: the explicit-consent path out of the
+    // agent refusal. Contract under test: cooperative stop first (busy
+    // aborts BEFORE launchd is touched), bootout verified by re-probe
+    // (a silently failed bootout must fail the takeover, not surface as a
+    // confusing second refusal from `install`), and the pre-split arm
+    // stays refused (that label is Desktop's own registration).
+    const smAgentPath =
+      "/Applications/Traycer.app/Contents/Library/LaunchAgents/ai.traycer.host.agent.plist";
+    const agentTarget = `gui/${process.getuid?.() ?? 0}/${label.id}.agent`;
+
+    function stageTakeoverRunner(input: {
+      cliLabelOwned: boolean;
+      agentLoadedAfterBootout: boolean;
+    }): {
+      calls: RecordedCall[];
+      controller: ServiceController;
+    } {
+      const calls: RecordedCall[] = [];
+      let agentPrints = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          if (args[1]?.endsWith(".agent") === true) {
+            agentPrints += 1;
+            const loaded =
+              agentPrints === 1 ? true : input.agentLoadedAfterBootout;
+            return loaded
+              ? { stdout: `path = ${smAgentPath}\n`, stderr: "", exitCode: 0 }
+              : {
+                  stdout: "",
+                  stderr: "Could not find specified service\n",
+                  exitCode: 113,
+                };
+          }
+          return input.cliLabelOwned
+            ? {
+                stdout: `path = /Applications/Traycer.app/Contents/Library/LaunchAgents/${label.id}.plist\n`,
+                stderr: "",
+                exitCode: 0,
+              }
+            : {
+                stdout: "",
+                stderr: "Could not find specified service\n",
+                exitCode: 113,
+              };
+        }
+        return buildSuccessResult();
+      };
+      return { calls, controller: createMacosController(runner) };
     }
+
+    it("cooperatively stops, boots out the agent, and verifies the bootout took effect", async () => {
+      const { calls, controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: false,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "took-over",
+        agentLabelId: `${label.id}.agent`,
+        cooperativeStop: "stopped",
+      });
+      expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledWith(
+        label.environment,
+        "takeover",
+      );
+      expect(calls.map((c) => c.args[0])).toEqual([
+        "print",
+        "print",
+        "bootout",
+        "print",
+      ]);
+      expect(calls[2]?.args).toEqual(["bootout", "--wait", agentTarget]);
+      // The takeover is an ownership change; the audit line is the only
+      // record of it a support thread can recover.
+      expect(MOCKS.cliLoggerInfo).toHaveBeenCalledWith(
+        expect.stringContaining("booted out Traycer Desktop's SMAppService"),
+        expect.objectContaining({ agentLabel: `${label.id}.agent` }),
+      );
+    });
+
+    it("aborts on a busy denial before touching launchd", async () => {
+      const { calls, controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: true,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+        message: expect.stringContaining("work in progress"),
+      });
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
+    });
+
+    it("proceeds underneath an unreachable host, logging the degradation", async () => {
+      const { calls, controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: false,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({
+        kind: "unreachable",
+        cause: "dial timeout",
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({
+        kind: "took-over",
+        agentLabelId: `${label.id}.agent`,
+        cooperativeStop: "skipped-unreachable",
+      });
+      expect(calls.map((c) => c.args[0])).toEqual([
+        "print",
+        "print",
+        "bootout",
+        "print",
+      ]);
+      expect(MOCKS.cliLoggerWarn).toHaveBeenCalledWith(
+        expect.stringContaining("could not be stopped cooperatively"),
+        expect.objectContaining({ cause: "dial timeout" }),
+      );
+    });
+
+    /*
+     * Verification must be POSITIVE, in both indeterminate shapes.
+     *
+     * The takeover proceeds on "the agent is gone". Every non-zero
+     * `launchctl print` used to collapse to not-loaded, and a thrown probe
+     * was caught into not-loaded as well - so an EPERM, a timeout, or a
+     * launchctl that could not spawn all read as proof the bootout worked.
+     * Registering the CLI LaunchAgent on that evidence leaves BOTH
+     * registrations live: two hosts, one data dir - the dual-host state this
+     * command exists to resolve.
+     */
+    it("aborts the takeover when the post-bootout probe fails rather than treating it as proof of absence", async () => {
+      const calls: RecordedCall[] = [];
+      let agentPrints = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          const target = args[1] ?? "";
+          if (target.endsWith(`/${label.id}.agent`)) {
+            agentPrints += 1;
+            // First probe establishes Desktop ownership; the verification
+            // probe afterwards cannot answer.
+            if (agentPrints === 1) {
+              return {
+                stdout: `path = ${smAgentPath}\n`,
+                stderr: "",
+                exitCode: 0,
+              };
+            }
+            throw new Error("launchctl could not be spawned");
+          }
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        return buildSuccessResult();
+      };
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("could not confirm"),
+      });
+    });
+
+    it("aborts the takeover when the post-bootout probe fails for a reason that is not service-not-found", async () => {
+      const calls: RecordedCall[] = [];
+      let agentPrints = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          const target = args[1] ?? "";
+          if (target.endsWith(`/${label.id}.agent`)) {
+            agentPrints += 1;
+            if (agentPrints === 1) {
+              return {
+                stdout: `path = ${smAgentPath}\n`,
+                stderr: "",
+                exitCode: 0,
+              };
+            }
+            // Non-zero, but NOT "could not find" - a permission failure is
+            // no evidence the label is gone.
+            return {
+              stdout: "",
+              stderr: "Operation not permitted\n",
+              exitCode: 1,
+            };
+          }
+          return {
+            stdout: "",
+            stderr: "Could not find specified service\n",
+            exitCode: 113,
+          };
+        }
+        return buildSuccessResult();
+      };
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        createMacosController(runner).takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("could not confirm"),
+      });
+    });
+
+    it("refuses on a pre-split machine where the CLI label is Desktop's own registration", async () => {
+      const { calls, controller } = stageTakeoverRunner({
+        cliLabelOwned: true,
+        agentLoadedAfterBootout: true,
+      });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("traycer host service uninstall"),
+      });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(calls.map((c) => c.args[0])).toEqual(["print"]);
+    });
+
+    it("reports not-applicable when Desktop owns nothing", async () => {
+      const { calls, controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: true,
+      });
+      // Agent print must read not-loaded on the FIRST probe for this case.
+      calls.length = 0;
+      const notLoadedRunner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        return {
+          stdout: "",
+          stderr: "Could not find specified service\n",
+          exitCode: 113,
+        };
+      };
+      const cleanController = createMacosController(notLoadedRunner);
+
+      await expect(
+        cleanController.takeoverDesktopRegistration(label),
+      ).resolves.toEqual({ kind: "not-applicable" });
+      expect(MOCKS.requestCooperativeShutdown).not.toHaveBeenCalled();
+      expect(calls.map((c) => c.args[0])).toEqual(["print", "print"]);
+      void controller;
+    });
+
+    it("fails closed when the bootout does not take effect", async () => {
+      const { calls, controller } = stageTakeoverRunner({
+        cliLabelOwned: false,
+        agentLoadedAfterBootout: true,
+      });
+      MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "no-host" });
+
+      await expect(
+        controller.takeoverDesktopRegistration(label),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining("did not take effect"),
+      });
+      expect(calls.map((c) => c.args[0])).toEqual([
+        "print",
+        "print",
+        "bootout",
+        "print",
+      ]);
+    });
+
+    /**
+     * The barrier, pinned in the states that need it.
+     *
+     * `--wait` is the difference between "launchd accepted the request" and
+     * "the process is gone". Takeover reaches the bootout with the old host
+     * still running in exactly these three outcomes - only `stopped` waited
+     * for exit - and the evicted host publishes `pid.json` until the very end
+     * of teardown. `service install` then starts the CLI-label host, whose
+     * first act is `findLiveIncumbentHost`: a bare bootout lets it read the
+     * corpse as a live incumbent, decline, and exit 0, and
+     * `KeepAlive{SuccessfulExit: false}` leaves it DOWN until the next login.
+     *
+     * Asserted per outcome rather than once, because the bug is not "the flag
+     * is missing" but "the flag is missing on the path where the host is
+     * still alive" - a single row over `stopped` would pass while every
+     * dangerous arm regressed.
+     */
+    it.each([
+      ["unreachable", { kind: "unreachable", cause: "dial failed" }],
+      ["hung", { kind: "hung", pid: 4242 }],
+      ["no-metadata", { kind: "no-metadata" }],
+    ] as const)(
+      "waits for the evicted host to exit before install can race it (%s)",
+      async (_name, outcome) => {
+        const { calls, controller } = stageTakeoverRunner({
+          cliLabelOwned: false,
+          agentLoadedAfterBootout: false,
+        });
+        MOCKS.requestCooperativeShutdown.mockResolvedValue(outcome);
+
+        await expect(
+          controller.takeoverDesktopRegistration(label),
+        ).resolves.toMatchObject({ kind: "took-over" });
+
+        const bootout = calls.find((c) => c.args[0] === "bootout");
+        expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
+      },
+    );
   });
 
   it("stop/start/restart proceed normally when the agent probe reads not-loaded (CLI-managed machine)", async () => {
@@ -1361,6 +2093,91 @@ describe("macOS service lifecycle", () => {
       expect(booted).toHaveLength(1);
       expect(booted[0]?.endsWith(`/${label.id}`)).toBe(true);
       await expect(readFile(createdPlistPath, "utf8")).rejects.toThrow();
+    });
+
+    /*
+     * The availability gate, in both directions.
+     *
+     * "Desktop's agent is loaded" is the only thing the ownership probe
+     * proves, and it is not enough to justify deleting the other
+     * registration. On a machine where the agent is loaded but cannot spawn
+     * (stale LWCR after an app replace, EX_CONFIG), the CLI job may be the
+     * ONLY host that runs - very possibly because the user created it with
+     * `service install --takeover` for exactly this reason. Retiring it there
+     * boots out the working host and kickstarts one already known to fail:
+     * the hostless lockout, produced by the repair.
+     *
+     * Desktop's launch-time retirement already gates the identical
+     * destructive direction; this is the CLI-side half of that rule.
+     */
+    const WEDGED_AGENT_PRINT = [
+      "\tpath = (submitted by smd.321)",
+      "\ttype = Submitted",
+      "\tmanaged_by = com.apple.xpc.ServiceManagement",
+      "\tstate = spawn failed",
+      "\tlast exit code = 78",
+    ].join("\n");
+
+    it("keeps the competing CLI registration when Desktop's agent shows positive wedge markers", async () => {
+      const calls: RecordedCall[] = [];
+      const runner = makeRunner(
+        { [agentLabelId]: WEDGED_AGENT_PRINT, [label.id]: CLI_PRINT },
+        calls,
+      );
+      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+      await writeFile(createdPlistPath, "<plist/>", "utf8");
+
+      await expect(
+        createMacosController(runner).retireCompetingRegistration(label),
+      ).resolves.toEqual({
+        kind: "kept-agent-possibly-wedged",
+        probe: "wedged",
+      });
+
+      // Nothing destructive ran: the CLI job still exists and its manifest
+      // is still on disk. Asserting the outcome alone would pass even if the
+      // bootout had happened and only the return value changed.
+      expect(bootoutTargets(calls)).toEqual([]);
+      expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual([]);
+      await expect(readFile(createdPlistPath, "utf8")).resolves.toBe(
+        "<plist/>",
+      );
+    });
+
+    it("keeps the competing CLI registration when the agent's health cannot be read at all", async () => {
+      const calls: RecordedCall[] = [];
+      // The ownership probe answers (so the repair is in scope), then the
+      // wedge probe cannot run. An unreadable health probe must fail toward
+      // keeping the registration, exactly like positive wedge evidence.
+      let printsSeen = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "print") {
+          printsSeen += 1;
+          if (printsSeen === 1) {
+            return {
+              stdout: `${args[1] ?? ""} = {\n${SMAPPSERVICE_PRINT}\n}\n`,
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          throw new Error("launchctl could not be spawned");
+        }
+        return buildSuccessResult();
+      };
+      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+      await writeFile(createdPlistPath, "<plist/>", "utf8");
+
+      await expect(
+        createMacosController(runner).retireCompetingRegistration(label),
+      ).resolves.toEqual({
+        kind: "kept-agent-possibly-wedged",
+        probe: "unknown",
+      });
+      expect(bootoutTargets(calls)).toEqual([]);
+      await expect(readFile(createdPlistPath, "utf8")).resolves.toBe(
+        "<plist/>",
+      );
     });
 
     // The availability step. The agent job being LOADED (which is all the
@@ -1807,6 +2624,24 @@ describe("macOS service lifecycle", () => {
         }),
         "utf8",
       );
+      await expect(readRegisteredCliInvocation(label)).resolves.toBeNull();
+    });
+
+    it("refuses a launcher-form manifest whose path is not this label's own serviceLauncherScriptPath", async () => {
+      // Same basename, wrong path - e.g. an attacker-writable plist
+      // engineered to look like the launcher-file form. Matching on the
+      // `traycer-host-start` basename alone would treat this as a genuine
+      // registration and PRESERVE its command across the next `host
+      // update`, persisting an arbitrary CLI path into the freshly
+      // rewritten plist. Only the exact path this label's own
+      // `serviceLauncherScriptPath` resolves to may attest.
+      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+      await writeFile(
+        createdPlistPath,
+        `<plist><dict><key>ProgramArguments</key><array><string>/tmp/attacker-controlled/traycer-host-start</string><string>${process.execPath}</string></array></dict></plist>`,
+        "utf8",
+      );
+
       await expect(readRegisteredCliInvocation(label)).resolves.toBeNull();
     });
   });

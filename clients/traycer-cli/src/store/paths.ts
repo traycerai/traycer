@@ -69,6 +69,11 @@ const HOST_LOG_FILENAME = "host.log";
 // an archive (see `host-log-rotation.ts`).
 const HOST_LOG_BACKUP_FILENAME = "host.log.1";
 const HOST_PID_FILENAME = "pid.json";
+const HOST_SUBSTRATE_FILENAME = "substrate.json";
+const HOST_TRANSITION_FILENAME = "transition.json";
+const HOST_TRANSITION_PROBE_FILENAME = "transition-probe.json";
+const HOST_ACTIVATION_FILENAME = "activation.json";
+const HOST_PENDING_ACTIVATION_FILENAME = "pending-activation.json";
 
 function environmentSubdir(base: string, environment: Environment): string {
   // production → base; dev → base/dev (the slot dir name is the environment
@@ -160,6 +165,36 @@ export function hostLogBackupPath(
   environment: Environment | undefined,
 ): string {
   return join(hostHomeDir(environment), HOST_LOG_BACKUP_FILENAME);
+}
+/** Durable lifecycle-layer substrate selection (v1, temp+rename writes). */
+export function hostSubstratePath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_SUBSTRATE_FILENAME);
+}
+/** Durable lifecycle transition journal, including the governor snapshot. */
+export function hostTransitionJournalPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_TRANSITION_FILENAME);
+}
+/** Dedicated correlated probe marker; intentionally not appended to host.log. */
+export function hostTransitionProbeMarkerPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_TRANSITION_PROBE_FILENAME);
+}
+/** Durable activation journal; distinct from the substrate transition journal. */
+export function hostActivationJournalPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_ACTIVATION_FILENAME);
+}
+/** Busy activation intent, retained until activation reaches a terminal journal. */
+export function hostPendingActivationPath(
+  environment: Environment | undefined,
+): string {
+  return join(hostHomeDir(environment), HOST_PENDING_ACTIVATION_FILENAME);
 }
 export function bootstrapLogPath(environment: Environment | undefined): string {
   return hostLogPath(environment);

@@ -51,7 +51,11 @@ export function useNeighborTabPicker(): NeighborTabPicker {
         void navigate(LANDING_ROUTE);
         return;
       }
-      navigateToTabIntent(navigate, tabResolveIntent(captured.neighbor));
+      navigateToTabIntent(
+        navigate,
+        tabResolveIntent(captured.neighbor),
+        undefined,
+      );
     },
     [navigate],
   );

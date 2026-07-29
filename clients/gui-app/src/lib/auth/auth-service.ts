@@ -11,6 +11,17 @@ import type {
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  ListUserSessionsResponse,
+  MintHostCredentialRequest,
+} from "@traycer/protocol/auth/devices-sessions";
+import type {
+  MintHostCredentialFetchResult,
+  RetainedStepUpVerifyFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+} from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation";
 import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
 import {
@@ -195,6 +206,13 @@ export interface DeviceFlowProgress {
   readonly verificationUri: string;
   readonly verificationUriComplete: string;
   readonly expiresAtMs: number;
+  /**
+   * `waiting-approval` while the `/device/token` poll is outstanding;
+   * `finalizing` once the poll returned `authorized` and the token is being
+   * validated/persisted - the surface must stop saying "Waiting for approval"
+   * the moment the approval has actually landed.
+   */
+  readonly phase: "waiting-approval" | "finalizing";
 }
 
 export type DeviceFlowProgressListener = (
@@ -774,6 +792,7 @@ export class AuthService {
       verificationUri: authorization.verificationUri,
       verificationUriComplete: authorization.verificationUriComplete,
       expiresAtMs: Date.now() + authorization.expiresInSeconds * 1000,
+      phase: "waiting-approval",
     });
     // The attempt times out at the `device_code` TTL (`expires_in`); the handler
     // is epoch-scoped so a superseded attempt's timer can't kill a newer one.
@@ -1066,6 +1085,87 @@ export class AuthService {
     // so TanStack Query surfaces a retryable error on the panel (refresh button)
     // instead of a misleading "no subscription" empty state.
     throw new Error("Couldn't reach Traycer to load your subscription.");
+  }
+
+  /**
+   * Fetches the signed-in user's device/session list via authn-v3. The raw
+   * bearer remains inside this auth boundary; callers consume a parsed DTO from
+   * TanStack Query and render signed-out as an empty state.
+   */
+  async fetchUserSessions(): Promise<ListUserSessionsResponse | null> {
+    if (this.currentBearer === null) {
+      return null;
+    }
+    const result = await this.runnerHost.listUserSessions(this.currentBearer);
+    if (result.kind === "unauthorized") {
+      return null;
+    }
+    if (result.kind === "network-error") {
+      throw new Error("Couldn't reach Traycer to load your sessions.");
+    }
+    return result.response;
+  }
+
+  /**
+   * Revokes one session family. `useStepUpCredential` is false for the first
+   * attempt; if authn responds `step-up-required`, the UI verifies an OTP and
+   * retries by asking the runner-host boundary to attach its retained step-up
+   * bearer internally.
+   */
+  async revokeUserSession(
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeUserSession(
+      this.currentBearer,
+      familyId,
+      useStepUpCredential,
+    );
+  }
+
+  /**
+   * Global sign-out is intentionally tighter than per-session cleanup: callers
+   * verify a fresh step-up challenge for each invocation, then the runner-host
+   * boundary attaches and clears the retained step-up bearer internally.
+   */
+  async revokeAllSessions(): Promise<RevokeAllSessionsFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.revokeAllSessions(this.currentBearer);
+  }
+
+  /**
+   * Mints a device credential for a connected host. A single attempt on the
+   * ordinary bearer: unlike `revokeUserSession` there is no step-up retry,
+   * because the mint is not step-up gated (see the mint route's doc comment).
+   */
+  async mintHostCredential(
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintHostCredential(this.currentBearer, request);
+  }
+
+  async requestStepUpChallenge(): Promise<StepUpChallengeFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.requestStepUpChallenge(this.currentBearer);
+  }
+
+  async verifyStepUpChallenge(
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.verifyStepUpChallenge(this.currentBearer, code);
   }
 
   private async revalidateCurrentContextOnce(
@@ -1615,6 +1715,23 @@ export class AuthService {
       return;
     }
     if (result.kind === "authorized") {
+      // Set BEFORE the first await, like every other terminal outcome below:
+      // an overlapping start() invoked after this attempt's signIn() shares
+      // its identityGeneration (nothing bumps it again until a fresh sign-in
+      // /out), so the generation fence alone cannot stop a straggling
+      // rehydration from clobbering the identity applyTokenInternal is about
+      // to establish. `authResolvedDuringStart` is the only guard for that.
+      if (this.starting) {
+        this.authResolvedDuringStart = true;
+      }
+      // The approval has landed; only token validation/persistence remains.
+      // Flip the surface off "Waiting for approval" NOW - validation can take
+      // seconds (network retries, credentials-file lock), and through that
+      // window the panel would otherwise claim the approval never arrived.
+      const progress = this.deviceProgress;
+      if (progress !== null) {
+        this.setDeviceProgress({ ...progress, phase: "finalizing" });
+      }
       await this.applyTokenInternal(
         result.token,
         result.refreshToken,

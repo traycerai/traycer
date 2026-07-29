@@ -98,8 +98,13 @@ export function MarkdownAnchor({
     [href, linkPolicy, reportIssueAvailable, runnerHost],
   );
 
+  // Native `title` ON PURPOSE - see the eslint exemption for this file. This
+  // is not app chrome: it is the link title the DOCUMENT AUTHOR wrote, and
+  // `title` is where a Markdown link title belongs. Routing it through the
+  // app's tooltip surface would restyle author content as UI and strip the
+  // attribute off the rendered anchor.
   return (
-    <a href={href} title={title} className={className} onClick={routeLinkClick}>
+    <a href={href} className={className} title={title} onClick={routeLinkClick}>
       {children}
     </a>
   );

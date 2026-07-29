@@ -1,5 +1,6 @@
 import { homedir, platform as osPlatform } from "node:os";
 import { join } from "node:path";
+import { HOST_START_LAUNCHER_BASENAME } from "@traycer-clients/shared/host-lifecycle";
 import type { Environment } from "../runner/environment";
 import { devDesktopSlotForEnvironment } from "../store/dev-desktop-slot";
 
@@ -101,6 +102,23 @@ export function serviceManifestPath(label: ServiceLabel): string {
     return "";
   }
   return join(home, ".config", "systemd", "user", `${label.id}.service`);
+}
+
+// On-disk home of the macOS launcher file the LaunchAgent executes
+// (`~/.traycer/service/<label-id>/traycer-host-start`). The label id is the
+// parent directory - load-bearing, not tidiness: the shared recognizer
+// (`attestTraycerRegistration`) matches a launcher-form plist to a label by
+// finding `/<label-id>/` in `ProgramArguments[0]`, and the basename is the
+// name macOS shows in Login Items. Written by `service install` alongside
+// the plist and removed by `service uninstall`.
+export function serviceLauncherScriptPath(label: ServiceLabel): string {
+  return join(
+    homedir(),
+    ".traycer",
+    "service",
+    label.id,
+    HOST_START_LAUNCHER_BASENAME,
+  );
 }
 
 // Windows Scheduled Task identifier. production = `\Traycer\Host`,

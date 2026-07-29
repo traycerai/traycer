@@ -10,7 +10,11 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { appLogger } from "@/lib/logger";
-import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import {
+  Analytics,
+  AnalyticsEvent,
+  type AnalyticsSource,
+} from "@/lib/analytics";
 
 export interface HostDirectoryServiceOptions {
   readonly runnerHost: IRunnerHost;
@@ -159,6 +163,44 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.setSelected(entry);
   }
 
+  /**
+   * Binds a host for the CURRENT app context without recording it as the
+   * user's chosen host.
+   *
+   * Same single binding authority as `selectById` - it goes through
+   * `setSelected`, so `HostRuntime` still performs exactly one synchronous
+   * `hostClient.bind(entry)` and the directory and client cannot disagree.
+   * What it deliberately does NOT write is `explicitSelection`: activating a
+   * host to show a notification's destination moves the app, it does not
+   * answer "which host do you work on". Leaving that intent unset is what
+   * lets `reconcileSelection` promote `getDefaultEntry()` again if the
+   * activated host later leaves the directory - a durable pin would strand
+   * the session unbound on a host that no longer exists.
+   *
+   * `source` is the caller's analytics attribution: this seam is about
+   * selection LIFETIME, not about who triggered it, so the entry point names
+   * itself rather than being assumed here.
+   *
+   * An id the directory does not currently hold is a no-op, never a clear: a
+   * transient activation must not be able to unbind the app.
+   */
+  selectTransientById(hostId: string, source: AnalyticsSource): void {
+    const entry = this.findById(hostId);
+    appLogger.debug("[host-directory] transient host activation requested", {
+      hostId,
+      resolved: entry !== null,
+      source,
+    });
+    if (entry === null) {
+      return;
+    }
+    Analytics.getInstance().track(AnalyticsEvent.HostSelected, {
+      source,
+      host_kind: entry.kind === "remote" ? "remote" : "local",
+    });
+    this.setSelected(entry);
+  }
+
   getLocalEntry(): HostDirectoryEntry | null {
     return this.localEntry;
   }
@@ -187,10 +229,10 @@ export class HostDirectoryService implements IHostDirectoryService {
   /**
    * Returns the cardinality of the merged directory.
    *
-   * `<MobileHostGate />` consumes this to decide whether to render the
-   * no-host guidance state, let auto-bind proceed, or programmatically
-   * open the mounted `<HostPicker />`. Consumers can alternatively
-   * compute it from `list()`; this helper just centralises the mapping.
+   * The host-readiness controller consumes this as `hasMobileNoHost`, which
+   * resolves to the `mobile-no-host` readiness kind and its no-host guidance
+   * surface. Consumers can alternatively compute it from `list()`; this helper
+   * just centralises the mapping.
    */
   getCardinality(): "zero" | "one" | "many" {
     const total = this.snapshot().length;
@@ -262,37 +304,49 @@ export class HostDirectoryService implements IHostDirectoryService {
   private reconcileSelection(): void {
     if (this.selected !== null) {
       const fresh = this.findById(this.selected.hostId);
-      if (fresh === null) {
-        this.setSelected(null);
+      if (fresh !== null) {
+        if (fresh !== this.selected) {
+          this.selected = fresh;
+          appLogger.debug(
+            "[host-directory] effective host selection refreshed",
+            {
+              hostId: fresh.hostId,
+              kind: fresh.kind,
+              hasWebsocketUrl: fresh.websocketUrl !== null,
+            },
+          );
+          for (const handler of this.selectionListeners) {
+            handler(fresh);
+          }
+        }
         return;
       }
-      if (fresh !== this.selected) {
-        this.selected = fresh;
-        appLogger.debug("[host-directory] effective host selection refreshed", {
-          hostId: fresh.hostId,
-          kind: fresh.kind,
-          hasWebsocketUrl: fresh.websocketUrl !== null,
-        });
-        for (const handler of this.selectionListeners) {
-          handler(fresh);
-        }
-      }
-      return;
+      // The selected host left the directory. Fall through to resolve the
+      // next selection from INTENT rather than clearing and waiting for a
+      // later pass: a selection with no durable intent behind it (a transient
+      // notification activation) hands straight back to the default host in
+      // one transition, instead of leaving the app unbound until the next
+      // refresh happens to arrive. An explicit pick still resolves to the
+      // same `null` it always did - the user chose that host, so we do not
+      // silently move them somewhere else.
     }
+    this.setSelected(this.selectionFromIntent());
+  }
+
+  /**
+   * The selection implied by durable intent alone, ignoring whatever is
+   * currently selected: the user's explicit pick while the directory can
+   * still resolve it, their explicit clear when they made one, and otherwise
+   * the auto-promoted default host.
+   */
+  private selectionFromIntent(): HostDirectoryEntry | null {
     if (this.explicitSelection !== null) {
       if (this.explicitSelection.hostId === null) {
-        return;
+        return null;
       }
-      const explicitEntry = this.findById(this.explicitSelection.hostId);
-      if (explicitEntry !== null) {
-        this.setSelected(explicitEntry);
-      }
-      return;
+      return this.findById(this.explicitSelection.hostId);
     }
-    const defaultEntry = this.getDefaultEntry();
-    if (defaultEntry !== null) {
-      this.setSelected(defaultEntry);
-    }
+    return this.getDefaultEntry();
   }
 
   private emit(): void {

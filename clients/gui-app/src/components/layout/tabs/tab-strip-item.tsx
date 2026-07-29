@@ -9,7 +9,7 @@ import {
 import { X } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { AnimatePresence, type Transition } from "motion/react";
+import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
 import {
   useDraggable,
@@ -53,8 +53,14 @@ import {
   leaderDigitFor,
   leaderHint,
 } from "@/components/ui/leader-digit-shortcuts";
+import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  HEADER_TAB_LAYOUT_TRANSITION,
+  TAB_CLASS_BASE,
+} from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
+import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
 import type { HeaderTab, TabIcon } from "@/stores/tabs/types";
@@ -67,20 +73,22 @@ import {
 } from "@/hooks/epic/use-epic-activity-status";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
-const TAB_CLASS_BASE =
-  "group/tab relative flex h-10 w-full min-w-0 items-center gap-1.5 px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm transition-[color,transform] duration-300 ease-spring";
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
-const HEADER_TAB_LAYOUT_TRANSITION = {
-  type: "spring",
-  stiffness: 520,
-  damping: 42,
-  mass: 0.72,
-} satisfies Transition;
 const LONG_PRESS_CONTEXT_MENU_MS = 500;
 
 interface TabItemProps {
   readonly tab: HeaderTab;
   readonly index: number;
+  /** `null` makes this a member control inside a group-level reorder frame. */
+  readonly dnd: HeaderTabDndConfig | null;
+  /**
+   * `"own"` draws the tab's own chrome silhouette. `"member"` is for the halves
+   * of a split group: the group draws one shared silhouette around both, so a
+   * member drawing its own would nest a second outline inside it. Members get a
+   * flat focus wash and tighter padding instead.
+   */
+  readonly chrome: "own" | "member";
+  readonly includeMotionFrame: boolean;
   readonly isActive: boolean;
   readonly showSeparatorAfter: boolean;
   readonly showDropIndicatorBefore: boolean;
@@ -91,6 +99,7 @@ interface TabItemProps {
   readonly canCloseOtherTabs: boolean;
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
+  readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
   readonly taskPinned: boolean | null;
   readonly isTaskPinPending: boolean;
   readonly onSetTaskPinned: (
@@ -100,10 +109,19 @@ interface TabItemProps {
   ) => void;
 }
 
+export interface HeaderTabDndConfig {
+  readonly stripItemId: string;
+  readonly index: number;
+  readonly isDropSlot: boolean;
+}
+
 export const TabItem = memo(function TabItem(props: TabItemProps) {
   const {
     tab,
     index,
+    dnd,
+    chrome,
+    includeMotionFrame,
     isActive,
     showSeparatorAfter,
     showDropIndicatorBefore,
@@ -114,6 +132,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     canCloseOtherTabs,
     onOpenInNewWindow,
     canOpenInNewWindow,
+    onSplitCommand,
     taskPinned,
     isTaskPinPending,
     onSetTaskPinned,
@@ -122,7 +141,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     ref: dndRef,
     listeners,
     isDragging,
-  } = useHeaderTabDnd(tab.kind, tab.id, index);
+  } = useHeaderTabDnd(tab.kind, tab.id, dnd);
   const tabRef = useRef<HTMLDivElement | null>(null);
   const scrollActiveTabIntoView = useCallback(
     (element: HTMLDivElement | null) => {
@@ -152,6 +171,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     tab.kind === "epic" ? tab.epicId : null,
   );
   const canEditTitle = tab.kind === "epic" && isEditableRole(permissionRole);
+  const canClose = tab.kind !== "epic" || tab.canClose;
   // Epic tabs can carry an empty name; render through `displayTitle` so it falls
   // back to "Untitled task". Other kinds render their name verbatim.
   const resolvedTabName = liveEpicTitle ?? tab.name;
@@ -243,7 +263,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
 
   const activateTab = useCallback(() => {
     if (rename.isEditing) return;
-    navigateToTabIntent(navigate, tabResolveIntent(tab));
+    navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
   }, [navigate, rename.isEditing, tab]);
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -294,85 +314,93 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           index,
           hint: leaderHint(leaderDigitFor(index), "to switch to", displayName),
         };
-  return (
+  const control = (
     <ContextMenu>
-      <HeaderTabMotionFrame isDragging={isDragging}>
-        <ContextMenuTrigger asChild>
-          <div
-            ref={combinedRef}
-            {...listeners}
-            role="tab"
-            tabIndex={0}
-            aria-selected={isActive}
-            data-testid={`tab-${tab.kind}-${tab.id}`}
-            data-tab-kind={tab.kind}
-            data-tab-index={index}
-            onClick={activateTab}
-            onKeyDown={handleKeyDown}
-            onTouchCancel={cancelLongPress}
-            onTouchEnd={cancelLongPress}
-            onTouchMove={cancelLongPress}
-            onTouchStart={handleTouchStart}
-            className={cn(
-              TAB_CLASS_BASE,
-              tabStateClass(isActive),
-              NO_DRAG_CLASS,
-              "cursor-pointer",
-            )}
-          >
-            <HeaderTabDropIndicator
-              visible={showDropIndicatorBefore}
-              side="left"
-            />
+      <ContextMenuTrigger asChild>
+        <div
+          ref={combinedRef}
+          {...listeners}
+          role="tab"
+          tabIndex={0}
+          aria-selected={isActive}
+          data-testid={`tab-${tab.kind}-${tab.id}`}
+          data-tab-kind={tab.kind}
+          data-tab-index={index}
+          onClick={activateTab}
+          onKeyDown={handleKeyDown}
+          onTouchCancel={cancelLongPress}
+          onTouchEnd={cancelLongPress}
+          onTouchMove={cancelLongPress}
+          onTouchStart={handleTouchStart}
+          className={cn(
+            TAB_CLASS_BASE,
+            // A split half shares the group's silhouette and only has half the
+            // width, so it trades the tab's generous side padding for enough
+            // room to still show an icon plus a readable title.
+            chrome === "member" && cn("gap-1", isActive ? "px-5" : "px-1.5"),
+            tabStateClass(isActive),
+            NO_DRAG_CLASS,
+            "cursor-pointer",
+          )}
+        >
+          <HeaderTabDropIndicator
+            visible={showDropIndicatorBefore}
+            side="left"
+          />
+          {chrome === "own" ? (
             <TabChrome isActive={isActive} />
-            <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
-              <TabLeadingIcon
-                icon={tab.icon}
-                titleGenerationPending={titleGenerationPending}
-                activityStatus={activityStatus}
-                tabId={tab.id}
-                epicId={tab.kind === "epic" ? tab.epicId : null}
-              />
-              {rename.isEditing ? (
-                <input
-                  {...rename.inputProps}
-                  aria-label="Edit epic title"
-                  data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
-                  className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-center text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
-                />
-              ) : (
-                <>
-                  <span className="min-w-0 flex-1 text-center">
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span
-                          data-testid={`tab-title-${tab.kind}-${tab.id}`}
-                          className="inline-block max-w-full truncate align-bottom"
-                        >
-                          {displayName}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>{displayName}</TooltipContent>
-                    </Tooltip>
-                  </span>
-                  <TabTrailingSlot
-                    label={`Close ${displayName}`}
-                    testId={`tab-close-${tab.kind}-${tab.id}`}
-                    onClose={() => onClose(displayTab)}
-                    leaderBadge={leaderBadge}
-                    active={isActive}
-                  />
-                </>
-              )}
-            </span>
-            <HeaderTabSeparator visible={showSeparatorAfter} />
-            <HeaderTabDropIndicator
-              visible={showDropIndicatorAfter}
-              side="right"
+          ) : (
+            <SplitMemberChrome focused={isActive} />
+          )}
+          <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
+          <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
+            <TabLeadingIcon
+              icon={tab.icon}
+              titleGenerationPending={titleGenerationPending}
+              activityStatus={activityStatus}
+              tabId={tab.id}
+              epicId={tab.kind === "epic" ? tab.epicId : null}
             />
-          </div>
-        </ContextMenuTrigger>
-      </HeaderTabMotionFrame>
+            {rename.isEditing ? (
+              <input
+                {...rename.inputProps}
+                aria-label="Edit epic title"
+                data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
+                className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-center text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
+              />
+            ) : (
+              <>
+                <span className="min-w-0 flex-1 text-center">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        data-testid={`tab-title-${tab.kind}-${tab.id}`}
+                        className="inline-block max-w-full truncate align-bottom"
+                      >
+                        {displayName}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>{displayName}</TooltipContent>
+                  </Tooltip>
+                </span>
+                <TabTrailingSlot
+                  label={`Close ${displayName}`}
+                  testId={`tab-close-${tab.kind}-${tab.id}`}
+                  onClose={() => onClose(displayTab)}
+                  leaderBadge={leaderBadge}
+                  active={isActive}
+                  disabled={!canClose}
+                />
+              </>
+            )}
+          </span>
+          <HeaderTabSeparator visible={showSeparatorAfter} />
+          <HeaderTabDropIndicator
+            visible={showDropIndicatorAfter}
+            side="right"
+          />
+        </div>
+      </ContextMenuTrigger>
       <TabContextMenuContent
         tab={displayTab}
         canCloseOtherTabs={canCloseOtherTabs}
@@ -383,10 +411,18 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         onCloseOtherTabs={onCloseOtherTabs}
         onDuplicateTab={onDuplicateTab}
         onOpenInNewWindow={onOpenInNewWindow}
+        onSplitCommand={onSplitCommand}
         onEditTitle={rename.startEditing}
         onSetTaskPinned={handleSetTaskPinned}
       />
     </ContextMenu>
+  );
+  return includeMotionFrame ? (
+    <HeaderTabMotionFrame isDragging={isDragging}>
+      {control}
+    </HeaderTabMotionFrame>
+  ) : (
+    control
   );
 });
 
@@ -402,27 +438,50 @@ interface UseHeaderTabDndReturn {
 function useHeaderTabDnd(
   tabKind: HeaderTabKind,
   tabId: string,
-  index: number,
+  config: HeaderTabDndConfig | null,
 ): UseHeaderTabDndReturn {
   const dragData = useMemo<HeaderTabDragData>(
-    () => ({ kind: HEADER_TAB_DND_TYPE, tabKind, tabId, index }),
-    [index, tabId, tabKind],
+    () => ({
+      kind: HEADER_TAB_DND_TYPE,
+      stripItemId: config?.stripItemId ?? `member:${tabKind}:${tabId}`,
+      tabKind,
+      tabId,
+      index: config?.index ?? 0,
+    }),
+    [config, tabId, tabKind],
   );
+  // A `tab:` strip item is already unique per tab, so it keys on the tab id
+  // alone. A split member shares its tab id with nothing but must stay distinct
+  // per half, so it keys on `<splitId>:<tabId>`; an unconfigured (undraggable)
+  // item falls back to the same shape under `member`.
+  const stripItemId = config?.stripItemId ?? "member";
+  const dragKey = stripItemId.startsWith("tab:")
+    ? tabId
+    : `${stripItemId}:${tabId}`;
   const {
     listeners,
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getHeaderTabDragId(tabKind, tabId),
+    id: getHeaderTabDragId(tabKind, dragKey),
     data: dragData,
+    disabled: config === null,
   });
   const dropData = useMemo<HeaderTabSlotDropData>(
-    () => ({ kind: HEADER_TAB_SLOT_DND_TYPE, index, isTrailing: false }),
-    [index],
+    () => ({
+      kind: HEADER_TAB_SLOT_DND_TYPE,
+      index: config?.index ?? 0,
+      isTrailing: false,
+    }),
+    [config],
   );
   const { setNodeRef: dropRef } = useDroppable({
-    id: getHeaderTabSlotDropId(tabKind, tabId),
+    id: getHeaderTabSlotDropId(
+      tabKind,
+      `${config?.stripItemId ?? "member"}:${tabId}`,
+    ),
     data: dropData,
+    disabled: config === null || !config.isDropSlot,
   });
   const ref = useMemo(
     () => mergeRefs<HTMLElement>(dragRef, dropRef),
@@ -540,6 +599,7 @@ interface TabTrailingSlotProps {
   onClose: () => void;
   leaderBadge: LeaderBadge | null;
   active: boolean;
+  disabled: boolean;
 }
 
 /**
@@ -555,7 +615,7 @@ interface TabTrailingSlotProps {
  * across the hover transition.
  */
 function TabTrailingSlot(props: TabTrailingSlotProps) {
-  const { label, testId, onClose, leaderBadge, active } = props;
+  const { label, testId, onClose, leaderBadge, active, disabled } = props;
   const showLeader = leaderBadge !== null;
   return (
     <span
@@ -583,6 +643,7 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
           variant="ghost"
           aria-label={label}
           data-testid={testId}
+          disabled={disabled}
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -601,17 +662,25 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
   );
 }
 
-function HeaderTabSeparator(props: { readonly visible: boolean }) {
+/**
+ * The hairline between two adjacent, non-active strip items. Exported because a
+ * split group is a strip item too and needs the identical rule at its own right
+ * edge - see `SplitTabItem`.
+ */
+export function HeaderTabSeparator(props: { readonly visible: boolean }) {
   if (!props.visible) return null;
   return (
     <span
       aria-hidden
+      // Shared id, disambiguated by scoping the query to the owning strip item
+      // (`tab-<kind>-<id>` or `split-tab-group-<id>`).
+      data-testid="header-tab-separator"
       className="pointer-events-none absolute right-0 top-1/2 z-10 h-5 w-px -translate-y-1/2 bg-border/80"
     />
   );
 }
 
-function TabChrome(props: { readonly isActive: boolean }) {
+export function TabChrome(props: { readonly isActive: boolean }) {
   if (!props.isActive) {
     return (
       <span
@@ -627,6 +696,53 @@ function TabChrome(props: { readonly isActive: boolean }) {
       borderColor="var(--color-border)"
       coversBaseline
       className="transition-opacity duration-300 ease-spring"
+    />
+  );
+}
+
+/**
+ * Shown on the tab a pair-into-split drop would combine with, once its dwell
+ * has fired. The two panes mirror the content-pane edge-split preview so both
+ * routes into a split announce the same outcome.
+ */
+function StripPairPreview(props: {
+  readonly tabKind: HeaderTabKind;
+  readonly tabId: string;
+}) {
+  const previewing = useTopLevelStripPairPreview(props.tabKind, props.tabId);
+  if (!previewing) return null;
+  return (
+    <span
+      aria-hidden
+      data-testid={`tab-strip-pair-preview-${props.tabKind}-${props.tabId}`}
+      className="pointer-events-none absolute inset-x-1 inset-y-1 z-30 grid grid-cols-2 gap-px overflow-hidden rounded-sm bg-primary/15 ring-2 ring-primary"
+    >
+      <span className="bg-primary/10" />
+      <span className="bg-primary/25" />
+    </span>
+  );
+}
+
+/**
+ * Selection treatment for one member of a split group. The focused member uses
+ * the same raised silhouette as an ordinary selected tab; group membership is
+ * communicated independently by the split group's accent underline.
+ */
+export function SplitMemberChrome(props: { readonly focused: boolean }) {
+  if (props.focused) {
+    return (
+      <TabChromeBackground
+        fill="var(--color-background)"
+        borderColor="var(--color-primary)"
+        coversBaseline
+      />
+    );
+  }
+
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
     />
   );
 }

@@ -41,6 +41,13 @@ const MINIMAP_SCROLL_OFFSET_PX = -48;
 const MINIMAP_ACTIVE_ANCHOR_OFFSET_PX = Math.abs(MINIMAP_SCROLL_OFFSET_PX) + 1;
 const BOTTOM_FOLLOW_TOLERANCE_PX = 48;
 
+/**
+ * Per-press step for the transcript's arrow-key scrolling. Chromium's own
+ * arrow-key scroll step is 40px; matching it keeps the transcript feeling like
+ * any other scroll region.
+ */
+export const CHAT_ARROW_SCROLL_STEP_PX = 40;
+
 const INITIAL_SCROLL_MODIFIER: ScrollModifier = {
   type: "item-location",
   location: {

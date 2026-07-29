@@ -144,6 +144,13 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
 }));
 
+// The candidates table's failed-pack arm reaches `providers.ensurePack`, which
+// goes through TanStack Query. Mocked here alongside the other provider
+// mutations so this panel test keeps rendering without a QueryClientProvider.
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
+  useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
+}));
+
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
   useProvidersSetSelection: () => ({
     mutate: providerMocks.setSelectionMutate,
@@ -487,6 +494,7 @@ import { redactEmail } from "@/lib/providers/redact-email";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 
+import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const OPENCODE_CANDIDATES: readonly ProviderCliCandidate[] = [
   {
     kind: "bundled",
@@ -530,6 +538,9 @@ function providerState(input: {
     envOverrides: [...input.envOverrides],
     loginCapability: null,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [...(input.profiles ?? [])],
   };
 }
@@ -1393,7 +1404,9 @@ describe("<ProvidersSettingsPanel />", () => {
     }
     const removeProfileDisabledReason =
       "This profile uses your default CLI login and cannot be removed.";
-    expect(removeProfileTooltipTrigger.title).toBe(removeProfileDisabledReason);
+    expect(tooltipTextNear(removeProfileTooltipTrigger)).toBe(
+      removeProfileDisabledReason,
+    );
     expect(removeProfileButton.getAttribute("aria-label")).toBe(
       `Remove profile. ${removeProfileDisabledReason}`,
     );
@@ -1407,7 +1420,15 @@ describe("<ProvidersSettingsPanel />", () => {
     const refreshButton = screen.getByRole("button", {
       name: "Refresh profile statuses and usage limits",
     });
-    expect(addProfileButton.nextElementSibling).toBe(refreshButton);
+    // The add-profile button now sits inside the span that lets its tooltip
+    // fire while it is disabled, so adjacency is measured from that span.
+    // Both buttons now sit inside the span that lets their tooltip fire while
+    // disabled, so adjacency is asserted between those spans.
+    expect(
+      addProfileButton.parentElement?.nextElementSibling?.contains(
+        refreshButton,
+      ),
+    ).toBe(true);
     fireEvent.click(refreshButton);
     await waitFor(() => {
       expect(providerMocks.refreshProviders).toHaveBeenCalledTimes(1);
@@ -1634,6 +1655,7 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
+          signInUnavailableHint={null}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={vi.fn()}

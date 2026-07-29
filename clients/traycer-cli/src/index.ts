@@ -8,7 +8,9 @@ import {
   type Command as CommanderCommand,
 } from "commander";
 import { AGENT_FACING_HARNESS_ID_LIST } from "@traycer/protocol/host/agent/shared";
+import { readFeatureSettingsSync } from "@traycer/protocol/config/store";
 import { config } from "./config";
+import { resolveCliVersion } from "./cli-version";
 import { cliFinalizeUpgradeCommand } from "./commands/cli-finalize-upgrade";
 import { buildCliMarkSourceCommand } from "./commands/cli-mark-source";
 import { buildCliReAnchorCommand } from "./commands/cli-re-anchor";
@@ -65,8 +67,9 @@ import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-an
 import { buildHostInstallCommand } from "./commands/host-install";
 import { buildHostLogsCommand } from "./commands/host-logs";
 import { buildHostRestartCommand } from "./commands/host-restart";
-import { runHostStart } from "./commands/host-start";
+import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
 import { buildHostStampRuntimeCommand } from "./commands/host-stamp-runtime";
+import { runHostCapabilities } from "./host/capabilities";
 import { hostStatusCommand } from "./commands/host-status";
 import { hostStopCommand } from "./commands/host-stop";
 import { buildHostUninstallCommand } from "./commands/host-uninstall";
@@ -83,6 +86,7 @@ import { addRunnerFlags, extractRunnerFlags } from "./runner/commander-flags";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
 import { readonlyEnv } from "./runner/runtime";
+import { flushStdio, writeStderr, writeStdout } from "./runner/std-write";
 
 // Helper: register a runner-aware action handler. The runner owns
 // process.exit, so anything composed via `withRunner` participates in
@@ -166,14 +170,11 @@ export function isTraycerCliEntrypoint(argv1: string | undefined): boolean {
   return /(?:^|[\\/])(?:index\.ts|traycer(?:\.exe)?)$/i.test(argv1);
 }
 
-// Local/dev fallback when the build pipeline did not inject a version
-// (i.e. running under tsx / vitest or an unreleased local SEA build).
-// CI release workflows set `TRAYCER_CLI_VERSION` from the `cli-v<version>`
-// tag, and `build-cli-sea.cjs` bakes that value into the bundle via an
-// esbuild define - when that path runs, `process.env.TRAYCER_CLI_VERSION`
-// is a literal string in the emitted JS so this fallback is unreachable
-// from a published binary.
-export const LOCAL_CLI_VERSION = "0.0.0-local";
+// Both live in the leaf `cli-version.ts` so `registry/` can read the running
+// CLI's version without importing this module (which builds the whole program
+// and would close a cycle). Re-exported here because this is where every
+// existing caller and test looks for them.
+export { LOCAL_CLI_VERSION, resolveCliVersion } from "./cli-version";
 
 export type AgentCliSurface = "full" | "readonly";
 
@@ -183,28 +184,18 @@ export function resolveAgentCliSurface(
   return env.TRAYCER_AGENT_CLI_SURFACE === "readonly" ? "readonly" : "full";
 }
 
-/**
- * Resolve the version Commander should advertise. SEA builds get the
- * release-injected value through an esbuild `define` on
- * `process.env.TRAYCER_CLI_VERSION`; everything else (tsx dev, vitest,
- * an unreleased local SEA built without the env var) falls back to
- * `0.0.0-local`. Exported so tests can pin the resolution matrix
- * without subprocess-spawning the binary.
- */
-export function resolveCliVersion(
-  env: Readonly<Record<string, string | undefined>>,
-): string {
-  const injected = env.TRAYCER_CLI_VERSION;
-  if (typeof injected === "string" && injected.length > 0) return injected;
-  return LOCAL_CLI_VERSION;
-}
-
 // Construct the full commander program. Exported as a builder so tests
 // can assert command registration (subject of the
 // "Register native-packaging CLI commands in Traycer CLI entrypoint"
 // follow-up bug) without spawning a subprocess. The script-mode call at
 // the bottom of this file is the only place that invokes parseAsync.
 export function buildProgram(): Command {
+  return buildProgramWithAgentRoles(readFeatureSettingsSync().agentRoles);
+}
+
+export function buildProgramWithAgentRoles(
+  agentRolesEnabled: boolean,
+): Command {
   const program = new Command();
   program
     .name("traycer")
@@ -216,7 +207,7 @@ export function buildProgram(): Command {
   // `optsWithGlobals()` which is what the runner-aware action handlers
   // rely on.
   addRunnerFlags(program);
-  registerCommands(program);
+  registerCommands(program, agentRolesEnabled);
   // Route commander's own parse failures (missing required option, unknown
   // option/command) through the runner's error contract so `--json`
   // consumers get a structured `result/error` envelope instead of a bare
@@ -243,11 +234,11 @@ function applyRunnerErrorRouting(root: Command): void {
     cmd.exitOverride();
     cmd.configureOutput({
       writeErr: (str) => {
-        if (!argvRequestsJson(root)) process.stderr.write(str);
+        if (!argvRequestsJson(root)) writeStderr(str);
       },
       writeOut: (str) => {
         if (argvRequestsJson(root)) commanderStdoutBuffer += str;
-        else process.stdout.write(str);
+        else writeStdout(str);
       },
     });
     for (const sub of cmd.commands) route(sub);
@@ -300,7 +291,7 @@ function collectValueOptionFlags(root: Command): Set<string> {
 // group and returns void after wiring its commands onto `program`. Keep
 // this split when adding new commands - the body of `registerCommands`
 // stays a single page of declarative registrations.
-function registerCommands(program: Command): void {
+function registerCommands(program: Command, agentRolesEnabled: boolean): void {
   registerAuthCommands(program);
   registerHostCommands(program);
   registerCliCommands(program);
@@ -308,7 +299,7 @@ function registerCommands(program: Command): void {
   registerCommentsCommands(program);
   registerWorkspaceCommands(program);
   registerWorktreeCommands(program);
-  registerAgentCommands(program);
+  registerAgentCommands(program, agentRolesEnabled);
   registerMonitorCommand(program);
 }
 
@@ -358,6 +349,34 @@ function registerHostCommands(program: Command): void {
       .option(
         "--cwd <path>",
         "Working directory for the host (defaults to the install directory)",
+      )
+      // Identity binding for journal-authorised reclaim probes. Existing
+      // registrations remain valid without these options; a probe requires
+      // all three and otherwise produces no correlated marker.
+      //
+      // Hidden per the house convention for `"Internal:"` options - and
+      // deliberately so: the emitted service definitions gate on
+      // `host capabilities --has service-label`, never on help text, so
+      // hiding these cannot silently disable the identity binding. Adding
+      // `.hideHelp()` here IS the regression this decoupling exists to
+      // survive; see host/capabilities.ts.
+      .addOption(
+        new Option(
+          "--service-label <label>",
+          "Internal: owning service label",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--transition-id <id>",
+          "Internal: lifecycle transition id",
+        ).hideHelp(),
+      )
+      .addOption(
+        new Option(
+          "--probe-nonce <nonce>",
+          "Internal: lifecycle probe nonce",
+        ).hideHelp(),
       ),
   ).action(async (opts) => {
     const logger = createCliLogger(config.environment);
@@ -366,13 +385,50 @@ function registerHostCommands(program: Command): void {
       hasCwdOverride: typeof opts.cwd === "string",
     });
     await runHostStart(
-      {
+      hostStartOptionsFromCommand({
         environment: config.environment,
         cwd: typeof opts.cwd === "string" ? opts.cwd : null,
-      },
+        serviceLabel:
+          typeof opts.serviceLabel === "string" ? opts.serviceLabel : null,
+        transitionId:
+          typeof opts.transitionId === "string" ? opts.transitionId : null,
+        probeNonce:
+          typeof opts.probeNonce === "string" ? opts.probeNonce : null,
+      }),
       {},
     );
   });
+
+  // The capability contract emitted service definitions probe before they
+  // pass an argument their (possibly N-1) CLI slot may not understand. NOT
+  // routed through `withRunner`: the output is a machine contract read by a
+  // `/bin/sh` script and a VBScript launcher, so it must stay raw stdout +
+  // exit code rather than the NDJSON envelope. Pure and side-effect free -
+  // see host/capabilities.ts.
+  host
+    .command("capabilities")
+    .description("Print the capability tokens this CLI supports")
+    .option("--json", "Print the capability document as JSON")
+    .option(
+      "--has <capability>",
+      "Exit 0 when this CLI supports <capability>, non-zero otherwise",
+    )
+    .action((...actionArgs: unknown[]) => {
+      // `optsWithGlobals()` rather than the local opts bag: `--json` is also
+      // declared globally by `addRunnerFlags(program)`, and commander binds
+      // the token to the root option, leaving the subcommand's copy unset.
+      const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
+      const opts = command.optsWithGlobals() as Record<string, unknown>;
+      const response = runHostCapabilities(
+        typeof opts.has === "string"
+          ? { kind: "has", capability: opts.has }
+          : { kind: "list", json: opts.json === true },
+      );
+      if (response.stdout.length > 0) {
+        writeStdout(response.stdout);
+      }
+      process.exitCode = response.exitCode;
+    });
 
   withRunner(
     host
@@ -842,6 +898,61 @@ function registerHostCommands(program: Command): void {
   );
 }
 
+export function hostStartOptionsFromCommand(input: {
+  readonly environment: typeof config.environment;
+  readonly cwd: string | null;
+  readonly serviceLabel: string | null;
+  readonly transitionId: string | null;
+  readonly probeNonce: string | null;
+}): RunHostStartOptions {
+  const probeValues = [
+    input.serviceLabel,
+    input.transitionId,
+    input.probeNonce,
+  ];
+  const probeValueCount = probeValues.filter((value) => value !== null).length;
+  if (probeValueCount === 0) {
+    return { environment: input.environment, cwd: input.cwd };
+  }
+  if (
+    input.serviceLabel !== null &&
+    input.transitionId === null &&
+    input.probeNonce === null
+  ) {
+    return {
+      environment: input.environment,
+      cwd: input.cwd,
+      serviceLabel: input.serviceLabel,
+    };
+  }
+  if (
+    input.serviceLabel === null ||
+    input.transitionId === null ||
+    input.probeNonce === null
+  ) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message:
+        "host start probe requires --service-label, --transition-id, and --probe-nonce together",
+      details: {
+        serviceLabelProvided: input.serviceLabel !== null,
+        transitionIdProvided: input.transitionId !== null,
+        probeNonceProvided: input.probeNonce !== null,
+      },
+      exitCode: 1,
+    });
+  }
+  return {
+    environment: input.environment,
+    cwd: input.cwd,
+    probe: {
+      serviceLabel: input.serviceLabel,
+      transitionId: input.transitionId,
+      probeNonce: input.probeNonce,
+    },
+  };
+}
+
 function registerServiceCommands(host: Command): void {
   const service = host
     .command("service")
@@ -860,11 +971,16 @@ function registerServiceCommands(host: Command): void {
       .option(
         "--allow-self-invocation",
         "Dev only: register the current (non-packaged) CLI as the service command.",
+      )
+      .option(
+        "--takeover",
+        "macOS only: move host management from the Traycer Desktop app to the CLI (stops the Desktop-managed host cooperatively, deregisters its agent, then registers the CLI-owned service)",
       ),
     (opts) =>
       buildServiceInstallCommand({
         enableLinger: opts.linger !== false,
         allowSelfInvocation: opts.allowSelfInvocation === true,
+        takeover: opts.takeover === true,
       }),
   );
 
@@ -1196,7 +1312,9 @@ function registerCommentsCommands(program: Command): void {
   withRunner(
     comments
       .command("list")
-      .description("List artifact comment threads")
+      .description(
+        "List artifact comment threads. Read them after reading an artifact, so human-authored feedback is visible before editing or responding. A thread may quote the artifact text it refers to: anchor=present means that quote is still located in the current artifact, while anchor=missing or anchor=unavailable means the quote is context only - verify it against the artifact before acting on it.",
+      )
       .argument("[artifactPaths...]", "Absolute artifact paths")
       .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
       .option("--status <status>", "Thread status: all, open, or resolved"),
@@ -1213,7 +1331,9 @@ function registerCommentsCommands(program: Command): void {
   withRunner(
     comments
       .command("set-status")
-      .description("Set artifact comment threads to open or resolved")
+      .description(
+        "Set artifact comment threads to open or resolved after addressing or reopening feedback. Prefer telling the user which threads look addressed and letting them decide, unless they have already asked you to resolve threads yourself.",
+      )
       .requiredOption("--artifact <path>", "Absolute artifact path")
       .requiredOption("--status <status>", "Thread status: open or resolved")
       .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
@@ -1316,7 +1436,10 @@ function registerWorktreeCommands(program: Command): void {
   );
 }
 
-function registerAgentCommands(program: Command): void {
+function registerAgentCommands(
+  program: Command,
+  agentRolesEnabled: boolean,
+): void {
   const cliSurface = resolveAgentCliSurface(readonlyEnv());
   const readonlyHidden = { hidden: cliSurface === "readonly" };
   const harnessHelp = `Harness id: ${AGENT_FACING_HARNESS_ID_LIST}`;
@@ -1376,7 +1499,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--fast",
-        "Request fast mode for supported models. Only available for gui surface.",
+        "Request fast mode for supported models. Only available for gui surface. May consume additional credits - set it only when the user asks for it or the agent selection guide recommends it.",
       )
       .option("--profile <ambient|id>", profileHelp)
       .option(
@@ -1544,7 +1667,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--fast",
-        "Enable fast mode for supported models. Omitting it disables fast mode.",
+        "Enable fast mode for supported models. Omitting it disables fast mode. May consume additional credits - turn it on only when the user asks for it or the agent selection guide recommends it.",
       )
       .option(
         "--permission-mode <mode>",
@@ -1582,7 +1705,7 @@ function registerAgentCommands(program: Command): void {
       )
       .option(
         "--expect-reply",
-        "Open or reuse a reply thread; the host returns a responseId",
+        "Open or reuse a reply thread; the host returns a responseId. Without it the peer processes your message and never reports back.",
       )
       .option(
         "--response-id <id>",
@@ -1614,73 +1737,75 @@ function registerAgentCommands(program: Command): void {
       }),
   );
 
-  const role = agent
-    .command("role")
-    .description(
-      "Claim, list, and relinquish durable Task-local roles for the calling agent",
+  if (agentRolesEnabled) {
+    const role = agent
+      .command("role")
+      .description(
+        "Claim, list, and relinquish durable Task-local roles for the calling agent",
+      );
+
+    withRunner(
+      role
+        .command("claim", readonlyHidden)
+        .description(
+          "Claim a durable role for the calling agent in this Task's role registry",
+        )
+        .requiredOption(
+          "--role <name>",
+          "Role name to claim. Short and memorable; disambiguate against existing roles.",
+        )
+        .requiredOption(
+          "--scope <scope>",
+          "Task-local scope of responsibility this role covers",
+        )
+        .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+        .option(
+          "--agent-id <id>",
+          "Claiming agent (defaults to $TRAYCER_AGENT_ID)",
+        ),
+      (opts) =>
+        buildAgentRoleClaimCommand({
+          epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+          agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+          role: typeof opts.role === "string" ? opts.role : null,
+          scope: typeof opts.scope === "string" ? opts.scope : null,
+        }),
     );
 
-  withRunner(
-    role
-      .command("claim", readonlyHidden)
-      .description(
-        "Claim a durable role for the calling agent in this Task's role registry",
-      )
-      .requiredOption(
-        "--role <name>",
-        "Role name to claim. Short and memorable; disambiguate against existing roles.",
-      )
-      .requiredOption(
-        "--scope <scope>",
-        "Task-local scope of responsibility this role covers",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--agent-id <id>",
-        "Claiming agent (defaults to $TRAYCER_AGENT_ID)",
-      ),
-    (opts) =>
-      buildAgentRoleClaimCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        agentId: typeof opts.agentId === "string" ? opts.agentId : null,
-        role: typeof opts.role === "string" ? opts.role : null,
-        scope: typeof opts.scope === "string" ? opts.scope : null,
-      }),
-  );
+    withRunner(
+      role
+        .command("list")
+        .description(
+          "List the roles currently claimed in this Task (your account's live agents only)",
+        )
+        .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
+      (opts) =>
+        buildAgentRoleListCommand({
+          epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+        }),
+    );
 
-  withRunner(
-    role
-      .command("list")
-      .description(
-        "List the roles currently claimed in this Task (your account's live agents only)",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)"),
-    (opts) =>
-      buildAgentRoleListCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-      }),
-  );
-
-  withRunner(
-    role
-      .command("relinquish", readonlyHidden)
-      .description("Relinquish a role claim held by the calling agent")
-      .requiredOption(
-        "--claim-id <id>",
-        "Claim id to relinquish (see 'traycer agent role list')",
-      )
-      .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
-      .option(
-        "--agent-id <id>",
-        "Relinquishing agent (defaults to $TRAYCER_AGENT_ID)",
-      ),
-    (opts) =>
-      buildAgentRoleRelinquishCommand({
-        epicId: typeof opts.epicId === "string" ? opts.epicId : null,
-        agentId: typeof opts.agentId === "string" ? opts.agentId : null,
-        claimId: typeof opts.claimId === "string" ? opts.claimId : null,
-      }),
-  );
+    withRunner(
+      role
+        .command("relinquish", readonlyHidden)
+        .description("Relinquish a role claim held by the calling agent")
+        .requiredOption(
+          "--claim-id <id>",
+          "Claim id to relinquish (see 'traycer agent role list')",
+        )
+        .option("--epic-id <id>", "Epic (defaults to $TRAYCER_EPIC_ID)")
+        .option(
+          "--agent-id <id>",
+          "Relinquishing agent (defaults to $TRAYCER_AGENT_ID)",
+        ),
+      (opts) =>
+        buildAgentRoleRelinquishCommand({
+          epicId: typeof opts.epicId === "string" ? opts.epicId : null,
+          agentId: typeof opts.agentId === "string" ? opts.agentId : null,
+          claimId: typeof opts.claimId === "string" ? opts.claimId : null,
+        }),
+    );
+  }
 
   withRunner(
     agent
@@ -1864,11 +1989,12 @@ function registerMonitorCommand(program: Command): void {
         { exitCode: 1 },
         errorFromUnknown(err),
       );
-      process.stderr.write(
+      writeStderr(
         `[traycer monitor] fatal: ${
           err instanceof Error ? err.message : String(err)
         }\n`,
       );
+      await flushStdio();
       process.exit(1);
     }
   });
@@ -1890,7 +2016,7 @@ if (isTraycerCliEntrypoint(entryArgv)) {
     environment: config.environment,
     argvLength: process.argv.length,
   });
-  program.parseAsync(process.argv).catch((err) => {
+  program.parseAsync(process.argv).catch(async (err) => {
     if (err instanceof CommanderError) {
       const jsonMode = argvRequestsJson(program);
       // Help (`--help`) and version (`--version`) flow through exitOverride
@@ -1911,8 +2037,11 @@ if (isTraycerCliEntrypoint(entryArgv)) {
             data: { output: commanderStdoutBuffer.trimEnd() },
             timestamp: new Date().toISOString(),
           };
-          process.stdout.write(`${JSON.stringify(event)}\n`);
+          writeStdout(`${JSON.stringify(event)}\n`);
         }
+        // `--help` under `--json` wraps the whole help text in one line;
+        // long help easily clears the 64 KiB pipe buffer. See std-write.ts.
+        await flushStdio();
         process.exit(0);
       }
       // Parse failure. In --json mode emit the runner's NDJSON error
@@ -1938,8 +2067,9 @@ if (isTraycerCliEntrypoint(entryArgv)) {
           },
           timestamp: new Date().toISOString(),
         };
-        process.stdout.write(`${JSON.stringify(event)}\n`);
+        writeStdout(`${JSON.stringify(event)}\n`);
       }
+      await flushStdio();
       process.exit(err.exitCode || 1);
     }
     const error = errorFromUnknown(err);
@@ -1960,12 +2090,13 @@ if (isTraycerCliEntrypoint(entryArgv)) {
         },
         timestamp: new Date().toISOString(),
       };
-      process.stdout.write(`${JSON.stringify(event)}\n`);
+      writeStdout(`${JSON.stringify(event)}\n`);
     } else {
-      process.stderr.write(
+      writeStderr(
         `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
       );
     }
+    await flushStdio();
     process.exit(1);
   });
 }
@@ -1997,7 +2128,7 @@ function exitAfterUnhandledFailure(
   const error = errorFromUnknown(cause);
   logger.error(message, { exitCode: 1 }, error);
   Sentry.captureException(cause);
-  process.stderr.write(
+  writeStderr(
     `error: unexpected CLI failure [code=${CLI_ERROR_CODES.UNEXPECTED}]\n`,
   );
   void Sentry.flush(2000)
@@ -2007,6 +2138,7 @@ function exitAfterUnhandledFailure(
         errorMessage: errorFromUnknown(flushErr).message,
       });
     })
+    .then(() => flushStdio())
     .finally(() => {
       process.exit(1);
     });

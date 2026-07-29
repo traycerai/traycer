@@ -1,9 +1,10 @@
 import {
-  type HostNotificationEntry,
+  type HostNotificationEntryV21,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
   deriveHostNotificationStoppedReason,
+  parseHostOperationCommonPayload,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationKnownPayload,
 } from "@traycer/protocol/host/notifications/payloads";
@@ -28,7 +29,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntry,
+  entry: HostNotificationEntryV21,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -65,7 +66,99 @@ export function formatHostNotificationPresentation(
         title,
         body: `${agentContext} • ${resolvableRequestStatus(entry.resolvedAt, "Question waiting", "Question resolved")}`,
       };
+    case "host.operation.finished":
+      return hostOperationFinishedPresentation(
+        entry.outcome,
+        entry.payload,
+        known,
+      );
   }
+}
+
+/**
+ * Three-tier degradation for a host-wide operation completion, resolved as a
+ * per-FIELD fallback chain rather than a first-match-wins branch:
+ *
+ *  1. a KNOWN operation payload's own copy, when that arm supplies any
+ *     (`hostOperationKnownCopy` - no arm supplies copy yet);
+ *  2. the common `operation`/`title`/`message` convention read leniently off
+ *     the open record, so an operation newer than this build still shows
+ *     host-composed copy;
+ *  3. generic copy, keyed only off the durable `outcome` column.
+ *
+ * The chain is per-field on purpose. A first-match-wins branch would let the
+ * first real operation arm REGRESS a row that already renders host-composed
+ * copy today: recognising the payload would swap "Deleted 3 worktrees" for
+ * whatever the known branch produced. Here an arm can only ever add copy, so
+ * a known payload is never worse than an unknown one - which is the property
+ * that makes the tier ordering safe to activate.
+ *
+ * Tiers 2 and 3 are what make the frozen outer arm affordable: a future
+ * operation is additive at the payload layer and never needs another outer
+ * kind. Copy comes from the host, so it reaches email and hooks unchanged.
+ */
+function hostOperationFinishedPresentation(
+  outcome: HostNotificationOutcome,
+  payload: Record<string, unknown>,
+  known: HostNotificationKnownPayload | null,
+): HostNotificationPresentation {
+  const operationCopy = known === null ? null : hostOperationKnownCopy(known);
+  const common = parseHostOperationCommonPayload(payload);
+  return {
+    title:
+      operationCopy?.title ??
+      common?.title ??
+      hostOperationGenericTitle(outcome),
+    body:
+      operationCopy?.body ??
+      common?.message ??
+      hostOperationGenericBody(outcome),
+  };
+}
+
+/**
+ * Per-operation copy for a payload arm this build fully understands, or
+ * `null` to inherit the common-field/generic copy below it.
+ *
+ * Exhaustive over the known payload union so the first operation arm gets a
+ * compile-visible slot here. Every arm that exists today is chat-scoped and
+ * belongs to a different notification kind, so none of them may supply copy
+ * for a host-wide row: their titles come from `taskTitle`/`chatTitle` fields
+ * a host-wide operation payload does not have, and letting them answer would
+ * render "Task" over the host's own composed title.
+ */
+export function hostOperationKnownCopy(
+  payload: HostNotificationKnownPayload,
+): { readonly title: string | null; readonly body: string | null } | null {
+  switch (payload.kind) {
+    case "chat":
+    case "epic":
+    case "agent_stalled":
+    case "approval":
+    case "interview":
+    case "workspace_operation_failed":
+      return null;
+    // Worktree deletion supplies no copy of its own on purpose: the host
+    // already composed `title`/`message` into the payload's common fields, and
+    // that exact wording is what reached email and notification hooks at mint
+    // time. Re-deriving it here would make the in-app row and the email
+    // disagree about the same command for no gain - the arm's value is the
+    // structured counts and the navigation target, not the prose.
+    case "worktree_deletion":
+      return null;
+  }
+}
+
+function hostOperationGenericTitle(outcome: HostNotificationOutcome): string {
+  return outcome === "errored"
+    ? "Host operation failed"
+    : "Host operation finished";
+}
+
+function hostOperationGenericBody(outcome: HostNotificationOutcome): string {
+  if (outcome === "errored") return "Host operation • Failed";
+  if (outcome === "stopped") return "Host operation • Stopped";
+  return "Host operation • Done";
 }
 
 // The protocol records only whether an approval/interview has resolved, not
@@ -84,13 +177,39 @@ function knownPresentationContext(known: HostNotificationKnownPayload | null) {
     known === null ? null : nonEmptyTitle(knownAgentName(known));
   const chatTitle =
     known === null ? null : nonEmptyTitle(knownChatTitle(known));
-  const taskTitle = known === null ? null : nonEmptyTitle(known.taskTitle);
+  const taskTitle =
+    known === null ? null : nonEmptyTitle(knownTaskTitle(known));
   const title = taskTitle ?? chatTitle ?? agentName ?? "Task";
   return {
     agentName,
     title,
-    agentContext: chatTitle !== null && chatTitle !== title ? chatTitle : "Agent",
+    agentContext:
+      chatTitle !== null && chatTitle !== title ? chatTitle : "Agent",
   };
+}
+
+/**
+ * The task title a chat-scoped payload carries, or `null` for a payload that
+ * has no task at all.
+ *
+ * Read through a switch rather than off the union directly (`known.taskTitle`)
+ * because host-WIDE operation payloads are not addressed to an epic/chat and
+ * carry no such field. This is the compile-visible seam that stopped the first
+ * host-wide arm from being modelled as "a task notification with the task
+ * fields left blank".
+ */
+function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
+  switch (payload.kind) {
+    case "chat":
+    case "epic":
+    case "agent_stalled":
+    case "approval":
+    case "interview":
+    case "workspace_operation_failed":
+      return payload.taskTitle;
+    case "worktree_deletion":
+      return null;
+  }
 }
 
 function knownAgentName(payload: HostNotificationKnownPayload): string | null {
@@ -102,6 +221,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "approval":
     case "interview":
     case "workspace_operation_failed":
+    case "worktree_deletion":
       return null;
   }
 }
@@ -115,6 +235,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "chat":
     case "epic":
     case "agent_stalled":
+    case "worktree_deletion":
       return null;
   }
 }
@@ -133,6 +254,7 @@ function knownStoppedReason(
     case "approval":
     case "interview":
     case "workspace_operation_failed":
+    case "worktree_deletion":
       return null;
   }
 }
@@ -150,6 +272,7 @@ function knownProviderId(
     case "approval":
     case "interview":
     case "workspace_operation_failed":
+    case "worktree_deletion":
       return null;
   }
 }
@@ -200,6 +323,14 @@ function agentStoppedFailureStatus(
         providerId,
         "Provider connection failed",
         (providerName) => `Connection to ${providerName} failed`,
+      );
+    case "context_exhausted":
+      return "Context limit reached";
+    case "request_rejected":
+      return providerSpecificFailureStatus(
+        providerId,
+        "Provider rejected the request",
+        (providerName) => `${providerName} rejected the request`,
       );
     case "turn_start_timeout":
       return "Provider did not start in time";

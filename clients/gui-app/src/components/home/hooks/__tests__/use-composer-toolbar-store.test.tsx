@@ -58,6 +58,11 @@ const modelQueryCalls: Array<{
 }> = [];
 const registeredComposerKinds: Array<FocusedComposerKind | null> = [];
 
+// `data` is returned regardless of `enabled`, because that is what TanStack
+// does: `enabled:false` stops FETCHING, it does not evict the cache, and a
+// focused split partner observing the same key keeps it warm. Modelling it as
+// "inactive means no data" would let a consumer that blanks its own catalog on
+// blur look correct here.
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQuery: (activity: {
     enabled: boolean;
@@ -67,7 +72,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    return { data: activity.enabled ? harnessesData.value : undefined };
+    return { data: harnessesData.value };
   },
   useGuiHarnessModelsQuery: (
     harnessId: string,
@@ -80,7 +85,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
       enabled: activity.enabled,
       subscribed: activity.subscribed,
     });
-    return { data: activity.enabled ? modelsData.value : undefined };
+    return { data: modelsData.value };
   },
 }));
 
@@ -1271,5 +1276,63 @@ describe("useComposerToolbarStore selection reconciliation", () => {
       subscribed: false,
     });
     expect(registeredComposerKinds.at(-1)).toBeNull();
+  });
+
+  it("keeps the resolved catalog while inactive so a background split pane's toolbar stays intact", () => {
+    // Both members of a split are VISIBLE; only one is focused. Detaching the
+    // query observers is right, but discarding the cached catalog with them left
+    // the unfocused pane deriving `selectedModel: null` - which silently blanked
+    // its own reasoning-effort and fast-mode chips, because both labels are
+    // derived from the selected model's advertised options. The user sees the
+    // composer's settings vanish just by clicking the other pane.
+    seedDefault("codex");
+    useSettingsStore.setState({ defaultReasoning: "high" });
+    harnessesData.value = {
+      harnesses: [
+        { id: "codex", available: true, supportedPermissionModes: ["full"] },
+      ],
+    };
+    modelsData.value = {
+      models: [
+        {
+          harnessId: "codex",
+          slug: "saved-model",
+          label: "Saved Model",
+          description: null,
+          isDefault: true,
+          contextWindow: null,
+          maxOutputTokens: null,
+          defaultReasoningEffort: "high",
+          supportedReasoningEfforts: [
+            { id: "high", label: "High", description: null },
+          ],
+          defaultServiceTier: null,
+          supportedServiceTiers: [
+            { id: "priority", label: "Priority", description: null },
+          ],
+          metadata: {},
+        },
+      ],
+    };
+
+    const { result } = renderHook(
+      () => useComposerToolbarStore("landing", { kind: "none" }, null, false),
+      { wrapper: inactiveWrapper },
+    );
+
+    // The observers are still released - that half of the gate must not regress.
+    expect(harnessQueryCalls.at(-1)).toEqual({
+      enabled: false,
+      subscribed: false,
+    });
+
+    const state = result.current.getState();
+    // The chips render off the selected model; the harness slice goes with it.
+    expect(state.selectedModel?.slug).toBe("saved-model");
+    expect(state.selectedModel?.supportedReasoningEfforts).toEqual([
+      { id: "high", label: "High", description: null },
+    ]);
+    expect(state.reasoning).toBe("high");
+    expect(state.supportedPermissionModes).toEqual(["full"]);
   });
 });

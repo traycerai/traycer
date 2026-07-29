@@ -136,6 +136,42 @@ vi.mock("@/components/epic-canvas/epic-route-session-body", () => ({
   ),
 }));
 
+vi.mock("@/components/epic-tabs/epic-surface", () => ({
+  EpicSurface: (props: { readonly epicId: string; readonly tabId: string }) => (
+    <div
+      data-epic-id={props.epicId}
+      data-tab-id={props.tabId}
+      data-testid="epic-route-session-body"
+    />
+  ),
+}));
+
+vi.mock("@/components/home/landing-draft-surface", () => ({
+  LandingDraftSurface: () => <div data-testid="draft-surface" />,
+}));
+
+vi.mock("@/components/epics/history-surface", () => ({
+  HistorySurface: () => <div data-testid="history-surface" />,
+}));
+
+vi.mock("@/components/settings/settings-surface", () => ({
+  SettingsSurface: () => <div data-testid="settings-surface" />,
+}));
+
+// The host wraps the panel in the gesture provider (the single live-value
+// reader); this route test does not exercise the terminal, so the provider is a
+// pass-through and the panel is inert.
+vi.mock(
+  "@/components/home/terminal-panel/landing-terminal-gesture-provider",
+  () => ({
+    LandingTerminalGestureProvider: (props: { readonly children: ReactNode }) =>
+      props.children,
+  }),
+);
+vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
+  LandingTerminalPanel: () => null,
+}));
+
 vi.mock("@/components/settings/panels/general-settings-panel", () => ({
   GeneralSettingsPanel: () => <div data-testid="settings-general-route" />,
 }));
@@ -225,9 +261,7 @@ describe("app route tab-strip navigation", () => {
       name: "History",
       lastPath: "/epics",
     });
-    const draftId = useLandingDraftStore
-      .getState()
-      .createDraft(null, undefined);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
     const router = renderAppAt(`/epics/epic-current/${epicTabId}`);
     await screen.findByTestId("epic-route-session-body");
 

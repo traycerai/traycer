@@ -17,6 +17,7 @@ import type {
   HostRemovalState,
   HostTrayCommand,
   HostUninstallResult,
+  HostRestartRequestResult,
   InstallVersionOk,
   MutationOutcome,
   ServiceRegistrationOk,
@@ -77,6 +78,15 @@ export type {
 };
 
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type {
+  ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+  RetainedStepUpVerifyFetchResult,
+} from "@traycer-clients/shared/auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type {
   DesktopAppUpdateCheckIntent,
@@ -97,7 +107,9 @@ import type {
   OwnershipClaimResult,
   OwnershipEntry,
   PerWindowSnapshot,
+  PerWindowStateCapabilities,
   PerWindowStatePatch,
+  PerWindowStateUpdateAcknowledgement,
   SupportLogTarget,
   SupportLogTailResult,
   SupportRevealLogResult,
@@ -124,6 +136,24 @@ export interface DesktopPreloadBridge {
   // Credentials-file token store (tech plan §3): an IPC client of the main
   // `FileTokenStore`. Replaces the renderer-local encrypt-storage token slots.
   tokenStore: ITokenStore;
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult>;
+  revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult>;
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult>;
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult>;
   openExternalLink(url: string): Promise<void>;
   getRegisteredUrlSchemes(
     schemes: readonly string[],
@@ -151,7 +181,7 @@ export interface DesktopPreloadBridge {
     dispose: () => void;
   };
   onSystemResumed(handler: () => void): { dispose: () => void };
-  requestHostRespawn(): Promise<void>;
+  requestHostRespawn(): Promise<HostRestartRequestResult>;
   trayState: {
     setEpics(epics: readonly TrayEpic[]): Promise<void>;
     setIndicator(state: TrayIndicatorState): Promise<void>;
@@ -220,7 +250,7 @@ export interface DesktopHostManagementBridge {
   uninstallTraycer(): Promise<TraycerUninstallResult>;
   getRemovalState(): Promise<HostRemovalState>;
   clearRemoval(): Promise<void>;
-  restartHost(): Promise<void>;
+  restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
   }): Promise<HostLogsTailResult>;
@@ -468,7 +498,10 @@ export interface DesktopWindowsBridge {
   };
   perWindowState: {
     get(): Promise<PerWindowSnapshot>;
-    update(patch: PerWindowStatePatch): Promise<void>;
+    capabilities?(): Promise<PerWindowStateCapabilities>;
+    update(
+      patch: PerWindowStatePatch,
+    ): Promise<PerWindowStateUpdateAcknowledgement | void>;
     clear(): Promise<void>;
     onChange(handler: (snapshot: PerWindowSnapshot) => void): {
       dispose: () => void;
@@ -716,6 +749,48 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.validateAuthTokenIdentity(token);
   }
 
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult> {
+    return this.bridge.listUserSessions(bearerToken);
+  }
+
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult> {
+    return this.bridge.revokeUserSession(
+      bearerToken,
+      familyId,
+      useStepUpCredential,
+    );
+  }
+
+  revokeAllSessions(
+    bearerToken: string,
+  ): Promise<RevokeAllSessionsFetchResult> {
+    return this.bridge.revokeAllSessions(bearerToken);
+  }
+
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult> {
+    return this.bridge.mintHostCredential(bearerToken, request);
+  }
+
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult> {
+    return this.bridge.requestStepUpChallenge(bearerToken);
+  }
+
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    return this.bridge.verifyStepUpChallenge(bearerToken, code);
+  }
+
   beginAuthAttempt(): void {
     this.bridge.beginAuthAttempt();
   }
@@ -743,7 +818,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     return toDisposable(this.bridge.onSystemResumed(handler));
   }
 
-  requestHostRespawn(): Promise<void> {
+  requestHostRespawn(): Promise<HostRestartRequestResult> {
     return this.bridge.requestHostRespawn();
   }
 

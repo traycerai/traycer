@@ -289,6 +289,28 @@ describe("HostClient", () => {
     expect(events[0].reason).toBe("availability-recovered");
   });
 
+  it("explicit-host recovery invalidates a NON-active host's scope without announcing an active-host change", () => {
+    const { client, invalidator, events } = buildHostClientWithMock();
+    client.bind(mockLocalHostEntry);
+    invalidator.calls.length = 0;
+    invalidator.options.length = 0;
+    events.length = 0;
+
+    // A tab-bound durable stream heartbeats its own host, which need not be
+    // the active one; its queries are keyed by THAT id.
+    client.notifyHostAvailabilityRecovered("other-host");
+    expect(invalidator.calls).toEqual(["other-host"]);
+    expect(invalidator.options).toEqual([{ refetchActive: true }]);
+    expect(events).toEqual([]);
+
+    // For the active host it is exactly notifyAvailabilityRecovered(),
+    // change event included.
+    client.notifyHostAvailabilityRecovered("mock-local");
+    expect(invalidator.calls).toEqual(["other-host", "mock-local"]);
+    expect(events).toHaveLength(1);
+    expect(events[0].reason).toBe("availability-recovered");
+  });
+
   it("delegates unary requests to the bound messenger", async () => {
     const { client, messenger } = buildHostClientWithMock();
     client.bind(mockLocalHostEntry);

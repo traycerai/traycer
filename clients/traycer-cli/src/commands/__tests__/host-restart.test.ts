@@ -42,6 +42,13 @@ vi.mock("../../service", async (importOriginal) => {
       restart: async () => {
         mocks.controllerCalls.push("restart");
       },
+      stopForRestart: async () => {
+        mocks.controllerCalls.push("stopForRestart");
+        return { forcedRecycle: false };
+      },
+      relaunchAfterRestart: async () => {
+        mocks.controllerCalls.push("relaunchAfterRestart");
+      },
     }),
   };
 });
@@ -166,7 +173,10 @@ describe("buildHostRestartCommand", () => {
 
     expect(mocks.lockCalls).toEqual([{ reason: "host-restart" }]);
     expect(mocks.busyCalls).toHaveLength(0);
-    expect(mocks.controllerCalls).toEqual(["stop", "start"]);
+    expect(mocks.controllerCalls).toEqual([
+      "stopForRestart",
+      "relaunchAfterRestart",
+    ]);
   });
 
   it("plain restart proceeds unconditionally even when the host is busy", async () => {
@@ -176,7 +186,10 @@ describe("buildHostRestartCommand", () => {
     const result = await command(fakeCtx());
 
     expect(mocks.busyCalls).toHaveLength(0);
-    expect(mocks.controllerCalls).toEqual(["stop", "start"]);
+    expect(mocks.controllerCalls).toEqual([
+      "stopForRestart",
+      "relaunchAfterRestart",
+    ]);
     expect(result.data).toMatchObject({ restarted: true });
   });
 
@@ -200,7 +213,10 @@ describe("buildHostRestartCommand", () => {
     await command(fakeCtx());
 
     expect(mocks.busyCalls).toEqual(["production"]);
-    expect(mocks.controllerCalls).toEqual(["stop", "start"]);
+    expect(mocks.controllerCalls).toEqual([
+      "stopForRestart",
+      "relaunchAfterRestart",
+    ]);
   });
 
   it("--if-idle refuses with E_HOST_BUSY before stop is ever called, and never proceeds", async () => {

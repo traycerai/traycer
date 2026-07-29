@@ -42,10 +42,13 @@ const NO_AFFECTED: ReadonlyArray<AffectedTaskChat> = [];
  * Whether a sibling chat's persisted settings make it eligible for a task-wide
  * switch off the limited profile. Beyond the same harness + limited profile,
  * the sibling must use the SAME model as the composer that owns the banner:
- * the destination was validated as strictly better only for that model
- * (`useProfileRateLimitSwitchPrompt`'s `selectedModel`), so the guarantee
- * transfers only to same-model chats. A differently-modeled sibling could
- * otherwise be moved to a profile that is equal or worse for ITS model.
+ * a proven-better destination is only proven for that model, and an
+ * unknown-usage destination was only ever offered as a deliberate choice to
+ * that model's composer - nothing was validated for it at all
+ * (`useProfileRateLimitSwitchPrompt`'s `selectedModel` scopes both). Either
+ * way the guarantee (or deliberate choice) transfers only to same-model
+ * chats; a differently-modeled sibling could otherwise be moved to a profile
+ * that is equal, worse, or simply unvetted for ITS model.
  * `selectedModelSlug` is `null` when the composer's model is unresolved
  * (catalog still loading); no persisted sibling matches a null slug, so
  * task-wide switching is conservatively withheld until the model resolves.

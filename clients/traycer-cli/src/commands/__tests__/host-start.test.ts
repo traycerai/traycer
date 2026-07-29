@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,7 @@ import type { HostInstallRecord } from "../../manifest/host-install";
 import { noopLogger } from "../../logger";
 import { hostHomeDir } from "../../store/paths";
 import { withDevDesktopSlotAsync as withDevDesktopSlot } from "@traycer-clients/shared/test-fixtures/dev-desktop-slot";
+import type { ProbeMarker } from "@traycer-clients/shared/host-lifecycle";
 
 // `traycer host start --environment <ch>` is the single supervisor entry
 // point. There is one launch path: read the environment's
@@ -216,6 +218,14 @@ function makeRunStubs(
     // actual `~/.traycer/host/pid.json` and probes whatever host is live on
     // this machine. Every test below would then decline instead of spawning.
     findIncumbentHost: async () => null,
+    readLiveProbeContext: async () => ({
+      kind: "unauthorised" as const,
+      reason: "no-journal" as const,
+    }),
+    readLiveProbeContextForServiceLabel: async () => ({
+      kind: "unauthorised" as const,
+      reason: "no-journal" as const,
+    }),
     readInstallRecord: async () => installRecord,
     pathExists: async (p: string) =>
       (existsOverride ?? ((q: string) => q === installRecord?.executablePath))(
@@ -380,6 +390,192 @@ describe("runHostStart - incumbent host guard", () => {
   });
 });
 
+describe("runHostStart - label-derived reclaim probe", () => {
+  it("derives live probe authority from a label-only registration and bypasses the incumbent guard", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const status = new PassThrough();
+    Object.assign(child, { stdio: [null, null, null, status] });
+    const originalSpawn = deps.spawn;
+    if (originalSpawn === undefined)
+      throw new Error("test spawn dependency missing");
+
+    const invoke = () =>
+      runHostStart(
+        {
+          environment: "production",
+          cwd: null,
+          serviceLabel: "ai.traycer.host.fallback",
+        },
+        {
+          ...deps,
+          findIncumbentHost: async () => ({
+            pid: 9001,
+            version: "1.0.0",
+            websocketUrl: "ws://127.0.0.1:9001/rpc",
+          }),
+          readLiveProbeContextForServiceLabel: async () => ({
+            kind: "authorised" as const,
+            context: {
+              transitionId: "transition-1",
+              probeNonce: "nonce-1",
+              serviceLabel: "ai.traycer.host.fallback",
+            },
+          }),
+          spawn: (command, args, options) => {
+            const spawned = originalSpawn(command, args, options);
+            setImmediate(() => {
+              status.end();
+              child.emit("exit", 0, null);
+            });
+            return spawned;
+          },
+        },
+      );
+
+    await runUntilExit(invoke, recorded);
+    expect(recorded.spawnCalls).toHaveLength(1);
+    expect(recorded.spawnCalls[0]?.stdio).toEqual(["ignore", 42, 42, "pipe"]);
+
+    // The status transport is authorised EXPLICITLY, never inferred. The
+    // supervisor opened the pipe at stdio[3], so it must also name that
+    // descriptor - and the two must agree, or the host writes its frame into
+    // a descriptor nobody is reading (or, worse, one somebody else is).
+    const args = recorded.spawnCalls[0]?.args ?? [];
+    const flagAt = args.indexOf("--layer0-status-fd");
+    expect(flagAt).toBeGreaterThanOrEqual(0);
+    expect(args[flagAt + 1]).toBe("3");
+    const stdio = recorded.spawnCalls[0]?.stdio;
+    expect(Array.isArray(stdio) ? stdio[Number(args[flagAt + 1])] : null).toBe(
+      "pipe",
+    );
+  });
+
+  it("keeps a label-only start behind the incumbent guard without a live reclaim journal", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+
+    await runHostStart(
+      {
+        environment: "production",
+        cwd: null,
+        serviceLabel: "ai.traycer.host.fallback",
+      },
+      {
+        ...deps,
+        readLiveProbeContextForServiceLabel: async () => ({
+          kind: "unauthorised" as const,
+          reason: "no-journal" as const,
+        }),
+        findIncumbentHost: async () => ({
+          pid: 9001,
+          version: "1.0.0",
+          websocketUrl: "ws://127.0.0.1:9001/rpc",
+        }),
+      },
+    );
+
+    expect(recorded.exited).toBe(0);
+    expect(recorded.spawnCalls).toHaveLength(0);
+  });
+
+  it("writes an attested terminal probe marker for a known target-resolution failure", async () => {
+    const markerWrites: unknown[] = [];
+    const { recorded, deps } = makeRunStubs(null, null);
+
+    await runHostStart(
+      {
+        environment: "production",
+        cwd: null,
+        serviceLabel: "ai.traycer.host.fallback",
+      },
+      {
+        ...deps,
+        readLiveProbeContextForServiceLabel: async () => ({
+          kind: "authorised" as const,
+          context: {
+            transitionId: "transition-1",
+            probeNonce: "nonce-1",
+            serviceLabel: "ai.traycer.host.fallback",
+          },
+        }),
+        attestProbeSupervisor: async (serviceLabel, supervisorPid) => ({
+          serviceLabel,
+          supervisorPid,
+          capturedAt: "2026-07-27T00:00:00.000Z",
+        }),
+        writeProbeMarker: async (_environment, marker) => {
+          markerWrites.push(marker);
+        },
+      },
+    );
+
+    expect(recorded.exited).toBe(69);
+    expect(markerWrites).toHaveLength(1);
+    expect(markerWrites[0]).toMatchObject({
+      transitionId: "transition-1",
+      outcome: {
+        kind: "terminal",
+        reason: "target-resolution-E_HOST_NOT_INSTALLED",
+      },
+    });
+  });
+
+  it("turns an asynchronous child spawn error into one attested terminal marker", async () => {
+    const exec = "/opt/traycer/host/install/traycer-host";
+    const { child, recorded, deps } = makeRunStubs(sampleRecord(exec), null);
+    const markerWrites: ProbeMarker[] = [];
+    const status = new PassThrough();
+    Object.assign(child, { stdio: [null, null, null, status] });
+
+    const invoke = () =>
+      runHostStart(
+        {
+          environment: "production",
+          cwd: null,
+          serviceLabel: "ai.traycer.host.fallback",
+        },
+        {
+          ...deps,
+          readLiveProbeContextForServiceLabel: async () => ({
+            kind: "authorised" as const,
+            context: {
+              transitionId: "transition-async-spawn-error",
+              probeNonce: "nonce-1",
+              serviceLabel: "ai.traycer.host.fallback",
+            },
+          }),
+          attestProbeSupervisor: async (serviceLabel, supervisorPid) => ({
+            serviceLabel,
+            supervisorPid,
+            capturedAt: "2026-07-27T00:00:00.000Z",
+          }),
+          writeProbeMarker: async (_environment, marker) => {
+            markerWrites.push(marker);
+          },
+        },
+      );
+
+    setTimeout(() => {
+      status.end();
+      child.emit("error", new Error("ENOENT async"));
+      child.emit("exit", 66, null);
+    });
+    await runUntilExit(invoke, recorded);
+
+    expect(recorded.exited).toBe(66);
+    expect(recorded.markers.map((marker) => marker.phase)).toContain(
+      "failed-to-spawn",
+    );
+    expect(markerWrites).toEqual([
+      expect.objectContaining({
+        transitionId: "transition-async-spawn-error",
+        outcome: { kind: "terminal", reason: "host-spawn-failed" },
+      }),
+    ]);
+  });
+});
+
 describe("runHostStart - installed-record launch path", () => {
   it("spawns record.executablePath directly with no shell wrapping and the environment env exported", async () => {
     const exec = "/opt/traycer/host/install/traycer-host";
@@ -409,7 +605,24 @@ describe("runHostStart - installed-record launch path", () => {
     // The supervisor passes the slot dir as `--host-data-dir` (NOT an
     // `--environment` arg or env): path-only, so the host writes pid.json in
     // this environment's slot while its cloud target stays baked.
-    expect(call?.args).toEqual(["--host-data-dir", hostHomeDir("production")]);
+    expect(call?.args.slice(0, 2)).toEqual([
+      "--host-data-dir",
+      hostHomeDir("production"),
+    ]);
+    expect(call?.args[2]).toBe("--layer0-attempt-id");
+    expect(call?.args[3]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+    // No status pipe was opened on this path, so the host must NOT be
+    // authorised to write status frames. The flag IS the authorisation:
+    // passing it speculatively is what let the host sniff fd 3 by type and
+    // inject frames into an unrelated Node IPC channel.
+    expect(call?.args).not.toContain("--layer0-status-fd");
+    expect(call?.stdio).toEqual([
+      "ignore",
+      expect.anything(),
+      expect.anything(),
+    ]);
     expect(call?.env.TRAYCER_CHANNEL).toBeUndefined();
     expect(call?.env.EXTRA_FROM_OVERRIDE).toBe("1");
     expect(call?.env.TRAYCER_TEST_UNSET).toBeUndefined();
@@ -436,10 +649,11 @@ describe("runHostStart - installed-record launch path", () => {
     setTimeout(() => child.emit("exit", 0, null));
     await runUntilExit(invoke, recorded);
     expect(recorded.markers.every((m) => m.environment === "dev")).toBe(true);
-    expect(recorded.spawnCalls[0]?.args).toEqual([
+    expect(recorded.spawnCalls[0]?.args.slice(0, 2)).toEqual([
       "--host-data-dir",
       hostHomeDir("dev"),
     ]);
+    expect(recorded.spawnCalls[0]?.args[2]).toBe("--layer0-attempt-id");
     expect(recorded.spawnCalls[0]?.env.TRAYCER_CHANNEL).toBeUndefined();
   });
 
@@ -475,10 +689,11 @@ describe("runHostStart - installed-record launch path", () => {
         runHostStart({ environment: "dev", cwd: null }, deps);
       setTimeout(() => child.emit("exit", 0, null));
       await runUntilExit(invoke, recorded);
-      expect(recorded.spawnCalls[0]?.args).toEqual([
+      expect(recorded.spawnCalls[0]?.args.slice(0, 2)).toEqual([
         "--host-data-dir",
         hostHomeDir("dev"),
       ]);
+      expect(recorded.spawnCalls[0]?.args[2]).toBe("--layer0-attempt-id");
       expect(hostHomeDir("dev")).toMatch(
         /[\\/]\.traycer[\\/]host[\\/]dev-runs[\\/]worktree-slot$/,
       );
@@ -497,10 +712,11 @@ describe("runHostStart - installed-record launch path", () => {
     await runUntilExit(invoke, recorded);
     expect(recorded.spawnCalls).toHaveLength(1);
     expect(recorded.spawnCalls[0]?.command).toBe(wrapper);
-    expect(recorded.spawnCalls[0]?.args).toEqual([
+    expect(recorded.spawnCalls[0]?.args.slice(0, 2)).toEqual([
       "--host-data-dir",
       hostHomeDir("dev"),
     ]);
+    expect(recorded.spawnCalls[0]?.args[2]).toBe("--layer0-attempt-id");
   });
 });
 
@@ -684,9 +900,24 @@ describe("HostStartTarget", () => {
 });
 
 // --------------------------------- service manifest sanity tests
+//
+// SCOPE. These are text-level negatives about the manifest layer only: that
+// no flag which does not exist on `host start` leaks into a generated
+// definition. They deliberately do NOT try to assert the identity binding
+// works - substring assertions here were proven vacuous during cold review
+// (`expect(unit).toContain("--service-label")` passed with the label branch
+// stripped, because the string also appeared in the probe pattern).
+//
+// The binding is proven by EXECUTING the emitted artifact:
+//   * macOS      - service/platforms/__tests__/macos.test.ts
+//   * systemd    - service/platforms/__tests__/linux.test.ts
+//   * Windows    - service/platforms/__tests__/windows-hidden-launcher.test.ts
+//   * real CLI   - host/__tests__/capabilities.test.ts
 
-describe("service manifests invoke `host start` (slot from config.environment) without --bundle/--environment", () => {
-  it("macOS plist ProgramArguments end with `host start` and no --environment", async () => {
+describe("service manifests never leak a flag `host start` does not have", () => {
+  const REMOVED_FLAGS = ["--environment", "--bundle", "--node-bin"] as const;
+
+  it("macOS plist", async () => {
     const { buildLaunchAgentPlist } =
       await import("../../service/platforms/macos");
     const xml = buildLaunchAgentPlist({
@@ -700,18 +931,15 @@ describe("service manifests invoke `host start` (slot from config.environment) w
         args: [],
       },
     });
-    expect(xml).toContain("<string>host</string>");
-    expect(xml).toContain("<string>start</string>");
-    // No --environment - the CLI/host resolve the slot from config.environment.
-    expect(xml).not.toContain("--environment");
-    // The --bundle / --node-bin flags no longer exist on `host start`,
-    // but pin them not appearing in service manifests anyway so a future
-    // regression that reintroduces them is caught at the manifest layer.
-    expect(xml).not.toContain("--bundle");
-    expect(xml).not.toContain("--node-bin");
+    // launchd execs ProgramArguments[0]; the compatibility program is the
+    // per-label launcher FILE (macOS names the login item after it - the
+    // former inline `/bin/sh -c` vector surfaced as "sh" in Login Items).
+    expect(xml).toContain("/ai.traycer.host.prod/traycer-host-start</string>");
+    expect(xml).not.toContain("<string>/bin/sh</string>");
+    for (const flag of REMOVED_FLAGS) expect(xml).not.toContain(flag);
   });
 
-  it("systemd unit ExecStart contains `host start` without --environment/--bundle", async () => {
+  it("systemd unit", async () => {
     const { buildSystemdUnit } = await import("../../service/platforms/linux");
     const unit = buildSystemdUnit({
       label: {
@@ -724,14 +952,10 @@ describe("service manifests invoke `host start` (slot from config.environment) w
         args: [],
       },
     });
-    expect(unit).toContain("host");
-    expect(unit).toContain("start");
-    expect(unit).not.toContain("--environment");
-    expect(unit).not.toContain("--bundle");
-    expect(unit).not.toContain("--node-bin");
+    for (const flag of REMOVED_FLAGS) expect(unit).not.toContain(flag);
   });
 
-  it("Windows scheduled task XML invokes the hidden launcher, which runs `host start` without --environment/--bundle", async () => {
+  it("Windows Scheduled Task XML and its hidden launcher", async () => {
     const { buildScheduledTaskXml, buildWindowsHiddenHostLauncher } =
       await import("../../service/platforms/windows");
     const prevUsername = process.env.USERNAME;
@@ -745,33 +969,25 @@ describe("service manifests invoke `host start` (slot from config.environment) w
         command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
         args: [],
       };
-      const xml = buildScheduledTaskXml({
-        label: {
-          id: "ai.traycer.host.prod",
-          displayName: "Traycer Host",
-          environment: "production",
-          devSlot: null,
-        },
-        cli,
-      });
-      const launcher = buildWindowsHiddenHostLauncher(cli);
+      const label = {
+        id: "ai.traycer.host.prod",
+        displayName: "Traycer Host",
+        environment: "production" as const,
+        devSlot: null,
+      };
+      const xml = buildScheduledTaskXml({ label, cli });
+      const launcher = buildWindowsHiddenHostLauncher(cli, label);
+      // The task must launch the GUI script host, not the console CLI, or
+      // Task Scheduler flashes a window on every login.
       expect(xml).toContain("<Hidden>true</Hidden>");
       expect(xml).toContain("wscript.exe");
       expect(xml).toContain("host-start-hidden.vbs");
       expect(xml).not.toContain(
         "<Command>C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe</Command>",
       );
-      expect(launcher).toContain('Set shell = CreateObject("WScript.Shell")');
-      expect(launcher).toContain("shell.Run");
-      expect(launcher).toContain(", 0, True)");
-      expect(launcher).toContain(
-        "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
-      );
-      expect(launcher).toContain("host");
-      expect(launcher).toContain("start");
-      expect(`${xml}\n${launcher}`).not.toContain("--environment");
-      expect(`${xml}\n${launcher}`).not.toContain("--bundle");
-      expect(`${xml}\n${launcher}`).not.toContain("--node-bin");
+      for (const flag of REMOVED_FLAGS) {
+        expect(`${xml}\n${launcher}`).not.toContain(flag);
+      }
     } finally {
       restoreUsername();
     }

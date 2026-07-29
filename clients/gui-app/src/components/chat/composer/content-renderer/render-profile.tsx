@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import type {
   ComposerContentBlockRenderArgs,
   ComposerContentCodeBlockRenderArgs,
+  ComposerContentOrderedListRenderArgs,
   ComposerContentRenderProfile,
   ComposerContentRenderVariant,
   ComposerContentRootRenderArgs,
@@ -129,9 +130,14 @@ function renderBulletList({
 function renderOrderedList({
   children,
   nodeKey,
-}: ComposerContentBlockRenderArgs) {
+  start,
+}: ComposerContentOrderedListRenderArgs) {
   return (
-    <ol key={nodeKey} className="my-0.5 list-decimal pl-5">
+    <ol
+      key={nodeKey}
+      start={start === 1 ? undefined : start}
+      className="my-0.5 list-decimal pl-5"
+    >
       {children}
     </ol>
   );

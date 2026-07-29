@@ -60,19 +60,27 @@ function ComposerSendButtonImpl(props: ComposerSendButtonProps) {
   );
 
   const button = (
-    <Button
-      type="button"
-      size="icon"
-      onClick={submitOrStopTurn}
-      disabled={hintActive ? false : disabled}
-      aria-disabled={hintActive || undefined}
-      aria-label={label}
-      title={hintActive ? undefined : buttonTitle}
-      data-testid={stopMode ? "chat-stop-button" : undefined}
-      className={buttonClassName}
+    <TooltipWrapper
+      label={hintActive ? undefined : buttonTitle}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {composerSendButtonIcon(attachmentPending, stopMode)}
-    </Button>
+      <span className="inline-flex">
+        <Button
+          type="button"
+          size="icon"
+          onClick={submitOrStopTurn}
+          disabled={hintActive ? false : disabled}
+          aria-disabled={hintActive || undefined}
+          aria-label={label}
+          data-testid={stopMode ? "chat-stop-button" : undefined}
+          className={buttonClassName}
+        >
+          {composerSendButtonIcon(attachmentPending, stopMode)}
+        </Button>
+      </span>
+    </TooltipWrapper>
   );
 
   if (!hintActive) return button;

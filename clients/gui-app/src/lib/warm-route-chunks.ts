@@ -24,14 +24,25 @@ export function warmRouteChunks(): void {
   if (typeof window === "undefined") return;
 
   const warm = () => {
-    // The epic-canvas graph spans two split routes: the `/epics` layout
-    // (EpicTabHost -> EpicSessionProvider -> EpicRouteSessionBody) and the
-    // detail route (EpicRoute -> EpicShell -> TileCanvas/DnD/sidebar). Warming
-    // both source modules covers the bulk of the cost; the thin per-route split
-    // wrappers the router imports later re-use these already-warm deps.
+    // Route adapters, for a deep-link navigation's own route chunk.
     void import("@/routes/epics-layout-route-components");
     void import("@/routes/epic-tab-route-components");
     void import("@/routes/draft-route-components");
+    // The top-level tab host reaches every surface through
+    // `tabSurfaceDescriptor(kind).render()`, which returns a `lazy()`
+    // component - so NOTHING statically imports these modules and the route
+    // adapters above no longer pull them in. Each one must be warmed by name
+    // or the first open of that tab kind pays the cold dynamic import behind
+    // `Suspense fallback={null}`, i.e. a blank pane. `epic-surface` is the
+    // expensive one: it owns `EpicRouteSessionBody` + `EpicSidebarColumn` +
+    // `EpicSessionProvider`, which the epic route adapter used to import
+    // directly and warm for free. `surface-modules-are-warmed.test.ts` keeps
+    // this list in sync with the `lazy()` calls in `stores/tabs/kinds/`.
+    void import("@/components/epic-tabs/epic-surface");
+    void import("@/components/home/landing-draft-surface");
+    void import("@/providers/draft-surface-provider");
+    void import("@/components/epics/history-surface");
+    void import("@/components/settings/settings-surface");
   };
 
   if (typeof window.requestIdleCallback === "function") {

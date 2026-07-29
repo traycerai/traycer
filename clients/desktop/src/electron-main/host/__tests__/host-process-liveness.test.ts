@@ -5,11 +5,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readPublishedHostProcessLiveness } from "../host-process-liveness";
 import {
   __setAsyncProcessLivenessReaderForTest,
-  __setAsyncProcessStartTimeReaderForTest,
+  __setAsyncProcessStartIdentityReaderForTest,
 } from "../process-identity";
 
 const HOST_PID = 4242;
 const PUBLISHED_AT = "2026-07-25T10:00:00.000Z";
+// Tokens are only ever compared against each other, so a fixed platform tag
+// keeps these rows identical on a macOS laptop and a Linux runner.
+const HOST_IDENTITY = "linux:boot-a 4242";
+const STRANGER_IDENTITY = "linux:boot-a 999999";
 
 describe("readPublishedHostProcessLiveness", () => {
   let dir: string;
@@ -21,8 +25,8 @@ describe("readPublishedHostProcessLiveness", () => {
   let previousLiveness: Parameters<
     typeof __setAsyncProcessLivenessReaderForTest
   >[0] = null;
-  let previousStartTime: Parameters<
-    typeof __setAsyncProcessStartTimeReaderForTest
+  let previousStartIdentity: Parameters<
+    typeof __setAsyncProcessStartIdentityReaderForTest
   >[0] = null;
 
   beforeEach(() => {
@@ -32,11 +36,11 @@ describe("readPublishedHostProcessLiveness", () => {
 
   afterEach(() => {
     __setAsyncProcessLivenessReaderForTest(previousLiveness);
-    __setAsyncProcessStartTimeReaderForTest(previousStartTime);
+    __setAsyncProcessStartIdentityReaderForTest(previousStartIdentity);
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function publishPid(): void {
+  function publishPid(startIdentity: string | null): void {
     writeFileSync(
       pidFile,
       JSON.stringify({
@@ -45,6 +49,10 @@ describe("readPublishedHostProcessLiveness", () => {
         version: "1.1.8",
         websocketUrl: "ws://127.0.0.1:55555/rpc",
         startedAt: PUBLISHED_AT,
+        // `null` reproduces a pid.json written before the field existed.
+        ...(startIdentity === null
+          ? {}
+          : { processStartIdentity: startIdentity }),
       }),
       "utf8",
     );
@@ -52,19 +60,19 @@ describe("readPublishedHostProcessLiveness", () => {
 
   function stubProcess(
     liveness: "alive" | "dead" | "indeterminate",
-    startTimeMs: number | null,
+    observedIdentity: string | null,
   ): void {
     previousLiveness = __setAsyncProcessLivenessReaderForTest(() =>
       Promise.resolve(liveness),
     );
-    previousStartTime = __setAsyncProcessStartTimeReaderForTest(() =>
-      Promise.resolve(startTimeMs),
+    previousStartIdentity = __setAsyncProcessStartIdentityReaderForTest(() =>
+      Promise.resolve(observedIdentity),
     );
   }
 
   it("reports a running host as alive - the case that must never be auto-killed", async () => {
-    publishPid();
-    stubProcess("alive", Date.parse(PUBLISHED_AT) - 1_000);
+    publishPid(HOST_IDENTITY);
+    stubProcess("alive", HOST_IDENTITY);
 
     await expect(readPublishedHostProcessLiveness(pidFile)).resolves.toBe(
       "alive",
@@ -72,7 +80,7 @@ describe("readPublishedHostProcessLiveness", () => {
   });
 
   it("reports a vanished process as dead so recovery can run", async () => {
-    publishPid();
+    publishPid(HOST_IDENTITY);
     stubProcess("dead", null);
 
     await expect(readPublishedHostProcessLiveness(pidFile)).resolves.toBe(
@@ -81,22 +89,51 @@ describe("readPublishedHostProcessLiveness", () => {
   });
 
   it("treats a recycled pid as dead rather than an eternal shield", async () => {
-    // Something unrelated now owns this pid: it started well AFTER pid.json was
-    // published, so it cannot be the host. Without this, recovery would be
-    // blocked forever by a stranger's process.
-    publishPid();
-    stubProcess("alive", Date.parse(PUBLISHED_AT) + 60_000);
+    // Something unrelated now owns this pid: the kernel's creation stamp for
+    // whatever is running there is positively not the one the host recorded,
+    // so it cannot be the host. Without this, recovery would be blocked
+    // forever by a stranger's process.
+    publishPid(HOST_IDENTITY);
+    stubProcess("alive", STRANGER_IDENTITY);
 
     await expect(readPublishedHostProcessLiveness(pidFile)).resolves.toBe(
       "dead",
     );
   });
 
+  /*
+   * traycerai/traycer#740, at the exact seam where it did its damage.
+   *
+   * A pid.json written by a host that predates `processStartIdentity` gives
+   * the verdict nothing to compare. The retired code fell back to comparing a
+   * wall-clock-derived start time against the publication timestamp, and a
+   * `CLOCK_REALTIME` step - routine on WSL2, which resynchronises when the VM
+   * resumes from an idle pause - pushed the derived value past the stamp and
+   * produced "mismatch" for a completely healthy host. This function turned
+   * that into "dead", which dropped the governor's never-kill shield and let
+   * a running host be SIGTERMed every few minutes until the respawn budget
+   * ran out and the app wedged.
+   *
+   * The stub is deliberately the sharpest one available: the process is alive
+   * and its observed identity is the host's own. Any reader that reaches for
+   * a timestamp fallback has nothing here to make it say "dead" - so this row
+   * pins the absence of the fallback, not merely its current answer.
+   */
+  it("errs towards alive for a legacy pid.json instead of inventing a recycled pid", async () => {
+    publishPid(null);
+    stubProcess("alive", HOST_IDENTITY);
+
+    await expect(readPublishedHostProcessLiveness(pidFile)).resolves.toBe(
+      "alive",
+    );
+  });
+
   it("errs towards alive when the probe cannot conclude", async () => {
-    // No start-time source (or a refused `tasklist`). Guessing "dead" here
-    // would kill a host that may be working perfectly; guessing "alive" costs
-    // at most a wait for the demote window and a manual Retry.
-    publishPid();
+    // No identity source (a `/proc` that is not mounted, a refused
+    // `Get-Process`). Guessing "dead" here would kill a host that may be
+    // working perfectly; guessing "alive" costs at most a wait for the demote
+    // window and a manual Retry.
+    publishPid(HOST_IDENTITY);
     stubProcess("alive", null);
 
     await expect(readPublishedHostProcessLiveness(pidFile)).resolves.toBe(
@@ -125,7 +162,9 @@ describe("readPublishedHostProcessLiveness", () => {
     // A deliberate stop unlinks pid.json, and a host that has not bound yet
     // never published one. Either way there is no process for this gate to
     // protect - the monitor's own metadata check decides what happens next.
-    stubProcess("alive", Date.parse(PUBLISHED_AT));
+    // Stubbed alive-and-matching so only the absent-file short circuit can
+    // produce "dead" here.
+    stubProcess("alive", HOST_IDENTITY);
 
     await expect(readPublishedHostProcessLiveness(pidFile)).resolves.toBe(
       "dead",

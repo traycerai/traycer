@@ -29,6 +29,7 @@ import {
   type KeyboardEvent,
   type PointerEvent,
 } from "react";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { PauseIcon, PlayIcon } from "lucide-react";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -275,20 +276,26 @@ function CommGraphTransportTrack(props: {
         style={{ width: `${playhead * 100}%` }}
       />
       {markers.map((marker) => (
-        <span
+        <TooltipWrapper
           key={marker.key}
-          aria-hidden
-          title={markerTitle(marker.event)}
-          data-testid={`comm-graph-transport-marker-${marker.key}`}
-          data-kind={marker.event.kind}
-          className={cn(
-            "absolute top-1 bottom-1 w-px -translate-x-1/2",
-            marker.event.kind === "a2a_notice"
-              ? "bg-amber-500/70"
-              : "bg-foreground/25",
-          )}
-          style={{ left: `${marker.fraction * 100}%` }}
-        />
+          label={markerTitle(marker.event)}
+          side="top"
+          sideOffset={4}
+          align="center"
+        >
+          <span
+            aria-hidden
+            data-testid={`comm-graph-transport-marker-${marker.key}`}
+            data-kind={marker.event.kind}
+            className={cn(
+              "absolute top-1 bottom-1 w-px -translate-x-1/2",
+              marker.event.kind === "a2a_notice"
+                ? "bg-amber-500/70"
+                : "bg-foreground/25",
+            )}
+            style={{ left: `${marker.fraction * 100}%` }}
+          />
+        </TooltipWrapper>
       ))}
       {!hasEvents ? null : (
         <div

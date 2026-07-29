@@ -69,6 +69,7 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
     return (
       <WorktreeOwnerMetadataTooltip
         trigger={props.trigger}
+        title={nodeName}
         hostId={hostId}
         epicId={epicId}
         ownerId={nodeId}
@@ -78,10 +79,13 @@ export function AgentHoverTooltip(props: AgentHoverTooltipProps): ReactNode {
       />
     );
   }
-  if (roleContent === null) return props.trigger;
+  // Never a bare trigger: a row without roles or owner metadata still exposes
+  // its FULL name on hover - sidebar rows and graph nodes truncate, and the
+  // tooltip is the only place the complete title is readable (upstream pinned
+  // this for selection mode; the shared component gives it everywhere).
   return (
     <TooltipWrapper
-      label={roleContent}
+      label={roleContent ?? nodeName}
       side={side}
       sideOffset={6}
       align="start"

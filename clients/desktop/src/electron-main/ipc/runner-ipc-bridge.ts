@@ -20,7 +20,9 @@ import type {
   OwnershipEntry,
   PerWindowLandingDraft,
   PerWindowSnapshot,
+  PerWindowStateCapabilities,
   PerWindowStatePatch,
+  PerWindowStateUpdateAcknowledgement,
   SupportLogTarget,
   SupportLogTailResult,
   SupportRevealLogResult,
@@ -40,17 +42,24 @@ import type {
 import { DesktopAuthSession } from "../auth/desktop-auth-session";
 import {
   createEmptyPerWindowSnapshot,
+  PER_WINDOW_STATE_CAPABILITIES,
   type PerWindowStateChange,
 } from "../windows/per-window-state";
 import {
   isMruFallbackMenuCommand,
-  readEpicId,
   readSenderWebContentsId,
 } from "./ipc-parsers";
 import {
   uniqueLandingDrafts,
   uniquePerWindowTabs,
 } from "./landing-draft-helpers";
+import {
+  findWindowIdForOpenArtifact,
+  findWindowIdForOpenChat,
+  findWindowIdForOpenTab,
+  parseNotificationClickTarget,
+  type NotificationClickTarget,
+} from "./notification-target";
 import { registerAuthIpc } from "./auth-ipc";
 import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
@@ -148,7 +157,14 @@ export interface IpcEpicWindowOwnership {
 
 export interface IpcPerWindowState {
   get(windowId: string): PerWindowSnapshot;
-  update(windowId: string, patch: PerWindowStatePatch): void;
+  capabilities(): PerWindowStateCapabilities;
+  update(
+    windowId: string,
+    patch: PerWindowStatePatch,
+  ):
+    | PerWindowStateUpdateAcknowledgement
+    | void
+    | Promise<PerWindowStateUpdateAcknowledgement | void>;
   clear(windowId: string): void;
   on(event: "change", listener: (change: PerWindowStateChange) => void): void;
   off(event: "change", listener: (change: PerWindowStateChange) => void): void;
@@ -209,7 +225,7 @@ export interface IpcZoomController {
 }
 
 export interface IpcSupportService {
-  getSnapshot(): SupportSnapshot;
+  getSnapshot(): Promise<SupportSnapshot>;
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult>;
   submitReport(
     form: SupportSubmitReportRequest,
@@ -488,9 +504,66 @@ export class RunnerIpcBridge {
     );
   }
 
+  /**
+   * Resolves the live window already holding a notification click's exact
+   * target - chat/terminal-agent/terminal tile (`chatId`), terminal tab
+   * (`tabId`), or artifact tile (`artifactId`) - or null when there is no
+   * epicId or no such target is open anywhere.
+   */
+  private resolveNotificationOpenWindowId(
+    target: NotificationClickTarget,
+  ): string | null {
+    if (target.epicId === null) return null;
+    if (target.chatId !== null) {
+      return findWindowIdForOpenChat(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.chatId,
+        target.originHostId,
+      );
+    }
+    if (target.tabId !== null) {
+      return findWindowIdForOpenTab(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.tabId,
+      );
+    }
+    if (target.artifactId !== null) {
+      return findWindowIdForOpenArtifact(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.artifactId,
+        target.originHostId,
+      );
+    }
+    return null;
+  }
+
+  /**
+   * Routes a native-notification click. When the click carries a chat/
+   * terminal-agent target, a terminal-route tab target, or an artifact
+   * target, that is already open in some live window, focuses that exact
+   * window - `NotificationFocusBridge` there brings the tile to the
+   * foreground itself. Otherwise falls back to owned-or-MRU delivery, as for
+   * any other epic-scoped event.
+   */
   deliverNotificationClick(payload: unknown): void {
+    const target = parseNotificationClickTarget(payload);
+    const openWindowId = this.resolveNotificationOpenWindowId(target);
+    if (openWindowId !== null) {
+      this.focusAndDeliver(
+        openWindowId,
+        RunnerHostEvent.notificationClick,
+        payload,
+      );
+      return;
+    }
     this.deliverToOwnedOrMru(
-      readEpicId(payload),
+      target.epicId,
       RunnerHostEvent.notificationClick,
       payload,
     );
@@ -910,11 +983,19 @@ export class RunnerIpcBridge {
       });
       return;
     }
-    this.windowRegistry.focusById(target.windowId);
-    if (!this.safeSendToWindow(target.windowId, channel, payload)) {
+    this.focusAndDeliver(target.windowId, channel, payload);
+  }
+
+  private focusAndDeliver(
+    windowId: string,
+    channel: string,
+    payload: unknown,
+  ): void {
+    this.windowRegistry.focusById(windowId);
+    if (!this.safeSendToWindow(windowId, channel, payload)) {
       log.warn("[runner-ipc] renderer event delivery failed", {
         channel,
-        windowId: target.windowId,
+        windowId,
       });
     }
   }
@@ -1163,7 +1244,16 @@ class NullPerWindowState implements IpcPerWindowState {
     return this.snapshots.get(windowId) ?? createEmptyPerWindowSnapshot();
   }
 
-  update(windowId: string, patch: PerWindowStatePatch): void {
+  capabilities(): PerWindowStateCapabilities {
+    // Shared with the real store: the renderer handshake must not see a
+    // different feature set depending on which implementation backs the bridge.
+    return PER_WINDOW_STATE_CAPABILITIES;
+  }
+
+  update(
+    windowId: string,
+    patch: PerWindowStatePatch,
+  ): PerWindowStateUpdateAcknowledgement {
     const current = this.get(windowId);
     const landingDrafts =
       "landingDrafts" in patch
@@ -1173,7 +1263,8 @@ class NullPerWindowState implements IpcPerWindowState {
       "activeLandingDraftId" in patch
         ? (patch.activeLandingDraftId ?? null)
         : current.activeLandingDraftId;
-    this.snapshots.set(windowId, {
+    const next: PerWindowSnapshot = {
+      revision: (current.revision ?? 0) + 1,
       epicTabs:
         "epicTabs" in patch
           ? uniquePerWindowTabs(patch.epicTabs ?? [])
@@ -1188,7 +1279,17 @@ class NullPerWindowState implements IpcPerWindowState {
           : current.canvasByTabId,
       landingDrafts,
       activeLandingDraftId,
-    });
+      tabStripLayout:
+        "tabStripLayout" in patch
+          ? (patch.tabStripLayout ?? null)
+          : current.tabStripLayout,
+      activeRoute:
+        "activeRoute" in patch
+          ? (patch.activeRoute ?? null)
+          : current.activeRoute,
+    };
+    this.snapshots.set(windowId, next);
+    return { capabilities: this.capabilities(), revision: next.revision ?? 0 };
   }
 
   clear(windowId: string): void {
@@ -1207,8 +1308,8 @@ class NullPerWindowState implements IpcPerWindowState {
 }
 
 class NullSupportService implements IpcSupportService {
-  getSnapshot(): SupportSnapshot {
-    return {
+  getSnapshot(): Promise<SupportSnapshot> {
+    return Promise.resolve({
       appName: "Traycer",
       appVersion: "0.0.0",
       platform: process.platform,
@@ -1228,11 +1329,12 @@ class NullSupportService implements IpcSupportService {
         version: null,
         pid: null,
         hostId: null,
+        layer0: null,
       },
       logs: [],
       links: [],
       supportEmail: "",
-    };
+    });
   }
 
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult> {
@@ -1242,7 +1344,7 @@ class NullSupportService implements IpcSupportService {
   submitReport(
     _form: SupportSubmitReportRequest,
   ): Promise<SupportSubmitReportResult> {
-    return Promise.resolve({ reportId: "" });
+    return Promise.resolve({ reportId: null });
   }
 
   tailLog(input: {

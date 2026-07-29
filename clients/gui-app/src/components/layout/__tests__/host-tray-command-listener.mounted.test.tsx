@@ -20,8 +20,17 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
-const navigateMock = vi.hoisted(() => vi.fn());
+interface CapturedNavigate {
+  readonly to: string;
+  readonly replace: boolean;
+  readonly state: unknown;
+}
+
+const navigateMock = vi.hoisted(() =>
+  vi.fn<(options: CapturedNavigate) => void>(),
+);
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
@@ -128,7 +137,7 @@ function makeManagement(overrides: ManagementOverrides): IHostManagement {
         deregisteredService: true,
       }),
     ),
-    restartHost: vi.fn(() => Promise.resolve()),
+    restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     uninstallTraycer: vi.fn(() =>
       Promise.resolve({
         removedHost: true,
@@ -193,6 +202,17 @@ function makeHost(tray: IHostTray, management: IHostManagement): IRunnerHost {
     hasLocalHost: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
+    listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
+    revokeUserSession: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    revokeAllSessions: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    mintHostCredential: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    requestStepUpChallenge: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    verifyStepUpChallenge: () =>
+      Promise.resolve({ kind: "network-error" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
@@ -242,7 +262,7 @@ function makeHost(tray: IHostTray, management: IHostManagement): IRunnerHost {
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
-    requestHostRespawn: () => Promise.resolve(),
+    requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     service: null,
     traycerCli: null,
     migration: null,
@@ -268,11 +288,13 @@ function renderListener(host: IRunnerHost): QueryClient {
 
 describe("<HostTrayCommandListener /> - mounted in __root", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     navigateMock.mockClear();
     toastErrorMock.mockClear();
   });
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
   });
 
   it("subscribes to hostTray.onCommand and navigates on openSettingsHost", () => {
@@ -284,7 +306,12 @@ describe("<HostTrayCommandListener /> - mounted in __root", () => {
       tray.emit({ kind: "openSettingsHost" });
     });
 
-    expect(navigateMock).toHaveBeenCalledWith({ to: "/settings/host" });
+    const call = navigateMock.mock.calls.at(-1);
+    if (call === undefined) throw new Error("expected navigation");
+    const [navigation] = call;
+    expect(navigation.to).toBe("/settings/host");
+    expect(navigation.replace).toBe(false);
+    expect(navigation.state).toEqual(expect.any(Function));
   });
 
   it("opens a confirmation dialog for restartHost and only invokes restartHost after confirm", async () => {

@@ -271,8 +271,10 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: (props: { readonly children: ReactNode }) => props.children,
   TooltipTrigger: (props: { readonly children: ReactNode }) => props.children,
+  // `role="tooltip"` so `tooltipTextIn` can find the label this mock renders
+  // eagerly (the real content only exists while the tooltip is open).
   TooltipContent: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
+    <div role="tooltip">{props.children}</div>
   ),
 }));
 
@@ -814,6 +816,18 @@ describe("epic sidebar selection mode", () => {
       screen.getByText("Add an agent and choose a Chat or Terminal interface."),
     ).not.toBeNull();
     expect(screen.queryByText("No agents use this interface.")).toBeNull();
+  });
+
+  it("exposes each full agent title on hover without worktree metadata", () => {
+    seedChatTree();
+    testState.rowHostId = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.getByRole("tooltip", { name: "Root chat" })).toBeTruthy();
+    expect(
+      screen.getByRole("tooltip", { name: "Terminal agent" }),
+    ).toBeTruthy();
   });
 
   it("blames the interface filter, not the Task, when a filter hides every agent", () => {
@@ -1385,6 +1399,17 @@ function leadingStatusKinds(nodeId: string): readonly string[] {
  * so it appears only once no attention tone, activity tier or unread completion
  * has claimed the icon. Scoped to the row so a sibling's lock cannot satisfy it.
  */
+/**
+ * The hover label attached to `el`. The real `TooltipContent` is portalled and
+ * open-only, but this file's `@/components/ui/tooltip` mock renders it inline -
+ * as a sibling of the trigger, since the mocked `Tooltip`/`TooltipTrigger` both
+ * render their children directly.
+ */
+function tooltipTextIn(el: HTMLElement): string | null {
+  const tip = el.parentElement?.querySelector('[role="tooltip"]') ?? null;
+  return tip === null ? null : tip.textContent;
+}
+
 function readOnlyLock(nodeId: string): HTMLElement | null {
   const row = screen.queryByTestId(`epic-sidebar-item-${nodeId}`);
   if (row === null) return null;
@@ -1590,7 +1615,7 @@ describe("chat descendant status rollup", () => {
     const nested = screen.getByTestId(
       "chat-descendant-status-failure-chat-root",
     );
-    expect(nested.getAttribute("title")).toBe(
+    expect(tooltipTextIn(nested)).toBe(
       "Nested: 1 needs attention · 1 running · 1 completed",
     );
     // The nested rollup owns the slot, so the parent's own spinner is absent.
@@ -1678,8 +1703,8 @@ describe("chat descendant status rollup", () => {
     const icon = screen.getByTestId("chat-descendant-status-running-chat-root");
     expect(icon).toBeTruthy();
     // The tooltip breaks the aggregate down across both tiers.
-    expect(icon.getAttribute("title")).toContain("1 running");
-    expect(icon.getAttribute("title")).toContain("1 in background");
+    expect(tooltipTextIn(icon)).toContain("1 running");
+    expect(tooltipTextIn(icon)).toContain("1 in background");
   });
 
   it("lets a descendant's turn outrank the parent's own background work", () => {
@@ -1946,7 +1971,7 @@ describe("chat row read-only arm", () => {
 
     const lock = readOnlyLock("chat-child");
     expect(lock).toBeTruthy();
-    expect(lock?.getAttribute("title")).toBe("Read-only agent");
+    expect(lock === null ? null : tooltipTextIn(lock)).toBe("Read-only agent");
     // It replaces the IDLE GLYPH, not the trailing time: a viewer still sees
     // when the row last moved.
     const row = screen.getByTestId("epic-sidebar-item-chat-child");
@@ -2884,7 +2909,7 @@ describe("chat row archive", () => {
     // "no status". Scoped to the row, since several rows carry the same label.
     const lock = readOnlyLock("chat-child");
     expect(lock).toBeTruthy();
-    expect(lock?.getAttribute("title")).toBe("Read-only agent");
+    expect(lock === null ? null : tooltipTextIn(lock)).toBe("Read-only agent");
   });
 
   // --- B8: status survives selection mode and rename (archive must not blank it)

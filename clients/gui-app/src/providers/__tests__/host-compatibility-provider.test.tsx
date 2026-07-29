@@ -26,6 +26,8 @@ import {
   collectOpenEpicIds,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import {
   clearSessionCreatedEpics,
@@ -37,6 +39,8 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 const STARTUP_EPIC_ID = "epic-startup-compat";
 const STALE_EPIC_ID = "epic-stale-persisted";
 const FRESH_EPIC_ID = "epic-fresh-created";
+const RESTORED_PHASE_ID = "phase-restored-persisted";
+const RESTORED_PHASE_TAB_ID = "phase-restored-tab";
 
 const HANDOFF_SETTINGS = {
   harnessId: "codex",
@@ -329,6 +333,16 @@ function installAuthFetch(): () => void {
 describe("HostCompatibilityProvider startup consumers", () => {
   beforeEach(() => {
     restoreFetch = installAuthFetch();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    // `EpicTabExistenceReconciler` now closes stale epics through
+    // `tabCommandCoordinator.handleEpicAccessLoss`, which derives its
+    // affected refs from the coordinator's OWN layout (`useTabsStore`), not
+    // from the canvas store directly. Install the real source-reconciliation
+    // subscription so every `openEpicTab*` call this file makes below is
+    // reflected into that layout exactly as it is in the running app,
+    // instead of hand-mirroring each auto-generated tab id into a second
+    // fixture.
+    tabCommandCoordinator.installSourceReconciliation();
   });
 
   afterEach(() => {
@@ -336,7 +350,12 @@ describe("HostCompatibilityProvider startup consumers", () => {
     useAuthStore.getState().setSignedOut();
     useEpicCanvasStore
       .getState()
-      .closeTabsForEpics([STARTUP_EPIC_ID, STALE_EPIC_ID, FRESH_EPIC_ID]);
+      .closeTabsForEpics([
+        STARTUP_EPIC_ID,
+        STALE_EPIC_ID,
+        FRESH_EPIC_ID,
+        RESTORED_PHASE_ID,
+      ]);
     useInitialChatHandoffStore.getState().resetForTests();
     clearSessionCreatedEpics();
     vi.restoreAllMocks();
@@ -558,6 +577,33 @@ describe("HostCompatibilityProvider startup consumers", () => {
       expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
     });
     expect(collectOpenEpicIds()).toContain(FRESH_EPIC_ID);
+    queryClient.clear();
+  });
+
+  it("keeps a restored Phase-mode ref while pruning an ordinary stale Epic", async () => {
+    const { queryClient } = mountReconcilerHarness();
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .openPhaseMigrationTabWithId(
+          RESTORED_PHASE_TAB_ID,
+          RESTORED_PHASE_ID,
+          "Restored Phase",
+        );
+      useEpicCanvasStore.getState().openEpicTab(STALE_EPIC_ID, "Stale");
+    });
+
+    await waitFor(() => {
+      expect(collectOpenEpicIds()).not.toContain(STALE_EPIC_ID);
+    });
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(
+      RESTORED_PHASE_TAB_ID,
+    );
+    expect(
+      useEpicCanvasStore.getState().tabsById[RESTORED_PHASE_TAB_ID]
+        ?.surfaceMode,
+    ).toEqual({ kind: "phase-migration", phaseId: RESTORED_PHASE_ID });
     queryClient.clear();
   });
 

@@ -150,6 +150,11 @@ import {
   commentsSetThreadStatusV10,
 } from "@traycer/protocol/host/comments/contracts";
 import { hostStatusV10 } from "@traycer/protocol/host/status/contracts";
+import {
+  lifecycleClaimShutdownV10,
+  lifecycleCommitShutdownV10,
+  lifecycleReleaseShutdownV10,
+} from "@traycer/protocol/host/lifecycle/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -215,6 +220,7 @@ import {
   epicSetCommentThreadResolvedV10,
   epicSetPinnedV10,
   epicSubscribeV10,
+  epicSubscribeV11,
   epicUpdateArtifactStatusV10,
   epicUpdateTitleV10,
 } from "@traycer/protocol/host/epic/contracts";
@@ -233,6 +239,7 @@ import {
   workspaceSearchPathsV10,
   workspaceSearchTextV10,
 } from "@traycer/protocol/host/workspace/contracts";
+import { workspaceSubscribeFileListV10 } from "@traycer/protocol/host/workspace/subscribe";
 import {
   terminalCreateDowngradeV20ToV10,
   terminalCreateV10,
@@ -259,17 +266,21 @@ import {
   hostNotificationsClearAll,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorState,
-  hostNotificationsListDowngradeV20ToV10,
+  hostNotificationsListDowngradeV21ToV10,
   hostNotificationsListUpgradeV10ToV20,
+  hostNotificationsListUpgradeV20ToV21,
   hostNotificationsListV10,
   hostNotificationsListV20,
+  hostNotificationsListV21,
   hostNotificationsMarkAllRead,
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
   hostNotificationsFeedSubscribeV10,
+  hostNotificationsFeedSubscribeV11,
   hostNotificationsSubscribeV10,
   notificationsSubscribeV10,
+  notificationsSubscribeV11,
 } from "@traycer/protocol/host/notifications/contracts";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
@@ -288,6 +299,7 @@ import {
   migrationRunV10,
   phaseMigrateToEpicV10,
 } from "@traycer/protocol/host/migration/contracts";
+import { worktreeDeleteBatchByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
 import { epicCommunicationGraphSubscribeV10 } from "@traycer/protocol/host/epic/communication-graph";
@@ -392,6 +404,8 @@ import {
   providersSubmitLoginCodeResponseSchema,
   providersTouchLoginRequestSchema,
   providersTouchLoginResponseSchema,
+  providersEnsurePackRequestSchema,
+  providersEnsurePackResponseSchema,
   providersListRequestSchema,
   providersListResponseSchema,
   providersListResponseSchemaV10,
@@ -399,6 +413,7 @@ import {
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
+  providersListResponseSchemaV60,
   downgradeProviderCliStateToV10,
   downgradeProviderCliStateListToV20,
   downgradeProviderCliStateListToV30,
@@ -437,6 +452,7 @@ import {
   providersSetTerminalAgentArgsResponseSchema,
   providersSetTerminalAgentArgsResponseSchemaV10,
   providersSetTerminalAgentArgsResponseSchemaV20,
+  type DowngradableToV10ProviderState,
   type ProviderCliState,
   type ProviderCliStateV10,
   type ProviderMutationCliStateV20,
@@ -860,16 +876,13 @@ function unsupportedProviderStateDowngrade(
   };
 }
 
-// Accepts either the live (latest) state or the frozen v2.0 state - see
-// `downgradeProviderCliStateToV10`'s comment. `providersListDowngradeV2ToV1`
-// downgrades from v2.0 (already `profiles`-free); every other caller
-// downgrades from the live state.
+// `DowngradableToV10ProviderState` (imported) accepts either the live (latest)
+// state or the frozen v2.0 state - see `downgradeProviderCliStateToV10`'s
+// comment, which owns the shape. `providersListDowngradeV2ToV1` downgrades from
+// v2.0 (already `profiles`-free); every other caller downgrades from the live
+// state.
 function downgradeProviderStateForV10(
-  state: Omit<ProviderCliState, "profiles" | "loginCapability"> & {
-    profiles?: ProviderCliState["profiles"];
-    loginCapability:
-      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
-  },
+  state: DowngradableToV10ProviderState,
 ): DowngradeResult<ProviderCliStateV10> {
   const downgraded = downgradeProviderCliStateToV10(state);
   if (downgraded === null) {
@@ -879,11 +892,7 @@ function downgradeProviderStateForV10(
 }
 
 function downgradeProviderStateListForV10(
-  states: readonly (Omit<ProviderCliState, "profiles" | "loginCapability"> & {
-    profiles?: ProviderCliState["profiles"];
-    loginCapability:
-      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
-  })[],
+  states: readonly DowngradableToV10ProviderState[],
 ): ProviderCliStateV10[] {
   return states.flatMap((state) => {
     const downgraded = downgradeProviderCliStateToV10(state);
@@ -903,6 +912,24 @@ function upgradeProviderStateFromV10(
   return upgradeProviderCliStateV10ToMutationV20(state);
 }
 
+// Applied where `providers.list`'s pre-v4.0 line upgrades to the live shape,
+// alongside the existing `profiles: []` fill. An old host predates the
+// provider pack registry entirely, so it has no managed-install lifecycle, no
+// other-session version-visibility signal, and no Phase-2 advisory to report -
+// "nothing to show" is the honest projection, matching how `profiles: []`
+// reads "old host never had this feature."
+//
+// `providers.list` is the ONLY carrier: the provider.* mutation echoes are
+// pinned to the frozen `providerMutationCliStateSchemaV21`, which does not
+// model these fields at all (a state echo cannot change what is installed -
+// see that schema's comment), so their 2.0 -> 2.1 upgrades must not fill
+// them.
+const PROVIDER_LIVE_FIELDS_PRE_REGISTRY = {
+  managedInstallState: null,
+  versionVisibility: null,
+  advisory: null,
+} as const;
+
 // Fills the code-paste capability slot a frozen pre-`codePaste` state (v1.0,
 // v2.0, v3.0) never carries - same "old host never had this feature"
 // semantics as the `profiles: []` fill these upgrade bridges already apply
@@ -918,7 +945,6 @@ function upgradeLoginCapabilityFromV10(
     ? null
     : { ...loginCapability, codePaste: null };
 }
-
 function downgradeProviderRequestForV10<T>(
   schema: {
     safeParse: (
@@ -1029,6 +1055,13 @@ export const providersListUpgradeV3ToV4 = defineUpgradePath<
   // `profiles: []` (same "old host never had this feature" semantics as the
   // v1.0 -> v2.0 `availabilityPending` fill above). Devin/Pi absence needs no
   // transform - a v3.0 provider set is a valid v4.0 subset.
+  //
+  // The provider-pack-registry fields are deliberately NOT filled here. This
+  // bridge's target, `providersListResponseSchemaV40`, is frozen and does not
+  // model them, so a fill here is discarded - and the only released host in the
+  // field (v1.1.7) tops out at 4.0, which made this the one upgrade path that
+  // runs in practice while filling nothing. They are filled on the v5.0 -> v6.0
+  // hop instead, whose target is the live shape that models them.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     providers: response.providers.map((provider) => ({
@@ -1098,6 +1131,16 @@ export const providersListV60 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 6, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
+  // Frozen: `cli-v1.1.9` shipped this line. It pointed at the canonical schema
+  // until then, which is how the provider-pack-registry fields grew an
+  // already-released version - the same way `omp` first tried to ride v5.0.
+  responseSchema: providersListResponseSchemaV60,
+});
+
+export const providersListV70 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 7, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
 });
 
@@ -1107,9 +1150,37 @@ export const providersListUpgradeV5ToV6 = defineUpgradePath<
 >({
   from: { major: 5, minor: 0 },
   to: { major: 6, minor: 0 },
-  // Purely additive: a v5.0 response without omp is already a valid v6.0 one.
+  // Purely additive: a v5.0 provider set is already a valid v6.0 one (omp
+  // simply never appears).
+  //
+  // The provider-pack-registry fields are deliberately NOT filled here. Once
+  // `cli-v1.1.9` froze v6.0, `providersListResponseSchemaV60` stopped modelling
+  // them, and `upgradeResponseToVersion` chains these callbacks by cast with no
+  // re-parse - so a fill onto a frozen target is simply dropped. They are
+  // filled on the v6.0 -> v7.0 hop instead, whose target is the live shape.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
+});
+
+export const providersListUpgradeV6ToV7 = defineUpgradePath<
+  typeof providersListV60,
+  typeof providersListV70
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 7, minor: 0 },
+  // The fill's home, moved up one line for the same reason it moved from
+  // v3->v4 to v5->v6 before: this is now the first bridge whose TARGET schema
+  // actually models the provider-pack-registry fields. A v6.0 host either
+  // predates the registry or never reported it on this line, so "nothing to
+  // show" is the honest projection - same semantics as the `profiles: []` fill
+  // on the v3->v4 hop.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    providers: response.providers.map((provider) => ({
+      ...provider,
+      ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+    })),
+  }),
 });
 
 export const providersListDowngradeV6ToV5 = defineDowngradePath<
@@ -1178,6 +1249,100 @@ export const providersListDowngradeV6ToV1 = defineDowngradePath<
   typeof providersListV10
 >({
   from: { major: 6, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: downgradeProviderStateListForV10(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV6 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV60
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // The id sets are identical, so this hop exists purely to strip the
+  // provider-pack-registry fields: reparsing through the frozen v6.0 schema
+  // drops the keys it does not model, which is exactly what `cli-v1.1.9`
+  // expects to receive.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV60.parse({
+      providers: response.providers,
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV5 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV50
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV50.parse({
+      providers: downgradeProviderCliStateListToV50(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV4 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV40
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV40.parse({
+      providers: downgradeProviderCliStateListToV40(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV3 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV30
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV2 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV20
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV1 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV10
+>({
+  from: { major: 7, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1702,6 +1867,36 @@ export const providersTouchLoginV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersTouchLoginRequestSchema,
   responseSchema: providersTouchLoginResponseSchema,
+});
+
+/**
+ * Brand-new v1.0 method (outside `RELEASED_FLOOR_METHOD_NAMES` - a new method
+ * NAME is handshake-fatal against a released peer, so it rides the optional-
+ * capability channel with `degrade: { kind: "unsupported" }`, exactly like
+ * `providers.submitLoginCode`/`touchLogin` above).
+ *
+ * Missing-peer behavior: a host that predates the provider pack registry has
+ * no managed packs to ensure, so there is nothing for the client to do about
+ * `E_HOST_UNSUPPORTED` here beyond not offering the retry affordance - which
+ * it already will not, because such a host reports `managedInstallState: null`
+ * and the affordance only exists on the `downloading`/`error` arms.
+ *
+ * That last clause used to be the WHOLE safety argument, and
+ * `trust-unavailable` retired it: a host whose keyring could not be verified
+ * now reports the `error` arm, so "null means no affordance" no longer covers
+ * every host this method cannot serve. Two mechanisms replace it, and both are
+ * load-bearing - neither is defence in depth for the other. The client must not
+ * draw a retry affordance for `trust-unavailable` (see
+ * `providerManagedInstallErrorReasonSchema`), and a host with no install
+ * machinery must REFUSE this call with a typed error rather than answering
+ * `managedInstallState: null`, which is indistinguishable from success on a
+ * pack that is simply absent and turns a click into a silent no-op forever.
+ */
+export const providersEnsurePackV10 = defineRpcContract({
+  method: "providers.ensurePack",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersEnsurePackRequestSchema,
+  responseSchema: providersEnsurePackResponseSchema,
 });
 
 export const providersSetEnabledV10 = defineRpcContract({
@@ -2294,6 +2489,51 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "lifecycle.claimShutdown": {
+    // Hosts predating the lifecycle layer cannot safely emulate a shutdown
+    // claim, so reconciliation must re-probe and use its legacy-safe path.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: lifecycleClaimShutdownV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "lifecycle.commitShutdown": {
+    // A commit token has authority only on the host that granted it; there is
+    // no meaningful fallback on an older host.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: lifecycleCommitShutdownV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "lifecycle.releaseShutdown": {
+    // Release authority is meaningful only to the host that minted the token;
+    // an older host cannot emulate this recovery arm safely.
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: lifecycleReleaseShutdownV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "host.getRuntimeCapabilities": {
     1: {
       latestMinor: 0,
@@ -2379,15 +2619,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostNotificationsListV20,
           upgradeFromPreviousVersion: hostNotificationsListUpgradeV10ToV20,
         },
+        1: {
+          contract: hostNotificationsListV21,
+          upgradeFromPreviousVersion: hostNotificationsListUpgradeV20ToV21,
+        },
       },
       downgradePathsFromLatest: {
-        1: hostNotificationsListDowngradeV20ToV10,
+        1: hostNotificationsListDowngradeV21ToV10,
       },
     },
   },
@@ -4192,6 +4436,23 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         5: providersListDowngradeV6ToV5,
       },
     },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV70,
+          upgradeFromPreviousVersion: providersListUpgradeV6ToV7,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV7ToV1,
+        2: providersListDowngradeV7ToV2,
+        3: providersListDowngradeV7ToV3,
+        4: providersListDowngradeV7ToV4,
+        5: providersListDowngradeV7ToV5,
+        6: providersListDowngradeV7ToV6,
+      },
+    },
   },
 
   "providers.setSelection": {
@@ -4362,6 +4623,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersTouchLoginV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.ensurePack": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersEnsurePackV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -4752,20 +5026,36 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
 const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   "epic.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds additive `dirtySnapshot`, `artifactRoomDirty`, and
+      // `rootDirty`. @1.0 stays installed and FROZEN: a renderer that
+      // negotiated it never receives the new kinds, and the resolver gates
+      // emission on the negotiated version rather than assuming the peer will
+      // tolerate an unknown frame.
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicSubscribeV10,
+        },
+        1: {
+          contract: epicSubscribeV11,
         },
       },
     },
   },
   "notifications.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds the additive, server-only `awareness` frame (agent-activity
+      // presence on the per-user notification room). @1.0 stays installed and
+      // FROZEN: a client that negotiated it must never receive the new kind -
+      // the emitting resolver MUST gate on the negotiated version rather than
+      // assuming the peer will tolerate an unknown frame.
+      latestMinor: 1,
       versions: {
         0: {
           contract: notificationsSubscribeV10,
+        },
+        1: {
+          contract: notificationsSubscribeV11,
         },
       },
     },
@@ -4782,10 +5072,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "host.notifications.feed.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostNotificationsFeedSubscribeV10,
+        },
+        1: {
+          contract: hostNotificationsFeedSubscribeV11,
         },
       },
     },
@@ -4831,6 +5124,19 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         // explicit in the host resolver because streams have no bridges.
         2: {
           contract: gitSubscribeStatusV12,
+        },
+      },
+    },
+  },
+  // Additive stream, deliberately absent from every released host: a client
+  // whose open is rejected as an unknown method falls back to the unary
+  // `workspace.listFileTree` snapshot (see the contract's degrade note).
+  "workspace.subscribeFileList": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: workspaceSubscribeFileListV10,
         },
       },
     },
@@ -4903,6 +5209,23 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       versions: {
         0: {
           contract: worktreeDeleteByPathStreamV10,
+        },
+      },
+    },
+  },
+  // Separate method, not a minor of `worktree.deleteByPath`: its request and
+  // frames are released and frozen, and a client that lands on the batch
+  // method must be able to discover THAT, not negotiate down to a per-target
+  // stream it would then have to drive N times. An older host simply omits
+  // this method from its manifest, so the compatibility check rejects it at
+  // openAck - before the subscribe frame, therefore before any host work -
+  // which is what makes fallback safe for a destructive operation.
+  "worktree.deleteBatchByPath": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: worktreeDeleteBatchByPathStreamV10,
         },
       },
     },

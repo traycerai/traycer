@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Minimize2 } from "lucide-react";
+import { ChevronDown, ChevronRight, FoldVertical } from "lucide-react";
 import { useState } from "react";
 import { useChatMeasuredBooleanToggle } from "@/components/chat/chat-measured-item-change-context";
 import { cn } from "@/lib/utils";
@@ -52,16 +52,41 @@ function compactionMetricText(
   return metricParts.length === 0 ? "" : ` · ${metricParts.join(" · ")}`;
 }
 
+// "Compacted" is a claim about what happened to the context. When compaction
+// failed nothing was folded, so the bar must not make that claim - it marks the
+// attempt, and the destructive line below carries the reason.
+function terminalCompactionLabel(
+  status: "completed" | "errored",
+  isAuto: boolean,
+): string {
+  if (status === "errored") {
+    return isAuto ? "Auto-compaction failed" : "Compaction failed";
+  }
+  return isAuto ? "Auto-compacted" : "Compacted";
+}
+
 export function CompactionSegment(props: CompactionSegmentProps) {
-  const { status, preTokens, postTokens, durationMs, summary, error } = props;
+  const { status, trigger, preTokens, postTokens, durationMs, summary, error } =
+    props;
   const isStreaming = status === "streaming";
+  const isErrored = status === "errored";
   const [expanded, setExpanded] = useState(false);
   const toggleExpanded = useChatMeasuredBooleanToggle(setExpanded);
 
-  const metricText = compactionMetricText(preTokens, postTokens, durationMs);
+  // A failed compaction has no boundary, so there are no real metrics and no
+  // summary to expand - only the failure and its reason.
+  const metricText = isErrored
+    ? ""
+    : compactionMetricText(preTokens, postTokens, durationMs);
 
-  const hasSummary = !isStreaming && summary !== null && summary.length > 0;
+  const hasSummary =
+    status === "completed" && summary !== null && summary.length > 0;
   const ExpandIcon = expanded ? ChevronDown : ChevronRight;
+  // Only `auto` earns a distinct label. A manual compaction is one the user
+  // just asked for, so naming it adds nothing; an automatic one interrupted
+  // them because the window filled up, and that is worth saying. `null` (most
+  // harnesses report no trigger) stays neutral rather than guessing.
+  const isAuto = trigger === "auto";
 
   const labelInner = isStreaming ? (
     <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
@@ -70,13 +95,13 @@ export function CompactionSegment(props: CompactionSegmentProps) {
         testId={undefined}
         variant={undefined}
       />
-      <span>Compacting…</span>
+      <span>{isAuto ? "Auto-compacting…" : "Compacting…"}</span>
     </div>
   ) : (
     <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
-      <Minimize2 className="size-3.5 shrink-0" aria-hidden />
+      <FoldVertical className="size-3.5 shrink-0" aria-hidden />
       <span>
-        Compacted
+        {terminalCompactionLabel(isErrored ? "errored" : "completed", isAuto)}
         <span className="text-muted-foreground/80">{metricText}</span>
       </span>
       {hasSummary ? (

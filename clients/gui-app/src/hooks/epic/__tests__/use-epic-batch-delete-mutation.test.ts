@@ -21,6 +21,7 @@ import {
   deletedEpicSuccessToastMessage,
   emitEpicDeleteToast,
   pickNeighborAfterDeletingEpics,
+  worktreeCleanupSummary,
 } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type { HeaderTab } from "@/stores/tabs/types";
@@ -50,6 +51,7 @@ function epicTab(id: string, epicId: string): HeaderTab {
     route: `/epics/${epicId}/${id}`,
     name: epicId,
     icon: null,
+    canClose: true,
     canDuplicate: true,
     canOpenInNewWindow: true,
   };
@@ -241,3 +243,36 @@ function readWarningOptions(): ExternalToast {
   }
   return options;
 }
+
+describe("worktreeCleanupSummary", () => {
+  it("says nothing when the cleanup covered nothing", () => {
+    expect(
+      worktreeCleanupSummary({ removed: [], failed: [], uncertain: [] }),
+    ).toBeNull();
+  });
+
+  it("summarizes removals and failures together", () => {
+    expect(
+      worktreeCleanupSummary({
+        removed: ["/wt/a", "/wt/b"],
+        failed: ["/wt/c"],
+        uncertain: [],
+      }),
+    ).toBe("2 worktrees removed, 1 worktree couldn't be removed");
+  });
+
+  // An unconfirmed target is NOT a failure: the host still owns the command and
+  // its durable completion notification carries the real counts. Saying
+  // "couldn't be removed" here would be a claim this client cannot make.
+  it("keeps unconfirmed targets distinct from failures", () => {
+    expect(
+      worktreeCleanupSummary({
+        removed: ["/wt/a"],
+        failed: ["/wt/b"],
+        uncertain: ["/wt/c", "/wt/d"],
+      }),
+    ).toBe(
+      "1 worktree removed, 1 worktree couldn't be removed, 2 worktrees unconfirmed",
+    );
+  });
+});

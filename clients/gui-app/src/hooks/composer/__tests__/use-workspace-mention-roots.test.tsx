@@ -167,9 +167,7 @@ describe("useLandingComposerMentionRoots", () => {
 
   it("uses an imported draft worktree path for draft-scoped landing composers", () => {
     setGlobalFolders(["/repo"]);
-    const draftId = useLandingDraftStore
-      .getState()
-      .createDraft(null, undefined);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
     useWorktreeIntentStagingStore
       .getState()
       .stageIntent(

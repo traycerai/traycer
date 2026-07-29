@@ -8,6 +8,7 @@ import {
   shift,
 } from "@floating-ui/dom";
 import { TextQuote } from "lucide-react";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { cn } from "@/lib/utils";
 import {
   appendQuoteToDraft,
@@ -40,8 +41,10 @@ interface QuoteSelectionPopoverProps {
 export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
   const { taskId, snapshot, onDismiss, boundaryRef } = props;
   const floatingRef = useRef<HTMLDivElement | null>(null);
+  const paneFocused = usePaneFocused();
 
   useLayoutEffect(() => {
+    if (!paneFocused) return;
     const floating = floatingRef.current;
     if (floating === null) return;
     const { range } = snapshot;
@@ -97,7 +100,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
     };
     reposition();
     return autoUpdate(virtualReference, floating, reposition);
-  }, [snapshot, onDismiss, boundaryRef]);
+  }, [snapshot, onDismiss, boundaryRef, paneFocused]);
 
   const handleQuote = (): void => {
     // Consume the mouseup snapshot; NEVER read the live Selection here.
@@ -112,7 +115,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
     onDismiss();
   };
 
-  if (typeof document === "undefined") return null;
+  if (!paneFocused || typeof document === "undefined") return null;
 
   return createPortal(
     <div

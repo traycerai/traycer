@@ -1,6 +1,7 @@
 import { open, readFile, stat } from "node:fs/promises";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import { hostLogPath } from "../store/paths";
+import { writeStdoutBytes } from "../runner/std-write";
 
 // `traycer host logs [--tail N] [--follow]` - surfaces the host
 // log file the supervisor writes into. JSON mode emits the tail string
@@ -68,7 +69,7 @@ export function buildHostLogsCommand(args: HostLogsArgs): CommandFn {
     // Thread `--quiet` into the streaming loop so it matches the
     // non-follow path and `output.ts` semantics: `--quiet --follow`
     // keeps the follower alive (offset tracking, rotation handling) but
-    // suppresses every streamed line, since the raw `process.stdout.write`
+    // suppresses every streamed line, since the raw `writeStdoutBytes`
     // below bypasses `ctx.output.human`'s quiet gate.
     await followLog(path, ctx.runtime.quiet);
     return {
@@ -149,7 +150,7 @@ async function followLog(path: string, quiet: boolean): Promise<void> {
               // follow wouldn't re-emit these bytes; gate only the write
               // so `--quiet` mirrors `ctx.output.human`'s suppression.
               if (!quiet) {
-                process.stdout.write(buf.subarray(0, bytesRead));
+                writeStdoutBytes(buf.subarray(0, bytesRead));
               }
               offset += bytesRead;
             }

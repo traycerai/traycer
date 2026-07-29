@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useSettingsDensity } from "@/providers/settings-density-context";
 
 interface SettingsPanelShellProps {
   title: string;
@@ -27,17 +28,29 @@ export function SettingsPanelShell(props: SettingsPanelShellProps) {
     bodyClassName,
     children,
   } = props;
+  const compact = useSettingsDensity() === "compact";
   return (
     <section
       data-settings-panel-shell
       className={cn(
-        "mx-auto w-full max-w-5xl px-8 py-10",
+        "mx-auto w-full max-w-5xl",
+        compact ? "px-5 py-5" : "px-8 py-10",
         fillHeight && "flex h-full flex-col",
       )}
     >
-      <header className="mb-8 flex items-start justify-between gap-4">
+      <header
+        className={cn(
+          "flex items-start justify-between gap-4",
+          compact ? "mb-4" : "mb-8",
+        )}
+      >
         <div className="min-w-0 space-y-2">
-          <h1 className="text-title-lg font-semibold text-foreground">
+          <h1
+            className={cn(
+              "font-semibold text-foreground",
+              compact ? "text-title-md" : "text-title-lg",
+            )}
+          >
             {title}
           </h1>
           {description ? (

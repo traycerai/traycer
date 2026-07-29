@@ -295,7 +295,15 @@ export function TabStrip(props: TabStripProps) {
             </LayoutGroup>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5 border-l border-canvas-border/70 bg-canvas px-1">
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-0.5 bg-canvas px-1",
+            // Every tab already draws its own right border, so a border here
+            // too would stack two hairlines against each other. Only an empty
+            // strip has no preceding tab to supply the separator.
+            tabs.length === 0 && "border-l border-canvas-border/70",
+          )}
+        >
           <SplitGroupButton groupId={groupId} onSplit={onSplit} />
           <Button
             type="button"

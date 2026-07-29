@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ChatRunSettings,
   GuiHarnessId,
@@ -9,8 +9,16 @@ import type {
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import {
   useEpicChatHarnessId,
+  useEpicAgentRoleClaims,
+  useEpicAgentRoleClaimsByAgentId,
+  useEpicSyncPillState,
   useMaybeEpicTuiAgentHarnessId,
 } from "@/lib/epic-selectors";
+
+const featureSettings = vi.hoisted(() => ({ enabled: true }));
+vi.mock("@/hooks/runner/use-runner-feature-settings-query", () => ({
+  useAgentRolesEnabled: () => featureSettings.enabled,
+}));
 import {
   createOpenEpicStore,
   type EpicStreamClientFactory,
@@ -25,6 +33,7 @@ const handles: OpenEpicStoreHandle[] = [];
 
 afterEach(() => {
   cleanup();
+  featureSettings.enabled = true;
   for (const handle of handles) {
     handle.dispose();
   }
@@ -125,6 +134,154 @@ describe("useEpicChatHarnessId", () => {
     });
 
     expect(result.current).toBeNull();
+  });
+});
+
+describe("useEpicSyncPillState", () => {
+  function healthyBaseline(handle: OpenEpicStoreHandle): void {
+    handle.store.setState({
+      hostTransportStatus: "open",
+      cloudSyncStatus: "connected",
+      hasFreshCloudSyncStatus: true,
+      hasConnectedOnce: true,
+      isDirty: false,
+      rootDirty: false,
+      hasDirtySnapshotForOpenCycle: true,
+      artifactRoomDirtyByArtifactRoomId: {},
+    });
+  }
+
+  it("treats an artifact-room record absent from a received snapshot as clean", () => {
+    const handle = createHandle("epic-dirty-absent");
+    healthyBaseline(handle);
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("synced");
+  });
+
+  it("treats an empty pre-snapshot map as unknown, never synced", () => {
+    const handle = createHandle("epic-dirty-unknown");
+    healthyBaseline(handle);
+    handle.store.setState({
+      rootDirty: null,
+      hasDirtySnapshotForOpenCycle: false,
+      artifactRoomDirtyByArtifactRoomId: {},
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("connected");
+  });
+
+  it("treats an explicit false record the same as an absent one", () => {
+    const handle = createHandle("epic-dirty-false");
+    healthyBaseline(handle);
+    handle.store.setState({
+      artifactRoomDirtyByArtifactRoomId: { "room-a": false },
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("synced");
+  });
+
+  it("is dirty when any one room in the map is dirty, not only when all are", () => {
+    const handle = createHandle("epic-dirty-any");
+    healthyBaseline(handle);
+    handle.store.setState({
+      artifactRoomDirtyByArtifactRoomId: { "room-a": false, "room-b": true },
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("hostPending");
+  });
+
+  it("flips hostPending -> synced live as a room's dirty flag flips true -> false", () => {
+    const handle = createHandle("epic-dirty-transition");
+    healthyBaseline(handle);
+    handle.store.setState({
+      artifactRoomDirtyByArtifactRoomId: { "room-a": true },
+    });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("hostPending");
+
+    act(() => {
+      handle.store.setState({
+        artifactRoomDirtyByArtifactRoomId: { "room-a": false },
+      });
+    });
+
+    expect(result.current).toBe("synced");
+  });
+
+  it("includes the root doc in host dirtiness", () => {
+    const handle = createHandle("epic-root-dirty");
+    healthyBaseline(handle);
+    handle.store.setState({ rootDirty: true });
+
+    const { result } = renderHook(() => useEpicSyncPillState(), {
+      wrapper: openEpicWrapper(handle),
+    });
+
+    expect(result.current).toBe("hostPending");
+
+    act(() => {
+      handle.store.setState({ rootDirty: false });
+    });
+
+    expect(result.current).toBe("synced");
+  });
+});
+
+describe("agent role selectors", () => {
+  const claim = {
+    claimId: "11111111-1111-4111-8111-111111111111",
+    agentId: "agent-1",
+    userId: "user-1",
+    role: "Planner",
+    scope: "selector tests",
+    claimedAt: 1,
+  };
+
+  it("hides projected claims while disabled and restores them without a Yjs update", () => {
+    const handle = createHandle("epic-role-selector-gate");
+    handle.store.setState({
+      agentRoles: { byAgentId: { "agent-1": [claim] } },
+    });
+
+    const { result, rerender } = renderHook(
+      () => ({
+        claims: useEpicAgentRoleClaims("agent-1"),
+        byAgent: useEpicAgentRoleClaimsByAgentId(),
+      }),
+      { wrapper: openEpicWrapper(handle) },
+    );
+    expect(result.current.claims).toEqual([claim]);
+    expect(result.current.byAgent).toEqual({ "agent-1": [claim] });
+
+    featureSettings.enabled = false;
+    rerender();
+    expect(result.current.claims).toEqual([]);
+    expect(result.current.byAgent).toEqual({});
+
+    featureSettings.enabled = true;
+    rerender();
+    expect(result.current.claims).toEqual([claim]);
+    expect(result.current.byAgent).toEqual({ "agent-1": [claim] });
   });
 });
 

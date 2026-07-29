@@ -28,6 +28,7 @@ import {
 } from "../artifact-link-popover";
 import { ArtifactToolbar } from "../../toolbar/artifact-toolbar";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { SurfacePresentationBoundary } from "@/components/layout/surface-presentation-boundary";
 
 vi.mock("@floating-ui/dom", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@floating-ui/dom")>();
@@ -308,6 +309,58 @@ describe("ArtifactLinkPopover", () => {
       "https://traycer.ai",
     );
     expect(screen.queryByRole("dialog", { name: "Edit link" })).toBeNull();
+  });
+
+  it("retains an in-progress edit when its pane is backgrounded — the boundary's forced blur must not commit/close/refocus", async () => {
+    const editor = makeEditor(LINK_CONTENT);
+    editor.commands.setTextSelection(2);
+    const onOpenChange = vi.fn<(open: boolean) => void>();
+    const boundedPopover = (focused: boolean) => (
+      <SurfacePresentationBoundary visible focused={focused}>
+        <EditorContent editor={editor} />
+        <ArtifactLinkPopover
+          editor={editor}
+          editable
+          scrollContainer={null}
+          openLink={vi.fn()}
+          openLinkPending={false}
+          onOpenChange={onOpenChange}
+        />
+      </SurfacePresentationBoundary>
+    );
+    const { rerender } = render(boundedPopover(true));
+    await screen.findByRole("dialog", { name: "Link preview" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const url = await screen.findByRole("textbox", { name: "Link URL" });
+    const before = editor.getHTML();
+    const documentTransaction = vi.fn();
+    editor.on("transaction", ({ transaction }) => {
+      if (transaction.docChanged) documentTransaction();
+    });
+
+    fireEvent.change(url, { target: { value: "https://changed.example" } });
+    act(() => {
+      url.focus();
+    });
+
+    // Background this pane: the boundary force-blurs the focused URL field. That
+    // synthetic relinquish-blur must NOT run the blur-as-commit path.
+    act(() => {
+      rerender(boundedPopover(false));
+    });
+
+    expect(documentTransaction).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(editor.getHTML()).toBe(before);
+    // The card stays MOUNTED (hidden + aria-hidden with the pane, so role queries
+    // can't reach it) — assert via the DOM that the edit field survived with its
+    // in-progress draft intact and that the field WAS relinquished (blurred).
+    const retainedUrl = document.querySelector('input[aria-label="Link URL"]');
+    if (!(retainedUrl instanceof HTMLInputElement)) {
+      throw new Error("Expected the URL field to remain mounted");
+    }
+    expect(retainedUrl.value).toBe("https://changed.example");
+    expect(document.activeElement).not.toBe(retainedUrl);
   });
 
   it("reverts Escape to the read state without committing when editing", async () => {

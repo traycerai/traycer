@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { COPY_CONFIRMATION_RESET_MS } from "./styles";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const handleCopyError = (): void => {
   reportableErrorToast("Couldn't copy to clipboard.", undefined, {
     title: "Could not copy to clipboard",
@@ -45,19 +46,25 @@ export function CopyableApprovalField(props: {
             : "border-border bg-background focus-within:border-ring",
         )}
       >
-        <span
-          className={cn(
-            "min-w-0 flex-1 px-3 py-2 text-left font-mono font-semibold",
-            props.valueKind === "code"
-              ? "tracking-widest"
-              : "truncate tracking-normal",
-            props.isHero ? "text-white" : "text-foreground",
-          )}
-          title={props.value}
-          data-testid={props.testId}
+        <TooltipWrapper
+          label={props.value}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {props.value}
-        </span>
+          <span
+            className={cn(
+              "min-w-0 flex-1 px-3 py-2 text-left font-mono font-semibold",
+              props.valueKind === "code"
+                ? "tracking-widest"
+                : "truncate tracking-normal",
+              props.isHero ? "text-white" : "text-foreground",
+            )}
+            data-testid={props.testId}
+          >
+            {props.value}
+          </span>
+        </TooltipWrapper>
         <button
           type="button"
           onClick={() => copy(props.value)}

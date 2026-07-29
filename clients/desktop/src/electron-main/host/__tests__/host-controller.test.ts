@@ -125,9 +125,10 @@ import {
   HostController,
   type HostControllerHostLifecycle,
 } from "../host-controller";
-import type {
-  MutationLaneStatus,
-  MutationProgress,
+import {
+  HOST_REMOVED_BY_USER_MESSAGE,
+  type MutationLaneStatus,
+  type MutationProgress,
 } from "../host-controller-types";
 import { getHostFsLayout, cliLockPath } from "../host-paths";
 import { DEV_DESKTOP_SLOT_ENV } from "../dev-desktop-slot";
@@ -139,7 +140,7 @@ import {
 } from "../host-removal-state";
 import {
   __setAsyncProcessLivenessReaderForTest,
-  __setAsyncProcessStartTimeReaderForTest,
+  __setAsyncProcessStartIdentityReaderForTest,
 } from "../process-identity";
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -342,6 +343,9 @@ function writePidMetadata(
     readonly pid: number;
     readonly websocketUrl?: string;
     readonly startedAt?: string;
+    // Omitted reproduces a pid.json written before the field existed, which
+    // must read as "cannot compare identity" rather than as a mismatch.
+    readonly processStartIdentity?: string;
   },
 ): void {
   const layout = getHostFsLayout(environment);
@@ -354,6 +358,9 @@ function writePidMetadata(
       version: fields.version,
       pid: fields.pid,
       startedAt: fields.startedAt ?? new Date().toISOString(),
+      ...(fields.processStartIdentity === undefined
+        ? {}
+        : { processStartIdentity: fields.processStartIdentity }),
     }),
   );
 }
@@ -1672,31 +1679,13 @@ describe("canonical status: activation-state derivation", () => {
     expect(probe).not.toHaveBeenCalled();
   });
 
-  it("P7/V5: rejects a recycled PID whose current process started after the published host identity", async () => {
-    writeInstallRecord("production", {
-      version: "1.7.0",
-      runtimeVersion: "1.7.0",
-    });
-    writePidMetadata("production", {
-      version: "1.7.0",
-      pid: process.pid,
-      startedAt: "2000-01-01T00:00:00.000Z",
-    });
-
-    const status = await newControllerWithReachability(
-      "production",
-      async () => true,
-    ).getStatus();
-
-    expect(status.reachable).toBe(false);
-    expect(status.activation).toBe("unavailable");
-  });
-
-  // F3: endpoint reachability is the positive liveness proof. A failed
-  // process-start probe cannot turn that proof into a false "down" result;
-  // identity only rejects a positively established recycled PID.
-  it("F3: keeps a handshake-reachable host online when its OS identity probe is indeterminate", async () => {
-    const restore = __setAsyncProcessStartTimeReaderForTest(async () => null);
+  it("P7/V5: rejects a recycled PID whose kernel creation stamp positively differs", async () => {
+    // Both operands present and same-platform, so the comparison can reach a
+    // POSITIVE "different" - the only verdict entitled to reject a live pid.
+    // The stub keeps the platform tag deterministic across runners.
+    const restore = __setAsyncProcessStartIdentityReaderForTest(
+      async () => "linux:boot-a 1",
+    );
     try {
       writeInstallRecord("production", {
         version: "1.7.0",
@@ -1705,6 +1694,39 @@ describe("canonical status: activation-state derivation", () => {
       writePidMetadata("production", {
         version: "1.7.0",
         pid: process.pid,
+        processStartIdentity: "linux:boot-a 2",
+      });
+
+      const status = await newControllerWithReachability(
+        "production",
+        async () => true,
+      ).getStatus();
+
+      expect(status.reachable).toBe(false);
+      expect(status.activation).toBe("unavailable");
+    } finally {
+      __setAsyncProcessStartIdentityReaderForTest(restore);
+    }
+  });
+
+  // F3: endpoint reachability is the positive liveness proof. A failed
+  // process-start probe cannot turn that proof into a false "down" result;
+  // identity only rejects a positively established recycled PID.
+  it("F3: keeps a handshake-reachable host online when its OS identity probe is indeterminate", async () => {
+    const restore = __setAsyncProcessStartIdentityReaderForTest(
+      async () => null,
+    );
+    try {
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      // A recorded identity IS present, so the row exercises a failed PROBE
+      // rather than the easier missing-record path.
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: process.pid,
+        processStartIdentity: "linux:boot-a 1",
       });
 
       const status = await newControllerWithReachability(
@@ -1715,17 +1737,18 @@ describe("canonical status: activation-state derivation", () => {
       expect(status.reachable).toBe(true);
       expect(status.activation).toBe("activated");
     } finally {
-      __setAsyncProcessStartTimeReaderForTest(restore);
+      __setAsyncProcessStartIdentityReaderForTest(restore);
     }
   });
 
   it("F4: awaits the async identity probe instead of synchronously shelling out from getStatus", async () => {
     const livenessGate = deferred<"alive" | "dead" | "indeterminate">();
     const livenessReader = vi.fn(async () => livenessGate.promise);
-    const startReader = vi.fn(async () => Date.now() - 1_000);
+    const startReader = vi.fn(async () => "linux:boot-a 1");
     const restoreLiveness =
       __setAsyncProcessLivenessReaderForTest(livenessReader);
-    const restoreStart = __setAsyncProcessStartTimeReaderForTest(startReader);
+    const restoreStart =
+      __setAsyncProcessStartIdentityReaderForTest(startReader);
     try {
       writeInstallRecord("production", {
         version: "1.7.0",
@@ -1734,6 +1757,7 @@ describe("canonical status: activation-state derivation", () => {
       writePidMetadata("production", {
         version: "1.7.0",
         pid: process.pid,
+        processStartIdentity: "linux:boot-a 1",
       });
       const statusPromise = newControllerWithReachability(
         "production",
@@ -1751,7 +1775,7 @@ describe("canonical status: activation-state derivation", () => {
       await expect(statusPromise).resolves.toMatchObject({ reachable: true });
       expect(startReader).toHaveBeenCalledOnce();
     } finally {
-      __setAsyncProcessStartTimeReaderForTest(restoreStart);
+      __setAsyncProcessStartIdentityReaderForTest(restoreStart);
       __setAsyncProcessLivenessReaderForTest(restoreLiveness);
     }
   });
@@ -2719,7 +2743,18 @@ describe("platform matrix", () => {
       startedAt: null,
       reason: "pid metadata never appeared",
     });
-    vi.mocked(readHostLoginItemStatus).mockReturnValue("requires-approval");
+    // "enabled" until the readiness wait has actually run, then
+    // "requires-approval" - the mid-wait toggle this test exists to pin. A
+    // blanket "requires-approval" here made the cycle's EARLY approval
+    // terminal fire before register and before the wait, so the queued
+    // not-ready readiness above was never consumed (and leaked into the
+    // next test's Once queue) while the assertion passed against the wrong
+    // branch.
+    vi.mocked(readHostLoginItemStatus).mockImplementation(() =>
+      vi.mocked(waitForHostReady).mock.calls.length > 0
+        ? "requires-approval"
+        : "enabled",
+    );
 
     const outcome = await controller.installVersion("1.8.0", false);
 
@@ -3909,11 +3944,15 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     expect(waitForHostReady).not.toHaveBeenCalled();
   });
 
-  // Fixup C3: ported from the deleted `host-ensure-ipc.test.ts` ("throws
-  // the login-item error when the idle refresh cycle ends a non-enabled,
-  // non-approval status" + "quarantines the refresh for the rest of the
-  // session after a cycle that did not land enabled").
-  it("registerHostLoginItem returning a non-enabled, non-approval status fails, quarantines, and a second attempt never re-runs the cycle", async () => {
+  // Field RCA 2026-07-28: this cycle's leading bootout had just torn down a
+  // verified-idle host when SMAppService answered `not-found` for every
+  // subsequent call in the session - the old terminal failure stranded the
+  // machine with nothing running AND nothing registered. The refresh must
+  // restore service via the CLI-owned LaunchAgent (which bypasses
+  // SMAppService/BTM), keep the quarantine so this session never re-runs
+  // the doomed cycle, and leave the marker for the next launch's fresh
+  // SMAppService session.
+  it("registerHostLoginItem returning a non-enabled, non-approval status recovers via the CLI takeover fallback, quarantines, and a second attempt never re-runs the cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
     writeInstallRecord("production", {
@@ -3923,15 +3962,28 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     writePidMetadata("production", { version: "1.7.0", pid: process.pid });
     vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
     vi.mocked(registerHostLoginItem).mockResolvedValue("not-registered");
+    // The recovered host must publish the runtime the committed install
+    // expects - the beforeEach default (1.0.0) would rightly be rejected.
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
 
     const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
 
     expect(outcome).toEqual({
-      kind: "failed",
-      message: expect.stringContaining(
-        "could not be enabled (status: not-registered)",
-      ),
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
     });
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith([
+      "host",
+      "service",
+      "install",
+      "--takeover",
+    ]);
     expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
 
@@ -3942,6 +3994,33 @@ describe("applyPendingLoginItemRevisionIfIdle", () => {
     const second = await controller.applyPendingLoginItemRevisionIfIdle();
     expect(second).toBeNull();
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failing CLI fallback after a failed refresh cycle surfaces BOTH failures with the manual escape hatch", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    vi.mocked(hasUnappliedPendingLoginItemRevision).mockResolvedValue(true);
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
+    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+      new Error("takeover exploded"),
+    );
+
+    const outcome = await controller.applyPendingLoginItemRevisionIfIdle();
+
+    expect(outcome).toEqual({
+      kind: "failed",
+      message: expect.stringContaining("status=not-found"),
+    });
+    if (outcome !== null && outcome.kind === "failed") {
+      expect(outcome.message).toContain("takeover exploded");
+      expect(outcome.message).toContain("service uninstall");
+    }
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
   });
 
   // Fixup C3: ported from the deleted `host-ensure-ipc.test.ts` ("throws
@@ -5418,5 +5497,320 @@ describe("installVersion busy/force continuation (CLI-owned)", () => {
     const retryOutcome = await controller.installVersion("1.8.0", false);
     expect(retryOutcome.kind).toBe("ok");
     expect(streamBundledTraycerCliJson).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bounded auto-retry: a readiness timeout after a COMPLETED register cycle
+// re-runs the full activation cycle exactly once before surfacing the gate
+// card. The register cycle is itself the repair (bootout + re-register), so
+// this is the machine clicking its own Retry button - bounded at one so a
+// genuinely broken host still surfaces a card instead of churning
+// disruptive SMAppService cycles forever. `requires-approval` never
+// auto-retries: only the user can act there.
+// ---------------------------------------------------------------------------
+describe("packaged-mac activation: bounded auto-retry on readiness timeout", () => {
+  const NOT_READY = {
+    ready: false,
+    version: null,
+    pid: null,
+    startedAt: null,
+    reason: "pid metadata never appeared",
+  } as const;
+
+  function stagePackagedMacWorld(): HostController {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    return controller;
+  }
+
+  it("re-runs the full cycle once (register included) and succeeds when the host comes up on attempt two", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(waitForHostReady)
+      .mockResolvedValueOnce(NOT_READY)
+      .mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("ok");
+    // The retry is a FULL cycle - a second register, not a second wait on
+    // the failed cycle's corpse.
+    expect(waitForHostReady).toHaveBeenCalledTimes(2);
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays bounded: a second timeout surfaces the gate card carrying the readiness reason", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind === "failed") {
+      expect(outcome.message).toContain("pid metadata never appeared");
+    }
+    expect(waitForHostReady).toHaveBeenCalledTimes(2);
+  });
+
+  /*
+   * The deadline is not proof of failure. A host that binds its endpoint just
+   * after `HOST_READY_TIMEOUT_MS` expires is up and serving, and the retry
+   * leads with `registerHostLoginItem`'s bootout - so retrying regardless
+   * KILLS the recovery this code was waiting for and holds the caller's
+   * mutation lane for another full timeout before anything surfaces.
+   *
+   * The evidence has to be a DIFFERENT process, though: this cycle just
+   * booted a host out, and one that outlived its own eviction is reachable
+   * too. Accepting that would report an activation that never happened, which
+   * is worse than the wasted cycle because it is silent. Both rows below
+   * exist because a guard that only checked reachability would pass the first
+   * and fail the second.
+   */
+  it("accepts a host that came up late instead of cycling it again", async () => {
+    const controller = stagePackagedMacWorld();
+    // The host binds just AFTER the deadline: the wait reports not-ready, and
+    // by the time the retry decision is taken pid.json names a new process.
+    // Written as a side effect of the wait because the ordering is the whole
+    // point - staging the new pid up front would make it the cycle's `prePid`
+    // and the guard would (correctly) reject it.
+    //
+    // `process.ppid` is a different, genuinely live pid;
+    // `isPublishedHostEndpointReachable` probes real liveness, so a synthetic
+    // number would read as dead and the row would prove nothing.
+    vi.mocked(waitForHostReady).mockImplementation(async () => {
+      writePidMetadata("production", { version: "1.7.0", pid: process.ppid });
+      return NOT_READY;
+    });
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("ok");
+    // The point of the guard: no second bootout, no second wait.
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT accept the outgoing host as proof the cycle succeeded", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
+    // pid.json still names the pid that was serving BEFORE the cycle - the
+    // host being evicted, still answering because teardown has not finished.
+    // Reachable, and worth nothing as evidence.
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    expect(waitForHostReady).toHaveBeenCalledTimes(2);
+  });
+
+  it("never auto-retries when the login item requires approval - only the user can act there", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(waitForHostReady).mockResolvedValue(NOT_READY);
+    // Flips only after the wait ran: a blanket "requires-approval" would
+    // hit the cycle's EARLY approval terminal before register/wait and
+    // this test would pin the wrong branch (see the mid-wait toggle test).
+    vi.mocked(readHostLoginItemStatus).mockImplementation(() =>
+      vi.mocked(waitForHostReady).mock.calls.length > 0
+        ? "requires-approval"
+        : "enabled",
+    );
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    expect(waitForHostReady).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Field RCA 2026-07-28 (`make install-desktop-production`, ad-hoc build):
+// SMAppService answered `not-found` for a byte-correct in-bundle plist for
+// the remainder of the app process's life, AFTER the register cycle's own
+// bootout had already torn down the loaded agent. Every same-session retry
+// (S8 auto-retry, the monitor, the gate card's Retry button) re-ran the
+// same doomed SMAppService call, so the user was locked out with no
+// recovery affordance. These rows pin the escalation: a register failure
+// hands off to the CLI-owned raw LaunchAgent (`host service install
+// --takeover`), which does not go through SMAppService/BTM at all.
+describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback", () => {
+  const TAKEOVER_ARGV = ["host", "service", "install", "--takeover"];
+
+  function stagePackagedMacWorld(): HostController {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    const controller = newController("production");
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+    // The fallback's readiness check keeps the normal version-equality
+    // guard: the recovered host must publish the runtime the committed
+    // installation expects (the beforeEach default reports 1.0.0, which
+    // this world would rightly reject).
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    return controller;
+  }
+
+  it("activation cycle: register not-found recovers via the CLI takeover without a second SMAppService attempt", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("ok");
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(TAKEOVER_ARGV);
+    // The futile-retry pin: `not-found` is sticky for this SMAppService
+    // session, so neither the S8 wrapper nor the fallback may re-run the
+    // register cycle.
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    // SMAppService is unusable this session - the pending-revision monitor
+    // must not boot the fallback host back out for a plist revision it
+    // cannot land.
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
+  });
+
+  it("activation cycle: a failing takeover surfaces one terminal message naming the status and the manual escape hatch", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
+    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+      new Error("takeover exploded"),
+    );
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind === "failed") {
+      expect(outcome.message).toContain("status=not-found");
+      expect(outcome.message).toContain("takeover exploded");
+      expect(outcome.message).toContain("service uninstall");
+    }
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
+  // Field RCA 2026-07-28: the very restart that exercised this fallback in
+  // the field hit a live host that denied the takeover's shutdown claim
+  // (E_HOST_BUSY) - a self-recovering state (the retry 14s later
+  // succeeded), yet it surfaced as a `failed` outcome and therefore a
+  // reportable "Couldn't restart host" error toast. The denial must
+  // resolve `deferred` so restart surfaces present it as information.
+  it("activation cycle: a takeover denied by a busy host is deferred - retry-later information, not a reportable failure", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
+    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+      new TraycerCliError(
+        "E_HOST_BUSY",
+        "service install --takeover: the running host has work in progress and denied the shutdown claim; retry once the work completes.",
+      ),
+    );
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("deferred");
+    if (outcome.kind === "deferred") {
+      // User-facing retry copy - not the CLI's takeover jargon, and none
+      // of the failure message's escape-hatch instructions.
+      expect(outcome.message).toContain("work in progress");
+      expect(outcome.message).toContain("Try again");
+      expect(outcome.message).not.toContain("service uninstall");
+    }
+    // The denial still quarantines this SMAppService session: the register
+    // cycle is just as doomed as any other takeover-recoverable failure.
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
+  });
+
+  it("activation cycle: a takeover that registered but never produced a ready host is a failure, not a silent success", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-registered");
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: false,
+      version: null,
+      pid: null,
+      startedAt: null,
+      reason: "pid metadata never appeared",
+    });
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind === "failed") {
+      expect(outcome.message).toContain("status=not-registered");
+      expect(outcome.message).toContain("pid metadata never appeared");
+    }
+  });
+
+  it("registerService: register not-found recovers via the CLI takeover and reports registered", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
+
+    const outcome = await controller.registerService();
+
+    expect(outcome).toEqual({ kind: "ok", value: { registered: true } });
+    expect(runBundledTraycerCliJson).toHaveBeenCalledWith(TAKEOVER_ARGV);
+  });
+
+  it("requires-approval NEVER escalates to the takeover - the toggle is the user's alone", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(registerHostLoginItem).mockResolvedValue("requires-approval");
+    // `requires-approval` still means the plist is registered, so the cycle
+    // waits for readiness; only when the host does NOT come up does the
+    // approval failure surface. A ready host here would be a legitimate
+    // success and prove nothing about the escalation gate.
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: false,
+      version: null,
+      pid: null,
+      startedAt: null,
+      reason: "pid metadata never appeared",
+    });
+    vi.mocked(readHostLoginItemStatus).mockImplementation(() =>
+      vi.mocked(waitForHostReady).mock.calls.length > 0
+        ? "requires-approval"
+        : "enabled",
+    );
+
+    const respawnOutcome = await controller.respawn();
+    const registerOutcome = await controller.registerService();
+
+    expect(respawnOutcome.kind).toBe("failed");
+    expect(registerOutcome.kind).toBe("failed");
+    // Guards against a vacuous pass: the pre-bootout `requires-approval`
+    // preflight must not have short-circuited before either cycle actually
+    // reached registration - otherwise "failed" and no takeover would hold
+    // trivially without exercising the escalation gate at all.
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(2);
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(TAKEOVER_ARGV);
+  });
+
+  it("removed-by-user NEVER escalates to the takeover - reinstalling the service would defy the removal", async () => {
+    const controller = stagePackagedMacWorld();
+    // The register cycle's own in-lock re-check found the removal sentinel
+    // (persisted mid-cycle by an in-app uninstall) - the fallback would
+    // resurrect the exact registration the user just removed.
+    vi.mocked(registerHostLoginItem).mockResolvedValue("removed-by-user");
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("failed");
+    if (outcome.kind === "failed") {
+      expect(outcome.message).toBe(HOST_REMOVED_BY_USER_MESSAGE);
+    }
+    expect(runBundledTraycerCliJson).not.toHaveBeenCalledWith(TAKEOVER_ARGV);
   });
 });

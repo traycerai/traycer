@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -55,13 +56,16 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useEpicCreate } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
+import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import {
-  useLandingComposerStore,
-  flushPendingLandingDraftContent,
-} from "@/stores/composer/landing-composer-store";
+  draftRuntimeRegistry,
+  EMPTY_DRAFT_RUNTIME_CONTENT,
+  imageHashes,
+  type DraftRuntimeState,
+} from "@/stores/home/draft-runtime-registry";
 import { useResolvedWorkspaceFolders } from "@/hooks/workspace/use-resolved-workspace-folders-query";
 import {
   deriveFolderlessAllowedWorkspaceAvailability,
@@ -87,28 +91,34 @@ interface LandingComposerProps {
    */
   readonly pendingCreateId: string | null;
   readonly initialSettings: ChatRunSettings | null;
-  readonly workspaceControls: ReactNode;
+  readonly workspaceControls: (disabled: boolean) => ReactNode;
 }
 
 export function LandingComposer(props: LandingComposerProps) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const createdUnboundDraftIdRef = useRef<string | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
   const hostClient = useHostBinding()?.hostClient ?? null;
   const activityEnabled = useSurfaceActivity();
-  const [initialContent] = useState<JsonContent>(() =>
-    useLandingComposerStore.getState().openDraft(props.draftId),
+  const runtime = draftRuntimeRegistry.getOrHydrate(props.draftId);
+  const [unboundRuntime] = useState(() =>
+    createStore<DraftRuntimeState>(() => ({
+      content: EMPTY_DRAFT_RUNTIME_CONTENT,
+      selection: null,
+      contentRevision: 0,
+      attachmentRoots: new Set<string>(),
+      isSubmitting: false,
+    })),
   );
+  const runtimeStore = runtime?.store ?? unboundRuntime;
+  const runtimeState = useStore(runtimeStore);
+  const [initialContent] = useState<JsonContent>(() => runtimeState.content);
   // Restore the caret to where it was when the draft was last persisted (decision
   // A3). Read once at mount; the composer is keyed by draft id, so each draft
   // mounts fresh and `composer-prompt-editor` applies `initialSelection` once.
-  const [initialSelection] = useState<DraftSelection | null>(() => {
-    if (props.draftId === null) return null;
-    return (
-      useLandingDraftStore
-        .getState()
-        .drafts.find((draft) => draft.id === props.draftId)?.selection ?? null
-    );
-  });
+  const [initialSelection] = useState<DraftSelection | null>(
+    () => runtimeState.selection,
+  );
   const draftId = props.draftId;
   const globalComposerMode = useSettingsStore((state) => state.composerMode);
   const setGlobalComposerMode = useSettingsStore(
@@ -128,9 +138,9 @@ export function LandingComposer(props: LandingComposerProps) {
 
   useEffect(() => {
     return () => {
-      flushPendingLandingDraftContent();
+      draftRuntimeRegistry.flush(props.draftId);
     };
-  }, []);
+  }, [props.draftId]);
 
   // [B2] The landing surface is gated on windows-bridge hydration, so its mount
   // means the authoritative draft snapshot is in and the live-editor + draft
@@ -201,12 +211,12 @@ export function LandingComposer(props: LandingComposerProps) {
 
   const createEpic = useEpicCreate();
   const terminalAgentCreate = useCreateTuiAgent();
-  const isSubmitting = createEpic.isPending || terminalAgentCreate.isPending;
+  const isSubmitting =
+    runtimeState.isSubmitting ||
+    createEpic.isPending ||
+    terminalAgentCreate.isPending;
 
-  const setSnapshot = useLandingComposerStore((s) => s.setSnapshot);
-  const hasSubmittableContent = useLandingComposerStore((s) =>
-    contentIsSubmittable(s.currentContent),
-  );
+  const hasSubmittableContent = contentIsSubmittable(runtimeState.content);
   const draftWorkspace = useLandingDraftStore((state) => {
     if (draftId === null) return null;
     return (
@@ -256,11 +266,13 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   const workspaceCanStart = workspaceComposerCanStart(workspaceAvailability);
   const runnerHost = useRunnerHost();
-  const paste = useLandingComposerPaste(
+  const paste = useLandingComposerPaste({
     editorRef,
-    runnerHost.fileDrops,
+    draftId,
+    disabled: isSubmitting,
+    fileDrops: runnerHost.fileDrops,
     mentionRoots,
-  );
+  });
   const runPendingImageJob = paste.runPendingImageJob;
   // Background job for ONE pending image node (already in the document, carrying
   // b64 + `id`): hash + store the bytes, then flip that node's payload to the
@@ -333,7 +345,8 @@ export function LandingComposer(props: LandingComposerProps) {
       // One budget reservation for the whole paste (evicts oldest inactive
       // drafts, or blocks with its own toast if it still can't fit).
       const budgetOk =
-        acceptedBytes.length === 0 || reserveLandingImageBudget(incomingBytes);
+        acceptedBytes.length === 0 ||
+        reserveLandingImageBudget(draftId, incomingBytes);
       // Count ONLY undecodable images toward the generic "corrupted or too large"
       // toast. A valid image blocked solely by the aggregate budget is already
       // covered by `reserveLandingImageBudget`'s own accurate budget toast, so
@@ -366,7 +379,7 @@ export function LandingComposer(props: LandingComposerProps) {
       }
       return outcomes;
     },
-    [startPendingImageIngest],
+    [draftId, startPendingImageIngest],
   );
   // Mount-time re-entry completes the pending-node model: the b64 image node IS
   // the work token, so whichever mount owns the editor restarts its ingest. This
@@ -418,9 +431,22 @@ export function LandingComposer(props: LandingComposerProps) {
     }
   }, [startPendingImageIngest]);
   const attachmentPending = isAttachmentIngestPending(paste);
+  // Send-time gate for the selected provider's managed binary pack. Folded
+  // into `canSubmit` rather than checked separately at submit, so the button
+  // and its hint can never disagree - the user is told why BEFORE pressing,
+  // which is the whole point of gating the affordance instead of accepting the
+  // turn and failing it. Fails open while `providers.list` is loading; the
+  // host resolver is the authoritative backstop either way.
+  const packGate = useProviderPackGate(harnessId);
+  const { submitBlocked, submitBlockedHint } = resolveLandingSubmitBlock({
+    workspaceDisabledHint: workspaceAvailability.disabledHint,
+    packPreparingHint: packGate.hint,
+    packBlocked: packGate.blocked,
+  });
   const canSubmit =
     !isSubmitting &&
     !attachmentPending &&
+    !submitBlocked &&
     workspaceCanStart &&
     hasSubmittableContent;
 
@@ -432,14 +458,40 @@ export function LandingComposer(props: LandingComposerProps) {
 
   const handleSnapshot = useCallback(
     (content: JsonContent, selection: { from: number; to: number }) => {
-      setSnapshot(
-        draftId,
+      if (runtime !== null) {
+        runtime.setSnapshot(content, selection);
+        return;
+      }
+      unboundRuntime.setState((current) => ({
         content,
         selection,
-        draftId === null ? (props.pendingCreateId ?? undefined) : undefined,
-      );
+        contentRevision: current.contentRevision + 1,
+        attachmentRoots: imageHashes(content),
+      }));
+      if (!contentIsSubmittable(content)) return;
+      const existingDraftId = createdUnboundDraftIdRef.current;
+      if (existingDraftId !== null) {
+        useLandingDraftStore
+          .getState()
+          .setDraftContent(existingDraftId, content, selection);
+        return;
+      }
+      // Reuse the parent-pre-minted mount key (props.pendingCreateId) as the
+      // new draft's id so activeDraftId's null -> id flip lines up with the
+      // key the parent already mounted under (no editor remount). Falls back
+      // to a fresh id when the caller has not pre-minted one.
+      const createdDraftId = useLandingDraftStore
+        .getState()
+        .createDraftWithId(
+          props.pendingCreateId ?? uuidv4(),
+          useComposerRunSettingsStore.getState().globalLastRunSettings,
+        );
+      createdUnboundDraftIdRef.current = createdDraftId;
+      useLandingDraftStore
+        .getState()
+        .setDraftContent(createdDraftId, content, selection);
     },
-    [draftId, props.pendingCreateId, setSnapshot],
+    [props.pendingCreateId, runtime, unboundRuntime],
   );
 
   const handleSubmit = useCallback(() => {
@@ -447,6 +499,12 @@ export function LandingComposer(props: LandingComposerProps) {
     const toolbar = toolbarStore.getState();
     if (toolbar.selection.modelSlug.length === 0) return;
     actions.submit({
+      // `handleSnapshot` mints the unbound draft the moment the first edit
+      // becomes submittable, but `props.draftId` only catches up on the
+      // parent's next render - so a type-then-Enter still reads `null` here.
+      // Without this fallback `ensureSubmissionDraft` would mint a SECOND
+      // draft and strand the one already holding the user's content.
+      draftId: draftId ?? createdUnboundDraftIdRef.current,
       editor: editorRef.current,
       toolbar: {
         selection: toolbar.selection,
@@ -456,23 +514,27 @@ export function LandingComposer(props: LandingComposerProps) {
         agentMode: toolbar.agentMode,
       },
     });
-  }, [actions, canSubmit, toolbarStore]);
+  }, [actions, canSubmit, draftId, toolbarStore]);
 
   const handleStartTerminal = useCallback(
     (launch: TerminalAgentLaunch) => {
-      if (!workspaceCanStart) return;
-      actions.selectTerminalAgent(launch);
+      if (!workspaceCanStart || isSubmitting) return;
+      actions.selectTerminalAgent(launch, draftId);
     },
-    [actions, workspaceCanStart],
+    [actions, draftId, isSubmitting, workspaceCanStart],
   );
 
-  const handleRemoveImage = useCallback((id: string) => {
-    Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
-      kind: "image",
-      surface: "draft",
-    });
-    editorRef.current?.removeImageAttachmentById(id);
-  }, []);
+  const handleRemoveImage = useCallback(
+    (id: string) => {
+      if (isSubmitting) return;
+      Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
+        kind: "image",
+        surface: "draft",
+      });
+      editorRef.current?.removeImageAttachmentById(id);
+    },
+    [isSubmitting],
+  );
 
   const switcher = (
     <button
@@ -483,6 +545,7 @@ export function LandingComposer(props: LandingComposerProps) {
           : "Switch to the Chat interface"
       }
       className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ui-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      disabled={isSubmitting}
       onClick={() => {
         const next = nextComposerMode(composerMode);
         setGlobalComposerMode(next);
@@ -509,7 +572,7 @@ export function LandingComposer(props: LandingComposerProps) {
       canSubmit={canSubmit}
       isSubmitting={isSubmitting}
       attachmentPending={attachmentPending}
-      workspaceDisabledHint={workspaceAvailability.disabledHint}
+      workspaceDisabledHint={submitBlockedHint}
       header={<div className="flex justify-end">{switcher}</div>}
       topBanner={
         rateLimitPrompt.kind === "visible" ? (
@@ -537,9 +600,12 @@ export function LandingComposer(props: LandingComposerProps) {
         ) : null
       }
       attachmentsStrip={
-        <LandingComposerAttachmentStrip onRemoveImage={handleRemoveImage} />
+        <LandingComposerAttachmentStrip
+          content={runtimeState.content}
+          onRemoveImage={handleRemoveImage}
+        />
       }
-      workspaceControls={props.workspaceControls}
+      workspaceControls={props.workspaceControls(isSubmitting)}
       dictationControl={dictationControl}
       dictationPreparing={dictationPreparing}
       paste={paste}
@@ -553,16 +619,43 @@ export function LandingComposer(props: LandingComposerProps) {
   );
 }
 
+/**
+ * Whether submit is blocked by a gate that owes the user copy, and that copy.
+ * Returned as a pair for the same reason `resolveSendBlock` does it in
+ * `chat-composer.tsx`: a reason that kills the button without supplying its
+ * hint leaves a grey button that reads as broken.
+ *
+ * Priority matches the chat composer's, and mirrors severity: the workspace
+ * gate first (nothing can run, and the user has to fix it), then the
+ * managed-pack gate (self-resolving, and it says so). Ordered the other way, a
+ * user with an unusable workspace would sit through `Preparing… 40%` and find
+ * the button still dead once the download finished, with the real reason only
+ * appearing then.
+ */
+function resolveLandingSubmitBlock(args: {
+  readonly workspaceDisabledHint: string | null;
+  readonly packPreparingHint: string | null;
+  readonly packBlocked: boolean;
+}): {
+  readonly submitBlocked: boolean;
+  readonly submitBlockedHint: string | null;
+} {
+  return {
+    submitBlocked: args.packBlocked,
+    submitBlockedHint: args.workspaceDisabledHint ?? args.packPreparingHint,
+  };
+}
+
 function noopSwitchProfileForTask(): void {}
 
 function LandingComposerAttachmentStrip(props: {
+  readonly content: JsonContent;
   readonly onRemoveImage: (id: string) => void;
 }): ReactNode {
-  const currentContent = useLandingComposerStore((s) => s.currentContent);
   const fetcher = useLandingImageFetcher();
   return (
     <AttachmentStrip
-      content={currentContent}
+      content={props.content}
       onRemoveImage={props.onRemoveImage}
       fetcher={fetcher}
       sessionObjectUrl={sessionObjectUrl}

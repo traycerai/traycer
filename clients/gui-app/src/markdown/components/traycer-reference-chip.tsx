@@ -7,10 +7,12 @@ import {
   useArtifactDragSource,
   type ArtifactDragIdentity,
 } from "@/components/epic-canvas/dnd/use-artifact-drag-source";
+import { useEpicViewTabId } from "@/components/epic-canvas/view-tab-context";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 interface TraycerReferenceChipProps {
   readonly icon: ReactNode;
   readonly children: ReactNode;
@@ -48,8 +50,8 @@ export function TraycerReferenceChip(props: TraycerReferenceChipProps) {
   }
   return (
     <ReferenceChipButton
+      tooltip={props.title}
       icon={props.icon}
-      title={props.title}
       refKind={props.refKind}
       onOpen={props.onOpen}
       drag={null}
@@ -89,6 +91,7 @@ function DraggableReferenceChip(
   },
 ) {
   const { refKind, sameEpicNodeRef, epicId } = props;
+  const viewTabId = useEpicViewTabId();
   // Build the artifact identity from the resolved same-epic ref, guarding the
   // kind to the artifact-only payload type. `null` when the ref is absent or is
   // not an artifact kind, which disables the drag surface. This component only
@@ -106,15 +109,15 @@ function DraggableReferenceChip(
   const { isDraggable, setNodeRef, listeners, attributes, isDragging } =
     useArtifactDragSource({
       epicId,
-      viewTabId: undefined,
+      viewTabId,
       identity,
       enabled: true,
     });
 
   return (
     <ReferenceChipButton
+      tooltip={props.title}
       icon={props.icon}
-      title={props.title}
       refKind={refKind}
       onOpen={props.onOpen}
       drag={
@@ -146,38 +149,46 @@ interface ReferenceChipDragWiring {
 function ReferenceChipButton(props: {
   readonly icon: ReactNode;
   readonly children: ReactNode;
-  readonly title: string | undefined;
+  /** Hover label; `tooltip` not `title` so the call site cannot read as the
+   *  native attribute. */
+  readonly tooltip: string | undefined;
   readonly refKind: "spec" | "ticket" | "chat" | "epic";
   readonly onOpen: (event: MouseEvent<HTMLButtonElement>) => void;
   readonly drag: ReferenceChipDragWiring | null;
 }) {
   const drag = props.drag;
   return (
-    <button
-      ref={drag === null ? undefined : drag.ref}
-      {...(drag === null ? undefined : drag.attributes)}
-      {...(drag === null ? undefined : drag.listeners)}
-      type="button"
-      onClick={props.onOpen}
-      title={props.title}
-      data-traycer-ref={props.refKind}
-      // Excluded from quote selection: it's an interactive chip inside quotable
-      // prose, so a drag across it must not append its label as quoted text.
-      data-quote-exclude=""
-      className={cn(
-        "mx-px inline-flex max-w-full items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90 no-underline",
-        "transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-        // Affordance (plan section 6): whole pill is the drag surface -
-        // grab cursor + a subtle border/ring emphasis on hover, no inline grip.
-        drag !== null &&
-          "cursor-grab hover:border-primary/40 hover:ring-1 hover:ring-primary/40",
-        drag !== null && drag.isDragging && "cursor-grabbing opacity-60",
-      )}
+    <TooltipWrapper
+      label={props.tooltip}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
-        {props.icon}
-      </span>
-      <span className="truncate">{props.children}</span>
-    </button>
+      <button
+        ref={drag === null ? undefined : drag.ref}
+        {...(drag === null ? undefined : drag.attributes)}
+        {...(drag === null ? undefined : drag.listeners)}
+        type="button"
+        onClick={props.onOpen}
+        data-traycer-ref={props.refKind}
+        // Excluded from quote selection: it's an interactive chip inside quotable
+        // prose, so a drag across it must not append its label as quoted text.
+        data-quote-exclude=""
+        className={cn(
+          "mx-px inline-flex max-w-full items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90 no-underline",
+          "transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+          // Affordance (plan section 6): whole pill is the drag surface -
+          // grab cursor + a subtle border/ring emphasis on hover, no inline grip.
+          drag !== null &&
+            "cursor-grab hover:border-primary/40 hover:ring-1 hover:ring-primary/40",
+          drag !== null && drag.isDragging && "cursor-grabbing opacity-60",
+        )}
+      >
+        <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
+          {props.icon}
+        </span>
+        <span className="truncate">{props.children}</span>
+      </button>
+    </TooltipWrapper>
   );
 }

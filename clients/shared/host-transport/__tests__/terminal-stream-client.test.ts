@@ -89,6 +89,7 @@ function makeClient(
     endpoint: () => mockLocalHostEntry,
     bearer: () => context.credentials,
     auth: null,
+    hostCredentialMint: null,
     webSocketFactory: factory,
     dialTimeoutMs: 1_000,
     openAckTimeoutMs: 1_000,

@@ -1637,13 +1637,30 @@ export function createChatSessionStore(
         if (disposed) return;
         closeStreamClient();
         clearBufferedDeltas();
+        const prior = get();
         set({
           connectionStatus: "connecting",
           steerProtocolSupported: false,
           fatalClose: null,
           snapshotLoaded: false,
         });
-        streamClient = createStreamClient();
+        try {
+          streamClient = createStreamClient();
+        } catch (cause) {
+          // The replacement factory can throw (durable-transport wiring throws
+          // on a failed subscription). Without this restore the session would
+          // strand in "connecting" with NO stream client - nothing ever moves
+          // it again, and recovery passes (the wake retry, the tile's retry
+          // affordance) all key off a terminal status. Restore the pre-attempt
+          // terminal state so the next pulse or click can try again, then
+          // rethrow for the caller to report.
+          set({
+            connectionStatus: "closed",
+            fatalClose: prior.fatalClose,
+            snapshotLoaded: prior.snapshotLoaded,
+          });
+          throw cause;
+        }
       },
       refreshMissingWorktreePaths: (update) => {
         if (disposed) return;
@@ -2740,9 +2757,11 @@ function findRestorableSendByMessageId<
 
 /**
  * A chat session is "fully settled" when no turn is running, none is active,
- * and the queue is empty/idle. Single source of truth for the
- * render-send-as-pending check and the turn-completion refresh subscribers
- * (`lib/chats/chat-turn-completions.ts`).
+ * and the queue is empty/idle. Used only by the render-send-as-pending check
+ * below - the turn-completion refresh subscribers
+ * (`lib/chats/chat-turn-completions.ts`) intentionally use their own looser
+ * `turnEnded` (idle + no active turn; the queue may still be paused), so an
+ * errored turn's parked queue still drives a completion refresh.
  */
 export function isChatSessionSettled(
   state: Pick<ChatSessionState, "runStatus" | "activeTurn" | "queue">,

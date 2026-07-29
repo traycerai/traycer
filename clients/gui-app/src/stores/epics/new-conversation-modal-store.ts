@@ -25,6 +25,10 @@ export interface NewConversationModalSeed {
 
 export interface NewConversationModalDraftPatch {
   readonly content: JsonContent | null;
+  // The editor caret, persisted alongside `content` so a focus round-trip that
+  // unmounts + remounts the composer body restores the selection, not just the
+  // prompt bytes (the body reseeds `initialSelection` from here on mount).
+  readonly selection: { readonly from: number; readonly to: number } | null;
   readonly settings: ChatRunSettings | null;
   readonly composerMode: ComposerMode | null;
   readonly workspace: LandingDraftWorkspaceSnapshot | null;
@@ -35,6 +39,10 @@ interface NewConversationModalStore {
     Record<string, NewConversationModalDraftPatch | undefined>
   >;
   readonly setContent: (epicId: string, content: JsonContent) => void;
+  readonly setSelection: (
+    epicId: string,
+    selection: { readonly from: number; readonly to: number },
+  ) => void;
   readonly setSettings: (
     epicId: string,
     settings: ChatRunSettings | null,
@@ -63,6 +71,7 @@ interface NewConversationModalStore {
 
 const EMPTY_DRAFT_PATCH: NewConversationModalDraftPatch = {
   content: null,
+  selection: null,
   settings: null,
   composerMode: null,
   workspace: null,
@@ -88,6 +97,12 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
       set((state) => ({
         draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {
           content,
+        }),
+      })),
+    setSelection: (epicId, selection) =>
+      set((state) => ({
+        draftPatchesByEpicId: mergePatch(state.draftPatchesByEpicId, epicId, {
+          selection,
         }),
       })),
     setSettings: (epicId, settings) =>

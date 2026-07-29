@@ -203,7 +203,12 @@ export function useChatComposerSubmit(
       const toolbar = toolbarStore.getState();
       if (toolbar.selection.modelSlug.length === 0) return;
       const editor = editorRef.current;
-      if (editor === null) return;
+      // A handle exists from the owner's first commit, before Tiptap's async
+      // `useEditor` resolves - `getJSON()`/`clear()` silently no-op until
+      // then, so a submit in that window would read the fallback initial JSON
+      // and clear nothing, letting the just-submitted text resurrect once the
+      // editor finishes initializing from that same stale initial content.
+      if (editor === null || !editor.isReady()) return;
       const editorContent = editor.getJSON();
       const contentText =
         extractPlainTextFromComposerJSONContent(editorContent);

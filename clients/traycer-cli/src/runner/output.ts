@@ -1,5 +1,6 @@
 import type { CliErrorCode } from "./errors";
 import type { RuntimeContext } from "./runtime";
+import { writeStderr, writeStdout } from "./std-write";
 
 // NDJSON envelope shapes per the Native Packaging tech plan. Every line
 // on stdout in --json mode is one of these three discriminated by
@@ -79,12 +80,15 @@ function now(): string {
   return new Date().toISOString();
 }
 
+// Synchronous by way of `std-write`: the runner `process.exit()`s the instant
+// `emitResult` / `emitError` returns, so a buffered write here loses
+// everything past the 64 KiB pipe buffer. See std-write.ts.
 function writeStdoutLine(line: string): void {
-  process.stdout.write(`${line}\n`);
+  writeStdout(`${line}\n`);
 }
 
 function writeStderrLine(line: string): void {
-  process.stderr.write(`${line}\n`);
+  writeStderr(`${line}\n`);
 }
 
 function formatBytes(n: number): string {
@@ -103,6 +107,22 @@ function formatBytes(n: number): string {
 //   downloading host 1.5.0 [████████░░░░░░░░] 52% (5.2 MB / 10.0 MB)
 // The caller rewrites this in place with a carriage return on a TTY.
 const PROGRESS_BAR_WIDTH = 24;
+
+// Percent-less liveness heartbeats for the archive transfer. The registry
+// client publishes these as `registry-archive-<phase>` ticks (phases:
+// attempt / watchdog / backoff - see `emitRegistryHeartbeat` in
+// ../registry/client.ts) BETWEEN the byte-progress ticks of the same
+// download: fetch-resource.ts opens every attempt with one, immediately
+// before publishing the resume offset. While the download bar is on screen
+// they are status updates on that bar, not stage transitions - rendering
+// them down the discrete-line path finalized the live bar with a newline
+// and the next byte tick started a NEW bar, stacking one frozen bar per
+// retry. This predicate is what lets the renderer keep ONE bar per
+// download and redraw it in place instead.
+const ARCHIVE_HEARTBEAT_STAGE_PREFIX = "registry-archive-";
+function isArchiveHeartbeatStage(stage: string): boolean {
+  return stage.startsWith(ARCHIVE_HEARTBEAT_STAGE_PREFIX);
+}
 function renderProgressBar(info: ProgressInfo): string {
   const percent = Math.max(0, Math.min(100, info.percent ?? 0));
   const filled = Math.round((percent / 100) * PROGRESS_BAR_WIDTH);
@@ -167,12 +187,17 @@ export function createOutput(runtime: RuntimeContext): Output {
   // discrete line (or human text) terminates it with a newline first.
   const isTty = process.stderr.isTTY === true;
   let progressOpen = false;
+  // The last percent-bearing tick rendered as the open TTY bar. An archive
+  // liveness heartbeat borrows these numbers so its in-place redraw holds
+  // the bar at the last real transfer values instead of rewinding to 0%.
+  let openBarInfo: ProgressInfo | null = null;
   let lastDiscreteMessage: string | null = null;
   let lastNonTtyDecile = -1;
   const closeProgressLine = (): void => {
     if (progressOpen) {
-      process.stderr.write("\n");
+      writeStderr("\n");
       progressOpen = false;
+      openBarInfo = null;
     }
   };
   return {
@@ -182,8 +207,9 @@ export function createOutput(runtime: RuntimeContext): Output {
         if (isTty) {
           // `\r` returns to column 0; `\x1b[2K` clears the line so a shorter
           // render can't leave stale characters from a longer previous one.
-          process.stderr.write(`\r\x1b[2K${renderProgressBar(info)}`);
+          writeStderr(`\r\x1b[2K${renderProgressBar(info)}`);
           progressOpen = true;
+          openBarInfo = info;
           return;
         }
         const decile = Math.floor(
@@ -194,6 +220,30 @@ export function createOutput(runtime: RuntimeContext): Output {
         if (info.message !== null) {
           writeStderrLine(`${info.message} ${info.percent}%`);
         }
+        return;
+      }
+      // Archive liveness heartbeat while the download bar is live: redraw
+      // the SAME bar in place, with the heartbeat text as its label and the
+      // last real transfer numbers - never the newline that would freeze
+      // the bar on screen (that is exactly what stacked one frozen bar per
+      // retry). `progressOpen` is only ever set on a TTY, so this path is
+      // TTY-only by construction; without a live bar (attempt 1 fires
+      // before any byte progress exists) the heartbeat falls through and
+      // prints as an ordinary discrete line.
+      if (
+        progressOpen &&
+        openBarInfo !== null &&
+        isArchiveHeartbeatStage(info.stage)
+      ) {
+        writeStderr(
+          `\r\x1b[2K${renderProgressBar({
+            stage: info.stage,
+            message: info.message ?? openBarInfo.message,
+            percent: openBarInfo.percent,
+            bytes: openBarInfo.bytes,
+            totalBytes: openBarInfo.totalBytes,
+          })}`,
+        );
         return;
       }
       // Discrete (percent-less) stage line. Close any open bar, reset the

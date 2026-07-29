@@ -1,0 +1,74 @@
+gui/501/com.docker.helper = {
+	active count = 0
+	path = (submitted by smd.321)
+	type = Submitted
+	managed_by = com.apple.xpc.ServiceManagement
+	state = not running
+
+	program identifier = com.docker.helper (mode: 1)
+	parent bundle identifier = com.docker.docker
+	parent bundle version = 233772
+	BTM uuid = 3F568BC9-F0FB-4F65-A426-839B687AB27B
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.nZ4scYjk2n/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => com.docker.helper
+	}
+
+	domain = gui/501 [100023]
+	asid = 100023
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	last exit code = 0
+
+	semaphores = {
+		successful exit => 0
+	}
+
+	endpoints = {
+		"com.docker.helper" = {
+			port = 0xd4403
+			active = 0
+			managed = 1
+			reset = 0
+			hide = 0
+			watching = 1
+		}
+	}
+
+	resource coalition = {
+		ID = 1044
+		type = resource
+		state = active
+		active count = 1
+		name = com.docker.helper
+	}
+
+	jetsam coalition = {
+		ID = 1045
+		type = jetsam
+		state = active
+		active count = 1
+		name = com.docker.helper
+	}
+
+	spawn type = interactive (4)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	submitted job. ignore execute allowed
+	jetsam thread limit = 32
+	cpumon = default
+	job state = exited
+
+	properties = supports transactions | resolve program | has LWCR
+}

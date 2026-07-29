@@ -40,7 +40,7 @@ function surfaceOf(type: string): "gui" | "tui" | null {
  * agent on top with Stop all, its active descendants beneath.
  *
  * Structure + titles come from the reactive epic tree (instant on spawn); the
- * live `active` bit comes from the cross-host awareness `agentWorking` set
+ * live `active` bit comes from the global activity awareness source
  * (`useEpicActiveAgentIds`) - push-driven, no polling.
  */
 export function useAgentStopControls(input: {

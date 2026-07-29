@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { type SettingsSectionId } from "@/lib/settings-sections";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
@@ -7,6 +8,7 @@ import { KeybindingsSettingsPanel } from "@/components/settings/panels/keybindin
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
 import { HostSettingsPanel } from "@/components/settings/panels/host-settings-panel";
+import { DevicesSessionsPanel } from "@/components/settings/panels/devices-sessions-panel";
 import { DiagnosticsSettingsPanel } from "@/components/settings/panels/diagnostics-settings-panel";
 import { ProvidersSettingsPanel } from "@/components/settings/panels/providers-settings-panel";
 import { AgentsSettingsPanel } from "@/components/settings/panels/agents-settings-panel";
@@ -28,22 +30,24 @@ export function SettingsModalContent(
   const { setSection } = useSystemTabModalActions();
   const section: SettingsSectionId = props.section ?? "general";
   return (
-    <div className="flex min-h-0 min-w-0 flex-1">
-      <SettingsSidebar
-        mode={{
-          kind: "modal",
-          activeSection: section,
-          onSelect: setSection,
-        }}
-      />
-      <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
-        <SettingsPanelForSection section={section} />
+    <SettingsDensityContext.Provider value="compact">
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <SettingsSidebar
+          mode={{
+            kind: "modal",
+            activeSection: section,
+            onSelect: setSection,
+          }}
+        />
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+          <SettingsPanelForSection section={section} />
+        </div>
       </div>
-    </div>
+    </SettingsDensityContext.Provider>
   );
 }
 
-function SettingsPanelForSection(props: {
+export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
   switch (props.section) {
@@ -65,6 +69,8 @@ function SettingsPanelForSection(props: {
       return <WorktreesSettingsPanel />;
     case "host":
       return <HostSettingsPanel />;
+    case "devices":
+      return <DevicesSessionsPanel />;
     case "diagnostics":
       return <DiagnosticsSettingsPanel />;
   }

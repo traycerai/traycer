@@ -23,7 +23,10 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
-import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
+import {
+  publishAgentActivity,
+  resetAgentActivityPresence,
+} from "@/__tests__/agent-activity-presence-harness";
 import { TabStrip } from "@/components/epic-canvas/canvas/tab-strip";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -31,6 +34,7 @@ import type { SplitDirection } from "@/stores/epics/canvas/types";
 import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 
+import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
 }));
@@ -177,11 +181,12 @@ async function flushEpicSnapshot(): Promise<void> {
 }
 
 function markChatWorking(): void {
-  const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
-  if (handle === null) throw new Error("expected open epic handle");
-  handle.awareness.setLocalState({
-    [AGENT_WORKING_AWARENESS_FIELD]: [CHAT_ID],
-  });
+  publishAgentActivity([
+    {
+      hostId: "host-a",
+      byEpic: { [EPIC_ID]: { working: [CHAT_ID], turn: [CHAT_ID] } },
+    },
+  ]);
 }
 
 describe("TabStrip title", () => {
@@ -205,6 +210,7 @@ describe("TabStrip title", () => {
   afterEach(() => {
     cleanup();
     queryClient.clear();
+    resetAgentActivityPresence();
     harness.teardown();
     useEpicCanvasStore.getState().clearAllTitleGenerationPending();
   });
@@ -271,7 +277,7 @@ describe("TabStrip title", () => {
         screen.getByTestId(`chat-tab-spinner-activity-${CHAT_ID}`),
       ).toBeTruthy();
     });
-    expect(screen.getByTitle("Agent in progress")).toBeTruthy();
+    expect(anyTooltipHasText("Agent in progress")).toBe(true);
     expect(
       screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
     ).toBeNull();

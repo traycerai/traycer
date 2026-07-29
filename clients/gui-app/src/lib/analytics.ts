@@ -55,6 +55,7 @@ export type AnalyticsCommand =
 export type AnalyticsSettingsSection =
   | "agents"
   | "appearance"
+  | "devices"
   | "diagnostics"
   | "general"
   | "host"

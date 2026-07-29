@@ -52,6 +52,13 @@ vi.mock("../../service", async (importOriginal) => {
       restart: async () => {
         mocks.controllerCalls.push("restart");
       },
+      stopForRestart: async () => {
+        mocks.controllerCalls.push("stopForRestart");
+        return { forcedRecycle: false };
+      },
+      relaunchAfterRestart: async () => {
+        mocks.controllerCalls.push("relaunchAfterRestart");
+      },
     }),
   };
 });
@@ -225,7 +232,10 @@ describe.skipIf(process.platform === "win32")(
 
         writeFileSync(join(holdBarrierDir, "release"), "");
         const result = await pending;
-        expect(mocks.controllerCalls).toEqual(["stop", "start"]);
+        expect(mocks.controllerCalls).toEqual([
+          "stopForRestart",
+          "relaunchAfterRestart",
+        ]);
         expect(result.data).toMatchObject({ restarted: true });
       } finally {
         // Re-written unconditionally (idempotent): if an assertion above

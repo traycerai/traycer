@@ -39,6 +39,7 @@ import { goBack, goForward } from "@/lib/commands/actions/history-navigation";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 const modalProbe: { current: SystemTabModalApi | null } = { current: null };
 const hostMountLog: string[] = [];
@@ -135,6 +136,7 @@ function snapshot(router: SnapshotRouter) {
 
 describe("back stays functional after promoting a system overlay to a tab", () => {
   beforeEach(() => {
+    __resetTabNavigationControllerForTesting();
     window.localStorage.clear();
     modalProbe.current = null;
     hostMountLog.length = 0;
@@ -144,6 +146,7 @@ describe("back stays functional after promoting a system overlay to a tab", () =
   });
   afterEach(() => {
     cleanup();
+    __resetTabNavigationControllerForTesting();
     window.localStorage.clear();
   });
 

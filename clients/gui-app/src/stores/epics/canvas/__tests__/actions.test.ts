@@ -643,14 +643,70 @@ describe("splitPaneAtEdge", () => {
     expectCanvasInvariants(next);
   });
 
-  it("does not split a sole tab onto its own pane edge", () => {
+  // Dropping a pane's ONLY tab on that pane's own edge is the common way to
+  // split a freshly opened Git Diff / Terminal, and the pane drop zone paints
+  // the half-pane split preview for it. The commit must produce that split -
+  // the dragged tile in the highlighted half, the source pane left behind as
+  // an empty opener pane - instead of silently discarding the drop.
+  it("splits a sole tab onto its own pane edge, leaving an empty opener pane", () => {
     const state = openPinned(createEmptyCanvas(), SPEC_A);
     const paneId = rootPane(state).id;
+
     const next = splitPaneAtEdge(state, paneId, "right", {
       kind: "node",
       node: SPEC_A,
     });
-    expect(next).toBe(state);
+
+    const group = rootGroup(next);
+    expect(group.direction).toBe("horizontal");
+    const [leading, trailing] = collectPanes(next.root);
+    expect(leading.id).toBe(paneId);
+    expect(leading.tabInstanceIds).toEqual([]);
+    expect(paneTabIds(next, trailing)).toEqual([SPEC_A.id]);
+    expect(next.activePaneId).toBe(trailing.id);
+    expectCanvasInvariants(next);
+  });
+
+  it("splits a sole tab onto the leading edge with the tile in the leading pane", () => {
+    const state = openPinned(createEmptyCanvas(), SPEC_A);
+    const paneId = rootPane(state).id;
+
+    const next = splitPaneAtEdge(state, paneId, "left", {
+      kind: "tab",
+      sourcePaneId: paneId,
+      tabId: SPEC_A.instanceId,
+      node: SPEC_A,
+    });
+
+    const [leading, trailing] = collectPanes(next.root);
+    expect(paneTabIds(next, leading)).toEqual([SPEC_A.id]);
+    expect(trailing.id).toBe(paneId);
+    expect(trailing.tabInstanceIds).toEqual([]);
+    expectCanvasInvariants(next);
+  });
+
+  // Only the SAME-pane drop keeps the emptied pane: dragging a pane's last tab
+  // into a DIFFERENT pane still collapses the pane it came from.
+  it("still collapses the source pane when its last tab lands on another pane's edge", () => {
+    let state = openPinned(createEmptyCanvas(), SPEC_A);
+    const targetPaneId = rootPane(state).id;
+    state = splitPaneAtEdge(state, targetPaneId, "right", {
+      kind: "node",
+      node: SPEC_B,
+    });
+    const sourcePaneId = state.activePaneId;
+    if (sourcePaneId === null) throw new Error("expected source pane");
+
+    const next = splitPaneAtEdge(state, targetPaneId, "bottom", {
+      kind: "tab",
+      sourcePaneId,
+      tabId: SPEC_B.instanceId,
+      node: SPEC_B,
+    });
+
+    expect(findPaneById(next.root, sourcePaneId)).toBeNull();
+    expect(collectPanes(next.root)).toHaveLength(2);
+    expectCanvasInvariants(next);
   });
 
   it("rejects an edge split that would exceed MAX_TREE_DEPTH (no-op)", () => {

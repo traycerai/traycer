@@ -30,6 +30,20 @@ export const RunnerHostInvoke = {
   authTokenStoreRotate: "runnerHost:auth:tokenStore:rotate",
   authTokenStoreDelete: "runnerHost:auth:tokenStore:delete",
   authTokenStoreMigrateLegacy: "runnerHost:auth:tokenStore:migrateLegacy",
+  // Devices & Sessions account-security surface. These authn-v3 calls run in
+  // main for the same renderer-origin CORS reason as token validation.
+  listUserSessions: "runnerHost:auth:sessions:list",
+  revokeUserSession: "runnerHost:auth:sessions:revoke",
+  revokeAllSessions: "runnerHost:auth:sessions:revokeAll",
+  // Delegated host-credential mint. Same main-process placement as the revoke
+  // calls, with the added reason that the retained step-up bearer must never
+  // reach the renderer.
+  mintHostCredential: "runnerHost:auth:hosts:mintCredential",
+  // Cross-window arbitration for the mint above. Each BrowserWindow is its own
+  // module realm, so the renderer's "one prompt per host" memo does not span
+  // them; main holds the single registry every window claims against.
+  requestStepUpChallenge: "runnerHost:auth:stepUp:challenge",
+  verifyStepUpChallenge: "runnerHost:auth:stepUp:verify",
   openExternalLink: "runnerHost:openExternalLink",
   getRegisteredUrlSchemes: "runnerHost:getRegisteredUrlSchemes",
   requestMicrophoneAccess: "runnerHost:requestMicrophoneAccess",
@@ -64,6 +78,7 @@ export const RunnerHostInvoke = {
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",
   perWindowStateGet: "runnerHost:windows:perWindowState:get",
+  perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
   perWindowStateClear: "runnerHost:windows:perWindowState:clear",
   authSessionGet: "runnerHost:windows:authSession:get",
@@ -153,6 +168,8 @@ export const RunnerHostInvoke = {
   gpuAccelerationSet: "runnerHost:gpu:set",
   logLevelsGet: "runnerHost:logLevels:get",
   logLevelsSet: "runnerHost:logLevels:set",
+  featureSettingsGet: "runnerHost:featureSettings:get",
+  agentRolesEnabledSet: "runnerHost:featureSettings:agentRoles:set",
   // Enumerates fonts installed on this machine for the Appearance font
   // pickers (Settings → Appearance → UI/Code/Terminal font).
   fontsList: "runnerHost:fonts:list",

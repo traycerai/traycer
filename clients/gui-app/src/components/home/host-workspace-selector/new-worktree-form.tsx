@@ -40,6 +40,7 @@ import {
 } from "@/components/home/worktree/worktree-unified-picker-model";
 import { promotePickerRow } from "./promote-picker-row";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 type RepoIdentifier = WorktreeFolderIntent["repoIdentifier"];
 
 const WORKTREE_AUTOSAVE_DELAY_MS = 500;
@@ -243,25 +244,37 @@ export function ImportedWorktreeBranchForm(
         <dt className="text-ui-xs font-medium text-muted-foreground">
           Source branch
         </dt>
-        <dd
-          title={props.sourceBranch}
-          className="mt-1 min-w-0 truncate text-ui-sm text-foreground/85"
-          data-testid="import-worktree-source-branch"
+        <TooltipWrapper
+          label={props.sourceBranch}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {props.sourceBranch}
-        </dd>
+          <dd
+            className="mt-1 min-w-0 truncate text-ui-sm text-foreground/85"
+            data-testid="import-worktree-source-branch"
+          >
+            {props.sourceBranch}
+          </dd>
+        </TooltipWrapper>
       </div>
       <div className="min-w-0">
         <dt className="text-ui-xs font-medium text-muted-foreground">
           Current branch
         </dt>
-        <dd
-          title={props.currentBranchName}
-          className="mt-1 min-w-0 truncate text-ui-sm text-foreground/85"
-          data-testid="import-worktree-branch-name"
+        <TooltipWrapper
+          label={props.currentBranchName}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {props.currentBranchName}
-        </dd>
+          <dd
+            className="mt-1 min-w-0 truncate text-ui-sm text-foreground/85"
+            data-testid="import-worktree-branch-name"
+          >
+            {props.currentBranchName}
+          </dd>
+        </TooltipWrapper>
       </div>
     </dl>
   );

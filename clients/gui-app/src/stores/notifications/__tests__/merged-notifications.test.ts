@@ -491,4 +491,67 @@ describe("merged notifications feed", () => {
       severity: "info",
     });
   });
+
+  it("routes a worktree-deletion row to the worktree settings surface with the host's own copy", () => {
+    expect(
+      rowFromHostEntry({
+        id: "worktree.deletion:command-1",
+        updatedAt: 10,
+        readAt: null,
+        kind: "host.operation.finished",
+        sourceRef: "command-1",
+        severity: "failure",
+        outcome: "errored",
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "worktree_deletion",
+          operation: "worktree.deletion",
+          title: "Some worktrees were not deleted",
+          message: "Deleted 2 of 3 worktrees; 1 failed.",
+          commandId: "command-1",
+          source: "settings",
+          requestedCount: 3,
+          deletedCount: 2,
+          failedCount: 1,
+        },
+      }),
+    ).toMatchObject({
+      title: "Some worktrees were not deleted",
+      body: "Deleted 2 of 3 worktrees; 1 failed.",
+      // Surface-only: the worktree the row describes is gone, so there is no
+      // resource left to focus.
+      payload: {
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        focus: undefined,
+      },
+    });
+  });
+
+  it("renders a newer host's unknown operation payload from its common fields, with no destination", () => {
+    const row = rowFromHostEntry({
+      id: "testbox.provision:command-2",
+      updatedAt: 10,
+      readAt: null,
+      kind: "host.operation.finished",
+      sourceRef: "command-2",
+      severity: "done",
+      outcome: "completed",
+      epicId: null,
+      chatId: null,
+      payload: {
+        kind: "testbox_provision",
+        operation: "testbox.provision",
+        title: "Test box ready",
+        message: "Provisioned 1 test box.",
+      },
+    });
+    expect(row).toMatchObject({
+      title: "Test box ready",
+      body: "Provisioned 1 test box.",
+    });
+    // Readable and acknowledgeable, but never routed by guesswork.
+    expect(row.payload).toBeNull();
+  });
 });

@@ -4,6 +4,7 @@ import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -40,6 +41,20 @@ describe("<SettingsSidebar /> leader hints", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    // The settings section leader now gates on the actual focused ref, so seed
+    // the Settings tab as the focused layout item (the real on-/settings state).
+    useTabsStore.setState({
+      version: 2,
+      items: [],
+      activeItemId: null,
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+    useTabsStore.getState().openSystemTab({
+      kind: "settings",
+      name: "Settings",
+      lastPath: "/settings/general",
+    });
   });
 
   afterEach(() => {
@@ -69,6 +84,18 @@ describe("<SettingsSidebar /> leader hints", () => {
 
     const link = (await screen.findByText("Host")).closest("a");
     expect(link?.getAttribute("href")).toBe("/settings/host");
+  });
+
+  it("Devices entry links to /settings/devices", async () => {
+    const router = buildRouter("/settings/general");
+    render(
+      <KeybindingProvider router={router}>
+        <RouterProvider router={router} />
+      </KeybindingProvider>,
+    );
+
+    const link = await screen.findByRole("link", { name: "Devices" });
+    expect(link.getAttribute("href")).toBe("/settings/devices");
   });
 
   it("SETTINGS_SECTIONS does not contain the legacy Service id", () => {
