@@ -22,7 +22,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
 import {
+  accessSync,
   chmodSync,
+  constants,
   cpSync,
   existsSync,
   mkdirSync,
@@ -249,10 +251,84 @@ describe("inject-host-launch-agent afterPack", () => {
             ),
           );
           const plist = readFileSync(plistPath, "utf8");
-          expect(plist).toContain("traycer-host-start");
+          // Deliberately the full launcher path, not a `toContain` of the
+          // basename: the helper bundle directory is `<product> Host.app`, so
+          // a bare substring check for `<product> Host` passes no matter what
+          // the launcher is called - it matches the directory. Verified by
+          // mutation probe (reverting the basename left the loose form green).
+          expect(plist).toContain(
+            `<string>Contents/Library/LaunchAgents/${PRODUCT_NAME} Host.app/Contents/MacOS/${PRODUCT_NAME} Host</string>`,
+          );
           expect(plist).not.toContain("<string>/bin/sh</string>");
           expect(plist).toContain(expectedLabel);
         }
+      });
+
+      it("names the executable BTM shows in Login Items after the product, not after a slug filename", async () => {
+        // System Settings → Login Items renders this agent under whatever
+        // BTM recorded as `Name`, and BTM takes that from the VERBATIM
+        // basename of the plist's `BundleProgram`. It is not bundle-aware:
+        // live-probed 2026-07-29 (macOS 26.5, real `SMAppService.agent`
+        // registration read back with `sfltool dumpbtm`), a variant whose
+        // `BundleProgram` pointed at the helper bundle's own
+        // `CFBundleExecutable` still recorded that executable's basename and
+        // ignored `CFBundleDisplayName`/`CFBundleName`/the `.app` name. So
+        // the helper's Info.plist naming keys - asserted elsewhere in this
+        // file - do NOT cover this, and cannot: the basename is the only
+        // lever, which is what makes it worth its own test.
+        //
+        // The prior basename `traycer-host-start` shipped a filename into a
+        // product surface. Reverting it must fail here.
+        const { modulePath, appOutDir, appPath } = createFixture("production");
+        const injected = loadModule(modulePath);
+
+        await injected.afterPack({
+          electronPlatformName: "darwin",
+          appOutDir,
+          arch: Arch.arm64,
+        });
+
+        const agentLabel = smAppServiceAgentLabelId(
+          labelForEnvironment("production").id,
+        );
+        const agentPlist = readFileSync(
+          path.join(
+            appPath,
+            "Contents",
+            "Library",
+            "LaunchAgents",
+            `${agentLabel}.plist`,
+          ),
+          "utf8",
+        );
+        const bundleProgram = agentPlist.match(
+          /<key>BundleProgram<\/key>\s*<string>([^<]+)<\/string>/,
+        )?.[1];
+        if (bundleProgram === undefined) {
+          throw new Error("BundleProgram not found in the generated plist");
+        }
+
+        // The one assertion this test is named for: what the user reads.
+        expect(path.basename(bundleProgram)).toBe(`${PRODUCT_NAME} Host`);
+
+        // launchd execs `BundleProgram`, so a name BTM likes is worthless if
+        // the file it points at is not actually there and executable. The
+        // live probe confirmed launchd resolves and runs a space-containing
+        // basename (`$0` intact, exit 0); this pins our half of that.
+        const launcherOnDisk = path.join(appPath, bundleProgram);
+        expect(existsSync(launcherOnDisk)).toBe(true);
+        expect(() => {
+          accessSync(launcherOnDisk, constants.X_OK);
+        }).not.toThrow();
+
+        // ProgramArguments[0] and BundleProgram must name the same file.
+        // launchd uses BundleProgram for the exec, but the argv is what
+        // `attestTraycerRegistration` reads, so drift between them would
+        // leave the two halves disagreeing about which file this job is.
+        const firstProgramArgument = agentPlist.match(
+          /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]+)<\/string>/,
+        )?.[1];
+        expect(firstProgramArgument).toBe(bundleProgram);
       });
 
       it("stages a signed helper .app and a relocatable NumberOfFiles=8192 LaunchAgent plist, both valid via plutil -lint", async () => {
@@ -358,7 +434,9 @@ describe("inject-host-launch-agent afterPack", () => {
         }
         const relativeLauncherPath = bundleProgramMatch[1];
         expect(relativeLauncherPath.startsWith("/")).toBe(false);
-        expect(relativeLauncherPath.endsWith("/traycer-host-start")).toBe(true);
+        expect(relativeLauncherPath.endsWith(`/${PRODUCT_NAME} Host`)).toBe(
+          true,
+        );
 
         // Actually relocate the packaged .app (cp -R to a different path) and
         // confirm BundleProgram - parsed from the plist, not just grepped -
