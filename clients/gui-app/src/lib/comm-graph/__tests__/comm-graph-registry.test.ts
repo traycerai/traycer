@@ -206,7 +206,7 @@ describe("comm-graph subscription registry", () => {
     ]);
     // Apply a row so the retained manager would have had a cursor to resume
     // from, had it survived.
-    first.dials[0].handlers.onSnapshot([row(7, 100)], null);
+    first.dials[0].handlers.onSnapshot([row(7, 100)], 7);
     releaseCommGraphSubscription(evictedEpicId, claim);
 
     for (let index = 0; index < DETACHED_MANAGER_LIMIT; index += 1) {
@@ -252,7 +252,7 @@ describe("comm-graph registry orphaned transports", () => {
 
     const manager = getCommGraphSubscriptionManager("epic-1");
     acquireCommGraphSubscription("epic-1", claimA, a.opener, ["host-a"]);
-    a.dials[0].handlers.onSnapshot([row(1, 100), row(2, 200)], null);
+    a.dials[0].handlers.onSnapshot([row(1, 100), row(2, 200)], 2);
     acquireCommGraphSubscription("epic-1", claimB, b.opener, ["host-a"]);
     // B joined an already-open socket: nothing to dial yet.
     expect(b.dials).toHaveLength(0);
@@ -268,7 +268,7 @@ describe("comm-graph registry orphaned transports", () => {
 
     // The resumed socket re-delivers the boundary row and then continues: no
     // row is lost, and none is duplicated.
-    b.dials[0].handlers.onSnapshot([row(2, 200), row(3, 300)], null);
+    b.dials[0].handlers.onSnapshot([row(2, 200), row(3, 300)], 3);
     expect(manager.getSnapshot().events.map((event) => event.id)).toEqual([
       1, 2, 3,
     ]);
@@ -403,7 +403,7 @@ describe("comm-graph registry redial containment", () => {
 
     const manager = getCommGraphSubscriptionManager("epic-1");
     acquireCommGraphSubscription("epic-1", claimA, a.opener, ["host-a"]);
-    a.dials[0].handlers.onSnapshot([row(1, 100)], null);
+    a.dials[0].handlers.onSnapshot([row(1, 100)], 1);
     acquireCommGraphSubscription("epic-1", claimB, flaky, ["host-a"]);
 
     releaseCommGraphSubscription("epic-1", claimA);

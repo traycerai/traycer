@@ -93,6 +93,7 @@ describe("epic.communicationGraph.subscribe@1.0 frames", () => {
       kind: "snapshot",
       epicId: "epic-1",
       events: [A2A_MESSAGE_EVENT],
+      headId: A2A_MESSAGE_EVENT.id,
       hasBinaryPayload: false,
     });
 
@@ -110,6 +111,8 @@ describe("epic.communicationGraph.subscribe@1.0 frames", () => {
       kind: "snapshot",
       epicId: "epic-1",
       events: [],
+      // Required-and-nullable: an empty log reports no head, explicitly.
+      headId: null,
       hasBinaryPayload: false,
     });
 
@@ -129,6 +132,10 @@ describe("epic.communicationGraph.subscribe@1.0 frames", () => {
         { ...A2A_MESSAGE_EVENT, id: 11 },
         { ...A2A_MESSAGE_EVENT, id: 12 },
       ],
+      // The log's head at handoff covers the overflow below: 13 and 14 are
+      // pre-existing rows the bounded snapshot could not carry, and headId is
+      // what lets a client class them as history rather than new activity.
+      headId: 14,
       hasBinaryPayload: false,
     });
     // Backlog past the snapshot's bound - pre-existing rows, NOT new activity.

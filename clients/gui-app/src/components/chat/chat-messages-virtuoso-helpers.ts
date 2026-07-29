@@ -268,12 +268,17 @@ export function chatMessageAlignmentDelta(
 ): number | null {
   if (scroller === null) return null;
   // One native lookup: this runs on every correction frame, and materializing
-  // the whole row list just to scan it would be per-frame garbage. Quote and
-  // backslash are the only characters that can break out of a QUOTED
-  // attribute selector; escaped inline rather than via `CSS.escape`, which
+  // the whole row list just to scan it would be per-frame garbage. Everything
+  // outside [A-Za-z0-9_-] is hex-escaped (the CSS `\XX ` form), so no id -
+  // quotes, backslashes, control characters included - can make
+  // `querySelector` throw. Inline rather than `CSS.escape`, which
   // node-environment tests do not provide.
+  const escaped = messageId.replace(
+    /[^A-Za-z0-9_-]/gu,
+    (ch) => `\\${(ch.codePointAt(0) ?? 0).toString(16)} `,
+  );
   const target = scroller.querySelector<HTMLElement>(
-    `[data-message-id="${messageId.replace(/["\\]/gu, "\\$&")}"]`,
+    `[data-message-id="${escaped}"]`,
   );
   if (target === null) return null;
 
