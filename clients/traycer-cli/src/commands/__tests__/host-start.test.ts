@@ -931,9 +931,11 @@ describe("service manifests never leak a flag `host start` does not have", () =>
         args: [],
       },
     });
-    // launchd execs ProgramArguments[0]; the compatibility program is a
-    // `/bin/sh -c` vector, so the shell must be argv[0].
-    expect(xml).toContain("<string>/bin/sh</string>");
+    // launchd execs ProgramArguments[0]; the compatibility program is the
+    // per-label launcher FILE (macOS names the login item after it - the
+    // former inline `/bin/sh -c` vector surfaced as "sh" in Login Items).
+    expect(xml).toContain("/ai.traycer.host.prod/traycer-host-start</string>");
+    expect(xml).not.toContain("<string>/bin/sh</string>");
     for (const flag of REMOVED_FLAGS) expect(xml).not.toContain(flag);
   });
 

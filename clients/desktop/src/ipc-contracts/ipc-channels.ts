@@ -154,6 +154,8 @@ export const RunnerHostInvoke = {
   gpuAccelerationSet: "runnerHost:gpu:set",
   logLevelsGet: "runnerHost:logLevels:get",
   logLevelsSet: "runnerHost:logLevels:set",
+  featureSettingsGet: "runnerHost:featureSettings:get",
+  agentRolesEnabledSet: "runnerHost:featureSettings:agentRoles:set",
   // Enumerates fonts installed on this machine for the Appearance font
   // pickers (Settings → Appearance → UI/Code/Terminal font).
   fontsList: "runnerHost:fonts:list",

@@ -17,6 +17,7 @@ import type {
   HostRemovalState,
   HostTrayCommand,
   HostUninstallResult,
+  HostRestartRequestResult,
   InstallVersionOk,
   MutationOutcome,
   ServiceRegistrationOk,
@@ -153,7 +154,7 @@ export interface DesktopPreloadBridge {
     dispose: () => void;
   };
   onSystemResumed(handler: () => void): { dispose: () => void };
-  requestHostRespawn(): Promise<void>;
+  requestHostRespawn(): Promise<HostRestartRequestResult>;
   trayState: {
     setEpics(epics: readonly TrayEpic[]): Promise<void>;
     setIndicator(state: TrayIndicatorState): Promise<void>;
@@ -222,7 +223,7 @@ export interface DesktopHostManagementBridge {
   uninstallTraycer(): Promise<TraycerUninstallResult>;
   getRemovalState(): Promise<HostRemovalState>;
   clearRemoval(): Promise<void>;
-  restartHost(): Promise<void>;
+  restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
   }): Promise<HostLogsTailResult>;
@@ -748,7 +749,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     return toDisposable(this.bridge.onSystemResumed(handler));
   }
 
-  requestHostRespawn(): Promise<void> {
+  requestHostRespawn(): Promise<HostRestartRequestResult> {
     return this.bridge.requestHostRespawn();
   }
 

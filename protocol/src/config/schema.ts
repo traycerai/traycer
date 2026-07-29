@@ -42,6 +42,13 @@ export const logsConfigSchema = z
   .default({ cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL });
 export type LogsConfig = z.infer<typeof logsConfigSchema>;
 
+export const featureSettingsSchema = z
+  .object({
+    agentRoles: z.boolean().default(false),
+  })
+  .default({ agentRoles: false });
+export type FeatureSettings = z.infer<typeof featureSettingsSchema>;
+
 /**
  * Zod schema for `~/.traycer/cli/config.json` - the single on-disk source
  * of truth for the user's shell + env-override config, shared by the CLI
@@ -104,6 +111,7 @@ export const cliConfigSchema = z.object({
     .default({ path: null, args: null, entries: [] }),
   envOverrides: envOverrideMapSchema.default({}),
   logs: logsConfigSchema,
+  features: featureSettingsSchema,
 });
 
 export type CliConfig = z.infer<typeof cliConfigSchema>;
@@ -149,4 +157,5 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   shell: { path: null, args: null, entries: [] },
   envOverrides: {},
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
+  features: { agentRoles: false },
 };

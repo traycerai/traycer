@@ -1,121 +1,86 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { type ReactNode, useCallback, useSyncExternalStore } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { FilePlus2 } from "lucide-react";
+import { toast } from "sonner";
+import { EpicsListPanel } from "@/components/epics/epics-list-panel";
+import type { HistoryItem } from "@/components/home/data/home-page.data";
 import { Button } from "@/components/ui/button";
 import {
   commitFillableSlotDestination,
-  getFillableSlotChoicesWithCatalog,
-  type FillableSlotCatalogEntry,
+  type FillableSlotChoice,
+  type FillableSlotDestination,
 } from "@/components/layout/tabs/fillable-slot";
+import { useHostBinding } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { tabResolveIntent } from "@/stores/tabs/registry";
+import { tabResolveIntent, tabSurfaceDescriptor } from "@/stores/tabs/registry";
+import {
+  getHeaderTabs,
+  useHeaderStripItems,
+} from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
-import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import type { SplitSide, SplitSideName } from "@/stores/tabs/layout";
-import type { TabRef } from "@/stores/tabs/types";
-import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
-import { useHistoryQuery } from "@/hooks/home/use-history-query";
-import { useHostBinding } from "@/lib/host";
 import {
   getTabStructuralLockRevision,
+  isTabStructurallyLocked,
   subscribeTabStructuralLocks,
 } from "@/stores/tabs/tab-structural-lock";
+import type { TabRef } from "@/stores/tabs/types";
 
 export interface SplitSlotChooserProps {
   readonly splitId: string;
   readonly side: SplitSideName;
   readonly slot: Exclude<SplitSide, { readonly kind: "tab" }>;
-  readonly focused: boolean;
   /** A header tab is hovering this slot and releasing would commit the drop. */
   readonly dropActive: boolean;
 }
 
-export function SplitSlotChooser(props: SplitSlotChooserProps) {
-  const [query, setQuery] = useState("");
+export function SplitSlotChooser(props: SplitSlotChooserProps): ReactNode {
   const binding = useHostBinding();
-  if (binding === null) {
-    return (
-      <SplitSlotChooserContent
-        {...props}
-        catalog={EMPTY_CATALOG}
-        query={query}
-        onQueryChange={setQuery}
-      />
-    );
-  }
   return (
-    <CataloguedSplitSlotChooser
-      {...props}
-      query={query}
-      onQueryChange={setQuery}
-    />
+    <SplitSlotChooserContent {...props} historyAvailable={binding !== null} />
   );
-}
-
-const EMPTY_CATALOG: ReadonlyArray<FillableSlotCatalogEntry> = [];
-
-function CataloguedSplitSlotChooser(
-  props: SplitSlotChooserProps & {
-    readonly query: string;
-    readonly onQueryChange: (query: string) => void;
-  },
-) {
-  const history = useHistoryQuery({
-    search: { ...DEFAULT_HISTORY_SEARCH, query: props.query },
-    nowMs: null,
-  });
-  const catalog = useMemo<ReadonlyArray<FillableSlotCatalogEntry>>(
-    () =>
-      (history.data?.items ?? []).map((item) =>
-        item.taskType === "epic"
-          ? { kind: "epic", epicId: item.epicId, name: item.title }
-          : {
-              kind: "phase-migration",
-              phaseId: item.epicId,
-              name: item.title,
-            },
-      ),
-    [history.data],
-  );
-  return <SplitSlotChooserContent {...props} catalog={catalog} />;
 }
 
 export function SplitSlotChooserContent(
-  props: SplitSlotChooserProps & {
-    readonly catalog: ReadonlyArray<FillableSlotCatalogEntry>;
-    readonly query: string;
-    readonly onQueryChange: (query: string) => void;
-  },
-) {
+  props: SplitSlotChooserProps & { readonly historyAvailable: boolean },
+): ReactNode {
   const navigate = useNavigate();
-  useTabsStore((state) => state.items);
+  const headerItems = useHeaderStripItems();
+  // Store focus can land on this empty side without any DOM focus following
+  // it (keyboard "add split", focus-side commands). Mirroring the focused
+  // side into the search's focus effect gives typing somewhere to go.
+  const sideFocused = useTabsStore((state) =>
+    state.items.some(
+      (item) =>
+        item.kind === "split" &&
+        item.id === props.splitId &&
+        item.focusedSide === props.side,
+    ),
+  );
   useSyncExternalStore(
     subscribeTabStructuralLocks,
     getTabStructuralLockRevision,
     getTabStructuralLockRevision,
   );
-  const searchRef = useRef<HTMLInputElement | null>(null);
-  const choices = getFillableSlotChoicesWithCatalog(
-    props.splitId,
-    props.side,
-    props.catalog,
-  );
-  const filtered = useMemo(
-    () =>
-      choices.filter((choice) =>
-        choice.label
-          .toLocaleLowerCase()
-          .includes(props.query.toLocaleLowerCase()),
-      ),
-    [choices, props.query],
-  );
+  const openTabs = headerItems.flatMap<FillableSlotChoice>((item) => {
+    if (item.kind !== "tab") return [];
+    const ref: TabRef = { kind: item.tab.kind, id: item.tab.id };
+    if (
+      isTabStructurallyLocked(ref) ||
+      tabSurfaceDescriptor(ref.kind).splitEligibility !== "eligible"
+    ) {
+      return [];
+    }
+    return [
+      {
+        id: `open:${ref.kind}:${ref.id}`,
+        label: item.tab.name,
+        destination: { kind: "open-ref", ref },
+        group: "open",
+      },
+    ];
+  });
   const activateFocusedRef = useCallback(
     (ref: TabRef): void => {
       const tab = getHeaderTabs().find(
@@ -127,63 +92,172 @@ export function SplitSlotChooserContent(
     },
     [navigate],
   );
-  useEffect(() => {
-    if (!props.focused) return;
-    searchRef.current?.focus();
-  }, [props.focused]);
-  const emptyHeadline =
-    props.slot.kind === "unavailable"
-      ? props.slot.label
-      : "Choose a view for this split";
-  const headline = props.dropActive ? "Release to open here" : emptyHeadline;
+  const openDestination = useCallback(
+    (destination: FillableSlotDestination): void => {
+      const resolution = commitFillableSlotDestination({
+        splitId: props.splitId,
+        side: props.side,
+        destination,
+        activateFocusedRef,
+      });
+      // Rows come from shared surfaces (History) that cannot pre-filter every
+      // invalid state - a structurally locked legacy Phase being the settled
+      // example. A click that resolves invalid must say so, not silently
+      // leave the slot empty.
+      if (resolution.kind === "invalid") {
+        toast.error(
+          destination.kind === "phase-migration"
+            ? "This Phase is locked open in another view."
+            : "This view can't be opened in the split right now.",
+        );
+      }
+    },
+    [activateFocusedRef, props.side, props.splitId],
+  );
+  const openHistoryItem = useCallback(
+    (item: HistoryItem): void => {
+      openDestination(
+        item.taskType === "phase"
+          ? {
+              kind: "phase-migration",
+              phaseId: item.epicId,
+              name: item.title,
+            }
+          : { kind: "epic", epicId: item.epicId, name: item.title },
+      );
+    },
+    [openDestination],
+  );
 
   return (
     <section
       aria-label={`${props.slot.kind === "unavailable" ? "Unavailable" : "Empty"} split view`}
       className={cn(
-        "flex h-full min-h-0 min-w-0 flex-col items-center justify-center gap-3 border border-dashed border-border/80 bg-muted/20 p-[clamp(0.75rem,3vw,2rem)] transition-colors duration-150 ease-out",
+        "flex h-full min-h-0 min-w-0 flex-col overflow-hidden border border-dashed border-border/80 bg-muted/20 transition-colors duration-150 ease-out",
         props.dropActive && "border-solid border-primary bg-primary/10",
       )}
       data-drop-active={props.dropActive ? "true" : "false"}
       data-testid={`split-slot-chooser-${props.side}`}
     >
-      <div className="max-w-prose text-center">
-        <p className="text-ui-sm font-medium text-foreground">{headline}</p>
-        <p className="mt-1 text-ui-xs text-muted-foreground">
-          Search open tabs or choose a destination. You can also drop an
-          unpaired tab here.
-        </p>
-      </div>
-      <input
-        ref={searchRef}
-        aria-label="Search tabs and destinations"
-        value={props.query}
-        onChange={(event) => props.onQueryChange(event.target.value)}
-        placeholder="Search views"
-        className="w-full max-w-[min(92vw,28rem)] rounded-md border border-input bg-background px-3 py-2 text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      />
-      <div className="flex w-full max-w-[min(92vw,28rem)] flex-col gap-1 overflow-y-auto">
-        {filtered.map((choice) => (
+      <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col gap-6 overflow-hidden p-[clamp(1rem,4vw,3rem)]">
+        {props.dropActive ? (
+          <p
+            className="text-center text-ui-sm font-medium text-primary"
+            aria-live="polite"
+          >
+            Release to open here
+          </p>
+        ) : null}
+        {props.slot.kind === "unavailable" ? (
+          <div className="px-1 py-2">
+            <p className="text-ui-sm font-medium text-foreground">
+              {props.slot.label}
+            </p>
+            <p className="mt-1 text-ui-xs text-muted-foreground">
+              Choose another view for this split.
+            </p>
+          </div>
+        ) : null}
+
+        <SplitDestinationGroup
+          id={`open-tabs-${props.splitId}-${props.side}`}
+          title="Open Tabs"
+          testId="split-open-tabs"
+          sectionClassName={undefined}
+          bodyClassName="max-h-[35vh] space-y-1 overflow-y-auto"
+        >
+          {openTabs.length > 0 ? (
+            openTabs.map((choice) => (
+              <Button
+                key={choice.id}
+                type="button"
+                variant="ghost"
+                className="h-11 w-full justify-start rounded-md px-3"
+                onClick={() => openDestination(choice.destination)}
+              >
+                {choice.label}
+              </Button>
+            ))
+          ) : (
+            <p className="px-3 py-2 text-ui-sm text-muted-foreground">
+              No other open tabs
+            </p>
+          )}
+        </SplitDestinationGroup>
+
+        <SplitDestinationGroup
+          id={`create-${props.splitId}-${props.side}`}
+          title="Create"
+          testId="split-create-actions"
+          sectionClassName="border-t border-border/60 pt-5"
+          bodyClassName={undefined}
+        >
           <Button
-            key={choice.id}
             type="button"
             variant="ghost"
-            className={cn(
-              "justify-start",
-              choice.group === "destination" && "text-muted-foreground",
-            )}
-            onClick={() =>
-              commitFillableSlotDestination({
-                splitId: props.splitId,
-                side: props.side,
-                destination: choice.destination,
-                activateFocusedRef,
-              })
-            }
+            className="h-11 w-full justify-start rounded-md px-3"
+            onClick={() => openDestination({ kind: "new-draft" })}
           >
-            {choice.label}
+            <FilePlus2 />
+            New Task
           </Button>
-        ))}
+        </SplitDestinationGroup>
+
+        <SplitDestinationGroup
+          id={`history-${props.splitId}-${props.side}`}
+          title="History"
+          testId="split-history"
+          sectionClassName="flex min-h-0 flex-1 flex-col border-t border-border/60 pt-5"
+          bodyClassName="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pt-1"
+        >
+          {props.historyAvailable ? (
+            <EpicsListPanel
+              variant="picker"
+              className="mt-0"
+              onSelectEpic={null}
+              onOpenItem={openHistoryItem}
+              routeSearch={null}
+              historyNowMs={null}
+              autoFocusSearch={sideFocused}
+            />
+          ) : (
+            <p className="px-1 py-2 text-ui-sm text-muted-foreground">
+              History is unavailable while the host is disconnected.
+            </p>
+          )}
+        </SplitDestinationGroup>
+      </div>
+    </section>
+  );
+}
+
+interface SplitDestinationGroupProps {
+  readonly id: string;
+  readonly title: string;
+  readonly testId: string;
+  readonly sectionClassName: string | undefined;
+  readonly bodyClassName: string | undefined;
+  readonly children: ReactNode;
+}
+
+function SplitDestinationGroup(props: SplitDestinationGroupProps): ReactNode {
+  return (
+    <section
+      aria-labelledby={props.id}
+      data-testid={props.testId}
+      className={props.sectionClassName}
+    >
+      <h2
+        id={props.id}
+        className="mb-1.5 px-1 text-ui-xs font-semibold text-muted-foreground"
+      >
+        {props.title}
+      </h2>
+      <div
+        data-testid={`${props.testId}-card`}
+        className={cn("overflow-hidden", props.bodyClassName)}
+      >
+        {props.children}
       </div>
     </section>
   );

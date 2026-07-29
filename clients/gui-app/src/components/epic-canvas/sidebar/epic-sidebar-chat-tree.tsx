@@ -2076,10 +2076,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
         </span>
       </label>
     );
-    if (roleHoverContent === null) return selectionRow;
     return (
       <TooltipWrapper
-        label={roleHoverContent}
+        label={roleHoverContent ?? nodeName}
         side="right"
         sideOffset={6}
         align="start"
@@ -2162,6 +2161,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
     return (
       <WorktreeOwnerMetadataTooltip
         trigger={button}
+        title={nodeName}
         hostId={ownerHostId}
         epicId={epicId}
         ownerId={nodeId}
@@ -2170,10 +2170,9 @@ function ChatRowButton(props: ChatRowButtonProps) {
       />
     );
   }
-  if (roleHoverContent === null) return button;
   return (
     <TooltipWrapper
-      label={roleHoverContent}
+      label={roleHoverContent ?? nodeName}
       side="right"
       sideOffset={6}
       align="start"

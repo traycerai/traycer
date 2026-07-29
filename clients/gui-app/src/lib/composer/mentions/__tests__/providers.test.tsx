@@ -102,15 +102,7 @@ describe("mention provider registry", () => {
   it("returns root providers in the composer order", () => {
     expect(
       labels(mentionProviderRegistry.entries(ROOT_MENTION_STEP, context({}))),
-    ).toEqual([
-      "Files",
-      "Folders",
-      "Worktrees",
-      "Git",
-      "Task",
-      "Artifacts",
-      "Review",
-    ]);
+    ).toEqual(["Files", "Folders", "Worktrees", "Git", "Task", "Artifacts"]);
   });
 
   it("adds Agents as a current-epic provider covering both interfaces", () => {
@@ -144,7 +136,6 @@ describe("mention provider registry", () => {
       "Task",
       "Agents",
       "Artifacts",
-      "Review",
     ]);
 
     const agentRows = mentionProviderRegistry.entries(
@@ -316,18 +307,21 @@ describe("mention provider registry", () => {
       }),
     );
 
-    expect(labels(entries)).toEqual([
-      "auth.ts",
-      "auth",
-      "Auth epic",
-      "Auth chat",
-      "Auth spec",
-    ]);
-    expect(completeEntry(entries[3])).toMatchObject({
+    // Root search returns one flat, cross-provider ranked list; membership is
+    // asserted here and the ranking itself in root-search-ranking.test.ts.
+    expect(labels(entries).toSorted()).toEqual(
+      ["auth.ts", "auth", "Auth epic", "Auth chat", "Auth spec"].toSorted(),
+    );
+    const byLabel = (label: string): MentionMenuEntry => {
+      const entry = entries.find((candidate) => candidate.label === label);
+      if (entry === undefined) throw new Error(`missing entry: ${label}`);
+      return entry;
+    };
+    expect(completeEntry(byLabel("Auth chat"))).toMatchObject({
       contextType: "chat",
       path: "chat:epic-1/chat-1",
     });
-    expect(completeEntry(entries[4])).toMatchObject({
+    expect(completeEntry(byLabel("Auth spec"))).toMatchObject({
       contextType: "spec",
       path: "spec:epic-1/spec-1",
     });
@@ -472,10 +466,11 @@ describe("mention provider registry", () => {
       "epic.mentionSpecs",
       "epic.mentionTickets",
       "epic.mentionStories",
+      "epic.mentionReviews",
     ]);
   });
 
-  it("lists specs, tickets, and stories together while preserving mention types", () => {
+  it("lists specs, tickets, stories, and reviews together while preserving mention types", () => {
     const artifactStep: MentionFlowStep = {
       kind: "provider",
       providerId: "artifacts",
@@ -547,10 +542,12 @@ describe("mention provider registry", () => {
       "Auth spec",
       "Auth ticket",
       "Auth story",
+      "Auth review",
     ]);
     expect(completeEntry(entries[1]).contextType).toBe("spec");
     expect(completeEntry(entries[2]).contextType).toBe("ticket");
     expect(completeEntry(entries[3]).contextType).toBe("story");
+    expect(completeEntry(entries[4]).contextType).toBe("review");
     expect(mentionProviderRegistry.menuCopy(artifactStep)).toEqual({
       header: "Artifacts",
       empty: "No artifacts available",

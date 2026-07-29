@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,12 +41,15 @@ import {
   loadEffectiveShellConfig,
   migrateCliConfig,
   readCliConfig,
+  readFeatureSettings,
+  readFeatureSettingsSync,
   readLogLevels,
   readLogLevelsSync,
   removeShell,
   resetShell,
   revertShellArgs,
   setEnvOverride,
+  setAgentRolesEnabled,
   setLogLevels,
   setShell,
   writeCliConfig,
@@ -70,6 +73,11 @@ describe("cli config store", () => {
     expect(await readCliConfig()).toEqual(EMPTY_CLI_CONFIG);
   });
 
+  it("defaults agent roles off when feature settings are missing", async () => {
+    expect(await readFeatureSettings()).toEqual({ agentRoles: false });
+    expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+  });
+
   it("round-trips a written config through the schema", async () => {
     const cfg = {
       version: 1 as const,
@@ -80,6 +88,7 @@ describe("cli config store", () => {
       },
       envOverrides: { FOO: "bar" },
       logs: { cliLogLevel: "info" as const, hostLogLevel: "info" as const },
+      features: { agentRoles: false },
     };
     await writeCliConfig(cfg);
     expect(await readCliConfig()).toEqual(cfg);
@@ -142,6 +151,79 @@ describe("cli config store", () => {
     expect(readLogLevelsSync()).toEqual({
       cliLogLevel: "debug",
       hostLogLevel: "trace",
+    });
+  });
+
+  it("fails closed for malformed and future-version feature config reads", async () => {
+    await writeRaw("{ not json");
+    expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+
+    await writeRaw(
+      JSON.stringify({
+        version: 999,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        features: { agentRoles: true },
+      }),
+    );
+    expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+
+    await writeRaw(
+      JSON.stringify({
+        version: 1,
+        shell: { path: null, args: null },
+        envOverrides: {},
+        features: { agentRoles: "yes" },
+      }),
+    );
+    expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "fails closed when feature config is unreadable",
+    async () => {
+      await writeRaw(
+        JSON.stringify({
+          version: 1,
+          features: { agentRoles: true },
+        }),
+      );
+      await chmod(cliConfigPath(), 0o000);
+      try {
+        expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+      } finally {
+        await chmod(cliConfigPath(), 0o600);
+      }
+    },
+  );
+
+  it("sets agent roles without changing shell, env, or log settings", async () => {
+    await setShell("/bin/fish", ["-l"]);
+    await setEnvOverride("FOO", "bar");
+    await setLogLevels("debug", "warn");
+
+    await setAgentRolesEnabled(true);
+    expect(await readFeatureSettings()).toEqual({ agentRoles: true });
+    expect(await readCliConfig()).toMatchObject({
+      shell: {
+        path: "/bin/fish",
+        args: ["-l"],
+      },
+      envOverrides: { FOO: "bar" },
+      logs: { cliLogLevel: "debug", hostLogLevel: "warn" },
+      features: { agentRoles: true },
+    });
+
+    await setAgentRolesEnabled(false);
+    expect(await readFeatureSettings()).toEqual({ agentRoles: false });
+    expect(await readCliConfig()).toMatchObject({
+      shell: {
+        path: "/bin/fish",
+        args: ["-l"],
+      },
+      envOverrides: { FOO: "bar" },
+      logs: { cliLogLevel: "debug", hostLogLevel: "warn" },
+      features: { agentRoles: false },
     });
   });
 
@@ -214,6 +296,7 @@ describe("cli config store", () => {
       shell: { path: "/bin/zsh", args: null, entries: [] },
       envOverrides: {},
       logs: { cliLogLevel: "info", hostLogLevel: "info" },
+      features: { agentRoles: false },
     });
   });
 
@@ -328,7 +411,9 @@ describe("shell entries + mirror invariant", () => {
     // are remembered against the login shell's entry.
     expect(autoState.shell.path).toBeNull();
     expect(autoState.shell.args).toBeNull();
-    expect(autoState.shell.entries).toEqual([{ path: defaultPath, args: ["-x"] }]);
+    expect(autoState.shell.entries).toEqual([
+      { path: defaultPath, args: ["-x"] },
+    ]);
 
     await setShell("/bin/cat", null); // pick a non-shell: mirror materialises to []
     const cfg = await readCliConfig();
@@ -422,7 +507,10 @@ describe("shell entries + mirror invariant", () => {
 });
 
 describe("flag deviations - canonicalisation + revert", () => {
-  function entryArgs(cfg: CliConfig, path: string): string[] | null | undefined {
+  function entryArgs(
+    cfg: CliConfig,
+    path: string,
+  ): string[] | null | undefined {
     return cfg.shell.entries.find((e) => e.path === path)?.args;
   }
 
@@ -515,7 +603,10 @@ describe("legacy (pre-entries) shell resolution", () => {
     // Switch away: without seeding the customisation would be lost.
     await setShell("/bin/cat", null);
     const cfg = await readCliConfig();
-    expect(cfg.shell.entries).toContainEqual({ path: "/bin/bash", args: ["-i"] });
+    expect(cfg.shell.entries).toContainEqual({
+      path: "/bin/bash",
+      args: ["-i"],
+    });
     // Returning to bash restores the seeded flags rather than the family default.
     await setShell("/bin/bash", null);
     expect((await readCliConfig()).shell.args).toEqual(["-i"]);
@@ -530,39 +621,42 @@ describe("legacy (pre-entries) shell resolution", () => {
 
 // POSIX-only: on win32 `defaultShellPath` takes the COMSPEC branch and never
 // consults passwd, so these assertions are meaningless there.
-describe.skipIf(process.platform === "win32")("defaultShellPath - POSIX", () => {
-  const originalShell = process.env.SHELL;
-  afterEach(() => {
-    if (originalShell === undefined) delete process.env.SHELL;
-    else process.env.SHELL = originalShell;
-  });
+describe.skipIf(process.platform === "win32")(
+  "defaultShellPath - POSIX",
+  () => {
+    const originalShell = process.env.SHELL;
+    afterEach(() => {
+      if (originalShell === undefined) delete process.env.SHELL;
+      else process.env.SHELL = originalShell;
+    });
 
-  it("prefers the passwd login shell over a leaked $SHELL", () => {
-    h.passwdShell = "/usr/bin/fish";
-    process.env.SHELL = "/bin/bash";
-    expect(defaultShellPath()).toBe("/usr/bin/fish");
-  });
+    it("prefers the passwd login shell over a leaked $SHELL", () => {
+      h.passwdShell = "/usr/bin/fish";
+      process.env.SHELL = "/bin/bash";
+      expect(defaultShellPath()).toBe("/usr/bin/fish");
+    });
 
-  it("falls back to $SHELL when there is no passwd entry", () => {
-    h.passwdThrows = true;
-    process.env.SHELL = "/bin/bash";
-    expect(defaultShellPath()).toBe("/bin/bash");
-  });
+    it("falls back to $SHELL when there is no passwd entry", () => {
+      h.passwdThrows = true;
+      process.env.SHELL = "/bin/bash";
+      expect(defaultShellPath()).toBe("/bin/bash");
+    });
 
-  it("falls back to $SHELL when the passwd shell field is empty", () => {
-    h.passwdShell = "";
-    process.env.SHELL = "/bin/bash";
-    expect(defaultShellPath()).toBe("/bin/bash");
-  });
+    it("falls back to $SHELL when the passwd shell field is empty", () => {
+      h.passwdShell = "";
+      process.env.SHELL = "/bin/bash";
+      expect(defaultShellPath()).toBe("/bin/bash");
+    });
 
-  it("falls back to the platform default when passwd and $SHELL are both absent", () => {
-    h.passwdThrows = true;
-    delete process.env.SHELL;
-    expect(defaultShellPath()).toBe(
-      process.platform === "darwin" ? "/bin/zsh" : "/bin/bash",
-    );
-  });
-});
+    it("falls back to the platform default when passwd and $SHELL are both absent", () => {
+      h.passwdThrows = true;
+      delete process.env.SHELL;
+      expect(defaultShellPath()).toBe(
+        process.platform === "darwin" ? "/bin/zsh" : "/bin/bash",
+      );
+    });
+  },
+);
 
 describe("migrateCliConfig", () => {
   it("passes a current-version config through unchanged", () => {

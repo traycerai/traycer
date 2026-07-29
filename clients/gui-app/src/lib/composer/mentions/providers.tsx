@@ -1,7 +1,6 @@
 import { CornerUpLeft, File } from "lucide-react";
 import type { ReactElement } from "react";
 import { isSubsequence } from "@traycer/protocol/utils/text/fuzzy";
-import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
 import type {
   EpicAgentMentionEntry,
   EpicMentionEntry,
@@ -15,7 +14,6 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { mentionAttachmentFromSuggestion } from "./attachments";
 import {
-  artifactIcon,
   artifactsIcon,
   descriptionForSuggestion,
   detailForSuggestion,
@@ -28,6 +26,7 @@ import {
   previewForSuggestion,
   worktreeIcon,
 } from "./mention-entry-display";
+import { rankRootSearchEntries } from "./root-search-ranking";
 import { taskMentionQueryForRequest } from "./task-mention-helpers";
 
 const EMPTY_MENU_ENTRIES: ReadonlyArray<MentionMenuEntry> = [];
@@ -35,14 +34,7 @@ const EMPTY_WORKSPACE_REQUESTS: ReadonlyArray<MentionWorkspaceRequest> = [];
 const EMPTY_EPIC_REQUESTS: ReadonlyArray<MentionEpicRequest> = [];
 
 export type MentionProviderId =
-  | "files"
-  | "folders"
-  | "worktree"
-  | "git"
-  | "epic"
-  | "chat"
-  | "artifacts"
-  | "review";
+  "files" | "folders" | "worktree" | "git" | "epic" | "chat" | "artifacts";
 
 export interface MentionMenuCopy {
   readonly header: string;
@@ -629,51 +621,33 @@ const EPIC_ARTIFACT_MENTION_METHODS: Record<
   review: "epic.mentionReviews",
 };
 
-const STANDARD_ARTIFACT_KINDS: ReadonlyArray<EpicArtifactKind> = [
+const ALL_ARTIFACT_KINDS: ReadonlyArray<EpicArtifactKind> = [
   "spec",
   "ticket",
   "story",
+  "review",
 ];
 
-function isArtifactMentionProviderId(
-  providerId: MentionProviderId,
-): providerId is "artifacts" | "review" {
-  return providerId === "artifacts" || providerId === "review";
-}
-
 export function isArtifactMentionStep(step: MentionFlowStep): boolean {
-  return (
-    step.kind === "provider" && isArtifactMentionProviderId(step.providerId)
-  );
+  return step.kind === "provider" && step.providerId === "artifacts";
 }
 
+/**
+ * The one Artifacts category. Covers every artifact kind - spec, ticket,
+ * story, AND review - matching the sidebar's single "Artifacts" grouping.
+ */
 class ArtifactMentionProvider extends ComposerMentionProvider {
-  readonly id: "artifacts" | "review";
-  readonly rootOrder: number;
-  protected readonly label: string;
-  protected readonly description: string;
-  private readonly artifactKinds: ReadonlySet<EpicArtifactKind>;
-
-  constructor(
-    id: "artifacts" | "review",
-    artifactKinds: ReadonlyArray<EpicArtifactKind>,
-    rootOrder: number,
-  ) {
-    super();
-    this.id = id;
-    this.rootOrder = rootOrder;
-    this.artifactKinds = new Set(artifactKinds);
-    this.label = id === "artifacts" ? "Artifacts" : EPIC_NODE_LABELS.review;
-    this.description =
-      id === "artifacts" ? "Task artifacts" : "Review artifacts";
-  }
+  readonly id = "artifacts" as const;
+  readonly rootOrder = 50;
+  protected readonly label = "Artifacts";
+  protected readonly description = "Task artifacts";
 
   rootEntry(_context: ComposerMentionProviderContext): MentionMenuEntry | null {
     return providerEntry({
-      id: `provider:${this.id}`,
+      id: "provider:artifacts",
       label: this.label,
       description: this.description,
-      icon: this.id === "artifacts" ? artifactsIcon() : artifactIcon("review"),
+      icon: artifactsIcon(),
       step: this.providerStep("root", null),
     });
   }
@@ -682,17 +656,14 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
     return context.epicEntries.flatMap((entry) =>
-      entry.kind === "epic-artifact" &&
-      this.artifactKinds.has(entry.artifactType)
-        ? suggestionEntry(entry)
-        : [],
+      entry.kind === "epic-artifact" ? suggestionEntry(entry) : [],
     );
   }
 
   rootEpicRequests(
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionEpicRequest> {
-    return [...this.artifactKinds].map((kind) =>
+    return ALL_ARTIFACT_KINDS.map((kind) =>
       epicRequest(context, EPIC_ARTIFACT_MENTION_METHODS[kind]),
     );
   }
@@ -711,19 +682,15 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
     return [
       backEntry("Mentions"),
       ...context.epicEntries.flatMap((entry) =>
-        entry.kind === "epic-artifact" &&
-        this.artifactKinds.has(entry.artifactType)
-          ? suggestionEntry(entry)
-          : [],
+        entry.kind === "epic-artifact" ? suggestionEntry(entry) : [],
       ),
     ];
   }
 
   menuCopy(_step: MentionFlowStep): MentionMenuCopy {
-    const plural = this.id === "artifacts" ? "Artifacts" : "Reviews";
     return {
-      header: plural,
-      empty: `No ${plural.toLowerCase()} available`,
+      header: "Artifacts",
+      empty: "No artifacts available",
     };
   }
 }
@@ -747,8 +714,13 @@ class MentionProviderRegistry {
     context: ComposerMentionProviderContext,
   ): ReadonlyArray<MentionMenuEntry> {
     if (context.query.trim().length > 0) {
-      return this.orderedProviders.flatMap((provider) =>
-        provider.rootSearchEntries(context),
+      return rankRootSearchEntries(
+        this.orderedProviders.flatMap((provider) =>
+          provider
+            .rootSearchEntries(context)
+            .map((entry) => ({ entry, providerId: provider.id })),
+        ),
+        context.query,
       );
     }
     return this.orderedProviders.flatMap((provider) => {
@@ -814,8 +786,7 @@ export const mentionProviderRegistry = new MentionProviderRegistry([
   new GitMentionProvider(),
   new EpicMentionProvider(),
   new AgentMentionProvider(),
-  new ArtifactMentionProvider("artifacts", STANDARD_ARTIFACT_KINDS, 50),
-  new ArtifactMentionProvider("review", ["review"], 60),
+  new ArtifactMentionProvider(),
 ]);
 
 interface ProviderEntryArgs {

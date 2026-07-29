@@ -163,6 +163,7 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
   private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
   private readonly methodSupportListeners = new Set<() => void>();
   private readonly closedListeners = new Set<() => void>();
+  private readonly availabilityRecoveredListeners = new Set<() => void>();
   private closed = false;
   private closedReason: string | null = null;
 
@@ -220,6 +221,9 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       onDispose: () => removeSession(),
       onMethodSupport: (nextMethod, support, schemaVersion) => {
         this.setMethodSupport(nextMethod, support, schemaVersion);
+      },
+      onAvailabilityRecovered: () => {
+        this.emitAvailabilityRecovered();
       },
     });
     removeSession = () => {
@@ -317,6 +321,26 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
   }
 
   /**
+   * Subscribes to positive evidence that the host endpoint just RECOVERED
+   * availability after a period of being unreachable or unresponsive. Fired by
+   * any owned session when (a) it re-opens after a drop (its status was
+   * `"reconnecting"` when the handshake completed), or (b) a heartbeat pong
+   * lands after a stall-length gap WITHOUT the socket ever dropping - the
+   * host-event-loop-stall case, where an established stream survives the
+   * 60s pong cutoff while fresh unary dials time out and strand their
+   * queries in a permanent error state. Consumers use this to drive
+   * `HostClient.notifyAvailabilityRecovered()` so those stranded queries
+   * refetch; multiple sessions recovering at once each fire, so consumers
+   * should coalesce.
+   */
+  subscribeAvailabilityRecovered(listener: () => void): () => void {
+    this.availabilityRecoveredListeners.add(listener);
+    return () => {
+      this.availabilityRecoveredListeners.delete(listener);
+    };
+  }
+
+  /**
    * Proactively drops and re-dials every open session immediately. Driven by a
    * device-wake / network-online signal: after an OS sleep the sockets can be
    * half-open (frozen by the OS) while the client still believes it is
@@ -353,6 +377,25 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     );
     for (const session of Array.from(this.ownedSessions)) {
       session.forceReconnect(reason);
+    }
+  }
+
+  private emitAvailabilityRecovered(): void {
+    if (this.closed) {
+      return;
+    }
+    // Guarded per listener: the emission happens inside a session's inbound
+    // frame handling (the pong path), so a throwing consumer must not break
+    // the socket's message processing or the other listeners.
+    for (const listener of Array.from(this.availabilityRecoveredListeners)) {
+      try {
+        listener();
+      } catch (error) {
+        console.error(
+          `[stream] availability-recovered listener threw (client=${this.instanceId})`,
+          error,
+        );
+      }
     }
   }
 
@@ -442,7 +485,30 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     support: StreamMethodSupport,
     schemaVersion: SchemaVersion | null,
   ) => void;
+  /**
+   * Reports positive host-recovery evidence to the owning client - see
+   * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
+   * sites and why they exist.
+   */
+  readonly onAvailabilityRecovered: () => void;
 }
+
+/**
+ * Slack added to `pingIntervalMs` before a pong gap counts as recovery
+ * evidence. On a healthy connection consecutive pongs arrive one ping
+ * interval apart (the ping timer is exact; the pong round-trip is
+ * RTT-scale), so a gap exceeding the interval by several seconds means at
+ * least one ping sat unanswered - the host was unresponsive and has just
+ * come back. Kept well under `pongTimeoutMs - pingIntervalMs` so this
+ * detects the stalls the drop cutoff deliberately tolerates.
+ *
+ * Known benign false positive: a backgrounded renderer throttles timers, so
+ * pings go out late and the measured gap stretches without any host stall.
+ * The resulting notify fires as the tab foregrounds and costs one refetch of
+ * active host-scoped queries - freshness on return, not churn - so it is
+ * accepted rather than special-cased with visibility heuristics.
+ */
+const PONG_GAP_RECOVERY_SLACK_MS = 5_000;
 
 /**
  * One open stream. Owns the per-connect socket plus every timer wired to
@@ -824,7 +890,18 @@ class StreamSession<
     }
 
     if (envelope.kind === "pong") {
-      this.lastPongAt = Date.now();
+      const now = Date.now();
+      const pongGapMs = now - this.lastPongAt;
+      this.lastPongAt = now;
+      if (
+        pongGapMs >=
+        this.config.pingIntervalMs + PONG_GAP_RECOVERY_SLACK_MS
+      ) {
+        // The host just answered after leaving at least one ping hanging: it
+        // was unresponsive (event-loop stall) and has recovered - without the
+        // socket ever dropping, so the reconnect path below never fires.
+        this.config.onAvailabilityRecovered();
+      }
       return;
     }
 
@@ -943,12 +1020,20 @@ class StreamSession<
       "supported",
       prepared.onWireVersion,
     );
+    // Read BEFORE `transitionTo("open")` overwrites it: a session that was
+    // "reconnecting" (dropped socket, or failed dial attempts) has just proved
+    // the host is reachable again. The initial clean connect ("connecting" →
+    // "open") is NOT recovery - nothing was stuck - so it stays silent.
+    const recoveredFromUnavailable = this.status === "reconnecting";
     this.phase = "subscribed";
     this.reconnectAttempt = 0;
     this.noProgressUnauthorizedReconnects = 0;
     this.lastPongAt = Date.now();
     this.startHeartbeat();
     this.transitionTo("open", null);
+    if (recoveredFromUnavailable) {
+      this.config.onAvailabilityRecovered();
+    }
     // If the bearer rotated DURING the handshake - after the open frame was sent
     // but before we became `subscribed` - that rotation's `notifyBearerRotated`
     // was dropped (we weren't subscribed yet) and the open frame carried the now

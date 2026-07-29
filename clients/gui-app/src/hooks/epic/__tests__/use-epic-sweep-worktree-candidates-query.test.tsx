@@ -154,6 +154,7 @@ describe("useEpicSweepWorktreeCandidates", () => {
     await waitFor(() => {
       expect(result.current.rows).toHaveLength(3);
     });
+    expect(result.current.hostId).toBe("host-1");
     const byPath = new Map(
       result.current.rows.map((row) => [row.entry.worktreePath, row]),
     );
@@ -372,6 +373,7 @@ describe("useEpicSweepWorktreeCandidates", () => {
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
     });
+    expect(result.current.hostId).toBeNull();
     expect(result.current.rows).toEqual([]);
   });
 
@@ -381,6 +383,7 @@ describe("useEpicSweepWorktreeCandidates", () => {
       [],
     );
     const { result } = renderCandidates(null);
+    expect(result.current.hostId).toBeNull();
     expect(result.current.rows).toEqual([]);
     expect(result.current.isPending).toBe(false);
     expect(mockHostClient.request).not.toHaveBeenCalled();

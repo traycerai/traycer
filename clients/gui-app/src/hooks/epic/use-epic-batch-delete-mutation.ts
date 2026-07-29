@@ -172,6 +172,7 @@ export function useEpicBatchDelete(): UseMutationResult<
             openStreamTransport,
             hostId,
             eligibleWorktreePaths,
+            "task_cleanup",
           ).then((outcome) => {
             emitTaskDeleteSummaryToast(epicToast, outcome);
             invalidateWorktreeCachesForHost(queryClient, hostId);
@@ -349,11 +350,13 @@ function eligibleWorktreeCleanupPaths(
     .map((candidate) => candidate.worktreePath);
 }
 
-function worktreeCleanupSummary(
-  removed: number,
-  failed: number,
+export function worktreeCleanupSummary(
+  outcome: WorktreeCleanupOutcome,
 ): string | null {
-  if (removed === 0 && failed === 0) return null;
+  const removed = outcome.removed.length;
+  const failed = outcome.failed.length;
+  const uncertain = outcome.uncertain.length;
+  if (removed === 0 && failed === 0 && uncertain === 0) return null;
   const parts: string[] = [];
   if (removed > 0) {
     parts.push(`${removed} worktree${removed === 1 ? "" : "s"} removed`);
@@ -363,6 +366,14 @@ function worktreeCleanupSummary(
       `${failed} worktree${failed === 1 ? "" : "s"} couldn't be removed`,
     );
   }
+  // Distinct from "couldn't be removed": the host owns the cleanup command and
+  // is still running it, so claiming a failure here would be a guess. The
+  // durable completion notification carries the real counts.
+  if (uncertain > 0) {
+    parts.push(
+      `${uncertain} worktree${uncertain === 1 ? "" : "s"} unconfirmed`,
+    );
+  }
   return parts.join(", ");
 }
 
@@ -370,17 +381,18 @@ function emitTaskDeleteSummaryToast(
   epicToast: EpicDeleteToastParts,
   outcome: WorktreeCleanupOutcome,
 ): void {
-  const summary = worktreeCleanupSummary(
-    outcome.removed.length,
-    outcome.failed.length,
-  );
+  const summary = worktreeCleanupSummary(outcome);
   if (summary === null) {
     emitEpicDeleteToast(epicToast.level, epicToast.message);
     return;
   }
-  // A worktree that couldn't be removed downgrades the combined toast to a
-  // warning even when every Task deleted cleanly.
-  const level = outcome.failed.length > 0 ? "warning" : epicToast.level;
+  // A worktree that couldn't be removed - or whose removal we never saw
+  // confirmed - downgrades the combined toast to a warning even when every
+  // Task deleted cleanly.
+  const level =
+    outcome.failed.length > 0 || outcome.uncertain.length > 0
+      ? "warning"
+      : epicToast.level;
   emitEpicDeleteToast(level, `${epicToast.message} · ${summary}`);
 }
 

@@ -32,6 +32,7 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
 import { useRunnerConvergeReady } from "@/hooks/runner/use-runner-converge-ready-mutation";
@@ -320,8 +321,15 @@ function HostSettingsPanelInner(props: HostSettingsPanelInnerProps) {
   const restartMutation = useMutation({
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => management.restartHost(),
-    onSuccess: () => {
+    onSuccess: (result) => {
       setRestartConfirmOpen(false);
+      // `declined` resolves (rather than rejecting) because it is not an
+      // error - the host deliberately was not restarted and a later retry
+      // succeeds on its own; see `toastHostRestartDeclined`.
+      if (result.kind === "declined") {
+        toastHostRestartDeclined(result.message);
+        return;
+      }
       toast.success("Host restart requested");
       void queryClient.invalidateQueries({
         queryKey: runnerQueryKeys.hostInstalledRecord(management),

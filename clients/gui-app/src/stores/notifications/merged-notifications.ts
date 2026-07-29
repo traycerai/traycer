@@ -1134,6 +1134,17 @@ function navigationPayloadFromKnown(
         chatId: known.chatId,
         interviewBlockId: known.interviewBlockId,
       };
+    // No focus hint: the deleted worktree's row is gone, and the list's saved
+    // filters are the authoritative view to return to. A row from a NEWER host
+    // whose operation payload this build cannot parse never reaches here at
+    // all - it renders with common-field copy and no deep link, which is the
+    // designed degradation rather than a guessed destination.
+    case "worktree_deletion":
+      return {
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        focus: undefined,
+      };
   }
 }
 
