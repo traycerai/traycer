@@ -9,8 +9,10 @@ import {
   type AgentInboxNotice,
 } from "@traycer/protocol/host/agent/inbox";
 import type { RoleAwarenessEvent } from "@traycer/protocol/host/agent/roles";
-import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
+import {
+  MutableBearerLease,
+  readLeaseBearer,
+} from "../../../shared/auth/bearer-source";
 import type { RevalidateOutcome } from "../../../shared/auth/bearer-revalidator";
 import {
   createProactiveRefreshScheduler,
@@ -265,25 +267,6 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       agentId,
       epicId,
     });
-  }
-}
-
-/**
- * Reads the lease's current bearer, mapping the "no bearer" throw
- * (`CredentialLeaseReleasedError`, raised on an empty token) to `null` so the
- * refresh scheduler treats it as "signed out, nothing to schedule".
- */
-function readLeaseBearer(lease: MutableBearerLease): string | null {
-  try {
-    return lease.getBearerToken();
-  } catch (cause) {
-    // Only the "no bearer / signed out" signal maps to null. Any other lease
-    // failure is a real bug; rethrow it rather than silently disabling the
-    // refresh scheduler and masking it as a benign signed-out state.
-    if (cause instanceof CredentialLeaseReleasedError) {
-      return null;
-    }
-    throw cause;
   }
 }
 
@@ -699,20 +682,3 @@ function diag(message: string): void {
   writeStderr(`[traycer monitor] ${message}\n`);
 }
 
-/**
- * Whether a human is present to answer a prompt. Both streams must be a TTY -
- * a background command inherits pipes, not a terminal - and the standard CI /
- * `TRAYCER_NONINTERACTIVE` opt-outs are honoured the same way `RuntimeContext`
- * reads them, so an automated run never blocks on stdin.
- */
-function isInteractiveTerminal(): boolean {
-  if (envFlag(process.env.CI) || envFlag(process.env.TRAYCER_NONINTERACTIVE)) {
-    return false;
-  }
-  return process.stdin.isTTY === true && process.stderr.isTTY === true;
-}
-
-function envFlag(value: string | undefined): boolean {
-  if (value === undefined) return false;
-  return value !== "" && value !== "0" && value !== "false";
-}

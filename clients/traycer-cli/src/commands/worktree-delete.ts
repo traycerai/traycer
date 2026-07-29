@@ -12,8 +12,10 @@ import type {
   WorktreeDeleteBatchPhase,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
-import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
+import {
+  MutableBearerLease,
+  readLeaseBearer,
+} from "../../../shared/auth/bearer-source";
 import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../../shared/host-transport/worktree-delete-batch-stream-client";
 import { createWhatwgStreamWebSocketFactory } from "../../../shared/host-transport/whatwg-stream-ws-factory";
@@ -380,16 +382,6 @@ async function runLegacyDeleteStream(
  * signal maps to null - any other lease failure is a real bug and must not be
  * masked into "no credential, carry on".
  */
-function readLeaseBearer(lease: MutableBearerLease): string | null {
-  try {
-    return lease.getBearerToken();
-  } catch (cause) {
-    if (cause instanceof CredentialLeaseReleasedError) {
-      return null;
-    }
-    throw cause;
-  }
-}
 
 function relayStatus(ctx: CommandContext, message: string): void {
   if (ctx.runtime.json) {

@@ -215,7 +215,7 @@ export class MockRunnerHost implements IRunnerHost {
     return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken);
   }
 
-  revokeUserSession(
+  async revokeUserSession(
     bearerToken: string,
     familyId: string,
     useStepUpCredential: boolean,
@@ -223,11 +223,19 @@ export class MockRunnerHost implements IRunnerHost {
     const stepUpToken = useStepUpCredential
       ? this.activeRetainedStepUpToken()
       : null;
-    return revokeUserSessionViaHttp(
+    const result = await revokeUserSessionViaHttp(
       this.authnBaseUrl,
       stepUpToken ?? bearerToken,
       familyId,
     );
+    // Parity with the desktop main-process handler (`auth-ipc.ts`): a
+    // step-up-required verdict on a retained credential means the server just
+    // rejected it, so holding it would make the next revoke re-send a
+    // credential known to be dead and re-prompt in a loop.
+    if (result.kind === "step-up-required" && useStepUpCredential) {
+      this.retainedStepUpCredential = null;
+    }
+    return result;
   }
 
   async revokeAllSessions(
