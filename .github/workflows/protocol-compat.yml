@@ -69,6 +69,10 @@ jobs:
         run: |
           bun run protocol/scripts/compat/resolve-baselines.ts "$BASE_REPO_URL" \
             | jq -c '.baselines' > /tmp/baselines.json
+          if [ "$(jq 'length' /tmp/baselines.json)" = "0" ]; then
+            echo "::error::resolve-baselines.ts produced no protected baselines; refusing to run the gate with zero baselines." >&2
+            exit 1
+          fi
           echo "Protected baselines:"
           jq -r '.[] | "  " + .tags[0] + " (" + .sha + ")"' /tmp/baselines.json
       - name: Dump the working tree's protocol surface
@@ -96,7 +100,8 @@ jobs:
             fetched=""
             read -r -a group_tags <<< "$tags"
             for tag in "${group_tags[@]}"; do
-              if curl -sfL --retry 3 "${release_repo_url}/releases/download/${tag}/protocol-surface.json" -o "$out" \
+              if curl -sfL --retry 3 --connect-timeout 10 --max-time 60 \
+                "${release_repo_url}/releases/download/${tag}/protocol-surface.json" -o "$out" \
                 && jq -e 'has("formatVersion") and has("unary") and has("stream")' "$out" >/dev/null 2>&1; then
                 fetched="$tag"
                 break
