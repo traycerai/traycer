@@ -78,17 +78,24 @@ type ProvidersListQuery = UseQueryResult<
 // filtered out per provider via `nativeCapabilities.supportedTabs`.
 const PROVIDER_TAB_ORDER: readonly ProviderSettingsTab[] = [
   "general",
-  "env",
   "usage",
+  "env",
   "mcp",
   "plugins",
   "skills",
 ];
 
+// The `usage` id is the wire enum member (`providerSettingsTabSchema`), not a
+// display string: it rides `supportedTabs`, which a released client decodes
+// through a single `.catch(DEFAULT_PROVIDER_NATIVE_CAPABILITIES)` on the whole
+// `nativeCapabilities` object. An id this side renames that an older client
+// cannot parse fails the enum and drops that ENTIRE object, silently taking
+// MCP/Plugins/Skills with it. So the tab that now carries Profiles is relabeled
+// here and keeps its id.
 const PROVIDER_TAB_LABELS: Record<ProviderSettingsTab, string> = {
   general: "General",
   env: "Env",
-  usage: "Usage limits",
+  usage: "Profiles & Limits",
   mcp: "MCP",
   plugins: "Plugins",
   skills: "Skills",
@@ -152,14 +159,14 @@ function tabHasContent(
   switch (tab) {
     case "general":
       return (
-        state.candidates.length > 0 ||
-        state.terminalAgentArgs.trim().length > 0 ||
-        state.profiles.length > 0
+        state.candidates.length > 0 || state.terminalAgentArgs.trim().length > 0
       );
     case "env":
       return state.envOverrides.length > 0;
     case "usage":
+      // Profiles moved onto this tab, so they carry its dot now.
       return (
+        state.profiles.length > 0 ||
         isRateLimitCapableProvider(state.providerId) ||
         state.providerId === "traycer"
       );
@@ -760,11 +767,14 @@ function ProviderDetail({
   );
 }
 
-// Profile-management surface handed to the "general" tab body - the only tab
-// that needs to render `ProviderProfileScopedSection` (add/rename/remove/
-// recolor, switch active profile). Bundled into one object rather than eight
-// individual props on `ProviderTabBody`, since the other five tabs
-// (env/usage/mcp/plugins/skills) are provider-level and never touch it.
+// Profile-management surface handed to the "usage" ("Profiles & Limits") tab
+// body - the only tab that renders `ProviderProfileScopedSection` (add/rename/
+// remove/recolor, switch active profile). It sits with the usage limits because
+// the section already owns the SELECTED PROFILE's limits; splitting them across
+// two tabs meant a provider's limits were reported in two places at once.
+// Bundled into one object rather than eight individual props on
+// `ProviderTabBody`, since the other five tabs (general/env/mcp/plugins/skills)
+// are provider-level and never touch it.
 interface ProviderProfileTabProps {
   readonly hostId: string | null;
   readonly isSelectedHostLocal: boolean;
@@ -792,14 +802,6 @@ function ProviderTabBody({
     case "general":
       return (
         <div className="flex flex-col gap-3">
-          <ProviderProfileScopedSection
-            state={state}
-            {...profileTab}
-            signInUnavailableHint={providerSignInUnavailableHint(
-              state,
-              profileTab.isSelectedHostLocal,
-            )}
-          />
           <ProviderCliCandidatesSection state={state} providers={providers} />
           <TerminalAgentArgsSection
             key={state.terminalAgentArgs}
@@ -817,13 +819,29 @@ function ProviderTabBody({
     case "usage":
       return (
         <div className="flex flex-col gap-3">
-          <TraycerSubscriptionForProvider providerId={state.providerId} />
-          <ProviderRateLimitForProvider
-            providerId={state.providerId}
-            profileId={null}
-            usageUpdatedAt={null}
-            fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
+          <ProviderProfileScopedSection
+            state={state}
+            {...profileTab}
+            signInUnavailableHint={providerSignInUnavailableHint(
+              state,
+              profileTab.isSelectedHostLocal,
+            )}
           />
+          <TraycerSubscriptionForProvider providerId={state.providerId} />
+          {/* The unscoped card is the ZERO-profile shape, which is what
+              `ProviderProfileScopedSection` documents it as. With profiles on
+              this same tab its per-profile limits are already rendered above,
+              scoped to the selected profile - mounting this too would show two
+              near-identical limits blocks and leave the ambient one looking
+              authoritative when the selected profile is what actually runs. */}
+          {state.profiles.length === 0 ? (
+            <ProviderRateLimitForProvider
+              providerId={state.providerId}
+              profileId={null}
+              usageUpdatedAt={null}
+              fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
+            />
+          ) : null}
         </div>
       );
     case "mcp": {

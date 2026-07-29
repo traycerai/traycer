@@ -252,13 +252,17 @@ function renderProvidersSettingsPanel() {
       mutations: { retry: false },
     },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ProvidersSettingsPanel />
       </TooltipProvider>
     </QueryClientProvider>,
   );
+  // Profiles render on the "Profiles & Limits" tab, not General. Radix Tabs
+  // activate on mouseDown, not click.
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Profiles & Limits" }));
+  return view;
 }
 
 const VERY_LONG_LABEL = "C".repeat(2000);

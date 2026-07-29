@@ -978,6 +978,15 @@ function createRunnerHost(): MockRunnerHost {
   });
 }
 
+/**
+ * Profiles render on the "Profiles & Limits" tab, not General, so every profile
+ * assertion has to activate that tab after mounting. Kept as one helper so the
+ * next time the section moves this is a one-line change, not forty.
+ */
+function openProfilesTab(): void {
+  selectTab("Profiles & Limits");
+}
+
 describe("<ProvidersSettingsPanel />", () => {
   beforeEach(() => {
     useProvidersFocusStore.setState({
@@ -1539,9 +1548,13 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     expect(screen.getByRole("tab", { name: "General" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
-    expect(screen.getByRole("tab", { name: "Usage limits" })).toBeDefined();
+    expect(
+      screen.getByRole("tab", { name: "Profiles & Limits" }),
+    ).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Skills" })).toBeDefined();
@@ -1549,7 +1562,7 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
 
     expect(screen.queryByRole("tab", { name: "General" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Usage limits" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Profiles & Limits" })).toBeNull();
     expect(screen.getByRole("tab", { name: "Env" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "MCP" })).toBeDefined();
     expect(screen.getByRole("tab", { name: "Plugins" })).toBeDefined();
@@ -1786,6 +1799,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     expect(
       screen.getByRole("button", {
         name: "Codex profile: Terminal account, Terminal",
@@ -1918,6 +1933,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Default" },
@@ -2016,6 +2033,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -2176,6 +2195,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
       target: { value: "Unsaved profile" },
@@ -2255,6 +2276,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // Defaults to the ambient profile and shows its persisted label, along
     // with its drift notice, tier, and redacted email.
@@ -2357,6 +2380,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     // Defaults to the ambient profile - select "Work" to bring its email
     // into view.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
@@ -2413,6 +2438,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2478,6 +2505,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
@@ -2535,6 +2564,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2612,6 +2643,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -2677,6 +2710,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2748,6 +2783,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -2794,6 +2831,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -2876,6 +2915,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -2904,6 +2945,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -2976,6 +3019,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -3039,6 +3084,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
@@ -3136,6 +3183,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -3205,6 +3254,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -3265,6 +3316,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Terminal account, Terminal" }),
     );
@@ -3323,6 +3376,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3411,6 +3466,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
@@ -3507,6 +3564,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -3585,6 +3644,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
 
@@ -3647,6 +3708,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // First attempt fails after the await phase - the section banner appears.
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
@@ -3781,6 +3844,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
     const [, startOptions] = firstStartLoginCall();
@@ -3845,6 +3910,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -3917,6 +3984,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -3995,6 +4064,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -4068,6 +4139,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
@@ -4161,6 +4234,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     expect(
       screen
         .getByRole("button", { name: "Claude Code", hidden: true })
@@ -4236,6 +4311,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // Defaults to the ambient profile - select "Work" (signed out) first.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work, Signed out" }));
@@ -4391,6 +4468,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));
     fireEvent.click(screen.getByRole("button", { name: "Manage profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch account" }));
@@ -4479,6 +4558,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -4521,6 +4602,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -4582,6 +4665,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -4632,6 +4717,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
@@ -4716,6 +4803,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     fireEvent.click(
       screen.getByRole("menuitem", { name: "Create new profile" }),
     );
@@ -4776,6 +4865,8 @@ describe("<ProvidersSettingsPanel />", () => {
       </TooltipProvider>,
     );
 
+    openProfilesTab();
+
     expect(screen.getAllByText("ChatGPT Pro 20x Subscription").length).toBe(1);
   });
 
@@ -4818,6 +4909,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     // Defaults to the ambient profile - select "Work" to bring its editable
     // details dialog (name field, actions) into view.
@@ -4890,6 +4983,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.change(screen.getByLabelText("Profile name"), {
@@ -4997,6 +5092,8 @@ describe("<ProvidersSettingsPanel />", () => {
         <ProvidersSettingsPanel />
       </TooltipProvider>,
     );
+
+    openProfilesTab();
 
     fireEvent.click(screen.getByRole("button", { name: "Add profile" }));
     fireEvent.click(screen.getByRole("button", { name: "Link account" }));
