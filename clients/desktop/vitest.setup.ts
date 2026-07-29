@@ -38,6 +38,19 @@ const baselineHome = mkdtempSync(
 );
 process.env.HOME = baselineHome;
 process.env.USERPROFILE = baselineHome;
+// The platform app-dir env family short-circuits homedir()-based
+// resolution: electron-log's Linux logs path is `XDG_CONFIG_HOME ||
+// ~/.config` and its Windows path is `APPDATA || ~\AppData\Roaming`, and
+// GitHub's ubuntu runners EXPORT XDG_CONFIG_HOME - so without re-pointing
+// these, the sandbox leaks back to the real home exactly where CI runs.
+process.env.XDG_CONFIG_HOME = join(baselineHome, ".config");
+process.env.XDG_DATA_HOME = join(baselineHome, ".local", "share");
+process.env.XDG_STATE_HOME = join(baselineHome, ".local", "state");
+process.env.XDG_CACHE_HOME = join(baselineHome, ".cache");
+if (process.platform === "win32") {
+  process.env.APPDATA = join(baselineHome, "AppData", "Roaming");
+  process.env.LOCALAPPDATA = join(baselineHome, "AppData", "Local");
+}
 
 (os as { homedir: () => string }).homedir = () =>
   (process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME) ??
