@@ -99,9 +99,9 @@ describe("host method poll policy table", () => {
   });
 
   it("keeps ordinary provider listing latest but serializes forced auth refresh", () => {
-    expect(hostRpcSchedulingPolicy.modeFor("providers.list", { native: null })).toBe(
-      "latest",
-    );
+    expect(
+      hostRpcSchedulingPolicy.modeFor("providers.list", { native: null }),
+    ).toBe("latest");
     expect(
       hostRpcSchedulingPolicy.modeFor("providers.list", {
         forceAuthRefresh: true,

@@ -1097,23 +1097,28 @@ function ScopeChip(props: {
       sideOffset={undefined}
       align={undefined}
     >
-      <button
-        type="button"
-        onClick={props.onClick}
-        disabled={props.disabled}
-        aria-pressed={props.active}
-        className={cn(
-          "inline-flex items-center rounded-sm px-3 py-1 text-ui-sm transition-colors",
-          props.active
-            ? "bg-card text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-          props.disabled
-            ? "cursor-not-allowed opacity-50 hover:text-muted-foreground"
-            : null,
-        )}
-      >
-        {props.label}
-      </button>
+      {/* Span between the tooltip and the button because a `disabled` button
+          emits no pointer events for Radix to hover-detect - and the reason it
+          is disabled is exactly what this tooltip says. */}
+      <span className="inline-flex">
+        <button
+          type="button"
+          onClick={props.onClick}
+          disabled={props.disabled}
+          aria-pressed={props.active}
+          className={cn(
+            "inline-flex items-center rounded-sm px-3 py-1 text-ui-sm transition-colors",
+            props.active
+              ? "bg-card text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+            props.disabled
+              ? "cursor-not-allowed opacity-50 hover:text-muted-foreground"
+              : null,
+          )}
+        >
+          {props.label}
+        </button>
+      </span>
     </TooltipWrapper>
   );
 }

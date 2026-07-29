@@ -365,7 +365,7 @@ describe("<ProviderMcpTab />", () => {
     expect(projectCall).toBeDefined();
   });
 
-  it("disables Project chip when zero workspaces on this host", () => {
+  it("disables Project chip when zero workspaces on this host", async () => {
     useWorkspaceFoldersStore.setState({
       folders: [],
       folderInfoByPath: {},
@@ -375,7 +375,16 @@ describe("<ProviderMcpTab />", () => {
 
     const projectChip = screen.getByRole("button", { name: "Project" });
     expect(projectChip).toHaveProperty("disabled", true);
-    expect(projectChip.getAttribute("title")).toBe("Open a workspace first");
+    // The reason lives in a tooltip, not a native `title`. A `disabled` button
+    // emits no pointer events, so the hover lands on the guard span wrapping
+    // it - which is exactly why that span exists.
+    const guard = projectChip.parentElement;
+    expect(guard).not.toBeNull();
+    if (guard === null) return;
+    fireEvent.focus(guard);
+    expect(
+      (await screen.findAllByText("Open a workspace first")).length,
+    ).toBeGreaterThan(0);
   });
 
   it("shows multi-workspace picker on first use with no prior selection", () => {
