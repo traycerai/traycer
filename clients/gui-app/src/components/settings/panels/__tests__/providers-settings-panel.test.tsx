@@ -4206,7 +4206,7 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(
       screen.getByText(
-        "This account is already linked to Terminal account. No new profile was created.",
+        "Terminal account already uses this account and organization. Sign in again and choose a different organization.",
       ),
     ).toBeDefined();
     expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
