@@ -792,7 +792,7 @@ describe("<NotificationsSessionProvider />", () => {
     });
   });
 
-  it("tears down the pending cloud relay for an old host and recovers when capability returns", async () => {
+  it("falls back to the v1 local feed for an entitled user on a methodless host", async () => {
     const queryClient = new QueryClient();
     const streamClient = new MockWsStreamClient();
     hostState.id = mockLocalHostEntry.hostId;
@@ -831,6 +831,38 @@ describe("<NotificationsSessionProvider />", () => {
       expect(useCloudNotificationsStore.getState().connectionState).toBe(
         "unavailable",
       );
+      expect(streamClient.subscribedMethods).toEqual([
+        "host.notifications.cloudFeed.subscribe",
+        "notifications.subscribe",
+        "host.notifications.feed.subscribe",
+      ]);
+    });
+
+    // The fallback is not merely a mode label: the v1 host stream is live and
+    // its rows reach the local store for the entitled user.
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        attention: { entries: [], nextCursor: null },
+        recent: {
+          entries: [
+            hostEntry({
+              id: "flag-off-local-row",
+              epicId: "epic-local",
+              chatId: "chat-local",
+              severity: "done",
+            }),
+          ],
+          nextCursor: null,
+        },
+        summary: { unreadCount: 1, attentionCount: 0 },
+      });
+    });
+    await waitFor(() => {
+      expect(
+        useHostNotificationsStore.getState().byId["flag-off-local-row"],
+      ).toBeDefined();
     });
 
     act(() => {
@@ -846,6 +878,8 @@ describe("<NotificationsSessionProvider />", () => {
     await waitFor(() => {
       expect(streamClient.subscribedMethods).toEqual([
         "host.notifications.cloudFeed.subscribe",
+        "notifications.subscribe",
+        "host.notifications.feed.subscribe",
         "host.notifications.cloudFeed.subscribe",
       ]);
     });

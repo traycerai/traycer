@@ -27,7 +27,7 @@ describe("useNotificationFeedMode", () => {
     );
   });
 
-  it("uses cloud while capability negotiation is connected, unknown, or supported", () => {
+  it("uses cloud while capability is pending or supported, then falls back locally when absent", () => {
     useAuthStore.setState({ subscriptionStatus: "PRO" });
     cloudFeedSupport.value = null;
     const hook = renderHook(() => useNotificationFeedMode());
@@ -41,6 +41,6 @@ describe("useNotificationFeedMode", () => {
     expect(hook.result.current).toBe("cloud");
     cloudFeedSupport.value = "unsupported";
     hook.rerender();
-    expect(hook.result.current).toBe("upgrade-required");
+    expect(hook.result.current).toBe("local");
   });
 });
