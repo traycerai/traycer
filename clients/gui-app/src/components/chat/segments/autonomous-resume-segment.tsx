@@ -2,6 +2,9 @@ import { Activity, AlarmClockCheck, CheckCheck, XCircle } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { AutonomousResumeTrigger } from "@traycer/protocol/persistence/epic/content-blocks";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import { managedCommandKindLabel } from "@/lib/managed-commands/managed-command-copy";
+import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -106,7 +109,7 @@ function ResumeCompletionCard(props: {
         open={open}
         onOpenChange={setOpen}
         header={header}
-        headerAction={null}
+        headerAction={<ResumeManagedCommandDoor trigger={props.trigger} />}
         collapsedPreview={preview}
         body={body}
         tone="default"
@@ -140,6 +143,34 @@ function ResumeCompletionCardBody(props: {
   );
 }
 
+/**
+ * Opens the output window for the command whose delivery woke this turn
+ * (`UI.md` §5). Absent on an older trigger that carries no command id - there
+ * is nothing to open, and a dead button would be worse than none.
+ */
+function ResumeManagedCommandDoor(props: {
+  readonly trigger: AutonomousResumeTrigger;
+}) {
+  const managedCommand = props.trigger.managedCommand;
+  const openOutput = useManagedCommandDoor();
+  if (managedCommand === null || openOutput === null) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-6 shrink-0 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
+      data-testid={`resume-managed-command-door-${props.trigger.blockId}`}
+      onClick={(event) => {
+        event.stopPropagation();
+        openOutput(managedCommand.commandId);
+      }}
+    >
+      View output
+    </Button>
+  );
+}
+
 function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   if (trigger.kind === "wakeup") return wakeupStatusTitle(trigger.status);
   // A producer that is still running has no terminal outcome: `status` is
@@ -149,8 +180,10 @@ function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
   // shell's mid-run output, which is not a monitor.
   if (trigger.live) return "Command still running";
 
-  const noun =
-    trigger.mcp === null ? resumeKindTitle(trigger.kind) : "MCP tool";
+  // Prefer the real managed-command kind when the host reported one: the
+  // persisted `kind` enum is frozen at "monitor" for a Shell too, so without
+  // this a completed shell reads "Monitor completed".
+  const noun = resumeNoun(trigger);
   switch (trigger.status) {
     case "completed":
       return `${noun} completed`;
@@ -159,6 +192,14 @@ function resumeStatusTitle(trigger: AutonomousResumeTrigger): string {
     case "stopped":
       return `${noun} stopped`;
   }
+}
+
+function resumeNoun(trigger: AutonomousResumeTrigger): string {
+  if (trigger.managedCommand !== null) {
+    return managedCommandKindLabel(trigger.managedCommand.kind);
+  }
+  if (trigger.mcp !== null) return "MCP tool";
+  return resumeKindTitle(trigger.kind);
 }
 
 function wakeupStatusTitle(status: AutonomousResumeTrigger["status"]): string {

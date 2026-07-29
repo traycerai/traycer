@@ -295,6 +295,7 @@ describe("<EpicLeftPanelRail />", () => {
       "epic-rail-chats",
       "epic-rail-terminals",
       "epic-rail-panel-drop-line",
+      "epic-rail-managed-commands",
       "epic-rail-git-diff",
       "epic-rail-file-tree",
       "epic-rail-sharing",

@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
+import { ManagedCommandStripRows } from "@/components/chat/managed-command-strip-rows";
 import { cn } from "@/lib/utils";
 import {
   BASE_PAD_LEFT,
@@ -486,6 +487,15 @@ function BackgroundTreeRow(props: {
 
 export function BackgroundItemsPanel(props: {
   readonly items: ReadonlyArray<BackgroundItem>;
+  readonly epicId: string;
+  readonly chatId: string;
+  /**
+   * Running managed commands owned by this chat. Counted in the header for the
+   * same reason they are listed below it: to a human they are running work, no
+   * different from a backgrounded tool call - only their source differs (the
+   * host supervisor, not the harness session).
+   */
+  readonly managedCommandCount: number;
   readonly canAct: boolean;
   readonly readOnly: boolean;
   readonly pendingStopTaskIds: ReadonlySet<string>;
@@ -525,7 +535,7 @@ export function BackgroundItemsPanel(props: {
     (item) => item.kind === "wakeup",
   ).length;
   const headerSummary = backgroundHeaderSummary(
-    runningGroupCount,
+    runningGroupCount + props.managedCommandCount,
     waitingWakeCount,
   );
   const stopAllDisabled = !stoppable || props.stopAllPending;
@@ -583,7 +593,13 @@ export function BackgroundItemsPanel(props: {
             props.scrollRegionMaxHeightClass,
           )}
         >
-          <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5">
+          <div className="p-1.5">
+            <ManagedCommandStripRows
+              epicId={props.epicId}
+              chatId={props.chatId}
+            />
+          </div>
+          <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5 pt-0">
             <BackgroundTreeRows
               nodes={tree}
               depth={0}

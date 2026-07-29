@@ -174,6 +174,7 @@ function renderDock(input: {
       <ChatLowerDock
         snapshotLoaded
         epicId="epic-1"
+        chatId="chat-1"
         viewTabId="tab-1"
         selfAgent={null}
         activeAgents={[]}

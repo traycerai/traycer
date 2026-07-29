@@ -156,6 +156,13 @@ import {
   lifecycleCommitShutdownV10,
   lifecycleReleaseShutdownV10,
 } from "@traycer/protocol/host/lifecycle/contracts";
+import {
+  managedCommandDeleteV10,
+  managedCommandStartV10,
+  managedCommandStopV10,
+  managedCommandSubscribeListV10,
+  managedCommandSubscribeOutputV10,
+} from "@traycer/protocol/host/managed-command/contracts";
 import { hostGetRuntimeCapabilitiesV10 } from "@traycer/protocol/host/runtime-capabilities/contracts";
 import {
   hostGetRateLimitUsageV10,
@@ -285,6 +292,7 @@ import {
   resourcesSubscribeV11,
   resourcesSubscribeV12,
   resourcesSubscribeV13,
+  resourcesSubscribeV14,
   resourcesKillV10,
 } from "@traycer/protocol/host/resources/subscribe";
 import {
@@ -3952,6 +3960,48 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // The human lifecycle controls for monitors and shells. Brand-new v1.0
+  // methods on the same `degrade: unsupported` channel as `resources.kill`
+  // above: a host without the managed-command subsystem simply lacks them.
+  "managedCommand.start": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandStartV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "managedCommand.delete": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandDeleteV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "terminal.list": {
     1: {
       latestMinor: 0,
@@ -4863,6 +4913,29 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // The "Monitors & Shells" surface: one stream per epic for the list, one per
+  // command for its output. Both brand-new at 1.0 - a host that lacks the
+  // managed-command subsystem rejects the open as an unknown method.
+  "managedCommand.subscribeList": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandSubscribeListV10,
+        },
+      },
+    },
+  },
+  "managedCommand.subscribeOutput": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: managedCommandSubscribeOutputV10,
+        },
+      },
+    },
+  },
   "git.subscribeStatus": {
     1: {
       latestMinor: 2,
@@ -4901,7 +4974,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "resources.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: resourcesSubscribeV10,
@@ -4914,6 +4987,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         3: {
           contract: resourcesSubscribeV13,
+        },
+        // @1.4 widens the owner kind vocabulary by `managed-command`. A peer
+        // below it keeps the frozen three-kind enum and never receives one of
+        // those owners: the resolver folds their usage into `other`, as it did
+        // for every minor before this one.
+        4: {
+          contract: resourcesSubscribeV14,
         },
       },
     },

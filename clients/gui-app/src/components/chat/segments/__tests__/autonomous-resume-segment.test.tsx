@@ -68,6 +68,7 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "",
             outputFile: null,
             mcp: null,
+            managedCommand: null,
           },
         ]}
       />,
@@ -91,6 +92,7 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "",
             outputFile: null,
             mcp: null,
+            managedCommand: null,
           },
         ]}
       />,
@@ -112,6 +114,7 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "tool-9",
             outputFile: null,
             mcp: { serverName: "probe", toolName: "slow_op" },
+            managedCommand: null,
             live: false,
           },
         ]}
@@ -138,6 +141,7 @@ describe("<AutonomousResumeSegment />", () => {
               filePath: "task.output",
             },
             mcp: null,
+            managedCommand: null,
             live: false,
           },
         ]}
@@ -191,6 +195,7 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "tool-1",
             outputFile: null,
             mcp: null,
+            managedCommand: null,
             live: false,
           },
         ]}
@@ -221,6 +226,7 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "tool-2",
             outputFile: null,
             mcp: null,
+            managedCommand: null,
             live: false,
           },
         ]}
@@ -253,6 +259,7 @@ describe("<AutonomousResumeSegment />", () => {
             blockId: "wake-tool",
             outputFile: null,
             mcp: null,
+            managedCommand: null,
             live: false,
           },
         ]}

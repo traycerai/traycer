@@ -368,6 +368,8 @@ describe("chat.subscribe@1.2 server frames", () => {
       blockId: "wake-tool-1",
       outputFile: null,
       mcp: null,
+      // A fired schedule is not a managed command; there is nothing to open.
+      managedCommand: null,
       live: false,
     });
   });

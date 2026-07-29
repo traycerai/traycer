@@ -4278,6 +4278,27 @@ export const epicSchemaSurfaceBaseline = {
                                         default: false,
                                         type: "boolean",
                                       },
+                                      managedCommand: {
+                                        default: null,
+                                        anyOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              commandId: {
+                                                type: "string",
+                                              },
+                                              kind: {
+                                                type: "string",
+                                                enum: ["monitor", "shell"],
+                                              },
+                                            },
+                                            required: ["commandId", "kind"],
+                                          },
+                                          {
+                                            type: "null",
+                                          },
+                                        ],
+                                      },
                                     },
                                     required: [
                                       "kind",
@@ -10925,6 +10946,28 @@ export const epicSchemaSurfaceBaseline = {
                                         default: false,
                                         type: "boolean",
                                       },
+                                      managedCommand: {
+                                        default: null,
+                                        anyOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              commandId: {
+                                                type: "string",
+                                              },
+                                              kind: {
+                                                type: "string",
+                                                enum: ["monitor", "shell"],
+                                              },
+                                            },
+                                            required: ["commandId", "kind"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "null",
+                                          },
+                                        ],
+                                      },
                                     },
                                     required: [
                                       "kind",
@@ -10935,6 +10978,7 @@ export const epicSchemaSurfaceBaseline = {
                                       "outputFile",
                                       "mcp",
                                       "live",
+                                      "managedCommand",
                                     ],
                                     additionalProperties: false,
                                   },

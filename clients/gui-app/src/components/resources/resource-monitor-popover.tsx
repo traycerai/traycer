@@ -24,10 +24,11 @@ import {
   X,
 } from "lucide-react";
 import type {
-  OwnerResourceSnapshotWireV13,
+  ManagedCommandOwnerWire,
+  OwnerResourceSnapshotWireV14,
   HostTreeResourceSnapshotWire,
   OtherResourceSnapshotWire,
-  ResourceOwnerKindWire,
+  ResourceOwnerKindWireV14,
   ResourceProcessSnapshotWire,
 } from "@traycer/protocol/host/resources/subscribe";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
@@ -187,7 +188,7 @@ interface CanvasOwnerCandidate {
 }
 
 interface OwnerDisplayRow {
-  readonly snapshot: OwnerResourceSnapshotWireV13;
+  readonly snapshot: OwnerResourceSnapshotWireV14;
   readonly label: string;
   readonly canOpen: boolean;
   readonly tabOrder: number;
@@ -962,7 +963,7 @@ function resourcesSubscribeV12Supported(
 function combineHeadlineResourceSummary(
   hostTree: HostTreeResourceSnapshotWire | null,
   app: AppResourceUsage | null,
-  owners: readonly OwnerResourceSnapshotWireV13[],
+  owners: readonly OwnerResourceSnapshotWireV14[],
   desktopApp: DesktopAppResourceUsage | null,
 ): TaskResourceSummary | null {
   if (
@@ -994,7 +995,7 @@ function combineHeadlineResourceSummary(
 
 function legacyHeadlineSummary(
   app: AppResourceUsage | null,
-  owners: readonly OwnerResourceSnapshotWireV13[],
+  owners: readonly OwnerResourceSnapshotWireV14[],
 ): TaskResourceSummary {
   return owners.reduce(
     (summary, owner) => ({
@@ -1545,6 +1546,7 @@ function OwnerTreeRow(props: {
                   harnessId,
                   props.row.snapshot.owner.kind,
                   props.row.snapshot.activeProcessName,
+                  props.row.snapshot.managedCommand,
                 )}
               </span>
             </div>
@@ -2259,7 +2261,7 @@ function prepareResourceTarget(
   );
 }
 
-function focusForOwner(snapshot: OwnerResourceSnapshotWireV13) {
+function focusForOwner(snapshot: OwnerResourceSnapshotWireV14) {
   return {
     focusedAt: Date.now(),
     focusArtifactId:
@@ -2271,7 +2273,7 @@ function focusForOwner(snapshot: OwnerResourceSnapshotWireV13) {
 
 function findOwnerRecord(
   canvas: CanvasResourceSnapshot,
-  snapshot: OwnerResourceSnapshotWireV13,
+  snapshot: OwnerResourceSnapshotWireV14,
 ): EpicNodeRecord | null {
   const records = canvas.artifactTreeByEpicId[snapshot.owner.epicId] ?? [];
   return records.find((record) => record.id === snapshot.owner.ownerId) ?? null;
@@ -2300,7 +2302,7 @@ function taskTabOrder(epicId: string, canvas: CanvasResourceSnapshot): number {
 
 function ownerKey(
   epicId: string,
-  kind: ResourceOwnerKindWire,
+  kind: ResourceOwnerKindWireV14,
   ownerId: string,
 ): string {
   return `${epicId}\x1f${kind}\x1f${ownerId}`;
@@ -2308,7 +2310,7 @@ function ownerKey(
 
 function resourceOwnerKindForNodeType(
   type: string,
-): ResourceOwnerKindWire | null {
+): ResourceOwnerKindWireV14 | null {
   if (type === "terminal-agent") return "terminal-agent";
   if (type === "chat") return "chat";
   return null;
@@ -2316,7 +2318,7 @@ function resourceOwnerKindForNodeType(
 
 function resourceOwnerKindForRef(
   ref: EpicCanvasTileRef,
-): ResourceOwnerKindWire | null {
+): ResourceOwnerKindWireV14 | null {
   if (ref.type === "terminal") return "terminal";
   return resourceOwnerKindForNodeType(ref.type);
 }
@@ -2335,15 +2337,46 @@ function isResourceSortOption(value: string): value is ResourceSortOption {
   );
 }
 
-function ownerKindLabel(kind: ResourceOwnerKindWire): string {
-  // Three owner kinds render side by side here, so a raw Terminal has to stay
+function ownerKindLabel(
+  kind: ResourceOwnerKindWireV14,
+  managedCommand: ManagedCommandOwnerWire | null,
+): string {
+  // Several owner kinds render side by side here, so a raw Terminal has to stay
   // distinguishable from an Agent using the Terminal interface - qualification
   // is warranted. It uses the interface axis rather than coining "Chat agent" /
   // "Terminal agent" as sibling nouns, which would restate the entity model the
   // rename removes.
   if (kind === "terminal") return "Terminal";
   if (kind === "terminal-agent") return "Agent (Terminal)";
+  if (kind === "managed-command") {
+    return managedCommandKindLabel(managedCommand);
+  }
   return "Agent (Chat)";
+}
+
+/**
+ * Copy for a managed command is kind-explicit wherever the kind is known: it
+ * reads as the Monitor or Shell it is. The umbrella term is the fallback for a
+ * host that sent the owner without naming it, which nothing does today.
+ */
+function managedCommandKindLabel(
+  managedCommand: ManagedCommandOwnerWire | null,
+): string {
+  if (managedCommand === null) return "Managed command";
+  return managedCommand.kind === "monitor" ? "Monitor" : "Shell";
+}
+
+/**
+ * Row title for a managed command. Its own description is the only name it
+ * has - it is not a canvas node, so none of the tile/record fallbacks the
+ * other owner kinds walk apply to it.
+ */
+function managedCommandLabel(
+  managedCommand: ManagedCommandOwnerWire | null,
+): string {
+  const kindLabel = managedCommandKindLabel(managedCommand);
+  const description = managedCommand?.description ?? "";
+  return description === "" ? kindLabel : `${kindLabel} · ${description}`;
 }
 
 // Subtitle beside the provider icon. Always non-empty so the icon never sits
@@ -2352,12 +2385,20 @@ function ownerKindLabel(kind: ResourceOwnerKindWire): string {
 // process name trails either when present.
 function harnessProviderSubtitle(
   harnessId: string | null,
-  kind: ResourceOwnerKindWire,
+  kind: ResourceOwnerKindWireV14,
   activeProcessName: string | null,
+  managedCommand: ManagedCommandOwnerWire | null,
 ): string {
+  // A managed command already names its kind in the row title, so its subtitle
+  // spends the width on what is actually running instead of repeating it.
+  if (kind === "managed-command") {
+    return activeProcessName ?? managedCommandKindLabel(managedCommand);
+  }
   const providerId = harnessId === null ? null : normalizeProviderId(harnessId);
   const base =
-    providerId === null ? ownerKindLabel(kind) : agentProviderLabel(providerId);
+    providerId === null
+      ? ownerKindLabel(kind, managedCommand)
+      : agentProviderLabel(providerId);
   return activeProcessName === null ? base : `${base} · ${activeProcessName}`;
 }
 
@@ -2375,7 +2416,7 @@ function ownerTileRef(
 }
 
 function ownerLabel(
-  snapshot: OwnerResourceSnapshotWireV13,
+  snapshot: OwnerResourceSnapshotWireV14,
   ref: EpicNodeRef | null,
   record: EpicNodeRecord | null,
   liveArtifactTitle: string | null,
@@ -2398,14 +2439,17 @@ function ownerLabel(
       "agent",
     );
   }
+  if (snapshot.owner.kind === "managed-command") {
+    return managedCommandLabel(snapshot.managedCommand);
+  }
   if (liveArtifactTitle !== null) return liveArtifactTitle;
   if (ref !== null) return ref.name;
   if (record !== null) return record.name;
-  return ownerKindLabel(snapshot.owner.kind);
+  return ownerKindLabel(snapshot.owner.kind, snapshot.managedCommand);
 }
 
 function canOpenOwner(
-  snapshot: OwnerResourceSnapshotWireV13,
+  snapshot: OwnerResourceSnapshotWireV14,
   location: OpenOwnerLocation | null,
   closedTile: ClosedOwnerTile | null,
   record: EpicNodeRecord | null,

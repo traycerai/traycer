@@ -329,6 +329,7 @@ export function ChatLowerInteractionSurfaces(
       <ChatLowerDock
         snapshotLoaded={props.runtime.snapshotLoaded}
         epicId={props.epicId}
+        chatId={props.chatId}
         viewTabId={props.viewTabId}
         selfAgent={stopControls.self}
         activeAgents={activeAgents}

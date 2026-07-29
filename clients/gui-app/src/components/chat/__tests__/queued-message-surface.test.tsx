@@ -843,6 +843,7 @@ function managedCommandQueuedItem(
     queueItemId,
     commandId: `${queueItemId}-command`,
     description,
+    commandKind: "monitor",
     status: "pending",
     createdAt: 1,
     updatedAt: 1,

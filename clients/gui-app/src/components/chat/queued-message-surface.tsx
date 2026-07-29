@@ -64,6 +64,9 @@ import {
   useQueuePauseState,
 } from "@/components/chat/queued-message-utils";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import type { ManagedCommandKind } from "@traycer/protocol/host/managed-command/unary-schemas";
+import { managedCommandOutputWindowTitle } from "@/lib/managed-commands/managed-command-copy";
+import { useManagedCommandDoor } from "@/lib/managed-commands/use-managed-command-door";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
@@ -594,7 +597,10 @@ function QueuedMessageRowContent(props: {
       ) : null}
       {item.kind === "managed-command" ? (
         <div className="mb-1 flex min-w-0 flex-wrap items-center gap-1">
-          <ManagedCommandBadge />
+          <ManagedCommandBadge
+            commandId={item.commandId}
+            commandKind={item.commandKind}
+          />
         </div>
       ) : null}
       <div
@@ -645,22 +651,42 @@ function QueuedMessageRowContent(props: {
  * Provenance marker for a pending managed-command output delivery (a Monitor's
  * log digest, a backgrounded shell's completion digest). Distinct tone from
  * `ReceivedAgentBadge` so the two system-owned row kinds stay tellable apart.
+ *
+ * Also a door (`UI.md` §5): clicking it opens or focuses that command's output
+ * window, so a human who wants to see what the agent is about to read does not
+ * have to find the row in the sidebar first. The kind is named whenever the
+ * host reports one; a delivery queued by an older host has none, and the label
+ * stays kind-free rather than guessing.
  */
-export function ManagedCommandBadge() {
+export function ManagedCommandBadge(props: {
+  readonly commandId: string;
+  readonly commandKind: ManagedCommandKind | null;
+}) {
+  const openOutput = useManagedCommandDoor();
+  const label =
+    props.commandKind === null
+      ? "Command output"
+      : managedCommandOutputWindowTitle(props.commandKind);
+
   return (
     <TooltipWrapper
-      label="Output from a background command, delivered to the agent when this runs"
+      label="Output from a background command, delivered to the agent when this runs. Click to watch it live."
       side="top"
       sideOffset={6}
       align={undefined}
     >
-      <span
-        className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border/60 bg-muted/60 px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground"
+      <button
+        type="button"
+        className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-border/60 bg-muted/60 px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground enabled:hover:text-foreground"
         data-testid="queued-managed-command-badge"
+        disabled={openOutput === null}
+        onClick={() => {
+          openOutput?.(props.commandId);
+        }}
       >
         <Terminal className="size-3" aria-hidden />
-        <span>Command output</span>
-      </span>
+        <span>{label}</span>
+      </button>
     </TooltipWrapper>
   );
 }

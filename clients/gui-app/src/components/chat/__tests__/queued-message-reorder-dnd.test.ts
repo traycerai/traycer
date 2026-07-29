@@ -290,6 +290,7 @@ function makeManagedCommandItem(
     queueItemId,
     commandId: `${queueItemId}-command`,
     description: "bun test --watch",
+    commandKind: "monitor",
     status: "pending",
     createdAt: 1,
     updatedAt: 1,

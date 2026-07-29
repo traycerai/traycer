@@ -563,6 +563,9 @@ function panelElement(input: {
   return (
     <BackgroundItemsPanel
       items={input.items}
+      epicId="epic-1"
+      chatId="chat-1"
+      managedCommandCount={0}
       canAct
       readOnly={false}
       pendingStopTaskIds={new Set()}

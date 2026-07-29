@@ -591,6 +591,18 @@ export const autonomousResumeTriggerSchema = z.object({
   // `live` must prefer it, because a running command has no terminal outcome
   // and `status` is reporting the least-wrong of three wrong answers.
   live: z.boolean().default(false),
+  // Structured identity of the managed command whose delivery woke this turn.
+  // Exactly the `mcp` pattern above and for the same reason: `kind` is a
+  // PERSISTED enum, and an unknown value in it fails the WHOLE chat's
+  // `safeParse` on an older host, whereas an unknown defaulted key is silently
+  // stripped. So `kind` stays `"monitor"` for both a Monitor and a Shell, and
+  // the real kind rides here - along with the id the divider needs to open the
+  // command's output window on click. Renderers prefer this when present and
+  // fall back to the generic Monitor presentation when absent/stripped.
+  managedCommand: z
+    .object({ commandId: z.string(), kind: z.enum(["monitor", "shell"]) })
+    .nullable()
+    .default(null),
 });
 export type AutonomousResumeTrigger = z.infer<
   typeof autonomousResumeTriggerSchema
@@ -682,6 +694,8 @@ export function decodeAutonomousResumeBlock(
         ...wake,
         kind: "wakeup",
         mcp: null,
+        // A fired schedule is not a managed command and never had one.
+        managedCommand: null,
         // A fired wake is terminal by construction: it happened, then it was
         // over. Nothing about a schedule keeps producing.
         live: false,
@@ -714,6 +728,7 @@ export function encodeAutonomousResumeBlock(
         kind: _kind,
         mcp: _mcp,
         live: _live,
+        managedCommand: _managedCommand,
         ...wake
       }): AutonomousResumeWakeTrigger => wake,
     );

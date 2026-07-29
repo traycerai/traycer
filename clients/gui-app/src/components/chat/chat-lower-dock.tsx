@@ -13,12 +13,15 @@ import type { PinnedTodoSnapshot } from "@/components/chat/chat-pinned-todos";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
+import { useRunningManagedCommandsForChat } from "@/stores/managed-commands/managed-command-list-registry";
 import { cn } from "@/lib/utils";
 import type { ChatPinnedStackTopSpacing } from "@/components/chat/chat-pinned-stack";
 
 export interface ChatLowerDockProps {
   readonly snapshotLoaded: boolean;
   readonly epicId: string;
+  /** The chat this dock belongs to - the strip's managed-command join key. */
+  readonly chatId: string;
   readonly viewTabId: string;
   readonly selfAgent: AgentRow | null;
   readonly activeAgents: ReadonlyArray<AgentRow>;
@@ -58,8 +61,16 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
   const queueVisible = props.queue.items.length > 0;
   const agentsVisible =
     props.activeAgents.length > 0 && props.selfAgent !== null;
+  // Managed commands reach the strip by a client-side join on the epic's list
+  // stream, so they can make the section worth showing even when the harness
+  // session reports no background work of its own.
+  const runningManagedCommandCount = useRunningManagedCommandsForChat(
+    props.epicId,
+    props.chatId,
+  ).length;
   const backgroundVisible =
-    props.backgroundItems !== undefined && props.backgroundItems.length > 0;
+    (props.backgroundItems !== undefined && props.backgroundItems.length > 0) ||
+    runningManagedCommandCount > 0;
 
   if (!pinnedVisible && !queueVisible && !agentsVisible && !backgroundVisible) {
     return null;
@@ -86,6 +97,7 @@ export function ChatLowerDock(props: ChatLowerDockProps) {
             dock={props}
           />
           <BackgroundSection
+            managedCommandCount={runningManagedCommandCount}
             visible={backgroundVisible}
             separated={queueVisible || pinnedVisible || agentsVisible}
             dock={props}
@@ -164,14 +176,20 @@ function AgentsSection(props: {
 function BackgroundSection(props: {
   readonly visible: boolean;
   readonly separated: boolean;
+  readonly managedCommandCount: number;
   readonly dock: ChatLowerDockProps;
 }) {
   const { dock } = props;
-  const items = dock.backgroundItems;
-  if (!props.visible || items === undefined) return null;
+  // An undefined `backgroundItems` is "the host has not said yet"; the
+  // managed-command rows come from a different stream and need not wait on it.
+  const items = dock.backgroundItems ?? [];
+  if (!props.visible) return null;
   return (
     <BackgroundItemsPanel
       items={items}
+      epicId={dock.epicId}
+      chatId={dock.chatId}
+      managedCommandCount={props.managedCommandCount}
       canAct={dock.canAct}
       readOnly={dock.readOnly}
       pendingStopTaskIds={dock.backgroundStopPendingTaskIds}

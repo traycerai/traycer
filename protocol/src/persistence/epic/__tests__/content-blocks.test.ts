@@ -376,6 +376,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
           live: false,
         },
       ],
@@ -466,6 +467,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
         blockId: "",
         outputFile: null,
         mcp: null,
+        managedCommand: null,
         live: false,
       },
     ]);
@@ -498,6 +500,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
       blockId: "",
       outputFile: null,
       mcp: null,
+      managedCommand: null,
       live: false,
     });
     expect("wakeTriggers" in parsed).toBe(false);
@@ -537,6 +540,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
           live: false,
         },
       ],
@@ -562,6 +566,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "sub-block",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
           live: false,
         },
         {
@@ -572,6 +577,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
           live: false,
         },
       ],
@@ -606,6 +612,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
           live: false,
         },
       ],
@@ -626,6 +633,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
           blockId: "",
           outputFile: null,
           mcp: null,
+          managedCommand: null,
           live: false,
         },
       ],

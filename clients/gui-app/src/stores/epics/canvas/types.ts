@@ -11,6 +11,7 @@ import type {
 import {
   TILE_KIND_BLANK,
   TILE_KIND_GIT_DIFF,
+  TILE_KIND_MANAGED_COMMAND_OUTPUT,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "./tile-kinds";
 
@@ -249,6 +250,25 @@ export interface SnapshotDiffTileRef {
 }
 
 /**
+ * Read-only window on one managed command's log timeline.
+ *
+ * A pointer, not a copy: `id` IS the command id (so opening the same command
+ * twice focuses the one window, via the canvas's content-id dedup) and
+ * `hostId` is the host that owns it. Kind, description and status are
+ * deliberately absent - they are live state the list stream answers, and a
+ * window restored days later must not render a description the agent renamed
+ * or a status the command left. `name` is the kind-free fallback the tab strip
+ * shows only until the stream answers.
+ */
+export interface ManagedCommandOutputTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_MANAGED_COMMAND_OUTPUT;
+  readonly name: string;
+  readonly hostId: string;
+}
+
+/**
  * A blank tab. A real strip tab (titled "New tab", closable) whose body renders
  * the inline opener; picking content replaces it in place. `hostId` is a
  * placeholder - the opener binds the real default host at create time, and
@@ -263,12 +283,22 @@ export interface BlankTileRef {
 }
 
 export type EpicCanvasTileRef =
-  EpicNodeRef | GitDiffTileRef | SnapshotDiffTileRef | BlankTileRef;
+  | EpicNodeRef
+  | GitDiffTileRef
+  | SnapshotDiffTileRef
+  | ManagedCommandOutputTileRef
+  | BlankTileRef;
 
 export function isBlankTileRef(
   value: EpicCanvasTileRef,
 ): value is BlankTileRef {
   return value.type === TILE_KIND_BLANK;
+}
+
+export function isManagedCommandOutputTileRef(
+  value: EpicCanvasTileRef,
+): value is ManagedCommandOutputTileRef {
+  return value.type === TILE_KIND_MANAGED_COMMAND_OUTPUT;
 }
 
 export function isGitDiffTileRef(

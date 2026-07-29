@@ -368,6 +368,15 @@ export const chatQueuedManagedCommandItemSchema = z.object({
   // The command's human label (the Monitor's description / the shell command
   // line), shown on the queue chip.
   description: z.string(),
+  // Which kind of managed command this delivery came from, so the chip reads
+  // "Monitor · deploy watcher" rather than a generic badge. Named
+  // `commandKind` because `kind` above is the union's discriminant.
+  //
+  // Nullable and defaulted rather than required even though this line is
+  // unshipped: the queue is DURABLE, so an item written by an earlier build of
+  // this same line must still rehydrate. Absent means "not recorded", which the
+  // chip renders generically - it never stands in for a guessed kind.
+  commandKind: z.enum(["monitor", "shell"]).nullable().default(null),
   // Narrower than the prompt lifecycle enum on purpose: a delivery is never
   // steered, so `steer_requested`/`steering`/`injected`/`fallback` are not just
   // unused here, they are unrepresentable. The `1.5` line that introduced this

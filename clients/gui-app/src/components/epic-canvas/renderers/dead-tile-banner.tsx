@@ -101,6 +101,45 @@ export function TerminalDeadTileBanner(
   );
 }
 
+export interface ManagedCommandDeletedBannerProps {
+  /**
+   * "Monitor" or "Shell" - `null` only when the window never received a
+   * snapshot (restored for a command the host had already dropped), which is
+   * the one case where the kind is genuinely unknown.
+   */
+  readonly kindLabel: string | null;
+  readonly onClose: () => void;
+  readonly testId: string;
+}
+
+/**
+ * A managed command deleted while its output window was open. Sits ABOVE the
+ * timeline rather than replacing it: the scrollback the viewer already has is
+ * the last trace of a history the host just destroyed, so it stays readable
+ * until the tab is closed. Nothing can be paged in behind it and no lifecycle
+ * action remains - the command is gone, not merely stopped.
+ */
+export function ManagedCommandDeletedBanner(
+  props: ManagedCommandDeletedBannerProps,
+): ReactNode {
+  return (
+    <div
+      className="flex min-w-0 items-center gap-3 border-b border-border/60 bg-muted/30 px-3 py-2 text-ui-xs text-muted-foreground"
+      data-testid={props.testId}
+      role="status"
+    >
+      <span className="min-w-0 flex-1">
+        {props.kindLabel === null
+          ? "This monitor or shell is no longer on this host. Its output history is gone; what is shown below is only what this window had already read."
+          : `This ${props.kindLabel.toLowerCase()} was deleted. Its output history is gone; what is shown below is only what this window had already read.`}
+      </span>
+      <Button type="button" variant="outline" size="sm" onClick={props.onClose}>
+        Close tab
+      </Button>
+    </div>
+  );
+}
+
 export interface WorkspaceFileDeadTileBannerProps {
   readonly hostLabel: string;
   /**

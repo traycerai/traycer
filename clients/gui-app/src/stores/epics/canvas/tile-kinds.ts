@@ -9,6 +9,10 @@ const TILE_KIND_TERMINAL = "terminal";
 const TILE_KIND_WORKSPACE_FILE = "workspace-file";
 export const TILE_KIND_GIT_DIFF = "git-diff";
 export const TILE_KIND_SNAPSHOT_DIFF = "snapshot-diff";
+// A read-only window on one managed command's log timeline ("Monitors &
+// Shells"). Renderer-local like `terminal`: the tile points at a command the
+// host owns, it does not carry one.
+export const TILE_KIND_MANAGED_COMMAND_OUTPUT = "managed-command-output";
 // A "blank" tab: a real strip tab whose body renders the inline opener until
 // content is picked (which replaces it in place).
 export const TILE_KIND_BLANK = "blank";
@@ -24,6 +28,7 @@ export type TileKindId =
   | typeof TILE_KIND_WORKSPACE_FILE
   | typeof TILE_KIND_GIT_DIFF
   | typeof TILE_KIND_SNAPSHOT_DIFF
+  | typeof TILE_KIND_MANAGED_COMMAND_OUTPUT
   | typeof TILE_KIND_BLANK;
 
 export const isTileKind = makeLiteralGuard<TileKindId>({
@@ -37,5 +42,6 @@ export const isTileKind = makeLiteralGuard<TileKindId>({
   [TILE_KIND_WORKSPACE_FILE]: true,
   [TILE_KIND_GIT_DIFF]: true,
   [TILE_KIND_SNAPSHOT_DIFF]: true,
+  [TILE_KIND_MANAGED_COMMAND_OUTPUT]: true,
   [TILE_KIND_BLANK]: true,
 });

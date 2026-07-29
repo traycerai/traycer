@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
+  Activity,
   FileDiff,
   FilePlus,
   SplitSquareHorizontal,
@@ -55,6 +56,7 @@ import {
   isBlankTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
+  isManagedCommandOutputTileRef,
   isOpenableEpicNodeKind,
 } from "@/stores/epics/canvas/types";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
@@ -923,6 +925,9 @@ function TabIcon(props: {
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;
+  }
+  if (isManagedCommandOutputTileRef(props.tab)) {
+    return <Activity className="size-3.5 shrink-0 text-muted-foreground" />;
   }
   // Title generation is the idle default for chat tabs only - threaded into
   // ChatProgressIcon so running / notification / read-only semantics win

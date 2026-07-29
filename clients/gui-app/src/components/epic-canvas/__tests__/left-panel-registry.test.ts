@@ -7,6 +7,7 @@ describe("epic left panel registry", () => {
     expect(LEFT_PANEL_DEFINITIONS.map((definition) => definition.id)).toEqual([
       "chats",
       "terminals",
+      "managed-commands",
       "artifacts",
       "git-diff",
       "file-tree",
@@ -28,6 +29,7 @@ describe("epic left panel registry", () => {
     const alwaysVisiblePanelIds = [
       "chats",
       "terminals",
+      "managed-commands",
       "artifacts",
       "sharing",
     ];

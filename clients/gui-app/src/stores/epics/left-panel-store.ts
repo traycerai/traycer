@@ -14,6 +14,7 @@ import {
 export const LEFT_PANEL_IDS = [
   "chats",
   "terminals",
+  "managed-commands",
   "artifacts",
   "git-diff",
   "file-tree",
@@ -153,6 +154,7 @@ export function clampSidebarWidthPx(widthPx: number): number {
 export const DEFAULT_LEFT_PANEL_GROUPS: ReadonlyArray<LeftPanelGroup> = [
   { panelIds: ["chats", "artifacts"] },
   { panelIds: ["terminals"] },
+  { panelIds: ["managed-commands"] },
   { panelIds: ["git-diff"] },
   { panelIds: ["file-tree"] },
   { panelIds: ["sharing"] },

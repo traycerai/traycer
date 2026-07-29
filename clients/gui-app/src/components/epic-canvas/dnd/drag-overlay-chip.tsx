@@ -7,7 +7,7 @@
  */
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
-import { FileDiff, FilePlus } from "lucide-react";
+import { Activity, FileDiff, FilePlus } from "lucide-react";
 import { LEFT_PANEL_DEFINITIONS } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
@@ -21,9 +21,11 @@ import {
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
 import {
   isBlankTileRef,
+  isManagedCommandOutputTileRef,
   isDiffTileRef,
   isGitDiffTileRef,
   type BlankTileRef,
+  type ManagedCommandOutputTileRef,
   type EpicCanvasTileRef,
   type EpicNodeRef,
   type GitDiffTileRef,
@@ -134,7 +136,25 @@ function EpicCanvasNodeDragOverlay(props: {
   if (isBlankTileRef(props.node)) {
     return <BlankTileDragOverlay node={props.node} />;
   }
+  if (isManagedCommandOutputTileRef(props.node)) {
+    return <ManagedCommandOutputTileDragOverlay node={props.node} />;
+  }
   return <ArtifactNodeDragOverlay node={props.node} epicId={props.epicId} />;
+}
+
+/**
+ * The dragged output window carries no label of its own (its tile is just the
+ * command pointer), so the chip names the surface rather than the command.
+ */
+function ManagedCommandOutputTileDragOverlay(props: {
+  readonly node: ManagedCommandOutputTileRef;
+}) {
+  return (
+    <m.div {...CHIP_MOTION} className={cn(CHIP_CLASS)}>
+      <Activity className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-medium">{props.node.name}</span>
+    </m.div>
+  );
 }
 
 function BlankTileDragOverlay(props: { readonly node: BlankTileRef }) {

@@ -86,6 +86,7 @@ function managedCommandItem(queueItemId: string): ChatQueuedManagedCommandItem {
     queueItemId,
     commandId: `${queueItemId}-command`,
     description: "bun test --watch",
+    commandKind: "monitor",
     status: "pending",
     createdAt: 1000,
     updatedAt: 1000,
