@@ -250,6 +250,28 @@ export function chatScrollLocationForMessage(
   };
 }
 
+/**
+ * Measures how far a rendered target is from the same visual anchor used by
+ * `chatScrollLocationForMessage`. Unlike an index scroll, this reads the final
+ * DOM geometry after variable-height rows above the target have measured.
+ */
+export function chatMessageAlignmentDelta(
+  scroller: HTMLElement | null,
+  messageId: string,
+): number | null {
+  if (scroller === null) return null;
+  const target = Array.from(
+    scroller.querySelectorAll<HTMLElement>("[data-message-id]"),
+  ).find((row) => row.dataset.messageId === messageId);
+  if (target === undefined) return null;
+
+  const scrollerRect = scroller.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  if (scrollerRect.height <= 0 || targetRect.height <= 0) return null;
+  const targetTop = scrollerRect.top + Math.abs(MINIMAP_SCROLL_OFFSET_PX);
+  return targetRect.top - targetTop;
+}
+
 export function selectActiveUserMessageId(
   messages: ReadonlyArray<ChatMessageModel>,
   viewportRowMessageId: string | null,

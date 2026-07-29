@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildMessageIdToIndex,
+  chatMessageAlignmentDelta,
   chatComputeItemKey,
   chatItemIdentity,
   chatScrollLocationForMessage,
@@ -539,6 +540,18 @@ describe("ChatMessages Virtuoso helpers", () => {
       offset: -48,
       behavior: "smooth",
     });
+  });
+
+  it("measures the rendered row's correction against the transcript anchor", () => {
+    const scroller = document.createElement("div");
+    setElementRect(scroller, 100, 600);
+    appendMessageRow(scroller, "message-3", 190, 290);
+
+    // The row should sit 48px below the scroller's top, but it is currently at
+    // 90px. Correcting scrollTop by +42px lands it on the actual anchor even
+    // when Virtuoso's estimated index offset was stale.
+    expect(chatMessageAlignmentDelta(scroller, "message-3")).toBe(42);
+    expect(chatMessageAlignmentDelta(scroller, "missing")).toBeNull();
   });
 });
 

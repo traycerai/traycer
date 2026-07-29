@@ -23,6 +23,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
   readonly ownerId: string;
   readonly ownerKind: WorktreeBindingOwnerKind;
   readonly supplementalContent: ReactNode | null;
+  readonly side: "top" | "right" | "bottom" | "left";
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const client = useHostClientForHostId(props.hostId);
@@ -107,7 +108,7 @@ export function WorktreeOwnerMetadataTooltip(props: {
           />
         </div>
       }
-      side="right"
+      side={props.side}
       sideOffset={4}
       align="start"
       open={open}

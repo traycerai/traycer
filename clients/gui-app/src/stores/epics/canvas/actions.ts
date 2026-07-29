@@ -20,6 +20,7 @@
  */
 import { v4 as uuidv4 } from "uuid";
 import type {
+  CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
   GitDiffTileRef,
@@ -28,6 +29,7 @@ import type {
 } from "./types";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
 } from "./types";
@@ -616,6 +618,28 @@ export function openTileInBackgroundTab(
     root,
     tilesByInstanceId: withTile(state.tilesByInstanceId, node),
   };
+}
+
+/**
+ * Opener path for a SINGLETON tile - one whose content `id` is derived rather
+ * than per-instance (the comm graph is one per epic).
+ *
+ * {@link openTileInPane} deliberately bypasses dedup so two views of the same
+ * content can sit side by side. That is wrong for a singleton: a second tab
+ * would share the content id, so any per-tile state keyed on it (the comm
+ * graph's persisted viewport) would be written by both copies. Focus the
+ * existing tab wherever it lives, and only open into `paneId` when there is
+ * none.
+ */
+export function openSingletonTileInPane(
+  state: EpicCanvasState,
+  paneId: string,
+  ref: EpicCanvasTileRef,
+): EpicCanvasState {
+  if (state.root !== null && findPaneTabByContentId(state, ref.id) !== null) {
+    return openTile(state, ref, false, null);
+  }
+  return openTileInPane(state, paneId, ref);
 }
 
 /**
@@ -1381,7 +1405,10 @@ export function updateGitDiffTileView(
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isGitDiffTileRef(ref),
-    (ref) => ({ ...ref, view }),
+    // Re-narrowed here, not just in the predicate: `view` is per-kind now that
+    // the comm-graph tile carries a viewport-shaped one, so a bare spread over
+    // the union would type-check against the wrong kind.
+    (ref) => (isGitDiffTileRef(ref) ? { ...ref, view } : ref),
   );
 }
 
@@ -1393,7 +1420,34 @@ export function updateSnapshotDiffTileView(
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isSnapshotDiffTileRef(ref),
-    (ref) => ({ ...ref, view }),
+    (ref) => (isSnapshotDiffTileRef(ref) ? { ...ref, view } : ref),
+  );
+}
+
+/**
+ * Persist a comm-graph tile's viewport. Called on gesture END (React Flow's
+ * `onMoveEnd`), never per animation frame - the canvas snapshot is serialized
+ * on every write, so a per-frame pan would churn the whole persistence path.
+ */
+export function updateCommGraphTileView(
+  state: EpicCanvasState,
+  tileId: string,
+  view: CommGraphTileViewState,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isCommGraphTileRef(ref),
+    (ref) => {
+      if (!isCommGraphTileRef(ref)) return ref;
+      if (
+        ref.view.x === view.x &&
+        ref.view.y === view.y &&
+        ref.view.zoom === view.zoom
+      ) {
+        return ref;
+      }
+      return { ...ref, view };
+    },
   );
 }
 

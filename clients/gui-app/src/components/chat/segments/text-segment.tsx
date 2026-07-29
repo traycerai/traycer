@@ -71,6 +71,7 @@ function TextSegmentPart(props: TextSegmentPartProps) {
         markdown={part.markdown}
         proseSize="normal"
         quotable
+        components={null}
       />
     );
   }
@@ -91,6 +92,7 @@ function TextSegmentPart(props: TextSegmentPartProps) {
           markdown={part.prose}
           proseSize="normal"
           quotable
+          components={null}
         />
       )}
       <NextStepsActionGroup

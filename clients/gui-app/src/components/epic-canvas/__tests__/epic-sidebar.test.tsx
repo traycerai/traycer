@@ -31,6 +31,16 @@ const testState = vi.hoisted<TestState>(() => ({
   activeArtifact: null,
 }));
 
+const tileNavigationMocks = vi.hoisted(() => ({
+  openTileInEpic: vi.fn(),
+  openTileInTab: vi.fn(),
+  openTilePreviewInEpic: vi.fn(),
+  openTilePreviewInTab: vi.fn(),
+}));
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => tileNavigationMocks,
+}));
+
 vi.mock("@dnd-kit/core", () => ({
   useDroppable: (input: CapturedDroppableInput) => {
     testState.droppableInputs.push(input);
@@ -86,6 +96,7 @@ function resetTestState(): void {
   testState.droppableInputs = [];
   testState.activeArtifactId = null;
   testState.activeArtifact = null;
+  tileNavigationMocks.openTileInEpic.mockClear();
 }
 
 describe("<EpicLeftPanelRail />", () => {
@@ -100,6 +111,20 @@ describe("<EpicLeftPanelRail />", () => {
     resetLeftPanelStore();
     resetDndStore();
     resetTestState();
+  });
+
+  it("does not open the graph when another rail entry is activated", () => {
+    render(
+      <EpicLeftPanelRail
+        epicId={EPIC_ID}
+        tabId={TAB_ID}
+        orientation="vertical"
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("epic-rail-terminals"));
+
+    expect(tileNavigationMocks.openTileInEpic).not.toHaveBeenCalled();
   });
 
   it("renders default registry panels and registers rail icon and background drop targets", () => {

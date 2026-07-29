@@ -290,6 +290,7 @@ import {
 } from "@traycer/protocol/host/migration/contracts";
 import { worktreeDeleteByPathStreamV10 } from "@traycer/protocol/host/worktree-delete-stream";
 import { worktreeChangedV10 } from "@traycer/protocol/host/worktree-changed-stream";
+import { epicCommunicationGraphSubscribeV10 } from "@traycer/protocol/host/epic/communication-graph";
 import { editorOpenPathsV10 } from "@traycer/protocol/host/editor/contracts";
 import {
   gitListChangedFilesV10,
@@ -4709,11 +4710,20 @@ export type HostRpcRegistry = typeof hostRpcRegistry;
  * `chat.subscribe@1.3`, `notifications.subscribe@1.0`,
  * `terminal.subscribe@1.0`, `git.subscribeStatus@1.1`,
  * `resources.subscribe@1.0`, `agent.inbox.subscribe@1.0`,
- * `speech.dictate@1.0`, and
+ * `epic.communicationGraph.subscribe@1.0`, `speech.dictate@1.0`, and
  * `migration.run@1.0` are negotiated from this registry. Later minors within
  * the same major line must be
  * additive; later majors must carry a real breaking change and ship without a
  * cross-major downgrade bridge (streams reconnect on mismatched majors in v1).
+ *
+ * Unlike `hostRpcRegistry`, this registry has no floor list: the `/stream`
+ * handshake checks compatibility PER METHOD at subscribe time
+ * (`checkStreamMethodCompatibility`), so a method one peer lacks is a
+ * per-feature degrade (`onMethodSupport(..., "unsupported")`), not a fatal
+ * connection error. Every method added here after host-v1.0.0 is therefore
+ * implicitly optional and MUST document what its consumer renders when the
+ * peer does not advertise it (see `resources.subscribe` and
+ * `epic.communicationGraph.subscribe`).
  *
  * Growth rules mirror `hostRpcRegistry` above:
  *
@@ -4861,6 +4871,22 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
+  // Additive, post-v1.0.0 OPTIONAL stream method: the per-epic communication
+  // event log behind the Communication Graph tile. A host that predates it
+  // never advertises it, so the tile's per-host subscription degrades to
+  // `unsupported` and that host's agents render with a "no edge data"
+  // affordance while every other host in the epic keeps streaming. Never add
+  // it to the unary released floor - that list is fail-closed on the name set.
+  "epic.communicationGraph.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicCommunicationGraphSubscribeV10,
+        },
+      },
+    },
+  },
   "migration.run": {
     1: {
       latestMinor: 0,
@@ -4945,9 +4971,10 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
 // directly-imported contract const (`chatSubscribeV15`), so this is a
 // narrow, intentional trade-off - confirmed by a full workspace
 // compile+build with this annotation in place.
-type HostStreamRpcMethodMap = typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
-  readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
-};
+type HostStreamRpcMethodMap =
+  typeof HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION & {
+    readonly "chat.subscribe": UncheckedStreamMethodVersionRegistry;
+  };
 
 export type HostStreamRpcRegistry =
   VersionedStreamRpcRegistry<HostStreamRpcMethodMap>;

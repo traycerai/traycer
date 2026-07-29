@@ -16,6 +16,15 @@ import type { ReactNode } from "react";
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
   useEditorOpen: () => ({ mutate: () => undefined }),
 }));
+/**
+ * The restore loop's CANCEL is the observable for the jump fix: jsdom has no
+ * layout, so whether the viewport ends up at the anchor cannot be asserted -
+ * whether the loop that would overwrite it was called off can.
+ */
+const scrollRestorationCancelSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/scroll/use-scroll-restoration", () => ({
+  useScrollRestoration: () => scrollRestorationCancelSpy,
+}));
 // Platform-dependent keyboard behavior (plain Home/End claim scroll on macOS
 // only) needs both branches testable; jsdom always reports non-mac.
 const platformMock = vi.hoisted(() => ({ isMac: false }));
@@ -1167,6 +1176,102 @@ describe("ChatMessages Virtuoso renderer", () => {
     );
 
     expect(screen.getByText("echo hi")).not.toBeNull();
+  });
+
+  /**
+   * REGRESSION: a cross-tile jump always landed at the bottom.
+   *
+   * `useScrollRestoration` keeps re-applying its anchor for up to
+   * MAX_RESTORE_FRAMES whenever a restore reports `retry`/`defend`, and a
+   * freshly opened tile's anchor is "pinned at bottom". A scroll request that
+   * did not cancel that loop issued a ~50-frame smooth scroll into it and lost.
+   * Every user-gesture unpin already cancelled it; the programmatic navigation
+   * did not.
+   *
+   * jsdom has no layout, so the VIEWPORT outcome is not assertable here - what
+   * is assertable is the state transition the fix turns on: fulfilling a scroll
+   * request cancels the restore loop and leaves follow-bottom OFF.
+   */
+  it("cancels the restore defend loop when a scroll request is fulfilled", async () => {
+    const messages = [makeMessage(1, "assistant")];
+    const opts = makeDefaultOpts({ minimapItems: [] });
+    const { rerender } = renderChatMessages(messages, opts);
+    await waitFor(() => {
+      expect(screen.getByTestId("virtuoso-list")).not.toBeNull();
+    });
+    scrollRestorationCancelSpy.mockClear();
+
+    rerenderChatMessages(rerender, messages, {
+      ...opts,
+      scrollRequest: {
+        messageId: messages[0].id,
+        blockId: null,
+        requestId: 7,
+      },
+    });
+
+    expect(scrollRestorationCancelSpy).toHaveBeenCalled();
+  });
+
+  it("highlights the transcript row reached by a scroll request", async () => {
+    const messages = [makeMessage(1, "assistant")];
+    const opts = makeDefaultOpts({ minimapItems: [] });
+    const { rerender } = renderChatMessages(messages, opts);
+    await waitFor(() => {
+      expect(screen.getByTestId("virtuoso-list")).not.toBeNull();
+    });
+
+    rerenderChatMessages(rerender, messages, {
+      ...opts,
+      scrollRequest: {
+        messageId: messages[0].id,
+        blockId: null,
+        requestId: 8,
+      },
+    });
+
+    const target = document.querySelector<HTMLElement>(
+      `[data-message-id="${messages[0].id}"]`,
+    );
+    expect(target?.dataset.navigationHighlighted).toBe("true");
+
+    fireEvent.pointerDown(screen.getByTestId("virtuoso-scroller"));
+    expect(target?.dataset.navigationHighlighted).toBeUndefined();
+  });
+
+  it("does NOT pulse a minimap navigation - the target parks at the top already", async () => {
+    // The pulse disambiguates a landing the reader arrived at cold (a
+    // cross-tile jump). An in-tile minimap click visibly parks its target at
+    // the top of the viewport, so pulsing it there is redundant noise.
+    const messages = [makeMessage(1, "user"), makeMessage(2, "assistant")];
+    renderChatMessages(
+      messages,
+      makeDefaultOpts({ minimapItems: minimapItemsFor(messages) }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("virtuoso-list")).not.toBeNull();
+    });
+
+    const rail = screen.getByTestId("chat-user-message-minimap-rail");
+    const item = rail.querySelector("button");
+    expect(item).not.toBeNull();
+    if (item === null) throw new Error("no minimap rail item");
+    fireEvent.click(item);
+
+    expect(document.querySelector("[data-navigation-highlighted]")).toBeNull();
+  });
+
+  it("leaves the restore loop alone when a chat opens with no jump", async () => {
+    const messages = [makeMessage(1, "assistant")];
+    scrollRestorationCancelSpy.mockClear();
+    renderChatMessages(messages, makeDefaultOpts({ minimapItems: [] }));
+    await waitFor(() => {
+      expect(screen.getByTestId("virtuoso-list")).not.toBeNull();
+    });
+
+    // Opening a chat normally must still land pinned at the bottom, so the
+    // restore must be left to do its job.
+    expect(scrollRestorationCancelSpy).not.toHaveBeenCalled();
   });
 
   it("consumes background scroll requests once across background item refreshes", async () => {
