@@ -102,7 +102,13 @@ jobs:
             for tag in "${group_tags[@]}"; do
               if curl -sSfL --retry 3 --connect-timeout 10 --max-time 60 \
                 "${release_repo_url}/releases/download/${tag}/protocol-surface.json" -o "$out" \
-                && jq -e 'has("formatVersion") and has("unary") and has("stream")' "$out" >/dev/null 2>&1; then
+                && SURFACE_PATH="$out" bun -e '
+                  import { readFileSync } from "node:fs";
+                  import { protocolSurfaceSchema } from "./protocol/src/framework/surface-compat.ts";
+                  const path = process.env.SURFACE_PATH;
+                  if (path === undefined) throw new Error("SURFACE_PATH is required");
+                  protocolSurfaceSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+                ' >/dev/null 2>&1; then
                 fetched="$tag"
                 break
               fi
