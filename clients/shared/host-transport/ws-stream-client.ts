@@ -221,10 +221,13 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       initialBackoffMs: this.options.initialBackoffMs,
       maxBackoffMs: this.options.maxBackoffMs,
       onDispose: () => removeSession(),
-      onMethodSupport: (nextMethod, support, schemaVersion) => {
-        this.setMethodSupport(nextMethod, support, schemaVersion);
-      },
-      onManifest: (manifest) => this.applyHostManifest(manifest),
+      onManifest: (manifest, subscribedMethod, support, schemaVersion) =>
+        this.applyHostManifest(
+          manifest,
+          subscribedMethod,
+          support,
+          schemaVersion,
+        ),
       onTransportReconnect: () => this.resetMethodSupport(),
     });
     removeSession = () => {
@@ -361,19 +364,6 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     }
   }
 
-  private setMethodSupport(
-    method: string,
-    support: StreamMethodSupport,
-    schemaVersion: SchemaVersion | null,
-  ): void {
-    if (!this.updateMethodSupport(method, support, schemaVersion)) {
-      return;
-    }
-    for (const listener of Array.from(this.methodSupportListeners)) {
-      listener();
-    }
-  }
-
   private updateMethodSupport(
     method: string,
     support: StreamMethodSupport,
@@ -401,10 +391,24 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     return true;
   }
 
-  private applyHostManifest(theirManifest: ConnectionManifest): void {
+  private applyHostManifest(
+    theirManifest: ConnectionManifest,
+    subscribedMethod: string,
+    subscribedMethodSupport: "supported" | "unsupported",
+    subscribedMethodSchemaVersion: SchemaVersion | null,
+  ): void {
     const myManifest = buildStreamManifest(this.options.registry);
     let changed = false;
     for (const method of Object.keys(myManifest)) {
+      if (method === subscribedMethod) {
+        changed =
+          this.updateMethodSupport(
+            method,
+            subscribedMethodSupport,
+            subscribedMethodSchemaVersion,
+          ) || changed;
+        continue;
+      }
       const compat = checkStreamMethodCompatibility(
         this.options.registry,
         myManifest,
@@ -413,10 +417,9 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
         method,
       );
       changed =
-        this.updateMethodSupport(
+        this.updateMethodSupportFromManifest(
           method,
           compat.ok ? "supported" : "unsupported",
-          compat.ok ? (theirManifest[method] ?? null) : null,
         ) || changed;
     }
     if (changed) {
@@ -424,6 +427,25 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
         listener();
       }
     }
+  }
+
+  private updateMethodSupportFromManifest(
+    method: string,
+    support: "supported" | "unsupported",
+  ): boolean {
+    const previous = this.methodSupport.get(method) ?? "unknown";
+    const hadSchemaVersion = this.methodSchemaVersions.has(method);
+    if (support === "unsupported") {
+      this.methodSchemaVersions.delete(method);
+    }
+    if (
+      previous === support &&
+      !(support === "unsupported" && hadSchemaVersion)
+    ) {
+      return false;
+    }
+    this.methodSupport.set(method, support);
+    return true;
   }
 
   private resetMethodSupport(): void {
@@ -489,12 +511,12 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly initialBackoffMs: number;
   readonly maxBackoffMs: number;
   readonly onDispose: () => void;
-  readonly onMethodSupport: (
-    method: keyof Registry & string,
-    support: StreamMethodSupport,
+  readonly onManifest: (
+    manifest: ConnectionManifest,
+    subscribedMethod: keyof Registry & string,
+    support: "supported" | "unsupported",
     schemaVersion: SchemaVersion | null,
   ) => void;
-  readonly onManifest: (manifest: ConnectionManifest) => void;
   readonly onTransportReconnect: () => void;
 }
 
@@ -943,7 +965,6 @@ class StreamSession<
 
     const myManifest = buildStreamManifest(this.config.registry);
     const theirManifest = ackParse.data.manifest;
-    this.config.onManifest(theirManifest);
     const compat = checkStreamMethodCompatibility(
       this.config.registry,
       myManifest,
@@ -958,7 +979,12 @@ class StreamSession<
     }
 
     if (!compat.ok) {
-      this.config.onMethodSupport(this.config.method, "unsupported", null);
+      this.config.onManifest(
+        theirManifest,
+        this.config.method,
+        "unsupported",
+        null,
+      );
       const terminalFrame: ClientStreamFatalErrorFrame = {
         kind: "fatalError",
         details: compat.details,
@@ -993,7 +1019,8 @@ class StreamSession<
       this.onSendFailure(socket);
       return;
     }
-    this.config.onMethodSupport(
+    this.config.onManifest(
+      theirManifest,
       this.config.method,
       "supported",
       prepared.onWireVersion,
