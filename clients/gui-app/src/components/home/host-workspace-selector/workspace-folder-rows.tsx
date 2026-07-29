@@ -1,10 +1,12 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import { FolderPlus, RotateCw } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { Checkbox } from "@/components/ui/checkbox";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
 import { cn } from "@/lib/utils";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { FolderRow } from "./folder-row";
 import type { WorkspaceRunItem } from "./workspace-run-item";
 
@@ -43,6 +45,13 @@ export function WorkspaceFolderRows(props: {
   readonly nestedInPopover: boolean;
 }) {
   const { items } = props;
+  // The global multi-select preference gates the per-row ADDITIONAL
+  // checkboxes; the bottom-line toggle below flips it. This is the one piece
+  // of state this component reads/writes itself - it is a global UI
+  // preference, not binding/staging/mutation logic (still item handlers).
+  const allowMultipleFolders = useWorkspaceFoldersStore(
+    (state) => state.allowMultipleFolders,
+  );
   // Captured so the branch-form's nested source dropdown uses this container as
   // its collision boundary (in-epic, where the rows live inside a popover).
   const [boundaryEl, setBoundaryEl] = useState<HTMLDivElement | null>(null);
@@ -106,6 +115,14 @@ export function WorkspaceFolderRows(props: {
         pending={props.updatePending}
       />
     );
+  const multiToggle =
+    props.readOnly ||
+    !items.some((item) => item.onToggleSelected !== null) ? null : (
+      <AllowMultipleFoldersToggle
+        items={items}
+        checked={allowMultipleFolders}
+      />
+    );
 
   if (items.length === 0) {
     return (
@@ -143,13 +160,24 @@ export function WorkspaceFolderRows(props: {
     >
       <div className="flex min-w-0 flex-1 flex-col items-stretch gap-1.5">
         <div
-          className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto] items-center gap-x-1.5 gap-y-1.5"
+          className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1.25fr)_auto] items-center gap-x-1.5 gap-y-1.5"
           data-testid="workspace-folder-grid"
         >
+          <div
+            className="col-span-full grid min-w-0 grid-cols-subgrid items-center text-ui-xs font-medium tracking-wider text-muted-foreground/70 uppercase"
+            data-testid="workspace-folder-header"
+          >
+            <span aria-hidden />
+            <span className="px-1">Project</span>
+            <span className="px-1.5">Location</span>
+            <span className="px-1.5">Branch</span>
+            <span aria-hidden />
+          </div>
           {items.map((item) => (
             <FolderRow
               key={item.key}
               item={item}
+              multiSelectEnabled={allowMultipleFolders}
               onEditEnvironment={props.onEditEnvironment}
               uncommittedByPath={uncommittedByPath}
               boundaryEl={nestedBoundaryEl}
@@ -157,17 +185,79 @@ export function WorkspaceFolderRows(props: {
             />
           ))}
         </div>
-        {updateButton === null ? (
+        {multiToggle === null && updateButton === null ? (
           addFolder
         ) : (
           <div className="flex w-full items-center justify-between gap-3">
             {addFolder}
-            {updateButton}
+            <div className="flex shrink-0 items-center gap-3">
+              {multiToggle}
+              {updateButton}
+            </div>
           </div>
         )}
       </div>
       {trailing}
     </div>
+  );
+}
+
+/**
+ * The bottom-line "Allow multiple folders in chat" checkbox - the global
+ * opt-in for ADDITIONAL folders (per-row checkboxes). Rendered only when the
+ * surface has per-chat selection (some row carries a toggle handler), so
+ * read-only and legacy surfaces are unchanged. Unticking collapses THIS
+ * surface to its main project: every additional folder is deselected through
+ * its own item handler (it stays in the saved list). Rows whose selection is
+ * currently locked (`selectionDisabledReason`) are left as they are - the
+ * preference still turns off, it just doesn't mutate a locked surface.
+ */
+function AllowMultipleFoldersToggle(props: {
+  readonly items: ReadonlyArray<WorkspaceRunItem>;
+  readonly checked: boolean;
+}) {
+  const checkboxId = useId();
+  const setAllowMultipleFolders = useWorkspaceFoldersStore(
+    (state) => state.setAllowMultipleFolders,
+  );
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-2 px-1.5"
+      data-testid="workspace-multi-folder-toggle"
+    >
+      <Checkbox
+        id={checkboxId}
+        checked={props.checked}
+        data-testid="workspace-multi-folder-toggle-checkbox"
+        // Match the row checkboxes: the default `border-input` outline is
+        // near-invisible on the dark popover when unchecked.
+        className="border-muted-foreground/50 hover:border-muted-foreground/80"
+        onCheckedChange={(checked) => {
+          const next = checked === true;
+          setAllowMultipleFolders(next);
+          if (next) return;
+          for (const item of props.items) {
+            // Honor the same per-row guard the checkboxes render under
+            // (e.g. an active run locks a live binding): the preference
+            // still flips off for future chats, but a locked surface keeps
+            // its additional folders instead of mutating mid-run.
+            if (
+              item.selected &&
+              !item.isPrimary &&
+              item.selectionDisabledReason === null
+            ) {
+              item.onToggleSelected?.(false);
+            }
+          }
+        }}
+      />
+      <label
+        htmlFor={checkboxId}
+        className="cursor-pointer text-ui-sm text-muted-foreground select-none"
+      >
+        Allow multiple folders in chat
+      </label>
+    </span>
   );
 }
 

@@ -33,17 +33,29 @@ export interface WorkspaceRunItem {
   readonly currentIntent: WorktreeFolderIntent | null;
   readonly defaultNewBranchName: string;
   readonly repoIdentifier: WorktreeFolderIntent["repoIdentifier"];
+  // The chat's MAIN project (its primary folder). Shown as the filled main
+  // marker + "Main" badge; it cannot be unchecked, only switched via another
+  // row's `onUseAsMain`.
   readonly isPrimary: boolean;
-  // Surface capability (same value for every row in a given surface): true
-  // for every not-yet-created-owner picker (landing, fork dialogs, the
-  // new-conversation modal, the terminal-agent launcher); false for bound
-  // owner rows (chat / terminal-agent), where the primary pin is
-  // read-only - there is no atomic set-primary RPC for a live binding.
-  readonly canChangePrimary: boolean;
-  // True for a row that can't act on "Make primary" yet (unresolved /
-  // still loading its disk metadata), independent of `canChangePrimary`.
-  readonly makePrimaryDisabled: boolean;
-  readonly makePrimaryDisabledReason: string | null;
+  // Whether this saved project is used by the current chat (main or
+  // additional). Unselected rows stay in the picker (persistent saved list)
+  // but render display-only facts.
+  readonly selected: boolean;
+  // Additional-folder checkbox (never rendered on the main row). `null`
+  // hides it (read-only surfaces / the transient global-fallback
+  // representation, where selection IS the saved list).
+  readonly onToggleSelected: ((nextSelected: boolean) => void) | null;
+  readonly selectionDisabledReason: string | null;
+  // Switches the chat's main project to this row (click on the name area).
+  // `null` = not switchable here: the main row itself, unresolved rows, and
+  // bound owners (a live chat's primary is fixed host-side).
+  readonly onUseAsMain: (() => void) | null;
+  // The saved-list pin: this project is the DEFAULT for brand-new tasks
+  // (in-task chats inherit the task's workspace). Per-chat selection never
+  // moves it.
+  readonly isPinned: boolean;
+  /** `null` hides the pin action (row not in the saved list / read-only). */
+  readonly onTogglePin: (() => void) | null;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly modeDisabled: boolean;
   readonly modeDisabledReason: string | null;
@@ -53,7 +65,6 @@ export interface WorkspaceRunItem {
   readonly onSelectMode: (mode: WorkspaceRunMode) => void;
   readonly onEmit: (intent: WorktreeFolderIntent) => void;
   readonly onLocate: (() => void) | null;
-  readonly onMakePrimary: () => void;
   readonly onRemove: (() => void) | null;
 }
 

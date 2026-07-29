@@ -142,7 +142,11 @@ describe("useLandingComposerActions", () => {
       primaryPath: null,
     });
     useWorktreeIntentStagingStore.getState().resetForTests();
-    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useLandingDraftStore.setState({
+      drafts: [],
+      activeDraftId: null,
+      pendingWorkspace: null,
+    });
     useTabsStore.setState({
       items: [],
       activeItemId: null,
@@ -174,7 +178,11 @@ describe("useLandingComposerActions", () => {
       primaryPath: null,
     });
     useWorktreeIntentStagingStore.getState().resetForTests();
-    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useLandingDraftStore.setState({
+      drafts: [],
+      activeDraftId: null,
+      pendingWorkspace: null,
+    });
     useTabsStore.setState({
       items: [],
       activeItemId: null,
@@ -735,6 +743,22 @@ describe("useLandingComposerActions", () => {
         },
       },
     });
+    // Blank-landing launches use the PENDING per-chat snapshot (never the
+    // whole saved list) - this is the state a user selecting both rows in
+    // the picker produces.
+    useLandingDraftStore.setState({
+      pendingWorkspace: {
+        folders: [UNKNOWN_WORKSPACE_PATH, WORKSPACE_PATH],
+        folderInfoByPath: {
+          [WORKSPACE_PATH]: {
+            path: WORKSPACE_PATH,
+            name: "traycer",
+            repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          },
+        },
+        primaryPath: null,
+      },
+    });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -797,6 +821,26 @@ describe("useLandingComposerActions", () => {
       },
       // The user explicitly switched primary to the SECOND folder.
       primaryPath: SECOND_PATH,
+    });
+    // The same switch, as the blank landing's PENDING snapshot records it -
+    // the representation the launch boundary now reads.
+    useLandingDraftStore.setState({
+      pendingWorkspace: {
+        folders: [WORKSPACE_PATH, SECOND_PATH],
+        folderInfoByPath: {
+          [WORKSPACE_PATH]: {
+            path: WORKSPACE_PATH,
+            name: "traycer",
+            repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          },
+          [SECOND_PATH]: {
+            path: SECOND_PATH,
+            name: "second",
+            repoIdentifier: null,
+          },
+        },
+        primaryPath: SECOND_PATH,
+      },
     });
     // The staged intent still carries a STALE primary bit on the first
     // folder (staged before the switch) - launch must restamp it by path.
@@ -982,6 +1026,26 @@ describe("useLandingComposerActions", () => {
       },
       // The user clicked the pin on the NON-GIT folder.
       primaryPath: NON_GIT_PATH,
+    });
+    // The same selection/primary, as the blank landing's PENDING snapshot
+    // records it - the representation the launch boundary now reads.
+    useLandingDraftStore.setState({
+      pendingWorkspace: {
+        folders: [WORKSPACE_PATH, NON_GIT_PATH],
+        folderInfoByPath: {
+          [WORKSPACE_PATH]: {
+            path: WORKSPACE_PATH,
+            name: "traycer",
+            repoIdentifier: { owner: "traycerai", repo: "traycer" },
+          },
+          [NON_GIT_PATH]: {
+            path: NON_GIT_PATH,
+            name: "non-git",
+            repoIdentifier: null,
+          },
+        },
+        primaryPath: NON_GIT_PATH,
+      },
     });
     // What `setPrimaryFolder`'s restamp actually leaves behind: the git
     // folder's worktree entry, demoted, and no entry at all for the non-git
@@ -1822,8 +1886,15 @@ describe("useLandingComposerActions", () => {
       await Promise.resolve();
     });
     expect(landingMocks.request).not.toHaveBeenCalled();
+    // The mint moved the pick to the draft's own slot (it rides with the
+    // draft for the retry); nothing is orphaned under the null landing key.
     expect(
       useWorktreeIntentStagingStore.getState().intentByKey["landing:"],
+    ).toBeUndefined();
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        `landing:${draftId}`
+      ],
     ).toEqual(stagedIntent);
     queryClient.clear();
   });
@@ -1860,8 +1931,17 @@ describe("useLandingComposerActions", () => {
     await act(async () => {
       await Promise.resolve();
     });
+    // The mint moved the pick to the draft's own slot (it rides with the
+    // retained draft for the retry); nothing stays under the null key.
+    const rejectedDraftId = useLandingDraftStore.getState().activeDraftId;
+    if (rejectedDraftId === null) throw new Error("expected generated draft");
     expect(
       useWorktreeIntentStagingStore.getState().intentByKey["landing:"],
+    ).toBeUndefined();
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        `landing:${rejectedDraftId}`
+      ],
     ).toEqual(stagedIntent);
     queryClient.clear();
   });

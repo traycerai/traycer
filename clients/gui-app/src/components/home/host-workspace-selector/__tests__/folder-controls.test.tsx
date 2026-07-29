@@ -72,6 +72,7 @@ vi.mock("@/components/ui/dropdown-menu", () => {
 import { FolderBranchControl } from "../folder-branch-control";
 import { FolderLocationControl } from "../folder-location-control";
 import { FolderRow } from "../folder-row";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { WorkspaceFolderRows } from "../workspace-folder-rows";
 import { WorkspaceFolderSummaryControl } from "../workspace-folder-summary-control";
 import { WorkspaceSummaryTrigger } from "../workspace-summary-trigger";
@@ -81,24 +82,6 @@ import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 const NOOP = (): void => undefined;
 const NOOP_ADD = (): Promise<boolean> => Promise.resolve(false);
 const EMPTY_COUNTS: ReadonlyMap<string, number> = new Map();
-
-function tabForward(): void {
-  const focusable = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  );
-  const currentIndex = focusable.findIndex(
-    (element) => element === document.activeElement,
-  );
-  const next = focusable[currentIndex + 1] ?? focusable[0];
-  fireEvent.keyDown(document.activeElement ?? document.body, {
-    key: "Tab",
-    code: "Tab",
-  });
-  next.focus();
-  fireEvent.keyUp(next, { key: "Tab", code: "Tab" });
-}
 
 const GIT_SUMMARY: WorktreeWorkspaceSummary = {
   workspacePath: "/repo",
@@ -141,9 +124,12 @@ function item(over: Partial<WorkspaceRunItem>): WorkspaceRunItem {
     defaultNewBranchName: "traycer/swift-otter",
     repoIdentifier: { owner: "acme", repo: "app" },
     isPrimary: true,
-    canChangePrimary: true,
-    makePrimaryDisabled: false,
-    makePrimaryDisabledReason: null,
+    selected: true,
+    onToggleSelected: NOOP,
+    selectionDisabledReason: null,
+    onUseAsMain: null,
+    isPinned: false,
+    onTogglePin: NOOP,
     hostClient: null,
     modeDisabled: false,
     modeDisabledReason: null,
@@ -153,13 +139,16 @@ function item(over: Partial<WorkspaceRunItem>): WorkspaceRunItem {
     onSelectMode: NOOP,
     onEmit: NOOP,
     onLocate: null,
-    onMakePrimary: NOOP,
     onRemove: null,
     ...over,
   };
 }
 
 afterEach(cleanup);
+// The rows read the global multi-select preference; keep tests order-independent.
+afterEach(() => {
+  useWorkspaceFoldersStore.setState({ allowMultipleFolders: false });
+});
 
 describe("FolderLocationControl", () => {
   function renderControl(over: Partial<WorkspaceRunItem>): void {
@@ -309,14 +298,16 @@ describe("FolderLocationControl", () => {
 });
 
 describe("FolderRow", () => {
-  function renderRow(
+  function renderRowWithMulti(
     over: Partial<WorkspaceRunItem>,
     onEdit: (p: string) => void,
+    multiSelectEnabled: boolean,
   ): void {
     render(
       <TooltipProvider>
         <FolderRow
           item={item(over)}
+          multiSelectEnabled={multiSelectEnabled}
           onEditEnvironment={onEdit}
           uncommittedByPath={EMPTY_COUNTS}
           boundaryEl={null}
@@ -324,6 +315,12 @@ describe("FolderRow", () => {
         />
       </TooltipProvider>,
     );
+  }
+  function renderRow(
+    over: Partial<WorkspaceRunItem>,
+    onEdit: (p: string) => void,
+  ): void {
+    renderRowWithMulti(over, onEdit, true);
   }
 
   it("opens the scripts editor from the ⚙ button in every mode", () => {
@@ -374,20 +371,32 @@ describe("FolderRow", () => {
     expect(writeText).toHaveBeenCalledWith("/wt/feat-login");
   });
 
-  it("hides the copy-path action for a new worktree that has no path yet", () => {
+  it("falls back to the source folder path for a new worktree that has no run path yet", () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
     renderRow({ mode: "worktree", currentIntent: null }, NOOP);
-    expect(screen.queryByLabelText("Copy folder path")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Copy folder path"));
+    expect(writeText).toHaveBeenCalledWith("/repo");
   });
 
-  it("keeps the copy-path icon's default state free of stacked opacity attenuation and >=3:1 against the popover in every theme preset", () => {
+  it("keeps the revealed copy-path icon free of stacked opacity attenuation and >=3:1 against the popover in every theme preset", () => {
     renderRow(
       { mode: "local", displayPath: "/repo", currentIntent: null },
       NOOP,
     );
     const copyButton = screen.getByLabelText("Copy folder path");
-    // The bug was `text-muted-foreground/70` (a fractional text color) MULTIPLIED
-    // by an outer `opacity-[var(--fc-opacity,0.7)]` - ~49% effective opacity.
-    // Both must be gone from the default (non-hover) state.
+    // Hover-revealed: hidden at rest via the WRAPPER's opacity-0 (user
+    // decision - one copy icon per row reads as noise), shown on row
+    // hover/focus. The revealed state must still be free of the old bug:
+    // `text-muted-foreground/70` (a fractional text color) MULTIPLIED by an
+    // outer `opacity-[var(--fc-opacity,0.7)]` - ~49% effective opacity.
+    const wrapper = copyButton.closest("span");
+    expect(wrapper?.className).toContain("opacity-0");
+    expect(wrapper?.className).toContain("group-hover:opacity-100");
+    expect(wrapper?.className).toContain("group-focus-within:opacity-100");
     expect(copyButton.className).not.toMatch(/text-muted-foreground\/\d/);
     expect(copyButton.className).not.toMatch(/opacity-\[var\(--fc-opacity/);
     expect(copyButton.className).toContain("text-muted-foreground");
@@ -406,11 +415,11 @@ describe("FolderRow", () => {
     }
   });
 
-  it("keeps pin, identity, controls, and actions on one aligned row", () => {
+  it("keeps main marker, identity, controls, and actions on one aligned row", () => {
     renderRow({ displayName: "a-folder-name-that-needs-room" }, NOOP);
 
     const row = screen.getByTestId("folder-row");
-    const pin = screen.getByTestId("folder-primary-pin");
+    const pin = screen.getByTestId("folder-main-marker");
     const identity = screen.getByTestId("folder-chip");
     const actions = screen.getByTestId("folder-row-actions");
     const location = screen.getByTestId("folder-location-trigger");
@@ -436,19 +445,22 @@ describe("FolderRow", () => {
     expect(tooltipTextNear(identity.children[1])).toBe("/repo");
   });
 
-  it("reserves two stable trailing action slots", () => {
-    renderRow({ isPrimary: true, canChangePrimary: true }, NOOP);
+  it("reserves three stable trailing action slots (pin, scripts, remove)", () => {
+    renderRow({ isPrimary: true }, NOOP);
 
     const actions = screen.getByTestId("folder-row-actions");
-    expect(actions.children).toHaveLength(2);
+    expect(actions.children).toHaveLength(3);
     expect(actions.className).toContain("justify-self-end");
     expect(
-      actions.children[0].querySelector(
+      actions.children[0].querySelector('[data-testid="folder-pin-default"]'),
+    ).not.toBeNull();
+    expect(
+      actions.children[1].querySelector(
         '[data-testid="folder-scripts-trigger"]',
       ),
     ).not.toBeNull();
     expect(
-      actions.children[1].querySelector('[data-testid="folder-remove"]'),
+      actions.children[2].querySelector('[data-testid="folder-remove"]'),
     ).not.toBeNull();
   });
 
@@ -589,13 +601,26 @@ describe("FolderRow", () => {
     expect(screen.queryByTestId("folder-branch-trigger")).toBeNull();
   });
 
-  it("shows the delete button even for a single folder, wired to onRemove", () => {
+  it("shows the delete button even for a single folder, removing only after confirmation", () => {
     const onRemove = vi.fn();
     renderRow({ onRemove }, NOOP);
     const remove = screen.getByTestId("folder-remove");
     expect(remove).toBeTruthy();
+    // The trash opens a confirmation first - it never removes directly.
     fireEvent.click(remove);
+    expect(onRemove).not.toHaveBeenCalled();
+    const dialog = screen.getByTestId("confirm-destructive-dialog");
+    expect(dialog.textContent).toContain("Remove repo from saved projects?");
+    fireEvent.click(screen.getByTestId("confirm-action"));
     expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancelling the remove confirmation keeps the project", () => {
+    const onRemove = vi.fn();
+    renderRow({ onRemove }, NOOP);
+    fireEvent.click(screen.getByTestId("folder-remove"));
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
+    expect(onRemove).not.toHaveBeenCalled();
   });
 
   it("offers both Locate and Remove on an Unavailable row", () => {
@@ -608,6 +633,7 @@ describe("FolderRow", () => {
     expect(onLocate).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByTestId("folder-remove"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
@@ -616,6 +642,7 @@ describe("FolderRow", () => {
       <TooltipProvider>
         <FolderRow
           item={item({ unresolved: true, onLocate: NOOP, onRemove: NOOP })}
+          multiSelectEnabled
           onEditEnvironment={NOOP}
           uncommittedByPath={EMPTY_COUNTS}
           boundaryEl={null}
@@ -628,126 +655,211 @@ describe("FolderRow", () => {
     expect(screen.queryByTestId("folder-remove")).toBeNull();
   });
 
-  it("shows a filled Primary pin with an explanatory tooltip", async () => {
-    renderRow({ isPrimary: true }, NOOP);
-    const pin = screen.getByTestId("folder-primary-pin");
-    expect(pin.tagName).toBe("BUTTON");
-    expect(pin.getAttribute("aria-disabled")).toBe("true");
-    expect(pin.getAttribute("aria-label")).toBe("Primary folder information");
-    expect(pin.querySelector("svg")?.getAttribute("fill")).toBe("currentColor");
-    tabForward();
-    expect(document.activeElement).toBe(pin);
+  it("marks the main row with the filled marker, a tinted row, and no checkbox", async () => {
+    renderRow({ isPrimary: true, selected: true }, NOOP);
+    const marker = screen.getByTestId("folder-main-marker");
+    expect(marker).toBeTruthy();
+    // The row tint replaced the old "Main" text badge (user decision).
+    expect(screen.getByTestId("folder-row").className).toContain(
+      "bg-primary/5",
+    );
+    expect(screen.queryByTestId("folder-main-badge")).toBeNull();
+    // The main slot is structural: there is no checkbox to uncheck.
+    expect(screen.queryByTestId("folder-select-checkbox")).toBeNull();
+    fireEvent.focus(marker);
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       "New agent commands and terminals start here",
     );
   });
 
-  it("shows an outline locked pin with a disabled cursor and explanation", async () => {
-    renderRow({ isPrimary: false, canChangePrimary: false }, NOOP);
-    const pin = screen.getByTestId("folder-secondary-pin");
-    expect(pin.querySelector("svg")?.getAttribute("fill")).toBe("none");
-    expect(pin.getAttribute("aria-disabled")).toBe("true");
-    expect(pin.className).toContain("cursor-not-allowed");
-    fireEvent.focus(pin);
-    expect((await screen.findByRole("tooltip")).textContent).toContain(
-      "cannot be changed after the agent starts",
+  it("shows a plain checked checkbox (no main styling) on an additional row", () => {
+    renderRow({ isPrimary: false, selected: true }, NOOP);
+    const checkbox = screen.getByTestId("folder-select-checkbox");
+    expect(checkbox.getAttribute("data-state")).toBe("checked");
+    expect(screen.queryByTestId("folder-main-marker")).toBeNull();
+    expect(screen.getByTestId("folder-row").className).not.toContain(
+      "bg-primary/5",
     );
   });
 
-  it("explains the post-start lock on the filled Primary pin", async () => {
-    renderRow({ isPrimary: true, canChangePrimary: false }, NOOP);
-    const pin = screen.getByTestId("folder-primary-pin");
-    expect(pin.getAttribute("aria-disabled")).toBe("true");
-    expect(pin.className).toContain("cursor-not-allowed");
-    tabForward();
-    expect(document.activeElement).toBe(pin);
-    expect((await screen.findByRole("tooltip")).textContent).toContain(
-      "cannot be changed after the agent starts",
-    );
+  it("toggles additional membership through the checkbox, wired to onToggleSelected", () => {
+    const onToggleSelected = vi.fn();
+    renderRow({ isPrimary: false, selected: false, onToggleSelected }, NOOP);
+    const checkbox = screen.getByTestId("folder-select-checkbox");
+    expect(checkbox.getAttribute("data-state")).toBe("unchecked");
+    fireEvent.click(checkbox);
+    expect(onToggleSelected).toHaveBeenCalledWith(true);
   });
 
-  it("hides the Make primary action on the primary row itself", () => {
-    renderRow({ isPrimary: true, canChangePrimary: true }, NOOP);
-    expect(screen.queryByTestId("folder-make-primary")).toBeNull();
-    expect(screen.getByTestId("folder-primary-pin")).toBeTruthy();
+  it("switches the main project by clicking another row's name", () => {
+    const onUseAsMain = vi.fn();
+    renderRow({ isPrimary: false, selected: false, onUseAsMain }, NOOP);
+    const name = screen.getByTestId("folder-use-as-main");
+    expect(name.textContent).toBe("repo");
+    fireEvent.click(name);
+    expect(onUseAsMain).toHaveBeenCalledTimes(1);
   });
 
-  it("offers a keyboard-operable Make primary action on a non-primary row, wired to onMakePrimary", () => {
-    const onMakePrimary = vi.fn();
+  it("keeps the name inert (path tooltip only) when the main cannot move here", () => {
+    renderRow({ isPrimary: false, selected: true, onUseAsMain: null }, NOOP);
+    expect(screen.queryByTestId("folder-use-as-main")).toBeNull();
+  });
+
+  it("disables the checkbox with the given selection reason", () => {
+    const onToggleSelected = vi.fn();
     renderRow(
-      { isPrimary: false, canChangePrimary: true, onMakePrimary },
+      {
+        isPrimary: false,
+        selected: false,
+        onToggleSelected,
+        selectionDisabledReason: "Not available on the selected host.",
+      },
       NOOP,
     );
-    const button = screen.getByRole("button", { name: "Set as primary" });
-    expect(button).toBeTruthy();
-    expect(button.hasAttribute("disabled")).toBe(false);
-    fireEvent.click(button);
-    expect(onMakePrimary).toHaveBeenCalledTimes(1);
+    const checkbox = screen.getByTestId("folder-select-checkbox");
+    expect(checkbox.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(checkbox);
+    expect(onToggleSelected).not.toHaveBeenCalled();
   });
 
-  it("replaces Make primary with a passive outline pin when the surface can't change primary", () => {
-    renderRow({ isPrimary: false, canChangePrimary: false }, NOOP);
-    expect(screen.queryByTestId("folder-make-primary")).toBeNull();
-    expect(screen.getByTestId("folder-secondary-pin")).toBeTruthy();
+  it("pins the default project for new tasks from the row actions", () => {
+    const onTogglePin = vi.fn();
+    renderRow({ isPinned: false, onTogglePin }, NOOP);
+    const pin = screen.getByTestId("folder-pin-default");
+    expect(pin.getAttribute("aria-pressed")).toBe("false");
+    expect(pin.querySelector("svg")?.getAttribute("fill")).toBe("none");
+    fireEvent.click(pin);
+    expect(onTogglePin).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the disabled pin keyboard-reachable while metadata is pending", async () => {
+  it("fills the pin on the pinned default project with an explanatory tooltip", async () => {
+    renderRow({ isPinned: true }, NOOP);
+    const pin = screen.getByTestId("folder-pin-default");
+    expect(pin.getAttribute("aria-pressed")).toBe("true");
+    expect(pin.querySelector("svg")?.getAttribute("fill")).toBe("currentColor");
+    fireEvent.focus(pin);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "New tasks start with this project selected",
+    );
+  });
+
+  it("hides the pin slot for a row outside the saved list", () => {
+    renderRow({ onTogglePin: null }, NOOP);
+    expect(screen.queryByTestId("folder-pin-default")).toBeNull();
+  });
+
+  it("shows display-only facts (no location/branch controls) on an unselected row", () => {
+    let edited = "";
+    renderRow(
+      { selected: false, isPrimary: false, branchLabel: "development" },
+      (p) => {
+        edited = p;
+      },
+    );
+    const facts = screen.getByTestId("folder-row-unselected-facts");
+    expect(facts.textContent).toContain("development");
+    // The branch fact renders in the Branch track; the Location track stays
+    // an (empty) separate cell so the column headers hold for every row.
+    expect(screen.getByTestId("folder-row-unselected-location")).toBeTruthy();
+    expect(screen.queryByTestId("folder-location-trigger")).toBeNull();
+    expect(screen.queryByTestId("folder-branch-trigger")).toBeNull();
+    // The saved-list actions stay available - including scripts, which are a
+    // property of the saved project, not of the chat's selection.
+    fireEvent.click(screen.getByTestId("folder-scripts-trigger"));
+    expect(edited).toBe("/repo");
+    expect(screen.getByTestId("folder-pin-default")).toBeTruthy();
+    expect(screen.getByTestId("folder-remove")).toBeTruthy();
+  });
+
+  it("hides the checkbox on an unselected row when multi-select is off, keeping the switch affordance", () => {
+    const onUseAsMain = vi.fn();
+    renderRowWithMulti(
+      { selected: false, isPrimary: false, onUseAsMain },
+      NOOP,
+      false,
+    );
+    expect(screen.queryByTestId("folder-select-checkbox")).toBeNull();
+    // An empty spacer keeps the grid's first column aligned.
+    expect(screen.getByTestId("folder-select-spacer")).toBeTruthy();
+    // The row can still become the main project by clicking its name.
+    fireEvent.click(screen.getByTestId("folder-use-as-main"));
+    expect(onUseAsMain).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the checkbox on a still-selected extra when multi-select is off", () => {
+    const onToggleSelected = vi.fn();
+    renderRowWithMulti(
+      { selected: true, isPrimary: false, onToggleSelected },
+      NOOP,
+      false,
+    );
+    const checkbox = screen.getByTestId("folder-select-checkbox");
+    expect(checkbox.getAttribute("data-state")).toBe("checked");
+    fireEvent.click(checkbox);
+    expect(onToggleSelected).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps remove live while metadata is pending", () => {
+    const onRemove = vi.fn();
+    renderRow(
+      { metadataPending: true, isPrimary: false, summary: null, onRemove },
+      NOOP,
+    );
+    expect(screen.getByTestId("folder-row-loading")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("folder-remove"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables checking an unresolved row with an explanation, keeping Locate and Remove live", () => {
+    const onToggleSelected = vi.fn();
+    const onLocate = vi.fn();
     const onRemove = vi.fn();
     renderRow(
       {
-        metadataPending: true,
+        unresolved: true,
+        selected: false,
         isPrimary: false,
-        canChangePrimary: true,
-        makePrimaryDisabled: true,
-        makePrimaryDisabledReason: "Loading folder metadata",
-        summary: null,
+        onToggleSelected,
+        selectionDisabledReason: "Not available on the selected host.",
+        onLocate,
         onRemove,
       },
       NOOP,
     );
-    expect(screen.getByTestId("folder-row-loading")).toBeTruthy();
-    // aria-disabled keeps the explanation in normal keyboard traversal while
-    // guarding activation during the fetch.
-    const pin = screen.getByTestId("folder-make-primary");
-    expect(pin.hasAttribute("disabled")).toBe(false);
-    expect(pin.getAttribute("aria-disabled")).toBe("true");
-    tabForward();
-    expect(document.activeElement).toBe(pin);
-    const tooltip = await screen.findByRole("tooltip");
-    expect(pin.getAttribute("aria-describedby")).toBe(tooltip.id);
-    expect(tooltip.textContent).toContain("Loading folder metadata");
-    // Remove stays live - a pending row is still removable.
+    const checkbox = screen.getByTestId("folder-select-checkbox");
+    expect(checkbox.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(checkbox);
+    expect(onToggleSelected).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("folder-row-locate"));
+    expect(onLocate).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId("folder-remove"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
     expect(onRemove).toHaveBeenCalledTimes(1);
   });
 
-  it("tabs to the disabled Make primary explanation for an unresolved row", async () => {
-    const onMakePrimary = vi.fn();
+  it("switches the main by clicking the row's empty background, but not its controls", () => {
+    const onUseAsMain = vi.fn();
+    const onToggleSelected = vi.fn();
     renderRow(
-      {
-        unresolved: true,
-        isPrimary: false,
-        canChangePrimary: true,
-        makePrimaryDisabled: true,
-        makePrimaryDisabledReason: "Resolve this folder to make it primary",
-        onLocate: NOOP,
-        onMakePrimary,
-        onRemove: NOOP,
-      },
+      { isPrimary: false, selected: false, onUseAsMain, onToggleSelected },
       NOOP,
     );
-    const button = screen.getByTestId("folder-make-primary");
-    expect(button.hasAttribute("disabled")).toBe(false);
-    expect(button.getAttribute("aria-disabled")).toBe("true");
-    tabForward();
-    expect(document.activeElement).toBe(button);
-    const tooltip = await screen.findByRole("tooltip");
-    expect(button.getAttribute("aria-describedby")).toBe(tooltip.id);
-    expect(tooltip.textContent).toContain(
-      "Resolve this folder to make it primary",
-    );
-    fireEvent.click(button);
-    expect(onMakePrimary).not.toHaveBeenCalled();
+    // A click on one of the row's own controls must NOT switch the main...
+    fireEvent.click(screen.getByTestId("folder-select-checkbox"));
+    expect(onUseAsMain).not.toHaveBeenCalled();
+    // ...while a click on the row's background does.
+    fireEvent.click(screen.getByTestId("folder-row"));
+    expect(onUseAsMain).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the row background inert when the main cannot move here", () => {
+    renderRow({ isPrimary: false, selected: true, onUseAsMain: null }, NOOP);
+    const row = screen.getByTestId("folder-row");
+    expect(row.className).not.toContain("cursor-pointer");
+    fireEvent.click(row);
+    // No handler to call - nothing to assert beyond not crashing; the
+    // affordance classes are the observable contract.
   });
 });
 
@@ -775,6 +887,129 @@ describe("WorkspaceFolderRows", () => {
     expect(screen.getByTestId("device-slot")).toBeTruthy();
     expect(screen.getByTestId("folder-row")).toBeTruthy();
     expect(screen.getByTestId("folder-add")).toBeTruthy();
+    // The column header names the grid's tracks above the rows.
+    const header = screen.getByTestId("workspace-folder-header");
+    expect(header.textContent).toContain("Project");
+    expect(header.textContent).toContain("Location");
+    expect(header.textContent).toContain("Branch");
+  });
+
+  it("renders the multi-select toggle on the Add-folder line, reflecting the global preference", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderRows
+          items={[
+            item({}),
+            item({
+              key: "/repo2",
+              displayName: "repo2",
+              isPrimary: false,
+              selected: false,
+            }),
+          ]}
+          trailingSlot={null}
+          onAddFolder={NOOP_ADD}
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onEditEnvironment={NOOP}
+          nestedInPopover={false}
+          readOnly={false}
+          bindingResolved
+        />
+      </TooltipProvider>,
+    );
+    const toggle = screen.getByTestId("workspace-multi-folder-toggle");
+    expect(toggle.textContent).toContain("Allow multiple folders in chat");
+    const checkbox = screen.getByTestId(
+      "workspace-multi-folder-toggle-checkbox",
+    );
+    // Off by default: single-project chats until the user opts in.
+    expect(checkbox.getAttribute("data-state")).toBe("unchecked");
+    // ...which also hides the unselected row's additional checkbox.
+    expect(screen.queryByTestId("folder-select-checkbox")).toBeNull();
+    fireEvent.click(checkbox);
+    expect(useWorkspaceFoldersStore.getState().allowMultipleFolders).toBe(true);
+    expect(screen.getByTestId("folder-select-checkbox")).toBeTruthy();
+  });
+
+  it("unticking the toggle deselects every additional folder but never the main", () => {
+    useWorkspaceFoldersStore.setState({ allowMultipleFolders: true });
+    const onToggleMain = vi.fn();
+    const onToggleExtra = vi.fn();
+    const onToggleUnselected = vi.fn();
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderRows
+          items={[
+            item({ onToggleSelected: onToggleMain }),
+            item({
+              key: "/repo2",
+              displayName: "repo2",
+              isPrimary: false,
+              selected: true,
+              onToggleSelected: onToggleExtra,
+            }),
+            item({
+              key: "/repo3",
+              displayName: "repo3",
+              isPrimary: false,
+              selected: false,
+              onToggleSelected: onToggleUnselected,
+            }),
+          ]}
+          trailingSlot={null}
+          onAddFolder={NOOP_ADD}
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onEditEnvironment={NOOP}
+          nestedInPopover={false}
+          readOnly={false}
+          bindingResolved
+        />
+      </TooltipProvider>,
+    );
+    fireEvent.click(
+      screen.getByTestId("workspace-multi-folder-toggle-checkbox"),
+    );
+    expect(useWorkspaceFoldersStore.getState().allowMultipleFolders).toBe(
+      false,
+    );
+    // Only the still-selected EXTRA leaves the chat; the main row and the
+    // already-unselected saved row are untouched.
+    expect(onToggleExtra).toHaveBeenCalledWith(false);
+    expect(onToggleMain).not.toHaveBeenCalled();
+    expect(onToggleUnselected).not.toHaveBeenCalled();
+  });
+
+  it("hides the multi-select toggle on read-only surfaces", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceFolderRows
+          items={[item({})]}
+          trailingSlot={null}
+          onAddFolder={NOOP_ADD}
+          addFolderPending={false}
+          addFolderDisabled={false}
+          addFolderDisabledReason={null}
+          onUpdate={null}
+          updateEnabled={false}
+          updatePending={false}
+          onEditEnvironment={NOOP}
+          nestedInPopover={false}
+          readOnly
+          bindingResolved
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.queryByTestId("workspace-multi-folder-toggle")).toBeNull();
   });
 
   it("lets the container own all text-track widths so long values cannot overflow a modal", () => {
@@ -822,8 +1057,10 @@ describe("WorkspaceFolderRows", () => {
     );
 
     const grid = screen.getByTestId("workspace-folder-grid");
+    // Project gets a wider text track (long repo names must stay readable),
+    // balanced against the Branch track's from-source annotations.
     expect(grid.className).toContain(
-      "grid-cols-[1.5rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.5fr)_auto]",
+      "grid-cols-[1.5rem_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1.25fr)_auto]",
     );
     expect(grid.className).not.toContain("max-content");
 
@@ -1017,11 +1254,15 @@ describe("WorkspaceFolderRows", () => {
 });
 
 describe("WorkspaceSummaryTrigger", () => {
-  it("summarizes the primary folder and extra count", () => {
+  it("summarizes the first two selected projects and folds the rest into +N", () => {
     render(
       <TooltipProvider>
         <WorkspaceSummaryTrigger
-          items={[item({}), item({ key: "/repo2", displayName: "repo2" })]}
+          items={[
+            item({}),
+            item({ key: "/repo2", displayName: "repo2", isPrimary: false }),
+            item({ key: "/repo3", displayName: "repo3", isPrimary: false }),
+          ]}
           readOnly={false}
           bindingResolved
         />
@@ -1030,7 +1271,34 @@ describe("WorkspaceSummaryTrigger", () => {
     const trigger = screen.getByTestId("workspace-summary-trigger");
     expect(trigger.textContent).toContain("repo");
     expect(trigger.textContent).toContain("feat/x");
+    expect(screen.getByTestId("workspace-summary-secondary").textContent).toBe(
+      "repo2",
+    );
     expect(trigger.textContent).toContain("+1");
+  });
+
+  it("keeps unselected saved projects out of the collapsed summary", () => {
+    render(
+      <TooltipProvider>
+        <WorkspaceSummaryTrigger
+          items={[
+            item({}),
+            item({
+              key: "/repo2",
+              displayName: "repo2",
+              isPrimary: false,
+              selected: false,
+            }),
+          ]}
+          readOnly={false}
+          bindingResolved
+        />
+      </TooltipProvider>,
+    );
+    const trigger = screen.getByTestId("workspace-summary-trigger");
+    expect(trigger.textContent).toContain("repo");
+    expect(screen.queryByTestId("workspace-summary-secondary")).toBeNull();
+    expect(trigger.textContent).not.toContain("+1");
   });
 
   it("shows the new target and its source in the collapsed workspace trigger", () => {

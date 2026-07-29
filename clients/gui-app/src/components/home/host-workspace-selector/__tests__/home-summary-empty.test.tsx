@@ -383,7 +383,11 @@ describe("landing workspace summary empty state", () => {
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     draftRuntimeRegistry.resetForTesting();
-    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useLandingDraftStore.setState({
+      drafts: [],
+      activeDraftId: null,
+      pendingWorkspace: null,
+    });
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -394,6 +398,7 @@ describe("landing workspace summary empty state", () => {
       folders: [],
       folderInfoByPath: {},
       primaryPath: null,
+      pinnedPath: null,
     });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
@@ -407,7 +412,11 @@ describe("landing workspace summary empty state", () => {
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     draftRuntimeRegistry.resetForTesting();
-    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useLandingDraftStore.setState({
+      drafts: [],
+      activeDraftId: null,
+      pendingWorkspace: null,
+    });
     useEpicCanvasStore.setState({
       tabsById: {},
       openTabOrder: [],
@@ -418,6 +427,7 @@ describe("landing workspace summary empty state", () => {
       folders: [],
       folderInfoByPath: {},
       primaryPath: null,
+      pinnedPath: null,
     });
     useWorktreeIntentMemoryStore.getState().resetForTests();
     useWorktreeIntentStagingStore.getState().resetForTests();
@@ -444,6 +454,19 @@ describe("landing workspace summary empty state", () => {
   });
 
   it("queries disk metadata for unresolved folders and renders them usable when git exists", () => {
+    // The folder must be part of the chat's selection (the global list in the
+    // no-draft fallback) for the interactive location/branch controls to show.
+    useWorkspaceFoldersStore.setState({
+      folders: ["/workspace/app"],
+      folderInfoByPath: {
+        "/workspace/app": {
+          path: "/workspace/app",
+          name: "app",
+          repoIdentifier: { owner: "acme", repo: "app" },
+        },
+      },
+      primaryPath: "/workspace/app",
+    });
     mocks.resolvedWorkspace.current = {
       folders: [
         {
@@ -476,6 +499,17 @@ describe("landing workspace summary empty state", () => {
   });
 
   it("renders unresolved folders with non-git disk metadata as local-only folders", async () => {
+    useWorkspaceFoldersStore.setState({
+      folders: ["/workspace/app"],
+      folderInfoByPath: {
+        "/workspace/app": {
+          path: "/workspace/app",
+          name: "app",
+          repoIdentifier: { owner: "acme", repo: "app" },
+        },
+      },
+      primaryPath: "/workspace/app",
+    });
     mocks.resolvedWorkspace.current = {
       folders: [
         {
@@ -820,6 +854,14 @@ describe("landing workspace summary empty state", () => {
         },
         primaryPath: folderAPath,
       });
+      // The blank landing edits a per-chat PENDING snapshot now: adding B to
+      // the saved list alone no longer selects it into the chat - staged
+      // intent seeding only covers selected rows, so select B explicitly.
+      useLandingDraftStore
+        .getState()
+        .addPendingResolvedFolders([
+          { path: folderBPath, name: "lib", repoIdentifier: folderBRepo },
+        ]);
     });
 
     await waitFor(() => {

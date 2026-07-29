@@ -58,7 +58,10 @@ import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useComposerToolbarStore } from "@/components/home/hooks/use-composer-toolbar-store";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
-import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  useLandingDraftStore,
+  usePendingOrPinnedLandingWorkspace,
+} from "@/stores/home/landing-draft-store";
 import {
   draftRuntimeRegistry,
   EMPTY_DRAFT_RUNTIME_CONTENT,
@@ -216,12 +219,19 @@ export function LandingComposer(props: LandingComposerProps) {
     terminalAgentCreate.isPending;
 
   const hasSubmittableContent = contentIsSubmittable(runtimeState.content);
-  const draftWorkspace = useLandingDraftStore((state) => {
+  // Blank landing: the availability gate must check the folders this submit
+  // will actually run with - the shared pending-or-pinned snapshot, never the
+  // whole saved list (an unavailable UNSELECTED saved project must not block
+  // a valid pinned-only landing).
+  const pendingOrPinnedWorkspace = usePendingOrPinnedLandingWorkspace();
+  const boundDraftWorkspace = useLandingDraftStore((state) => {
     if (draftId === null) return null;
     return (
       state.drafts.find((draft) => draft.id === draftId)?.workspace ?? null
     );
   });
+  const draftWorkspace =
+    draftId === null ? pendingOrPinnedWorkspace : boundDraftWorkspace;
   const defaultHostClient = useHostClient();
   // Rate-limit switch prompt for the landing composer's own toolbar
   // selection, scoped to the app-wide default host (landing has no tab of

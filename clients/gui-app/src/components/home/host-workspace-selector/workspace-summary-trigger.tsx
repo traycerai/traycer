@@ -35,16 +35,25 @@ export function WorkspaceSummaryTrigger(
   },
 ) {
   const { items, readOnly, bindingResolved, className, ref, ...rest } = props;
+  // The chip previews the CURRENT CHAT's folders, so unselected saved-list
+  // rows stay out of it (they still render in the expanded picker).
+  const selectedItems = items.filter((item) => item.selected);
   // Resolve by the marked `isPrimary` row, not array order: the host
   // normalizes binding flags without reordering entries, so the collapsed
   // chip must agree with the primary pin/row rather than always reading
   // position 0.
   const primary =
-    items.length === 0
+    selectedItems.length === 0
       ? null
-      : (items.find((item) => item.isPrimary) ?? items[0]);
-  const extraCount = Math.max(0, items.length - 1);
-  const anyMissing = items.some((item) => item.missing);
+      : (selectedItems.find((item) => item.isPrimary) ?? selectedItems[0]);
+  // The first TWO selected projects show by name (primary first); the rest
+  // fold into "+N".
+  const secondary =
+    primary === null
+      ? null
+      : (selectedItems.find((item) => item !== primary) ?? null);
+  const extraCount = Math.max(0, selectedItems.length - 2);
+  const anyMissing = selectedItems.some((item) => item.missing);
   const [readOnlyPopoverOpen, setReadOnlyPopoverOpen] = useState(false);
   const [readOnlyHoverOpen, setReadOnlyHoverOpen] = useState(false);
 
@@ -64,7 +73,10 @@ export function WorkspaceSummaryTrigger(
       {...rest}
     >
       {primary === null ? (
-        <SummaryEmptyState bindingResolved={bindingResolved} />
+        <SummaryEmptyState
+          bindingResolved={bindingResolved}
+          hasSavedProjects={items.length > 0}
+        />
       ) : (
         <>
           {anyMissing ? (
@@ -88,6 +100,14 @@ export function WorkspaceSummaryTrigger(
               className={undefined}
             />
           </span>
+          {secondary === null ? null : (
+            <span
+              className="min-w-0 max-w-[min(24vw,9rem)] shrink-[2] truncate text-current/80"
+              data-testid="workspace-summary-secondary"
+            >
+              {secondary.displayName}
+            </span>
+          )}
           {extraCount > 0 ? (
             <span className="shrink-0 rounded-md bg-muted/80 px-1.5 py-0.5 text-overline font-medium text-current">
               +{extraCount}
@@ -117,7 +137,7 @@ export function WorkspaceSummaryTrigger(
         }}
       >
         <HoverPreviewCard
-          content={<WorkspaceFolderHoverList items={items} />}
+          content={<WorkspaceFolderHoverList items={selectedItems} />}
           side="bottom"
           sideOffset={4}
           align="start"
@@ -160,9 +180,16 @@ export function WorkspaceSummaryTrigger(
   return trigger;
 }
 
-function SummaryEmptyState(props: { readonly bindingResolved: boolean }) {
+function SummaryEmptyState(props: {
+  readonly bindingResolved: boolean;
+  readonly hasSavedProjects: boolean;
+}) {
   if (props.bindingResolved) {
-    return <span className="text-current/70">No workspace linked</span>;
+    return (
+      <span className="text-current/70">
+        {props.hasSavedProjects ? "No folders selected" : "No workspace linked"}
+      </span>
+    );
   }
   return (
     <>

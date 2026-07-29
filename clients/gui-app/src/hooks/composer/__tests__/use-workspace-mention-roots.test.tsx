@@ -17,17 +17,30 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
 
 function setGlobalFolders(folders: ReadonlyArray<string>): void {
-  useWorkspaceFoldersStore.setState({ folders });
+  // Real store writes always pair a folder with its metadata; draft seeding
+  // (pinned default) reads it, so the fixture must too.
+  useWorkspaceFoldersStore.setState({
+    folders,
+    folderInfoByPath: Object.fromEntries(
+      folders.map((path) => [
+        path,
+        { path, name: path.split("/").pop() ?? path, repoIdentifier: null },
+      ]),
+    ),
+  });
 }
 
 function resetStores(): void {
   useWorkspaceFoldersStore.setState({
     folders: [],
     folderInfoByPath: {},
+    primaryPath: null,
+    pinnedPath: null,
   });
   useLandingDraftStore.setState({
     drafts: [],
     activeDraftId: null,
+    pendingWorkspace: null,
   });
   useWorktreeIntentStagingStore.setState({ intentByKey: {} });
 }
@@ -163,6 +176,17 @@ describe("useLandingComposerMentionRoots", () => {
     const { result } = renderHook(() => useLandingComposerMentionRoots(null));
 
     expect(result.current).toEqual(["/worktrees/repo-feature"]);
+  });
+
+  it("scopes base-landing roots to the pending selection, not every saved project", () => {
+    setGlobalFolders(["/repo", "/other-saved"]);
+    useWorkspaceFoldersStore.setState({ pinnedPath: "/repo" });
+
+    const { result } = renderHook(() => useLandingComposerMentionRoots(null));
+
+    // Untouched blank landing = pinned-only; the unselected saved project
+    // must not surface as a mention root.
+    expect(result.current).toEqual(["/repo"]);
   });
 
   it("uses an imported draft worktree path for draft-scoped landing composers", () => {

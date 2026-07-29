@@ -23,7 +23,6 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { useEpicCreate } from "@/hooks/epic/use-epic-create-mutation";
 import { useCreateTuiAgent } from "@/hooks/agent/use-create-tui-agent";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import {
   readStagedWorktreeIntent,
   stagedWorktreeIntentIsSuspended,
@@ -33,6 +32,7 @@ import {
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import {
+  readPendingOrPinnedLandingWorkspace,
   useLandingDraftStore,
   type LandingDraftWorkspaceSnapshot,
 } from "@/stores/home/landing-draft-store";
@@ -906,19 +906,17 @@ function readLandingWorkspaceContext(
       draftId: exactDraftId,
     };
   }
-  const globalState = useWorkspaceFoldersStore.getState();
-  const globalWorkspace = {
-    folders: globalState.folders,
-    folderInfoByPath: globalState.folderInfoByPath,
-    primaryPath: globalState.primaryPath,
-  };
+  // No draft yet (blank landing): launch with the same pending-or-pinned
+  // snapshot the picker shows - never the whole saved list, which would pull
+  // every saved project (and the legacy global primary) into the run.
+  const pendingWorkspace = readPendingOrPinnedLandingWorkspace();
   return {
     ...canonicalLaunchWorkspace(
-      globalWorkspace,
+      pendingWorkspace,
       stagedWorktreeIntent,
-      readCachedDefaultWorktreeIntent(queryClient, hostId, globalWorkspace),
+      readCachedDefaultWorktreeIntent(queryClient, hostId, pendingWorkspace),
     ),
-    workspaceFolderInfoByPath: globalState.folderInfoByPath,
+    workspaceFolderInfoByPath: pendingWorkspace.folderInfoByPath,
     worktreeIntentSuspended,
     draftId: null,
   };

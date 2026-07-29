@@ -59,8 +59,16 @@ beforeEach(() => {
     folders: [],
     folderInfoByPath: {},
     primaryPath: null,
+    pinnedPath: null,
+    // These scenarios exercise MULTI-folder adds; with the default
+    // single-project mode an add would switch the main instead.
+    allowMultipleFolders: true,
   });
-  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useLandingDraftStore.setState({
+    drafts: [],
+    activeDraftId: null,
+    pendingWorkspace: null,
+  });
   useWorktreeIntentStagingStore.getState().resetForTests();
 });
 
@@ -69,8 +77,14 @@ afterEach(() => {
     folders: [],
     folderInfoByPath: {},
     primaryPath: null,
+    pinnedPath: null,
+    allowMultipleFolders: false,
   });
-  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useLandingDraftStore.setState({
+    drafts: [],
+    activeDraftId: null,
+    pendingWorkspace: null,
+  });
   useWorktreeIntentStagingStore.getState().resetForTests();
 });
 
@@ -133,6 +147,11 @@ describe("useHomeWorkspaceSource addResolvedFolders - cap eviction unstages the 
     );
     useWorkspaceFoldersStore.getState().addResolvedFolders(initialFolders);
     const draftId = useLandingDraftStore.getState().createDraft(null);
+    // A new draft seeds with only the pinned default now - build the full
+    // divergent 50-folder draft membership explicitly.
+    useLandingDraftStore
+      .getState()
+      .addDraftResolvedFolders(draftId, initialFolders);
 
     // Keep both representations at the supported 50-folder cap while making
     // their membership and primary choices diverge. On the next add, global

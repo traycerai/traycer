@@ -12,6 +12,7 @@ import {
   setWorktreeIntentEntryScripts,
 } from "@/components/home/host-workspace-selector/worktree-intent-merge";
 import { basePersistOptions, worktreeIntentStagingKey } from "@/lib/persist";
+import { setLandingDraftMintObserver } from "@/stores/home/landing-draft-mint-bridge";
 import {
   worktreeFolderIntentReferencesRemoved,
   type RemovedWorktreeRefs,
@@ -201,6 +202,19 @@ interface WorktreeIntentStagingStore {
     key: WorktreeStagingKey,
     workspacePaths: readonly string[],
   ) => void;
+  /**
+   * Move one slot's staged intent + suspended paths to another slot. Used at
+   * draft mint: the blank landing stages under `landing:null`, and those
+   * picks must follow the pending workspace into the minted draft's own slot
+   * (otherwise the surface rekeys, finds nothing staged, and reseeds
+   * defaults). If the target already holds staged intent (a restored draft
+   * id), the target wins and the source is still cleared so it cannot leak
+   * into a later mint.
+   */
+  readonly adoptSlot: (
+    from: WorktreeStagingKey,
+    to: WorktreeStagingKey,
+  ) => void;
   readonly clear: (key: WorktreeStagingKey) => void;
   /**
    * Drops staged entries that reference just-removed worktrees across EVERY
@@ -357,6 +371,39 @@ export const useWorktreeIntentStagingStore =
             }
             return { suspendedWorkspacePathsByKey };
           }),
+        adoptSlot: (from, to) =>
+          set((state) => {
+            const fromId = worktreeStagingKeyString(from);
+            const toId = worktreeStagingKeyString(to);
+            if (fromId === toId) return state;
+            const sourceIntent = state.intentByKey[fromId];
+            const sourceSuspended = state.suspendedWorkspacePathsByKey[fromId];
+            if (sourceIntent === undefined && sourceSuspended === undefined) {
+              return state;
+            }
+            const intentByKey = { ...state.intentByKey };
+            const suspendedWorkspacePathsByKey = {
+              ...state.suspendedWorkspacePathsByKey,
+            };
+            delete intentByKey[fromId];
+            delete suspendedWorkspacePathsByKey[fromId];
+            if (state.intentByKey[toId] === undefined) {
+              if (sourceIntent !== undefined) {
+                intentByKey[toId] = sourceIntent;
+              }
+              if (sourceSuspended !== undefined) {
+                suspendedWorkspacePathsByKey[toId] = sourceSuspended;
+              }
+            }
+            return {
+              intentByKey,
+              suspendedWorkspacePathsByKey,
+              revisionByKey: incrementStagingRevision(
+                incrementStagingRevision(state.revisionByKey, fromId),
+                toId,
+              ),
+            };
+          }),
         clear: (key) =>
           set((state) => {
             const id = worktreeStagingKeyString(key);
@@ -439,6 +486,20 @@ export const useWorktreeIntentStagingStore =
       },
     ),
   );
+
+// Wired after store construction through the dependency-free mint bridge
+// (mirrors `draftRuntimeRegistry.configure`): a direct import between the
+// landing-draft store and this one re-enters the cycle-sensitive store
+// graph mid-eval. At draft mint the blank landing's staged picks move from
+// `landing:null` to the minted draft's own slot.
+setLandingDraftMintObserver((draftId) => {
+  useWorktreeIntentStagingStore
+    .getState()
+    .adoptSlot(
+      { surface: "landing", draftId: null },
+      { surface: "landing", draftId },
+    );
+});
 
 /** Non-hook read of the staged intent for a surface (for getState callers). */
 export function readStagedWorktreeIntent(

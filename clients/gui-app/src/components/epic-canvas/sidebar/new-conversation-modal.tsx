@@ -86,6 +86,7 @@ import {
   workspaceComposerCanStart,
 } from "@/lib/composer/workspace-composer-availability";
 import { effectiveWorktreeIntent } from "@/lib/worktree/effective-worktree-intent";
+import { resolvePrimaryPath } from "@/lib/worktree/resolve-primary-path";
 import { deriveWorkspaceMode } from "@/lib/worktree/workspace-mode";
 import { cn } from "@/lib/utils";
 import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-selector/host-workspace-selector";
@@ -1043,13 +1044,29 @@ function useLatestConversationSettingsSeed(): {
 }
 
 function useGlobalWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
-  return useWorkspaceFoldersStore(
-    useShallow((state) => ({
-      folders: state.folders,
-      folderInfoByPath: state.folderInfoByPath,
-      primaryPath: state.primaryPath,
-    })),
+  // A brand-new conversation (no latest-conversation seed) starts with ONLY
+  // the pinned default project selected - the rest of the saved list stays
+  // available as unselected picker rows, mirroring the landing draft seed.
+  const folders = useWorkspaceFoldersStore((state) => state.folders);
+  const folderInfoByPath = useWorkspaceFoldersStore(
+    (state) => state.folderInfoByPath,
   );
+  const pinnedPath = useWorkspaceFoldersStore((state) => state.pinnedPath);
+  return useMemo(() => {
+    const pinned = resolvePrimaryPath(folders, pinnedPath);
+    const pinnedInfo =
+      pinned !== null && Object.hasOwn(folderInfoByPath, pinned)
+        ? folderInfoByPath[pinned]
+        : null;
+    if (pinnedInfo === null) {
+      return { folders: [], folderInfoByPath: {}, primaryPath: null };
+    }
+    return {
+      folders: [pinnedInfo.path],
+      folderInfoByPath: { [pinnedInfo.path]: pinnedInfo },
+      primaryPath: pinnedInfo.path,
+    };
+  }, [folders, folderInfoByPath, pinnedPath]);
 }
 
 function toTuiPlacement(

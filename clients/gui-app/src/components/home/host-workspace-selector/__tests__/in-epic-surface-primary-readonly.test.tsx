@@ -184,7 +184,7 @@ afterEach(() => {
 describe.each(["chat", "terminal-agent"] as const)(
   "InEpicSurface (%s owner)",
   (kind) => {
-    it("renders the primary pin read-only and offers NO Set-as-primary action on any bound row", async () => {
+    it("locks the bound main as a marker row; secondaries keep additional checkboxes", async () => {
       renderBoundSurface(kind);
 
       // Open the folder-rows popover from the collapsed summary.
@@ -192,16 +192,34 @@ describe.each(["chat", "terminal-agent"] as const)(
       const rows = await screen.findAllByTestId("folder-row");
       expect(rows).toHaveLength(2);
 
-      // The filled pin marks the bound primary (read-only display)...
-      expect(screen.getByTestId("folder-primary-pin")).toBeTruthy();
-      // ...and the collapsed chip agreed with it (isPrimary, not items[0]).
+      // The bound PRIMARY (beta, `isPrimary` — not array position) renders
+      // the locked main marker + badge, with no checkbox to uncheck...
+      const alphaRow = rows.find(
+        (row) => row.getAttribute("data-path") === "/repo/alpha",
+      );
+      const betaRow = rows.find(
+        (row) => row.getAttribute("data-path") === "/repo/beta",
+      );
+      expect(
+        betaRow?.querySelector('[data-testid="folder-main-marker"]'),
+      ).not.toBeNull();
+      expect(betaRow?.className).toContain("bg-primary/5");
+      expect(
+        betaRow?.querySelector('[data-testid="folder-select-checkbox"]'),
+      ).toBeNull();
+      // ...the secondary keeps its checked additional-folder checkbox...
+      const alphaCheckbox = alphaRow?.querySelector(
+        '[data-testid="folder-select-checkbox"]',
+      );
+      expect(alphaCheckbox?.getAttribute("data-state")).toBe("checked");
+      // ...and the collapsed chip agreed with the marker (isPrimary, not
+      // items[0]).
       expect(
         screen.getByTestId("workspace-summary-trigger").textContent,
       ).toContain("beta");
 
-      // No atomic set-primary RPC exists for a live binding - the action
-      // must be absent on EVERY row of a bound surface.
-      expect(screen.queryByTestId("folder-make-primary")).toBeNull();
+      // A live chat's main is fixed: no switch affordance on any row.
+      expect(screen.queryByTestId("folder-use-as-main")).toBeNull();
       // The other row actions are still there (the rows are editable).
       expect(screen.getAllByTestId("folder-remove").length).toBeGreaterThan(0);
     });

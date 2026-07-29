@@ -508,6 +508,30 @@ describe("useLandingDraftStore", () => {
     ).toBe("terminal");
   });
 
+  it("seeds a new draft with only the pinned default project selected", () => {
+    useWorkspaceFoldersStore.setState({
+      folders: [WORKSPACE_A.path, WORKSPACE_B.path, WORKSPACE_C.path],
+      folderInfoByPath: {
+        [WORKSPACE_A.path]: WORKSPACE_A,
+        [WORKSPACE_B.path]: WORKSPACE_B,
+        [WORKSPACE_C.path]: WORKSPACE_C,
+      },
+      primaryPath: WORKSPACE_A.path,
+      pinnedPath: WORKSPACE_B.path,
+    });
+
+    const id = useLandingDraftStore.getState().createDraft(null);
+
+    const workspace = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === id)?.workspace;
+    expect(workspace?.folders).toEqual([WORKSPACE_B.path]);
+    expect(workspace?.primaryPath).toBe(WORKSPACE_B.path);
+    expect(Object.keys(workspace?.folderInfoByPath ?? {})).toEqual([
+      WORKSPACE_B.path,
+    ]);
+  });
+
   it("keeps workspace snapshots independent per draft", () => {
     useWorkspaceFoldersStore.setState({
       folders: [WORKSPACE_A.path],
