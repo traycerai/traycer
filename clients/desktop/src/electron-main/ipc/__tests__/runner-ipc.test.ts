@@ -629,8 +629,6 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.revokeUserSession,
         RunnerHostInvoke.revokeAllSessions,
         RunnerHostInvoke.mintHostCredential,
-        RunnerHostInvoke.claimHostCredentialProvision,
-        RunnerHostInvoke.releaseHostCredentialProvision,
         RunnerHostInvoke.requestStepUpChallenge,
         RunnerHostInvoke.verifyStepUpChallenge,
         RunnerHostInvoke.notificationShow,
@@ -2270,10 +2268,12 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
-  it("mints a host credential with the retained step-up token and never returns it to the renderer", async () => {
-    // The renderer only ever sees { expires_in } from verify and the mint
-    // result — the step-up bearer stays in main and is swapped in when
-    // useStepUpCredential is true.
+  it("mints a host credential with the caller's own bearer, never the retained step-up credential", async () => {
+    // Provisioning is not step-up gated: a retained step-up credential must
+    // never be substituted for the mint's Authorization header, even when one
+    // is sitting in main from a prior verify. This closes an exposure where
+    // an IPC caller could spend a step-up bearer for a mint no dialog ever
+    // authorized.
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
       const url = input.toString();
       if (url.endsWith("/api/v3/user/step-up/verify")) {
@@ -2285,7 +2285,7 @@ describe("RunnerIpcBridge", () => {
       }
       if (url.endsWith("/api/v3/hosts/token")) {
         expect((init?.headers as Record<string, string>).Authorization).toBe(
-          "Bearer step-up-secret",
+          "Bearer user-jwt",
         );
         return jsonResponse(200, {
           token: "host-access-jws",
@@ -2319,23 +2319,17 @@ describe("RunnerIpcBridge", () => {
       RunnerHostInvoke.mintHostCredential,
     );
     if (verifyHandler === undefined || mintHandler === undefined) {
-      throw new Error("mintHostCredential step-up handlers missing");
+      throw new Error("mintHostCredential handlers missing");
     }
 
-    const verifyResult = await verifyHandler(bareEvent(), "user-jwt", "123456");
-    expect(verifyResult).toEqual({
-      kind: "ok",
-      response: { expires_in: 900 },
-    });
-    // Renderer must never observe the step-up bearer.
-    expect(JSON.stringify(verifyResult)).not.toContain("step-up-secret");
+    // Establish a retained step-up credential in main first.
+    await verifyHandler(bareEvent(), "user-jwt", "123456");
 
-    const mintResult = await mintHandler(
-      bareEvent(),
-      "user-jwt",
-      { hostId: "host-abc", hostLabel: "Mac", platform: null },
-      true,
-    );
+    const mintResult = await mintHandler(bareEvent(), "user-jwt", {
+      hostId: "host-abc",
+      hostLabel: "Mac",
+      platform: null,
+    });
     expect(mintResult).toEqual({
       kind: "ok",
       response: {
@@ -2347,279 +2341,8 @@ describe("RunnerIpcBridge", () => {
         provisionedAt: "2026-07-08T12:00:00.000Z",
       },
     });
-    expect(JSON.stringify(mintResult)).not.toContain("step-up-secret");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     bridge.dispose();
-  });
-
-  it("clears the retained step-up credential when mint still answers step-up-required", async () => {
-    // Stale retained credential: server rejects it, main must drop it so the
-    // next attempt re-challenges instead of replaying a dead token.
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
-      const url = input.toString();
-      if (url.endsWith("/api/v3/user/step-up/verify")) {
-        return jsonResponse(200, {
-          access_token: "step-up-stale",
-          token_type: "Bearer",
-          expires_in: 900,
-        });
-      }
-      if (url.endsWith("/api/v3/hosts/token")) {
-        const auth = (init?.headers as Record<string, string>).Authorization;
-        if (auth === "Bearer step-up-stale") {
-          return jsonResponse(401, { reason: "step_up_required" });
-        }
-        if (auth === "Bearer user-jwt") {
-          return jsonResponse(401, { reason: "step_up_required" });
-        }
-        throw new Error(`unexpected Authorization ${auth}`);
-      }
-      throw new Error(`unexpected authn URL ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const mod = await import("../register-runner-ipc");
-    const bridge = new mod.RunnerIpcBridge({
-      host: new FakeHost(),
-      hostController: new FakeHostController(),
-      authnBaseUrl: "http://localhost:5005",
-      authRedirectUri: null,
-      tray: null,
-      zoomController: undefined,
-      authTokenStore: undefined,
-      window: buildWindow(),
-    });
-    bridge.install();
-
-    const verifyHandler = ipcMainState.handlers.get(
-      RunnerHostInvoke.verifyStepUpChallenge,
-    );
-    const mintHandler = ipcMainState.handlers.get(
-      RunnerHostInvoke.mintHostCredential,
-    );
-    if (verifyHandler === undefined || mintHandler === undefined) {
-      throw new Error("mintHostCredential step-up handlers missing");
-    }
-
-    await verifyHandler(bareEvent(), "user-jwt", "123456");
-    await expect(
-      mintHandler(
-        bareEvent(),
-        "user-jwt",
-        { hostId: "host-abc", hostLabel: null, platform: null },
-        true,
-      ),
-    ).resolves.toEqual({ kind: "step-up-required" });
-
-    // Retained credential was cleared: a subsequent mint with
-    // useStepUpCredential=true falls back to the user bearer.
-    await expect(
-      mintHandler(
-        bareEvent(),
-        "user-jwt",
-        { hostId: "host-abc", hostLabel: null, platform: null },
-        true,
-      ),
-    ).resolves.toEqual({ kind: "step-up-required" });
-
-    const hostTokenCalls = fetchMock.mock.calls.filter((call) =>
-      call[0].toString().endsWith("/api/v3/hosts/token"),
-    );
-    expect(hostTokenCalls).toHaveLength(2);
-    const secondAuth = (
-      hostTokenCalls[1]?.[1]?.headers as Record<string, string> | undefined
-    )?.Authorization;
-    expect(secondAuth).toBe("Bearer user-jwt");
-    bridge.dispose();
-  });
-
-  describe("host credential provision claim IPC", () => {
-    const HOST_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-
-    /** The claim's discriminant, for tests that only care granted vs denied. */
-    function readClaimKind(result: unknown): string {
-      if (
-        result === null ||
-        typeof result !== "object" ||
-        !("kind" in result)
-      ) {
-        throw new Error("claim did not return a result object");
-      }
-      const kind = result.kind;
-      if (typeof kind !== "string") {
-        throw new Error("claim result carried no kind");
-      }
-      return kind;
-    }
-
-    /** Asserts a grant and returns the token `release` requires back. */
-    function readClaimToken(result: unknown): string {
-      if (readClaimKind(result) !== "granted") {
-        throw new Error("expected a granted claim");
-      }
-      if (
-        result === null ||
-        typeof result !== "object" ||
-        !("token" in result)
-      ) {
-        throw new Error("granted claim carried no token");
-      }
-      const token = result.token;
-      if (typeof token !== "string") {
-        throw new Error("claim token was not a string");
-      }
-      return token;
-    }
-
-    function signedIn(
-      userId: string,
-      token: string,
-    ): DesktopAuthSessionSnapshot {
-      return {
-        status: "signed-in",
-        token,
-        profile: {
-          userId,
-          userName: "Test User",
-          email: "test@example.com",
-        },
-      };
-    }
-
-    interface ProvisionClaimHarness {
-      readonly registry: FakeWindowRegistry;
-      readonly authSession: DesktopAuthSession;
-      readonly claim: InvokeHandler;
-      readonly release: InvokeHandler;
-      readonly setSession: InvokeHandler;
-      readonly dispose: () => void;
-    }
-
-    // Shared preamble for every test below: registry with two windows, a
-    // bridge wired to it, and the three provision-claim handler lookups. The
-    // only thing individual tests vary is whether they need to hold onto
-    // `authSession` to drive it directly (identity-change / sign-out cases).
-    async function createProvisionClaimHarness(): Promise<ProvisionClaimHarness> {
-      const mod = await import("../register-runner-ipc");
-      const registry = new FakeWindowRegistry();
-      registry.add("window-a", 101, buildWindow());
-      registry.add("window-b", 202, buildWindow());
-      const authSession = new DesktopAuthSession();
-      const bridge = new mod.RunnerIpcBridge({
-        host: new FakeHost(),
-        hostController: new FakeHostController(),
-        authnBaseUrl: "http://localhost:5005",
-        authRedirectUri: null,
-        tray: null,
-        zoomController: undefined,
-        authTokenStore: undefined,
-        windowRegistry: registry,
-        ownership: new EpicWindowOwnership(null),
-        perWindowState: new PerWindowState(null),
-        authSession,
-        quitState: undefined,
-      });
-      bridge.install();
-
-      const claim = ipcMainState.handlers.get(
-        RunnerHostInvoke.claimHostCredentialProvision,
-      );
-      const release = ipcMainState.handlers.get(
-        RunnerHostInvoke.releaseHostCredentialProvision,
-      );
-      const setSession = ipcMainState.handlers.get(
-        RunnerHostInvoke.authSessionSet,
-      );
-      if (
-        claim === undefined ||
-        release === undefined ||
-        setSession === undefined
-      ) {
-        throw new Error("provision claim/session handlers missing");
-      }
-
-      return {
-        registry,
-        authSession,
-        claim,
-        release,
-        setSession,
-        dispose: () => bridge.dispose(),
-      };
-    }
-
-    it("grants the first window and denies a second window for the same hostId", async () => {
-      const { claim, dispose } = await createProvisionClaimHarness();
-
-      expect(readClaimKind(await claim(sender(101), HOST_ID))).toBe("granted");
-      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
-      dispose();
-    });
-
-    it("frees the claim when the holding window closes (retainHolders path)", async () => {
-      const { registry, claim, dispose } = await createProvisionClaimHarness();
-
-      expect(readClaimKind(await claim(sender(101), HOST_ID))).toBe("granted");
-      // Closing the holder mid-prompt must free the host without settling it.
-      await registry.closeById("window-a");
-      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("granted");
-      dispose();
-    });
-
-    it("does not reset the claim registry when only the auth token rotates", async () => {
-      // Token refresh fires authSession.change with the same userId. If that
-      // reset the registry, every refresh would re-open the prompt for a new
-      // window against a host this identity already answered for.
-      const { claim, release, setSession, dispose } =
-        await createProvisionClaimHarness();
-
-      await setSession(sender(101), signedIn("user-1", "token-v1"));
-      const token = readClaimToken(await claim(sender(101), HOST_ID));
-      await release(sender(101), HOST_ID, token);
-      // Settled under user-1.
-      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
-
-      // Same userId, new bearer — must leave settled hosts settled.
-      await setSession(sender(101), signedIn("user-1", "token-v2"));
-      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
-      dispose();
-    });
-
-    it("resets the claim registry when the signed-in userId changes", async () => {
-      const { claim, release, setSession, dispose } =
-        await createProvisionClaimHarness();
-
-      await setSession(sender(101), signedIn("user-1", "token-u1"));
-      const token = readClaimToken(await claim(sender(101), HOST_ID));
-      await release(sender(101), HOST_ID, token);
-      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
-
-      // Different identity — previous user's settlements must not stick.
-      await setSession(sender(101), signedIn("user-2", "token-u2"));
-      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("granted");
-      dispose();
-    });
-
-    it("resets the claim registry on sign-out", async () => {
-      const { claim, release, setSession, dispose } =
-        await createProvisionClaimHarness();
-
-      await setSession(sender(101), signedIn("user-1", "token-u1"));
-      const token = readClaimToken(await claim(sender(101), HOST_ID));
-      await release(sender(101), HOST_ID, token);
-      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("denied");
-
-      const signedOut: DesktopAuthSessionSnapshot = {
-        status: "signed-out",
-        token: null,
-        profile: null,
-      };
-      await setSession(sender(101), signedOut);
-      // After sign-out the memo is clear; a subsequent sign-in would re-ask.
-      // Prove the clear with a re-claim under the same webContents while still
-      // signed out (identity null): claims themselves are not identity-gated.
-      expect(readClaimKind(await claim(sender(202), HOST_ID))).toBe("granted");
-      dispose();
-    });
   });
 
   it("awaits a terminal quit decision and defaults malformed payloads to proceed", async () => {

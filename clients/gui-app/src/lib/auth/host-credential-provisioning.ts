@@ -11,52 +11,34 @@ import type {
  * routinely holds SEVERAL clients against the same host at once - the app-wide
  * stream provider, a durable per-tab chat transport, a one-shot worktree stream.
  * Each would independently notice a `missing` host credential and each would
- * raise its own email-OTP dialog. This module is where "one prompt per host"
- * actually lives; `buildHostStreamClient` hands every client the same flow from
- * here, so the guarantee holds no matter how many transports exist.
+ * mint. `buildHostStreamClient` hands every client the same flow from here, so
+ * "one mint in flight per host" holds no matter how many transports exist.
  *
- * The mechanism (which auth service, which dialog) is supplied at runtime by the
- * provisioning provider: this module deliberately owns no React state, so a
- * transport constructed outside a component tree still gets the same policy.
+ * That guarantee is about CORRECTNESS, not about interruption: the server
+ * supersedes older credentials for a host on every mint, so simultaneous mints
+ * would revoke one another and resolve as 409s - leaving the host with nothing.
+ * (Provisioning itself is silent; there is no dialog to de-duplicate any more.)
+ *
+ * The mechanism (which auth service) is supplied at runtime by the provisioning
+ * provider: this module deliberately owns no React state, so a transport
+ * constructed outside a component tree still gets the same policy.
  */
 export type HostCredentialMintRunner = (
   request: HostCredentialMintRequest,
 ) => Promise<HostCredentialMintOutcome>;
 
-/**
- * Cross-realm half of the same policy, supplied by the shell.
- *
- * Everything above this line is realm-local, and on desktop a realm is one
- * `BrowserWindow` - so two windows watching the same un-provisioned host would
- * each pass the memo above and each raise a dialog. The gate is the shell's
- * single registry (main process on desktop), which grants exactly one window
- * the turn and remembers which hosts this identity has already answered for.
- *
- * With no gate installed - the web shell, tests, the window before the runner
- * host is wired - the realm-local policy stands alone, which is the behavior
- * that existed before this gate did.
- */
-export interface HostCredentialProvisionGate {
-  /** Resolves the claim's token when granted, or null when denied. */
-  readonly claim: (hostId: string) => Promise<string | null>;
-  readonly release: (hostId: string, token: string) => Promise<void>;
-}
-
 let runner: HostCredentialMintRunner | null = null;
-let gate: HostCredentialProvisionGate | null = null;
-const settledHostIds = new Set<string>();
 /**
  * Bumped by every reset. An attempt that was already running when the identity
- * changed must not write its result into the new identity's state - otherwise a
- * decline made by the previous user lands in the memo moments after the sign-out
- * that was supposed to clear it, and the new user is never asked.
+ * changed must not hand its credential to a transport that is now serving
+ * someone else - the mint was authorized by the previous user's bearer.
  */
 let generation = 0;
 
 /**
  * Installs (or clears) the runtime that actually mints. Called by the
  * provisioning provider on mount/unmount. With no runner installed - dev shells,
- * tests, the window before auth is wired - every request resolves `declined`,
+ * tests, the window before auth is wired - every request resolves `unavailable`,
  * which leaves hosts on the client-lease fallback rather than failing anything.
  */
 export function setHostCredentialMintRunner(
@@ -66,31 +48,20 @@ export function setHostCredentialMintRunner(
 }
 
 /**
- * Installs (or clears) the shell's cross-window arbiter. Called by the
- * provisioning provider alongside the runner.
- */
-export function setHostCredentialProvisionGate(
-  next: HostCredentialProvisionGate | null,
-): void {
-  gate = next;
-}
-
-/**
- * Forgets which hosts have already been asked about. Must run on sign-out: the
- * memo below is keyed by hostId alone, so without this the next user to sign in
- * on this machine would silently never be offered provisioning for a host the
- * PREVIOUS user had declined.
+ * Abandons in-flight attempts. Must run on sign-out: a mint authorized by the
+ * departing user's bearer must never be handed to a transport now serving the
+ * next one.
  *
- * Deliberately does NOT reset the shell's cross-window gate. This runs on every
- * mount of the provisioning provider, so a second window opening would wipe the
- * shared memo and re-ask about a host the first window already handled - the
- * exact duplicate the gate exists to prevent. The shell scopes its own registry
- * to the signed-in identity instead.
+ * Note what is deliberately NOT here any more: a memo of hosts already asked
+ * about. That existed so a decline could not re-raise a dialog on every
+ * reconnect. With provisioning silent there is nothing to decline, and a failed
+ * attempt SHOULD be retryable by a later transport - a transient network error
+ * on first connect should not strand a host on the client lease for the rest of
+ * the app run.
  */
 export function resetHostCredentialProvisioning(): void {
   generation += 1;
   attemptsByHostId.clear();
-  settledHostIds.clear();
 }
 
 /**
@@ -112,46 +83,34 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   const hostId = request.hostId;
   const existing = attemptsByHostId.get(hostId);
   if (existing !== undefined) {
-    // A second transport noticed the same host mid-prompt. Join the first
-    // attempt instead of raising a second dialog. Note the `.then(claim)` here
-    // rather than returning the stored promise directly: the gate has to run
-    // once PER CALLER, and a shared promise's own `.then` would run only once.
+    // A second transport noticed the same host mid-mint. Join the first attempt
+    // instead of racing it. Note the `.then(claim)` here rather than returning
+    // the stored promise directly: the claim has to run once PER CALLER, and a
+    // shared promise's own `.then` would run only once.
     return existing.settled.then(existing.claim);
-  }
-  if (settledHostIds.has(hostId)) {
-    return Promise.resolve({ kind: "declined" });
   }
   const current = runner;
   if (current === null) {
-    return Promise.resolve({ kind: "declined" });
+    return Promise.resolve({ kind: "unavailable" });
   }
 
   const startedAt = generation;
-  // Registered in `attemptsByHostId` BELOW, synchronously, before the gate's
-  // async claim can resolve - a second local transport must join this attempt
-  // rather than start its own while the claim is still in flight.
-  const settled = runGatedAttempt(request, current, gate)
-    .catch((): HostCredentialAttemptResult => ({
-      outcome: { kind: "unavailable" },
-      settles: true,
-    }))
-    .then((result): HostCredentialMintOutcome => {
+  // Registered in `attemptsByHostId` BELOW, synchronously, so a second local
+  // transport joins this attempt rather than starting its own.
+  const settled = current(request)
+    .catch((): HostCredentialMintOutcome => ({ kind: "unavailable" }))
+    .then((outcome): HostCredentialMintOutcome => {
       if (generation !== startedAt) {
         // A reset (sign-out, or a switch to another account) overtook this
-        // attempt. Its state belongs to an identity that is gone: do not write
-        // it back, and do not hand the credential to a transport that is now
-        // serving someone else.
+        // attempt. The credential was minted under an identity that is gone, so
+        // do not hand it to a transport that is now serving someone else. The
+        // host would reject it anyway - it asserts the access token's `id`
+        // matches its own owner-gated identity - but dropping it here keeps a
+        // dead 30-day refresh JWE from travelling at all.
         return { kind: "unavailable" };
       }
       attemptsByHostId.delete(hostId);
-      // Settled whenever this window actually asked. A success needs no second
-      // mint, and a decline or a failure must not re-prompt on the next
-      // reconnect - the recovery door for both is the next app run, not a
-      // dialog loop.
-      if (result.settles) {
-        settledHostIds.add(hostId);
-      }
-      return result.outcome;
+      return outcome;
     });
 
   // Every joiner learns the attempt finished, but only ONE is given the
@@ -176,53 +135,3 @@ export const appHostCredentialMintFlow: HostCredentialMintFlow = (request) => {
   attemptsByHostId.set(hostId, { settled, claim });
   return settled.then(claim);
 };
-
-interface HostCredentialAttemptResult {
-  readonly outcome: HostCredentialMintOutcome;
-  /**
-   * Whether this window has now "been asked" about the host.
-   *
-   * False only when the shell denied the turn. A denial is arbitration, not an
-   * answer - nobody put a dialog in front of this user - so recording it here
-   * would write off a host this window was merely not first to reach.
-   *
-   * Note the exact bound, because it is narrower than it looks: this only lets
-   * a transport constructed LATER ask again. `WsStreamClient` marks the host in
-   * its own `provisionAttemptedHostIds` before ever calling this flow and never
-   * clears it, so the client that was denied stays out for its own lifetime
-   * however this resolves. Recovering the denied client too would need the
-   * "busy" and "already answered" denials to be distinguishable all the way
-   * back through the transport, which they are not today.
-   */
-  readonly settles: boolean;
-}
-
-/**
- * Wraps one attempt in the shell's cross-window turn, when there is one.
- */
-async function runGatedAttempt(
-  request: HostCredentialMintRequest,
-  run: HostCredentialMintRunner,
-  arbiter: HostCredentialProvisionGate | null,
-): Promise<HostCredentialAttemptResult> {
-  if (arbiter === null) {
-    return { outcome: await run(request), settles: true };
-  }
-  const token = await arbiter.claim(request.hostId);
-  if (token === null) {
-    // Another window is mid-prompt, or this identity has already answered for
-    // this host. Either way there is nothing to ask and nothing to hand over:
-    // the winning window pushes its credential over its own stream.
-    return { outcome: { kind: "declined" }, settles: false };
-  }
-  try {
-    return { outcome: await run(request), settles: true };
-  } finally {
-    // Fire-and-forget, and deliberately NOT awaited: a failing release must not
-    // be able to replace a successful outcome with a rejection and throw away a
-    // credential we already hold. An unreleased claim is recovered by the
-    // shell's abandoned-claim timeout. The token scopes it to THIS claim, so a
-    // release delayed past an identity change cannot settle a later one.
-    void arbiter.release(request.hostId, token).catch(() => undefined);
-  }
-}

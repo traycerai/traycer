@@ -81,13 +81,13 @@ export interface WsStreamClientOptions<
   /**
    * Mints a device credential when a connected host reports it has none, so the
    * host can act on the user's behalf after the client disconnects. `null` opts
-   * the client out entirely - correct for dev mocks, tests, and any surface with
-   * no way to run the interactive step-up the mint requires. An opted-out client
-   * never sends the provision frame and never prompts; the host stays on this
-   * connection's credential lease, exactly as before the capability existed.
+   * the client out entirely - correct for dev mocks and tests. An opted-out
+   * client never sends the provision frame; the host stays on this connection's
+   * credential lease, exactly as before the capability existed.
    *
-   * See `HostCredentialMintFlow` for the two obligations the implementor owns
-   * (app-wide single-flight per hostId, and never prompting headlessly).
+   * See `HostCredentialMintFlow` for the obligation the implementor owns:
+   * app-wide single-flight per hostId, so concurrent mints cannot supersede one
+   * another and leave the host with nothing.
    */
   readonly hostCredentialMint: HostCredentialMintFlow | null;
   readonly webSocketFactory: IStreamWebSocketFactory;
@@ -187,19 +187,19 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
    * ONE attempt per host per client, for the life of the client.
    *
    * The bound is deliberately blunt, because the failure it prevents is worse
-   * than the one it causes. Provisioning is interactive, and a host that stays
-   * un-provisioned reports `missing` on EVERY reconnect - so an unbounded policy
-   * turns a reconnect loop (an expired sign-in, a flapping network, a user who
-   * dismissed the dialog) into a stream of OTP challenges. Giving up instead
-   * costs only the delegated credential, and the host keeps running on the
-   * connection's client lease until the app is restarted.
+   * than the one it causes. A host that stays un-provisioned reports `missing`
+   * on EVERY reconnect, so an unbounded policy turns a reconnect loop (an
+   * expired sign-in, a flapping network) into a stream of mint requests, each
+   * superseding the last. Giving up instead costs only the delegated credential,
+   * and the host keeps running on the connection's client lease until the app is
+   * restarted.
    */
   private readonly provisionAttemptedHostIds = new Set<string>();
   /**
    * Minted credentials waiting for a live connection to carry them, keyed by
-   * host. The mint is interactive, so the socket that triggered it is routinely
-   * gone by the time the user finishes typing the code - dropping the credential
-   * there would throw away an OTP the user already entered.
+   * host. The socket that triggered the mint can be gone by the time it
+   * resolves - dropping the credential there would waste a mint that has
+   * ALREADY superseded whatever the host was using.
    *
    * Keyed rather than a single slot because one client can hold sessions against
    * several hosts at once: two mints resolving close together would otherwise
@@ -442,9 +442,8 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     }
     if (!HOST_ID_UUID_PATTERN.test(hostId)) {
       // The server rejects a non-UUID hostId outright - such a host cannot hold
-      // a delegated credential at all. Checked BEFORE the flow because the flow
-      // is interactive: without this, a legacy host would raise an email-OTP
-      // challenge on every app run and answer it with a 400.
+      // a delegated credential at all. Checked here so a legacy host does not
+      // spend a mint request on every app run to be told 400.
       this.provisionAttemptedHostIds.add(hostId);
       console.debug(
         `[stream] host credential provisioning skipped, hostId is not a UUID (client=${this.instanceId}, host=${hostId})`,
@@ -509,7 +508,8 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     // The server-side row lives on as a host session nobody holds; the next
     // successful provisioning of this host supersedes it, so it self-heals
     // rather than needing cleanup here. The attempt marker stays set on purpose:
-    // re-minting would raise a fresh OTP challenge the user never asked for.
+    // re-minting from this same client would supersede a credential that may
+    // since have been delivered by another one.
     this.discardPendingProvision(hostId);
     console.warn(
       `[stream] discarded host credential that expired before delivery (client=${this.instanceId}, host=${hostId})`,

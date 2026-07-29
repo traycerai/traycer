@@ -1139,24 +1139,17 @@ export class AuthService {
   }
 
   /**
-   * Mints a device credential for a connected host. Same two-attempt shape as
-   * `revokeUserSession` - the first call runs without step-up and the caller
-   * retries with `useStepUpCredential` after verifying an OTP - because the
-   * mint is always step-up gated server-side, including for a host that already
-   * holds one.
+   * Mints a device credential for a connected host. A single attempt on the
+   * ordinary bearer: unlike `revokeUserSession` there is no step-up retry,
+   * because the mint is not step-up gated (see the mint route's doc comment).
    */
   async mintHostCredential(
     request: MintHostCredentialRequest,
-    useStepUpCredential: boolean,
   ): Promise<MintHostCredentialFetchResult> {
     if (this.currentBearer === null) {
       return { kind: "unauthorized" };
     }
-    return this.runnerHost.mintHostCredential(
-      this.currentBearer,
-      request,
-      useStepUpCredential,
-    );
+    return this.runnerHost.mintHostCredential(this.currentBearer, request);
   }
 
   async requestStepUpChallenge(): Promise<StepUpChallengeFetchResult> {

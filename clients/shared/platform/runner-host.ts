@@ -8,7 +8,6 @@ import type {
   StepUpChallengeFetchResult,
   RetainedStepUpVerifyFetchResult,
 } from "../auth/devices-sessions-fetcher";
-import type { HostProvisionClaim } from "../host-transport/host-provision-claim-registry";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
@@ -107,10 +106,9 @@ export interface IRunnerHost {
 
   /**
    * Mints a device credential for a connected host, so the host can keep
-   * working on the user's behalf after this client disconnects. Same step-up
-   * shape as `revokeUserSession`: the renderer passes its ordinary bearer plus
-   * whether the boundary should swap in the retained step-up credential, and
-   * never handles the raw step-up bearer itself.
+   * working on the user's behalf after this client disconnects. The renderer
+   * passes its ordinary bearer; there is no step-up variant, because the mint is
+   * not step-up gated (see the mint route's doc comment).
    *
    * Unlike the revoke calls, the RESULT here carries live credentials (a
    * host-audience access JWS and a refresh JWE). They necessarily cross back
@@ -120,32 +118,7 @@ export interface IRunnerHost {
   mintHostCredential(
     bearerToken: string,
     request: MintHostCredentialRequest,
-    useStepUpCredential: boolean,
   ): Promise<MintHostCredentialFetchResult>;
-
-  /**
-   * Asks the shell for the exclusive right to prompt about `hostId` before
-   * `mintHostCredential` is reached.
-   *
-   * The renderer's own "one prompt per host" memo is realm-local, and on
-   * desktop every window is a separate realm - two windows watching the same
-   * un-provisioned host would each raise an email-OTP dialog. The shell holds
-   * the one registry above all of them. `denied` means either another window is
-   * mid-prompt or this identity has already answered for this host; both are
-   * "carry on without a host credential", not errors. A grant carries a token
-   * that `releaseHostCredentialProvision` requires back.
-   *
-   * Shells with a single realm (web, tests, mobile) still implement this - they
-   * just always have exactly one caller to arbitrate between.
-   */
-  claimHostCredentialProvision(hostId: string): Promise<HostProvisionClaim>;
-
-  /**
-   * Ends this window's turn, recording that the host has been asked about
-   * however it turned out. Must be called even when the mint failed or the user
-   * declined, or the host stays claimed until the abandoned-claim timeout.
-   */
-  releaseHostCredentialProvision(hostId: string, token: string): Promise<void>;
 
   requestStepUpChallenge(
     bearerToken: string,

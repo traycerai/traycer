@@ -9,8 +9,8 @@ export interface HostCredentialMintRequest {
   readonly hostId: string;
   /**
    * Why the host wants one. `needs-reauth` means it held a credential whose
-   * refresh family is dead, so the user may reasonably be told this is a
-   * re-authorization rather than a first-time grant.
+   * refresh family is dead; the distinction is kept for logging, since neither
+   * case involves the user.
    */
   readonly reason: Exclude<HostCredentialState, "active">;
 }
@@ -18,11 +18,10 @@ export interface HostCredentialMintRequest {
 /**
  * The result of one provisioning attempt.
  *
- * `unavailable` deliberately merges every "nothing to hand over, and asking
- * again right now would not help" case - the 409 supersede (another client won
- * the race and its credential is already on its way), a rejected hostId, an
- * expired sign-in, a network failure. None of them produce a credential and none
- * are worth a second interactive prompt; the host simply stays on the
+ * `unavailable` deliberately merges every "nothing to hand over" case - the 409
+ * supersede (another client won the race and its credential is already on its
+ * way), a rejected hostId, an expired sign-in, a network failure. None of them
+ * produce a credential, and in all of them the host simply stays on the
  * connection's client lease, which is the designed fallback.
  */
 export type HostCredentialMintOutcome =
@@ -49,28 +48,27 @@ export type HostCredentialMintOutcome =
        */
       readonly expiresIn: number;
     }
-  | { readonly kind: "declined" }
   | { readonly kind: "unavailable" };
 
 /**
  * App-supplied hook that mints a host credential and hands it back for delivery.
  *
- * The mint is **step-up gated server-side and therefore interactive**: desktop
- * raises its email-OTP dialog, the CLI prompts on the terminal. That has two
- * consequences the implementor owns, because the transport cannot:
+ * Provisioning is **silent**: the mint needs only the caller's ordinary bearer,
+ * so there is no dialog, no OTP, and no headless special case. A delegated host
+ * credential is a refresh family like any other - what bounds it is that the
+ * owner sees the row in Devices & Sessions and can revoke it, exactly as for an
+ * interactive session. (This reverses an earlier design that gated the mint on
+ * step-up; see the mint route's doc comment for why that gate did not pay for
+ * itself.)
  *
- *  1. **Be single-flight per hostId across the whole app.** A surface routinely
- *     holds several `WsStreamClient`s against one host (a durable transport plus
- *     one-shot ones), and each is a separate instance with its own state. The
- *     transport de-duplicates only within itself, so without an app-level guard
- *     one host reconnecting raises several OTP challenges at once.
- *  2. **Never prompt where nobody can answer.** A headless surface (the CLI's
- *     background `monitor`, CI) must return `declined` rather than block on a
- *     prompt no human will ever see.
- *
- * Returning `declined` is a first-class outcome, not a failure: the host keeps
- * working on the connection's client lease exactly as it did before this
- * capability existed.
+ * One obligation survives that change, for a different reason than before. The
+ * implementor must be **single-flight per hostId across the whole app**, because
+ * a surface routinely holds several `WsStreamClient`s against one host (a
+ * durable transport plus one-shot ones) and each is a separate instance with its
+ * own state. That used to be about not stacking OTP dialogs; now it is about
+ * correctness: the server supersedes older credentials for a host on every mint,
+ * so concurrent mints would revoke each other's rows and settle as 409s, leaving
+ * the host tokenless after a burst of work.
  */
 export type HostCredentialMintFlow = (
   request: HostCredentialMintRequest,

@@ -164,9 +164,6 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
         Promise.resolve({ kind: "network-error" as const }),
       mintHostCredential: () =>
         Promise.resolve({ kind: "network-error" as const }),
-      claimHostCredentialProvision: () =>
-        Promise.resolve({ kind: "granted" as const, token: "claim-1" }),
-      releaseHostCredentialProvision: () => Promise.resolve(),
       requestStepUpChallenge: () =>
         Promise.resolve({ kind: "network-error" as const }),
       verifyStepUpChallenge: () =>

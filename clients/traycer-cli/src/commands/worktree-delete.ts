@@ -12,6 +12,7 @@ import type {
   WorktreeDeleteBatchPhase,
 } from "@traycer/protocol/host/worktree-delete-batch-stream";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
 import { MutableBearerLease } from "../../../shared/auth/bearer-source";
 import { WsStreamClient } from "../../../shared/host-transport/ws-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../../shared/host-transport/worktree-delete-batch-stream-client";
@@ -21,6 +22,7 @@ import type {
   StreamCloseReason,
   StreamConnectionStatus,
 } from "../../../shared/host-transport/i-stream-session";
+import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
 import { resolveEndpoint } from "../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES, type CliError } from "../runner/errors";
@@ -131,11 +133,18 @@ async function runWorktreeDelete(
     endpoint: () => endpoint,
     bearer: () => lease,
     auth: null,
-    // No provisioning here: this is a one-shot command, and interrupting
-    // `traycer worktree delete` with an email-OTP challenge would be a
-    // surprise the user did not ask for. `traycer monitor` is the CLI's
-    // provisioning surface.
-    hostCredentialMint: null,
+    // Provisioning rides along here too. It used to be opted out because a
+    // one-shot command must not interrupt with an email-OTP challenge; now that
+    // the mint is silent there is nothing to interrupt, and only a host that
+    // reports `missing` triggers it - a host that already holds a credential is
+    // left alone.
+    hostCredentialMint: createCliHostCredentialMintFlow({
+      authnBaseUrl: auth.authnBaseUrl,
+      // Read through the lease each time rather than capturing `auth.token`: a
+      // rotation during the delete must not leave the mint on a dead bearer.
+      bearer: () => readLeaseBearer(lease),
+      diag: (message) => relayStatus(ctx, message),
+    }),
     webSocketFactory: createWhatwgStreamWebSocketFactory(),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
@@ -366,6 +375,22 @@ async function runLegacyDeleteStream(
  * `progress` channel so stdout stays parseable; in human mode it goes to
  * stderr, keeping stdout for the teardown output itself.
  */
+/**
+ * Reads the lease without letting a signed-out lease throw. Only the released
+ * signal maps to null - any other lease failure is a real bug and must not be
+ * masked into "no credential, carry on".
+ */
+function readLeaseBearer(lease: MutableBearerLease): string | null {
+  try {
+    return lease.getBearerToken();
+  } catch (cause) {
+    if (cause instanceof CredentialLeaseReleasedError) {
+      return null;
+    }
+    throw cause;
+  }
+}
+
 function relayStatus(ctx: CommandContext, message: string): void {
   if (ctx.runtime.json) {
     ctx.progress({

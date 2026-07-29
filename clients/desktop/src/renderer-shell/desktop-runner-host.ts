@@ -88,7 +88,6 @@ import type {
 } from "@traycer-clients/shared/auth/devices-sessions-fetcher";
 import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
-import type { HostProvisionClaim } from "@traycer-clients/shared/host-transport/host-provision-claim-registry";
 import type {
   DesktopAppUpdateCheckIntent,
   DesktopAppUpdateSnapshot,
@@ -147,10 +146,7 @@ export interface DesktopPreloadBridge {
   mintHostCredential(
     bearerToken: string,
     request: MintHostCredentialRequest,
-    useStepUpCredential: boolean,
   ): Promise<MintHostCredentialFetchResult>;
-  claimHostCredentialProvision(hostId: string): Promise<HostProvisionClaim>;
-  releaseHostCredentialProvision(hostId: string, token: string): Promise<void>;
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;
@@ -778,21 +774,8 @@ export class DesktopRunnerHost implements IRunnerHost {
   mintHostCredential(
     bearerToken: string,
     request: MintHostCredentialRequest,
-    useStepUpCredential: boolean,
   ): Promise<MintHostCredentialFetchResult> {
-    return this.bridge.mintHostCredential(
-      bearerToken,
-      request,
-      useStepUpCredential,
-    );
-  }
-
-  claimHostCredentialProvision(hostId: string): Promise<HostProvisionClaim> {
-    return this.bridge.claimHostCredentialProvision(hostId);
-  }
-
-  releaseHostCredentialProvision(hostId: string, token: string): Promise<void> {
-    return this.bridge.releaseHostCredentialProvision(hostId, token);
+    return this.bridge.mintHostCredential(bearerToken, request);
   }
 
   requestStepUpChallenge(

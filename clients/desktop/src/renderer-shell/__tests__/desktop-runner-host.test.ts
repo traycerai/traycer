@@ -101,11 +101,6 @@ function buildFakeBridge(
     revokeUserSession: async () => ({ kind: "network-error" as const }),
     revokeAllSessions: async () => ({ kind: "network-error" as const }),
     mintHostCredential: async () => ({ kind: "network-error" as const }),
-    claimHostCredentialProvision: async () => ({
-      kind: "granted" as const,
-      token: "claim-1",
-    }),
-    releaseHostCredentialProvision: async () => undefined,
     requestStepUpChallenge: async () => ({ kind: "network-error" as const }),
     verifyStepUpChallenge: async () => ({ kind: "network-error" as const }),
     openExternalLink: async () => undefined,

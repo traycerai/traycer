@@ -13,7 +13,6 @@ import type {
   TokenStoreChange,
 } from "../ipc-contracts/auth-types";
 import type {
-  HostProvisionClaim,
   ListUserSessionsFetchResult,
   MintHostCredentialFetchResult,
   MintHostCredentialRequest,
@@ -80,10 +79,7 @@ export interface AuthBridgeSurface {
   mintHostCredential(
     bearerToken: string,
     request: MintHostCredentialRequest,
-    useStepUpCredential: boolean,
   ): Promise<MintHostCredentialFetchResult>;
-  claimHostCredentialProvision(hostId: string): Promise<HostProvisionClaim>;
-  releaseHostCredentialProvision(hostId: string, token: string): Promise<void>;
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;
@@ -123,26 +119,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<RevokeAllSessionsFetchResult>,
 
-    mintHostCredential: (bearerToken, request, useStepUpCredential) =>
+    mintHostCredential: (bearerToken, request) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.mintHostCredential,
         bearerToken,
         request,
-        useStepUpCredential,
       ) as Promise<MintHostCredentialFetchResult>,
-
-    claimHostCredentialProvision: (hostId) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.claimHostCredentialProvision,
-        hostId,
-      ) as Promise<HostProvisionClaim>,
-
-    releaseHostCredentialProvision: (hostId, token) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.releaseHostCredentialProvision,
-        hostId,
-        token,
-      ) as Promise<void>,
 
     requestStepUpChallenge: (bearerToken) =>
       ipcRenderer.invoke(

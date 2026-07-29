@@ -2355,7 +2355,7 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 
   it("does not mint when an older host omits the capability and state (still parses)", async () => {
-    const mint = vi.fn(async () => ({ kind: "declined" as const }));
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();
     const client = makeProvisioningClient({
       factory,
@@ -2373,7 +2373,7 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 
   it("does not mint when hostCredentialState is null even if capability is advertised", async () => {
-    const mint = vi.fn(async () => ({ kind: "declined" as const }));
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();
     const client = makeProvisioningClient({
       factory,
@@ -2410,7 +2410,7 @@ describe("WsStreamClient host credential provisioning", () => {
   });
 
   it("skips mint when hostId is not a UUID (marks attempted, no OTP)", async () => {
-    const mint = vi.fn(async () => ({ kind: "declined" as const }));
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();
     // mockLocalHostEntry.hostId is "mock-local" — not a UUID.
     const client = makeProvisioningClient({
@@ -2491,25 +2491,8 @@ describe("WsStreamClient host credential provisioning", () => {
     session.close();
   });
 
-  it("never sends a hostCredentialProvision frame when mint returns declined", async () => {
-    const mint = vi.fn(async () => ({ kind: "declined" as const }));
-    const { factory, sockets } = makeFactory();
-    const client = makeProvisioningClient({
-      factory,
-      mint,
-      endpoint: () => HOST_A,
-      authToken: undefined,
-    });
-    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
-    await flush();
-    completeProvisionHandshake(sockets[0].socket, "missing");
-    await flush();
-    expect(allProvisionFrames(sockets)).toHaveLength(0);
-    session.close();
-  });
-
   it("attempts the mint flow exactly once per hostId across many reconnects reporting missing", async () => {
-    const mint = vi.fn(async () => ({ kind: "declined" as const }));
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
     const { factory, sockets } = makeFactory();
     const client = makeProvisioningClient({
       factory,

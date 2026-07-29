@@ -198,14 +198,12 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
     auth: null,
     // Delegated host-credential provisioning. `monitor` is the CLI command that
-    // most needs it - the host it watches should keep serving after this process
-    // exits - but it usually runs as a BACKGROUND command inside a TUI session,
-    // where an OTP prompt would be written to a stream nobody reads. So the flow
-    // is interactive only on a real terminal, and declines everywhere else.
+    // most needs it: the host it watches should keep serving after this process
+    // exits. Provisioning is silent, so this works the same whether `monitor` is
+    // run from a terminal or as the background command it usually is.
     hostCredentialMint: createCliHostCredentialMintFlow({
       authnBaseUrl: auth.authnBaseUrl,
       bearer: () => readLeaseBearer(lease),
-      interactive: isInteractiveTerminal(),
       diag: (message) => diag(message),
     }),
     webSocketFactory: createWhatwgStreamWebSocketFactory(),
