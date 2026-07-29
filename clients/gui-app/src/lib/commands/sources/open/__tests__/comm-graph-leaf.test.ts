@@ -103,6 +103,17 @@ describe("commGraphOpenerItem", () => {
     invokeCommGraphOpener(ctx(tabId, otherPaneId));
 
     expect(commGraphTabInstanceIds(tabId)).toHaveLength(1);
+    // Focused, not merely deduped: the graph's OWN pane becomes the active
+    // pane and the graph instance is that pane's active tab - a regression
+    // that leaves focus in the empty second pane must fail here.
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    expect(canvas?.activePaneId).toBe(firstPaneId);
+    const graphInstanceId = commGraphTabInstanceIds(tabId)[0];
+    const owningPane = collectPanes(canvas?.root ?? null).find((pane) =>
+      pane.tabInstanceIds.includes(graphInstanceId),
+    );
+    expect(owningPane?.id).toBe(firstPaneId);
+    expect(owningPane?.activeTabId).toBe(graphInstanceId);
   });
 
   it("does nothing without an epic to scope the graph to", () => {

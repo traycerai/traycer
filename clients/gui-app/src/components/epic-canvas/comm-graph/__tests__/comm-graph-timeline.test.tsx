@@ -214,7 +214,12 @@ function deliverSnapshotFrom(
   events: ReadonlyArray<EpicCommunicationGraphEvent>,
 ): void {
   act(() => {
-    openedByHost.get(hostId)?.onSnapshot([...events]);
+    openedByHost.get(hostId)?.onSnapshot(
+      [...events],
+      // Faithful default: the log's head at handoff is the snapshot's own
+      // last row whenever the fixture is not exercising a capped snapshot.
+      events.length === 0 ? null : Math.max(...events.map((e) => e.id)),
+    );
   });
 }
 

@@ -18,8 +18,6 @@ import {
 } from "@/lib/epic-selectors";
 import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
 
-const HOST_KEY_SEPARATOR = " ";
-
 export interface CommGraphAgents {
   readonly nodes: ReadonlyArray<CommGraphAgentNode>;
   /**
@@ -64,22 +62,28 @@ export function useCommGraphAgents(): CommGraphAgents {
   // Derived through a string key so the array identity is stable across
   // projection churn: the subscription effect keys on `hostIds`, and a fresh
   // array on every title / `updatedAt` update would reopen every host socket.
+  // JSON round-trip rather than a delimiter join: host ids are opaque, so no
+  // separator is collision-safe by contract.
   const hostKey = useMemo(
     () =>
-      Array.from(
-        new Set(
-          nodes.flatMap((node) => (node.hostId === null ? [] : [node.hostId])),
-        ),
-      )
-        .sort()
-        .join(HOST_KEY_SEPARATOR),
+      JSON.stringify(
+        Array.from(
+          new Set(
+            nodes.flatMap((node) =>
+              node.hostId === null ? [] : [node.hostId],
+            ),
+          ),
+        ).sort(),
+      ),
     [nodes],
   );
 
-  const hostIds = useMemo<ReadonlyArray<string>>(
-    () => (hostKey.length === 0 ? [] : hostKey.split(HOST_KEY_SEPARATOR)),
-    [hostKey],
-  );
+  const hostIds = useMemo<ReadonlyArray<string>>(() => {
+    const parsed: unknown = JSON.parse(hostKey);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  }, [hostKey]);
 
   const agentIds = useMemo(
     () => new Set(nodes.map((node) => node.id)),

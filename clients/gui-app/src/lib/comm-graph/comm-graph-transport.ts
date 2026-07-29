@@ -16,6 +16,7 @@
  * range (one row, or several sharing a millisecond) collapses to a single point
  * and every marker sits at the right edge - see `commGraphFractionForTimestamp`.
  */
+import { commGraphUpperBoundIndex } from "@/lib/comm-graph/comm-graph-timeline";
 import {
   compareCommGraphSortKeys,
   type CommGraphEvent,
@@ -173,13 +174,7 @@ export function commGraphCursorIndex(
 ): number {
   if (events.length === 0) return -1;
   if (cursor === null) return events.length - 1;
-  let low = 0;
-  let high = events.length;
-  while (low < high) {
-    const mid = (low + high) >>> 1;
-    if (compareCommGraphSortKeys(events[mid], cursor) <= 0) low = mid + 1;
-    else high = mid;
-  }
+  const upper = commGraphUpperBoundIndex(events, cursor);
   // Before every row: the graph is as-of the first row, never as-of nothing.
-  return low === 0 ? 0 : low - 1;
+  return upper === 0 ? 0 : upper - 1;
 }

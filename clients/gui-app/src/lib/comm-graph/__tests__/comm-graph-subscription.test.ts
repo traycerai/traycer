@@ -96,13 +96,16 @@ describe("CommGraphSubscriptionManager", () => {
     const before = manager.getSnapshot().hosts;
     expect(before.every((host) => host.snapshotBoundary === null)).toBe(true);
 
-    opened[0].handlers.onSnapshot([
-      makeEvent({ id: 1, timestamp: 10 }),
-      makeEvent({ id: 4, timestamp: 20 }),
-    ]);
+    opened[0].handlers.onSnapshot(
+      [
+        makeEvent({ id: 1, timestamp: 10 }),
+        makeEvent({ id: 4, timestamp: 20 }),
+      ],
+      4,
+    );
     // A fresh epic legitimately has nothing - still a boundary, just an empty
     // one, which is what lets its FIRST row read as new.
-    opened[1].handlers.onSnapshot([]);
+    opened[1].handlers.onSnapshot([], null);
 
     const hosts = manager.getSnapshot().hosts;
     const hostA = hosts.find((host) => host.hostId === "host-a");
@@ -118,14 +121,17 @@ describe("CommGraphSubscriptionManager", () => {
     manager.attach();
     manager.setHostIds(["host-a", "host-b"]);
 
-    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 100 })]);
+    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 100 })], 1);
     // Host B hands over its whole history LATE, and its rows sort ABOVE
     // everything host A holds. Against a single merged high-water mark this
     // reads as a burst of activity; against host B's own boundary it is history.
-    opened[1].handlers.onSnapshot([
-      makeEvent({ id: 1, timestamp: 300 }),
-      makeEvent({ id: 2, timestamp: 400 }),
-    ]);
+    opened[1].handlers.onSnapshot(
+      [
+        makeEvent({ id: 1, timestamp: 300 }),
+        makeEvent({ id: 2, timestamp: 400 }),
+      ],
+      2,
+    );
 
     expect(manager.getSnapshot().lastArrival).toBeNull();
     manager.dispose();
@@ -139,7 +145,7 @@ describe("CommGraphSubscriptionManager", () => {
 
     // A fresh epic: no history at all. Its very first row is genuinely new, so
     // an empty snapshot must still count as an initialization.
-    opened[0].handlers.onSnapshot([]);
+    opened[0].handlers.onSnapshot([], null);
     opened[0].handlers.onEvent(makeEvent({ id: 1, timestamp: 100 }));
 
     expect(manager.getSnapshot().lastArrival?.id).toBe(1);
@@ -152,8 +158,8 @@ describe("CommGraphSubscriptionManager", () => {
     manager.attach();
     manager.setHostIds(["host-a", "host-b"]);
 
-    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 100 })]);
-    opened[1].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 300 })]);
+    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 100 })], 1);
+    opened[1].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 300 })], 1);
 
     opened[0].handlers.onEvent(makeEvent({ id: 2, timestamp: 500 }));
     expect(manager.getSnapshot().lastArrival?.hostId).toBe("host-a");
@@ -163,13 +169,43 @@ describe("CommGraphSubscriptionManager", () => {
     manager.dispose();
   });
 
+  it("classes capped-snapshot overflow as history, not arrivals", () => {
+    // The snapshot is BOUNDED: on a large backlog it is a prefix of the gap
+    // and the remainder legally arrives as `event` frames. The wire headId -
+    // the log's head at handoff - is what keeps that day-old overflow from
+    // pulsing as live traffic.
+    const { opened, opener } = createFakeOpener();
+    const manager = new CommGraphSubscriptionManager("epic-1", opener);
+    manager.attach();
+    manager.setHostIds(["host-a"]);
+
+    // A capped snapshot: two rows handed over, but the log's head is 5.
+    opened[0].handlers.onSnapshot(
+      [
+        makeEvent({ id: 1, timestamp: 100 }),
+        makeEvent({ id: 2, timestamp: 200 }),
+      ],
+      5,
+    );
+    // Overflow drains as event frames - ids at or below the head: history.
+    opened[0].handlers.onEvent(makeEvent({ id: 3, timestamp: 300 }));
+    opened[0].handlers.onEvent(makeEvent({ id: 5, timestamp: 500 }));
+    expect(manager.getSnapshot().lastArrival).toBeNull();
+    expect(manager.getSnapshot().events).toHaveLength(4);
+
+    // The first row ABOVE the head is the first genuine arrival.
+    opened[0].handlers.onEvent(makeEvent({ id: 6, timestamp: 600 }));
+    expect(manager.getSnapshot().lastArrival?.id).toBe(6);
+    manager.dispose();
+  });
+
   it("keeps the newer arrival when an older host's row lands after it", () => {
     const { opened, opener } = createFakeOpener();
     const manager = new CommGraphSubscriptionManager("epic-1", opener);
     manager.attach();
     manager.setHostIds(["host-a", "host-b"]);
-    opened[0].handlers.onSnapshot([]);
-    opened[1].handlers.onSnapshot([]);
+    opened[0].handlers.onSnapshot([], null);
+    opened[1].handlers.onSnapshot([], null);
 
     opened[1].handlers.onEvent(makeEvent({ id: 1, timestamp: 900 }));
     // Above host A's own boundary, so it IS an arrival for that host - but it
@@ -185,8 +221,8 @@ describe("CommGraphSubscriptionManager", () => {
     const manager = new CommGraphSubscriptionManager("epic-1", opener);
     manager.attach();
     manager.setHostIds(["host-a", "host-b"]);
-    opened[0].handlers.onSnapshot([]);
-    opened[1].handlers.onSnapshot([]);
+    opened[0].handlers.onSnapshot([], null);
+    opened[1].handlers.onSnapshot([], null);
     opened[1].handlers.onEvent(makeEvent({ id: 1, timestamp: 900 }));
     expect(manager.getSnapshot().lastArrival).not.toBeNull();
 
@@ -204,11 +240,11 @@ describe("CommGraphSubscriptionManager", () => {
     manager.attach();
     manager.setHostIds(["host-a"]);
 
-    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })]);
+    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })], 1);
     opened[0].handlers.onStatus("reconnecting");
     // Rows that appeared while we were disconnected are ARRIVALS, not history,
     // so the initialization line must stay where it was first drawn.
-    opened[1].handlers.onSnapshot([makeEvent({ id: 2, timestamp: 20 })]);
+    opened[1].handlers.onSnapshot([makeEvent({ id: 2, timestamp: 20 })], 2);
 
     const [hostA] = manager.getSnapshot().hosts;
     expect(hostA.snapshotBoundary).toEqual({ highestId: 1 });
@@ -224,14 +260,20 @@ describe("CommGraphSubscriptionManager", () => {
     const [hostA, hostB] = opened;
 
     // Both hosts hand out id 1 and id 2 - per-host id spaces are independent.
-    hostA.handlers.onSnapshot([
-      makeEvent({ id: 1, timestamp: 100 }),
-      makeEvent({ id: 2, timestamp: 300 }),
-    ]);
-    hostB.handlers.onSnapshot([
-      makeEvent({ id: 1, timestamp: 200 }),
-      makeEvent({ id: 2, timestamp: 400 }),
-    ]);
+    hostA.handlers.onSnapshot(
+      [
+        makeEvent({ id: 1, timestamp: 100 }),
+        makeEvent({ id: 2, timestamp: 300 }),
+      ],
+      2,
+    );
+    hostB.handlers.onSnapshot(
+      [
+        makeEvent({ id: 1, timestamp: 200 }),
+        makeEvent({ id: 2, timestamp: 400 }),
+      ],
+      2,
+    );
 
     const merged = manager.getSnapshot().events;
     expect(
@@ -251,10 +293,13 @@ describe("CommGraphSubscriptionManager", () => {
     manager.attach();
     manager.setHostIds(["host-a"]);
 
-    opened[0].handlers.onSnapshot([
-      makeEvent({ id: 1, timestamp: 500, messageText: "first" }),
-      makeEvent({ id: 2, timestamp: 500, messageText: "second" }),
-    ]);
+    opened[0].handlers.onSnapshot(
+      [
+        makeEvent({ id: 1, timestamp: 500, messageText: "first" }),
+        makeEvent({ id: 2, timestamp: 500, messageText: "second" }),
+      ],
+      2,
+    );
 
     const merged = manager.getSnapshot().events;
     expect(merged).toHaveLength(2);
@@ -271,10 +316,13 @@ describe("CommGraphSubscriptionManager", () => {
     manager.attach();
     manager.setHostIds(["host-a"]);
     liveSubscription(opened[0]);
-    opened[0].handlers.onSnapshot([
-      makeEvent({ id: 1, timestamp: 100 }),
-      makeEvent({ id: 2, timestamp: 200 }),
-    ]);
+    opened[0].handlers.onSnapshot(
+      [
+        makeEvent({ id: 1, timestamp: 100 }),
+        makeEvent({ id: 2, timestamp: 200 }),
+      ],
+      2,
+    );
 
     opened[0].handlers.onStatus("reconnecting");
 
@@ -283,10 +331,13 @@ describe("CommGraphSubscriptionManager", () => {
     expect(opened[1].request.sinceCursor).toBe(2);
 
     // A resume that re-delivers already-applied rows must not double them.
-    opened[1].handlers.onSnapshot([
-      makeEvent({ id: 2, timestamp: 200 }),
-      makeEvent({ id: 3, timestamp: 300 }),
-    ]);
+    opened[1].handlers.onSnapshot(
+      [
+        makeEvent({ id: 2, timestamp: 200 }),
+        makeEvent({ id: 3, timestamp: 300 }),
+      ],
+      3,
+    );
     expect(manager.getSnapshot().events.map((event) => event.id)).toEqual([
       1, 2, 3,
     ]);
@@ -354,7 +405,7 @@ describe("CommGraphSubscriptionManager", () => {
 
     hostA.handlers.onStatus("unsupported");
     liveSubscription(hostB);
-    hostB.handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })]);
+    hostB.handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })], 1);
 
     const snapshot = manager.getSnapshot();
     expect(snapshot.hosts.map((host) => [host.hostId, host.status])).toEqual([
@@ -370,8 +421,8 @@ describe("CommGraphSubscriptionManager", () => {
     const manager = new CommGraphSubscriptionManager("epic-1", opener);
     manager.attach();
     manager.setHostIds(["host-a", "host-b"]);
-    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })]);
-    opened[1].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 20 })]);
+    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })], 1);
+    opened[1].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 20 })], 1);
 
     manager.setHostIds(["host-b"]);
 
@@ -402,7 +453,7 @@ describe("CommGraphSubscriptionManager", () => {
     const manager = new CommGraphSubscriptionManager("epic-1", opener);
     manager.attach();
     manager.setHostIds(["host-a"]);
-    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 300 })]);
+    opened[0].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 300 })], 1);
 
     opened[0].handlers.onEvent(makeEvent({ id: 2, timestamp: 100 }));
 
@@ -419,7 +470,7 @@ describe("CommGraphSubscriptionManager", () => {
     const manager = new CommGraphSubscriptionManager("epic-1", opener);
     manager.attach();
     manager.setHostIds(["host-a"]);
-    opened[0].handlers.onSnapshot([makeEvent({ id: 7, timestamp: 100 })]);
+    opened[0].handlers.onSnapshot([makeEvent({ id: 7, timestamp: 100 })], 7);
 
     manager.detach();
     expect(opened[0].closed).toBe(true);
@@ -440,7 +491,7 @@ describe("CommGraphSubscriptionManager", () => {
     manager.detach();
     manager.attach();
 
-    stale.handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })]);
+    stale.handlers.onSnapshot([makeEvent({ id: 1, timestamp: 10 })], 1);
 
     expect(manager.getSnapshot().events).toHaveLength(0);
     manager.dispose();
@@ -477,7 +528,7 @@ describe("CommGraphSubscriptionManager failure containment", () => {
     manager.attach();
     manager.setHostIds(["host-a"]);
     // Advance the cursor so the drop takes the resume branch.
-    opened[0].handlers.onSnapshot([makeEvent({ id: 4, timestamp: 100 })]);
+    opened[0].handlers.onSnapshot([makeEvent({ id: 4, timestamp: 100 })], 4);
 
     dialBroken = true;
     // The socket reports its own drop; nothing may escape that callback.
@@ -529,7 +580,7 @@ describe("CommGraphSubscriptionManager failure containment", () => {
     });
     manager.attach();
     manager.setHostIds(["host-a", "host-b"]);
-    opened[1].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 100 })]);
+    opened[1].handlers.onSnapshot([makeEvent({ id: 1, timestamp: 100 })], 1);
 
     // Host removal runs from the standalone host-set effect, which is not
     // transactional either.

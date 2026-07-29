@@ -94,7 +94,11 @@ function decodeCharacterReferences(text: string): string {
         return codePointText(Number.parseInt(hex, 16), match);
       }
       if (name !== undefined) {
-        return NAMED_CHARACTER_REFERENCES[name] ?? match;
+        // Own-properties only: `&constructor;` must stay literal text, not
+        // resolve through Object.prototype into coerced function source.
+        return Object.hasOwn(NAMED_CHARACTER_REFERENCES, name)
+          ? (NAMED_CHARACTER_REFERENCES[name] ?? match)
+          : match;
       }
       return match;
     },

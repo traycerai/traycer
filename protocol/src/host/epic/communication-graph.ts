@@ -270,6 +270,17 @@ export const epicCommunicationGraphSubscribeServerFrameSchema =
       kind: z.literal("snapshot"),
       epicId: z.string(),
       events: z.array(epicCommunicationGraphEventSchema),
+      /**
+       * Highest row id this host's log held when the subscription OPENED, or
+       * null when the log was empty. This - not the snapshot's own last row -
+       * is the arrival boundary: because the snapshot is bounded, backlog
+       * PAST its bound legally arrives as `event` frames, and a client that
+       * classes "id above the snapshot's last row" as new would animate that
+       * day-old overflow as live traffic. Rows at or below `headId` are
+       * history the client is merely learning, however they were framed;
+       * rows above it were captured after the subscription opened.
+       */
+      headId: z.number().int().positive().nullable(),
       ...textFrameFields,
     }),
     /**

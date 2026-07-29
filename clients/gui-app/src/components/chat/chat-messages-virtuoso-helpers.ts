@@ -267,15 +267,22 @@ export function chatMessageAlignmentDelta(
   messageId: string,
 ): number | null {
   if (scroller === null) return null;
-  const target = Array.from(
-    scroller.querySelectorAll<HTMLElement>("[data-message-id]"),
-  ).find((row) => row.dataset.messageId === messageId);
-  if (target === undefined) return null;
+  // One native lookup: this runs on every correction frame, and materializing
+  // the whole row list just to scan it would be per-frame garbage. Quote and
+  // backslash are the only characters that can break out of a QUOTED
+  // attribute selector; escaped inline rather than via `CSS.escape`, which
+  // node-environment tests do not provide.
+  const target = scroller.querySelector<HTMLElement>(
+    `[data-message-id="${messageId.replace(/["\\]/gu, "\\$&")}"]`,
+  );
+  if (target === null) return null;
 
   const scrollerRect = scroller.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
   if (scrollerRect.height <= 0 || targetRect.height <= 0) return null;
-  const targetTop = scrollerRect.top + Math.abs(MINIMAP_SCROLL_OFFSET_PX);
+  // Negated, not `Math.abs`: `chatScrollLocationForMessage` passes the RAW
+  // offset, and the two anchors must move together if its sign ever changes.
+  const targetTop = scrollerRect.top - MINIMAP_SCROLL_OFFSET_PX;
   return targetRect.top - targetTop;
 }
 

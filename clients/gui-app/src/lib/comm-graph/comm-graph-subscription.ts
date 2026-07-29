@@ -44,6 +44,12 @@ import {
 export interface CommGraphSubscriptionHandlers {
   readonly onSnapshot: (
     events: ReadonlyArray<EpicCommunicationGraphEvent>,
+    /**
+     * The host log's head id at handoff (`snapshot.headId` on the wire), null
+     * for an empty log. THE arrival boundary - not the snapshot's last row,
+     * which a bounded snapshot legally undershoots.
+     */
+    headId: number | null,
   ) => void;
   readonly onEvent: (event: EpicCommunicationGraphEvent) => void;
   readonly onStatus: (status: CommGraphHostStatus) => void;
@@ -446,9 +452,9 @@ export class CommGraphSubscriptionManager {
       epicId: this.epicId,
       sinceCursor: entry.cursor,
       handlers: {
-        onSnapshot: (events) => {
+        onSnapshot: (events, headId) => {
           if (!isCurrent()) return;
-          this.applySnapshot(entry, events);
+          this.applySnapshot(entry, events, headId);
         },
         onEvent: (event) => {
           if (!isCurrent()) return;
@@ -465,6 +471,7 @@ export class CommGraphSubscriptionManager {
   private applySnapshot(
     entry: HostEntry,
     events: ReadonlyArray<EpicCommunicationGraphEvent>,
+    headId: number | null,
   ): void {
     const accepted = events.flatMap((event) => {
       if (!this.accept(entry, event)) return [];
@@ -475,12 +482,13 @@ export class CommGraphSubscriptionManager {
       this.noteArrival(entry, row);
       return [row];
     });
-    // The boundary is drawn AFTER the snapshot's rows are applied, so it covers
-    // every row this handoff carried. An EMPTY snapshot still draws one - a
-    // fresh epic has no history, and skipping the boundary there would leave
-    // this host permanently uninitialized, so its first genuinely-live row
-    // could never be recognized as one.
-    const initialized = this.markSnapshotBoundary(entry);
+    // The boundary is the HOST'S head at handoff, from the wire - not the
+    // snapshot's own last row. The snapshot is bounded, so pre-existing
+    // backlog past its bound legally arrives as `event` frames; only the
+    // head separates that overflow (history) from genuinely-new rows. An
+    // EMPTY snapshot still draws a boundary - a fresh epic has no history,
+    // and skipping it would leave this host permanently uninitialized.
+    const initialized = this.markSnapshotBoundary(entry, headId);
     if (accepted.length === 0) {
       if (initialized) this.publish();
       return;
@@ -495,9 +503,12 @@ export class CommGraphSubscriptionManager {
    * entry is a reconnect gap-fill, and the rows in it appeared while we were
    * disconnected - they are arrivals, so the line must not move past them.
    */
-  private markSnapshotBoundary(entry: HostEntry): boolean {
+  private markSnapshotBoundary(
+    entry: HostEntry,
+    headId: number | null,
+  ): boolean {
     if (entry.snapshotBoundary !== null) return false;
-    const boundary: CommGraphHostSnapshotBoundary = { highestId: entry.cursor };
+    const boundary: CommGraphHostSnapshotBoundary = { highestId: headId };
     entry.snapshotBoundary = boundary;
     return true;
   }

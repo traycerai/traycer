@@ -88,13 +88,17 @@ export type CommGraphHostStatus =
  */
 export interface CommGraphHostSnapshotBoundary {
   /**
-   * Highest row id the snapshot carried, or `null` when the snapshot was EMPTY.
+   * The host log's head id at handoff (the snapshot frame's `headId`), or
+   * `null` when the log was EMPTY. Deliberately NOT the snapshot's own last
+   * row: the snapshot is bounded, so backlog past its bound arrives as
+   * `event` frames, and only the head keeps that overflow classed as
+   * history.
    *
-   * An empty snapshot is a real boundary, not a missing one: a fresh epic
-   * legitimately has no history, and the very next row it produces is genuinely
-   * new. That is exactly why this is a distinct nullable INSIDE the boundary -
-   * "initialized with nothing" and "not initialized yet" would otherwise
-   * collapse onto the same `null`.
+   * An empty-log boundary is a real boundary, not a missing one: a fresh
+   * epic legitimately has no history, and the very next row it produces is
+   * genuinely new. That is exactly why this is a distinct nullable INSIDE
+   * the boundary - "initialized with nothing" and "not initialized yet"
+   * would otherwise collapse onto the same `null`.
    */
   readonly highestId: number | null;
 }

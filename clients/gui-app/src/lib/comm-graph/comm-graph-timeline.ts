@@ -84,6 +84,23 @@ export function commGraphEventsAsOfCursor(
   cursor: CommGraphTimeCursor | null,
 ): ReadonlyArray<CommGraphEvent> {
   if (cursor === null) return events;
+  const upper = commGraphUpperBoundIndex(events, cursor);
+  if (upper === events.length) return events;
+  return events.slice(0, upper);
+}
+
+/**
+ * Index of the first row strictly AFTER `cursor` in an array sorted by
+ * `compareCommGraphEvents` (`events.length` when no such row exists). THE one
+ * upper-bound search: the as-of slice, the playback "next" step, and the
+ * transport's cursor index all step through this - the rationale above (tens
+ * of thousands of rows, re-derived every playback tick) applies to each of
+ * them equally, so none may fall back to a linear scan or fork its own copy.
+ */
+export function commGraphUpperBoundIndex(
+  events: ReadonlyArray<CommGraphEvent>,
+  cursor: CommGraphTimeCursor,
+): number {
   let low = 0;
   let high = events.length;
   while (low < high) {
@@ -91,8 +108,7 @@ export function commGraphEventsAsOfCursor(
     if (compareEventToCursor(events[mid], cursor) <= 0) low = mid + 1;
     else high = mid;
   }
-  if (low === events.length) return events;
-  return events.slice(0, low);
+  return low;
 }
 
 /**
@@ -135,10 +151,7 @@ export function nextCommGraphTimelineEvent(
 ): CommGraphEvent | null {
   if (events.length === 0) return null;
   if (cursor === null) return null;
-  for (const event of events) {
-    if (compareEventToCursor(event, cursor) > 0) return event;
-  }
-  return null;
+  return events[commGraphUpperBoundIndex(events, cursor)] ?? null;
 }
 
 /**

@@ -19,6 +19,7 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { CommGraphDetailPanel } from "@/components/epic-canvas/comm-graph/comm-graph-detail-panel";
 
 export interface CommGraphAgentDetailPanelProps {
@@ -78,7 +79,7 @@ export function CommGraphAgentDetailPanel(
               instanceId: agent.id,
               type: agent.kind,
               name: agent.name,
-              hostId: "",
+              hostId: agent.hostId ?? UNKNOWN_HOST_PLACEHOLDER,
             }}
             epicId={epicId}
             variant="live"

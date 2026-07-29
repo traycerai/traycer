@@ -54,6 +54,7 @@ import {
   openTile,
   openTileInBackgroundTab as openTileInBackgroundTabCanvas,
   openTileInPane as openTileInPaneCanvas,
+  findPaneTabByContentId,
   openSingletonTileInPane as openSingletonTileInPaneCanvas,
   promotePreview,
   renameArtifact,
@@ -1709,16 +1710,20 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
         const before = canvasForExistingTab(get(), tabId);
         const targetPane =
           before === null ? null : findPaneById(before.root, paneId);
+        const existingSingleton =
+          before === null ? null : findPaneTabByContentId(before, ref.id);
         set((state) =>
           updateTabCanvas(state, tabId, (canvas) =>
             openSingletonTileInPaneCanvas(canvas, paneId, ref),
           ),
         );
         const after = currentNestedFocusTargetForTab(get(), tabId);
-        // A focus of an ALREADY-OPEN singleton is still a real focus target -
-        // it may live in another pane - so `targetPane` only gates the case
-        // where the requested pane no longer exists.
-        return targetPane === null ? null : after;
+        // A focus of an ALREADY-OPEN singleton is still a real focus target
+        // even when the requested pane is stale - the canvas focused the
+        // existing instance in ITS pane regardless. Null only when nothing
+        // could have happened: no pane to insert into AND no existing
+        // instance to focus.
+        return targetPane === null && existingSingleton === null ? null : after;
       },
 
       prepareOpenTileInPaneFocusTargetFromSource: (

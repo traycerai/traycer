@@ -50,7 +50,7 @@ function openCommGraphSubscription(
         return;
       }
       if (parsed.data.kind === "snapshot") {
-        handlers.onSnapshot(parsed.data.events);
+        handlers.onSnapshot(parsed.data.events, parsed.data.headId);
         return;
       }
       if (parsed.data.kind === "event") {
@@ -88,8 +88,14 @@ function openCommGraphSubscription(
       close: () => {
         if (closed) return;
         closed = true;
-        session.close();
-        transport.close();
+        // The transport (socket + rotation/wake listeners) must be released
+        // even when the session's own teardown throws - otherwise the leak is
+        // silent for the life of the app.
+        try {
+          session.close();
+        } finally {
+          transport.close();
+        }
       },
     };
   } catch (cause) {
