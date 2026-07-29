@@ -121,13 +121,33 @@ describe("windows OS-native uninstall macro", () => {
     // the macro fixes.
     const macro = readUninstallMacro();
     expect(macro).toContain(`\${GetOptions} $R0 "--updated" $R1`);
-    // The teardown must sit in the branch taken when the flag is ABSENT.
-    const guardIndex = macro.indexOf('"--updated"');
-    const deleteIndex = macro.indexOf("schtasks /Delete");
-    expect(guardIndex).toBeGreaterThan(-1);
-    expect(deleteIndex).toBeGreaterThan(guardIndex);
-    expect(macro.slice(guardIndex, deleteIndex)).toContain(
-      "${ifNot} ${Errors}",
-    );
+
+    // `${GetOptions}` sets the error flag when the option is ABSENT, so
+    // `${ifNot} ${Errors}` is the arm taken when `--updated` WAS passed - the
+    // update - and every teardown command has to live in its `${else}`.
+    //
+    // Both arms are sliced and asserted, rather than only checking that the
+    // delete follows the guard: that weaker form stays green when the two arms
+    // are SWAPPED, which is precisely the inversion this test exists to catch.
+    const optionIndex = macro.indexOf('"--updated"');
+    const guardIndex = macro.indexOf("${ifNot} ${Errors}");
+    const elseIndex = macro.indexOf("${else}", guardIndex);
+    const endIfIndex = macro.indexOf("${endIf}", elseIndex);
+    expect(optionIndex).toBeGreaterThan(-1);
+    expect(guardIndex).toBeGreaterThan(optionIndex);
+    expect(elseIndex).toBeGreaterThan(guardIndex);
+    expect(endIfIndex).toBeGreaterThan(elseIndex);
+
+    const updateArm = macro.slice(guardIndex, elseIndex);
+    const removalArm = macro.slice(elseIndex, endIfIndex);
+    for (const command of [
+      "schtasks /End",
+      "schtasks /Delete",
+      "host-start-hidden.vbs",
+      "DeleteFolder('Traycer',0)",
+    ]) {
+      expect(removalArm).toContain(command);
+      expect(updateArm).not.toContain(command);
+    }
   });
 });
