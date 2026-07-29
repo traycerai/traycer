@@ -9,6 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 import type { IpcHostController } from "../runner-ipc-bridge";
 import type { HostControllerStatus } from "../../host/host-controller-types";
 import { DEV_DESKTOP_SLOT_ENV } from "../../host/dev-desktop-slot";
@@ -93,8 +94,7 @@ interface RegistryPlatformAssetFixture {
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-registry-cache-"));
-  process.env.HOME = workHome;
-  process.env.USERPROFILE = workHome;
+  sandboxHome(workHome);
   vi.resetModules();
 });
 
