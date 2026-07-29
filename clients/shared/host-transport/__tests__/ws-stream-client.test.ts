@@ -960,6 +960,75 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
+  it("preserves Git v1.2 negotiation and frame routing when only the notification session reconnects", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const gitSession = client.subscribe("git.subscribeStatus", {
+      hostId: "host-1",
+      runningDir: "/repo",
+      ignoreWhitespace: false,
+      freshNonce: null,
+    });
+    const notificationSession = client.subscribe(
+      "host.notifications.feed.subscribe",
+      {
+        initialAttentionLimit: 50,
+        initialRecentLimit: 50,
+      },
+    );
+    const routedGitMinors: number[] = [];
+    gitSession.onServerFrame(() => {
+      routedGitMinors.push(
+        client.getMethodSchemaVersion("git.subscribeStatus")?.minor ?? -1,
+      );
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sockets).toHaveLength(2);
+    completeHandshake(sockets[0].socket);
+    completeHandshake(sockets[1].socket);
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
+      major: 1,
+      minor: 2,
+    });
+
+    notificationSession.requestReconnect();
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
+      major: 1,
+      minor: 2,
+    });
+    sockets[0].socket.fireText({
+      kind: "update",
+      hasBinaryPayload: false,
+      value: { type: "error", message: "during reconnect", isFatal: false },
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sockets).toHaveLength(3);
+    completeHandshake(sockets[2].socket);
+    expect(client.getMethodSchemaVersion("git.subscribeStatus")).toEqual({
+      major: 1,
+      minor: 2,
+    });
+    sockets[0].socket.fireText({
+      kind: "update",
+      hasBinaryPayload: false,
+      value: { type: "error", message: "after reconnect", isFatal: false },
+    });
+    expect(routedGitMinors).toEqual([2, 2]);
+
+    gitSession.close();
+    notificationSession.close();
+  });
+
   it("closes the socket after two missed pongs and triggers a reconnect", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 

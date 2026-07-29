@@ -228,7 +228,8 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
           support,
           schemaVersion,
         ),
-      onTransportReconnect: () => this.resetMethodSupport(),
+      onTransportReconnect: (reconnectingMethod) =>
+        this.resetMethodSupport(reconnectingMethod),
     });
     removeSession = () => {
       this.ownedSessions.delete(session);
@@ -448,12 +449,19 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     return true;
   }
 
-  private resetMethodSupport(): void {
-    if (this.methodSupport.size === 0 && this.methodSchemaVersions.size === 0) {
+  private resetMethodSupport(reconnectingMethod: string): void {
+    const hadMethodSupport = this.methodSupport.size > 0;
+    // A reconnect may be a new host incarnation, so capability evidence is
+    // client-wide and must be re-probed. Negotiated schema versions are owned
+    // by independent live sessions, though: only the reconnecting method has
+    // lost its negotiation. Clearing every version here would silently route
+    // frames from unrelated still-open sessions through their legacy decoder.
+    const hadNegotiatedVersion =
+      this.methodSchemaVersions.delete(reconnectingMethod);
+    if (!hadMethodSupport && !hadNegotiatedVersion) {
       return;
     }
     this.methodSupport.clear();
-    this.methodSchemaVersions.clear();
     for (const listener of Array.from(this.methodSupportListeners)) {
       listener();
     }
@@ -517,7 +525,9 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     support: "supported" | "unsupported",
     schemaVersion: SchemaVersion | null,
   ) => void;
-  readonly onTransportReconnect: () => void;
+  readonly onTransportReconnect: (
+    reconnectingMethod: keyof Registry & string,
+  ) => void;
 }
 
 /**
@@ -1308,7 +1318,7 @@ class StreamSession<
    * that decides whether to reconnect or go terminal.
    */
   private resetForReconnect(): void {
-    this.config.onTransportReconnect();
+    this.config.onTransportReconnect(this.config.method);
     this.clearHeartbeat();
     if (this.openAckTimer !== null) {
       clearTimeout(this.openAckTimer);
