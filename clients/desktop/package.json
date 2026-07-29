@@ -226,7 +226,8 @@
     "nsis": {
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "include": "uninstall-host-autostart.nsh"
     }
   },
   "author": {
