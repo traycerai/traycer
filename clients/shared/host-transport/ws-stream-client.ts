@@ -221,18 +221,16 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       initialBackoffMs: this.options.initialBackoffMs,
       maxBackoffMs: this.options.maxBackoffMs,
       onDispose: () => removeSession(),
-      onManifest: (manifest, subscribedMethod, support, schemaVersion) =>
-        this.applyHostManifest(
-          manifest,
-          subscribedMethod,
-          support,
-          schemaVersion,
-        ),
+      onManifest: (manifest, subscribedMethod, support) =>
+        this.applyHostManifest(manifest, subscribedMethod, support),
       onTransportReconnect: (reconnectingMethod) =>
         this.resetMethodSupport(reconnectingMethod),
     });
     removeSession = () => {
       this.ownedSessions.delete(session);
+      if (this.reconcileMethodSchemaVersion(method)) {
+        this.notifyMethodSupportListeners();
+      }
     };
     this.ownedSessions.add(session);
     return session;
@@ -368,24 +366,10 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
   private updateMethodSupport(
     method: string,
     support: StreamMethodSupport,
-    schemaVersion: SchemaVersion | null,
   ): boolean {
     const previous = this.methodSupport.get(method) ?? "unknown";
-    const previousVersion = this.methodSchemaVersions.get(method) ?? null;
-    if (
-      schemaVersion === null ||
-      support === "unsupported" ||
-      support === "unknown"
-    ) {
-      this.methodSchemaVersions.delete(method);
-    } else {
-      this.methodSchemaVersions.set(method, schemaVersion);
-    }
-    const nextVersion = this.methodSchemaVersions.get(method) ?? null;
-    if (
-      previous === support &&
-      schemaVersionEqual(previousVersion, nextVersion)
-    ) {
+    const versionChanged = this.reconcileMethodSchemaVersion(method);
+    if (previous === support && !versionChanged) {
       return false;
     }
     this.methodSupport.set(method, support);
@@ -396,7 +380,6 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     theirManifest: ConnectionManifest,
     subscribedMethod: string,
     subscribedMethodSupport: "supported" | "unsupported",
-    subscribedMethodSchemaVersion: SchemaVersion | null,
   ): void {
     const myManifest = buildStreamManifest(this.options.registry);
     let changed = false;
@@ -406,7 +389,6 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
           this.updateMethodSupport(
             method,
             subscribedMethodSupport,
-            subscribedMethodSchemaVersion,
           ) || changed;
         continue;
       }
@@ -424,9 +406,7 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
         ) || changed;
     }
     if (changed) {
-      for (const listener of Array.from(this.methodSupportListeners)) {
-        listener();
-      }
+      this.notifyMethodSupportListeners();
     }
   }
 
@@ -434,15 +414,10 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     method: string,
     support: "supported" | "unsupported",
   ): boolean {
+    // Another session's process manifest is capability evidence, not evidence
+    // that this method's already-open sessions lost their negotiations.
     const previous = this.methodSupport.get(method) ?? "unknown";
-    const hadSchemaVersion = this.methodSchemaVersions.has(method);
-    if (support === "unsupported") {
-      this.methodSchemaVersions.delete(method);
-    }
-    if (
-      previous === support &&
-      !(support === "unsupported" && hadSchemaVersion)
-    ) {
+    if (previous === support) {
       return false;
     }
     this.methodSupport.set(method, support);
@@ -452,16 +427,41 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
   private resetMethodSupport(reconnectingMethod: string): void {
     const hadMethodSupport = this.methodSupport.size > 0;
     // A reconnect may be a new host incarnation, so capability evidence is
-    // client-wide and must be re-probed. Negotiated schema versions are owned
-    // by independent live sessions, though: only the reconnecting method has
-    // lost its negotiation. Clearing every version here would silently route
-    // frames from unrelated still-open sessions through their legacy decoder.
-    const hadNegotiatedVersion =
-      this.methodSchemaVersions.delete(reconnectingMethod);
-    if (!hadMethodSupport && !hadNegotiatedVersion) {
+    // client-wide and must be re-probed. Negotiated schema versions belong to
+    // individual live sessions, though. Rebuild the method-level view from the
+    // remaining sessions so another repo's still-open stream keeps v1.2 frame
+    // routing while this session negotiates again.
+    const versionChanged =
+      this.reconcileMethodSchemaVersion(reconnectingMethod);
+    if (!hadMethodSupport && !versionChanged) {
       return;
     }
     this.methodSupport.clear();
+    this.notifyMethodSupportListeners();
+  }
+
+  private reconcileMethodSchemaVersion(method: string): boolean {
+    const previous = this.methodSchemaVersions.get(method) ?? null;
+    let liveVersion: SchemaVersion | null = null;
+    for (const session of this.ownedSessions) {
+      if (session.getMethod() !== method) {
+        continue;
+      }
+      const sessionVersion = session.getNegotiatedSchemaVersion();
+      if (sessionVersion !== null) {
+        liveVersion = sessionVersion;
+        break;
+      }
+    }
+    if (liveVersion === null) {
+      this.methodSchemaVersions.delete(method);
+    } else {
+      this.methodSchemaVersions.set(method, liveVersion);
+    }
+    return !schemaVersionEqual(previous, liveVersion);
+  }
+
+  private notifyMethodSupportListeners(): void {
     for (const listener of Array.from(this.methodSupportListeners)) {
       listener();
     }
@@ -523,7 +523,6 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     manifest: ConnectionManifest,
     subscribedMethod: keyof Registry & string,
     support: "supported" | "unsupported",
-    schemaVersion: SchemaVersion | null,
   ) => void;
   readonly onTransportReconnect: (
     reconnectingMethod: keyof Registry & string,
@@ -543,6 +542,7 @@ class StreamSession<
   private readonly config: StreamSessionOptions<Registry>;
 
   private status: StreamConnectionStatus = "connecting";
+  private negotiatedSchemaVersion: SchemaVersion | null = null;
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
   private reconnectAttempt = 0;
@@ -620,6 +620,14 @@ class StreamSession<
 
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
+  }
+
+  getMethod(): keyof Registry & string {
+    return this.config.method;
+  }
+
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return this.negotiatedSchemaVersion;
   }
 
   requestReconnect(): void {
@@ -993,7 +1001,6 @@ class StreamSession<
         theirManifest,
         this.config.method,
         "unsupported",
-        null,
       );
       const terminalFrame: ClientStreamFatalErrorFrame = {
         kind: "fatalError",
@@ -1029,11 +1036,11 @@ class StreamSession<
       this.onSendFailure(socket);
       return;
     }
+    this.negotiatedSchemaVersion = prepared.onWireVersion;
     this.config.onManifest(
       theirManifest,
       this.config.method,
       "supported",
-      prepared.onWireVersion,
     );
     this.phase = "subscribed";
     this.reconnectAttempt = 0;
@@ -1318,6 +1325,7 @@ class StreamSession<
    * that decides whether to reconnect or go terminal.
    */
   private resetForReconnect(): void {
+    this.negotiatedSchemaVersion = null;
     this.config.onTransportReconnect(this.config.method);
     this.clearHeartbeat();
     if (this.openAckTimer !== null) {
