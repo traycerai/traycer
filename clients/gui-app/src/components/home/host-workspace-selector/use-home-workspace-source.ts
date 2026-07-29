@@ -79,10 +79,12 @@ export interface HomeWorkspaceSource {
   readonly stageEntry: (entry: WorktreeFolderIntent) => void;
 }
 
+/** Returns the draft ID represented by a landing staging key. */
 function landingDraftIdFor(stagingKey: WorktreeStagingKey): string | null {
   return stagingKey.surface === "landing" ? stagingKey.draftId : null;
 }
 
+/** Returns the epic ID represented by a new-conversation staging key. */
 function newConversationEpicIdFor(
   stagingKey: WorktreeStagingKey,
 ): string | null {

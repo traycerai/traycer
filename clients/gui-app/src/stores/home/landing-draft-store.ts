@@ -840,6 +840,7 @@ export function pinnedLandingDraftWorkspaceSnapshot(globalState: {
   });
 }
 
+/** Reads the pinned-only workspace snapshot from the current global store. */
 function readCurrentLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
   return pinnedLandingDraftWorkspaceSnapshot(
     useWorkspaceFoldersStore.getState(),

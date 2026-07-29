@@ -1,6 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import type {
   WorktreeBinding,
   WorktreeBindingEntry,
@@ -188,40 +194,45 @@ describe.each(["chat", "terminal-agent"] as const)(
       renderBoundSurface(kind);
 
       // Open the folder-rows popover from the collapsed summary.
-      fireEvent.click(screen.getByTestId("workspace-summary-trigger"));
-      const rows = await screen.findAllByTestId("folder-row");
-      expect(rows).toHaveLength(2);
+      const summary = screen.getByRole("button", {
+        name: /beta.*alpha/i,
+      });
+      fireEvent.click(summary);
+      const alphaRow = await screen.findByRole("group", {
+        name: "alpha project",
+      });
+      const betaRow = screen.getByRole("group", {
+        name: "beta project",
+      });
 
       // The bound PRIMARY (beta, `isPrimary` — not array position) renders
-      // the locked main marker + badge, with no checkbox to uncheck...
-      const alphaRow = rows.find(
-        (row) => row.getAttribute("data-path") === "/repo/alpha",
-      );
-      const betaRow = rows.find(
-        (row) => row.getAttribute("data-path") === "/repo/beta",
-      );
+      // the locked main marker, with no checkbox to uncheck...
       expect(
-        betaRow?.querySelector('[data-testid="folder-main-marker"]'),
-      ).not.toBeNull();
-      expect(betaRow?.className).toContain("bg-primary/5");
-      expect(
-        betaRow?.querySelector('[data-testid="folder-select-checkbox"]'),
-      ).toBeNull();
+        within(betaRow).getByRole("img", { name: "Main project" }),
+      ).toBeTruthy();
+      expect(within(betaRow).queryByRole("checkbox")).toBeNull();
       // ...the secondary keeps its checked additional-folder checkbox...
-      const alphaCheckbox = alphaRow?.querySelector(
-        '[data-testid="folder-select-checkbox"]',
-      );
-      expect(alphaCheckbox?.getAttribute("data-state")).toBe("checked");
-      // ...and the collapsed chip agreed with the marker (isPrimary, not
-      // items[0]).
       expect(
-        screen.getByTestId("workspace-summary-trigger").textContent,
-      ).toContain("beta");
+        within(alphaRow).getByRole("checkbox", {
+          name: "Also use alpha in this chat",
+          checked: true,
+        }),
+      ).toBeTruthy();
+      // ...and the collapsed summary agreed with the marker (isPrimary, not
+      // items[0]) by naming beta first, as asserted by the role query above.
 
       // A live chat's main is fixed: no switch affordance on any row.
-      expect(screen.queryByTestId("folder-use-as-main")).toBeNull();
+      expect(
+        screen.queryByRole("button", {
+          name: /as the main project for this chat/i,
+        }),
+      ).toBeNull();
       // The other row actions are still there (the rows are editable).
-      expect(screen.getAllByTestId("folder-remove").length).toBeGreaterThan(0);
+      expect(
+        within(alphaRow).getByRole("button", {
+          name: "Remove alpha from saved projects",
+        }),
+      ).toBeTruthy();
     });
   },
 );

@@ -112,11 +112,13 @@ function resetStore(): void {
   useLandingDraftStore.setState({
     drafts: [],
     activeDraftId: null,
+    pendingWorkspace: null,
   });
   useWorkspaceFoldersStore.setState({
     folders: [],
     folderInfoByPath: {},
     primaryPath: null,
+    pinnedPath: null,
   });
   useSettingsStore.setState({
     composerMode: "chat",

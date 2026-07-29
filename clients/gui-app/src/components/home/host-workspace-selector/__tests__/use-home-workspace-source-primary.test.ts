@@ -24,6 +24,7 @@ function resetStores(): void {
     folders: [],
     folderInfoByPath: {},
     primaryPath: null,
+    pinnedPath: null,
     allowMultipleFolders: false,
   });
   useLandingDraftStore.setState({

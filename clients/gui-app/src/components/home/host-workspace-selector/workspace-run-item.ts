@@ -34,7 +34,7 @@ export interface WorkspaceRunItem {
   readonly defaultNewBranchName: string;
   readonly repoIdentifier: WorktreeFolderIntent["repoIdentifier"];
   // The chat's MAIN project (its primary folder). Shown as the filled main
-  // marker + "Main" badge; it cannot be unchecked, only switched via another
+  // marker + a tinted row; it cannot be unchecked, only switched via another
   // row's `onUseAsMain`.
   readonly isPrimary: boolean;
   // Whether this saved project is used by the current chat (main or

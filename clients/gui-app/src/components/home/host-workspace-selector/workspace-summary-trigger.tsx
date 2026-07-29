@@ -180,6 +180,7 @@ export function WorkspaceSummaryTrigger(
   return trigger;
 }
 
+/** Describes why the collapsed workspace summary has no selected project. */
 function SummaryEmptyState(props: {
   readonly bindingResolved: boolean;
   readonly hasSavedProjects: boolean;

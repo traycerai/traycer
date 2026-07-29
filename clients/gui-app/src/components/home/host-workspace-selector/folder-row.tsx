@@ -71,9 +71,9 @@ export function FolderRow(props: {
 
   return (
     // The background click is a redundant POINTER shortcut for the fully
-    // accessible use-as-main name button inside the row - the wrapper itself
-    // is a layout div with no semantics (hence presentation, not button:
-    // a focusable row would double up the tab stops of its own controls).
+    // accessible use-as-main name button inside the row. The outer wrapper
+    // remains presentational; the non-interactive contents group below gives
+    // the row an accessible name without adding another tab stop.
     <div
       role="presentation"
       className={cn(
@@ -85,48 +85,54 @@ export function FolderRow(props: {
       data-testid="folder-row"
       data-path={item.displayPath}
     >
-      <FolderSelectControl
-        item={item}
-        multiSelectEnabled={props.multiSelectEnabled}
-        readOnly={props.readOnly}
-      />
-      <span
-        className="inline-flex w-full max-w-full min-w-0 items-center gap-1.5 px-1 py-1 text-ui-sm"
-        data-testid="folder-chip"
+      <div
+        role="group"
+        aria-label={`${item.displayName} project`}
+        className="contents"
       >
-        <Folder
-          className="size-3.5 shrink-0 text-muted-foreground/70"
-          aria-hidden
+        <FolderSelectControl
+          item={item}
+          multiSelectEnabled={props.multiSelectEnabled}
+          readOnly={props.readOnly}
         />
-        <FolderNameControl item={item} readOnly={props.readOnly} />
-        {item.missing ? (
-          <TooltipWrapper
-            label="This bound folder is missing on disk."
-            side="top"
-            sideOffset={undefined}
-            align={undefined}
-          >
-            <TriangleAlert
-              className="size-3.5 shrink-0 text-destructive opacity-100"
-              aria-hidden
-              data-testid="folder-row-missing"
-            />
-          </TooltipWrapper>
-        ) : null}
-        {/* Hover-revealed (with a keyboard-focus fallback): every row has a
-            copy action now, and a constantly-visible icon per row is noise.
-            Pushed to the column's right edge, clear of the name text. */}
-        <span className="ml-auto inline-flex shrink-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
-          <CopyPathButton path={runPath} testId="folder-copy-path" />
+        <span
+          className="inline-flex w-full max-w-full min-w-0 items-center gap-1.5 px-1 py-1 text-ui-sm"
+          data-testid="folder-chip"
+        >
+          <Folder
+            className="size-3.5 shrink-0 text-muted-foreground/70"
+            aria-hidden
+          />
+          <FolderNameControl item={item} readOnly={props.readOnly} />
+          {item.missing ? (
+            <TooltipWrapper
+              label="This bound folder is missing on disk."
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <TriangleAlert
+                className="size-3.5 shrink-0 text-destructive opacity-100"
+                aria-hidden
+                data-testid="folder-row-missing"
+              />
+            </TooltipWrapper>
+          ) : null}
+          {/* Hover-revealed (with a keyboard-focus fallback): every row has a
+              copy action now, and a constantly-visible icon per row is noise.
+              Pushed to the column's right edge, clear of the name text. */}
+          <span className="ml-auto inline-flex shrink-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+            <CopyPathButton path={runPath} testId="folder-copy-path" />
+          </span>
         </span>
-      </span>
-      <FolderRowBody
-        item={item}
-        readOnly={props.readOnly}
-        boundaryEl={props.boundaryEl}
-        uncommittedByPath={props.uncommittedByPath}
-        onEditEnvironment={props.onEditEnvironment}
-      />
+        <FolderRowBody
+          item={item}
+          readOnly={props.readOnly}
+          boundaryEl={props.boundaryEl}
+          uncommittedByPath={props.uncommittedByPath}
+          onEditEnvironment={props.onEditEnvironment}
+        />
+      </div>
     </div>
   );
 }
@@ -362,7 +368,7 @@ function FolderSelectControl(props: {
           className="inline-flex size-6 shrink-0 cursor-help items-center justify-center text-primary"
           data-testid="folder-main-marker"
         >
-          <CircleDot className="size-4" aria-label="Main project" />
+          <CircleDot className="size-4" role="img" aria-label="Main project" />
         </span>
       </TooltipWrapper>
     );
@@ -412,6 +418,7 @@ function FolderSelectControl(props: {
   );
 }
 
+/** Explains an editable or disabled additional-project checkbox. */
 function additionalCheckboxLabel(
   item: WorkspaceRunItem,
   inert: boolean,

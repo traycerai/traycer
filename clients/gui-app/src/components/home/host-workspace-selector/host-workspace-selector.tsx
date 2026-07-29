@@ -2670,6 +2670,7 @@ function savedUnboundRunItemFields(input: {
   };
 }
 
+/** Explains why a saved project cannot be added to the current binding. */
 function unboundSelectionDisabledReason(input: {
   readonly entry: ResolvedFolder;
   readonly activeRunLocksBinding: boolean;
