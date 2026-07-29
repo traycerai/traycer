@@ -203,6 +203,9 @@ function providerState(
       plugins: null,
       skills: null,
     },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }

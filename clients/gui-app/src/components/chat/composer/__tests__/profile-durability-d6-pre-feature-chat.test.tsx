@@ -108,6 +108,9 @@ function claudeState(profiles: ProviderProfile[]): ProviderCliState {
       plugins: null,
       skills: null,
     },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles,
   };
 }

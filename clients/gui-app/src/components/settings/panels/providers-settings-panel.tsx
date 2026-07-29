@@ -58,6 +58,10 @@ import {
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
+import {
+  providerCanStartProfileOauth,
+  providerSignInUnavailableHint,
+} from "@/components/providers/provider-signin-availability";
 import { ProviderApiKeySection } from "./provider-api-key-section";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
@@ -788,7 +792,14 @@ function ProviderTabBody({
     case "general":
       return (
         <div className="flex flex-col gap-3">
-          <ProviderProfileScopedSection state={state} {...profileTab} />
+          <ProviderProfileScopedSection
+            state={state}
+            {...profileTab}
+            signInUnavailableHint={providerSignInUnavailableHint(
+              state,
+              profileTab.isSelectedHostLocal,
+            )}
+          />
           <ProviderCliCandidatesSection state={state} providers={providers} />
           <TerminalAgentArgsSection
             key={state.terminalAgentArgs}
@@ -853,12 +864,4 @@ function ProviderTabPlaceholder({
       <p className="text-ui-xs text-muted-foreground">{description}</p>
     </div>
   );
-}
-
-function providerCanStartProfileOauth(
-  state: ProviderCliState,
-  isSelectedHostLocal: boolean,
-): boolean {
-  const oauthArgs = state.loginCapability?.oauthArgs ?? null;
-  return isSelectedHostLocal && oauthArgs !== null && oauthArgs.length > 0;
 }

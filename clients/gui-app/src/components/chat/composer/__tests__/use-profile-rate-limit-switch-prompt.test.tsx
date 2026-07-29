@@ -120,6 +120,9 @@ function claudeState(
       plugins: null,
       skills: null,
     },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [...profiles],
   };
 }

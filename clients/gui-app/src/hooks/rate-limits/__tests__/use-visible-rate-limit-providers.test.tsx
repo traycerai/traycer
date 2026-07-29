@@ -86,6 +86,9 @@ function providerState(args: {
       skills: null,
     },
     profiles: [],
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
   };
 }
 

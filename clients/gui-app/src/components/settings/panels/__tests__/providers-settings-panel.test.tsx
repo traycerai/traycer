@@ -221,6 +221,13 @@ vi.mock("@/hooks/providers/use-providers-mcp-auth-mutation", () => ({
   }),
 }));
 
+// The candidates table's failed-pack arm reaches `providers.ensurePack`, which
+// goes through TanStack Query. Mocked here alongside the other provider
+// mutations so this panel test keeps rendering without a QueryClientProvider.
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
+  useProvidersEnsurePack: () => ({ mutate: () => {}, isPending: false }),
+}));
+
 vi.mock("@/hooks/providers/use-providers-set-selection-mutation", () => ({
   useProvidersSetSelection: () => ({
     mutate: providerMocks.setSelectionMutate,
@@ -645,6 +652,9 @@ function providerState(input: {
     availabilityPending: false,
     nativeCapabilities:
       input.nativeCapabilities ?? DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [...(input.profiles ?? [])],
   };
 }
@@ -2091,6 +2101,7 @@ describe("<ProvidersSettingsPanel />", () => {
           hostId={hostId}
           isSelectedHostLocal
           canAddProfile
+          signInUnavailableHint={null}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={vi.fn()}

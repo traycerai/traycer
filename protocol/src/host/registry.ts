@@ -404,6 +404,8 @@ import {
   providersSubmitLoginCodeResponseSchema,
   providersTouchLoginRequestSchema,
   providersTouchLoginResponseSchema,
+  providersEnsurePackRequestSchema,
+  providersEnsurePackResponseSchema,
   providersListRequestSchema,
   providersListRequestSchemaV30,
   providersListResponseSchema,
@@ -453,12 +455,10 @@ import {
   providersSetTerminalAgentArgsResponseSchema,
   providersSetTerminalAgentArgsResponseSchemaV10,
   providersSetTerminalAgentArgsResponseSchemaV20,
+  type DowngradableToV10ProviderState,
   type ProviderCliState,
   type ProviderCliStateV10,
-  type ProviderCliStateV20,
-  type ProviderCliStateV30,
-  type ProviderCliStateMutationV20,
-  type ProviderNativeCapabilities,
+  type ProviderMutationCliStateV20,
   type ProviderLoginCapability,
   type ProviderLoginCapabilityV10,
 } from "@traycer/protocol/host/provider-schemas";
@@ -879,22 +879,13 @@ function unsupportedProviderStateDowngrade(
   };
 }
 
-// Accepts either the live (latest) state or the frozen v2.0 state - see
-// `downgradeProviderCliStateToV10`'s comment. `providersListDowngradeV2ToV1`
-// downgrades from v2.0 (already `profiles`-free); every other caller
-// downgrades from the live state.
+// `DowngradableToV10ProviderState` (imported) accepts either the live (latest)
+// state or the frozen v2.0 state - see `downgradeProviderCliStateToV10`'s
+// comment, which owns the shape. `providersListDowngradeV2ToV1` downgrades from
+// v2.0 (already `profiles`-free); every other caller downgrades from the live
+// state.
 function downgradeProviderStateForV10(
-  state: (
-    | ProviderCliState
-    | ProviderCliStateV30
-    | ProviderCliStateV20
-    | ProviderCliStateMutationV20
-  ) & {
-    profiles?: ProviderCliState["profiles"];
-    nativeCapabilities?: ProviderNativeCapabilities;
-    loginCapability:
-      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
-  },
+  state: DowngradableToV10ProviderState,
 ): DowngradeResult<ProviderCliStateV10> {
   const downgraded = downgradeProviderCliStateToV10(state);
   if (downgraded === null) {
@@ -904,17 +895,7 @@ function downgradeProviderStateForV10(
 }
 
 function downgradeProviderStateListForV10(
-  states: readonly ((
-    | ProviderCliState
-    | ProviderCliStateV30
-    | ProviderCliStateV20
-    | ProviderCliStateMutationV20
-  ) & {
-    profiles?: ProviderCliState["profiles"];
-    nativeCapabilities?: ProviderNativeCapabilities;
-    loginCapability:
-      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
-  })[],
+  states: readonly DowngradableToV10ProviderState[],
 ): ProviderCliStateV10[] {
   return states.flatMap((state) => {
     const downgraded = downgradeProviderCliStateToV10(state);
@@ -930,8 +911,42 @@ function downgradeProviderStateListForV10(
 // 2.0 -> 2.1 upgrade fills `profiles: []` for the caller's canonical.
 function upgradeProviderStateFromV10(
   state: ProviderCliStateV10,
-): ProviderCliStateMutationV20 {
+): ProviderMutationCliStateV20 {
   return upgradeProviderCliStateV10ToMutationV20(state);
+}
+
+// Applied where `providers.list`'s pre-v4.0 line upgrades to the live shape,
+// alongside the existing `profiles: []` fill. An old host predates the
+// provider pack registry entirely, so it has no managed-install lifecycle, no
+// other-session version-visibility signal, and no Phase-2 advisory to report -
+// "nothing to show" is the honest projection, matching how `profiles: []`
+// reads "old host never had this feature."
+//
+// `providers.list` is the ONLY carrier: the provider.* mutation echoes are
+// pinned to the frozen `providerMutationCliStateSchemaV21`, which does not
+// model these fields at all (a state echo cannot change what is installed -
+// see that schema's comment), so their 2.0 -> 2.1 upgrades must not fill
+// them.
+const PROVIDER_LIVE_FIELDS_PRE_REGISTRY = {
+  managedInstallState: null,
+  versionVisibility: null,
+  advisory: null,
+} as const;
+
+// Fills the code-paste capability slot a frozen pre-`codePaste` state (v1.0,
+// v2.0, v3.0) never carries - same "old host never had this feature"
+// semantics as the `profiles: []` fill these upgrade bridges already apply
+// to the same state. Every v2.0 -> v2.1 (and v3.0 -> v4.0) response upgrade
+// that lifts a frozen state onto the live `ProviderCliState` shape must call
+// this alongside its `profiles: []` fill, or the live shape's `codePaste`
+// key is silently absent on the wire (`upgradeResponseToVersion` chains
+// these callbacks by cast, with no re-parse step to apply `.catch(null)`).
+function upgradeLoginCapabilityFromV10(
+  loginCapability: ProviderLoginCapabilityV10 | null,
+): ProviderLoginCapability | null {
+  return loginCapability === null
+    ? null
+    : { ...loginCapability, codePaste: null };
 }
 
 function downgradeProviderRequestForV10<T>(
@@ -1035,17 +1050,6 @@ export const providersListDowngradeV3ToV1 = defineDowngradePath<
 // line - see `providerCliStateBaseShapeV30`'s comment), so growing the
 // response with a new non-optional-shaped field is a breaking change per
 // `assertSchemaCompatibility`, not something a minor bump can carry.
-// Backfills the `codePaste` field a v1.0-shaped login capability predates.
-// Used by the frozen-target upgrade bridges, which cannot re-parse through the
-// live schema (that would pull in post-v4.0 fields).
-function upgradeLoginCapabilityFromV10(
-  loginCapability: ProviderLoginCapabilityV10 | null,
-): ProviderLoginCapability | null {
-  return loginCapability === null
-    ? null
-    : { ...loginCapability, codePaste: null };
-}
-
 export const providersListV40 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 4, minor: 0 } as const,
@@ -1064,10 +1068,17 @@ export const providersListUpgradeV3ToV4 = defineUpgradePath<
   // the v3.0 line (and below) predates it, so its providers upgrade to
   // `profiles: []` (same "old host never had this feature" semantics as the
   // v1.0 -> v2.0 `availabilityPending` fill above). Devin/Pi absence needs no
-  // transform - a v3.0 provider set is a valid v4.0 subset. The REQUEST is not
-  // identity: the v4.0 line is pinned to the live request schema, which
-  // carries the `native` list/discover carrier. A v3.0 caller predates it, so
-  // it upgrades to `native: null` ("classic caller, no native query").
+  // transform - a v3.0 provider set is a valid v4.0 subset.
+  //
+  // The provider-pack-registry fields are deliberately NOT filled here. This
+  // bridge's target, `providersListResponseSchemaV40`, is frozen and does not
+  // model them, so a fill here is discarded - they are filled on the
+  // v5.0 -> v6.0 hop instead, whose target is the live shape.
+  //
+  // The REQUEST is not identity: the v4.0 line is pinned to the live request
+  // schema, which carries the `native` list/discover carrier. A v3.0 caller
+  // predates it, so it upgrades to `native: null` ("classic caller, no native
+  // query").
   upgradeRequest: (request) => ({ ...request, native: null }),
   upgradeResponse: (response) => ({
     providers: response.providers.map((provider) => ({
@@ -1161,15 +1172,27 @@ export const providersListUpgradeV5ToV6 = defineUpgradePath<
 >({
   from: { major: 5, minor: 0 },
   to: { major: 6, minor: 0 },
-  // Provider-set-wise this is purely additive (a v5.0 response without omp is
-  // already a valid v6.0 one), but v6.0 is pinned to the LIVE response, which
-  // also carries `native` and per-provider `nativeCapabilities`. A v5.0 host
-  // predates both, so re-parse through the live schema's `.catch` fallbacks to
-  // fill `nativeCapabilities` with the default descriptor, and report
-  // `native: null` ("old host served no native result").
+  // Additive in both directions that matter: a v5.0 provider set is already a
+  // valid v6.0 one (omp simply never appears), and v6.0 - pinned to the LIVE
+  // response - adds the provider-pack-registry fields, `native`, and
+  // per-provider `nativeCapabilities`.
+  //
+  // This is the fill's real home for all of them. A v5.0 host predates the
+  // registry and the native surface entirely, so its providers upgrade to the
+  // honest "this host has no managed packs / served no native result" reading
+  // - same "old host never had this feature" semantics as the `profiles: []`
+  // fill on the v3->v4 hop. It must happen here rather than on an earlier hop
+  // because this is the first bridge whose TARGET schema actually models the
+  // fields; `upgradeResponseToVersion` chains these callbacks by cast with no
+  // re-parse, so a fill onto a frozen target is simply dropped.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    providers: upgradeProviderCliStateListToLatest(response.providers),
+    providers: upgradeProviderCliStateListToLatest(
+      response.providers.map((provider) => ({
+        ...provider,
+        ...PROVIDER_LIVE_FIELDS_PRE_REGISTRY,
+      })),
+    ),
     native: null,
   }),
 });
@@ -1370,7 +1393,13 @@ export const providersSetSelectionUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: upgradeProviderCliStateToLatest(response.state),
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1458,7 +1487,13 @@ export const providersAddCustomPathUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: upgradeProviderCliStateToLatest(response.state),
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1546,7 +1581,13 @@ export const providersRemoveCustomPathUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: upgradeProviderCliStateToLatest(response.state),
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -1699,7 +1740,13 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
     state:
       response.state === null
         ? null
-        : upgradeProviderCliStateToLatest(response.state),
+        : {
+            ...response.state,
+            profiles: [],
+            loginCapability: upgradeLoginCapabilityFromV10(
+              response.state.loginCapability,
+            ),
+          },
     mcpAuth: null,
     existingProfileId: null,
     codeRejected: false,
@@ -1829,6 +1876,36 @@ export const providersTouchLoginV10 = defineRpcContract({
   responseSchema: providersTouchLoginResponseSchema,
 });
 
+/**
+ * Brand-new v1.0 method (outside `RELEASED_FLOOR_METHOD_NAMES` - a new method
+ * NAME is handshake-fatal against a released peer, so it rides the optional-
+ * capability channel with `degrade: { kind: "unsupported" }`, exactly like
+ * `providers.submitLoginCode`/`touchLogin` above).
+ *
+ * Missing-peer behavior: a host that predates the provider pack registry has
+ * no managed packs to ensure, so there is nothing for the client to do about
+ * `E_HOST_UNSUPPORTED` here beyond not offering the retry affordance - which
+ * it already will not, because such a host reports `managedInstallState: null`
+ * and the affordance only exists on the `downloading`/`error` arms.
+ *
+ * That last clause used to be the WHOLE safety argument, and
+ * `trust-unavailable` retired it: a host whose keyring could not be verified
+ * now reports the `error` arm, so "null means no affordance" no longer covers
+ * every host this method cannot serve. Two mechanisms replace it, and both are
+ * load-bearing - neither is defence in depth for the other. The client must not
+ * draw a retry affordance for `trust-unavailable` (see
+ * `providerManagedInstallErrorReasonSchema`), and a host with no install
+ * machinery must REFUSE this call with a typed error rather than answering
+ * `managedInstallState: null`, which is indistinguishable from success on a
+ * pack that is simply absent and turns a click into a silent no-op forever.
+ */
+export const providersEnsurePackV10 = defineRpcContract({
+  method: "providers.ensurePack",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersEnsurePackRequestSchema,
+  responseSchema: providersEnsurePackResponseSchema,
+});
+
 export const providersSetEnabledV10 = defineRpcContract({
   method: "providers.setEnabled",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -1890,7 +1967,13 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
     native: null,
   }),
   upgradeResponse: (response) => ({
-    state: upgradeProviderCliStateToLatest(response.state),
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
     native: null,
   }),
 });
@@ -2040,7 +2123,13 @@ export const providersSetApiKeyUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: upgradeProviderCliStateToLatest(response.state),
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -2124,7 +2213,13 @@ export const providersClearApiKeyUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: upgradeProviderCliStateToLatest(response.state),
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -2208,7 +2303,13 @@ export const providersSetTerminalAgentArgsUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: upgradeProviderCliStateToLatest(response.state),
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -2292,7 +2393,13 @@ export const providersSetEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: upgradeProviderCliStateToLatest(response.state),
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -2376,7 +2483,13 @@ export const providersDeleteEnvOverrideUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
-    state: upgradeProviderCliStateToLatest(response.state),
+    state: {
+      ...response.state,
+      profiles: [],
+      loginCapability: upgradeLoginCapabilityFromV10(
+        response.state.loginCapability,
+      ),
+    },
   }),
 });
 
@@ -4632,6 +4745,19 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       versions: {
         0: {
           contract: providersTouchLoginV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.ensurePack": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersEnsurePackV10,
           upgradeFromPreviousVersion: null,
         },
       },

@@ -4,7 +4,7 @@ import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
   downgradeProviderCliStateToV10,
   providerCliStateSchema,
-  providerCliStateSchemaMutationV20,
+  providerMutationCliStateSchemaV20,
   providerCliStateSchemaV10,
   providerCliStateSchemaV20,
   providersAddCustomPathRequestSchema,
@@ -480,12 +480,14 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
       profileAction: null,
     });
     const upgradedResp = providersSetEnabledUpgradeV20ToV21.upgradeResponse({
-      state: providerCliStateSchemaMutationV20.parse(baseState("cursor")),
+      state: providerMutationCliStateSchemaV20.parse(baseState("cursor")),
     });
     expect(upgradedResp.native).toBeNull();
-    expect(upgradedResp.state.nativeCapabilities).toEqual(
-      DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-    );
+    // The mutation echo is pinned to the frozen `providerMutationCliStateSchemaV21`,
+    // which deliberately does NOT model `nativeCapabilities` - a state echo
+    // cannot change what is installed, so capability facts ride
+    // `providers.list` only.
+    expect(upgradedResp.state).not.toHaveProperty("nativeCapabilities");
   });
 
   it("refuses native setEnabled downgrade to 2.0", () => {
@@ -857,7 +859,7 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
     // Cross-check: every tag-derived mutation provider id remains valid in
     // the live schema. The live enum is allowed to grow beyond the tag's
     // snapshot (e.g. Devin/Pi post-date host-v1.1.5) since
-    // `providerCliStateSchemaMutationV20` deliberately tracks it - it must
+    // `providerMutationCliStateSchemaV20` deliberately tracks it - it must
     // never shrink or rename what the tag already proved accepted.
     for (const providerId of fixtures.mutationProviderIds) {
       expect(providerIdSchema.options).toContain(providerId);
@@ -913,7 +915,7 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
   });
 
   it("accepts amp on all ten state-returning @2.0 mutation responses", () => {
-    const ampState = providerCliStateSchemaMutationV20.parse(baseState("amp"));
+    const ampState = providerMutationCliStateSchemaV20.parse(baseState("amp"));
     expect(ampState.providerId).toBe("amp");
     expect(responseMethods).toHaveLength(10);
     for (const method of responseMethods) {
@@ -938,7 +940,7 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
     expect(fixtures.mutationProviderIds.length).toBeGreaterThan(0);
     for (const providerId of fixtures.mutationProviderIds) {
       expect(providerIdSchema.options).toContain(providerId);
-      const state = providerCliStateSchemaMutationV20.parse(
+      const state = providerMutationCliStateSchemaV20.parse(
         baseState(providerId),
       );
       for (const method of responseMethods) {
@@ -973,7 +975,7 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
         skills: null,
       },
     });
-    const asMutationV20 = providerCliStateSchemaMutationV20.parse(latest);
+    const asMutationV20 = providerMutationCliStateSchemaV20.parse(latest);
     expect(asMutationV20).not.toHaveProperty("nativeCapabilities");
     expect(asMutationV20.providerId).toBe("amp");
     for (const method of responseMethods) {

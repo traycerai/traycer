@@ -187,6 +187,199 @@ export const providerCliCandidateSchema = z.object({
 });
 export type ProviderCliCandidate = z.infer<typeof providerCliCandidateSchema>;
 
+/**
+ * Why an `error` arm's install is stuck, as a closed vocabulary the renderer
+ * can write copy against. Derived host-side from the typed verification code
+ * (never sniffed from a message), so UI copy and the internal classification
+ * cannot drift: `disk-full` is the ENOSPC/EDQUOT class, `verification` is a
+ * `definitively-invalid` verdict, `network` is a registry/transport failure,
+ * and `unknown` is the honest catch-all for a failure the host could not
+ * classify any further.
+ *
+ * `unrepairable` is the one member that is not a failure to retry, and it is
+ * the only reason that changes what the surface may OFFER rather than only
+ * what it says. It means the local copy was digest-verified against a signed
+ * artifact and only then found defective - a schema-invalid `pack.json`, or an
+ * envelope whose manifest does not cover the tree. Re-downloading fetches the
+ * byte-identical blob and fails in exactly the same place, fleet-wide, so the
+ * host records the cell as terminal and refuses further installs for it. It
+ * always travels with `retryAtMs: null`, and a renderer must not draw a retry
+ * affordance for it: the click cannot do anything, now or later. Every other
+ * reason is a genuine "try again"; this one is "this build is broken, and a
+ * new one has to be published".
+ *
+ * `live-owner-stalled` is the opposite pole and belongs to the same story: a
+ * SIBLING PROCESS on this machine holds the pack's download lease and its
+ * progress token stopped advancing, so this host gave up waiting behind it
+ * (bounded on the owner's lack of progress, not on elapsed time - a sibling
+ * legitimately pulling a multi-gigabyte pack outlasts any fixed cap). Fully
+ * retryable, with a real `retryAtMs`. It is deliberately NOT `network`, because
+ * nothing about the registry failed and telling the user to check their
+ * connection would send them after the wrong thing; and it is deliberately not
+ * `unknown`, because `unknown` means the host could not classify the failure at
+ * all, and this one is classified precisely - the host detected it on purpose
+ * and has a typed error for it.
+ *
+ * `trust-unavailable` is the third pole, and the only reason that is not about
+ * a PACK at all - it is about the host. The registry keyring could not be
+ * verified this process (fetch failed, no cached copy), so there is no install
+ * machinery to schedule anything with. It exists because `null` was carrying
+ * three different facts at once: "this host has no managed packs by design",
+ * "this build has no trust root baked yet" and "this host expected to serve
+ * managed packs and currently cannot". The first two are intended states the
+ * renderer must keep falling back on; the third is an outage, and reporting it
+ * as `null` made a host that could not serve a provider look identical to one
+ * that was never asked to - the provider silently vanished from the picker and
+ * a reached turn fell through to generic "install it yourself" copy.
+ *
+ * It is RETRYABLE in the sense that the condition clears on its own (the host
+ * re-attempts the keyring on the next kick), but a user-facing retry button is
+ * the wrong affordance: the click cannot move it and `providers.ensurePack`
+ * refuses on a host in this state. Its copy names reconnecting or restarting,
+ * never "retry". It always travels with `retryAtMs: null`.
+ *
+ * `local-storage-mismatch` is the third non-retryable member, and the only one
+ * that is a claim about the USER'S MACHINE. The host stored an archive that
+ * passed its declared size and signed digest, read it back, and got different
+ * bytes - twice for the same digest, the second time against an independently
+ * re-fetched copy. It is deliberately separate from `verification`, which says
+ * the registry's signed material failed its cryptography and sends the user to
+ * complain about Traycer's publishing, and from `unrepairable`, which says a
+ * published build is defective for everyone. Reported as either of those, the
+ * one machine with failing storage looks like a fleet incident and the user is
+ * pointed at something they cannot fix.
+ *
+ * Automatic refetch STOPS at this reason, which is what it is for: the failure
+ * is deterministic on this device and the loop it replaces was an unbounded
+ * multi-gigabyte download every backoff interval, forever. `retryAtMs` is null
+ * because no attempt is scheduled, and a retry button would be
+ * offered-then-failed.
+ */
+export const providerManagedInstallErrorReasonSchema = z.enum([
+  "disk-full",
+  "network",
+  "verification",
+  "unknown",
+  "unrepairable",
+  "live-owner-stalled",
+  "trust-unavailable",
+  "local-storage-mismatch",
+]);
+export type ProviderManagedInstallErrorReason = z.infer<
+  typeof providerManagedInstallErrorReasonSchema
+>;
+
+/**
+ * Install lifecycle of a provider's managed (registry-backed) binary pack.
+ * `absent` - never downloaded, or GC'd; `downloading` - fetch in progress,
+ * `percent` a best-effort progress estimate; `installed` - present and
+ * spawnable; `error` - the install failed and is not being retried until
+ * `retryAtMs`. Carried at the provider level (there is exactly one managed
+ * candidate per provider) rather than nested on `providerCliCandidateSchema`,
+ * which is shared byte-for-byte with the frozen v1.0/v2.0/v3.0 wire shapes -
+ * nesting it there would leak a new key into already-released responses (the
+ * providers.list #258 class). `null` (see `managedInstallState` below) means
+ * the host predates the provider pack registry, or - during the staged
+ * bundled -> managed rollout - this provider hasn't been cut over yet; the
+ * renderer falls back to today's `available`-flag rendering on the bundled
+ * candidate in both cases, never inferring one lifecycle from the other.
+ *
+ * `downloading.percent` is NULLABLE, and that is a real state rather than
+ * defensive typing: when a *live sibling host* sharing the same pack store
+ * owns the download (per-cell lease, N13), this host can see that a transfer
+ * is in progress but has no access to the owner's in-memory byte counter.
+ * Reporting `absent` there would be a lie - the pack is being fetched - so the
+ * observer reports `downloading` with no percent and the renderer shows an
+ * indeterminate indicator. Every percent consumer must handle null.
+ *
+ * The `error` arm and the nullable percent are ADDITIVE ON THE UNRELEASED 6.0
+ * LINE. No released tag (`host-v*`/`cli-v*`/`desktop-v*` through 1.1.8) ships
+ * `providers.list@6.0`, which is what makes growing this union legal at all;
+ * the released 5.0 and earlier lines are frozen and their downgrade bridges
+ * strip the field wholesale. Accepted, stated plainly: a client old enough to
+ * negotiate 6.0 but predating the `error` arm normalizes it to `null` through
+ * `managedInstallState`'s `.catch(null)` and renders the plain `available`
+ * fallback - post-T7 that is a silently-unavailable row with no message.
+ */
+export const providerManagedInstallStateSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.object({ status: z.literal("absent") }),
+    z.object({
+      status: z.literal("downloading"),
+      percent: z.number().min(0).max(100).nullable(),
+    }),
+    z.object({ status: z.literal("installed") }),
+    z.object({
+      status: z.literal("error"),
+      reason: providerManagedInstallErrorReasonSchema,
+      // Operator-facing detail behind the reason (the underlying error text).
+      // Never the primary copy - the renderer writes its own from `reason`.
+      message: z.string(),
+      // Epoch ms the host will accept an automatic retry again, or null when
+      // the failure carries no backoff. Null is NOT one condition: read it
+      // together with `reason`. For every reason but `unrepairable` it means
+      // nothing is scheduled and a user-initiated `providers.ensurePack` is
+      // the way forward; for `unrepairable` it means there is no way forward
+      // at all and `ensurePack` is a guaranteed no-op.
+      //
+      // Constrained like `percent` above rather than left a bare `z.number()`:
+      // an epoch-ms instant is a non-negative integer, and a fractional or
+      // negative one is a producer bug, not a countdown. Because the FIELD
+      // carries `.catch(null)`, a violation degrades to "no retry scheduled"
+      // instead of throwing the whole `providers.list` away.
+      retryAtMs: z.number().int().nonnegative().nullable(),
+    }),
+  ],
+);
+export type ProviderManagedInstallState = z.infer<
+  typeof providerManagedInstallStateSchema
+>;
+
+/**
+ * Host-aggregated, direction-free signal that other active sessions for this
+ * provider are pinned to a version other than `current`. Deliberately NOT a
+ * bare `pin !== current` boolean: holders legitimately differ (each pins its
+ * managed candidate for its whole life), and a version rollback can make
+ * `current` OLDER than a surviving pin - there is no "ahead/behind" to
+ * report, only a count. Rollback-specific messaging belongs solely to the
+ * `advisory` field below. `differingSessionCount: 0` and `null` both mean
+ * "nothing to show" - the renderer never shows a toast for this, only a
+ * quiet, self-correcting row indicator.
+ */
+export const providerVersionVisibilitySchema = z.object({
+  differingSessionCount: z.number().int().nonnegative(),
+});
+export type ProviderVersionVisibility = z.infer<
+  typeof providerVersionVisibilitySchema
+>;
+
+/**
+ * Phase-2 (live update lane) advisory vocabulary. Ships now as a DORMANT
+ * field only - no Phase-1 host ever populates it, always `null` until the
+ * Phase-2 live reader lands. Structurally present so that later work can
+ * start populating it without another protocol bump. `stale-channel` /
+ * `cannot-confirm-eligibility` describe a live-channel read that couldn't be
+ * trusted; `yank-keep-running` / `yank-rollback` distinguish an informational
+ * "still fine" notice from an actionable "session may need reset" one;
+ * `row-incompatibility` covers an explicitly selected PATH/custom candidate
+ * that fails the closure-coupled version gate.
+ */
+export const providerAdvisoryKindSchema = z.enum([
+  "stale-channel",
+  "cannot-confirm-eligibility",
+  "yank-keep-running",
+  "yank-rollback",
+  "row-incompatibility",
+]);
+export type ProviderAdvisoryKind = z.infer<typeof providerAdvisoryKindSchema>;
+
+export const providerAdvisorySchema = z.object({
+  kind: providerAdvisoryKindSchema,
+  detail: z.string().nullable(),
+});
+export type ProviderAdvisory = z.infer<typeof providerAdvisorySchema>;
+
 export const PROVIDER_AUTH_STATUS_SCHEMA_V10 = z.enum([
   "authenticated",
   "unauthenticated",
@@ -583,6 +776,34 @@ const providerCliStateBaseShape = {
   // hardening. UI affordances only appear once a provider has 2+ rows
   // (progressive disclosure).
   profiles: z.array(providerProfileSchema).catch([]),
+  // Install lifecycle of this provider's managed (registry-backed) binary
+  // pack - see `providerManagedInstallStateSchema`. Null/undefined for a host
+  // that predates the provider pack registry, or (during the staged bundled
+  // -> managed rollout) for a provider T7 has not yet cut over; the renderer
+  // falls back to the existing `available` flag on the bundled candidate in
+  // both cases. `.optional()` keeps the key itself omittable in a TS object
+  // literal - host-side construction sites that predate this ticket (and
+  // T4's population work) don't need to be touched just to satisfy the type -
+  // while `.catch(null)` still normalizes a PRESENT-but-unrecognized value
+  // (an older client reading a newer host's shape) to null rather than
+  // throwing. Total decoder: every input either parses, defaults to null, or
+  // is simply absent - never a hard failure.
+  managedInstallState: providerManagedInstallStateSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  // Aggregated, direction-free "other sessions differ" signal - see
+  // `providerVersionVisibilitySchema`. Null/undefined/zero all mean nothing to
+  // show; see `managedInstallState` above for why the field is `.optional()`
+  // on top of `.catch(null)`.
+  versionVisibility: providerVersionVisibilitySchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  // Phase-2 (live update lane) advisory - see `providerAdvisorySchema`. Lands
+  // now as a dormant field: no Phase-1 host ever populates it, always
+  // null/undefined. See `managedInstallState` above for why it's `.optional()`.
+  advisory: providerAdvisorySchema.nullable().catch(null).optional(),
 };
 
 const providerCliStateBaseShapeV10 = {
@@ -677,7 +898,7 @@ export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
 // providers here - use the existing v3 bridge. Frozen WITHOUT
 // nativeCapabilities (that rides @3.1 / @2.1). `providerIdSchemaV20` is ONLY
 // for this list@2.0 response shape — mutation @2.0 responses are amp-inclusive
-// (tag-exact host-v1.1.5); see providerCliStateSchemaMutationV20 below.
+// (tag-exact host-v1.1.5); see providerMutationCliStateSchemaV20 below.
 //
 // Built from the hand-frozen `providerCliStateBaseShapeV20` - NOT
 // `.extend()` on the live `providerCliStateSchema` - so this type never
@@ -703,13 +924,13 @@ export type ProvidersListResponseV20 = z.infer<
  * Oracle: `git show host-v1.1.5:protocol/src/host/provider-schemas.ts` —
  * mutation responses reused the then-latest amp-inclusive state schema.
  */
-export const providerCliStateSchemaMutationV20 = z.object({
+export const providerMutationCliStateSchemaV20 = z.object({
   providerId: providerIdSchema,
   ...providerCliStateBaseShapeV20,
   auth: PROVIDER_AUTH_SCHEMA_V20,
 });
-export type ProviderCliStateMutationV20 = z.infer<
-  typeof providerCliStateSchemaMutationV20
+export type ProviderMutationCliStateV20 = z.infer<
+  typeof providerMutationCliStateSchemaV20
 >;
 
 // ── Frozen protocol-v3.0 provider state + list response (with Amp, before ──
@@ -796,15 +1017,22 @@ export const providersListResponseSchemaV40 = z.object({
 /**
  * Frozen `providers.list` response as shipped in protocol v5.0.
  *
- * Structurally identical to the live shape except for the id enum: v5.0 and
- * v6.0 differ only by `omp` (verified against the `cli-v1.1.8` tree - the
- * whole file delta is the new id, its display name, and comments). Pinned so
- * a future `.extend()` on the live shape cannot silently leak back into this
- * already-shipped one.
+ * Both halves are pinned - the id enum AND the base shape. Pinning only the
+ * enum is not enough: this schema originally spread the LIVE base shape, whose
+ * comment ("so a future `.extend()` cannot silently leak back") described the
+ * intent but not the effect. A field ADDED to the live base shape leaks in the
+ * same way an `.extend()` would, and the provider-pack-registry fields did
+ * exactly that - `managedInstallState`, `versionVisibility` and `advisory`
+ * appeared on this already-shipped line and grew it.
+ *
+ * `providerCliStateBaseShapeV40` is the right pin: v4.0 and v5.0 differ only by
+ * the id enum, so the twelve keys below are precisely what `cli-v1.1.8` shipped
+ * on v5.0. The registry fields live on the live shape and therefore reach
+ * clients only through v6.0.
  */
 export const providerCliStateSchemaV50 = z.object({
   providerId: providerIdSchemaV50,
-  ...providerCliStateBaseShape,
+  ...providerCliStateBaseShapeV40,
   auth: PROVIDER_AUTH_SCHEMA_V20,
 });
 export type ProviderCliStateV50 = z.infer<typeof providerCliStateSchemaV50>;
@@ -838,6 +1066,42 @@ export {
 };
 
 
+// ── Frozen major-2.1 mutation-response provider state (pre-registry) ───────
+// The same freeze discipline as `providerMutationCliStateSchemaV20` above,
+// one minor later - and applied for the same reason it was needed there.
+//
+// The 2.1 line shipped (host-v1.1.7) as "the frozen 2.0 mutation shape plus
+// `profiles[]` plus the code-paste-capable login capability", but it was
+// WIRED to the LIVE `providerCliStateSchema` instead of a pinned shape. So
+// when the provider-pack-registry fields (`managedInstallState`,
+// `versionVisibility`, `advisory`) landed on the live state they silently
+// leaked onto ten already-released @2.1 echoes that no released peer ever
+// sends - exactly the drift the 2.0 pin was introduced to stop after
+// `profiles` did the same thing. Pinning the shape here restores the released
+// 2.1 wire byte-for-byte.
+//
+// This is the honest model, not merely a compat patch: a state echo can never
+// carry registry state in the first place. Enabling a provider, setting an
+// API key, or completing a login cannot change what is installed, so
+// `providers.list` - whose v5.0 line is properly versioned for these fields -
+// is their only carrier. Do not add new fields here; add them to the live
+// `providerCliStateBaseShape` and let `providers.list` publish them.
+//
+// The field set reuses `providerCliStateBaseShapeV40` (the list line's
+// hand-frozen v4.0 shape) because that is exactly what 2.1 released. Both are
+// frozen, so neither can drift into the other. `providerId` stays the LIVE
+// enum for the same reason the 2.0 pin keeps it: an echo returns the id the
+// caller just named, so enum growth stays request-gated (see the
+// `providers.set*` / `providers.add*` entries in compat-exceptions.json).
+export const providerMutationCliStateSchemaV21 = z.object({
+  providerId: providerIdSchema,
+  ...providerCliStateBaseShapeV40,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+});
+export type ProviderMutationCliStateV21 = z.infer<
+  typeof providerMutationCliStateSchemaV21
+>;
+
 export const providersSetSelectionRequestSchema = z.object({
   providerId: providerIdSchema,
   selection: providerSelectionSchema,
@@ -851,10 +1115,10 @@ export type ProvidersSetSelectionRequest = z.infer<
 >;
 
 export const providersSetSelectionResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersSetSelectionResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20,
+  state: providerMutationCliStateSchemaV20,
 });
 export const providersSetSelectionResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -876,10 +1140,10 @@ export type ProvidersAddCustomPathRequest = z.infer<
 >;
 
 export const providersAddCustomPathResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersAddCustomPathResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20,
+  state: providerMutationCliStateSchemaV20,
 });
 export const providersAddCustomPathResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -901,10 +1165,10 @@ export type ProvidersRemoveCustomPathRequest = z.infer<
 >;
 
 export const providersRemoveCustomPathResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersRemoveCustomPathResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20,
+  state: providerMutationCliStateSchemaV20,
 });
 export const providersRemoveCustomPathResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -969,11 +1233,11 @@ export type ProvidersSetEnabledRequest = z.infer<
  * enable/disable returns `native: null`.
  */
 export const providersSetEnabledResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
   native: nativeMutationResultSchema.nullable().default(null),
 });
 export const providersSetEnabledResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20,
+  state: providerMutationCliStateSchemaV20,
 });
 export const providersSetEnabledResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1015,10 +1279,10 @@ export type ProvidersSetApiKeyRequest = z.infer<
 >;
 
 export const providersSetApiKeyResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersSetApiKeyResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20,
+  state: providerMutationCliStateSchemaV20,
 });
 export const providersSetApiKeyResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1038,10 +1302,10 @@ export type ProvidersClearApiKeyRequest = z.infer<
 >;
 
 export const providersClearApiKeyResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersClearApiKeyResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20,
+  state: providerMutationCliStateSchemaV20,
 });
 export const providersClearApiKeyResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1064,10 +1328,10 @@ export type ProvidersSetTerminalAgentArgsRequest = z.infer<
 >;
 
 export const providersSetTerminalAgentArgsResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersSetTerminalAgentArgsResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20,
+  state: providerMutationCliStateSchemaV20,
 });
 export const providersSetTerminalAgentArgsResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1092,10 +1356,10 @@ export type ProvidersSetEnvOverrideRequest = z.infer<
 >;
 
 export const providersSetEnvOverrideResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersSetEnvOverrideResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20,
+  state: providerMutationCliStateSchemaV20,
 });
 export const providersSetEnvOverrideResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1117,10 +1381,10 @@ export type ProvidersDeleteEnvOverrideRequest = z.infer<
 >;
 
 export const providersDeleteEnvOverrideResponseSchema = z.object({
-  state: providerCliStateSchema,
+  state: providerMutationCliStateSchemaV21,
 });
 export const providersDeleteEnvOverrideResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20,
+  state: providerMutationCliStateSchemaV20,
 });
 export const providersDeleteEnvOverrideResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10,
@@ -1289,7 +1553,7 @@ export type ProvidersAwaitLoginRequest = z.infer<
 export const providersAwaitLoginResponseSchema = z.object({
   // The provider's state after the login child closed and auth was re-probed.
   // Null when no login was in flight for this provider (nothing to await).
-  state: providerCliStateSchema.nullable(),
+  state: providerMutationCliStateSchemaV21.nullable(),
   mcpAuth: nativeAuthResultSchema.nullable().default(null),
   // Create-profile only: when the authenticated account already belongs to
   // an active profile, the host discards the pending profile instead of
@@ -1311,7 +1575,7 @@ export const providersAwaitLoginResponseSchema = z.object({
   codeRejected: z.boolean().default(false),
 });
 export const providersAwaitLoginResponseSchemaV20 = z.object({
-  state: providerCliStateSchemaMutationV20.nullable(),
+  state: providerMutationCliStateSchemaV20.nullable(),
 });
 export const providersAwaitLoginResponseSchemaV10 = z.object({
   state: providerCliStateSchemaV10.nullable(),
@@ -1470,6 +1734,45 @@ export type ProvidersTouchLoginResponse = z.infer<
   typeof providersTouchLoginResponseSchema
 >;
 
+/**
+ * User-initiated "get this provider's managed pack ready". A NON-BLOCKING
+ * kick: the host promotes the pack to the front of its install queue, clears
+ * the cell's exponential backoff (this is a human pressing retry, not an
+ * automatic poll), and returns the pack's CURRENT state immediately - it never
+ * awaits the download. Poll `providers.list` for progress.
+ *
+ * The user-initiated flag is not on the wire because it is not the client's to
+ * assert: reaching the host through THIS method is what makes a call
+ * user-initiated. `providers.list` and boot convergence take the automatic
+ * arm, which honors backoff and may not quarantine an unverifiable version
+ * dir; only this method's arm may.
+ */
+export const providersEnsurePackRequestSchema = z.object({
+  providerId: providerIdSchema,
+});
+export type ProvidersEnsurePackRequest = z.infer<
+  typeof providersEnsurePackRequestSchema
+>;
+
+/**
+ * The pack's state as of the kick, in the same vocabulary `providers.list`
+ * carries. `null` where that field is null there: the provider has no managed
+ * pack on this host (store not managed, or a provider the staged rollout has
+ * not cut over), so there was nothing to ensure.
+ *
+ * A host with no install machinery at all does NOT answer null here - it
+ * refuses the call with an error. Null and "refused" would otherwise be the
+ * same response, and a client cannot tell a kick it should poll for from one
+ * that did nothing and never will. That is how a retry affordance stays
+ * offered forever for a click that cannot work.
+ */
+export const providersEnsurePackResponseSchema = z.object({
+  managedInstallState: providerManagedInstallStateSchema.nullable(),
+});
+export type ProvidersEnsurePackResponse = z.infer<
+  typeof providersEnsurePackResponseSchema
+>;
+
 export function downgradeProviderAuthV20ToV10(
   auth: ProviderAuthV20,
 ): ProviderAuthV10 {
@@ -1492,26 +1795,44 @@ export function downgradeProviderAuthV20ToV10(
 // Accepts the live (latest) state or any of the frozen v2.0/v3.0 states -
 // those already lack `profiles`/`nativeCapabilities` (see
 // `providerCliStateBaseShapeV20`), so both are typed optional here rather
-// than requiring callers to conjure one. `providersListDowngradeV2ToV1`
-// (v2.0/mutation-v2.0 sources) and the v3.0/latest downgrade paths (live
-// source) share this one stripping function.
+// than requiring callers to conjure one (the provider-pack-registry fields -
+// `managedInstallState`, `versionVisibility`, `advisory` - are already
+// optional on `ProviderCliState` itself, so no extra typing is needed for
+// those). `providersListDowngradeV2ToV1` (v2.0/mutation-v2.0 sources) and the
+// v3.0/latest downgrade paths (live source) share this one stripping
+// function.
 // `loginCapability` is typed as either the live or frozen-v10 capability
 // shape for the same reason: the v2.0/v3.0 frozen states carry the
 // pre-`codePaste` shape (`providerLoginCapabilitySchemaV10`), not the live
 // one - either is fine here since the strict v1.0 parse below only keeps
 // `oauthArgs`/`token` regardless.
+// Exported so `registry.ts` names the same shape instead of restating it: the
+// two definitions had already been written twice, identically, and the widened
+// `loginCapability` below is exactly the kind of detail that drifts when only
+// one copy gets updated.
+//
+// A union of the real source shapes rather than a single `Omit<ProviderCliState>`:
+// the frozen v2.0/v3.0/mutation-v2.0 states genuinely lack `nativeCapabilities`
+// and the provider-pack-registry fields, so those are widened to optional here.
+// That keeps them destructurable in the strip below no matter which side fed
+// this call.
+export type DowngradableToV10ProviderState = (
+  | ProviderCliState
+  | ProviderCliStateV30
+  | ProviderCliStateV20
+  | ProviderMutationCliStateV20
+  | ProviderMutationCliStateV21
+) & {
+  profiles?: ProviderCliState["profiles"];
+  nativeCapabilities?: ProviderNativeCapabilities;
+  managedInstallState?: ProviderCliState["managedInstallState"];
+  versionVisibility?: ProviderCliState["versionVisibility"];
+  advisory?: ProviderCliState["advisory"];
+  loginCapability: ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
+};
+
 export function downgradeProviderCliStateToV10(
-  state: (
-    | ProviderCliState
-    | ProviderCliStateV30
-    | ProviderCliStateV20
-    | ProviderCliStateMutationV20
-  ) & {
-    profiles?: ProviderCliState["profiles"];
-    nativeCapabilities?: ProviderNativeCapabilities;
-    loginCapability:
-      ProviderLoginCapability | ProviderLoginCapabilityV10 | null;
-  },
+  state: DowngradableToV10ProviderState,
 ): ProviderCliStateV10 | null {
   // `providerCliStateSchemaV10` is a `z.strictObject`, so it REJECTS any key it
   // doesn't model. Drop later-than-v1.0 fields before the parse — otherwise
@@ -1522,10 +1843,15 @@ export function downgradeProviderCliStateToV10(
   //   profile identity (email, label) off the wire for peers that never
   //   negotiated profile support.
   // - `nativeCapabilities` (v3.1 / v2.1+) — CRITICAL silent-data-loss trap
+  // - `managedInstallState` / `versionVisibility` / `advisory` — the
+  //   provider-pack-registry fields.
   const {
     availabilityPending: _availabilityPending,
     profiles: _profiles,
     nativeCapabilities: _nativeCapabilities,
+    managedInstallState: _managedInstallState,
+    versionVisibility: _versionVisibility,
+    advisory: _advisory,
     ...rest
   } = state;
   const parsed = providerCliStateSchemaV10.safeParse({
@@ -1578,11 +1904,11 @@ export function downgradeProviderCliStateToV20(
  * nativeCapabilities). Used by state-returning mutation 2.1→2.0 bridges.
  */
 export function downgradeProviderCliStateToMutationV20(
-  state: ProviderCliState | ProviderCliStateV30,
-): ProviderCliStateMutationV20 {
+  state: ProviderCliState | ProviderCliStateV30 | ProviderMutationCliStateV21,
+): ProviderMutationCliStateV20 {
   const { nativeCapabilities: _nativeCapabilities, ...rest } =
     state as ProviderCliState;
-  return providerCliStateSchemaMutationV20.parse(rest);
+  return providerMutationCliStateSchemaV20.parse(rest);
 }
 
 // Downgrades a latest-shaped provider-state list to the frozen v4.0 shape,
@@ -1631,8 +1957,8 @@ export function upgradeProviderCliStateV10ToV20(
  * Upgrade a tag-exact mutation@2.0 state (amp-inclusive) to latest by attaching
  * the default descriptor.
  */
-export function upgradeProviderCliStateMutationV20ToLatest(
-  state: ProviderCliStateMutationV20,
+export function upgradeProviderMutationCliStateV20ToLatest(
+  state: ProviderMutationCliStateV20,
 ): ProviderCliState {
   return providerCliStateSchema.parse({
     ...state,
@@ -1642,7 +1968,7 @@ export function upgradeProviderCliStateMutationV20ToLatest(
 
 /** Upgrade frozen list@2.0 / v3.0 state to latest by attaching the default descriptor. */
 export function upgradeProviderCliStateToLatest(
-  state: ProviderCliStateV20 | ProviderCliStateV30 | ProviderCliStateMutationV20,
+  state: ProviderCliStateV20 | ProviderCliStateV30 | ProviderMutationCliStateV20,
 ): ProviderCliState {
   return providerCliStateSchema.parse({
     ...state,
@@ -1654,7 +1980,7 @@ export function upgradeProviderCliStateListToLatest(
   states: readonly (
     | ProviderCliStateV20
     | ProviderCliStateV30
-    | ProviderCliStateMutationV20
+    | ProviderMutationCliStateV20
   )[],
 ): ProviderCliState[] {
   return states.map(upgradeProviderCliStateToLatest);
@@ -1667,8 +1993,8 @@ export function upgradeProviderCliStateListToLatest(
 // fills `profiles: []` for the caller's canonical.
 export function upgradeProviderCliStateV10ToMutationV20(
   state: ProviderCliStateV10,
-): ProviderCliStateMutationV20 {
-  return providerCliStateSchemaMutationV20.parse({
+): ProviderMutationCliStateV20 {
+  return providerMutationCliStateSchemaV20.parse({
     ...state,
     availabilityPending: false,
   });

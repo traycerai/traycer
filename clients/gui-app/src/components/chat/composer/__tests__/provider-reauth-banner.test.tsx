@@ -268,6 +268,9 @@ function claudeState(
       plugins: null,
       skills: null,
     },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }
@@ -305,6 +308,9 @@ function cursorState(): ProviderCliState {
       plugins: null,
       skills: null,
     },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }
@@ -335,6 +341,9 @@ function droidState(): ProviderCliState {
       plugins: null,
       skills: null,
     },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }

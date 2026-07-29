@@ -12,7 +12,7 @@ import {
   providerCliStateSchemaV10,
   providerCliStateSchemaV20,
   providerCliStateSchemaV30,
-  providerCliStateSchemaMutationV20,
+  providerMutationCliStateSchemaV20,
   providerProfileActionSchema,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -403,12 +403,12 @@ describe("providers.list v3.0 line predates profiles[]", () => {
 });
 
 describe("provider.* mutation major-2 lines predate profiles[]", () => {
-  it("providerCliStateSchemaMutationV20 drops an unmodeled profiles key on parse", () => {
+  it("providerMutationCliStateSchemaV20 drops an unmodeled profiles key on parse", () => {
     // The released 2.0 mutation responses reused the live state and silently
     // gained `profiles` - the frozen shape must stay pinned to what released
     // 2.0 hosts actually send (and what host-side projection onto 2.0 may
     // put on the wire).
-    const parsed = providerCliStateSchemaMutationV20.parse(stateWithProfile);
+    const parsed = providerMutationCliStateSchemaV20.parse(stateWithProfile);
     expect(parsed).not.toHaveProperty("profiles");
   });
 
@@ -418,7 +418,7 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
       { major: 2, minor: 0 },
       { major: 2, minor: 1 },
       {
-        state: providerCliStateSchemaMutationV20.parse(
+        state: providerMutationCliStateSchemaV20.parse(
           providerState("claude-code"),
         ),
       },
@@ -445,7 +445,7 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
       { major: 2, minor: 0 },
       { major: 2, minor: 1 },
       {
-        state: providerCliStateSchemaMutationV20.parse(
+        state: providerMutationCliStateSchemaV20.parse(
           providerState("claude-code"),
         ),
       },

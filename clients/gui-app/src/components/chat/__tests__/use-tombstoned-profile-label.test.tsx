@@ -54,6 +54,9 @@ function claudeState(profileIds: readonly string[]): ProviderCliState {
       plugins: null,
       skills: null,
     },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: profileIds.map((profileId) => ({
       profileId,
       kind:

@@ -98,6 +98,9 @@ function opencodeState(): ProviderCliState {
       plugins: null,
       skills: null,
     },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [ambientProfile()],
   };
 }
@@ -119,6 +122,7 @@ function renderSection(
           hostId="host-1"
           isSelectedHostLocal
           canAddProfile
+          signInUnavailableHint={null}
           startInReauth={false}
           failedAttempt={null}
           onAddProfile={() => undefined}

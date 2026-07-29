@@ -76,6 +76,9 @@ function claudeStateWithoutProfile(): ProviderCliState {
       plugins: null,
       skills: null,
     },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [ambient],
   };
 }
