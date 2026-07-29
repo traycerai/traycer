@@ -47,7 +47,16 @@ export function projectTabsForDesktop(
     const tab = state.tabsById[tabId];
     return tab === undefined
       ? []
-      : [{ id: tab.tabId, epicId: tab.epicId, name: tab.name }];
+      : [
+          tab.surfaceMode?.kind === "phase-migration"
+            ? {
+                id: tab.tabId,
+                epicId: tab.epicId,
+                name: tab.name,
+                surfaceMode: tab.surfaceMode,
+              }
+            : { id: tab.tabId, epicId: tab.epicId, name: tab.name },
+        ];
   });
 }
 
@@ -88,6 +97,7 @@ function parseProjectedEpicTabs(snapshot: DesktopPerWindowSnapshot): {
       tabId: tab.id,
       epicId: tab.epicId,
       name: tab.name,
+      surfaceMode: tab.surfaceMode ?? { kind: "epic" },
     };
     canvasByTabId[tab.id] =
       snapshotCanvasByTabId[tab.id] ?? createEmptyCanvas();
@@ -124,11 +134,28 @@ function reuseUnchangedTabRecords(
     if (tab === undefined) continue;
     const prev = current[tabId];
     out[tabId] =
-      prev !== undefined && prev.epicId === tab.epicId && prev.name === tab.name
+      prev !== undefined &&
+      prev.epicId === tab.epicId &&
+      prev.name === tab.name &&
+      sameSurfaceMode(prev.surfaceMode, tab.surfaceMode)
         ? prev
         : tab;
   }
   return out;
+}
+
+function sameSurfaceMode(
+  left: EpicViewTab["surfaceMode"],
+  right: EpicViewTab["surfaceMode"],
+): boolean {
+  const normalizedLeft = left ?? { kind: "epic" };
+  const normalizedRight = right ?? { kind: "epic" };
+  return (
+    normalizedLeft.kind === normalizedRight.kind &&
+    (normalizedLeft.kind !== "phase-migration" ||
+      normalizedRight.kind !== "phase-migration" ||
+      normalizedLeft.phaseId === normalizedRight.phaseId)
+  );
 }
 
 function mergeMostRecentTabIdsForDesktopProjection(

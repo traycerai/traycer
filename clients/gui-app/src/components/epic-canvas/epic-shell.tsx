@@ -9,6 +9,7 @@ import { useMemo, type ReactNode } from "react";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import { WorkspaceFileIconSpriteSheet } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
+import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-action";
 import { EpicConnectionToasts } from "@/components/epic-canvas/panels/epic-connection-toasts";
 import { CanvasSkeleton } from "@/components/epic-canvas/skeletons/canvas-skeleton";
 import {
@@ -38,14 +39,16 @@ export function EpicShell(props: EpicShellProps) {
 
   return (
     <div
-      className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-r-lg bg-background"
+      className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
       data-testid="epic-shell"
       data-epic-shell-root="true"
       data-epic-id={epicId}
       data-session-ready={sessionReady ? "true" : "false"}
     >
       <WorkspaceFileIconSpriteSheet />
-      <EpicSessionGate fallback={<EpicShellLoadingBody />}>
+      <EpicSessionGate
+        fallback={<EpicShellLoadingBody epicId={epicId} tabId={tabId} />}
+      >
         <EpicShellSessionBody epicId={epicId} tabId={tabId} active={active} />
       </EpicSessionGate>
     </div>
@@ -65,17 +68,32 @@ function EpicShellSessionBody(props: EpicShellProps) {
       {props.active ? <EpicConnectionToasts epicId={props.epicId} /> : null}
       <ResourcesStreamMount epicId={props.epicId} />
       <CanvasColumn
-        statusRow={<EpicShellStatusRow snapshotLoaded={snapshotLoaded} />}
+        statusRow={
+          <EpicShellStatusRow
+            snapshotLoaded={snapshotLoaded}
+            epicId={props.epicId}
+            tabId={props.tabId}
+          />
+        }
         canvas={<TileCanvas epicId={props.epicId} tabId={props.tabId} />}
       />
     </SnapshotLoadingProvider>
   );
 }
 
-function EpicShellLoadingBody() {
+function EpicShellLoadingBody(props: {
+  readonly epicId: string;
+  readonly tabId: string;
+}) {
   return (
     <CanvasColumn
-      statusRow={<EpicShellStatusRow snapshotLoaded={false} />}
+      statusRow={
+        <EpicShellStatusRow
+          snapshotLoaded={false}
+          epicId={props.epicId}
+          tabId={props.tabId}
+        />
+      }
       canvas={<LoadingTileCanvas />}
     />
   );
@@ -83,15 +101,29 @@ function EpicShellLoadingBody() {
 
 interface EpicShellStatusRowProps {
   readonly snapshotLoaded: boolean;
+  readonly epicId: string;
+  readonly tabId: string;
 }
 
+/**
+ * Top-right status row: the sync pill plus the Task-level Sweep affordance.
+ * Both are gated on `snapshotLoaded` - it implies a live Epic session, and the
+ * Sweep action is host-backed, so a merely-retained pane must never mount it
+ * (an ungated host hook there throws out of the pane and the route error
+ * boundary swallows the whole canvas).
+ */
 function EpicShellStatusRow(props: EpicShellStatusRowProps) {
   return (
     <output
       data-testid="epic-shell-status-row"
-      className="flex h-10 shrink-0 items-center justify-end gap-3 px-3 text-foreground"
+      className="flex h-10 shrink-0 items-center justify-end gap-1.5 px-3 text-foreground"
     >
-      {props.snapshotLoaded ? <EpicConnectionPill /> : null}
+      {props.snapshotLoaded ? (
+        <>
+          <EpicConnectionPill />
+          <EpicSweepAction epicId={props.epicId} tabId={props.tabId} />
+        </>
+      ) : null}
     </output>
   );
 }
@@ -111,7 +143,7 @@ function CanvasColumn(props: {
 function LoadingTileCanvas() {
   return (
     <div
-      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden rounded-t-lg border border-canvas-border/70 bg-canvas text-canvas-foreground"
+      className="canvas-token-scope relative h-full min-h-0 w-full overflow-hidden border border-canvas-border/70 bg-canvas text-canvas-foreground"
       data-testid="tile-canvas-loading"
     >
       <CanvasSkeleton />

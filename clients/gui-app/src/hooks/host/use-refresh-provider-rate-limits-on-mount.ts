@@ -32,9 +32,11 @@ export function useRefreshProviderRateLimitsOnMount(
   providerId: RateLimitProviderId,
   profileId: string | null,
   usageUpdatedAt: number | null,
+  fetchEligible: boolean,
 ): void {
   const queueScope = useRateLimitQueueScope();
   useEffect(() => {
+    if (!fetchEligible) return;
     if (rateLimitFetchLane(providerId) !== "ephemeralProcess") return;
     const stale =
       usageUpdatedAt === null ||
@@ -49,5 +51,5 @@ export function useRefreshProviderRateLimitsOnMount(
         profileId,
       },
     );
-  }, [profileId, providerId, queueScope, usageUpdatedAt]);
+  }, [fetchEligible, profileId, providerId, queueScope, usageUpdatedAt]);
 }

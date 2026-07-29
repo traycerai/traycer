@@ -12,6 +12,22 @@ import { buildProgram, extractActionPositionals } from "../index";
 import * as hostInstallModule from "../commands/host-install";
 import * as hostUpdateModule from "../commands/host-update";
 
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+// This test exercises the real runner through Commander. Its logger is not
+// part of the positional-forwarding contract, and must not append to a live
+// per-environment CLI log as a side effect.
+vi.mock("../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+}));
+
 // `host install` accepts a registry version via the `--release`
 // flag (defaults to `latest`) or a local archive via `--from`; the
 // two are mutually exclusive. We pin two layers of behaviour:
@@ -228,50 +244,5 @@ describe("traycer host install - --release / --from handling", () => {
       versionRequest: "1.4.2",
     });
     spy.mockRestore();
-  });
-});
-
-describe("traycer host update - --release handling", () => {
-  let exitSpy: MockInstance;
-
-  beforeEach(() => {
-    exitSpy = vi
-      .spyOn(process, "exit")
-      .mockImplementation((code: string | number | null | undefined): never => {
-        throw new Error(`__test_exit_${code ?? 0}`);
-      });
-  });
-
-  afterEach(() => {
-    exitSpy.mockRestore();
-    vi.restoreAllMocks();
-  });
-
-  it("normalizes an empty --release value to the stable latest pointer", async () => {
-    const updateSpy = vi
-      .spyOn(hostUpdateModule, "buildHostUpdateCommand")
-      .mockImplementation(() => async () => ({
-        data: { ok: true },
-        human: "ok",
-        exitCode: 0,
-      }));
-    const program = buildProgram();
-    program.exitOverride();
-
-    try {
-      await program.parseAsync(["host", "update", "--release", "", "--json"], {
-        from: "user",
-      });
-    } catch (err) {
-      if (!(err instanceof Error && err.message.startsWith("__test_exit_"))) {
-        throw err;
-      }
-    }
-
-    expect(updateSpy).toHaveBeenCalledTimes(1);
-    expect(updateSpy.mock.calls[0][0]).toMatchObject({
-      versionRequest: "latest",
-      force: false,
-    });
   });
 });

@@ -9,15 +9,21 @@ import {
 import { useStore } from "zustand";
 import { AlertTriangle } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
   ChatActiveTurn,
+  ChatQueueDeliveryPolicy,
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 
-import { useComposerPaste } from "@/hooks/composer/use-composer-paste";
+import {
+  isAttachmentIngestPending,
+  useComposerPaste,
+} from "@/hooks/composer/use-composer-paste";
 import { useComposerDictation } from "@/hooks/composer/use-composer-dictation";
 import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { ComposerShell } from "@/components/home/composer/composer-shell";
 import { ComposerWorkspaceRow } from "@/components/home/composer/composer-workspace-mode-row";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -29,9 +35,16 @@ import {
   type WorkspaceComposerAvailability,
 } from "@/lib/composer/workspace-composer-availability";
 import type { ChatLowerSurfaceTopSpacing } from "@/components/chat/chat-pinned-stack";
+import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-settings-conflict-dialog";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  steerHintIsActive,
+  type ChatComposerSubmitSource,
+} from "@/lib/chats/resolve-steer-submit";
 import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
-import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
 import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -77,6 +90,13 @@ interface ChatComposerProps {
    */
   readonly isActive: boolean;
   readonly sendDisabled: boolean | undefined;
+  /**
+   * Why `sendDisabled` is true, shown as the send button's hover/focus
+   * tooltip (e.g. "Reconnecting to the host…"). Without it a blocked send
+   * button is silently grey and reads as broken. `null`/absent when
+   * `sendDisabled` is false or the caller has no reason to give.
+   */
+  readonly sendDisabledHint: string | null | undefined;
   readonly mentionRoots: ReadonlyArray<string> | null;
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string | null;
@@ -86,6 +106,27 @@ interface ChatComposerProps {
     ((input: ChatComposerSubmitInput) => boolean) | null;
   readonly onSettingsChange: ((settings: ChatRunSettings) => void) | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
+  /**
+   * Whether the running turn's harness supports same-turn steering, projected
+   * from the host `activeTurn.sameTurnSteeringSupported` capability. A stable
+   * boolean (changes only when the turn's harness changes), so it never churns
+   * the memoized composer per streamed token. Gates the Cmd+Enter steer
+   * behavior and the discovery hints (decisions 5, 8, 9).
+   */
+  readonly steerCapable: boolean;
+  /**
+   * Whether the tab's negotiated `chat.subscribe` protocol version understands
+   * `after_safe_point` (host handshake minor >= 5). `false` degrades `Mod-Enter`
+   * to plain-Enter queueing so a new renderer never steers a released <=1.4 host
+   * that predates same-turn steering.
+   */
+  readonly steerProtocolSupported: boolean;
+  /**
+   * Reads the live active turn at submit time (not a reactive prop) so the
+   * settings-drift comparison for a Cmd+Enter steer never re-creates the submit
+   * callback per streamed token - mirrors `steerQueuedItemNow`'s live read.
+   */
+  readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   readonly editingQueueItemId: string | null;
   readonly onCancelQueueEdit: (() => void) | null;
   readonly hasPendingApprovals: boolean;
@@ -115,6 +156,7 @@ export interface ChatComposerSubmitInput {
   readonly contentText: string;
   readonly attachments: ReadonlyArray<Attachment>;
   readonly settings: ChatRunSettings;
+  readonly deliveryPolicy: ChatQueueDeliveryPolicy;
 }
 
 function ChatComposerImpl(props: ChatComposerProps) {
@@ -122,6 +164,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     taskId,
     isActive,
     sendDisabled,
+    sendDisabledHint,
     mentionRoots,
     fallbackToGlobalMentionRoots,
     currentEpicId,
@@ -130,6 +173,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
     onSubmitMessage,
     onSettingsChange,
     activeTurnStatus,
+    steerCapable,
+    steerProtocolSupported,
+    getActiveTurnForSteer,
     editingQueueItemId,
     onCancelQueueEdit,
     hasPendingApprovals,
@@ -144,6 +190,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     mentionRoots,
     fallbackToGlobalMentionRoots,
   );
+  const runnerHost = useRunnerHost();
   const hostClient = useTabHostClient();
   const tabHostId = useTabHostId();
   const workspaceBlocked = !workspaceComposerCanStart(workspaceAvailability);
@@ -160,20 +207,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const [pickerStore] = useState(() => createComposerPickerStore());
 
-  // The mention/slash menu renders through a body portal, so a left-open menu
-  // keeps painting over whichever surface the keep-alive host swaps in next.
-  // This composer is concealed (display:none) once either its canvas tab is no
-  // longer the selected body or its epic pane goes hidden, yet the portal
-  // escapes that container - so close the picker whenever the surface stops
-  // being actually visible. Both signals default to `true` outside their
-  // providers (standalone/mobile chat), so this is a no-op there.
-  const tabBodySelected = useTabBodySelected();
-  const paneVisible = usePaneVisible();
-  const surfaceVisible = tabBodySelected && paneVisible;
+  // The mention/slash menu renders through a body portal. It belongs to the
+  // one focused canvas tile, not merely every visible split member, so close
+  // its logical picker state whenever the exact focused owner changes. All
+  // three context signals default to `true` outside Epic surfaces.
+  const paneFocused = usePaneFocused();
+  const tabSelected = useTabBodySelected();
+  const focused = chatComposerFocused(isActive, paneFocused, tabSelected);
   useEffect(() => {
-    if (surfaceVisible) return;
+    if (focused) return;
     pickerStore.getState().close();
-  }, [surfaceVisible, pickerStore]);
+  }, [focused, pickerStore]);
 
   const {
     initialContent,
@@ -190,7 +234,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
-    isActive,
+    isActive: focused,
   });
 
   // S11: one seed source, computed once and consumed identically by both the
@@ -207,11 +251,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // slices it consumes (harness id for the picker/editor, selected model for
   // the image gate); everything else - permission, reasoning, tier, the
   // catalog churn - stays inside the toolbar leaves and the submit path.
-  // Note for the chat-tile owner: SurfaceActivityContext defaults to `true`
-  // here (the old hardcoded `activityEnabled`); wiring per-tile activity for
-  // keep-alive chat panes is a follow-up at the tile level.
+  // Only the focused top-level surface owns composer controls, automatic focus,
+  // and their catalog subscriptions. Visible split partners retain their body.
   const toolbarStore = useComposerToolbarStore(
-    isActive ? "chat-tile" : null,
+    focused ? "chat-tile" : null,
     seedSource,
     onSettingsChange,
     false,
@@ -224,25 +267,40 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const reauthGate = useProviderReauthGate(
     harnessId,
     profileId,
-    isActive,
+    focused,
     seedSource.kind,
   );
   const sendBlocked = sendDisabled === true || reauthGate.signedOut;
+  const sendBlockedHint = resolveSendBlockedHint({
+    workspaceDisabledHint: workspaceAvailability.disabledHint,
+    signedOut: reauthGate.signedOut,
+    sendDisabled,
+    sendDisabledHint,
+  });
   const selectedModel = useStore(toolbarStore, (s) => s.selectedModel);
   // Rate-limit switch prompt: purely informational + user-confirmed, so it
   // never blocks send the way the reauth gate does. Scoped to the selected
   // model - a limit gating only another model family stays silent here.
-  const rateLimitPrompt = useProfileRateLimitSwitchPrompt(
+  const rateLimitPrompt = useProfileRateLimitSwitchPrompt({
     harnessId,
     profileId,
     selectedModel,
-    isActive,
-  );
+    active: focused,
+    client: hostClient,
+  });
   // Keeps the switch prompt's own `providers.list` read converging with a
   // turn's passive rate-limit capture: without this, a turn that just pushed
   // this harness's profile into near/hard limit wouldn't surface the banner
   // until `providers.list`'s next unrelated 15-minute refetch.
-  useRefreshProvidersListOnTurn(harnessId, tabHostId);
+  const providerRefreshInputs = focusedProviderRefreshInputs(
+    focused,
+    harnessId,
+    tabHostId,
+  );
+  useRefreshProvidersListOnTurn(
+    providerRefreshInputs.harnessId,
+    providerRefreshInputs.hostId,
+  );
   const onSwitchProfile = useCallback(
     (nextProfileId: string | null) => {
       commitProfileSelection(toolbarStore, nextProfileId);
@@ -254,7 +312,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const taskProfileSwitch = useTaskProfileRateLimitSwitch({
     enabled:
       rateLimitPrompt.kind === "visible" &&
-      rateLimitPrompt.primaryTarget !== null,
+      rateLimitPrompt.destinations.some(
+        (destination) => destination.selectable,
+      ),
     harnessId,
     profileId,
     selectedModel,
@@ -273,7 +333,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     harnessId,
     mentionRoots: resolvedMentionRoots,
     currentEpicId,
-    isActive,
+    isActive: focused,
   });
 
   const {
@@ -283,17 +343,26 @@ function ChatComposerImpl(props: ChatComposerProps) {
     onDragEnter,
     onDragLeave,
     attachImageFiles,
-    isDraggingFiles,
+    dragOverlayVariant,
     isIngestingImages,
-  } = useComposerPaste(editorRef);
-  const attachmentPending = isIngestingImages;
+    isResolvingFilePaths,
+  } = useComposerPaste(editorRef, runnerHost.fileDrops, resolvedMentionRoots);
+  const attachmentPending = isAttachmentIngestPending({
+    isIngestingImages,
+    isResolvingFilePaths,
+  });
 
-  const submitDraft = useChatComposerSubmit({
+  const steerEnabled = useSettingsStore((s) => s.steerOnModEnterEnabled);
+  const { submitDraft, steerConflict } = useChatComposerSubmit({
     taskId,
     editorRef,
     pickerStore,
     toolbarStore,
     activeTurnStatus,
+    steerCapable,
+    steerEnabled,
+    steerProtocolSupported,
+    getActiveTurnForSteer,
     hasPendingApprovals,
     sendDisabled: sendBlocked,
     workspaceBlocked,
@@ -306,9 +375,27 @@ function ChatComposerImpl(props: ChatComposerProps) {
     reauthGate.state,
     profileId,
   );
-  const handleSubmitDraft = useCallback((): void => {
-    ambientDrift.guardSubmit(submitDraft);
-  }, [ambientDrift, submitDraft]);
+  // Preserves the submit source (Enter vs Cmd+Enter) across the ambient-drift
+  // "Continue" resubmit, so acknowledging drift on a steer chord still steers.
+  const lastSubmitSourceRef = useRef<ChatComposerSubmitSource>("enter");
+  const handleSubmitDraft = useCallback(
+    (source: ChatComposerSubmitSource): void => {
+      lastSubmitSourceRef.current = source;
+      ambientDrift.guardSubmit(() => submitDraft(source));
+    },
+    [ambientDrift, submitDraft],
+  );
+  const handleSubmitFromButton = useCallback((): void => {
+    handleSubmitDraft("enter");
+  }, [handleSubmitDraft]);
+  // Whether a Cmd+Enter here would steer (vs queue), gating the discovery hints
+  // (decisions 8, 9). Capability comes from the host; the setting is the opt-out.
+  const steerHintActive = steerHintIsActive({
+    activeTurnStatus,
+    steerCapable,
+    steerEnabled,
+    steerProtocolSupported,
+  });
   const reauthBanner = resolveReauthBannerProps(reauthGate);
   const topBannerKind = resolveComposerTopBannerKind({
     reauthVisible: reauthBanner !== null,
@@ -319,7 +406,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const continueAfterAmbientDrift = (): void => {
     ambientDrift.acknowledge(() => {
       if (rateLimitPrompt.kind === "visible") return;
-      submitDraft();
+      submitDraft(lastSubmitSourceRef.current);
     });
   };
 
@@ -363,6 +450,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   profiles={rateLimitPrompt.profiles}
                   destinations={rateLimitPrompt.destinations}
                   primaryTarget={rateLimitPrompt.primaryTarget}
+                  probeTarget={rateLimitPrompt.probeTarget}
                   runTargetHostId={tabHostId}
                   onSwitchProfile={onSwitchProfile}
                   affectedChatCount={taskProfileSwitch.affectedChatCount}
@@ -377,6 +465,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
         </ChatComposerBannerPortal>
       ) : null}
       <div
+        data-chat-composer=""
         className={cn(
           "bg-canvas px-4 pb-4",
           topSpacing === "normal" ? "pt-4" : "pt-0",
@@ -413,7 +502,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
               onDrop={onDrop}
               onDragEnter={onDragEnter}
               onDragLeave={onDragLeave}
-              isDraggingFiles={isDraggingFiles}
+              dragOverlayVariant={dragOverlayVariant}
               attachmentsStrip={
                 <ChatComposerAttachmentsStrip
                   content={draftContent}
@@ -430,9 +519,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   initialSelection={initialSelection}
                   slashProviderId={harnessId}
                   hasPastedImageBytes={hasPastedImageBytes}
-                  isActive={isActive}
+                  ingestPastedComposerImages={null}
+                  isActive={focused}
                   onSnapshot={handleSnapshot}
                   onSubmit={handleSubmitDraft}
+                  steerHintActive={steerHintActive}
                   onPaste={onPaste}
                   onDragOver={onDragOver}
                   onDrop={onDrop}
@@ -445,12 +536,12 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   onAttachImages={attachImageFiles}
                   canSubmit={canSubmit}
                   attachmentPending={attachmentPending}
-                  onSubmit={handleSubmitDraft}
+                  onSubmit={handleSubmitFromButton}
                   activeTurnStatus={activeTurnStatus}
                   hasPendingApprovals={hasPendingApprovals}
                   stopDisabled={stopDisabled}
                   onStopTurn={onStopTurn}
-                  composerDisabledHint={workspaceAvailability.disabledHint}
+                  composerDisabledHint={sendBlockedHint}
                   dictation={dictationControl}
                   dictationPreparing={dictationPreparing}
                   settingsLocked={false}
@@ -475,8 +566,40 @@ function ChatComposerImpl(props: ChatComposerProps) {
           )}
         </div>
       </div>
+      <SteerSettingsConflictDialog
+        open={steerConflict.open}
+        onOpenChange={steerConflict.onOpenChange}
+        onRestart={steerConflict.onRestart}
+        changed={steerConflict.changed}
+      />
     </>
   );
+}
+
+/**
+ * The composer owns exactly what the tile it lives in owns, so it answers with
+ * the tile's own predicate rather than a second, shorter one. `tabSelected` is
+ * the part that is easy to lose: keep-alive leaves a background tab's body
+ * mounted inside a focused pane, so pane focus plus tile-active is `true` for a
+ * composer that is not on screen - which would let it hold catalog
+ * subscriptions, own dictation, and mark its editor active from behind
+ * whichever tab the user is actually looking at.
+ */
+function chatComposerFocused(
+  isActive: boolean,
+  paneFocused: boolean,
+  tabSelected: boolean,
+): boolean {
+  return chatTileCatalogActivity(paneFocused, tabSelected, isActive);
+}
+
+function focusedProviderRefreshInputs(
+  focused: boolean,
+  harnessId: GuiHarnessId | null,
+  hostId: string | null,
+): { readonly harnessId: GuiHarnessId | null; readonly hostId: string | null } {
+  if (!focused) return { harnessId: null, hostId: null };
+  return { harnessId, hostId };
 }
 
 export const ChatComposer = memo(ChatComposerImpl);
@@ -560,6 +683,27 @@ interface CanSubmitDraftArgs {
   readonly attachmentPreparationPending: boolean;
   readonly draftHasText: boolean;
   readonly draftHasImages: boolean;
+}
+
+/**
+ * Every blocked-send reason gets a hover/focus hint on the send button — a
+ * silently grey button reads as broken. Priority mirrors severity: the
+ * workspace gate (can't run anywhere), then the signed-out gate (the reauth
+ * banner has the full story), then the caller's reason (connection loss /
+ * view-only access).
+ */
+function resolveSendBlockedHint(args: {
+  readonly workspaceDisabledHint: string | null;
+  readonly signedOut: boolean;
+  readonly sendDisabled: boolean | undefined;
+  readonly sendDisabledHint: string | null | undefined;
+}): string | null {
+  if (args.workspaceDisabledHint !== null) return args.workspaceDisabledHint;
+  if (args.signedOut) {
+    return "Signed out of the provider — sign in to send messages";
+  }
+  if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
+  return null;
 }
 
 function canSubmitDraft(args: CanSubmitDraftArgs): boolean {

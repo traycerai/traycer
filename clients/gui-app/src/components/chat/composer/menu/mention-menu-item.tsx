@@ -1,5 +1,6 @@
 import type { MentionMenuEntry } from "@/lib/composer/mentions";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 export type { MentionMenuEntry } from "@/lib/composer/mentions";
 
 export interface MentionMenuItemProps {
@@ -16,12 +17,16 @@ export function MentionMenuItem(props: MentionMenuItemProps) {
         {entry.label}
       </span>
       {trailing ? (
-        <span
-          className="min-w-0 shrink max-w-[45%] truncate text-ui-xs text-muted-foreground/70"
-          title={entry.preview === null ? trailing : undefined}
+        <TooltipWrapper
+          label={entry.preview === null ? trailing : undefined}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {trailing}
-        </span>
+          <span className="min-w-0 shrink max-w-[45%] truncate text-ui-xs text-muted-foreground/70">
+            {trailing}
+          </span>
+        </TooltipWrapper>
       ) : null}
     </div>
   );

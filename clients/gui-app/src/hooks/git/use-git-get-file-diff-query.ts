@@ -3,7 +3,7 @@ import {
   useQuery,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   GitGetFileDiffRequest,
@@ -54,7 +54,7 @@ export function useGitGetFileDiffQuery(args: {
         ),
       ],
       queryFn: () =>
-        withHostRpcErrorBoundary("git.getFileDiff", async () => {
+        withHostQueryErrorBoundary("git.getFileDiff", async () => {
           // client is captured from closure. enabled: readiness.isReady ensures it's available.
           // The enabled flag prevents this queryFn from running when client is unavailable,
           // but a defensive runtime guard is retained against future refactors.

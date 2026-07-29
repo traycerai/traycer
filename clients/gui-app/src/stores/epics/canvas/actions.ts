@@ -474,6 +474,7 @@ export function openTile(
   state: EpicCanvasState,
   node: EpicCanvasTileRef,
   preview: boolean,
+  preferredPaneId: string | null,
 ): EpicCanvasState {
   if (state.root === null) return seedRootPane(node, preview);
   const existing = findPaneTabByContentId(state, node.id);
@@ -492,7 +493,12 @@ export function openTile(
     }
     return { ...state, root, activePaneId: existing.pane.id };
   }
-  const target = activePaneOrFirst(state);
+  // Prefer `preferredPaneId` (e.g. a history entry's original pane) when it
+  // still exists in the tree; otherwise fall back to the active pane, same
+  // as every other caller.
+  const preferredPane =
+    preferredPaneId === null ? null : findPaneById(state.root, preferredPaneId);
+  const target = preferredPane ?? activePaneOrFirst(state);
   if (target === null) return state;
 
   // Fill-in-place: a permanent open while the active tab is a blank "New tab"
@@ -534,6 +540,35 @@ export function openTile(
     };
   }
 
+  return insertTileInPane(state, target, node, preview);
+}
+
+/**
+ * Restore one exact historical tile instance as a preview. Unlike
+ * {@link openTile}, this deliberately bypasses content-id dedup: opener paths
+ * can create two views of the same content under different instance ids, and
+ * history must recreate the specific instance addressed by the landing URL.
+ */
+export function restoreTilePreview(
+  state: EpicCanvasState,
+  node: EpicCanvasTileRef,
+  preferredPaneId: string | null,
+): EpicCanvasState {
+  if (state.root === null) return seedRootPane(node, true);
+  const preferredPane =
+    preferredPaneId === null ? null : findPaneById(state.root, preferredPaneId);
+  const target = preferredPane ?? activePaneOrFirst(state);
+  if (target === null) return state;
+  return insertTileInPane(state, target, node, true);
+}
+
+function insertTileInPane(
+  state: EpicCanvasState,
+  target: TilePane,
+  node: EpicCanvasTileRef,
+  preview: boolean,
+): EpicCanvasState {
+  if (state.root === null) return seedRootPane(node, preview);
   const inserted = insertTabInstance(
     target,
     node.instanceId,
@@ -1121,23 +1156,23 @@ function resolveSplitSource(
   if (sourcePane === null) return null;
   const fromIndex = sourcePane.tabInstanceIds.indexOf(source.tabId);
   if (fromIndex === -1) return null;
-  // Splitting a single-tab source pane onto its own edge would just
-  // rearrange the same pane - reject as no-op.
-  if (
-    source.sourcePaneId === targetPaneId &&
-    sourcePane.tabInstanceIds.length === 1
-  ) {
-    return null;
-  }
   const ref = state.tilesByInstanceId[source.tabId];
   if (ref === undefined) return null;
   const removed = removeTabAtIndexWithSyntheticFallback(sourcePane, fromIndex);
   const root = replacePane(state.root, source.sourcePaneId, () => removed.pane);
+  // An emptied source pane normally collapses - a tab dragged OUT of a pane
+  // shouldn't leave a hole behind. But when the drop targets that same pane,
+  // collapsing would undo the very split the drop preview just promised (the
+  // sole-tab case: open a Git Diff or Terminal, drag it to the pane edge). Keep
+  // the emptied pane as the split's other half, where it renders the standard
+  // opener - the same shape the "Split group" button produces.
+  const emptiedSourcePane = removed.pane.tabInstanceIds.length === 0;
+  const splitsIntoItself = source.sourcePaneId === targetPaneId;
   return {
     state: { ...state, root },
     node: ref,
     collapseSourcePaneId:
-      removed.pane.tabInstanceIds.length === 0 ? source.sourcePaneId : null,
+      emptiedSourcePane && !splitsIntoItself ? source.sourcePaneId : null,
   };
 }
 

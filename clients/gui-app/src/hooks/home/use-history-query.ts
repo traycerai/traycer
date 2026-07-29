@@ -9,13 +9,21 @@ import {
   collectHistoryRepos,
   dedupSortWorkspaces,
   filterHistoryItems,
+  historyPullRequestQueryNumber,
+  historyPullRequestSearchEpicIds,
+  historyWorktreeSearchEpicIds,
   prioritizePinnedHistoryItems,
   sortHistoryItems,
-  withHistoryItemPullRequestNumbers,
+  withHistoryItemWorktreeMetadata,
 } from "@/components/home/data/home-page.data";
 import { useCloudEpicTasksQuery } from "@/hooks/epics/use-cloud-epic-tasks-query";
 import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
-import { useTaskWorktreeMetadata } from "@/hooks/worktree/use-task-worktree-metadata-query";
+import { useEpicGetTaskContexts } from "@/hooks/epic/use-epic-get-task-contexts-query";
+import {
+  useTaskWorktreeMetadata,
+  useWorktreeHostActivityIndex,
+  useWorktreeHostIndex,
+} from "@/hooks/worktree/use-task-worktree-metadata-query";
 import {
   listCloudTasksRequestForHistorySearch,
   type ListCloudTasksRequest,
@@ -37,6 +45,8 @@ const LOCAL_FUSE_OPTIONS: IFuseOptions<HistoryItem> = {
     { name: "title", weight: 0.8 },
     { name: "linkedRepos", weight: 0.2 },
     { name: "pullRequestNumbers", weight: 0.8 },
+    { name: "worktreeBranches", weight: 0.8 },
+    { name: "worktreePaths", weight: 0.3 },
   ],
 };
 
@@ -64,14 +74,42 @@ export function useHistoryQuery(
   const debouncedQuery = useDebouncedValue(trimmedQuery, SEARCH_DEBOUNCE_MS);
   const [fallbackNowMs] = useState(() => Date.now());
   const nowMs = params.nowMs ?? fallbackNowMs;
+  // Branch/worktree strings and PR numbers live only in local worktree
+  // metadata, never in the cloud task index. The cloud query stays a plain
+  // text search; local matches are resolved to epic ids here and fetched by
+  // id (`epic.getTaskContexts`) as an additive union below. PR matching needs
+  // the activity-enriched listing (`prNumber` is null on the cheap index), so
+  // that heavier host-wide probe is gated on a PR-shaped query.
+  const worktreeIndex = useWorktreeHostIndex(true);
+  const pullRequestQueryNumber = historyPullRequestQueryNumber(debouncedQuery);
+  const isPullRequestNumberQuery = pullRequestQueryNumber !== null;
+  const activityIndex = useWorktreeHostActivityIndex(isPullRequestNumberQuery);
+  const localTaskIds = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...historyWorktreeSearchEpicIds(
+            debouncedQuery,
+            worktreeIndex.worktrees,
+          ),
+          ...(pullRequestQueryNumber === null
+            ? []
+            : historyPullRequestSearchEpicIds(
+                pullRequestQueryNumber,
+                activityIndex.worktrees,
+              )),
+        ]),
+      ).sort((left, right) => left.localeCompare(right)),
+    [
+      activityIndex.worktrees,
+      debouncedQuery,
+      pullRequestQueryNumber,
+      worktreeIndex.worktrees,
+    ],
+  );
   const request = useMemo<ListCloudTasksRequest>(() => {
-    const isPullRequestNumberQuery =
-      isHistoryPullRequestNumberQuery(debouncedQuery);
     const search = patchHistorySearch(params.search, {
-      // PR numbers are discovered from local worktree activity, not the cloud
-      // task index. Keep the cloud query broad so it cannot remove the task
-      // before the local PR projection gets to match it.
-      query: isPullRequestNumberQuery ? "" : debouncedQuery,
+      query: debouncedQuery,
     });
     return listCloudTasksRequestForHistorySearch(search);
   }, [debouncedQuery, params.search]);
@@ -86,26 +124,49 @@ export function useHistoryQuery(
   } = useCloudEpicTasksQuery(request, { enabled: true });
   const tasksQueryRefetch = tasksQuery.refetch;
   const isQueryDebouncing = debouncedQuery !== trimmedQuery;
-  const isPullRequestNumberQuery =
-    isHistoryPullRequestNumberQuery(debouncedQuery);
   const shouldProjectLocally =
-    isQueryDebouncing ||
-    isPullRequestNumberQuery ||
-    tasksQuery.isFetching ||
-    tasksQuery.isPlaceholderData;
+    isQueryDebouncing || tasksQuery.isFetching || tasksQuery.isPlaceholderData;
+  const taskContexts = useEpicGetTaskContexts(localTaskIds, currentUserId);
   const baseItems = useMemo(
     () => buildHistoryItemsFromTasks(tasks, nowMs, currentUserId),
     [currentUserId, nowMs, tasks],
   );
+  const contextItems = useMemo(
+    () =>
+      filterHistoryItemsLocally(
+        buildHistoryItemsFromTasks(
+          Array.from(taskContexts.tasksById.values()),
+          nowMs,
+          currentUserId,
+        ),
+        params.search,
+      ),
+    [currentUserId, nowMs, params.search, taskContexts.tasksById],
+  );
+  // Locally matched tasks are unioned under the cloud page: the cloud rows
+  // keep their server order and the id-fetched extras are appended (dedup by
+  // row id). Extras respect the structured filters via the local predicate
+  // above; the ordering pass happens in the `data` memo.
+  const { allBaseItems, contextExtrasCount } = useMemo(() => {
+    if (contextItems.length === 0) {
+      return { allBaseItems: baseItems, contextExtrasCount: 0 };
+    }
+    const seen = new Set(baseItems.map((item) => item.id));
+    const extras = contextItems.filter((item) => !seen.has(item.id));
+    return {
+      allBaseItems: extras.length === 0 ? baseItems : [...baseItems, ...extras],
+      contextExtrasCount: extras.length,
+    };
+  }, [baseItems, contextItems]);
   const historyEpicIds = useMemo(
-    () => baseItems.map((item) => item.epicId),
-    [baseItems],
+    () => allBaseItems.map((item) => item.epicId),
+    [allBaseItems],
   );
   const worktreeMetadata = useTaskWorktreeMetadata(historyEpicIds);
   const worktreesByEpicId = worktreeMetadata.worktreesByEpicId;
-  const serverItems = useMemo(
-    () => withHistoryItemPullRequestNumbers(baseItems, worktreesByEpicId),
-    [baseItems, worktreesByEpicId],
+  const allItems = useMemo(
+    () => withHistoryItemWorktreeMetadata(allBaseItems, worktreesByEpicId),
+    [allBaseItems, worktreesByEpicId],
   );
 
   const data = useMemo<HistoryFetchResult | undefined>(() => {
@@ -116,9 +177,16 @@ export function useHistoryQuery(
     // flips a cached row's bit without moving it - the stable pinned-first
     // partition lifts it into (or drops it out of) the pinned block
     // instantly, and is an order-preserving no-op on untouched server data.
+    // When id-fetched extras joined the settled list they arrive appended out
+    // of order, so that path re-sorts the union client-side instead.
     const items = shouldProjectLocally
-      ? projectHistoryItems(serverItems, params.search)
-      : prioritizePinnedHistoryItems(serverItems);
+      ? projectHistoryItems(allItems, params.search)
+      : settledHistoryItems(
+          allItems,
+          contextExtrasCount,
+          params.search.sort,
+          debouncedQuery,
+        );
     const canUseServerFacets =
       !isQueryDebouncing && !tasksQuery.isPlaceholderData;
     const facets = canUseServerFacets
@@ -127,22 +195,24 @@ export function useHistoryQuery(
     const availableWorkspaces =
       facets.workspaces.length > 0
         ? facets.workspaces.map((workspace) => workspace.workspace)
-        : collectHistoryWorkspaces(serverItems);
+        : collectHistoryWorkspaces(allItems);
     return {
       items,
       availableRepos:
         facets.repos.length > 0
           ? facets.repos.map((repo) => repo.label)
-          : collectHistoryRepos(serverItems),
+          : collectHistoryRepos(allItems),
       availableWorkspaces,
       totalCount: items.length,
       facets,
       worktreesByEpicId,
     };
   }, [
+    allItems,
+    contextExtrasCount,
+    debouncedQuery,
     isQueryDebouncing,
     params.search,
-    serverItems,
     shouldProjectLocally,
     tasksQuery.data,
     tasksQuery.isPlaceholderData,
@@ -157,17 +227,19 @@ export function useHistoryQuery(
     isFetching:
       tasksQuery.isFetching ||
       isQueryDebouncing ||
-      (isPullRequestNumberQuery && worktreeMetadata.isFetching),
+      (isPullRequestNumberQuery && activityIndex.isFetching) ||
+      taskContexts.isFetching,
     error:
       (tasksQuery.error instanceof Error ? tasksQuery.error : null) ??
-      (isPullRequestNumberQuery ? worktreeMetadata.error : null),
+      (isPullRequestNumberQuery ? activityIndex.error : null) ??
+      taskContexts.error,
     hostId,
     refetch,
     fetchNextPage,
-    // A settled PR query intentionally projects the broad cloud page locally,
-    // but it must retain pagination so matching tasks beyond the first page
-    // remain reachable. During ordinary debouncing / placeholder handoff, keep
-    // the existing guard so "Show more" cannot fetch against a stale request.
+    // Pagination follows the plain cloud query; id-fetched local matches are
+    // complete per query (not paginated). Keep the guard so "Show more"
+    // cannot fetch against a stale request during debouncing / placeholder
+    // handoff.
     hasNextPage:
       hasNextPage && !isQueryDebouncing && !tasksQuery.isPlaceholderData,
     isFetchingNextPage,
@@ -227,6 +299,18 @@ function mapHistoryFacets(
   };
 }
 
+function settledHistoryItems(
+  items: ReadonlyArray<HistoryItem>,
+  contextExtrasCount: number,
+  sort: HistorySortOption,
+  query: string,
+): ReadonlyArray<HistoryItem> {
+  if (contextExtrasCount > 0) {
+    return sortProjectedHistoryItems(items, sort, query);
+  }
+  return prioritizePinnedHistoryItems(items);
+}
+
 function projectHistoryItems(
   items: ReadonlyArray<HistoryItem>,
   search: HistorySearchState,
@@ -266,12 +350,8 @@ function sortProjectedHistoryItems(
   sort: HistorySortOption,
   query: string,
 ): ReadonlyArray<HistoryItem> {
-  if (sort === "relevance" && query.length > 0) {
+  if ((sort === "relevance" && query.length > 0) || sort === "last-viewed") {
     return prioritizePinnedHistoryItems(items);
   }
   return sortHistoryItems(items, sort);
-}
-
-function isHistoryPullRequestNumberQuery(query: string): boolean {
-  return /^(?:pr\s*)?#?\d+$/i.test(query.trim());
 }

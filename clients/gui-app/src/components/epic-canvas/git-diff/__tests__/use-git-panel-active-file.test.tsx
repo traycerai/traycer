@@ -57,7 +57,7 @@ describe("useGitPanelActiveFile", () => {
       stage: "staged",
       repositoryContext: null,
     });
-    seedViewTab(openTile(createEmptyCanvas(), tile, false));
+    seedViewTab(openTile(createEmptyCanvas(), tile, false, null));
 
     const { result } = renderHook(() =>
       useGitPanelActiveFile({
@@ -82,7 +82,7 @@ describe("useGitPanelActiveFile", () => {
       stage: "unstaged",
       repositoryContext: null,
     });
-    seedViewTab(openTile(createEmptyCanvas(), tile, false));
+    seedViewTab(openTile(createEmptyCanvas(), tile, false, null));
 
     const { result } = renderHook(() =>
       useGitPanelActiveFile({

@@ -1139,7 +1139,7 @@ describe("<ProviderReauthBanner />", () => {
 
       expect(
         screen.getByText(
-          "This chat's Claude Code profile is no longer available.",
+          "This agent's Claude Code profile is no longer available.",
         ),
       ).toBeDefined();
       expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();

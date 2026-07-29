@@ -6,15 +6,15 @@
  *
  * This module runs OUTSIDE React render (store ops + GC), so it reads stores
  * imperatively via `getState()` at call time. It is consumer-driven: the draft
- * store, composer store, paste hook, and submit path call into it on the
+ * store, draft-runtime registry, paste hook, and submit path call into it on the
  * documented triggers (§6 of the tech plan).
  *
  * Two invariants drive the reconcile logic:
  *
  * - **[C2] Roots, never victims.** The set of referenced hashes is the union of
- *   every persisted draft's content AND the live editor mirror. The session
+ *   every persisted draft's content AND every keyed live runtime. The session
  *   cache additionally protects the paste→insert window: a just-pasted hash has
- *   bytes in IndexedDB before its node lands in `currentContent`, so it must not
+ *   bytes in IndexedDB before its node lands in a runtime mirror, so it must not
  *   be IDB-deleted while it is still session-cached.
  * - **[C1] Ready-gated sweep.** `reconcile()` is a no-op until the draft set is
  *   known. On browser the draft store hydrates synchronously from localStorage;
@@ -22,8 +22,6 @@
  *   so an ungated sweep at module load would see ZERO referenced hashes and
  *   delete every restored image's bytes moments before the drafts arrive.
  */
-
-import { toast } from "sonner";
 
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -38,7 +36,7 @@ import {
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
-import { landingComposerLiveImageHashes } from "@/stores/composer/landing-composer-store";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
@@ -69,6 +67,55 @@ function isDesktopRuntime(): boolean {
 // One-shot "the draft set is known" gate. Stays false until browser hydration
 // or the first desktop projection flips it — see `markLandingDraftsReady`.
 let draftsReady = false;
+
+// [B2] "The landing roots are trustworthy" gate for the DELETING sweep. On a
+// fresh desktop renderer the session cache is empty and the FIRST desktop
+// projection can be a spurious cold-start empty (a stale disk read, or a snapshot
+// clobbered by registry churn); reconciling then — empty roots, empty session —
+// would reap every restored image's bytes as an "orphan". Deletion is therefore
+// withheld until EITHER a non-empty authoritative draft snapshot has been applied
+// this session (roots definitely include real drafts) OR the live landing editor
+// has mounted (its surface is gated on windows-bridge hydration, so the
+// authoritative snapshot is in and the live-editor + draft roots are real).
+// Browser is exempt: it hydrates the draft set synchronously from localStorage,
+// so its first reconcile already has trustworthy roots.
+let sawAuthoritativeNonEmptyDrafts = false;
+let landingEditorMounted = false;
+
+/**
+ * Record that a non-empty authoritative draft snapshot has been applied this
+ * session. Called by the draft store's desktop-projection path. Opens the [B2]
+ * deletion gate: the reconcile's roots now provably reflect real drafts.
+ */
+export function markLandingDraftsAuthoritativeNonEmpty(): void {
+  sawAuthoritativeNonEmptyDrafts = true;
+}
+
+/**
+ * Record that the live landing editor has mounted (called once from
+ * `LandingComposer`). Opens the [B2] deletion gate and kicks a reconcile so any
+ * genuine orphans deferred while the gate was closed are reclaimed now that the
+ * roots are trustworthy.
+ */
+export function markLandingEditorMounted(): void {
+  if (landingEditorMounted) return;
+  landingEditorMounted = true;
+  // [B1] The editor mounting means the draft set is known, so satisfy readiness
+  // even if an empty-inbound projection guard suppressed the projection's own
+  // `markLandingDraftsReady` — otherwise reconcile would stay a no-op for this
+  // renderer's whole lifetime. Idempotent when readiness already fired.
+  markLandingDraftsReady();
+  // Ready may already have been set (no-op above); run a sweep now that the
+  // deletion gate is open so genuine orphans deferred while it was closed are
+  // reclaimed.
+  scheduleLandingImageReconcile();
+}
+
+/** Whether the [B2] deleting sweep is allowed to run (see the gate note above). */
+function landingDeletionAllowed(): boolean {
+  if (!isDesktopRuntime()) return true;
+  return sawAuthoritativeNonEmptyDrafts || landingEditorMounted;
+}
 
 /**
  * Flip the one-shot ready signal and run the startup orphan sweep. Idempotent:
@@ -103,17 +150,16 @@ function imageHashesOf(content: JsonContent): Set<string> {
 }
 
 /**
- * Every hash that must NOT be collected: union of all persisted drafts' content
- * and the live editor mirror. The session cache is handled separately (it
- * protects the paste→insert window but its entries are reclaimed once a hash
- * leaves the live roots).
+ * Every hash that must NOT be collected: union of all persisted drafts'
+ * content and every keyed runtime mirror. The session cache is handled
+ * separately to protect the normal paste-to-insert window.
  */
 function computeLiveRoots(): Set<string> {
   const roots = new Set<string>();
   for (const draft of useLandingDraftStore.getState().drafts) {
     for (const hash of imageHashesOf(draft.content)) roots.add(hash);
   }
-  for (const hash of landingComposerLiveImageHashes()) roots.add(hash);
+  for (const hash of draftRuntimeRegistry.liveImageRoots()) roots.add(hash);
   return roots;
 }
 
@@ -140,10 +186,28 @@ export async function reconcile(): Promise<void> {
   const orphans = stored.filter(
     (hash) => !liveRoots.has(hash) && !protectedFromDelete.has(hash),
   );
+  // [B2] Withhold the whole sweep while the roots are untrustworthy (cold-start
+  // desktop): deleting would reap freshly-restored bytes, and there is nothing to
+  // release either (the session is empty before the editor mounts). Once the gate
+  // opens, `markLandingEditorMounted` re-runs the reconcile so genuine orphans are
+  // still reaped.
+  if (orphans.length > 0 && !landingDeletionAllowed()) return;
   await Promise.all(orphans.map((hash) => deleteImage(hash)));
+  let releasedUnreferenced = false;
   for (const hash of sessionKeys) {
-    if (!liveRoots.has(hash)) releaseSession(hash);
+    if (!liveRoots.has(hash)) {
+      releaseSession(hash);
+      releasedUnreferenced = true;
+    }
   }
+  // A hash that was session-protected THIS sweep but is no longer referenced had
+  // its bytes spared (the session is a delete-root) and its session just
+  // released; only the NEXT sweep can reclaim those now-unprotected bytes. Kick
+  // one so a partial-failure orphan (a successful sibling of a failed putImage)
+  // is reclaimed promptly instead of lingering until an unrelated later sweep.
+  // Terminates: the follow-up finds the hash session-free and deletes it,
+  // releasing nothing new.
+  if (releasedUnreferenced) scheduleLandingImageReconcile();
 }
 
 let reconcileTimer: Parameters<typeof clearTimeout>[0] | null = null;
@@ -174,77 +238,39 @@ function referencedImageBytes(drafts: ReadonlyArray<LandingDraftTab>): number {
       if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
     }
   }
+  for (const content of draftRuntimeRegistry.liveContents()) {
+    for (const atom of collectImageAtoms(content)) {
+      if (atom.hash === null) continue;
+      if (!sizeByHash.has(atom.hash)) sizeByHash.set(atom.hash, atom.size ?? 0);
+    }
+  }
   let total = 0;
   for (const size of sizeByHash.values()) total += size;
   return total;
 }
 
 /**
- * Drop a draft and reclaim the image bytes it solely referenced. The evicted
- * draft is an intentional discard, so its hashes ARE deleted from IndexedDB (and
- * their session entries released) even though they were session-cached — unless
- * another remaining draft / the live editor still references them.
+ * Reserve budget for a paste of `incomingBytes` in the exact draft. Existing
+ * roots are never victims: cleanup deletes only unreferenced blobs, so a
+ * capacity miss rejects just the new attachment and never closes a draft.
  */
-function evictLandingDraftImages(draft: LandingDraftTab): void {
-  useLandingDraftStore.getState().closeDraft(draft.id);
-  const remainingRoots = computeLiveRoots();
-  for (const hash of imageHashesOf(draft.content)) {
-    if (remainingRoots.has(hash)) continue;
-    void deleteImage(hash);
-    releaseSession(hash);
-  }
-}
-
-/**
- * Reserve budget for a paste of `incomingBytes`. Returns whether the paste may
- * proceed. When the current referenced bytes + the incoming bytes would exceed
- * the budget, evict the oldest drafts by `lastTouchedAt` — EXCLUDING the active
- * draft — until back under budget, toasting each eviction. If only the active
- * draft remains and its own paste still exceeds the budget, the paste is blocked
- * with a toast (return false).
- */
-export function reserveLandingImageBudget(incomingBytes: number): boolean {
-  const { drafts, activeDraftId } = useLandingDraftStore.getState();
-  let referenced = referencedImageBytes(drafts);
+export function reserveLandingImageBudget(
+  draftId: string | null,
+  incomingBytes: number,
+): boolean {
+  const { drafts } = useLandingDraftStore.getState();
+  const referenced = referencedImageBytes(drafts);
   if (referenced + incomingBytes <= LANDING_IMAGE_BUDGET_BYTES) return true;
 
-  // With no active draft, this paste is not attributed to any existing draft, so
-  // `draft.id !== activeDraftId` would exclude NOTHING and the eviction below
-  // would destroy unrelated in-progress drafts to make room for it. Block the
-  // paste instead — we never evict user drafts for an unattributed paste.
-  if (activeDraftId === null) {
-    reportableErrorToast(
-      "Couldn't add the image.",
-      {
-        description: "It would exceed this window's image storage budget.",
-      },
-      {
-        title: "Could not add image",
-        message: "The image storage budget was exceeded.",
-        code: null,
-        source: "Chat composer",
-      },
-    );
-    return false;
-  }
-
-  const evictable = drafts
-    .filter((draft) => draft.id !== activeDraftId)
-    .sort((a, b) => a.lastTouchedAt - b.lastTouchedAt);
-
-  for (const draft of evictable) {
-    if (referenced + incomingBytes <= LANDING_IMAGE_BUDGET_BYTES) break;
-    evictLandingDraftImages(draft);
-    toast.info("Cleared an older draft to free up image space.");
-    referenced = referencedImageBytes(useLandingDraftStore.getState().drafts);
-  }
-
-  if (referenced + incomingBytes <= LANDING_IMAGE_BUDGET_BYTES) return true;
+  scheduleLandingImageReconcile();
 
   reportableErrorToast(
     "Couldn't add the image.",
     {
-      description: "It would exceed this window's image storage budget.",
+      description:
+        draftId === null
+          ? "Create a draft or remove images before trying again."
+          : "Remove images or close a draft yourself, then try again.",
     },
     {
       title: "Could not add image",

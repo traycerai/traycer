@@ -210,10 +210,10 @@ function buildCreateChatRequest(
   return {
     epicId,
     parentId: null,
-    // Chats are created with an empty stored title ("no title yet"); the
-    // "Untitled chat" fallback is applied at render via the chat display
-    // helper, never baked into the stored title. The AI chat title overwrites
-    // the empty store only while it is still empty.
+    // Agents are created with an empty stored title ("no title yet"); the
+    // "Untitled agent" fallback is applied at render via the display helper,
+    // never baked into the stored title. The AI-generated title overwrites the
+    // empty store only while it is still empty.
     title: "",
     chatId: uuidv4(),
     workspaceMode: deriveWorkspaceMode(1, worktreeIntent),
@@ -241,8 +241,9 @@ function openProjectedChat(
     instanceId: uuidv4(),
     type: "chat" as const,
     // Snapshot fallback label for the node: the raw title when present, else
-    // the "Untitled chat" render fallback. Never the "New chat" placeholder.
-    name: displayTitle(chat.title, "chat"),
+    // the "Untitled agent" render fallback (a durable Agent, addressed as such
+    // regardless of its Chat interface). Never the "New chat" placeholder.
+    name: displayTitle(chat.title, "agent"),
     hostId: intent.hostId,
   };
   const canvas = useEpicCanvasStore.getState();

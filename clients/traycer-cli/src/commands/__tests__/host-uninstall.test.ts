@@ -22,6 +22,7 @@ function commandDeps(args: {
       return {
         removedRecord: null,
         removedInstallDir: true,
+        removedStagedDir: true,
         purgedRuntime: options.purgeChannelRuntime,
       };
     },

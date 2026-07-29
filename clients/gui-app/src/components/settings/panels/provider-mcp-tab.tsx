@@ -52,6 +52,7 @@ import { useHostBinding } from "@/lib/host";
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 import { redactLogText } from "@/lib/logger";
 import { workspaceFolderName } from "@/lib/worktree/workspace-folder-name";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 import type { McpPendingAuthEntry } from "@/stores/settings/mcp-pending-auth-store";
 import { useMcpPendingAuthStore } from "@/stores/settings/mcp-pending-auth-store";
@@ -1090,24 +1091,30 @@ function ScopeChip(props: {
   readonly onClick: () => void;
 }): ReactNode {
   return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      disabled={props.disabled}
-      title={props.title ?? undefined}
-      aria-pressed={props.active}
-      className={cn(
-        "inline-flex items-center rounded-sm px-3 py-1 text-ui-sm transition-colors",
-        props.active
-          ? "bg-card text-foreground shadow-sm"
-          : "text-muted-foreground hover:text-foreground",
-        props.disabled
-          ? "cursor-not-allowed opacity-50 hover:text-muted-foreground"
-          : null,
-      )}
+    <TooltipWrapper
+      label={props.title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {props.label}
-    </button>
+      <button
+        type="button"
+        onClick={props.onClick}
+        disabled={props.disabled}
+        aria-pressed={props.active}
+        className={cn(
+          "inline-flex items-center rounded-sm px-3 py-1 text-ui-sm transition-colors",
+          props.active
+            ? "bg-card text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground",
+          props.disabled
+            ? "cursor-not-allowed opacity-50 hover:text-muted-foreground"
+            : null,
+        )}
+      >
+        {props.label}
+      </button>
+    </TooltipWrapper>
   );
 }
 

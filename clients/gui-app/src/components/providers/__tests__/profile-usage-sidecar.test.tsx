@@ -33,7 +33,9 @@ function entry(
 ): ProfileDropdownUsageEntry {
   return {
     profileId: "work",
+    fetchEligible: true,
     refresh: vi.fn(() => Promise.resolve()),
+    ensureFresh: vi.fn(() => Promise.resolve()),
     ...overrides,
   };
 }

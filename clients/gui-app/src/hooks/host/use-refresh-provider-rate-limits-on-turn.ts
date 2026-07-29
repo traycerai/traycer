@@ -51,6 +51,7 @@ import { enqueueRateLimitFetchForScope } from "@/lib/rate-limits/ephemeral-fetch
 export function useRefreshProviderRateLimitsOnTurn(
   providerId: RateLimitProviderId | null,
   profileId: string | null,
+  fetchEligible: boolean,
 ): void {
   const queryClient = useQueryClient();
   const queueScope = useRateLimitQueueScope();
@@ -63,7 +64,7 @@ export function useRefreshProviderRateLimitsOnTurn(
     // previous provider's cooldown timestamp and can skip its own first,
     // otherwise-due invalidation.
     lastInvalidatedAtRef.current = 0;
-    if (providerId === null) return;
+    if (providerId === null || !fetchEligible) return;
     const harnessId = providerIdToGuiHarnessId(providerId);
     return subscribeChatTurnCompletions((completion) => {
       if (completion.harnessId !== harnessId) return;
@@ -107,5 +108,5 @@ export function useRefreshProviderRateLimitsOnTurn(
         }),
       });
     });
-  }, [queryClient, profileId, providerId, queueScope]);
+  }, [fetchEligible, queryClient, profileId, providerId, queueScope]);
 }

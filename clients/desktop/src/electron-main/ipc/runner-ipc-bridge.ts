@@ -20,7 +20,9 @@ import type {
   OwnershipEntry,
   PerWindowLandingDraft,
   PerWindowSnapshot,
+  PerWindowStateCapabilities,
   PerWindowStatePatch,
+  PerWindowStateUpdateAcknowledgement,
   SupportLogTarget,
   SupportLogTailResult,
   SupportRevealLogResult,
@@ -29,20 +31,35 @@ import type {
   SupportSubmitReportResult,
   WindowSummary,
 } from "../../ipc-contracts/window-types";
+import type {
+  CredentialsMigrationOutcome,
+  StoredAuthTokens,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+  TokenStoreChange,
+} from "@traycer-clients/shared/platform/runner-host";
 import { DesktopAuthSession } from "../auth/desktop-auth-session";
 import {
   createEmptyPerWindowSnapshot,
+  PER_WINDOW_STATE_CAPABILITIES,
   type PerWindowStateChange,
 } from "../windows/per-window-state";
 import {
   isMruFallbackMenuCommand,
-  readEpicId,
   readSenderWebContentsId,
 } from "./ipc-parsers";
 import {
   uniqueLandingDrafts,
   uniquePerWindowTabs,
 } from "./landing-draft-helpers";
+import {
+  findWindowIdForOpenArtifact,
+  findWindowIdForOpenChat,
+  findWindowIdForOpenTab,
+  parseNotificationClickTarget,
+  type NotificationClickTarget,
+} from "./notification-target";
 import { registerAuthIpc } from "./auth-ipc";
 import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
@@ -51,20 +68,35 @@ import { registerOwnershipIpc } from "./ownership-ipc";
 import { registerPerWindowStateIpc } from "./per-window-state-ipc";
 import { registerHostIpc } from "./host-ipc";
 import { registerHostManagementIpc } from "./host-management-ipc";
-import { registerHostEnsureIpc } from "./host-ensure-ipc";
+import { registerHostControllerStatusBroadcast } from "./host-controller-status-broadcast";
 import { registerMigrationIpc } from "./migration-ipc";
 import { registerSupportIpc } from "./support-ipc";
 import { registerTraycerCliIpc } from "./traycer-cli-ipc";
 import { registerPlatformIpc } from "./platform-ipc";
 import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
+import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
+import { registerMenuIpc } from "./menu-ipc";
 import { getAppUpdateSnapshot } from "../app/updater";
 import type { HostTrayCommand } from "../../ipc-contracts/host-management-types";
 import {
   aggregateUnsyncedSnapshots,
   registerLifecycleIpc,
 } from "./lifecycle-ipc";
+import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
+  ConvergeReadyOk,
+  HostControllerStatus,
+  InstallVersionOk,
+  MutationOutcome,
+  MutationProgress,
+  RemoveTraycerOk,
+  ServiceRegistrationOk,
+  UninstallOk,
+} from "../host/host-controller-types";
 
 /**
  * Minimal window surface the bridge needs. Declaring it structurally lets
@@ -125,7 +157,14 @@ export interface IpcEpicWindowOwnership {
 
 export interface IpcPerWindowState {
   get(windowId: string): PerWindowSnapshot;
-  update(windowId: string, patch: PerWindowStatePatch): void;
+  capabilities(): PerWindowStateCapabilities;
+  update(
+    windowId: string,
+    patch: PerWindowStatePatch,
+  ):
+    | PerWindowStateUpdateAcknowledgement
+    | void
+    | Promise<PerWindowStateUpdateAcknowledgement | void>;
   clear(windowId: string): void;
   on(event: "change", listener: (change: PerWindowStateChange) => void): void;
   off(event: "change", listener: (change: PerWindowStateChange) => void): void;
@@ -152,6 +191,30 @@ export interface IpcDesktopAuthSession {
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }
 
+/**
+ * Minimal main-process token-store surface the auth IPC drives (tech plan §3).
+ * The concrete `FileTokenStore` structurally satisfies it. `subscribe` returns
+ * an unsubscribe thunk (registered on `disposeFns`); `dispose` tears down the
+ * underlying credentials mutation store.
+ */
+export interface IpcAuthTokenStore {
+  get(): Promise<StoredCredentials | null>;
+  signIn(
+    tokens: StoredAuthTokens,
+    identity: StoredCredentialsIdentity,
+  ): Promise<void>;
+  rotate(expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<TokenRotateResult>;
+  delete(): Promise<void>;
+  subscribe(listener: (change: TokenStoreChange) => void): () => void;
+  migrateLegacyCredentials(
+    legacy: StoredAuthTokens,
+  ): Promise<CredentialsMigrationOutcome>;
+  dispose(): void;
+}
+
 export interface IpcZoomController {
   getZoomPercent(): ZoomPercent;
   zoomIn(): Promise<ZoomPercent>;
@@ -162,7 +225,7 @@ export interface IpcZoomController {
 }
 
 export interface IpcSupportService {
-  getSnapshot(): SupportSnapshot;
+  getSnapshot(): Promise<SupportSnapshot>;
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult>;
   submitReport(
     form: SupportSubmitReportRequest,
@@ -198,13 +261,11 @@ export interface IpcHostLifecycle {
   getSnapshot(): DesktopLocalHostSnapshot | null;
   on(event: "change", listener: HostChangeListener): void;
   off(event: "change", listener: HostChangeListener): void;
-  respawn(): Promise<void>;
   /**
-   * Used by the macOS host-owned-login-item respawn path
-   * (`app/host-respawn.ts:respawnViaLoginItem`) to mark the host
-   * as "down" from the renderer's perspective before driving the
-   * SMAppService re-register cycle itself, without re-entering
-   * `respawn()`'s CLI-restart codepath.
+   * Used by `HostController`'s packaged-macOS activation cycle to mark the
+   * host as "down" from the renderer's perspective before driving the
+   * SMAppService re-register cycle, without going through a full mutation
+   * round-trip first.
    */
   notifyRespawning(): void;
   /**
@@ -236,21 +297,61 @@ export interface IpcHostLifecycle {
    * torn down by an FSEvents stream reset earlier in the session.
    */
   ensureWatcherInstalled(): void;
-  getServiceStatus(): Promise<{
-    state: "running" | "stopped" | "not-installed";
-    version: string | null;
-    listenUrl: string | null;
-    pid: number | null;
-  }>;
   getRecentLogTail(maxLines: number): Promise<string | null>;
+}
+
+/**
+ * Structural surface of `HostController` (Host Update Layer Redesign Tech
+ * Plan, "Desktop main: HostController") that IPC handlers and background
+ * monitors depend on. Declared here - not imported from `host-controller.ts`
+ * - so tests can pass a lightweight double instead of constructing the real
+ * class, the same pattern `IpcHostLifecycle` already uses for `HostLifecycle`.
+ * The real `HostController` satisfies this structurally; no explicit
+ * `implements` needed.
+ */
+export interface IpcHostController {
+  getStatus(): Promise<HostControllerStatus>;
+  convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
+  stageLatest(): Promise<void>;
+  applyStaged(
+    trigger: ApplyStagedTrigger,
+    force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>>;
+  activateInstalled(
+    force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+  installVersion(
+    pin: string,
+    force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>>;
+  registerService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>>;
+  respawn(): Promise<MutationOutcome<ActivateInstalledOk>>;
+  recoverIfDown(): Promise<
+    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
+  >;
+  freePortAndRestart(
+    pid: number | null,
+    port: number | null,
+  ): Promise<MutationOutcome<ActivateInstalledOk>>;
+  uninstallHost(all: boolean): Promise<MutationOutcome<UninstallOk>>;
+  removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>>;
+  isPendingRevisionRefreshQuarantined(): boolean;
+  onMutationProgress(
+    listener: (progress: MutationProgress) => void,
+  ): () => void;
 }
 
 export interface RunnerIpcOptions {
   readonly host: IpcHostLifecycle;
+  readonly hostController: IpcHostController;
   readonly authnBaseUrl: string;
   // Dev loopback redirect_uri; null when the build uses the custom-scheme
   // deep link (staging/prod). Snapshotted by the renderer to compose sign-in.
   readonly authRedirectUri: string | null;
+  // Absent in tests / the single-window shell: defaults to a null store. The
+  // real desktop startup always injects a `FileTokenStore`.
+  readonly authTokenStore: IpcAuthTokenStore | undefined;
   readonly tray: DesktopTrayController | null;
   readonly window: IpcManagedWindow;
   readonly zoomController: IpcZoomController | undefined;
@@ -258,8 +359,10 @@ export interface RunnerIpcOptions {
 
 export interface RunnerIpcRegistryOptions {
   readonly host: IpcHostLifecycle;
+  readonly hostController: IpcHostController;
   readonly authnBaseUrl: string;
   readonly authRedirectUri: string | null;
+  readonly authTokenStore: IpcAuthTokenStore | undefined;
   readonly tray: DesktopTrayController | null;
   readonly windowRegistry: IpcWindowRegistry;
   readonly ownership: IpcEpicWindowOwnership;
@@ -290,6 +393,7 @@ export class RunnerIpcBridge {
   readonly ownership: IpcEpicWindowOwnership;
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
+  readonly authTokenStore: IpcAuthTokenStore;
   readonly support: IpcSupportService;
   readonly zoomController: IpcZoomController;
   readonly quitState: IpcShellQuitState;
@@ -320,6 +424,7 @@ export class RunnerIpcBridge {
 
   constructor(options: RunnerIpcBridgeOptions) {
     this.options = options;
+    this.authTokenStore = options.authTokenStore ?? new NullAuthTokenStore();
     if ("windowRegistry" in options) {
       this.windowRegistry = options.windowRegistry;
       this.ownership = options.ownership;
@@ -350,7 +455,7 @@ export class RunnerIpcBridge {
     registerSupportIpc(this);
     registerHostIpc(this);
     registerHostManagementIpc(this);
-    registerHostEnsureIpc(this);
+    registerHostControllerStatusBroadcast(this);
     registerMigrationIpc(this);
     registerTraycerCliIpc(this);
     // Platform IPC (recent docs, window effects, diagnostics, etc.) is wired
@@ -358,7 +463,9 @@ export class RunnerIpcBridge {
     // `disposeFns` / `ipcMain.removeHandler` sweep.
     registerPlatformIpc(this);
     registerAppUpdateIpc(this);
+    registerGlobalShortcutsIpc(this);
     registerZoomIpc(this);
+    registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
     registerPowerIpc(this);
@@ -397,9 +504,66 @@ export class RunnerIpcBridge {
     );
   }
 
+  /**
+   * Resolves the live window already holding a notification click's exact
+   * target - chat/terminal-agent/terminal tile (`chatId`), terminal tab
+   * (`tabId`), or artifact tile (`artifactId`) - or null when there is no
+   * epicId or no such target is open anywhere.
+   */
+  private resolveNotificationOpenWindowId(
+    target: NotificationClickTarget,
+  ): string | null {
+    if (target.epicId === null) return null;
+    if (target.chatId !== null) {
+      return findWindowIdForOpenChat(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.chatId,
+        target.originHostId,
+      );
+    }
+    if (target.tabId !== null) {
+      return findWindowIdForOpenTab(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.tabId,
+      );
+    }
+    if (target.artifactId !== null) {
+      return findWindowIdForOpenArtifact(
+        this.windowRegistry,
+        this.perWindowState,
+        target.epicId,
+        target.artifactId,
+        target.originHostId,
+      );
+    }
+    return null;
+  }
+
+  /**
+   * Routes a native-notification click. When the click carries a chat/
+   * terminal-agent target, a terminal-route tab target, or an artifact
+   * target, that is already open in some live window, focuses that exact
+   * window - `NotificationFocusBridge` there brings the tile to the
+   * foreground itself. Otherwise falls back to owned-or-MRU delivery, as for
+   * any other epic-scoped event.
+   */
   deliverNotificationClick(payload: unknown): void {
+    const target = parseNotificationClickTarget(payload);
+    const openWindowId = this.resolveNotificationOpenWindowId(target);
+    if (openWindowId !== null) {
+      this.focusAndDeliver(
+        openWindowId,
+        RunnerHostEvent.notificationClick,
+        payload,
+      );
+      return;
+    }
     this.deliverToOwnedOrMru(
-      readEpicId(payload),
+      target.epicId,
       RunnerHostEvent.notificationClick,
       payload,
     );
@@ -415,10 +579,7 @@ export class RunnerIpcBridge {
     this.deliverToOwnedOrMru(epicId, RunnerHostEvent.trayEpicSelected, epicId);
   }
 
-  dispatchMenuCommand(
-    command: MenuCommandId,
-    hostUpdateVersion: string | null,
-  ): boolean {
+  dispatchMenuCommand(command: MenuCommandId): boolean {
     const target = this.resolveRendererHostedCommandTarget(command);
     if (target === null) {
       return false;
@@ -429,7 +590,6 @@ export class RunnerIpcBridge {
     return this.safeSendToWindow(target.windowId, RunnerHostEvent.menuCommand, {
       command,
       windowId: target.windowId,
-      hostUpdateVersion,
     } satisfies MenuCommandPayload);
   }
 
@@ -823,11 +983,19 @@ export class RunnerIpcBridge {
       });
       return;
     }
-    this.windowRegistry.focusById(target.windowId);
-    if (!this.safeSendToWindow(target.windowId, channel, payload)) {
+    this.focusAndDeliver(target.windowId, channel, payload);
+  }
+
+  private focusAndDeliver(
+    windowId: string,
+    channel: string,
+    payload: unknown,
+  ): void {
+    this.windowRegistry.focusById(windowId);
+    if (!this.safeSendToWindow(windowId, channel, payload)) {
       log.warn("[runner-ipc] renderer event delivery failed", {
         channel,
-        windowId: target.windowId,
+        windowId,
       });
     }
   }
@@ -1000,6 +1168,39 @@ class NeverQuittingShellState implements IpcShellQuitState {
   }
 }
 
+// Default token store for the single-window `window:` bridge variant and any
+// caller (tests) that omits `authTokenStore`: signed-out, writes no-op. The real
+// desktop startup always injects a `FileTokenStore`.
+class NullAuthTokenStore implements IpcAuthTokenStore {
+  get(): Promise<StoredCredentials | null> {
+    return Promise.resolve(null);
+  }
+
+  signIn(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  rotate(): Promise<TokenRotateResult> {
+    return Promise.resolve({ outcome: "deleted", pair: null });
+  }
+
+  delete(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  subscribe(): () => void {
+    return () => undefined;
+  }
+
+  migrateLegacyCredentials(): Promise<CredentialsMigrationOutcome> {
+    // No file backing (test caller omitted a store): there is nothing to
+    // migrate onto, so decline — the caller wipes the legacy remnant.
+    return Promise.resolve("identity-unknown");
+  }
+
+  dispose(): void {}
+}
+
 class NullEpicWindowOwnership implements IpcEpicWindowOwnership {
   getOwner(_tabId: string): string | null {
     return null;
@@ -1043,7 +1244,16 @@ class NullPerWindowState implements IpcPerWindowState {
     return this.snapshots.get(windowId) ?? createEmptyPerWindowSnapshot();
   }
 
-  update(windowId: string, patch: PerWindowStatePatch): void {
+  capabilities(): PerWindowStateCapabilities {
+    // Shared with the real store: the renderer handshake must not see a
+    // different feature set depending on which implementation backs the bridge.
+    return PER_WINDOW_STATE_CAPABILITIES;
+  }
+
+  update(
+    windowId: string,
+    patch: PerWindowStatePatch,
+  ): PerWindowStateUpdateAcknowledgement {
     const current = this.get(windowId);
     const landingDrafts =
       "landingDrafts" in patch
@@ -1053,7 +1263,8 @@ class NullPerWindowState implements IpcPerWindowState {
       "activeLandingDraftId" in patch
         ? (patch.activeLandingDraftId ?? null)
         : current.activeLandingDraftId;
-    this.snapshots.set(windowId, {
+    const next: PerWindowSnapshot = {
+      revision: (current.revision ?? 0) + 1,
       epicTabs:
         "epicTabs" in patch
           ? uniquePerWindowTabs(patch.epicTabs ?? [])
@@ -1068,7 +1279,17 @@ class NullPerWindowState implements IpcPerWindowState {
           : current.canvasByTabId,
       landingDrafts,
       activeLandingDraftId,
-    });
+      tabStripLayout:
+        "tabStripLayout" in patch
+          ? (patch.tabStripLayout ?? null)
+          : current.tabStripLayout,
+      activeRoute:
+        "activeRoute" in patch
+          ? (patch.activeRoute ?? null)
+          : current.activeRoute,
+    };
+    this.snapshots.set(windowId, next);
+    return { capabilities: this.capabilities(), revision: next.revision ?? 0 };
   }
 
   clear(windowId: string): void {
@@ -1087,8 +1308,8 @@ class NullPerWindowState implements IpcPerWindowState {
 }
 
 class NullSupportService implements IpcSupportService {
-  getSnapshot(): SupportSnapshot {
-    return {
+  getSnapshot(): Promise<SupportSnapshot> {
+    return Promise.resolve({
       appName: "Traycer",
       appVersion: "0.0.0",
       platform: process.platform,
@@ -1108,11 +1329,12 @@ class NullSupportService implements IpcSupportService {
         version: null,
         pid: null,
         hostId: null,
+        layer0: null,
       },
       logs: [],
       links: [],
       supportEmail: "",
-    };
+    });
   }
 
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult> {
@@ -1122,7 +1344,7 @@ class NullSupportService implements IpcSupportService {
   submitReport(
     _form: SupportSubmitReportRequest,
   ): Promise<SupportSubmitReportResult> {
-    return Promise.resolve({ reportId: "" });
+    return Promise.resolve({ reportId: null });
   }
 
   tailLog(input: {

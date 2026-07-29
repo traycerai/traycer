@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -57,12 +57,18 @@ export function useSlashItems(params: UseSlashItemsParams): void {
     data: commands,
     isLoading,
     isFetching,
+    error,
+    refetch,
   } = useSlashCommands(query, {
     hostClient,
     harnessId,
     workingDirectories,
     enabled: active,
   });
+
+  const retryLoad = useCallback(() => {
+    void refetch();
+  }, [refetch]);
 
   const items = useMemo<ReadonlyArray<ComposerPickerItem>>(
     () => slashItemsForScope(commands, slashScope),
@@ -82,8 +88,23 @@ export function useSlashItems(params: UseSlashItemsParams): void {
       step: STATIC_STEP,
       items,
       loading: isLoading,
+      // A failed catalog fetch must render as an error with a retry, never as
+      // "No matching commands" - an empty catalog and a dead provider are
+      // different states.
+      loadFailed: error !== null,
+      retryLoad: error !== null ? retryLoad : null,
     });
-  }, [active, isLoading, items, pickerStore, query, sessionId, slashScope]);
+  }, [
+    active,
+    error,
+    isLoading,
+    items,
+    pickerStore,
+    query,
+    retryLoad,
+    sessionId,
+    slashScope,
+  ]);
 
   useEffect(() => {
     if (!active) return;

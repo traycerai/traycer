@@ -2,41 +2,31 @@ import type {
   CliInstallManifestSnapshot,
   HostAvailableSnapshot,
   HostInstalledRecord,
-  HostOperationKind,
-  HostProgressEvent,
+  HostNameSettings,
   HostRegistryUpdateState,
   LocalHostSnapshot,
+  MutationKind,
+  MutationLaneStatus,
   ServiceStatusSnapshot,
-} from "@traycer-clients/shared/platform/runner-host";
-import {
-  isConsentedHostChannelVersion,
-  isReleaseCandidateHostVersion,
 } from "@traycer-clients/shared/platform/runner-host";
 
 export const VERSION_LIST_PREVIEW = 10;
 
-/**
- * `host available --include-pre-releases` is deliberately broad for terminal
- * operators. The app picker is an RC-consent surface, so project its response
- * before it can be rendered or selected.
- */
-export function projectAppHostAvailableSnapshot(
-  snapshot: HostAvailableSnapshot,
-  includePreReleases: boolean,
-): HostAvailableSnapshot {
-  return {
-    ...snapshot,
-    versions: snapshot.versions.filter(
-      (entry) =>
-        isConsentedHostChannelVersion(entry.version) &&
-        (includePreReleases || !isReleaseCandidateHostVersion(entry.version)),
-    ),
-  };
-}
+// Renderer-facing alias so call sites don't reach for the wire type name
+// directly - this is the canonical mutation-lane status the progress banner
+// renders, unchanged in shape from `MutationLaneStatus`.
+export type HostProgressState = MutationLaneStatus;
 
-export interface HostProgressState {
-  readonly kind: HostOperationKind;
-  readonly event: HostProgressEvent;
+export function customNameFromDraft(
+  draftName: string,
+  settings: HostNameSettings | undefined,
+): string | null {
+  const normalized = draftName.trim().replace(/\s+/g, " ");
+  if (normalized.length === 0) return null;
+  if (settings !== undefined && normalized === settings.systemName) {
+    return null;
+  }
+  return normalized;
 }
 
 export function deriveStatus(
@@ -223,20 +213,30 @@ export function formatSource(source: HostInstalledRecord["source"]): string {
     : "Local file";
 }
 
-export function formatProgressKind(kind: HostOperationKind): string {
+export function formatProgressKind(kind: MutationKind): string {
   switch (kind) {
-    case "install":
-      return "Installing host";
-    case "update":
-      return "Updating host";
-    case "register-service":
-      return "Registering service";
     case "ensure":
       return "Setting up host";
-    case "restart":
+    case "apply":
+      return "Applying update";
+    case "activate":
+      return "Activating host";
+    case "install":
+      return "Installing version";
+    case "register":
+      return "Registering service";
+    case "deregister":
+      return "Deregistering service";
+    case "respawn":
       return "Restarting host";
-    case "free-port-and-restart":
-      return "Freeing port and restarting host";
+    case "recoverIfDown":
+      return "Recovering host";
+    case "freePortAndRestart":
+      return "Freeing port";
+    case "uninstallHost":
+      return "Uninstalling host";
+    case "removeTraycer":
+      return "Removing Traycer";
   }
 }
 

@@ -57,6 +57,7 @@
     "@xterm/addon-clipboard": "catalog:",
     "@xterm/addon-fit": "catalog:",
     "@xterm/addon-search": "catalog:",
+    "@xterm/addon-unicode11": "catalog:",
     "@xterm/addon-web-links": "catalog:",
     "@xterm/addon-webgl": "catalog:",
     "@xterm/xterm": "catalog:",

@@ -242,6 +242,82 @@ describe("desktop app updater", () => {
     expect(updater.isInstallingUpdate()).toBe(true);
   });
 
+  it("publishes the in-flight install to the renderer without leaving ready", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    const readySequence = updater.getAppUpdateSnapshot().sequence;
+    expect(updater.getAppUpdateSnapshot().installInFlight).toBe(false);
+
+    updater.installDownloadedUpdate();
+
+    // A successful install emits nothing further - it ends the process - so
+    // this is the renderer's only signal that the restart it asked for is
+    // under way, and the only thing that disarms the restart affordances.
+    // Status stays "ready": the artifact is still staged, and the updater's
+    // own "ready" guards key on that.
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      sequence: readySequence + 1,
+      status: "ready",
+      installInFlight: true,
+    });
+  });
+
+  it("ignores a repeat install request while one is already in flight", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    updater.installDownloadedUpdate();
+
+    // The quit is bounded but not instant, and the restart affordances live in
+    // every window - so a second request can arrive mid-quit. Status is still
+    // "ready" then, so the readiness guard can't catch it.
+    updater.installDownloadedUpdate();
+
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1);
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "ready",
+      installInFlight: true,
+    });
+  });
+
+  it("surfaces an install handoff that throws synchronously", async () => {
+    const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      autoUpdater.emit("update-available", { version: "2.0.0" });
+      return Promise.resolve(null);
+    });
+    await updater.installAutoUpdater(true, makeDeps(true));
+    await updater.checkForUpdatesNow(false, "automatic");
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    autoUpdater.quitAndInstall.mockImplementation(() => {
+      throw new Error("Cannot update while running on a read-only volume.");
+    });
+
+    updater.installDownloadedUpdate();
+
+    // A synchronous throw never reaches the "error" event, so without an
+    // explicit catch the renderer would never learn the install died - every
+    // restart affordance would stay disabled with no way back.
+    expect(updater.getAppUpdateSnapshot()).toMatchObject({
+      status: "error",
+      errorMessage:
+        "Move Traycer to your Applications folder to install updates.",
+      installInFlight: false,
+    });
+    expect(updater.isInstallingUpdate()).toBe(false);
+  });
+
   it("surfaces an install failure that arrives after the user chose Restart", async () => {
     const { autoUpdater, updater } = await loadUpdater(NOT_LINUX_GUIDANCE);
     autoUpdater.checkForUpdates.mockImplementation(() => {
@@ -266,6 +342,7 @@ describe("desktop app updater", () => {
       status: "error",
       errorMessage:
         "Move Traycer to your Applications folder to install updates.",
+      installInFlight: false,
     });
     expect(updater.isInstallingUpdate()).toBe(false);
   });

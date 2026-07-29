@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import { type SettingsSectionId } from "@/lib/settings-sections";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
@@ -28,22 +29,24 @@ export function SettingsModalContent(
   const { setSection } = useSystemTabModalActions();
   const section: SettingsSectionId = props.section ?? "general";
   return (
-    <div className="flex min-h-0 min-w-0 flex-1">
-      <SettingsSidebar
-        mode={{
-          kind: "modal",
-          activeSection: section,
-          onSelect: setSection,
-        }}
-      />
-      <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
-        <SettingsPanelForSection section={section} />
+    <SettingsDensityContext.Provider value="compact">
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <SettingsSidebar
+          mode={{
+            kind: "modal",
+            activeSection: section,
+            onSelect: setSection,
+          }}
+        />
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+          <SettingsPanelForSection section={section} />
+        </div>
       </div>
-    </div>
+    </SettingsDensityContext.Provider>
   );
 }
 
-function SettingsPanelForSection(props: {
+export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
   switch (props.section) {

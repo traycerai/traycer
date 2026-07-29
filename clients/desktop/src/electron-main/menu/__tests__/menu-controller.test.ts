@@ -99,14 +99,6 @@ class FakeHost extends EventEmitter implements IpcHostLifecycle {
   ensureWatcherInstalled(): void {
     this.ensureWatcherCalls += 1;
   }
-  async getServiceStatus(): Promise<{
-    state: "running" | "stopped" | "not-installed";
-    version: string | null;
-    listenUrl: string | null;
-    pid: number | null;
-  }> {
-    return { state: "running", version: null, listenUrl: null, pid: null };
-  }
   async installService(): Promise<void> {}
   async uninstallService(_purge: boolean): Promise<void> {}
   async startService(): Promise<void> {}

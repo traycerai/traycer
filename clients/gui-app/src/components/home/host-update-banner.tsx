@@ -1,60 +1,49 @@
 import { useMemo, useState } from "react";
 import { ArrowDownToLine, X } from "lucide-react";
-import {
-  queryOptions,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
-import {
-  runnerMutationKeys,
-  runnerQueryKeys,
-} from "@/lib/query-keys/runner-mutation-keys";
-import { toastFromRunnerError } from "@/lib/runner-error-toast";
-import { useRunnerHostOperationStatusQuery } from "@/hooks/runner/use-runner-host-operation-status-query";
+import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
 import { cn } from "@/lib/utils";
-import { useAllowPrereleaseUpdates } from "@/hooks/runner/use-desktop-app-updates";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import type {
-  HostInstallResult,
-  HostRegistryUpdateState,
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  BusyContinuation,
+  HostControllerStatus,
   IHostManagement,
+  MutationLaneStatus,
+  MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
+import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
+import { useRunnerApplyStaged } from "@/hooks/runner/use-runner-apply-staged-mutation";
+import { useRunnerActivateInstalled } from "@/hooks/runner/use-runner-activate-installed-mutation";
 import {
   HOST_UPDATE_BANNER_SNOOZE_MS,
   isHostUpdateBannerSnoozed,
   useHostUpdateBannerStore,
 } from "@/stores/settings/host-update-banner-store";
-import {
-  Analytics,
-  AnalyticsEvent,
-  hostUpdateAnalyticsCallbacks,
-} from "@/lib/analytics";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 interface HostUpdateBannerProps {
   readonly className: string | undefined;
 }
 
+// `pendingActivation`/`activationUnknown` render identically ("debt");
+// `"unavailable"` never renders debt UI here - that ambiguous state is the
+// gate's domain, not a banner affordance (Renderer surfaces cutover ticket).
+const ACTIVATION_DEBT_STATES: ReadonlySet<string> = new Set([
+  "pendingActivation",
+  "activationUnknown",
+]);
+
 /**
- * In-app host update banner (Flow 6). Reads the cached host
- * registry state via the same TanStack Query the Settings panel uses,
- * so the launch-time probe (`refreshRegistryUpdateState({ force:
- * false })`) feeds both the banner and Settings without an extra
- * probe. Clicking `Install` runs `traycer host update` through the
- * existing CLI-backed mutation. The banner hides itself when:
- *
- *   - no update is available
- *   - the registry probe failed (banner stays silent; Settings shows
- *     `Last checked: failed`)
- *   - `hostManagement` is null (mobile/web runners that don't
- *     bundle the CLI).
- *   - the user dismissed the banner with "Remind me later" within the
- *     last `HOST_UPDATE_BANNER_SNOOZE_MS` window for the current
- *     `latestVersion` (a newer release re-arms the banner because the
- *     snooze key is bound to the version string).
+ * In-app host update / activation-debt banner (Host Update Layer Redesign
+ * Tech Plan, D4). Driven entirely by the canonical two-lane
+ * `HostControllerStatus` - never the raw registry probe - so it never shows
+ * for a merely-detected update, only once a stage is `updateReady` or the
+ * host carries activation debt. A ready update supersedes debt (applying new
+ * bytes activates them too), so the two never render together.
  */
 export function HostUpdateBanner(props: HostUpdateBannerProps) {
   const runnerHost = useRunnerHost();
@@ -75,148 +64,422 @@ interface HostUpdateBannerInnerProps {
   readonly className: string | undefined;
 }
 
+type BannerIntent = "apply" | "activate";
+
+interface BusyState {
+  readonly intent: BannerIntent;
+  readonly continuation: BusyContinuation;
+  readonly message: string;
+}
+
+interface TerminalOutcomeState {
+  readonly intent: BannerIntent;
+  readonly message: string;
+}
+
 function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
-  const { management, className } = props;
-  const queryClient = useQueryClient();
-  const allowPrerelease = useAllowPrereleaseUpdates();
+  const { className } = props;
   const snoozeUntilByVersion = useHostUpdateBannerStore(
     (state) => state.snoozeUntilByVersion,
   );
   const snooze = useHostUpdateBannerStore((state) => state.snooze);
 
-  const { data: registryState } = useQuery(
-    queryOptions<HostRegistryUpdateState>({
-      queryKey: runnerQueryKeys.hostRegistryUpdate(management, allowPrerelease),
-      queryFn: () => management.registryCheck({ force: false }),
-      // Same TTL as Settings - both reuse the cached probe.
-      staleTime: 60 * 60 * 1000,
-    }),
-  );
+  const statusQuery = useRunnerHostControllerStatusQuery();
+  const status = statusQuery.data;
 
-  // Canonical cross-surface "is a host mutation running" status (Ticket:
-  // host-update-race-conditions) - shared with Settings → Host and any other
-  // open window via the same query key, so the button here disables and
-  // shows progress whether THIS banner, Settings, or the background
-  // auto-update reconciler is the one actually driving the update.
-  const { data: operationStatus } =
-    useRunnerHostOperationStatusQuery(management);
-  const sharedOperationActive =
-    operationStatus !== undefined && operationStatus !== null;
-  const sharedPercent =
-    operationStatus !== undefined && operationStatus !== null
-      ? operationStatus.percent
-      : null;
+  const [busy, setBusy] = useState<BusyState | null>(null);
+  const [terminalOutcome, setTerminalOutcome] =
+    useState<TerminalOutcomeState | null>(null);
 
-  const hostUpdateAnalytics = hostUpdateAnalyticsCallbacks("direct_ui");
-  const updateMutation = useMutation<HostInstallResult, Error, string>({
-    mutationKey: runnerMutationKeys.hostUpdate(),
-    // Progress is read from the shared `operationStatus` query above (it
-    // reflects the operation regardless of which surface started it), so
-    // this mutation doesn't need its own progress callback.
-    // `expectedVersion` is the version this banner is displaying: the shell
-    // refuses the install if the registry now resolves a different target.
-    mutationFn: (expectedVersion) =>
-      management.updateHost({ expectedVersion, onProgress: null }),
-    onMutate: () => {
-      hostUpdateAnalytics.onStarted();
-    },
-    onSuccess: (data) => {
-      hostUpdateAnalytics.onSucceeded();
-      toast.success(`Updated host to v${data.version}`);
-      // Drop any snooze entry recorded against the version the user just
-      // installed. We pull `clearSnooze` from the store via `getState()`
-      // (rather than subscribing) so this onSuccess is reused for any
-      // future variant of the banner without re-triggering renders just
-      // to acquire the action.
-      useHostUpdateBannerStore.getState().clearSnooze(data.version);
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostRegistryUpdateScope(management),
-      });
-      void queryClient.invalidateQueries({
-        queryKey: runnerQueryKeys.hostInstalledRecord(management),
-      });
-    },
-    onError: (err) => {
-      hostUpdateAnalytics.onFailed(err);
-      toastFromRunnerError(err, "Couldn't update host");
-    },
-  });
+  const applyStagedMutation = useRunnerApplyStaged();
+  const activateInstalledMutation = useRunnerActivateInstalled();
+
+  const handleApplyOutcome = (
+    outcome: MutationOutcome<ApplyStagedOk>,
+  ): void => {
+    applyMutationOutcome("apply", outcome, {
+      setBusy,
+      setTerminalOutcome,
+      onOk: (value) => {
+        toast.success(`Updated host to v${value.appliedVersion}`);
+        useHostUpdateBannerStore.getState().clearSnooze(value.appliedVersion);
+      },
+    });
+  };
+
+  const handleActivateOutcome = (
+    outcome: MutationOutcome<ActivateInstalledOk>,
+  ): void => {
+    applyMutationOutcome("activate", outcome, {
+      setBusy,
+      setTerminalOutcome,
+      onOk: () => {
+        toast.success("Host activated");
+      },
+    });
+  };
+
+  const runApply = (force: boolean): void => {
+    Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
+      source: "direct_ui",
+    });
+    applyStagedMutation.mutate(
+      { trigger: "manual", force },
+      { onSuccess: handleApplyOutcome },
+    );
+  };
+
+  const runActivate = (force: boolean): void => {
+    Analytics.getInstance().track(AnalyticsEvent.HostUpdateStarted, {
+      source: "direct_ui",
+    });
+    activateInstalledMutation.mutate(
+      { force },
+      { onSuccess: handleActivateOutcome },
+    );
+  };
 
   const nowMs = useHostUpdateNowMs();
-  const shouldShow = useMemo(() => {
-    if (registryState === undefined) return false;
-    if (!registryState.reachable) return false;
-    if (!registryState.updateAvailable) return false;
-    if (registryState.latestVersion === null) return false;
-    if (
-      isHostUpdateBannerSnoozed(
-        snoozeUntilByVersion,
-        registryState.latestVersion,
-        nowMs,
-      )
-    ) {
-      return false;
-    }
-    return true;
-  }, [snoozeUntilByVersion, registryState, nowMs]);
 
-  if (
-    !shouldShow ||
-    registryState === undefined ||
-    registryState.latestVersion === null
-  ) {
+  // Update-over-debt priority (Tech Plan): a ready update supersedes
+  // activation debt outright, since applying the new bytes activates them.
+  const { showUpdate, showDebt, offeredVersion, installedVersion } =
+    deriveOfferedVersion(status);
+  const snoozed =
+    terminalOutcome === null &&
+    offeredVersion !== null &&
+    isHostUpdateBannerSnoozed(snoozeUntilByVersion, offeredVersion, nowMs);
+
+  const shouldShow = useMemo(
+    () =>
+      terminalOutcome !== null ||
+      ((showUpdate || showDebt) && offeredVersion !== null && !snoozed),
+    [terminalOutcome, showUpdate, showDebt, offeredVersion, snoozed],
+  );
+
+  const mutationLane = status?.mutation ?? null;
+  const percent = deriveActivePercent(
+    mutationLane,
+    applyStagedMutation.isPending,
+    activateInstalledMutation.isPending,
+  );
+
+  if (!shouldShow) {
     return null;
   }
 
-  const latestVersion = registryState.latestVersion;
+  // Disables off the mutation lane only (never the download lane) - and off
+  // the SHARED lane, not just this banner's own mutations, so a mutation
+  // started from Settings, the tray/menu, or the background auto-update
+  // reconciler disables this banner's button too (the exclusive mutation
+  // lane can only run one intent system-wide at a time).
+  const isPending =
+    applyStagedMutation.isPending ||
+    activateInstalledMutation.isPending ||
+    mutationLane !== null;
+
+  const handleForce = (): void => {
+    resolveForceAction(busy, runApply, runActivate);
+  };
+
+  const forceDialogProps = deriveForceDialogProps(busy);
+  const bannerAriaLabel = deriveBannerAriaLabel(
+    terminalOutcome,
+    offeredVersion,
+  );
+  const bannerClassName = deriveBannerClassName(terminalOutcome, className);
 
   return (
-    <output
-      aria-label={`Traycer host update available: ${latestVersion}`}
-      data-testid="host-update-banner"
-      className={cn(
-        "flex items-center gap-2 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-ui-sm text-sky-950 dark:text-sky-100",
-        className,
-      )}
-    >
+    <>
+      <HostBusyForceDeferDialog
+        open={busy !== null}
+        message={forceDialogProps.message}
+        isForcing={isPending}
+        forceLabel={forceDialogProps.forceLabel}
+        onForce={handleForce}
+        onDefer={() => {
+          setBusy(null);
+        }}
+      />
+      <output
+        aria-label={bannerAriaLabel}
+        data-testid="host-update-banner"
+        className={bannerClassName}
+      >
+        {terminalOutcome !== null ? (
+          <TerminalOutcomeContent
+            terminalOutcome={terminalOutcome}
+            isPending={isPending}
+            onRetry={() => {
+              setTerminalOutcome(null);
+              if (terminalOutcome.intent === "apply") {
+                runApply(false);
+              } else {
+                runActivate(false);
+              }
+            }}
+            onDismiss={() => {
+              setTerminalOutcome(null);
+            }}
+          />
+        ) : (
+          <UpdateOrDebtContent
+            showUpdate={showUpdate}
+            offeredVersion={offeredVersion}
+            installedVersion={installedVersion}
+            isPending={isPending}
+            percent={percent}
+            onAction={() => {
+              if (showUpdate) {
+                runApply(false);
+              } else {
+                runActivate(false);
+              }
+            }}
+            onSnooze={() => {
+              if (offeredVersion === null) return;
+              snooze(offeredVersion, getHostUpdateSnoozeUntilMs());
+              Analytics.getInstance().track(AnalyticsEvent.HostUpdateSnoozed, {
+                source: "direct_ui",
+              });
+            }}
+          />
+        )}
+      </output>
+    </>
+  );
+}
+
+interface MutationOutcomeActions<TOk> {
+  readonly setBusy: (busy: BusyState | null) => void;
+  readonly setTerminalOutcome: (outcome: TerminalOutcomeState | null) => void;
+  readonly onOk: (value: TOk) => void;
+}
+
+function applyMutationOutcome<TOk>(
+  intent: BannerIntent,
+  outcome: MutationOutcome<TOk>,
+  actions: MutationOutcomeActions<TOk>,
+): void {
+  if (outcome.kind === "ok") {
+    Analytics.getInstance().track(AnalyticsEvent.HostUpdateSucceeded, null);
+    actions.onOk(outcome.value);
+    actions.setBusy(null);
+    actions.setTerminalOutcome(null);
+    return;
+  }
+  if (outcome.kind === "busy") {
+    actions.setBusy({
+      intent,
+      continuation: outcome.continuation,
+      message: outcome.message,
+    });
+    return;
+  }
+  Analytics.getInstance().track(AnalyticsEvent.HostUpdateFailed, {
+    blocker: "unknown",
+  });
+  actions.setBusy(null);
+  actions.setTerminalOutcome({ intent, message: outcome.message });
+}
+
+function resolveForceAction(
+  busy: BusyState | null,
+  runApply: (force: boolean) => void,
+  runActivate: (force: boolean) => void,
+): void {
+  if (busy === null) return;
+  if (busy.continuation === "activate" || busy.intent === "activate") {
+    runActivate(true);
+    return;
+  }
+  runApply(true);
+}
+
+function deriveOfferedVersion(status: HostControllerStatus | undefined): {
+  readonly showUpdate: boolean;
+  readonly showDebt: boolean;
+  readonly offeredVersion: string | null;
+  readonly installedVersion: string | null;
+} {
+  if (status === undefined) {
+    return {
+      showUpdate: false,
+      showDebt: false,
+      offeredVersion: null,
+      installedVersion: null,
+    };
+  }
+  const showUpdate = status.updateReady;
+  const showDebt =
+    !status.updateReady && ACTIVATION_DEBT_STATES.has(status.activation);
+  let offeredVersion: string | null = null;
+  if (showUpdate) {
+    offeredVersion = status.stagedVersion;
+  } else if (showDebt) {
+    offeredVersion = status.installedVersion;
+  }
+  return {
+    showUpdate,
+    showDebt,
+    offeredVersion,
+    installedVersion: status.installedVersion,
+  };
+}
+
+interface ForceDialogProps {
+  readonly message: string;
+  readonly forceLabel: string;
+}
+
+function deriveForceDialogProps(busy: BusyState | null): ForceDialogProps {
+  if (busy === null) {
+    return { message: "", forceLabel: "Force update" };
+  }
+  return {
+    message: busy.message,
+    forceLabel:
+      busy.continuation === "activate" ? "Force restart" : "Force update",
+  };
+}
+
+function deriveBannerAriaLabel(
+  terminalOutcome: TerminalOutcomeState | null,
+  offeredVersion: string | null,
+): string {
+  if (terminalOutcome !== null) {
+    return `Traycer host update failed: ${terminalOutcome.message}`;
+  }
+  return `Traycer host update available: ${offeredVersion ?? ""}`;
+}
+
+function deriveBannerClassName(
+  terminalOutcome: TerminalOutcomeState | null,
+  className: string | undefined,
+): string {
+  const stateClassName =
+    terminalOutcome !== null
+      ? "border-destructive/30 bg-destructive/10 text-destructive"
+      : "border-sky-500/30 bg-sky-500/10 text-sky-950 dark:text-sky-100";
+  return cn(
+    "flex items-center gap-2 rounded-md border px-3 py-2 text-ui-sm",
+    stateClassName,
+    className,
+  );
+}
+
+function deriveActivePercent(
+  mutationLane: MutationLaneStatus | null,
+  applyPending: boolean,
+  activatePending: boolean,
+): number | null {
+  if (applyPending && mutationLane?.kind === "apply") {
+    return mutationLane.progress?.percent ?? null;
+  }
+  if (activatePending && mutationLane?.kind === "activate") {
+    return mutationLane.progress?.percent ?? null;
+  }
+  return null;
+}
+
+interface TerminalOutcomeContentProps {
+  readonly terminalOutcome: TerminalOutcomeState;
+  readonly isPending: boolean;
+  readonly onRetry: () => void;
+  readonly onDismiss: () => void;
+}
+
+function TerminalOutcomeContent(props: TerminalOutcomeContentProps) {
+  return (
+    <>
+      <span
+        className="min-w-0 flex-1"
+        data-testid="host-update-banner-deferred"
+      >
+        {props.terminalOutcome.message}
+      </span>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={props.isPending}
+        onClick={props.onRetry}
+        data-testid="host-update-banner-retry"
+      >
+        Retry
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Dismiss"
+        className="text-current hover:bg-destructive/15 hover:text-current"
+        onClick={props.onDismiss}
+      >
+        <X className="size-3" aria-hidden />
+      </Button>
+    </>
+  );
+}
+
+interface UpdateOrDebtContentProps {
+  readonly showUpdate: boolean;
+  readonly offeredVersion: string | null;
+  readonly installedVersion: string | null;
+  readonly isPending: boolean;
+  readonly percent: number | null;
+  readonly onAction: () => void;
+  readonly onSnooze: () => void;
+}
+
+function UpdateOrDebtContent(props: UpdateOrDebtContentProps) {
+  return (
+    <>
       <ArrowDownToLine className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1">
-        A new Traycer host is available:{" "}
-        <span className="font-mono">{latestVersion}</span>
-        {registryState.installedVersion !== null ? (
+        {props.showUpdate ? (
           <>
-            {" "}
-            (installed:{" "}
-            <span className="font-mono">{registryState.installedVersion}</span>)
+            A new Traycer host is available:{" "}
+            <span className="font-mono">{props.offeredVersion}</span>
+            {props.installedVersion !== null ? (
+              <>
+                {" "}
+                (installed:{" "}
+                <span className="font-mono">{props.installedVersion}</span>)
+              </>
+            ) : null}
+            .
           </>
-        ) : null}
-        .
+        ) : (
+          "Update installed — restart host to finish."
+        )}
       </span>
       <Button
         type="button"
         size="sm"
         variant="default"
-        disabled={updateMutation.isPending || sharedOperationActive}
-        onClick={() => updateMutation.mutate(latestVersion)}
+        disabled={props.isPending}
+        onClick={props.onAction}
+        data-testid="host-update-banner-action"
       >
-        {updateMutation.isPending || sharedOperationActive ? (
+        {props.isPending ? (
           <>
             <AgentSpinningDots
               className="mr-2 size-3"
               testId={undefined}
               variant={undefined}
             />
-            {sharedPercent !== null ? (
+            {props.percent !== null ? (
               <span
                 className="mr-2 font-mono text-code-xs tabular-nums"
                 data-testid="host-update-banner-progress-percent"
               >
-                {Math.max(0, Math.min(100, Math.round(sharedPercent)))}%
+                {Math.max(0, Math.min(100, Math.round(props.percent)))}%
               </span>
             ) : null}
           </>
         ) : null}
-        Install
+        {props.showUpdate ? "Update now" : "Restart host"}
       </Button>
       <Button
         type="button"
@@ -225,16 +488,11 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         aria-label="Remind me later"
         data-testid="host-update-banner-snooze"
         className="text-current hover:bg-sky-500/15 hover:text-current"
-        onClick={() => {
-          snooze(latestVersion, getHostUpdateSnoozeUntilMs());
-          Analytics.getInstance().track(AnalyticsEvent.HostUpdateSnoozed, {
-            source: "direct_ui",
-          });
-        }}
+        onClick={props.onSnooze}
       >
         <X className="size-3" aria-hidden />
       </Button>
-    </output>
+    </>
   );
 }
 

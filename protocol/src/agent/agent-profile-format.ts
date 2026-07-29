@@ -140,6 +140,33 @@ function formatProviderRateLimits(rateLimits: ProviderRateLimits): string {
       `spend: ${formatNumber(rateLimits.dailySpend)} today, ${formatNumber(rateLimits.weeklySpend)} this week, ${formatNumber(rateLimits.monthlySpend)} this month`,
     ].join("\n");
   }
+  if (rateLimits.provider === "grok") {
+    return [
+      `tier: ${rateLimits.subscriptionTier ?? "unknown"}`,
+      formatWindowLine(
+        rateLimits.periodType === null
+          ? "period"
+          : `period (${rateLimits.periodType})`,
+        rateLimits.period,
+      ),
+      rateLimits.period !== null ||
+      rateLimits.periodStart === null ||
+      rateLimits.periodEnd === null
+        ? null
+        : `billing period: ${formatTimestamp(rateLimits.periodStart)} - ${formatTimestamp(rateLimits.periodEnd)}`,
+      rateLimits.onDemandCap === null && rateLimits.onDemandUsed === null
+        ? null
+        : `on-demand: ${formatNumber(rateLimits.onDemandUsed)}/${formatNumber(rateLimits.onDemandCap)} used`,
+      rateLimits.prepaidBalance === null
+        ? null
+        : `prepaid balance: ${formatNumber(rateLimits.prepaidBalance)}`,
+      rateLimits.monthlyLimit === null
+        ? null
+        : `monthly limit: ${formatNumber(rateLimits.monthlyLimit)}`,
+    ]
+      .filter((line): line is string => line !== null)
+      .join("\n");
+  }
   return [
     `credit balance: ${formatNumber(rateLimits.creditBalance)}`,
     `pass: ${rateLimits.passState ?? "unknown"}`,

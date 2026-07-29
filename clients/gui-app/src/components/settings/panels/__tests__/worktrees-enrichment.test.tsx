@@ -284,10 +284,10 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         },
       }),
     });
-    client.bind(mockLocalHostEntry);
     client.setRequestContext(
       createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
     );
+    client.bind(mockLocalHostEntry);
     const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
       <QueryClientProvider client={queryClient}>
         {props.children}

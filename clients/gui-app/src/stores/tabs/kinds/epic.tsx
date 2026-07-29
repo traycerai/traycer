@@ -1,15 +1,24 @@
+import { createElement, lazy } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import {
-  epicHasUnsyncedEdits,
-  releaseOpenEpicSessionIfUnused,
-} from "@/lib/registries/epic-session-registry";
+import { epicHasUnsyncedEdits } from "@/lib/registries/epic-session-registry";
 import { buildNestedFocusSearchPatch } from "@/lib/epic-nested-focus-route";
 import { epicPathname, epicTabRoute } from "@/lib/routes";
 import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
 import { duplicateEpicTab } from "@/lib/commands/actions/duplicate-tab";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import type { TabKindModule } from "@/stores/tabs/types";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import {
+  isTabCloseLocked,
+  isTabStructurallyLocked,
+} from "@/stores/tabs/tab-structural-lock";
+
+const epicSurface = lazy(() =>
+  import("@/components/epic-tabs/epic-surface").then((module) => ({
+    default: module.EpicSurface,
+  })),
+);
 
 /**
  * Module for `kind: "epic"` tabs. Data lives in the epic-canvas
@@ -19,19 +28,45 @@ import type { TabKindModule } from "@/stores/tabs/types";
  */
 export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
   kind: "epic",
-  build: (source) => ({
-    kind: "epic",
-    id: source.tabId,
-    epicId: source.epicId,
-    route: epicPathname({ tabId: source.tabId, epicId: source.epicId }),
-    name: source.name,
-    icon: null,
-    canDuplicate: true,
-    canOpenInNewWindow: true,
-  }),
+  build: (source) => {
+    const closeLocked = isTabCloseLocked({
+      kind: "epic",
+      id: source.tabId,
+    });
+    const structurallyLocked = isTabStructurallyLocked({
+      kind: "epic",
+      id: source.tabId,
+    });
+    return {
+      kind: "epic",
+      id: source.tabId,
+      epicId: source.epicId,
+      route: epicPathname({ tabId: source.tabId, epicId: source.epicId }),
+      name: source.name,
+      icon: null,
+      canClose: !closeLocked,
+      canDuplicate: !structurallyLocked,
+      canOpenInNewWindow: !structurallyLocked,
+    };
+  },
   descriptor: {
     kind: "epic",
+    surface: {
+      render: (tab) =>
+        createElement(epicSurface, { epicId: tab.epicId, tabId: tab.id }),
+      canonicalRoute: (tab) => tab.route,
+      splitEligibility: "eligible",
+      duplication: "allowed",
+      singleton: "per-instance",
+      newWindow: "move",
+      // T11 adds a durable per-Epic host binding. Until then the session
+      // provider resolves through the renderer default host, so readiness must
+      // use that same scope rather than inventing a tile-derived binding.
+      readinessScope: "default-host",
+      durableState: { owner: "epic-canvas", eviction: "reconstruct" },
+    },
     duplicate: (tab) => {
+      if (isTabStructurallyLocked({ kind: "epic", id: tab.id })) return null;
       const duplicated = duplicateEpicTab(tab.id);
       if (duplicated === null) return null;
       return existingEpicTabIntent({
@@ -64,11 +99,14 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       useEpicCanvasStore.getState().setActiveTab(intent.tabId);
     },
     requestClose: (tab) => {
-      useEpicCanvasStore.getState().closeTab(tab.id);
-      releaseOpenEpicSessionIfUnused(tab.epicId);
+      tabCommandCoordinator.closeRefAfterConfirmed({
+        kind: "epic",
+        id: tab.id,
+      });
     },
     requiresCloseConfirm: (tab) => epicHasUnsyncedEdits(tab.epicId),
     openInNewWindow: (tab, deps) => {
+      if (isTabStructurallyLocked({ kind: "epic", id: tab.id })) return;
       deps.epicFlow.requestOpenInNewWindow({
         epicId: tab.epicId,
         tabId: tab.id,

@@ -6,10 +6,6 @@ import {
 import { useId, useMemo } from "react";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import {
-  resolveTabIdForEpic,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
-import {
   CHAT_ARTIFACT_DND_TYPE,
   getChatArtifactDragId,
   type EpicCanvasChatArtifactDragData,
@@ -31,15 +27,12 @@ export interface ArtifactDragIdentity {
  * Shared artifact drag-source wiring for artifact references rendered outside
  * the sidebar tree - chat artifact cards, inline reference chips, and artifact
  * child-index rows. Owns the common core: the occurrence-unique drag id, the
- * pure `viewTabId` resolution, the stable identity->payload memo, and the
+ * exact owning `viewTabId`, the stable identity->payload memo, and the
  * `useDraggable` registration. Each caller keeps its own eligibility gate
  * (`enabled`) and attaches the returned wiring to its own element.
  *
- * - C1: `viewTabId` comes from the NON-side-effecting `resolveTabIdForEpic` read
- *   reactively via a selector when the caller does not already have a tab id -
- *   never `resolveTargetTabForEpic`, which mutates tab state and must not run
- *   during render. A `null` result (no open tab for the epic) makes the source
- *   non-draggable.
+ * - C1: callers supply their exact owning `viewTabId`; a missing owner makes the
+ *   source non-draggable rather than resolving globally to an active/MRU tab.
  * - C2: the payload carries identity only; the `instanceId` is minted per drop
  *   at commit time, so it is absent here.
  * - C3: the drag id keys on `useId()`, not the artifact id, because the same
@@ -47,7 +40,7 @@ export interface ArtifactDragIdentity {
  */
 export function useArtifactDragSource(args: {
   readonly epicId: string | undefined;
-  readonly viewTabId: string | null | undefined;
+  readonly viewTabId: string | null;
   readonly identity: ArtifactDragIdentity | null;
   readonly enabled: boolean;
 }): {
@@ -57,19 +50,9 @@ export function useArtifactDragSource(args: {
   readonly attributes: DraggableAttributes;
   readonly isDragging: boolean;
 } {
-  const { epicId, viewTabId: providedViewTabId, identity, enabled } = args;
+  const { epicId, viewTabId, identity, enabled } = args;
   // C3 - occurrence-unique drag id.
   const occurrenceId = useId();
-  // C1 - pure resolver read reactively via a selector; `null` => non-draggable.
-  const resolvedViewTabId = useEpicCanvasStore((state) =>
-    providedViewTabId !== undefined ||
-    epicId === undefined ||
-    epicId.length === 0
-      ? null
-      : resolveTabIdForEpic(state, epicId),
-  );
-  const viewTabId =
-    providedViewTabId === undefined ? resolvedViewTabId : providedViewTabId;
   // Depend the memo on the identity's PRIMITIVE fields, not the object: a caller
   // may hand a fresh identity object every render (e.g. a ref that mints a new
   // `instanceId`), and `useDraggable` must not see a new `data` reference each

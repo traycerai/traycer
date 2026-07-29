@@ -282,8 +282,9 @@ describe("<FileTreeWorkspacePicker />", () => {
     expect(onSelectPath).toHaveBeenCalledWith("/work/notes");
   });
 
-  // Once the host RESOLVES the worktree as gone, "missing" is a fact again.
-  it("keeps the destructive missing badge for a resolved missing worktree", () => {
+  // Once the host RESOLVES the worktree as gone, "missing" is a fact - the
+  // dead row is hidden from this browse picker rather than shown as noise.
+  it("hides a resolved missing worktree that is not the current selection", () => {
     const missingWorktree: WorktreeBindingSelectorRowV12 = {
       ...makeRows()[1],
       isGitRepo: false,
@@ -296,6 +297,26 @@ describe("<FileTreeWorkspacePicker />", () => {
       isError: false,
     };
     openPicker(null, () => undefined);
+
+    expect(screen.queryByRole("option", { name: /feature-x/i })).toBeNull();
+  });
+
+  // The current selection is exempt from hiding: a root deleted while
+  // selected keeps its labeled row (with the destructive badge) instead of
+  // silently vanishing out from under the user.
+  it("keeps the destructive missing badge on the selected missing worktree", () => {
+    const missingWorktree: WorktreeBindingSelectorRowV12 = {
+      ...makeRows()[1],
+      isGitRepo: false,
+      disabledReason: "missing_worktree_path",
+      isGitResolvePending: false,
+    };
+    listQuery.current = {
+      data: { rows: [missingWorktree] },
+      isPending: false,
+      isError: false,
+    };
+    openPicker(missingWorktree.runningDir, () => undefined);
 
     const worktreeOption = screen.getByRole("option", { name: /feature-x/i });
     expect(within(worktreeOption).getByText("missing")).toBeDefined();

@@ -36,6 +36,17 @@
  * - `artifactRoomAwareness` - awareness update for a artifact-room doc.
  * - `artifactRoomState`     - unavailable/retrying/ready state for a artifactRoom. Text-only.
  *                    Drives the GUI's per-artifact body availability UI.
+ * - `dirtySnapshot`         - **@1.1 only** - atomic per-subscription dirtiness
+ *                    snapshot: `rootDirty` plus every live room's dirty
+ *                    boolean (including clean rooms). Receipt of this one
+ *                    frame *is* snapshot completion. Emitted once per
+ *                    subscribe / resubscribe cycle.
+ * - `artifactRoomDirty`     - **@1.1 only** - transition delta for one room
+ *                    after the cycle's `dirtySnapshot`. Text-only.
+ * - `rootDirty`             - **@1.1 only** - transition delta for the root
+ *                    doc after the cycle's `dirtySnapshot`. Same composition
+ *                    as per-room dirty (unsynced provider ∨ unflushed buffer
+ *                    ∨ retained pending row).
  *
  * Client frames:
  *
@@ -51,58 +62,16 @@
  * change and would need a new major.
  */
 import { z } from "zod";
-import {
-  defineStreamRpcContract,
-} from "@traycer/protocol/framework/versioned-stream-rpc";
+import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 
-/**
- * Awareness state field under which each host publishes the ids of its
- * locally-working agents (the `hasActivity` level) for an epic. The cloud-merged
- * awareness (one entry per host) is the cross-host union, so a client sees
- * working agents regardless of which host runs them. Written by the host's
- * per-epic awareness publisher; read by the gui-app Active Agents panel. Shared
- * here so writer and reader cannot drift.
- */
-export const AGENT_WORKING_AWARENESS_FIELD = "agentWorking";
-
-/**
- * Awareness state field under which each host publishes the subset of its
- * {@link AGENT_WORKING_AWARENESS_FIELD} ids whose work is an actual agent
- * **turn** (running or activating), as opposed to background-only work
- * (`run_in_background` / a subagent / Monitor / a scheduled wakeup) that keeps
- * a session non-idle while the agent itself is not executing.
- *
- * Additive and OPTIONAL by design. Awareness rides an opaque binary payload
- * (the `awareness` frame is `hasBinaryPayload: true`), so this value is NOT
- * schema-validated and is NOT covered by the stream contract's
- * `major`/`minor` negotiation - a reader cannot learn from the handshake
- * whether its peer publishes this field. Two rules follow, and both are
- * load-bearing:
- *
- * 1. NEVER change the shape of `agentWorking` itself. Existing readers do
- *    `Array.isArray(...)` on it and skip the whole entry otherwise, so
- *    repurposing it makes agents silently vanish from the working set on older
- *    clients.
- * 2. Absence is per-HOST, and must be read that way. Cloud-merged awareness
- *    carries one entry per host, so a single client can see an old host (field
- *    absent) and a new host (field present) simultaneously - indefinitely, not
- *    just during a rollout. Readers must therefore decide per entry:
- *      - field absent  -> tier unknown for that host; treat its working ids
- *                         conservatively as turns (the pre-existing behaviour).
- *      - field present -> ids listed here are turns; working ids NOT listed
- *                         here are genuinely background-only.
- *
- * Because "turn" is the conservative default, a publisher only needs to list
- * ids it can positively classify; agents with no turn/background distinction
- * (terminal agents, CLI/TUI runs) simply stay in the turn set.
- */
-export const AGENT_WORKING_TURN_AWARENESS_FIELD = "agentWorkingTurn";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 
 const permissionRoleSchema = getRecordSchema(
   commonRecordRegistry,
-  "permission-role", "latest");
+  "permission-role",
+  "latest",
+);
 import {
   earlyMetaEpicSchema,
   snapshotMetaEpicSchema,
@@ -124,7 +93,9 @@ export const epicArtifactRoomAvailabilitySchema = z.enum([
   "unavailable",
   "retrying",
 ]);
-export type EpicArtifactRoomAvailability = z.infer<typeof epicArtifactRoomAvailabilitySchema>;
+export type EpicArtifactRoomAvailability = z.infer<
+  typeof epicArtifactRoomAvailabilitySchema
+>;
 
 /**
  * Coarse phase reported alongside `migrationProgress` frames. The renderer
@@ -156,7 +127,14 @@ export const epicCloudSyncStatusSchema = z.enum([
 ]);
 export type EpicCloudSyncStatus = z.infer<typeof epicCloudSyncStatusSchema>;
 
-export const epicSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
+// ─── Frozen `epic.subscribe@1.0` server-frame set (as shipped) ────────────
+//
+// IMMUTABLE. A renderer that negotiated @1.0 agreed to exactly these frame
+// kinds, so this array must never learn a new one - sending a peer a frame it
+// did not negotiate is the host breaking the contract, not a "graceful"
+// degrade the peer happens to drop. New frames go on a new minor's union
+// below, and the host gates their emission on the NEGOTIATED version.
+const epicSubscribeSharedServerFrameSchemasV10 = [
   z.object({
     kind: z.literal("snapshot"),
     epicId: z.string(),
@@ -317,7 +295,100 @@ export const epicSubscribeServerFrameSchema = z.discriminatedUnion("kind", [
     deletedByTraycerUserId: z.string().nullable(),
     hasBinaryPayload: z.literal(false),
   }),
+] as const;
+
+export const epicSubscribeServerFrameSchemaV10 = z.discriminatedUnion(
+  "kind",
+  epicSubscribeSharedServerFrameSchemasV10,
+);
+
+/**
+ * Per-artifact-room sync-state signal: the room holds local work the host's
+ * cloud connection has not acknowledged (unsynced provider updates, an
+ * unflushed in-memory buffer, or a retained durable pending row).
+ *
+ * A SEPARATE dimension from {@link epicArtifactRoomAvailabilitySchema}, and a
+ * separate frame for that reason. Availability answers "is this body
+ * materialized and usable"; this answers "is there work in it the cloud has
+ * not taken". Artifact rooms are local-first - a room stays `ready` across a
+ * websocket drop and keeps accepting edits - so the two dimensions move
+ * independently, and folding `dirty` onto `artifactRoomState` would force the
+ * host to restate an availability it did not re-derive every time dirtiness
+ * flapped.
+ *
+ * NOT per-room offline: every room of an epic is multiplexed onto that epic's
+ * single websocket (`shardKey = epicId`), so per-room offline is degenerate.
+ * Offline is an epic-level fact and stays on the `cloudSyncStatus` frame.
+ *
+ * Transition delta after the cycle's {@link epicSubscribeDirtySnapshotServerFrameSchema}.
+ * Within a negotiated `@1.1` session, **absence means clean only after that
+ * cycle's `dirtySnapshot` has been received**. Pre-snapshot silence is not
+ * clean (A1 / finding 10): under-reporting dirtiness is the dangerous
+ * direction for the sync pill.
+ *
+ * Absence is NOT correct degradation against a pre-@1.1 host that never emits
+ * these frames: that host may still hold unacknowledged bytes. A @1.1 client
+ * against an old host must treat dirtiness as **unknown**, not clean. Gate on
+ * negotiated version / frame support instead.
+ */
+const epicSubscribeArtifactRoomDirtyServerFrameSchema = z.object({
+  kind: z.literal("artifactRoomDirty"),
+  epicId: z.string(),
+  artifactRoomId: z.string().min(1),
+  dirty: z.boolean(),
+  hasBinaryPayload: z.literal(false),
+});
+
+/**
+ * Root-doc transition delta after the cycle's `dirtySnapshot`. Same three-term
+ * composition as per-room dirtiness (provider unsynced ∨ unflushed buffer ∨
+ * retained pending row).
+ */
+const epicSubscribeRootDirtyServerFrameSchema = z.object({
+  kind: z.literal("rootDirty"),
+  epicId: z.string(),
+  dirty: z.boolean(),
+  hasBinaryPayload: z.literal(false),
+});
+
+/**
+ * Atomic per-subscription dirtiness snapshot for `@1.1`.
+ *
+ * Emitted **once per subscribe / resubscribe cycle**. Enumerates root dirty
+ * plus every live room (including clean ones). Receipt of this single frame
+ * *is* snapshot completion — no sentinel frame and no ordering contract on
+ * N separate per-room frames. After this, transitions use
+ * `artifactRoomDirty` / `rootDirty` deltas.
+ */
+const epicSubscribeDirtySnapshotServerFrameSchema = z.object({
+  kind: z.literal("dirtySnapshot"),
+  epicId: z.string(),
+  rootDirty: z.boolean(),
+  rooms: z.array(
+    z.object({
+      artifactRoomId: z.string().min(1),
+      dirty: z.boolean(),
+    }),
+  ),
+  hasBinaryPayload: z.literal(false),
+});
+
+// ─── `epic.subscribe@1.1` - additive: dirtySnapshot + dirty deltas ────────
+//
+// Adds `dirtySnapshot`, `artifactRoomDirty`, and `rootDirty`. @1.0 stays
+// installed and FROZEN: a renderer that negotiated it never receives the new
+// kinds, and the resolver gates on the negotiated version rather than assuming
+// the peer will tolerate an unknown frame. Both minors share the same V10 base
+// array so the frozen set cannot drift.
+export const epicSubscribeServerFrameSchemaV11 = z.discriminatedUnion("kind", [
+  ...epicSubscribeSharedServerFrameSchemasV10,
+  epicSubscribeDirtySnapshotServerFrameSchema,
+  epicSubscribeArtifactRoomDirtyServerFrameSchema,
+  epicSubscribeRootDirtyServerFrameSchema,
 ]);
+
+/** The latest installed shape. Host code builds frames against this. */
+export const epicSubscribeServerFrameSchema = epicSubscribeServerFrameSchemaV11;
 export type EpicSubscribeServerFrame = z.infer<
   typeof epicSubscribeServerFrameSchema
 >;
@@ -369,6 +440,14 @@ export const epicSubscribeV10 = defineStreamRpcContract({
   method: "epic.subscribe",
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: epicSubscribeOpenRequestSchema,
-  serverFrameSchema: epicSubscribeServerFrameSchema,
+  serverFrameSchema: epicSubscribeServerFrameSchemaV10,
+  clientFrameSchema: epicSubscribeClientFrameSchema,
+});
+
+export const epicSubscribeV11 = defineStreamRpcContract({
+  method: "epic.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: epicSubscribeOpenRequestSchema,
+  serverFrameSchema: epicSubscribeServerFrameSchemaV11,
   clientFrameSchema: epicSubscribeClientFrameSchema,
 });

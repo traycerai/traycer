@@ -48,7 +48,10 @@ import { ProviderRateLimitForProvider } from "./provider-rate-limit-section";
 import { ProviderMcpTab } from "./provider-mcp-tab";
 import { ProviderPluginsTab } from "./provider-plugins-tab";
 import { ProviderSkillsTab } from "./provider-skills-tab";
-import { isRateLimitCapableProvider } from "@/lib/rate-limit-providers";
+import {
+  isRateLimitCapableProvider,
+  resolveRateLimitFetchEligibility,
+} from "@/lib/rate-limit-providers";
 import {
   AddProviderProfileDialog,
   type FailedProviderProfileAttempt,
@@ -60,6 +63,7 @@ import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 type ProviderId = ProviderCliState["providerId"];
 type ProvidersListQuery = UseQueryResult<
   ResponseOfMethod<HostRpcRegistry, "providers.list">,
@@ -169,7 +173,7 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   codex: "OpenAI's Codex CLI.",
   opencode: "OpenCode CLI agent.",
   cursor:
-    "Cursor agent - SDK-driven chats authenticated with your Cursor API key.",
+    "Cursor coding agent - SDK-driven agents authenticated with your Cursor API key.",
   traycer: "Traycer's managed harness uses the selected OpenCode CLI binary.",
   openrouter:
     "OpenRouter - OpenAI-compatible gateway authenticated with your OpenRouter API key.",
@@ -186,6 +190,8 @@ const PROVIDER_DESCRIPTIONS: Record<ProviderId, string> = {
   devin:
     "Devin agent - Cognition's coding CLI via Windsurf/Devin login or API key.",
   pi: "Pi agent - pi.dev coding agent via your configured model API key (BYOK).",
+  hermes: "Hermes Agent - Nous Research's coding CLI via your Hermes account.",
+  omp: "Oh My Pi - can1357's coding CLI via your linked provider subscriptions.",
 };
 
 function hasPendingProviderProbe(
@@ -349,7 +355,7 @@ function ProvidersSettingsPanelInner({
   return (
     <SettingsPanelShell
       title="Providers"
-      description="Choose the CLI binary Traycer runs for each agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it from new chats."
+      description="Choose the CLI binary Traycer runs for each coding agent. Pick the bundled binary, one found on your PATH, or a custom install. Disable a provider to hide it when creating an agent."
       fillHeight
       bodyClassName="max-h-[min(85vh,52rem)]"
       headerAction={
@@ -548,18 +554,26 @@ function ProviderEnableSwitch(props: {
   const { id, providerId, enabled, isPending, onSetEnabled } = props;
   const disablingLast = enabled && props.enabledProviderCount <= 1;
   return (
-    <Switch
-      id={id}
-      checked={enabled}
-      onCheckedChange={(next) => {
-        if (isPending || (!next && disablingLast)) return;
-        onSetEnabled(providerId, next);
-      }}
-      disabled={isPending || disablingLast}
-      title={
-        disablingLast ? "At least one provider must stay enabled." : undefined
-      }
-    />
+    <TooltipWrapper
+      label={disablingLast ? "At least one provider must stay enabled." : null}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* Guard span: the Switch is `disabled` in exactly the state this
+          explains, and a disabled control emits no pointer events. */}
+      <span className="inline-flex">
+        <Switch
+          id={id}
+          checked={enabled}
+          onCheckedChange={(next) => {
+            if (isPending || (!next && disablingLast)) return;
+            onSetEnabled(providerId, next);
+          }}
+          disabled={isPending || disablingLast}
+        />
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -797,6 +811,7 @@ function ProviderTabBody({
             providerId={state.providerId}
             profileId={null}
             usageUpdatedAt={null}
+            fetchEligible={resolveRateLimitFetchEligibility(state).ambient}
           />
         </div>
       );

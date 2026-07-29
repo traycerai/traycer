@@ -21,8 +21,7 @@ export interface MenuState {
   readonly canOpenDevTools: boolean;
   // The launch-time host-registry probe surfaces an available version
   // here when an upgrade is queued (Flow 6). `null` means no update is
-  // pending. The tray menu uses it to insert an "Update available - Install"
-  // row; the macOS app menu does not currently surface it.
+  // pending. The tray and macOS app menus use it to insert an update row.
   readonly hostUpdateAvailableVersion: string | null;
 }
 

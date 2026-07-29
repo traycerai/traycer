@@ -163,6 +163,22 @@ export function finalizeStreamingActionBlocks(
             block.planStatus === "drafting" ? "ready" : block.planStatus,
         };
       }
+      // A compaction still in flight at turn end never reported a boundary, so
+      // it folded nothing. The content fallthrough below would mark it
+      // "completed" and the bar would claim a result it never produced - the
+      // silent version of a failed compaction, with no error line to contradict
+      // it. Compaction is not an action block, so `interrupted`/`superseded` are
+      // not in its schema; `errored` is the honest terminal state. No harness
+      // leaves a compaction running across a turn end (each yields its own
+      // terminal event first), so this only ever fires on a genuine cut-short.
+      if (block.type === "compaction") {
+        return {
+          ...block,
+          status: "errored" as const,
+          error: block.error ?? "Compaction did not finish",
+          timestamp,
+        };
+      }
       // text/reasoning are content, not actions: a partial thought/sentence is
       // not a failure. Always "completed", with `timestamp` advanced to turn-end
       // so a derived duration ("Thought for Xs") spans first delta → turn end.
@@ -304,6 +320,17 @@ function makeSubAgentBlock(fields: {
   return { type: "subagent", ...fields };
 }
 
+function isNewSubagentRun(
+  incomingSpawnToolCallId: string | undefined,
+  existingSpawnToolCallId: string | null,
+): boolean {
+  return (
+    incomingSpawnToolCallId !== undefined &&
+    existingSpawnToolCallId !== null &&
+    incomingSpawnToolCallId !== existingSpawnToolCallId
+  );
+}
+
 // Appends a new workflow activity entry, skipping a consecutive duplicate
 // (the same aggregate `task_progress` line can re-arrive on repeated polls
 // with no new milestone) so the persisted timeline reads as distinct steps.
@@ -313,7 +340,11 @@ function appendWorkflowActivity(
 ): WorkflowActivityEntry[] {
   if (entry === null) return activity;
   const last = activity[activity.length - 1];
-  if (last !== undefined && last.kind === entry.kind && last.text === entry.text) {
+  if (
+    last !== undefined &&
+    last.kind === entry.kind &&
+    last.text === entry.text
+  ) {
     return activity;
   }
   return [...activity, entry];
@@ -1486,6 +1517,20 @@ export function accumulateEvent(
       // name/task in place rather than appending a duplicate card.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
+        if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
+          return replaceBlock(blocks, event.blockId, {
+            ...existing,
+            status: "streaming",
+            timestamp: event.timestamp,
+            startedAt: event.timestamp,
+            task: nullableString(event.task),
+            progressUpdates: [],
+            result: null,
+            spawnToolCallId: event.spawnToolCallId ?? null,
+            stopped: false,
+            workflowMeta: null,
+          });
+        }
         return replaceBlock(blocks, event.blockId, {
           ...existing,
           name: event.name,
@@ -1610,6 +1655,23 @@ export function accumulateEvent(
       // open a fresh dual-written subagent block.
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
       if (existing) {
+        if (isNewSubagentRun(event.spawnToolCallId, existing.spawnToolCallId)) {
+          return replaceBlock(blocks, event.blockId, {
+            ...existing,
+            status: "streaming",
+            timestamp: event.timestamp,
+            startedAt: event.timestamp,
+            task: event.intent,
+            progressUpdates: [],
+            result: null,
+            spawnToolCallId: event.spawnToolCallId ?? null,
+            stopped: false,
+            workflowMeta: {
+              ...emptyWorkflowMeta(existing.name),
+              intent: event.intent,
+            },
+          });
+        }
         const meta = existing.workflowMeta ?? emptyWorkflowMeta(event.name);
         // A re-emit's `intent` is a required key but not necessarily a
         // meaningful one - only a genuine non-null value overwrites, mirroring
@@ -1658,8 +1720,7 @@ export function accumulateEvent(
 
     case "workflow.progress": {
       const existing = findBlockOfType(blocks, event.blockId, "subagent");
-      const progressLine =
-        event.activity !== null ? event.activity.text : null;
+      const progressLine = event.activity !== null ? event.activity.text : null;
       if (existing) {
         const meta = existing.workflowMeta ?? emptyWorkflowMeta(existing.name);
         const updated = {

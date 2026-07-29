@@ -83,6 +83,10 @@ vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
 }));
 
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
+import {
+  DEFAULT_WORKTREE_BRANCH_PREFIX,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
 import { installWorktreeVirtualizerOffsetHeight } from "./worktrees-virtualizer-test-utils";
 
 let restoreOffsetHeight: (() => void) | null = null;
@@ -154,6 +158,10 @@ beforeEach(() => {
     reportVisiblePaths: vi.fn(),
     enriching: false,
   };
+  window.localStorage.clear();
+  useSettingsStore.setState({
+    worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
+  });
 });
 
 afterEach(() => {
@@ -167,7 +175,41 @@ afterEach(() => {
     reportIssueAvailable: false,
     reportIssueContext: null,
   });
+  window.localStorage.clear();
+  useSettingsStore.setState({
+    worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
+  });
 });
+
+function documentPosition(
+  earlier: HTMLElement,
+  later: HTMLElement,
+): "before" | "after" | "unrelated" {
+  const relation = earlier.compareDocumentPosition(later);
+  if ((relation & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) return "before";
+  if ((relation & Node.DOCUMENT_POSITION_PRECEDING) !== 0) return "after";
+  return "unrelated";
+}
+
+/**
+ * Client-wide branch-prefix strip - must render regardless of host state.
+ * Section headings ("New worktrees" / "Existing worktrees" / "Applies on every
+ * host") were removed in the presentation redesign; the strip itself remains.
+ */
+function assertBranchPrefixStripPresent(): void {
+  expect(screen.queryByText("New worktrees")).toBeNull();
+  expect(screen.queryByText("Existing worktrees")).toBeNull();
+  expect(screen.queryByText("Applies on every host")).toBeNull();
+
+  const label = screen.getByText("Branch prefix");
+  const scope = screen.getByText("All hosts");
+  const prefixInput = screen.getByRole("textbox", { name: "Branch prefix" });
+  const example = screen.getByText(/New branches start like/);
+
+  expect(documentPosition(label, scope)).toBe("before");
+  expect(documentPosition(label, prefixInput)).toBe("before");
+  expect(documentPosition(label, example)).toBe("before");
+}
 
 describe("WorktreesSettingsPanel host-scoped states", () => {
   it("prompts to select a host when none is selected", () => {
@@ -177,6 +219,8 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     renderPanel();
 
     screen.getByText("Select a host to manage its worktrees.");
+    // Branch prefix defaults are client-wide - not gated on host selection.
+    assertBranchPrefixStripPresent();
   });
 
   it("shows a reachability check while the host is being probed", () => {
@@ -295,8 +339,11 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
 
     renderPanel();
 
+    // Wait for the partial-listing banner specifically - not an unscoped
+    // role="status", which also matches the always-mounted
+    // WorktreeBranchPrefixLiveStatus region (empty when idle).
     await waitFor(() => {
-      screen.getByRole("status");
+      screen.getByText(/Some worktrees could not be loaded/);
     });
     // Capability-gated off by default.
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
@@ -382,5 +429,34 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     screen.getByTestId("worktrees-filter-trigger");
     screen.getByTestId("worktrees-sort-trigger");
     screen.getByRole("button", { name: "Refresh worktrees" });
+    // Same branch-prefix strip as the no-host empty state - host-scoped UI
+    // does not own or gate creation defaults.
+    assertBranchPrefixStripPresent();
+    // Prefix strip still precedes the host-scoped inventory toolbar.
+    expect(
+      documentPosition(
+        screen.getByRole("textbox", { name: "Branch prefix" }),
+        screen.getByTestId("worktrees-host-select"),
+      ),
+    ).toBe("before");
+  });
+
+  it("wires the store's worktreeBranchPrefix into the branch prefix input and live example", () => {
+    useSettingsStore.setState({ worktreeBranchPrefix: "anurag/" });
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = null;
+
+    renderPanel();
+
+    assertBranchPrefixStripPresent();
+    expect(
+      screen.getByRole<HTMLInputElement>("textbox", {
+        name: "Branch prefix",
+      }).value,
+    ).toBe("anurag/");
+    // Live example uses the current draft (seeded from the store) + a stable
+    // per-mount suffix - don't hardcode the random slug, only the prefix.
+    const example = screen.getByText(/New branches start like/);
+    expect(example.textContent).toMatch(/anurag\/\S+/);
   });
 });

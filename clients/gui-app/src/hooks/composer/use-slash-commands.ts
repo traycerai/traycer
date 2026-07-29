@@ -17,6 +17,7 @@ export interface UseSlashCommandsResult {
   isLoading: boolean;
   isFetching: boolean;
   error: Error | null;
+  refetch: () => Promise<unknown>;
 }
 
 export interface UseSlashCommandsParams {
@@ -88,6 +89,7 @@ export function useSlashCommands(
     isLoading: params.enabled && commandsQuery.isPending,
     isFetching: params.enabled && commandsQuery.isFetching,
     error: commandsQuery.error,
+    refetch: commandsQuery.refetch,
   };
 }
 

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
@@ -25,7 +26,7 @@ export function useProvidersMcpList(args: {
     scope: args.scope,
     workspaceRoot: args.workspaceRoot,
   };
-  return useHostQueryWithResponseMap<
+  const query = useHostQueryWithResponseMap<
     HostRpcRegistry,
     "providers.list",
     McpListData
@@ -39,15 +40,33 @@ export function useProvidersMcpList(args: {
     options: {
       enabled: args.enabled,
       staleTime: 30_000,
-      refetchInterval: (query) => {
-        if (args.pollWhilePending) return MCP_LIST_PENDING_REFRESH_MS;
-        const servers = query.state.data?.servers;
-        if (servers === undefined) return false;
-        const needsPoll = servers.some(
-          (server) => server.discoveryPending || server.status === "connecting",
-        );
-        return needsPoll ? MCP_LIST_PENDING_REFRESH_MS : false;
-      },
+      // Opt out of the table-owned condition polling for `providers.list`:
+      // that policy classifies the CLASSIC response shape, while this query
+      // caches a mapped MCP shape under its own `cacheKeyIdentity`. The
+      // pending cadence below stands in for it.
+      poll: false,
     },
   });
+
+  // Table-owned polling can't serve this query (see `poll: false` above) and
+  // the host-query layer owns `refetchInterval`, so the pending cadence is
+  // driven here: re-list while an explicit auth flow is awaiting completion,
+  // or while any server is still discovering/connecting.
+  const { refetch } = query;
+  const servers = query.data?.servers;
+  const needsPoll =
+    args.enabled &&
+    (args.pollWhilePending ||
+      (servers ?? []).some(
+        (server) => server.discoveryPending || server.status === "connecting",
+      ));
+  useEffect(() => {
+    if (!needsPoll) return;
+    const timer = setInterval(() => {
+      void refetch();
+    }, MCP_LIST_PENDING_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [needsPoll, refetch]);
+
+  return query;
 }

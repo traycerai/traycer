@@ -4,6 +4,8 @@ import {
   guiHarnessIdSchemaV10,
   guiHarnessIdSchemaV20,
   guiHarnessIdSchemaV30,
+  guiHarnessIdSchemaV40,
+  guiHarnessIdSchemaV50,
 } from "@traycer/protocol/host/agent/shared";
 import {
   ALL_PERMISSION_MODES,
@@ -57,10 +59,17 @@ export const guiHarnessOptionSchema = z.object({
     .default([...ALL_PERMISSION_MODES]),
   // True while the host's availability probe for this harness is still running
   // in the background (e.g. the cold interactive-shell PATH probe). The client
-  // re-fetches until it flips false. A pending row always carries
-  // `available: false` so an old app that doesn't understand this field errs on
-  // the side of hiding the harness and retrying via its normal unavailable
-  // backoff. `.catch(false)` tolerates old host builds that omit the field.
+  // re-fetches until it flips false.
+  //
+  // `available` carries the LAST SETTLED verdict while a probe re-runs, so a
+  // harness whose host-side availability cache merely lapsed stays
+  // `available: true` and the client keeps serving the catalog it already has -
+  // pending is a background refresh, not a reason to retire a known-good model
+  // list. A harness the host has never settled a verdict for reports
+  // `available: false`, so an old app that doesn't understand this field errs on
+  // the side of hiding an unproven harness and retrying via its normal
+  // unavailable backoff. `.catch(false)` tolerates old host builds that omit the
+  // field.
   availabilityPending: z.boolean().catch(false),
 });
 export type GuiHarnessOption = z.infer<typeof guiHarnessOptionSchema>;
@@ -218,6 +227,35 @@ export const guiHarnessOptionSchemaV30 = guiHarnessOptionSchema.extend({
 });
 export const listGuiHarnessesResponseSchemaV30 = z.object({
   harnesses: z.array(guiHarnessOptionSchemaV30),
+});
+
+// ── Frozen protocol-v4.0 catalog row + response (with Devin/Pi, before ──────
+// Hermes). v4.0 shipped with Devin/Pi; the v5.0 line of
+// `agent.gui.listHarnesses` adds Hermes, and the v5→v4 downgrade bridge
+// filters it out for already-shipped v4.0 callers so their strict decode
+// never sees a value it can't parse.
+export const guiHarnessOptionSchemaV40 = guiHarnessOptionSchema.extend({
+  id: guiHarnessIdSchemaV40,
+});
+export const listGuiHarnessesResponseSchemaV40 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV40),
+});
+
+// ── Frozen protocol-v5.0 catalog row + response (with Hermes, before omp) ───
+// v5.0 shipped with Hermes in `cli-v1.1.8` / `host-v1.1.8` (both tagged
+// 2026-07-25); the v6.0 line of `agent.gui.listHarnesses` adds omp, and the
+// v6→v5 downgrade bridge filters it out for already-shipped v5.0 callers so
+// their strict decode never sees a value it can't parse.
+//
+// The row body reuses the live `guiHarnessOptionSchema` because the two lines
+// differ only by the id enum - verified against the `cli-v1.1.8` tree, where
+// this whole file is byte-identical to HEAD. Pinning the id here keeps a
+// future `.extend()` on the live row from leaking into this shipped line.
+export const guiHarnessOptionSchemaV50 = guiHarnessOptionSchema.extend({
+  id: guiHarnessIdSchemaV50,
+});
+export const listGuiHarnessesResponseSchemaV50 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV50),
 });
 export type ListGuiHarnessesResponse = z.infer<
   typeof listGuiHarnessesResponseSchema

@@ -10,7 +10,9 @@ import { openActiveTileFindWithReplace } from "@/lib/commands/tile-find";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { tabMatchesPath, tabResolveIntent } from "@/stores/tabs/registry";
-import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
+import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabActivationIntent } from "@/lib/tab-navigation/intents";
 import type {
   NavigateNestedFocus,
   PrepareNestedFocusTarget,
@@ -46,8 +48,11 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 
-const GROUP_EDITOR_FOCUS_TARGET_SELECTOR =
-  "[data-composer-editor], [data-artifact-editor]";
+const SELECTED_GROUP_TAB_SELECTOR =
+  '[data-tab-instance-id][data-selected="true"]';
+const PRIMARY_CHAT_COMPOSER_SELECTOR =
+  "[data-chat-composer] [data-composer-editor]";
+const ARTIFACT_EDITOR_SELECTOR = "[data-artifact-editor]";
 
 // ---------------------------------------------------------------------------
 // Narrow router adapter - decouples dispatch from `@tanstack/react-router`'s
@@ -66,13 +71,14 @@ export interface KeybindingRouter {
   readonly navigateToEpicList: () => void;
   readonly navigateSettingsSection: (sectionId: SettingsSectionId) => void;
   /**
-   * Canonical tab activation seam. Routes a `TabNavigationIntent`
+   * Canonical tab activation seam. Routes a `TabActivationIntent`
    * through `navigateToTabIntent` so every keybinding-triggered tab
    * switch performs the same activate-then-navigate dance as a UI
    * click - see `lib/tab-navigation.ts`.
    */
-  readonly navigateToTabIntent: (intent: TabNavigationIntent) => void;
+  readonly navigateToTabIntent: (intent: TabActivationIntent) => void;
   readonly navigateNestedFocus?: NavigateNestedFocus;
+  readonly navigateNestedFocusToPrimaryEditor?: NavigateNestedFocus;
   /**
    * In-app history back/forward. Delegate to the shared
    * `goBack`/`goForward` actions on the CURRENT router (the live
@@ -270,10 +276,15 @@ export function registerBaseLeaderScope(router: KeybindingRouter): () => void {
 }
 
 function isSettingsScope(pathname: string): boolean {
-  return (
-    isSettingsPath(pathname) ||
-    (getSystemTabModalApi()?.isOverlayActive("settings") ?? false)
-  );
+  // The settings overlay owns the whole screen regardless of strip layout, so
+  // its section digits stay live.
+  if (getSystemTabModalApi()?.isOverlayActive("settings") ?? false) return true;
+  if (!isSettingsPath(pathname)) return false;
+  // Otherwise gate on the ACTUAL focused ref, not just the pathname. With
+  // `[Settings | empty]` focused on the empty side, `routeBackingSide` keeps the
+  // URL on /settings but the Settings tab does not own focus - an Alt-digit
+  // section command must no-op instead of stealing focus back to Settings.
+  return selectHostFocusedRef(useTabsStore.getState())?.kind === "settings";
 }
 
 function digitToIndex(digit: number): number {
@@ -449,13 +460,26 @@ function getActiveEpicTabId(router: KeybindingRouter): string | null {
     return null;
   }
   if (useLandingDraftStore.getState().activeDraftId !== null) return null;
+  const focusedRef = selectHostFocusedRef(useTabsStore.getState());
+  if (focusedRef?.kind !== "epic") return null;
   const parts = router.getPathname().split("/");
   if (parts.length !== 4) return null;
   const [_root, scope, epicId, tabId] = parts;
   if (scope !== "epics" || epicId === "" || tabId === "") return null;
   const tab = useEpicCanvasStore.getState().tabsById[tabId];
-  if (tab === undefined || tab.epicId !== epicId) return null;
+  if (
+    tab === undefined ||
+    tab.epicId !== epicId ||
+    tab.tabId !== focusedRef.id ||
+    isPhaseMigrationSurface(tab)
+  ) {
+    return null;
+  }
   return tab.tabId;
+}
+
+function isPhaseMigrationSurface(tab: EpicViewTab): boolean {
+  return tab.surfaceMode?.kind === "phase-migration";
 }
 
 function getActiveTab(router: KeybindingRouter): EpicViewTab | null {
@@ -693,11 +717,15 @@ function focusGroupInDirection(
   if (active === undefined) return false;
   const nextId = findNeighbor(active, rects, dir);
   if (nextId === null) return false;
-  runNestedFocus(router, tab, () =>
+  const prepare = () =>
     useEpicCanvasStore
       .getState()
-      .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId),
-  );
+      .prepareSetActiveTilePaneFocusTarget(tab.tabId, nextId);
+  if (router.navigateNestedFocusToPrimaryEditor === undefined) {
+    runNestedFocus(router, tab, prepare);
+  } else {
+    router.navigateNestedFocusToPrimaryEditor(tab.epicId, tab.tabId, prepare);
+  }
   focusGroupEditor(nextId);
   return true;
 }
@@ -705,9 +733,12 @@ function focusGroupInDirection(
 function focusGroupEditor(groupId: string): boolean {
   if (typeof document === "undefined") return false;
   const group = document.querySelector<HTMLElement>(groupIdSelector(groupId));
-  const editor = group?.querySelector<HTMLElement>(
-    GROUP_EDITOR_FOCUS_TARGET_SELECTOR,
+  const selectedTab = group?.querySelector<HTMLElement>(
+    SELECTED_GROUP_TAB_SELECTOR,
   );
+  const editor =
+    selectedTab?.querySelector<HTMLElement>(PRIMARY_CHAT_COMPOSER_SELECTOR) ??
+    selectedTab?.querySelector<HTMLElement>(ARTIFACT_EDITOR_SELECTOR);
   if (editor === undefined || editor === null) return false;
   editor.focus({ preventScroll: true });
   return true;

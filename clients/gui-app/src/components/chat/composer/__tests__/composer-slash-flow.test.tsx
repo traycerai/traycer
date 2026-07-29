@@ -38,10 +38,11 @@ function makeFixture(): {
     element,
     extensions: buildComposerExtensions({
       pickerStore,
-      placeholder: "test",
+      getPlaceholder: () => "test",
       onSubmit: submitHolder,
       slashProviderId: "claude",
       getHasPastedImageBytes: () => null,
+      getIngestPastedComposerImages: () => null,
     }),
     content: { type: "doc", content: [{ type: "paragraph" }] },
   });
@@ -76,6 +77,8 @@ function openDisabledOnlyPicker(pickerStore: ComposerPickerStore): void {
       },
     ],
     loading: false,
+    loadFailed: false,
+    retryLoad: null,
   });
 }
 

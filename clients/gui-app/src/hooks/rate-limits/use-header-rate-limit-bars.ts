@@ -14,7 +14,10 @@ import {
   type RateLimitProfileSelection,
 } from "@/hooks/rate-limits/use-rate-limit-profile-selection";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import {
+  isRateLimitProfileFetchEligible,
+  type RateLimitProviderId,
+} from "@/lib/rate-limit-providers";
 import {
   envelopeDegradedReason,
   mapResponseToProviderRateLimitEnvelope,
@@ -53,6 +56,7 @@ type GlyphProviderId = (typeof GLYPH_PROVIDER_IDS)[number];
 interface GlyphProviderTarget {
   readonly providerId: GlyphProviderId;
   readonly profileId: string | null;
+  readonly fetchEligible: boolean;
 }
 
 /** A glyph provider's live query state, paired with its id (in draw order). */
@@ -72,10 +76,12 @@ function fiveHourWindow(
       return rateLimits.primary;
     case "claude-code":
       return rateLimits.fiveHour;
-    // OpenRouter/Kilo Code are never queried for a glyph slot; kept for
-    // exhaustiveness over the union.
+    // OpenRouter/Kilo Code/Grok are never queried for a glyph slot (grok stays
+    // out of `GLYPH_PROVIDER_IDS` - its billing period isn't a short rolling
+    // window); kept for exhaustiveness over the union.
     case "openrouter":
     case "kilocode":
+    case "grok":
       return null;
   }
 }
@@ -92,6 +98,7 @@ function weeklyWindow(
       return rateLimits.sevenDay;
     case "openrouter":
     case "kilocode":
+    case "grok":
       return null;
   }
 }
@@ -214,14 +221,26 @@ export function useHeaderRateLimitBars(
         (candidate) => candidate.providerId === providerId,
       );
       if (provider === undefined) return [];
+      const profileId = resolveRateLimitProfileId(
+        profileSelection,
+        providerId,
+        provider.profiles,
+      );
+      const selectedProfile = provider.profiles.find(
+        (profile) =>
+          (profile.kind === "ambient" ? null : profile.profileId) === profileId,
+      );
       return [
         {
           providerId,
-          profileId: resolveRateLimitProfileId(
-            profileSelection,
-            providerId,
-            provider.profiles,
-          ),
+          profileId,
+          fetchEligible:
+            selectedProfile === undefined
+              ? provider.fetchEligibility.ambient
+              : isRateLimitProfileFetchEligible(
+                  provider.fetchEligibility,
+                  selectedProfile,
+                ),
         },
       ];
     });
@@ -233,20 +252,20 @@ export function useHeaderRateLimitBars(
   // Verified here - rather than just trusted from `GLYPH_PROVIDER_IDS`'s own
   // comment - so a future glyph provider on a different lane falls back to
   // `null` (TanStack's defaults) instead of silently borrowing an unrelated
-  // provider's refetch behavior.
+  // provider's polling participation.
   const glyphOptions = glyphProviders.map(
     (target) =>
-      providerRateLimitQueryOptions(target.providerId, target.profileId)
-        .options,
+      providerRateLimitQueryOptions(
+        target.providerId,
+        target.profileId,
+        target.fetchEligible,
+      ).options,
   );
   const firstGlyphOptions: ProviderRateLimitTanstackOptions | null =
     glyphOptions.length > 0 ? glyphOptions[0] : null;
   const sharedGlyphOptions =
     firstGlyphOptions !== null &&
-    glyphOptions.every(
-      (options) =>
-        options.refetchInterval === firstGlyphOptions.refetchInterval,
-    )
+    glyphOptions.every((options) => options.poll === firstGlyphOptions.poll)
       ? firstGlyphOptions
       : null;
 
@@ -261,6 +280,7 @@ export function useHeaderRateLimitBars(
       const { method, params } = providerRateLimitQueryOptions(
         target.providerId,
         target.profileId,
+        target.fetchEligible,
       );
       return { method, params };
     }),

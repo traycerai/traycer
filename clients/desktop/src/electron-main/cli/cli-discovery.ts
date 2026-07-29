@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
 import {
   access,
@@ -12,13 +12,11 @@ import {
   rename,
   rm,
   stat,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { delimiter, dirname, join, parse } from "node:path";
 import { config, isDevBuild } from "../../config";
-import { compareHostVersions as compareHostSemanticVersions } from "@traycer-clients/shared/platform/runner-host";
 import { environmentSubdir } from "../host/host-paths";
 import { devDesktopSlotForEnvironment } from "../host/dev-desktop-slot";
 import { log } from "../app/logger";
@@ -596,15 +594,21 @@ export async function discoverCli(): Promise<CliDiscoveryResult> {
  * manifest pointing at it. Used both during first-launch setup and as a
  * silent self-heal step when the installed CLI is missing or corrupt.
  *
- * On POSIX we **symlink** the stable path at the bundled CLI rather than
- * copying it: the stable path (`~/.traycer/cli[/<slot>]/bin/traycer`) is then
- * a space-free, home-relative name the bundle-blind host can put on PATH,
- * while always resolving to the single, version-matched binary inside the
- * .app - no second copy to drift, corrupt, or go stale on app update. The
- * .app's path may contain spaces ("Traycer Staging.app"); that's fine as a
- * symlink target and as a PATH entry, since command resolution doesn't
- * re-split a resolved path. Windows symlinks need privilege we can't assume,
- * so there we fall back to a copy (the home path is space-free anyway).
+ * On every platform the stable path (`~/.traycer/cli[/<slot>]/bin/traycer`)
+ * is now a **copy** of the bundled CLI, not a symlink into the .app.
+ *
+ * It used to be a symlink on POSIX (one binary, nothing to drift or go
+ * stale on app update) - but that made the slot's validity hostage to the
+ * bundle's lifecycle: any bundle remove/replace (uninstall, drag-to-Trash,
+ * an updater's rm+cp window, an app rename) left a DANGLING link that
+ * `ls`/lstat still show while exec fails ENOENT, and the only healer was
+ * the next *successful* app launch - circular exactly when the app is the
+ * broken part (field report: "no such file or directory" on a file the
+ * user can see). A copy cannot dangle; staleness is already handled by the
+ * reconcile version compare, which re-stages on every app update - the
+ * same flow Windows (which always copied) has exercised in the field all
+ * along. The copy is staged beside the slot and renamed over it, so a
+ * crash mid-stage never leaves a truncated binary at the stable name.
  *
  * Returns the stable path, or throws if the bundled CLI isn't present (a
  * packaging bug worth surfacing loudly).
@@ -630,10 +634,27 @@ export async function installBundledCli(opts: {
     await renameCliBinaryAside(stablePath);
     await copyFile(opts.bundledCliPath, stablePath);
   } else {
-    // Clear any prior staged binary/symlink so symlink() doesn't EEXIST and a
-    // stale copy never lingers next to a fresh symlink.
-    await rm(stablePath, { force: true });
-    await symlink(opts.bundledCliPath, stablePath);
+    // Atomic replace: rename() over the slot also swallows a legacy
+    // symlink from the pre-copy era in one step.
+    //
+    // The staging name is per-invocation. A single fixed `.staging` path is
+    // shared mutable state between concurrent installers - an updater or a
+    // relaunch racing the running app resolves to the SAME stable slot - and
+    // interleaving there defeats the whole point of staging: B's copy can be
+    // mid-write when A chmods and renames, so A publishes a truncated binary
+    // onto the stable path. rename() is only atomic with respect to a source
+    // nobody else is writing.
+    const staging = `${stablePath}.staging.${process.pid}.${randomUUID()}`;
+    try {
+      await copyFile(opts.bundledCliPath, staging);
+      await chmod(staging, 0o755);
+      await rename(staging, stablePath);
+    } catch (error) {
+      // A unique name means nothing else can adopt this leftover, so it has
+      // to be swept here or it accumulates beside the slot.
+      await rm(staging, { force: true });
+      throw error;
+    }
   }
   const manifest: CliInstallManifest = {
     version: opts.version,
@@ -842,4 +863,63 @@ export function compareSemver(a: string, b: string): number {
  * to its GA instead of reading "up to date" forever. An unparseable core
  * triplet yields 0 so we never advertise an update we can't justify.
  */
-export const compareHostVersions = compareHostSemanticVersions;
+export function compareHostVersions(a: string, b: string): number {
+  const parse = (v: string): { core: number[]; pre: string[] } | null => {
+    // Reject anything that isn't a full SemVer triplet up front: lenient
+    // Number.parseInt would otherwise smuggle malformed input through (e.g.
+    // "1.2.3abc" → [1,2,3]) and skew the comparison, breaking the documented
+    // "unparseable => 0" contract.
+    const semver =
+      /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+    if (!semver.test(v)) return null;
+    const withoutBuild = v.split("+")[0];
+    const dash = withoutBuild.indexOf("-");
+    const core = (dash === -1 ? withoutBuild : withoutBuild.slice(0, dash))
+      .split(".")
+      .map((p) => Number.parseInt(p, 10));
+    const preRaw = dash === -1 ? "" : withoutBuild.slice(dash + 1);
+    return { core, pre: preRaw === "" ? [] : preRaw.split(".") };
+  };
+  const ap = parse(a);
+  const bp = parse(b);
+  if (ap === null || bp === null) return 0;
+  for (let i = 0; i < 3; i++) {
+    if (ap.core[i] !== bp.core[i]) return ap.core[i] > bp.core[i] ? 1 : -1;
+  }
+  // Equal core triplet: a version carrying a pre-release ranks below the same
+  // version without one (1.0.0-rc.1 < 1.0.0).
+  if (ap.pre.length === 0 && bp.pre.length === 0) return 0;
+  if (ap.pre.length === 0) return 1;
+  if (bp.pre.length === 0) return -1;
+  return comparePreRelease(ap.pre, bp.pre);
+}
+
+/**
+ * Compares two non-empty dot-separated pre-release identifier lists per SemVer
+ * §11: numeric identifiers compare numerically and rank below alphanumeric
+ * ones, alphanumeric identifiers compare in ASCII order, and a longer list
+ * outranks a shorter one when all preceding identifiers are equal.
+ */
+function comparePreRelease(a: string[], b: string[]): number {
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if (i >= a.length) return -1;
+    if (i >= b.length) return 1;
+    const ai = a[i];
+    const bi = b[i];
+    const aNumeric = /^\d+$/.test(ai);
+    const bNumeric = /^\d+$/.test(bi);
+    if (aNumeric && bNumeric) {
+      const an = Number.parseInt(ai, 10);
+      const bn = Number.parseInt(bi, 10);
+      if (an !== bn) return an > bn ? 1 : -1;
+    } else if (aNumeric) {
+      return -1;
+    } else if (bNumeric) {
+      return 1;
+    } else if (ai !== bi) {
+      return ai > bi ? 1 : -1;
+    }
+  }
+  return 0;
+}

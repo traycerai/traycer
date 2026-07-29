@@ -17,6 +17,7 @@ import { useHostUpdateBannerStore } from "@/stores/settings/host-update-banner-s
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { useLocalSnapshotClearStore } from "@/stores/settings/local-snapshot-clear-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useWorktreesSettingsViewStore } from "@/stores/settings/worktrees-settings-view-store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
@@ -100,6 +101,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useSettingsSectionStore",
     useSettingsSectionStore,
     "traycer-gui-app:settings-section",
+  ],
+  [
+    "useWorktreesSettingsViewStore",
+    useWorktreesSettingsViewStore,
+    "traycer-gui-app:worktrees-settings-view",
   ],
   [
     "useRateLimitPopoverStore",

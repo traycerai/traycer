@@ -117,6 +117,24 @@ function makeTerminalAgentEntry(
   return agent;
 }
 
+function makeRoleClaimEntry(args: {
+  readonly claimId: string;
+  readonly agentId: string;
+  readonly userId: string;
+  readonly role: string;
+  readonly scope: string;
+  readonly claimedAt: number;
+}): Y.Map<unknown> {
+  const claim = new Y.Map<unknown>();
+  claim.set("claimId", args.claimId);
+  claim.set("agentId", args.agentId);
+  claim.set("userId", args.userId);
+  claim.set("role", args.role);
+  claim.set("scope", args.scope);
+  claim.set("claimedAt", args.claimedAt);
+  return claim;
+}
+
 /**
  * Build a deleted-artifact tombstone entry exactly as the host writes it into
  * `epic.deletedArtifacts`. `status` is only set for ticket/story (spec/review
@@ -389,6 +407,80 @@ describe("epic-projector", () => {
       expect(state.tree.nodeById.theirs).toBeUndefined();
       handle.dispose();
     } finally {
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+
+  it("projects live same-account role claims and removes badges with their agents", () => {
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-a", userName: "A", email: "a@example.com" },
+        { userId: "user-a", username: "A" },
+        [],
+      );
+    const { handle } = newSession();
+    try {
+      const claimId = "10000000-0000-4000-8000-000000000001";
+      const visibleClaim = makeRoleClaimEntry({
+        claimId,
+        agentId: "agent-a",
+        userId: "user-a",
+        role: "Planner",
+        scope: "Authentication",
+        claimedAt: 1,
+      });
+      handle.doc.transact(() => {
+        const chats = new Y.Map<unknown>();
+        chats.set("agent-a", makeChatEntry("agent-a", "user-a", "Agent A"));
+        const claims = new Y.Map<unknown>();
+        claims.set(claimId, visibleClaim);
+        claims.set(
+          "10000000-0000-4000-8000-000000000002",
+          makeRoleClaimEntry({
+            claimId: "10000000-0000-4000-8000-000000000002",
+            agentId: "agent-a",
+            userId: "user-b",
+            role: "Foreign",
+            scope: "Hidden",
+            claimedAt: 2,
+          }),
+        );
+        claims.set(
+          "10000000-0000-4000-8000-000000000003",
+          makeRoleClaimEntry({
+            claimId: "10000000-0000-4000-8000-000000000003",
+            agentId: "deleted-agent",
+            userId: "user-a",
+            role: "Stale",
+            scope: "Hidden",
+            claimedAt: 3,
+          }),
+        );
+        handle.doc.getMap("epic").set("chats", chats);
+        handle.doc.getMap("epic").set("roleClaims", claims);
+      });
+
+      expect(handle.store.getState().agentRoles.byAgentId["agent-a"]).toEqual([
+        expect.objectContaining({ role: "Planner", scope: "Authentication" }),
+      ]);
+      expect(
+        handle.store.getState().agentRoles.byAgentId["deleted-agent"],
+      ).toBeUndefined();
+
+      visibleClaim.set("role", "Lead Planner");
+      expect(
+        handle.store.getState().agentRoles.byAgentId["agent-a"][0].role,
+      ).toBe("Lead Planner");
+
+      const chats = handle.doc.getMap("epic").get("chats");
+      if (!(chats instanceof Y.Map)) throw new Error("expected chats map");
+      chats.delete("agent-a");
+      expect(
+        handle.store.getState().agentRoles.byAgentId["agent-a"],
+      ).toBeUndefined();
+    } finally {
+      handle.dispose();
       useAuthStore.getState().setSignedOut();
     }
   });

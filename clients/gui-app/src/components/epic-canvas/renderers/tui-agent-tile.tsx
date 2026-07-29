@@ -66,7 +66,6 @@ import { useTuiSetupTerminalListRefreshDriver } from "@/hooks/agent/use-tui-setu
 import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
 import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
-import type { WorktreeBinding } from "@traycer/protocol/host/worktree-schemas";
 import { AgentModeReadonlyLabel } from "@/components/home/pickers/agent-mode-toggle";
 import type { AgentMode } from "@/components/home/data/landing-options";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
@@ -88,25 +87,7 @@ import { ReportIssueAction } from "@/components/report-issue/report-issue-action
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
-// Poll cadence for the setup card's binding while a worktree setup script is
-// still in flight. The script runs in a background PTY server-side and only
-// mutates the binding, so without polling a completion/failure would not
-// surface until the next window refocus - the card would stay "setting up".
-const SETUP_BINDING_POLL_INTERVAL_MS = 2_000;
-
-// A created worktree whose setup script has neither settled nor failed yet.
-// `pending`/`running` are the only non-terminal setup states; every other
-// state (succeeded / not_required / failed / cancelled) is final, so polling
-// stops once no entry is in flight.
-function hasInFlightWorktreeSetup(binding: WorktreeBinding | null): boolean {
-  if (binding === null) return false;
-  return binding.entries.some(
-    (entry) =>
-      entry.mode === "worktree" &&
-      (entry.setupState === "pending" || entry.setupState === "running"),
-  );
-}
-
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 /**
  * A bound worktree/folder is gone from disk. The host's prepare-launch
  * resolver rejects with the typed `WORKTREE_MISSING` envelope instead of
@@ -236,6 +217,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     return (
       <TerminalDeadTileBanner
         hostLabel={reachability.hostLabel}
+        ownerKind="agent"
         onClose={closeCanvasTile}
         testId={`terminal-agent-tile-${props.tileId}`}
       />
@@ -782,7 +764,7 @@ function TerminalAgentPreLaunchToolbar(
     refetchOnWindowFocus: paneVisible,
     // The nested setup notice owns the in-flight polling; this observer only
     // needs the binding for the chip, so it shares the cache without polling.
-    refetchInterval: false,
+    poll: false,
   });
   const binding = bindingQuery.data?.binding ?? null;
   const sourceStagingKey = useMemo<WorktreeStagingKey>(
@@ -837,6 +819,7 @@ function TerminalAgentPreLaunchToolbar(
       data-testid="terminal-agent-pre-launch-toolbar"
     >
       <HostWorkspaceSelector
+        disabled={false}
         surface={{
           kind: "terminal-agent",
           hostId: props.hostId,
@@ -860,22 +843,30 @@ function TerminalAgentPreLaunchToolbar(
         }}
       />
       <AgentModeReadonlyLabel value={props.agentMode} />
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-7 gap-1 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
-        disabled={forkDisabled}
-        title={
+      <TooltipWrapper
+        label={
           forkDisabled
             ? "Fork is available after the terminal agent session and workspace binding are ready."
             : "Fork terminal agent"
         }
-        onClick={openForkDialog}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        <GitFork aria-hidden className="size-3.5" />
-        Fork
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-ui-xs text-muted-foreground hover:text-foreground"
+            disabled={forkDisabled}
+            onClick={openForkDialog}
+          >
+            <GitFork aria-hidden className="size-3.5" />
+            Fork
+          </Button>
+        </span>
+      </TooltipWrapper>
       {/* Right-aligned status-bar group: the worktree-creation notice sits
           beside the agent controls. The notice's expanded detail opens as a
           downward Popover overlay, so it never reflows the terminal below. */}
@@ -888,6 +879,7 @@ function TerminalAgentPreLaunchToolbar(
         />
         <TerminalAgentHeaderControls
           epicId={props.epicId}
+          viewTabId={props.viewTabId}
           tuiAgentId={props.agent.id}
         />
       </div>
@@ -948,12 +940,9 @@ function TerminalAgentWorktreeNotice(props: {
     refetchOnWindowFocus: paneVisible,
     // Poll while a setup script is in flight so a background completion/failure
     // surfaces on the card even while the agent PTY runs (no chat subscription
-    // to push binding transitions). TanStack re-runs this against the freshest
-    // binding after each fetch, so polling stops the moment every entry settles.
-    refetchInterval: (query) =>
-      hasInFlightWorktreeSetup(query.state.data?.binding ?? null)
-        ? SETUP_BINDING_POLL_INTERVAL_MS
-        : false,
+    // to push binding transitions). The table stops polling once every entry
+    // settles.
+    poll: true,
   });
   const binding = bindingQuery.data?.binding ?? null;
   // Setup PTYs are spawned server-side, so nothing invalidates the renderer's
@@ -1021,6 +1010,7 @@ function TerminalAgentTileShell(props: {
  */
 function TerminalAgentHeaderControls(props: {
   readonly epicId: string;
+  readonly viewTabId: string;
   readonly tuiAgentId: string;
 }) {
   const controls = useAgentStopControls({
@@ -1056,6 +1046,7 @@ function TerminalAgentHeaderControls(props: {
         <PopoverContent align="end" className="w-[min(90vw,22rem)] p-0">
           <AgentStopList
             epicId={props.epicId}
+            viewTabId={props.viewTabId}
             self={self}
             descendants={controls.descendants}
             surface="tui-popover"
@@ -1250,6 +1241,7 @@ function TerminalAgentLive(props: TerminalAgentLiveProps) {
           onContainerResize={handleContainerResize}
           onWriterReady={handleWriterReady}
           shouldFocusOnActivePane={props.isActive}
+          registerImperativeFocus
           findTargetId={
             props.isActive
               ? `terminal-agent:${props.viewTabId}:${props.tileId}:${handle.sessionId}`

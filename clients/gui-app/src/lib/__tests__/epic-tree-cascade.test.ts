@@ -241,7 +241,7 @@ describe("formatCascadeSummary", () => {
       chat: 1,
       "terminal-agent": 0,
     };
-    expect(formatCascadeSummary(counts)).toBe("2 specs and 1 chat");
+    expect(formatCascadeSummary(counts)).toBe("2 specs and 1 agent");
   });
 
   it("joins three or more types with Oxford comma", () => {
@@ -254,8 +254,34 @@ describe("formatCascadeSummary", () => {
       "terminal-agent": 0,
     };
     expect(formatCascadeSummary(counts)).toBe(
-      "1 spec, 2 tickets, 1 review, and 3 chats",
+      "1 spec, 2 tickets, 1 review, and 3 agents",
     );
+  });
+
+  it("summarizes a mixed Chat/Terminal selection as one agent count", () => {
+    const counts: DescendantCounts = {
+      spec: 0,
+      ticket: 0,
+      story: 0,
+      review: 0,
+      chat: 1,
+      "terminal-agent": 1,
+    };
+    // Agent is the durable entity; Chat/Terminal are only its interfaces, so
+    // the summary must not split them into "1 chat and 1 terminal agent".
+    expect(formatCascadeSummary(counts)).toBe("2 agents");
+  });
+
+  it("uses the singular agent noun for a lone terminal-interface agent", () => {
+    const counts: DescendantCounts = {
+      spec: 0,
+      ticket: 0,
+      story: 0,
+      review: 0,
+      chat: 0,
+      "terminal-agent": 1,
+    };
+    expect(formatCascadeSummary(counts)).toBe("1 agent");
   });
 
   it("uses 'stories' plural for story", () => {

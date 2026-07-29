@@ -14,6 +14,11 @@ import {
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import type { HostDirectoryEntry } from "../../host-client/host-directory";
+import {
+  hostNotificationsSubscribeServerFrameSchema,
+  type HostNotificationEntry,
+  type HostNotificationsSummary,
+} from "@traycer/protocol/host/notifications/contracts";
 import { toStreamDialUrl } from "../ws-stream-client";
 import type {
   WebSocketCloseEvent,
@@ -302,7 +307,7 @@ describe("WsStreamClient", () => {
     expect(subscribeFrame).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 1 },
       params: { epicId: "epic-1" },
     });
 
@@ -340,7 +345,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 1 },
       params: { epicId: "epic-1" },
     });
 
@@ -412,7 +417,7 @@ describe("WsStreamClient", () => {
     expect(parseText(stub.textSent[1])).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 1 },
       params: { epicId: "epic-1" },
     });
 
@@ -989,7 +994,7 @@ describe("WsStreamClient", () => {
     expect(firstSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 1 },
       params: { epicId: "epic-42" },
     });
 
@@ -1009,11 +1014,219 @@ describe("WsStreamClient", () => {
     expect(secondSubscribe).toEqual({
       kind: "subscribe",
       method: "epic.subscribe",
-      schemaVersion: { major: 1, minor: 0 },
+      schemaVersion: { major: 1, minor: 1 },
       params: { epicId: "epic-42" },
     });
 
     session.close();
+    vi.useRealTimers();
+  });
+
+  it("emits availability recovery when a session re-opens after a drop, not on the initial clean open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    completeHandshake(sockets[0].socket);
+    // The first clean connect is not recovery - nothing was stranded yet.
+    expect(recovered).not.toHaveBeenCalled();
+
+    // Recoverable drop → backoff → fresh dial → handshake completes: the host
+    // just proved it is reachable again.
+    sockets[0].socket.fireClose(1006, "connection-lost", false);
+    vi.advanceTimersByTime(1_000);
+    expect(sockets).toHaveLength(2);
+    completeHandshake(sockets[1].socket);
+    expect(recovered).toHaveBeenCalledTimes(1);
+
+    session.close();
+    vi.useRealTimers();
+  });
+
+  it("emits availability recovery when a pong lands after a stall-length gap without any drop", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const socket = sockets[0].socket;
+    completeHandshake(socket);
+
+    // Healthy cadence: the pong answering the t=25s ping arrives one ping
+    // interval after `lastPongAt` was seeded at openAck - below the
+    // interval-plus-slack recovery threshold, so no emission.
+    vi.advanceTimersByTime(25_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).not.toHaveBeenCalled();
+
+    // Host event-loop stall: the t=50s ping goes unanswered until t=60s. The
+    // 35s pong gap exceeds pingIntervalMs + 5s slack → recovery evidence,
+    // while staying under the 50s missed-pong cutoff → the socket never
+    // dropped and the reconnect-recovery path never ran.
+    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(10_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(socket.closed).toBeNull();
+
+    session.close();
+    vi.useRealTimers();
+  });
+
+  it("requestReconnect drops the live socket and redials through existing backoff without disposing the session", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      webSocketFactory: factory,
+      dialTimeoutMs: 10_000,
+      openAckTimeoutMs: 10_000,
+      pingIntervalMs: 60_000,
+      pongTimeoutMs: 120_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const statuses: StreamConnectionStatus[] = [];
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-42" });
+    session.onStatusChange((status) => {
+      statuses.push(status);
+    });
+    completeHandshake(sockets[0].socket);
+    expect(statuses).toContain("open");
+
+    // Consumer asks the session-owned state machine to redial; it must not
+    // create a second session and must not dial before the initial backoff.
+    session.requestReconnect();
+    expect(sockets[0].socket.closed).toEqual({
+      code: 1000,
+      reason: "reconnect-requested-by-consumer",
+    });
+    expect(statuses).toContain("reconnecting");
+    expect(sockets).toHaveLength(1);
+
+    vi.advanceTimersByTime(9);
+    expect(sockets).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(sockets).toHaveLength(2);
+
+    completeHandshake(sockets[1].socket);
+    expect(parseText(sockets[1].socket.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "epic.subscribe",
+      schemaVersion: { major: 1, minor: 1 },
+      params: { epicId: "epic-42" },
+    });
+    expect(statuses.at(-1)).toBe("open");
+
+    // Same session object stays live; close only when the consumer tears down.
+    session.close();
+    expect(statuses.at(-1)).toBe("closed");
+    vi.useRealTimers();
+  });
+
+  it("requestReconnect preserves escalated reconnectAttempt instead of force-resetting like forceReconnect", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      webSocketFactory: factory,
+      dialTimeoutMs: 10_000,
+      openAckTimeoutMs: 10_000,
+      pingIntervalMs: 60_000,
+      pongTimeoutMs: 120_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 10_000,
+    });
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-42" });
+    completeHandshake(sockets[0].socket);
+
+    // Ordinary drop schedules backoffFor(0)=10ms and leaves reconnectAttempt=1
+    // on the subsequent dial. Leave the replacement mid-handshake so the
+    // attempt counter is still elevated while a live socket exists.
+    sockets[0].socket.fireClose(1006, "abnormal", false);
+    vi.advanceTimersByTime(10);
+    expect(sockets).toHaveLength(2);
+    sockets[1].socket.fireOpen();
+    expect(sockets[1].socket.textSent).toHaveLength(1);
+
+    // requestReconnect must schedule with the preserved attempt (backoffFor(1)
+    // = 20ms), not reset counters the way forceReconnect does.
+    session.requestReconnect();
+    expect(sockets[1].socket.closed).toEqual({
+      code: 1000,
+      reason: "reconnect-requested-by-consumer",
+    });
+    expect(sockets).toHaveLength(2);
+    vi.advanceTimersByTime(19);
+    expect(sockets).toHaveLength(2);
+    vi.advanceTimersByTime(1);
+    expect(sockets).toHaveLength(3);
+
+    session.close();
+    vi.useRealTimers();
+  });
+
+  it("requestReconnect is a no-op once the session is closed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => mockLocalHostEntry,
+      bearer: () => makeRequestContext("t")?.credentials ?? null,
+      auth: null,
+      webSocketFactory: factory,
+      dialTimeoutMs: 10_000,
+      openAckTimeoutMs: 10_000,
+      pingIntervalMs: 60_000,
+      pongTimeoutMs: 120_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-42" });
+    completeHandshake(sockets[0].socket);
+    session.close();
+    expect(sockets[0].socket.closed).toEqual({
+      code: 1000,
+      reason: "closed-by-caller",
+    });
+
+    session.requestReconnect();
+    vi.advanceTimersByTime(1_000);
+    expect(sockets).toHaveLength(1);
+
     vi.useRealTimers();
   });
 
@@ -1726,6 +1939,136 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     // Reconnected well past the no-progress bound (3) that a misclassified
     // UNAUTHORIZED would have hit - proof the transient path never gives up.
     expect(sockets.length).toBeGreaterThan(4);
+    session.close();
+  });
+
+  it("proves the real host.notifications.feed.subscribe retry sequence: retryable snapshot failure skips auth recovery, redials, and accepts the replacement snapshot", async () => {
+    const { factory, sockets } = makeFactory();
+    const revalidator = makeAuthRevalidator(["rotated"]);
+    const client = makeAuthClient(factory, revalidator.auth, 5);
+    const frames: StreamFrameEnvelope[] = [];
+    const session = client.subscribe("host.notifications.feed.subscribe", {
+      initialAttentionLimit: 50,
+      initialRecentLimit: 50,
+    });
+    session.onServerFrame((envelope) => {
+      frames.push(envelope);
+    });
+
+    await flush();
+    expect(sockets).toHaveLength(1);
+    // Complete the real open/openAck handshake so the client actually emits
+    // `host.notifications.feed.subscribe` on socket 0 before the host rejects
+    // the snapshot init - the failure must land on a real subscription
+    // attempt, not a pre-subscribe open-only socket.
+    completeHandshake(sockets[0].socket);
+    expect(sockets[0].socket.textSent).toHaveLength(2);
+    expect(parseText(sockets[0].socket.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "host.notifications.feed.subscribe",
+      // `@1.1` is the newest installed minor of the feed (the arm carrying
+      // `host.operation.finished`); the mirrored handshake negotiates it.
+      schemaVersion: { major: 1, minor: 1 },
+      params: {
+        initialAttentionLimit: 50,
+        initialRecentLimit: 50,
+      },
+    });
+    // Mirrors `HostNotificationsStreamResolver`'s real termination when its
+    // initial snapshot read fails: the wire code is host-domain
+    // (`NOTIFICATIONS_SNAPSHOT_UNAVAILABLE`), not `UNAUTHORIZED`, and
+    // `retryable: true` routes the client through the plain transport-drop
+    // path rather than credential recovery.
+    sockets[0].socket.fireText({
+      kind: "fatalError",
+      details: {
+        code: "NOTIFICATIONS_SNAPSHOT_UNAVAILABLE",
+        reason: "Failed to initialize host notifications stream for user=u1",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    });
+    await wait(50);
+
+    expect(revalidator.calls.count).toBe(0);
+    expect(sockets).toHaveLength(2);
+
+    // The redial completes a real handshake and re-issues the same subscribe
+    // declaration before the host lands a fresh atomic notification snapshot.
+    completeHandshake(sockets[1].socket);
+    expect(sockets[1].socket.textSent).toHaveLength(2);
+    expect(parseText(sockets[1].socket.textSent[1])).toEqual({
+      kind: "subscribe",
+      method: "host.notifications.feed.subscribe",
+      // `@1.1` is the newest installed minor of the feed (the arm carrying
+      // `host.operation.finished`); the mirrored handshake negotiates it.
+      schemaVersion: { major: 1, minor: 1 },
+      params: {
+        initialAttentionLimit: 50,
+        initialRecentLimit: 50,
+      },
+    });
+    const attentionEntry: HostNotificationEntry = {
+      id: "notif-attention",
+      updatedAt: 90,
+      readAt: null,
+      sourceRef: "notif-attention",
+      severity: "needs_action",
+      epicId: "epic-1",
+      chatId: "chat-2",
+      kind: "interview.requested",
+      outcome: null,
+      resolvedAt: null,
+      payload: {},
+    };
+    const recentEntry: HostNotificationEntry = {
+      id: "notif-recent",
+      updatedAt: 100,
+      readAt: null,
+      sourceRef: "notif-recent",
+      severity: "done",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      kind: "agent.stopped",
+      outcome: "completed",
+      payload: { outcome: "completed" },
+    };
+    const summary: HostNotificationsSummary = {
+      unreadCount: 2,
+      attentionCount: 1,
+    };
+    const attentionCursor = {
+      kind: "attention" as const,
+      tier: "blocking" as const,
+      updatedAt: 90,
+      id: "notif-attention",
+    };
+    const recentCursor = {
+      kind: "chronological" as const,
+      updatedAt: 100,
+      id: "notif-recent",
+    };
+    sockets[1].socket.fireText({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      attention: { entries: [attentionEntry], nextCursor: attentionCursor },
+      recent: { entries: [recentEntry], nextCursor: recentCursor },
+      summary,
+    });
+
+    expect(frames).toHaveLength(1);
+    const decoded = hostNotificationsSubscribeServerFrameSchema.parse(
+      frames[0],
+    );
+    expect(decoded).toEqual({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      attention: { entries: [attentionEntry], nextCursor: attentionCursor },
+      recent: { entries: [recentEntry], nextCursor: recentCursor },
+      summary,
+    });
+
     session.close();
   });
 

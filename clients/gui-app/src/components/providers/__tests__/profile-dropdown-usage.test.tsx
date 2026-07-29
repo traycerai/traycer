@@ -125,11 +125,14 @@ const WORK = profile("work", "managed", "Work profile with a very long label");
 function detailEntry(
   profileId: string | null,
   refresh: () => Promise<void>,
+  fetchEligible: boolean,
 ): ProfileDropdownUsageEntry {
   return {
     profileId,
+    fetchEligible,
     refreshStatus: "idle",
     refresh,
+    ensureFresh: () => Promise.resolve(),
     projection: {
       kind: "detail",
       severity: "running_low",
@@ -187,11 +190,14 @@ function detailEntry(
 
 function semanticEntry(
   refresh: () => Promise<void>,
+  fetchEligible: boolean,
 ): ProfileDropdownUsageEntry {
   return {
     profileId: null,
+    fetchEligible,
     refreshStatus: "idle",
     refresh,
+    ensureFresh: () => Promise.resolve(),
     projection: {
       kind: "semantic_only",
       severity: "limited",
@@ -259,12 +265,19 @@ describe("ProfileDropdown picker usage opt-in", () => {
     const usagePresentation = {
       isHostReady: true,
       entries: new Map([
-        [null, semanticEntry(vi.fn(() => Promise.resolve()))],
+        [
+          null,
+          semanticEntry(
+            vi.fn(() => Promise.resolve()),
+            true,
+          ),
+        ],
         [
           "work",
           detailEntry(
             "work",
             vi.fn(() => Promise.resolve()),
+            true,
           ),
         ],
       ]),
@@ -300,12 +313,19 @@ describe("ProfileDropdown picker usage opt-in", () => {
     const usagePresentation = {
       isHostReady: true,
       entries: new Map([
-        [null, semanticEntry(vi.fn(() => Promise.resolve()))],
+        [
+          null,
+          semanticEntry(
+            vi.fn(() => Promise.resolve()),
+            true,
+          ),
+        ],
         [
           "work",
           detailEntry(
             "work",
             vi.fn(() => Promise.resolve()),
+            true,
           ),
         ],
       ]),
@@ -342,8 +362,8 @@ describe("ProfileDropdown picker usage opt-in", () => {
     const usagePresentation = {
       isHostReady: true,
       entries: new Map([
-        [null, semanticEntry(refreshAmbient)],
-        ["work", detailEntry("work", refreshWork)],
+        [null, semanticEntry(refreshAmbient, true)],
+        ["work", detailEntry("work", refreshWork, true)],
       ]),
     } satisfies ProfileDropdownUsagePresentation;
     renderDropdown(usagePresentation, onSelect);
@@ -372,5 +392,36 @@ describe("ProfileDropdown picker usage opt-in", () => {
         name: "Usage details for Terminal account",
       }),
     ).toBeDefined();
+  });
+
+  it("does not advertise the refresh shortcut for ineligible usage rows", async () => {
+    const usagePresentation = {
+      isHostReady: true,
+      entries: new Map([
+        [
+          null,
+          semanticEntry(
+            vi.fn(() => Promise.resolve()),
+            false,
+          ),
+        ],
+        [
+          "work",
+          detailEntry(
+            "work",
+            vi.fn(() => Promise.resolve()),
+            false,
+          ),
+        ],
+      ]),
+    } satisfies ProfileDropdownUsagePresentation;
+    renderDropdown(usagePresentation, vi.fn());
+
+    const ambient = await screen.findByRole("menuitem", {
+      name: /Terminal account/,
+    });
+    const work = screen.getByRole("menuitem", { name: /Work profile/ });
+    expect(ambient.getAttribute("aria-keyshortcuts")).toBeNull();
+    expect(work.getAttribute("aria-keyshortcuts")).toBeNull();
   });
 });

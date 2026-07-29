@@ -325,12 +325,13 @@ describe("providers.list latest -> v2.0 downgrade strips profiles[]", () => {
 
   it("downgradeProviderCliStateListToV20 never leaks profile identity to a v2.0 caller", () => {
     // Latest major carries profiles[]; the path from latest → v2.0 must strip
-    // them. providers.list's latest is major 4 (profiles, nativeCapabilities,
-    // and Devin/Pi all ship at v4.0 - a genuine major bump, since v3.0
-    // predates profiles entirely and never reached a released host with it).
+    // them. Use 6 explicitly - providers.list latest after the omp freeze is
+    // v6.0 (`cli-v1.1.8` shipped v5.0, so that line is frozen). The latest
+    // major also carries `nativeCapabilities`, which this downgrade strips
+    // alongside `profiles`.
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      4,
+      6,
       2,
       { providers: [stateWithProfile], native: null },
     );
@@ -387,7 +388,7 @@ describe("providers.list v3.0 line predates profiles[]", () => {
   it("latest -> v3.0 downgrade never leaks profile identity to a v3.0 caller", () => {
     const downgraded = downgradeResponseAcrossMajors(
       hostRpcRegistry["providers.list"],
-      4,
+      6,
       3,
       { providers: [stateWithProfile], native: null },
     );

@@ -7,7 +7,33 @@
  */
 import type { JsonValue, PerWindowLandingDraft } from "./window-types";
 
+const MAX_JSON_VALUE_DEPTH = 64;
+
+/**
+ * Separates the two reasons a value can fail to parse, because they call for
+ * opposite handling inside an object.
+ *
+ * `undefined` means "not representable as JSON" (`undefined`, a function, a
+ * non-finite number). `JSON.stringify` omits such a property, so dropping it
+ * keeps a round-tripped snapshot equal to what the sender meant.
+ *
+ * `DEPTH_EXCEEDED` means the value was well-formed but too deep to walk. That
+ * one must fail the WHOLE value: dropping the property instead would let a
+ * silently truncated `tabStripLayout` be acknowledged and persisted as if it
+ * were the layout the renderer sent. Callers store `null` on a parse failure,
+ * which is recoverable; a partial layout is not.
+ */
+const DEPTH_EXCEEDED = Symbol("json-depth-exceeded");
+
+type ParsedJsonValue = JsonValue | undefined | typeof DEPTH_EXCEEDED;
+
 export function parseJsonValue(value: unknown): JsonValue | undefined {
+  const parsed = parseJsonValueAtDepth(value, 0);
+  return parsed === DEPTH_EXCEEDED ? undefined : parsed;
+}
+
+function parseJsonValueAtDepth(value: unknown, depth: number): ParsedJsonValue {
+  if (depth > MAX_JSON_VALUE_DEPTH) return DEPTH_EXCEEDED;
   if (
     value === null ||
     typeof value === "string" ||
@@ -19,18 +45,29 @@ export function parseJsonValue(value: unknown): JsonValue | undefined {
     return Number.isFinite(value) ? value : undefined;
   }
   if (Array.isArray(value)) {
-    const parsed = value.map(parseJsonValue);
+    const parsed = value.map((entry) =>
+      parseJsonValueAtDepth(entry, depth + 1),
+    );
+    if (parsed.some((entry) => entry === DEPTH_EXCEEDED)) {
+      return DEPTH_EXCEEDED;
+    }
+    // An array cannot drop a bad entry the way an object drops a key without
+    // shifting every later index, so one unrepresentable entry fails it whole.
     if (parsed.some((entry) => entry === undefined)) {
       return undefined;
     }
-    return parsed.filter((entry) => entry !== undefined);
+    return parsed.filter(
+      (entry): entry is JsonValue =>
+        entry !== undefined && entry !== DEPTH_EXCEEDED,
+    );
   }
   if (typeof value === "object") {
     const out: Record<string, JsonValue> = {};
     for (const [key, entry] of Object.entries(
       value as Record<string, unknown>,
     )) {
-      const parsed = parseJsonValue(entry);
+      const parsed = parseJsonValueAtDepth(entry, depth + 1);
+      if (parsed === DEPTH_EXCEEDED) return DEPTH_EXCEEDED;
       if (parsed !== undefined) {
         out[key] = parsed;
       }

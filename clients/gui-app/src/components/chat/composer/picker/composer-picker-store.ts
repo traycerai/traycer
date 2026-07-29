@@ -127,6 +127,17 @@ export interface ComposerPickerState {
   readonly fetching: boolean;
   readonly commit: ComposerPickerCommit | null;
   /**
+   * True when the active kind's catalog query FAILED (currently only the
+   * slash-command catalog reports this). The menu renders a "couldn't load"
+   * row with a Retry action instead of claiming "no matching" results -
+   * repeated provider failures must not be indistinguishable from a
+   * legitimately empty catalog. `retryLoad` is the failed query's refetch,
+   * kept as a closure in the store the same way `commit` / `clientRect` are;
+   * it is non-null only while `loadFailed` is set.
+   */
+  readonly loadFailed: boolean;
+  readonly retryLoad: (() => void) | null;
+  /**
    * Latest viewport rect of the suggestion range (trigger char + query).
    * Tiptap rebuilds the closure on every view update; we keep the function
    * itself in the store so the menu can read the freshest rect via
@@ -184,6 +195,8 @@ export interface ComposerPickerActions {
     readonly step: MentionFlowStep;
     readonly items: ReadonlyArray<ComposerPickerItem>;
     readonly loading: boolean;
+    readonly loadFailed: boolean;
+    readonly retryLoad: (() => void) | null;
   }) => void;
   readonly setLoading: (input: {
     readonly kind: ComposerPickerKind;
@@ -227,6 +240,8 @@ const INITIAL_STATE: ComposerPickerState = {
   loading: false,
   fetching: false,
   commit: null,
+  loadFailed: false,
+  retryLoad: null,
   clientRect: null,
   knownSlashCommands: null,
 };
@@ -243,6 +258,36 @@ function clampIndex(index: number, length: number): number {
 
 function wrapIndex(index: number, length: number): number {
   return ((index % length) + length) % length;
+}
+
+/**
+ * Active index to carry across an item-list replacement. A refresh of the same
+ * query can reorder rows as slower sources land (root mention search ranks all
+ * sources into one flat list); once the user has moved the highlight off the
+ * top row, it follows the item they chose - matched by id - rather than the
+ * index it happened to sit at. At index 0 the highlight stays on the top row,
+ * so the best match keeps the selection as better results arrive.
+ */
+function carriedActiveIndex(
+  previous: ComposerPickerState,
+  items: ReadonlyArray<ComposerPickerItem>,
+): number {
+  if (
+    previous.activeIndex > 0 &&
+    previous.activeIndex < previous.items.length
+  ) {
+    const activeId = previous.items[previous.activeIndex].id;
+    // Carry the id match even onto a DISABLED row: navigation deliberately
+    // highlights disabled slash rows (their disabled reason stays visible and
+    // commit refuses), so skipping them here would silently move the highlight
+    // to a different enabled command and a following Enter could commit it.
+    const carried = items.findIndex((item) => item.id === activeId);
+    if (carried >= 0) return carried;
+  }
+  return (
+    findEnabledIndex(items, previous.activeIndex, 1) ??
+    clampIndex(previous.activeIndex, items.length)
+  );
 }
 
 /**
@@ -296,6 +341,8 @@ export function createComposerPickerStore(): ComposerPickerStore {
         loading: false,
         fetching: false,
         commit,
+        loadFailed: false,
+        retryLoad: null,
         clientRect,
       });
     },
@@ -350,6 +397,8 @@ export function createComposerPickerStore(): ComposerPickerStore {
         activeIndex: 0,
         loading: false,
         fetching: false,
+        loadFailed: false,
+        retryLoad: null,
       });
     },
 
@@ -361,6 +410,8 @@ export function createComposerPickerStore(): ComposerPickerStore {
       step,
       items,
       loading,
+      loadFailed,
+      retryLoad,
     }) => {
       const previous = get();
       if (
@@ -382,9 +433,9 @@ export function createComposerPickerStore(): ComposerPickerStore {
         itemsForStepId: stepIdOf(step),
         itemsForSlashScope: slashScope,
         loading,
-        activeIndex:
-          findEnabledIndex(items, previous.activeIndex, 1) ??
-          clampIndex(previous.activeIndex, items.length),
+        loadFailed,
+        retryLoad,
+        activeIndex: carriedActiveIndex(previous, items),
       });
     },
 

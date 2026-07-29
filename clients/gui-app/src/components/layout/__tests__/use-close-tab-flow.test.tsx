@@ -5,6 +5,8 @@ import { useCloseTabFlow } from "@/components/layout/dialogs/use-close-tab-flow"
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { executeTabSplitCommand } from "@/stores/tabs/tab-split-commands";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import * as TabNav from "@/lib/tab-navigation";
 
@@ -79,6 +81,34 @@ describe("useCloseTabFlow", () => {
     });
   });
 
+  it("closes the route-backed tab when a split focuses its fillable half", () => {
+    // "Add tab to new split view" lands focus on the EMPTY half, so the split
+    // keeps `focusedSide: "right"` with `routeBackingSide: "left"` - the one
+    // state where the two diverge, because a side that holds no tab can never
+    // back the route. `selectHostFocusedRef` reads null there, so gating the
+    // close on it made Cmd+W silently do nothing right after the split command.
+    const a = useEpicCanvasStore.getState().openEpicTab("epic-a", "Alpha");
+    routerState.pathname = `/epics/epic-a/${a}`;
+
+    expect(executeTabSplitCommand("add", { kind: "epic", id: a })).toBe(true);
+    const split = useTabsStore.getState().items[0];
+    expect(split).toMatchObject({
+      kind: "split",
+      left: { kind: "tab", ref: { kind: "epic", id: a } },
+      right: { kind: "empty" },
+      focusedSide: "right",
+      routeBackingSide: "left",
+    });
+    expect(selectHostFocusedRef(useTabsStore.getState())).toBeNull();
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.closeActiveTab();
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(a);
+  });
+
   it("does not call navigateToTabIntent when closing a non-active tab", () => {
     const a = useEpicCanvasStore.getState().openEpicTab("epic-a", "Alpha");
     const b = useEpicCanvasStore.getState().openEpicTab("epic-b", "Beta");
@@ -94,6 +124,7 @@ describe("useCloseTabFlow", () => {
         name: "Beta",
         route: `/epics/epic-b/${b}`,
         icon: null,
+        canClose: true,
         canDuplicate: true,
         canOpenInNewWindow: true,
       });
@@ -101,5 +132,55 @@ describe("useCloseTabFlow", () => {
 
     expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(b);
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("keeps every member of the invoked split when closing other strip items", () => {
+    const a = useEpicCanvasStore.getState().openEpicTab("epic-a", "Alpha");
+    const b = useEpicCanvasStore.getState().openEpicTab("epic-b", "Beta");
+    const c = useEpicCanvasStore.getState().openEpicTab("epic-c", "Gamma");
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-ab",
+          left: { kind: "tab", ref: { kind: "epic", id: a } },
+          right: { kind: "tab", ref: { kind: "epic", id: b } },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+        { kind: "tab", id: `tab:epic:${c}`, ref: { kind: "epic", id: c } },
+      ],
+      activeItemId: "split-ab",
+      stripOrder: [
+        { kind: "epic", id: a },
+        { kind: "epic", id: b },
+        { kind: "epic", id: c },
+      ],
+      systemTabs: { history: null, settings: null },
+    });
+    const spy = vi.spyOn(TabNav, "navigateToTabIntent").mockReturnValue();
+    const { result } = renderHook(() => useCloseTabFlow());
+
+    act(() => {
+      result.current.closeOtherTabs({
+        kind: "epic",
+        id: a,
+        epicId: "epic-a",
+        name: "Alpha",
+        route: `/epics/epic-a/${a}`,
+        icon: null,
+        canClose: true,
+        canDuplicate: true,
+        canOpenInNewWindow: true,
+      });
+    });
+
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([a, b]);
+    expect(useTabsStore.getState().items).toEqual([
+      expect.objectContaining({ id: "split-ab", kind: "split" }),
+    ]);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

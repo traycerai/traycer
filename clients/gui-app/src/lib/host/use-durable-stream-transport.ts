@@ -50,6 +50,12 @@ export function useDurableStreamTransportFactory(): (
           const subscription = liveRef.current.directory.onChange(onChange);
           return () => subscription.dispose();
         },
+        // Recovery evidence targets the BOUND host, not the active one: a
+        // tab's queries are keyed by its own `hostId`, and only this
+        // transport heartbeats that host when it is not the active
+        // selection.
+        notifyAvailabilityRecovered: () =>
+          liveRef.current.globalClient.notifyHostAvailabilityRecovered(hostId),
       }),
     [],
   );

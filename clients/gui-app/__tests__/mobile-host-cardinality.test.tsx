@@ -18,6 +18,9 @@ import { TraycerApp, hostRpcRegistry } from "../index";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
 function mockMatchMedia(): void {
   Object.defineProperty(window, "matchMedia", {
@@ -67,12 +70,18 @@ describe("<TraycerApp /> mobile cardinality behavior", () => {
     useAppDialogStore.setState({ activeDialog: null });
     useAuthStore.getState().setSignedOut();
     useOnboardingStore.setState({ completedAt: 1 });
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    __resetTabNavigationControllerForTesting();
     restoreFetch = installAuthValidationFetch();
   });
 
   afterEach(() => {
     cleanup();
     useAuthStore.getState().setSignedOut();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    __resetTabNavigationControllerForTesting();
     restoreFetch();
   });
 

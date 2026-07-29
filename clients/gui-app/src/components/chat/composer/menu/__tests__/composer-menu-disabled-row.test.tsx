@@ -75,6 +75,8 @@ function openTriggered(
     step: store.getState().step,
     items,
     loading: false,
+    loadFailed: false,
+    retryLoad: null,
   });
 }
 

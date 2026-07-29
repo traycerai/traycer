@@ -26,12 +26,24 @@ import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 export interface ExtractOptions {
   readonly source: string;
   readonly targetDir: string;
+  // Called once per entry as the source is unpacked - for tar from the
+  // `filter`, i.e. just BEFORE that entry is written, and for zip just
+  // after. The exact side of the write does not matter; what matters is
+  // that something fires while the work is running.
+  //
+  // Extraction of a ~800MB archive can run for minutes with nothing else to
+  // show for it, and two separate mechanisms treat that silence as death:
+  // Desktop's inactivity timer SIGKILLs a CLI that emits no NDJSON, and the
+  // download cache's idle rule lets another process take over a slot whose
+  // archive has stopped being touched (extraction only READS it, so its
+  // mtime stops advancing). Callers throttle.
+  readonly onEntry: () => void;
 }
 
 export async function extractHostSource(opts: ExtractOptions): Promise<void> {
   const sourceStat = await stat(opts.source);
   if (sourceStat.isDirectory()) {
-    await copyDirectoryShallow(opts.source, opts.targetDir);
+    await copyDirectoryShallow(opts.source, opts.targetDir, opts.onEntry);
     return;
   }
   const ext = extname(opts.source).toLowerCase();
@@ -44,24 +56,39 @@ export async function extractHostSource(opts: ExtractOptions): Promise<void> {
     lower.endsWith(".tar.gz") ||
     lower.endsWith(".tar.xz")
   ) {
-    await extractTarArchive(opts.source, opts.targetDir);
+    await extractTarArchive(opts.source, opts.targetDir, opts.onEntry);
     return;
   }
   if (ext === ".zip") {
-    await extractZipArchive(opts.source, opts.targetDir);
+    await extractZipArchive(opts.source, opts.targetDir, opts.onEntry);
     return;
   }
   // Bare executable. Copy into the target dir keeping the basename so
   // resolveExecutable() can find it.
+  //
+  // A single `copyFile` has no interior to report from, so the one tick
+  // goes out before it starts rather than after: a ~100MB host binary onto
+  // a slow disk is the case worth covering, and a tick that lands after the
+  // copy is a tick the watchers never needed.
+  opts.onEntry();
   await copyFile(opts.source, join(opts.targetDir, basename(opts.source)));
 }
 
+// Per top-level entry rather than one bulk `cp` of the whole tree: the bulk
+// form reports nothing for however long it runs, which is the silence both
+// watchers read as a dead process. Each entry is still copied recursively,
+// so the resulting tree is identical.
 async function copyDirectoryShallow(
   source: string,
   target: string,
+  onEntry: () => void,
 ): Promise<void> {
   await mkdir(target, { recursive: true });
-  await cp(source, target, { recursive: true });
+  const entries = await readdir(source);
+  for (const entry of entries) {
+    onEntry();
+    await cp(join(source, entry), join(target, entry), { recursive: true });
+  }
 }
 
 // Reject any tar entry whose name is absolute, contains a `..` segment,
@@ -73,6 +100,7 @@ async function copyDirectoryShallow(
 async function extractTarArchive(
   source: string,
   targetDir: string,
+  onEntry: () => void,
 ): Promise<void> {
   let rejected: { entry: string; reason: string } | null = null;
   await tarExtract({
@@ -102,6 +130,7 @@ async function extractTarArchive(
         if (rejected === null) rejected = { entry: path, reason };
         return false;
       }
+      onEntry();
       return true;
     },
   });
@@ -119,8 +148,10 @@ async function extractTarArchive(
 async function extractZipArchive(
   source: string,
   targetDir: string,
+  onEntry: () => void,
 ): Promise<void> {
   const zip = new StreamZip.async({ file: source });
+  zip.on("extract", () => onEntry());
   try {
     const entries = await zip.entries();
     for (const entry of Object.values(entries)) {

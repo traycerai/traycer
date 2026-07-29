@@ -8,6 +8,7 @@ import type {
 import {
   mentionRootsFromWorktreeIntent,
   mentionRootsFromWorktreeBinding,
+  mentionRootsFromWorktreeBindingAndIntent,
   useLandingComposerMentionRoots,
   useWorkspaceMentionRoots,
 } from "../use-workspace-mention-roots";
@@ -260,5 +261,149 @@ describe("mentionRootsFromWorktreeIntent", () => {
         ],
       }),
     ).toEqual(["/repo-local", "/repo-create"]);
+  });
+});
+
+describe("mentionRootsFromWorktreeBindingAndIntent", () => {
+  it("matches the plain binding roots when no intent is staged", () => {
+    const bound = binding([
+      bindingEntry({
+        workspacePath: "/repo",
+        mode: "worktree",
+        worktreePath: "/wt/old",
+      }),
+    ]);
+    expect(mentionRootsFromWorktreeBindingAndIntent(bound, null)).toEqual([
+      "/wt/old",
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(bound, { entries: [] }),
+    ).toEqual(["/wt/old"]);
+  });
+
+  it("resolves a staged create over a bound (possibly deleted) worktree to the source checkout", () => {
+    // Regression: replacing a chat's dead worktree with "new worktree" from
+    // the composer must stop discovery from probing the superseded path -
+    // the source checkout stands in until the host materializes the worktree.
+    const bound = binding([
+      bindingEntry({
+        workspacePath: "/repo",
+        mode: "worktree",
+        worktreePath: "/wt/deleted-branch",
+      }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toEqual(["/repo"]);
+  });
+
+  it("resolves a staged import to its existing on-disk worktree", () => {
+    const bound = binding([
+      bindingEntry({ workspacePath: "/repo", mode: "local" }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo", "import", "/wt/feature"),
+      ),
+    ).toEqual(["/wt/feature"]);
+  });
+
+  it("resolves a staged local pick back to the workspace path", () => {
+    const bound = binding([
+      bindingEntry({
+        workspacePath: "/repo",
+        mode: "worktree",
+        worktreePath: "/wt/old",
+      }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo", "local", null),
+      ),
+    ).toEqual(["/repo"]);
+  });
+
+  it("keeps unstaged binding entries alongside a staged override", () => {
+    const bound = binding([
+      bindingEntry({
+        workspacePath: "/repo-a",
+        mode: "worktree",
+        worktreePath: "/wt/a",
+      }),
+      bindingEntry({ workspacePath: "/repo-b", mode: "local" }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo-a", "create", null),
+      ),
+    ).toEqual(["/repo-a", "/repo-b"]);
+  });
+
+  it("appends staged entries for folders absent from the binding", () => {
+    const bound = binding([
+      bindingEntry({ workspacePath: "/repo-a", mode: "local" }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo-b", "import", "/wt/b"),
+      ),
+    ).toEqual(["/repo-a", "/wt/b"]);
+  });
+
+  it("projects staged roots when the binding has not loaded yet", () => {
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        null,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toEqual(["/repo"]);
+  });
+
+  it("dedupes a staged root that collides with another binding root", () => {
+    const bound = binding([
+      bindingEntry({ workspacePath: "/repo", mode: "local" }),
+      bindingEntry({
+        workspacePath: "/repo-b",
+        mode: "worktree",
+        worktreePath: "/wt/old-b",
+      }),
+    ]);
+    // The staged import points /repo-b at the same directory /repo already
+    // contributes - the projection must not list it twice.
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo-b", "import", "/repo"),
+      ),
+    ).toEqual(["/repo"]);
+  });
+
+  it("returns no roots for a folderless binding even with staged intent entries", () => {
+    // mentionRootsFromWorktreeBinding suppresses folderless unconditionally -
+    // the combined projection must preserve that invariant rather than
+    // leaking a staged-only root through as if the binding had no folders.
+    const folderless: WorktreeBinding = {
+      entries: [],
+      workspaceMode: "folderless",
+    };
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        folderless,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toEqual([]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        folderless,
+        worktreeIntent("/repo", "import", "/wt/feature"),
+      ),
+    ).toEqual([]);
   });
 });

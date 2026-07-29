@@ -32,6 +32,10 @@ import * as Y from "yjs";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HOVER_PREVIEW_SURFACE_CLASS } from "@/components/ui/hover-preview-surface";
+import {
+  isPresentationLossBlur,
+  usePanePortalContainer,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { Input } from "@/components/ui/input";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
@@ -42,6 +46,7 @@ import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import { cn } from "@/lib/utils";
 import { isSingleTextblockLinkRange } from "./artifact-link-selection";
 
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 const HOVER_SHOW_DELAY_MS = 300;
 const HOVER_HIDE_DELAY_MS = 100;
 
@@ -587,48 +592,68 @@ function LinkPreview(props: LinkPreviewProps) {
         href={props.href}
       />
       {openable ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          aria-label={`Open link: ${props.href}`}
-          title={props.href}
-          className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
-          disabled={props.href.trim().length === 0 || externalOpenPending}
-          onClick={props.onOpen}
+        <TooltipWrapper
+          label={props.href}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          <span className="truncate">{props.href}</span>
-          {externalOpenPending ? (
-            <AgentSpinningDots
-              className={undefined}
-              testId="artifact-link-open-pending"
-              variant={undefined}
-            />
-          ) : null}
-        </Button>
+          <span className="inline-flex">
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              aria-label={`Open link: ${props.href}`}
+              className="min-w-0 max-w-[min(55vw,16rem)] justify-start px-1.5 font-normal text-muted-foreground hover:text-foreground"
+              disabled={props.href.trim().length === 0 || externalOpenPending}
+              onClick={props.onOpen}
+            >
+              <span className="truncate">{props.href}</span>
+              {externalOpenPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId="artifact-link-open-pending"
+                  variant={undefined}
+                />
+              ) : null}
+            </Button>
+          </span>
+        </TooltipWrapper>
       ) : (
-        <span
-          title={props.href}
-          className="min-w-0 max-w-[min(55vw,16rem)] truncate px-1.5 text-ui-xs text-muted-foreground"
+        <TooltipWrapper
+          label={props.href}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
         >
-          {props.href}
-        </span>
+          <span className="min-w-0 max-w-[min(55vw,16rem)] truncate px-1.5 text-ui-xs text-muted-foreground">
+            {props.href}
+          </span>
+        </TooltipWrapper>
       )}
-      <Button
-        type="button"
-        size="icon-xs"
-        variant="ghost"
-        disabled={props.href.trim().length === 0}
-        aria-label={props.copied ? "Copied" : "Copy link"}
-        title={props.copied ? "Copied" : "Copy link"}
-        onClick={props.onCopy}
+      <TooltipWrapper
+        label={props.copied ? "Copied" : "Copy link"}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
       >
-        {props.copied ? (
-          <Check aria-hidden="true" />
-        ) : (
-          <Copy aria-hidden="true" />
-        )}
-      </Button>
+        <span className="inline-flex">
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            disabled={props.href.trim().length === 0}
+            aria-label={props.copied ? "Copied" : "Copy link"}
+            onClick={props.onCopy}
+          >
+            {props.copied ? (
+              <Check aria-hidden="true" />
+            ) : (
+              <Copy aria-hidden="true" />
+            )}
+          </Button>
+        </span>
+      </TooltipWrapper>
       {props.editable ? (
         <Button
           type="button"
@@ -668,6 +693,12 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const [displayText, setDisplayText] = useState("");
   const targetRef = useRef<LinkTarget | null>(null);
   const hrefDirtyRef = useRef(false);
+  // Render into the pane's portal host so this kept-mounted link editor (its
+  // typed URL/title survive focus changes) hides with the pane instead of
+  // covering a focused split partner. `null` outside a pane → `document.body`.
+  // Declared here (before the positioning effects) so those effects can depend
+  // on it and rebind to the live node once the host ref settles.
+  const paneContainer = usePanePortalContainer();
   const textDirtyRef = useRef(false);
   const expectedCaretPositionRef = useRef<number | null>(null);
   const focusEditUrlRef = useRef(false);
@@ -1259,7 +1290,9 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       active = false;
       stopAutoUpdate();
     };
-  }, [editor, scrollContainer, target]);
+    // `paneContainer` dep: the portal remounts the card into the live node once
+    // the host ref settles, so rebind `autoUpdate` to it, not the first node.
+  }, [editor, scrollContainer, target, paneContainer]);
 
   useEffect(() => {
     const card = cardRef.current;
@@ -1285,7 +1318,11 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
       card.removeEventListener("pointerleave", handleCardPointerLeave);
       card.removeEventListener("keydown", handleCardKeyDown);
     };
-  }, [cancelHide, scheduleHoverHide, target]);
+    // `paneContainer` dep for the same reason as the positioning effect above:
+    // this reads `cardRef.current` under identical conditions, so without it
+    // the hover-hide and keyboard handlers stay bound to the pre-remount node
+    // while the card the user sees has none.
+  }, [cancelHide, scheduleHoverHide, target, paneContainer]);
 
   useLayoutEffect(() => {
     if (target?.mode === "create" || focusEditUrlRef.current) {
@@ -1381,12 +1418,19 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
   const handleSurfaceBlur = (event: ReactFocusEvent<HTMLFormElement>): void => {
     const next = event.relatedTarget;
     if (next instanceof Node && event.currentTarget.contains(next)) return;
+    // A pane backgrounding forcibly blurs this field to relinquish keyboard
+    // ownership; that is not a user-approved commit. Keep the draft mounted (the
+    // typed URL/title survive) and let the card reappear on refocus.
+    if (isPresentationLossBlur()) return;
     commit();
   };
 
   const handlePreviewBlur = (event: ReactFocusEvent<HTMLDivElement>): void => {
     const next = event.relatedTarget;
     if (next instanceof Node && event.currentTarget.contains(next)) return;
+    // Presentation-loss blur (pane backgrounded) must not close the card; it
+    // hides with the pane and returns on refocus.
+    if (isPresentationLossBlur()) return;
     close();
   };
 
@@ -1484,6 +1528,6 @@ export function ArtifactLinkPopover(props: ArtifactLinkPopoverProps) {
         </form>
       )}
     </div>,
-    document.body,
+    paneContainer ?? document.body,
   );
 }

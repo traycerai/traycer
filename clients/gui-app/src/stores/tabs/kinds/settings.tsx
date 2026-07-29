@@ -1,8 +1,9 @@
+import { createElement, lazy } from "react";
 import { Settings } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import { useTabsStore } from "@/stores/tabs/store";
 import { settingsTabIntent } from "@/lib/tab-navigation/intents";
 import type { SystemTab, TabKindModule } from "@/stores/tabs/types";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
@@ -12,6 +13,12 @@ const SETTINGS_TAB_LABEL = "Settings";
 const SETTINGS_PATH_PREFIX = "/settings";
 const SETTINGS_DEFAULT_PATH = "/settings/general";
 const LEGACY_SERVICE_PATH = "/settings/service";
+
+const settingsSurface = lazy(() =>
+  import("@/components/settings/settings-surface").then((module) => ({
+    default: module.SettingsSurface,
+  })),
+);
 
 function settingsRouteOptions(section: SettingsSectionId) {
   switch (section) {
@@ -67,6 +74,17 @@ export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
   },
   descriptor: {
     kind: "settings",
+    surface: {
+      render: (tab) =>
+        createElement(settingsSurface, { lastPath: tab.lastPath }),
+      canonicalRoute: (tab) => tab.route,
+      splitEligibility: "eligible",
+      duplication: "forbidden",
+      singleton: "per-window",
+      newWindow: "copy",
+      readinessScope: "none",
+      durableState: { owner: "tabs-store", eviction: "reconstruct" },
+    },
     duplicate: () => null,
     resolveIntent: (tab) =>
       settingsTabIntent(
@@ -77,7 +95,10 @@ export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
       useLandingDraftStore.getState().clearActiveDraft();
     },
     requestClose: () => {
-      useTabsStore.getState().closeSystemTab("settings");
+      tabCommandCoordinator.closeRefAfterConfirmed({
+        kind: "settings",
+        id: "settings",
+      });
     },
     requiresCloseConfirm: () => false,
     openInNewWindow: (tab, deps) => {

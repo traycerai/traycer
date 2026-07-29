@@ -1,6 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import { useState } from "react";
-import { act, cleanup, render, renderHook } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -27,6 +33,13 @@ function doc(text: string): JsonContent {
   };
 }
 
+const EMPTY_DOC: JsonContent = {
+  type: "doc",
+  content: [{ type: "paragraph" }],
+};
+
+const EMPTY_SELECTION = { from: 1, to: 1 } as const;
+
 function fakeHandle(ready: boolean) {
   const setContent = vi.fn();
   let isReady = ready;
@@ -39,6 +52,8 @@ function fakeHandle(ready: boolean) {
     clear: () => undefined,
     setContent,
     insertImageAttachments: () => undefined,
+    beginPathInsertion: () => null,
+    rewriteImageAttachmentHashById: () => false,
     removeImageAttachmentById: () => undefined,
     insertDictatedText: () => undefined,
     dismissActiveSuggestion: () => false,
@@ -167,6 +182,80 @@ describe("useChatComposerDraft bridge", () => {
     expect(setContent).toHaveBeenCalledTimes(2);
     expect(setContent).toHaveBeenLastCalledWith(doc("second restore"), null);
   });
+
+  /**
+   * clearDraft reuses the resetEpoch broadcast. Old clearDraft deleted the
+   * map entry, so a sibling composer's Tiptap document kept the just-
+   * submitted text (split panes / keep-alive tabs sharing one taskId).
+   */
+  it("broadcasts clearDraft empty content into every ready sibling composer for the same taskId", () => {
+    const taskId = "task-multi-surface";
+    const a = fakeHandle(true);
+    const b = fakeHandle(true);
+    const editorRefA = {
+      current: a.handle as ComposerPromptEditorHandle | null,
+    };
+    const editorRefB = {
+      current: b.handle as ComposerPromptEditorHandle | null,
+    };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, doc("queued steer text"), null);
+    });
+
+    renderBridgeHook({
+      taskId,
+      editorRef: editorRefA,
+      editorReadyTick: 1,
+    });
+    renderBridgeHook({
+      taskId,
+      editorRef: editorRefB,
+      editorReadyTick: 1,
+    });
+
+    act(() => {
+      useComposerDraftStore.getState().clearDraft(taskId);
+    });
+
+    // Both surfaces must push empty content into their local Tiptap docs.
+    // Old clearDraft deleted the map entry and never called setContent on B.
+    expect(a.setContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
+    expect(b.setContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
+  });
+
+  it("defers clearDraft apply until the handle becomes ready (readiness-deferred empty push)", () => {
+    const taskId = "task-clear-deferred";
+    const { handle, setContent, markReady } = fakeHandle(false);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, doc("stale text"), null);
+    });
+
+    const { rerender } = renderBridgeHook({
+      taskId,
+      editorRef,
+      editorReadyTick: 0,
+    });
+
+    act(() => {
+      useComposerDraftStore.getState().clearDraft(taskId);
+    });
+    // Handle exists but methods no-op until useEditor resolves - must not
+    // stamp the epoch yet or the empty content would be swallowed forever.
+    expect(setContent).not.toHaveBeenCalled();
+
+    markReady();
+    rerender({ taskId, editorRef, editorReadyTick: 1 });
+
+    expect(setContent).toHaveBeenCalledTimes(1);
+    expect(setContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
+  });
 });
 
 interface QuoteFocusHarnessProps {
@@ -202,6 +291,7 @@ function QuoteFocusHarness(props: QuoteFocusHarnessProps) {
       disabled={false}
       slashProviderId="claude"
       hasPastedImageBytes={null}
+      ingestPastedComposerImages={null}
       stabilizeImageAttachmentCaret={false}
       onSnapshot={(_content, selection) => {
         selectionRef.current = selection;
@@ -233,6 +323,79 @@ function docEndPosition(content: JsonContent): number {
 }
 
 describe("appendQuoteToDraft + useChatComposerDraft integration", () => {
+  it("preserves focus in the submitting composer when clearDraft broadcasts to a sibling", async () => {
+    const taskId = "task-clear-focus";
+    const editorRefA: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const editorRefB: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const selectionRefA: {
+      current: { readonly from: number; readonly to: number } | null;
+    } = { current: null };
+    const selectionRefB: {
+      current: { readonly from: number; readonly to: number } | null;
+    } = { current: null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, doc("queued steer text"), null);
+    });
+
+    render(
+      <>
+        <QuoteFocusHarness
+          taskId={taskId}
+          editorRef={editorRefA}
+          selectionRef={selectionRefA}
+        />
+        <QuoteFocusHarness
+          taskId={taskId}
+          editorRef={editorRefB}
+          selectionRef={selectionRefB}
+        />
+      </>,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const handleA = editorRefA.current;
+    const handleB = editorRefB.current;
+    expect(handleA).not.toBeNull();
+    expect(handleB).not.toBeNull();
+    if (handleA === null || handleB === null) {
+      throw new Error("editor handle missing");
+    }
+
+    act(() => {
+      handleA.focus();
+    });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+    const editorDoms = screen.getAllByRole("textbox", { name: "test" });
+    expect(editorDoms).toHaveLength(2);
+    expect(document.activeElement).toBe(editorDoms[0]);
+
+    act(() => {
+      useComposerDraftStore.getState().clearDraft(taskId);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+    expect(handleA.getJSON()).toEqual(EMPTY_DOC);
+    expect(handleB.getJSON()).toEqual(EMPTY_DOC);
+    expect(document.activeElement).toBe(editorDoms[0]);
+  });
+
   it("focuses the mounted editor with the caret at doc end after appending a quote", async () => {
     const taskId = "task-focus";
     const editorRef: { current: ComposerPromptEditorHandle | null } = {

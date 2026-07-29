@@ -7,9 +7,10 @@ import {
   type IndicatorTone,
 } from "@/components/notifications/notification-indicator-tones";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { cn } from "@/lib/utils";
 
-const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
+export const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
 
 /**
  * Live-activity tier for the running slot. `"turn"` is the agent actually
@@ -49,7 +50,7 @@ export function NotificationIndicatorIcon(
   }
   if (props.running === "turn") {
     return (
-      <IndicatorSpan indicatorProps={props} title={props.runningTitle}>
+      <IndicatorSpan indicatorProps={props} tooltip={props.runningTitle}>
         <AgentSpinningDots
           className="text-current"
           testId={`${props.testIdPrefix}-activity-${props.subjectId}`}
@@ -60,7 +61,7 @@ export function NotificationIndicatorIcon(
   }
   if (props.running === "background") {
     return (
-      <IndicatorSpan indicatorProps={props} title={BACKGROUND_ACTIVITY_TITLE}>
+      <IndicatorSpan indicatorProps={props} tooltip={BACKGROUND_ACTIVITY_TITLE}>
         <BackgroundActivityGlyph
           testId={`${props.testIdPrefix}-background-activity-${props.subjectId}`}
         />
@@ -91,22 +92,16 @@ function IndicatorStatus(props: {
 }): ReactNode {
   const Icon = props.tone.Icon;
   return (
-    <span
-      role="status"
-      aria-label={props.tone.title}
-      className={cn(
-        "inline-flex size-3.5 shrink-0 items-center justify-center",
-        props.indicatorProps.className,
-      )}
-      style={props.indicatorProps.style}
-      title={props.tone.title}
+    <IndicatorSpan
+      indicatorProps={props.indicatorProps}
+      tooltip={props.tone.title}
     >
       <Icon
         aria-hidden
         className={cn("size-3.5", props.tone.className)}
         data-testid={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
       />
-    </span>
+    </IndicatorSpan>
   );
 }
 
@@ -115,42 +110,53 @@ function IndicatorDot(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
 }): ReactNode {
   return (
-    <span
-      role="status"
-      aria-label={props.tone.title}
-      className={cn(
-        "inline-flex size-3.5 shrink-0 items-center justify-center",
-        props.indicatorProps.className,
-      )}
-      style={props.indicatorProps.style}
-      title={props.tone.title}
+    <IndicatorSpan
+      indicatorProps={props.indicatorProps}
+      tooltip={props.tone.title}
     >
       <AgentSpinningDots
         className={props.tone.className}
         testId={`${props.indicatorProps.testIdPrefix}-${props.tone.testId}-${props.indicatorProps.subjectId}`}
         variant="static"
       />
-    </span>
+    </IndicatorSpan>
   );
 }
 
+/**
+ * The one status-glyph leaf: `role="status"` + accessible name + the hover
+ * tooltip. The tone/dot/running variants above differ only in their glyph, and
+ * each used to re-spell this span - including its own native `title`, which is
+ * how three copies of the same "aria-label and title say the same thing"
+ * pairing ended up here.
+ *
+ * The prop is `tooltip`, not `title`: `title` on a component that spreads onto
+ * a DOM node is indistinguishable at the call site from the native attribute
+ * this replaces.
+ */
 function IndicatorSpan(props: {
   readonly indicatorProps: NotificationIndicatorIconProps;
-  readonly title: string;
+  readonly tooltip: string;
   readonly children: ReactNode;
 }): ReactNode {
   return (
-    <span
-      role="status"
-      aria-label={props.title}
-      className={cn(
-        "inline-flex size-3.5 shrink-0 items-center justify-center",
-        props.indicatorProps.className,
-      )}
-      style={props.indicatorProps.style}
-      title={props.title}
+    <TooltipWrapper
+      label={props.tooltip}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
     >
-      {props.children}
-    </span>
+      <span
+        role="status"
+        aria-label={props.tooltip}
+        className={cn(
+          "inline-flex size-3.5 shrink-0 items-center justify-center",
+          props.indicatorProps.className,
+        )}
+        style={props.indicatorProps.style}
+      >
+        {props.children}
+      </span>
+    </TooltipWrapper>
   );
 }

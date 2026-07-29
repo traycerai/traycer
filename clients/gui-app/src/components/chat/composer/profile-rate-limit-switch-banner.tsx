@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useId,
   useRef,
   useState,
@@ -39,9 +40,10 @@ import {
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
 import { cn } from "@/lib/utils";
-import type {
-  ProfileRateLimitDestination,
-  ProfileRateLimitSeverity,
+import {
+  initialPreviewProfileId,
+  type ProfileRateLimitDestination,
+  type ProfileRateLimitSeverity,
 } from "./use-profile-rate-limit-switch-prompt";
 
 interface ProfileRateLimitSwitchBannerProps {
@@ -55,6 +57,10 @@ interface ProfileRateLimitSwitchBannerProps {
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
   readonly primaryTarget: ProfileRateLimitDestination | null;
+  /** First authenticated unknown-usage destination, set only when no known
+   * strictly-better destination exists. The banner spends exactly one
+   * automatic non-forced usage check on it per mounted warning episode. */
+  readonly probeTarget: ProfileRateLimitDestination | null;
   readonly runTargetHostId: string | null;
   /** User-confirmed only. Commits the picked profile for the next turn. */
   readonly onSwitchProfile: (profileId: string | null) => void;
@@ -67,12 +73,11 @@ interface ProfileRateLimitSwitchBannerProps {
 
 interface ProfileRateLimitDestinationMenuProps {
   readonly harnessId: GuiHarnessId;
-  readonly providerId: ProviderId;
   readonly current: ProviderProfile;
   readonly profiles: ReadonlyArray<ProviderProfile>;
   readonly destinations: ReadonlyArray<ProfileRateLimitDestination>;
   readonly primaryTarget: ProfileRateLimitDestination | null;
-  readonly runTargetHostId: string | null;
+  readonly usagePresentation: ProfileDropdownUsagePresentation;
   readonly onSwitchProfile: (profileId: string | null) => void;
 }
 
@@ -113,7 +118,8 @@ function profileMenuRows(
   destinations: ReadonlyArray<ProfileRateLimitDestination>,
   primaryTarget: ProfileRateLimitDestination | null,
 ): ReadonlyArray<ProfileMenuRow> {
-  if (primaryTarget === null) {
+  const readOnly = !destinations.some((destination) => destination.selectable);
+  if (readOnly) {
     return profiles.map((profile) => ({
       profile,
       destination: null,
@@ -126,17 +132,9 @@ function profileMenuRows(
     destination,
     selectable: destination.selectable,
     isPrimaryTarget:
+      primaryTarget !== null &&
       destination.profile.profileId === primaryTarget.profile.profileId,
   }));
-}
-
-function initialPreviewProfileId(
-  primaryTarget: ProfileRateLimitDestination | null,
-  current: ProviderProfile,
-): string | null {
-  return primaryTarget === null
-    ? profileCommitId(current)
-    : primaryTarget.profileId;
 }
 
 function profileMenuStatus(
@@ -185,7 +183,12 @@ function handleUsageMenuKeyDown(
 ): void {
   if (MENU_NAVIGATION_KEYS.has(event.key)) event.stopPropagation();
   if (!isRefreshShortcut(event)) return;
-  if (entry === undefined || entry.refreshStatus !== "idle" || !isHostReady) {
+  if (
+    entry === undefined ||
+    !entry.fetchEligible ||
+    entry.refreshStatus !== "idle" ||
+    !isHostReady
+  ) {
     return;
   }
   event.preventDefault();
@@ -202,9 +205,42 @@ export function ProfileRateLimitSwitchBanner(
 ) {
   const [includeOtherChats, setIncludeOtherChats] = useState(false);
   const checkboxId = useId();
-  const canIncludeOtherChats = props.affectedChatCount > 1;
+  const readOnly = !props.destinations.some(
+    (destination) => destination.selectable,
+  );
+  const canIncludeOtherChats = !readOnly && props.affectedChatCount > 1;
   const effectiveTaskScope = canIncludeOtherChats && includeOtherChats;
-  const readOnly = props.primaryTarget === null;
+  const usagePresentation = useProfileUsagePresentation({
+    runTargetHostId: props.runTargetHostId,
+    providerId: props.providerId,
+    profiles: props.profiles,
+  });
+  // One automatic, NON-forced usage check per mounted warning episode, and
+  // only for the single probeTarget the hook nominated (no known
+  // strictly-better destination exists, this one is unknown). `ensureFresh`
+  // skips still-fresh cache and honors the usage-fetch cool-down, so this
+  // can never burst-probe or re-trip a 429. A successful reading lands in
+  // the gauge and the next providers.list snapshot promotes the profile to
+  // a real primary target; a failure leaves it unknown - no retry, no next
+  // candidate. The keyed composer boundary remounts this banner when the
+  // warning condition changes, which is what re-arms the single attempt.
+  const autoCheckSpentRef = useRef(false);
+  const probeEntry =
+    props.probeTarget === null
+      ? undefined
+      : usagePresentation.entries.get(props.probeTarget.profileId);
+  const probeReady =
+    probeEntry !== undefined &&
+    probeEntry.fetchEligible &&
+    usagePresentation.isHostReady;
+  useEffect(() => {
+    if (!probeReady || autoCheckSpentRef.current) return;
+    autoCheckSpentRef.current = true;
+    // Fire-and-forget at the boundary: a rejected probe (host/queue error) must
+    // not surface as an unhandled rejection - a failure just leaves the profile
+    // unknown, exactly as the no-retry contract above intends.
+    probeEntry.ensureFresh().catch(() => undefined);
+  }, [probeEntry, probeReady]);
   const executeSwitch = (profileId: string | null): void => {
     const destination = props.destinations.find(
       (candidate) => candidate.profileId === profileId && candidate.selectable,
@@ -255,12 +291,11 @@ export function ProfileRateLimitSwitchBanner(
           </div>
           <ProfileRateLimitDestinationMenu
             harnessId={props.harnessId}
-            providerId={props.providerId}
             current={props.current}
             profiles={props.profiles}
             destinations={props.destinations}
             primaryTarget={props.primaryTarget}
-            runTargetHostId={props.runTargetHostId}
+            usagePresentation={usagePresentation}
             onSwitchProfile={executeSwitch}
           />
           {canIncludeOtherChats ? (
@@ -290,18 +325,20 @@ export function ProfileRateLimitSwitchBanner(
 function ProfileRateLimitDestinationMenu(
   props: ProfileRateLimitDestinationMenuProps,
 ) {
+  const readOnly = !props.destinations.some(
+    (destination) => destination.selectable,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [previewProfileId, setPreviewProfileId] = useState<string | null>(() =>
-    initialPreviewProfileId(props.primaryTarget, props.current),
+    initialPreviewProfileId(
+      props.primaryTarget,
+      props.current,
+      props.destinations,
+    ),
   );
   const [previewAnchor, setPreviewAnchor] = useState<HTMLElement | null>(null);
   const keyboardPreviewEnabledRef = useRef(false);
-  const usagePresentation = useProfileUsagePresentation({
-    runTargetHostId: props.runTargetHostId,
-    providerId: props.providerId,
-    profiles: props.profiles,
-  });
-  const readOnly = props.primaryTarget === null;
+  const usagePresentation = props.usagePresentation;
   const rows = profileMenuRows(
     props.profiles,
     props.destinations,
@@ -323,7 +360,11 @@ function ProfileRateLimitDestinationMenu(
       return;
     }
     setPreviewProfileId(
-      initialPreviewProfileId(props.primaryTarget, props.current),
+      initialPreviewProfileId(
+        props.primaryTarget,
+        props.current,
+        props.destinations,
+      ),
     );
   };
   const preview = (profile: ProviderProfile, anchor: HTMLElement): void => {
@@ -343,6 +384,7 @@ function ProfileRateLimitDestinationMenu(
       <ProfileRateLimitMenuTrigger
         harnessId={props.harnessId}
         primaryTarget={props.primaryTarget}
+        readOnly={readOnly}
         onSwitchProfile={props.onSwitchProfile}
       />
       <ProfileRateLimitMenuContent
@@ -375,23 +417,26 @@ function ProfileRateLimitDestinationMenu(
 function ProfileRateLimitMenuTrigger({
   harnessId,
   primaryTarget,
+  readOnly,
   onSwitchProfile,
 }: {
   readonly harnessId: GuiHarnessId;
   readonly primaryTarget: ProfileRateLimitDestination | null;
+  readonly readOnly: boolean;
   readonly onSwitchProfile: (profileId: string | null) => void;
 }): ReactNode {
   if (primaryTarget === null) {
+    const label = readOnly ? "View profile limits" : "Choose a profile";
     return (
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
           size="sm"
           variant="outline"
-          aria-label="View profile limits"
+          aria-label={label}
           className="w-full min-w-0 sm:w-auto sm:justify-self-end"
         >
-          <span className="min-w-0 truncate">View profile limits</span>
+          <span className="min-w-0 truncate">{label}</span>
         </Button>
       </DropdownMenuTrigger>
     );
@@ -547,7 +592,7 @@ function ProfileRateLimitMenuRow({
         readOnly,
       })}
       aria-disabled={!row.selectable}
-      aria-keyshortcuts={usageEntry === undefined ? undefined : "R"}
+      aria-keyshortcuts={usageEntry?.fetchEligible ? "R" : undefined}
       className={cn("gap-2 py-1.5 pr-1.5", !row.selectable && "opacity-60")}
       onFocus={(event) => onFocusPreview(row.profile, event.currentTarget)}
       onPointerMove={(event) => onPreview(row.profile, event.currentTarget)}

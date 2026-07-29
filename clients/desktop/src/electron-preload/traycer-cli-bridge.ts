@@ -36,11 +36,6 @@ export interface TraycerCliBridgeSurface {
     readonly value: string | null;
   }): Promise<void>;
   envOverrideDelete(input: { readonly key: string }): Promise<void>;
-  cliLogin(input: {
-    readonly token: string;
-    readonly refreshToken: string;
-  }): Promise<void>;
-  cliLogout(): Promise<void>;
 }
 
 export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
@@ -104,12 +99,5 @@ export function buildTraycerCliBridge(): TraycerCliBridgeSurface {
         RunnerHostInvoke.traycerConfigEnvDelete,
         input,
       ) as Promise<void>,
-    cliLogin: (input) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.traycerCliLogin,
-        input,
-      ) as Promise<void>,
-    cliLogout: () =>
-      ipcRenderer.invoke(RunnerHostInvoke.traycerCliLogout) as Promise<void>,
   };
 }

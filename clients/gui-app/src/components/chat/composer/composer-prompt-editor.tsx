@@ -12,22 +12,33 @@ import {
   type KeyboardEventHandler,
   type Ref,
 } from "react";
+import type { Editor } from "@tiptap/core";
 import { EditorContent, useEditor } from "@tiptap/react";
-import { Selection } from "@tiptap/pm/state";
+import { Selection, type Transaction } from "@tiptap/pm/state";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 
+import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
 import { cn } from "@/lib/utils";
 import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
+import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 
 import { buildComposerExtensions } from "./editor/editor-config";
+import type {
+  PastedComposerImage,
+  PastedComposerImageOutcome,
+} from "./editor/extensions/chat-paste-handler";
 import { mentionSuggestionPluginKey } from "./editor/extensions/mention-extension";
 import {
   skillSuggestionPluginKey,
   slashSuggestionPluginKey,
 } from "./editor/extensions/slash-command-extension";
-import { insertImageAttachmentsCommand } from "@/hooks/composer/use-composer-paste";
+import {
+  insertPathSpansCommand,
+  insertImageAttachmentsCommand,
+  type PathInsertionCommit,
+} from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
 
@@ -53,7 +64,26 @@ export interface ComposerPromptEditorHandle {
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
   ) => void;
+  /**
+   * Starts a path-insertion job anchored to the current caret. The returned
+   * one-shot `commit` maps that position through intervening editor changes
+   * and returns `false` if the editor was destroyed before resolution.
+   */
+  readonly beginPathInsertion: () => PathInsertionCommit | null;
   readonly removeImageAttachmentById: (id: string) => void;
+  /**
+   * Flip a pending base64 image node (located by `id`) to its stored content
+   * hash IN PLACE, preserving its document position. A landing paste inserts
+   * image nodes in order carrying `b64content`; each node's background
+   * hash+store job calls this to convert it to `{hash}` once bytes are durable.
+   * Returns the command's result: `false` when no node with that id exists (the
+   * user removed the pending node before the write settled, or the editor is
+   * gone) so the caller can reclaim the now-unrooted bytes.
+   */
+  readonly rewriteImageAttachmentHashById: (
+    id: string,
+    hash: string,
+  ) => boolean;
   /**
    * Insert a finalized dictation segment at the caret (with a trailing space
    * so consecutive segments don't run together). Focuses first so the
@@ -85,11 +115,22 @@ export interface ComposerPromptEditorProps {
   readonly disabled: boolean;
   readonly slashProviderId: GuiHarnessId;
   readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
+  /**
+   * Landing-only: validates a paste's inline-base64 images + starts their
+   * in-place background ingest jobs, returning a verdict per image. `null` on
+   * chat surfaces, where base64 nodes are inserted verbatim. See
+   * `ChatPasteHandlerDeps`.
+   */
+  readonly ingestPastedComposerImages:
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null;
   readonly onSnapshot: (
     content: JsonContent,
     selection: { from: number; to: number },
   ) => void;
-  readonly onSubmit: () => void;
+  readonly onSubmit: (source: ChatComposerSubmitSource) => void;
   readonly onPaste: ClipboardEventHandler<HTMLElement>;
   readonly onDragOver: DragEventHandler<HTMLElement>;
   readonly onDrop: DragEventHandler<HTMLElement>;
@@ -106,6 +147,19 @@ export interface ComposerPromptEditorProps {
   readonly ref?: Ref<ComposerPromptEditorHandle>;
 }
 
+interface ComposerTransactionEvent {
+  readonly transaction: Transaction;
+  readonly appendedTransactions: Transaction[];
+}
+
+function subscribeToComposerTransactions(
+  editor: Editor,
+  listener: (event: ComposerTransactionEvent) => void,
+): () => void {
+  editor.on("transaction", listener);
+  return () => editor.off("transaction", listener);
+}
+
 function usePastedImageBytesPresenceGetter(
   hasPastedImageBytes: ((hash: string) => boolean) | null,
 ): () => ((hash: string) => boolean) | null {
@@ -113,6 +167,37 @@ function usePastedImageBytesPresenceGetter(
   useLayoutEffect(() => {
     latest.current = hasPastedImageBytes;
   }, [hasPastedImageBytes]);
+  return useCallback(() => latest.current, []);
+}
+
+// Stable getter for the live placeholder, mirroring the presence-getter above.
+// The Tiptap Placeholder decoration closes over this once (extensions build
+// once) and re-reads it on each transaction, so a changing placeholder never
+// rebuilds the editor. The layout effect lands the new value before the owner's
+// no-op-transaction poke fires.
+function usePlaceholderGetter(placeholder: string): () => string {
+  const latest = useRef(placeholder);
+  useLayoutEffect(() => {
+    latest.current = placeholder;
+  }, [placeholder]);
+  return useCallback(() => latest.current, []);
+}
+
+function useIngestPastedComposerImagesGetter(
+  ingestPastedComposerImages:
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null,
+): () =>
+  | ((
+      images: ReadonlyArray<PastedComposerImage>,
+    ) => ReadonlyArray<PastedComposerImageOutcome>)
+  | null {
+  const latest = useRef(ingestPastedComposerImages);
+  useLayoutEffect(() => {
+    latest.current = ingestPastedComposerImages;
+  }, [ingestPastedComposerImages]);
   return useCallback(() => latest.current, []);
 }
 
@@ -128,6 +213,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     disabled,
     slashProviderId,
     hasPastedImageBytes,
+    ingestPastedComposerImages,
     onSnapshot,
     onSubmit,
     onPaste,
@@ -162,28 +248,37 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     onEditorReadyRef.current = onEditorReady;
   });
 
-  const [stableSubmitHolder] = useState<{ readonly current: () => void }>(
-    () => ({
-      current: () => {
-        onSubmitRef.current();
-      },
-    }),
-  );
+  const [stableSubmitHolder] = useState<{
+    readonly current: (source: ChatComposerSubmitSource) => void;
+  }>(() => ({
+    current: (source) => {
+      onSubmitRef.current(source);
+    },
+  }));
+  // Live placeholder source. The editor is built once, so a changing placeholder
+  // (e.g. the mid-turn steer hint) flows through this stable getter rather than
+  // rebuilding extensions; an effect below re-reads it via a no-op transaction.
+  const getPlaceholder = usePlaceholderGetter(placeholder);
   const getHasPastedImageBytes =
     usePastedImageBytesPresenceGetter(hasPastedImageBytes);
+  const getIngestPastedComposerImages = useIngestPastedComposerImagesGetter(
+    ingestPastedComposerImages,
+  );
   const extensions = useMemo(
     () =>
       buildComposerExtensions({
         pickerStore,
-        placeholder,
+        getPlaceholder,
         onSubmit: stableSubmitHolder,
         slashProviderId,
         getHasPastedImageBytes,
+        getIngestPastedComposerImages,
       }),
     [
       getHasPastedImageBytes,
+      getPlaceholder,
+      getIngestPastedComposerImages,
       pickerStore,
-      placeholder,
       slashProviderId,
       stableSubmitHolder,
     ],
@@ -260,6 +355,17 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     });
   }, [editor, editorAttributesObject]);
 
+  useEffect(() => {
+    // The Placeholder decoration only re-reads the getter on a transaction. Poke
+    // an empty one when the placeholder changes and the editor is showing it
+    // (empty), so a mid-turn steer hint appears without waiting for a keystroke.
+    // Skipped while non-empty to avoid disturbing an in-progress edit / IME.
+    // `usePlaceholderGetter`'s layout effect has already landed the new value.
+    if (editor !== null && editor.isEmpty) {
+      editor.view.dispatch(editor.state.tr);
+    }
+  }, [editor, placeholder]);
+
   const isReady = useCallback(() => editor !== null, [editor]);
 
   const focus = useCallback(() => {
@@ -310,8 +416,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   const handleDrop = useCallback<DragEventHandler<HTMLElement>>(
     (event) => {
-      const hasFiles = Array.from(event.dataTransfer.types).includes("Files");
-      if (editor !== null && hasFiles) {
+      if (editor !== null && hasClaimableFileTransfer(event.dataTransfer)) {
         const dropPos = editor.view.posAtCoords({
           left: event.clientX,
           top: event.clientY,
@@ -337,10 +442,47 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     [editor, stabilizeImageAttachmentCaret],
   );
 
+  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
+    if (editor === null || editor.isDestroyed) return null;
+    let position = editor.state.selection.to;
+    const onTransaction = ({
+      transaction,
+      appendedTransactions,
+    }: ComposerTransactionEvent): void => {
+      [transaction, ...appendedTransactions].forEach((tr) => {
+        position = tr.mapping.map(position, -1);
+      });
+    };
+    const unsubscribeFromTransactions = subscribeToComposerTransactions(
+      editor,
+      onTransaction,
+    );
+    let settled = false;
+    return (paths): boolean => {
+      if (settled) return false;
+      settled = true;
+      unsubscribeFromTransactions();
+      if (editor.isDestroyed) return false;
+      if (paths.length > 0) {
+        insertPathSpansCommand(editor, { paths, position });
+        editor.commands.focus();
+      }
+      return true;
+    };
+  }, [editor]);
+
   const removeImageAttachmentById = useCallback(
     (id: string) => {
       if (editor === null) return;
       editor.commands.removeImageAttachmentById(id);
+    },
+    [editor],
+  );
+
+  const rewriteImageAttachmentHashById = useCallback(
+    (id: string, hash: string): boolean => {
+      if (editor === null || editor.isDestroyed) return false;
+      return editor.commands.rewriteImageAttachmentHashById(id, hash);
     },
     [editor],
   );
@@ -401,11 +543,14 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       clear,
       setContent,
       insertImageAttachments,
+      beginPathInsertion,
       removeImageAttachmentById,
+      rewriteImageAttachmentHashById,
       insertDictatedText,
       dismissActiveSuggestion,
     }),
     [
+      beginPathInsertion,
       clear,
       dismissActiveSuggestion,
       focus,
@@ -416,6 +561,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
       isEmpty,
       isReady,
       removeImageAttachmentById,
+      rewriteImageAttachmentHashById,
       setContent,
     ],
   );

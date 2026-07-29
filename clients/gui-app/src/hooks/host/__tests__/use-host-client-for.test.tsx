@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { cleanup, renderHook } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { StaleHostBindingAuthorityError } from "@traycer-clients/shared/host-client/host-binding-authority-registry";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
-import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
 
 // One global client shared between the mocked `useHostClient` and the tests.
 const globalClientRef = vi.hoisted(() => ({
@@ -144,7 +144,7 @@ describe("useHostClientFor", () => {
     expect(result.current?.getActiveHostId()).toBe("host-c");
   });
 
-  it("keeps every retry pinned to the original target after the default host changes", async () => {
+  it("routes through the provider client instead of creating a transient messenger", async () => {
     vi.stubGlobal("WebSocket", RetryTestWebSocket);
     const hostA: HostDirectoryEntry = {
       ...mockLocalHostEntry,
@@ -164,28 +164,11 @@ describe("useHostClientFor", () => {
       throw new Error("Expected a host-pinned transient client");
     }
 
-    const request = client.request("terminal.kill", { sessionId: "session-a" });
-    await waitFor(() => {
-      expect(RetryTestWebSocket.instances).toHaveLength(1);
-    });
     globalClient.bind(hostB);
-    RetryTestWebSocket.instances[0]?.emitError();
-
-    await waitFor(() => {
-      expect(RetryTestWebSocket.instances).toHaveLength(2);
-    });
-    RetryTestWebSocket.instances[1]?.emitError();
-
-    await waitFor(() => {
-      expect(RetryTestWebSocket.instances).toHaveLength(3);
-    });
-    RetryTestWebSocket.instances[2]?.emitError();
-
-    await expect(request).rejects.toBeInstanceOf(RetryableTransportError);
-    expect(RetryTestWebSocket.instances.map((socket) => socket.url)).toEqual([
-      "ws://host-a/rpc",
-      "ws://host-a/rpc",
-      "ws://host-a/rpc",
-    ]);
+    const request = client.request("terminal.kill", { sessionId: "session-a" });
+    await expect(request).rejects.toBeInstanceOf(
+      StaleHostBindingAuthorityError,
+    );
+    expect(RetryTestWebSocket.instances).toHaveLength(0);
   });
 });

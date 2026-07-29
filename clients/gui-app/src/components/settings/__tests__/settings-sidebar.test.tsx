@@ -4,6 +4,7 @@ import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -40,6 +41,20 @@ describe("<SettingsSidebar /> leader hints", () => {
   beforeEach(() => {
     window.localStorage.clear();
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    // The settings section leader now gates on the actual focused ref, so seed
+    // the Settings tab as the focused layout item (the real on-/settings state).
+    useTabsStore.setState({
+      version: 2,
+      items: [],
+      activeItemId: null,
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+    useTabsStore.getState().openSystemTab({
+      kind: "settings",
+      name: "Settings",
+      lastPath: "/settings/general",
+    });
   });
 
   afterEach(() => {
@@ -77,11 +92,14 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(ids).not.toContain("service");
   });
 
-  it("SETTINGS_SECTIONS includes the Agents section", () => {
+  it("labels the agent-selection section for selection, not the Task's Agents", () => {
     const ids = SETTINGS_SECTIONS.map((section) => section.id);
     const labels = SETTINGS_SECTIONS.map((section) => section.label);
+    // The id stays `agents` (compatibility identifier + `/settings/agents`
+    // route); only the product copy moves.
     expect(ids).toContain("agents");
-    expect(labels).toContain("Agents");
+    expect(labels).toContain("Agent selection");
+    expect(labels).not.toContain("Agents");
   });
 
   it("delays sub-leader digit badges in settings navigation", async () => {

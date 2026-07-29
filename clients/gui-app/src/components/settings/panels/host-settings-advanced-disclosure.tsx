@@ -8,6 +8,7 @@ import {
 } from "@/components/settings/panels/host-settings-panel-model";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import type {
   HostAvailableSnapshot,
   HostAvailableVersionEntry,
@@ -21,6 +22,7 @@ interface AdvancedDisclosureProps {
   readonly availablePending: boolean;
   readonly availableErrorMessage: string | null;
   readonly availableFetching: boolean;
+  readonly includePreReleases: boolean;
   readonly registryState: HostRegistryUpdateState | undefined;
   readonly statusState: ServiceStatusSnapshot["state"] | undefined;
   readonly anyPending: boolean;
@@ -30,6 +32,7 @@ interface AdvancedDisclosureProps {
   readonly onRegisterService: () => void;
   readonly onDeregisterService: () => void;
   readonly onRefreshAvailable: () => void;
+  readonly onIncludePreReleasesChange: (value: boolean) => void;
 }
 
 export function AdvancedDisclosure(props: AdvancedDisclosureProps) {
@@ -39,6 +42,7 @@ export function AdvancedDisclosure(props: AdvancedDisclosureProps) {
     availablePending,
     availableErrorMessage,
     availableFetching,
+    includePreReleases,
     statusState,
     anyPending,
     registerPending,
@@ -47,6 +51,7 @@ export function AdvancedDisclosure(props: AdvancedDisclosureProps) {
     onRegisterService,
     onDeregisterService,
     onRefreshAvailable,
+    onIncludePreReleasesChange,
   } = props;
   const [showAllVersions, setShowAllVersions] = useState(false);
   const visibleVersions = useMemo<readonly HostAvailableVersionEntry[]>(() => {
@@ -103,6 +108,25 @@ export function AdvancedDisclosure(props: AdvancedDisclosureProps) {
               Install a specific host version. Useful for pinning or rolling
               back.
             </p>
+          </div>
+          <div className="flex items-start gap-2 text-ui-sm text-muted-foreground">
+            <Checkbox
+              id="host-include-pre-releases"
+              aria-label="Include release candidates"
+              checked={includePreReleases}
+              onCheckedChange={(value) =>
+                onIncludePreReleasesChange(value === true)
+              }
+            />
+            <label
+              htmlFor="host-include-pre-releases"
+              className="flex min-w-0 cursor-pointer flex-col gap-0.5 select-none"
+            >
+              <span className="text-foreground">
+                Include release candidates
+              </span>
+              <span>Show RC host versions when choosing a version.</span>
+            </label>
           </div>
           <AvailableVersionsList
             availableSnapshot={availableSnapshot}

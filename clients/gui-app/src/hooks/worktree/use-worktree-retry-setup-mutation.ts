@@ -3,7 +3,7 @@ import {
   useQueryClient,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { withHostRpcErrorBoundary } from "@traycer-clients/shared/host-transport/host-messenger";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import { withHostMutationLifecycleBoundary } from "@/hooks/host/use-host-query";
 import type {
   HostRpcError,
@@ -55,7 +55,7 @@ export function useWorktreeRetrySetupFor(
     withHostMutationLifecycleBoundary("worktree.retrySetup", {
       mutationKey: worktreeMutationKeys.retrySetup(),
       mutationFn: (variables) =>
-        withHostRpcErrorBoundary("worktree.retrySetup", () => {
+        withHostQueryErrorBoundary("worktree.retrySetup", () => {
           if (client === null) {
             return Promise.reject<
               ResponseOfMethod<HostRpcRegistry, "worktree.retrySetup">

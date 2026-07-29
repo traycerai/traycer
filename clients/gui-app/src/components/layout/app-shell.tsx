@@ -5,7 +5,11 @@ import { TileFindOwnerBridge } from "@/components/epic-canvas/tile-find/tile-fin
 import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-bridge";
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppHeader } from "@/components/layout/header/app-header";
+import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
+import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level-surface-activation-provider";
+import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
+import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 
@@ -29,7 +33,27 @@ export function AppShell(props: AppShellProps) {
           <div className="relative flex h-screen w-full flex-col">
             <AppHeader variant="app" />
             <main className="relative flex min-h-0 flex-1 flex-col">
-              {children}
+              {/* The app's edge-to-edge content viewport. Individual surfaces
+                  own their internal overflow, including the landing terminal. */}
+              <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                <TopLevelSurfaceActivationProvider>
+                  <TopLevelTabHost />
+                </TopLevelSurfaceActivationProvider>
+                <div
+                  className="pointer-events-none absolute inset-0 flex h-full min-h-0 flex-col [&>*]:pointer-events-auto"
+                  data-testid="route-adapter-layer"
+                >
+                  {children}
+                </div>
+                {/* Single window-wide terminal mount: the gesture provider's
+                    state must survive draft/split focus changes, so it lives
+                    here rather than inside any one landing pane. The panel's
+                    DOM is portaled into the selected pane's anchor, which owns
+                    its layout and clipping. */}
+                <HostScopeReady scope="default-host">
+                  <LandingTerminalHost />
+                </HostScopeReady>
+              </div>
               <TileFindOwnerBridge />
             </main>
             <OpenFolderDialog />
