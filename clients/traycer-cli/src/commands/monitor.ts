@@ -681,4 +681,3 @@ function printReceiverCancelledNotice(
 function diag(message: string): void {
   writeStderr(`[traycer monitor] ${message}\n`);
 }
-
