@@ -29,6 +29,11 @@ type PackageManagerSource =
  *     path and rewrite the manifest. If the live binary is locked (typical
  *     on Windows), surface a `pendingUpgrade` instead of erroring.
  *
+ *   - If the Desktop-owned slot binary is present but cannot report its
+ *     version (failed probe: corrupt file, ENOEXEC, hang), never let the
+ *     manifest's recorded version stand in for it - route through the same
+ *     upgrade path and re-stage the bundled CLI over it.
+ *
  *   - If a **package-manager**-owned CLI (homebrew/npm/winget/scoop/apt/rpm) is
  *     older than the bundled CLI, **do not** overwrite it. Return a
  *     reconciliation outcome with platform/source-specific upgrade
@@ -331,9 +336,36 @@ export async function reconcileCli(
     });
   }
 
+  // Case 2b: the desktop-owned slot binary is present (case 2a saw it) but
+  // cannot report its version - a corrupt file's ENOEXEC, garbage
+  // `--version` output, and a hung binary all collapse to a null probe.
+  // The manifest's recorded version is exactly what must NOT stand in for
+  // it then: a broken slot plus a record claiming >= bundled reads
+  // "trusted-equal" on every launch, and the CLI stays dead until a manual
+  // reinstall (v1.1.9-rc.3 field incident: the slot held a non-executable
+  // file while the manifest claimed 2.0.0, so reconcile trusted it
+  // indefinitely). A binary that cannot even print its version has nothing
+  // worth preserving, so route it through the upgrade path below - which
+  // re-stages the app's own bundled CLI and already owns the
+  // binary-locked/pendingUpgrade fallbacks - instead of the trust branch.
+  // A transiently failing probe (the 2s timeout under cold-launch I/O)
+  // merely re-stages bytes the desktop owns anyway; the next launch probes
+  // the healthy copy and trusts it again.
+  const slotBinaryUnresponsive =
+    manifest.source === "desktop" && probedManifestVersion === null;
+
   // Case 2: manifest present. Compare versions.
   const cmp = compareSemver(installedVersion, bundledVersion);
-  if (cmp >= 0) {
+  if (slotBinaryUnresponsive) {
+    deps.logger.warn(
+      "[cli-reconcile] desktop-owned slot binary failed the version probe - re-staging the bundled CLI over it instead of trusting the manifest record",
+      {
+        binaryPath: manifest.binaryPath,
+        manifestVersion: manifest.version,
+        bundledVersion,
+      },
+    );
+  } else if (cmp >= 0) {
     // Version comparison is blind between two dogfood builds: every local
     // build stamps the same `0.0.0-local` sentinel, so a stale slot CLI
     // reads "equal" forever and keeps running host installs/stops with old
