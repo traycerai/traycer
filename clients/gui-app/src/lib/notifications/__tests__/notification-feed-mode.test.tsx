@@ -27,15 +27,15 @@ describe("useNotificationFeedMode", () => {
     );
   });
 
-  it("uses cloud while capability is pending or supported, then falls back locally when absent", () => {
+  it("keeps pending capability local and upgrades only after confirmed support", () => {
     useAuthStore.setState({ subscriptionStatus: "PRO" });
     cloudFeedSupport.value = null;
     const hook = renderHook(() => useNotificationFeedMode());
 
-    expect(hook.result.current).toBe("cloud");
+    expect(hook.result.current).toBe("local");
     cloudFeedSupport.value = "unknown";
     hook.rerender();
-    expect(hook.result.current).toBe("cloud");
+    expect(hook.result.current).toBe("local");
     cloudFeedSupport.value = "supported";
     hook.rerender();
     expect(hook.result.current).toBe("cloud");

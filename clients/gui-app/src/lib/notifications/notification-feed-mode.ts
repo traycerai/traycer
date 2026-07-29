@@ -6,11 +6,10 @@ export type NotificationFeedMode = "local" | "cloud" | "upgrade-required";
 
 /**
  * The notification center has one authoritative source at a time. A paid
- * user asks for the cloud feed while capability negotiation is pending. Once
- * the optional method is confirmed absent, the host is cloud-incapable for
- * this connection and the v1 local feed remains authoritative. This makes a
- * flag-off current host indistinguishable from a host predating cloud feed.
- * Free/pending users never subscribe to the cloud method.
+ * user stays on the v1 local feed while capability negotiation is pending.
+ * Only a confirmed method upgrades the session to cloud; an offline or older
+ * host therefore cannot blank retained local rows while discovery waits.
+ * Free/pending users never select the cloud method.
  */
 export function useNotificationFeedMode(): NotificationFeedMode {
   const subscriptionStatus = useAuthStore((state) => state.subscriptionStatus);
@@ -20,5 +19,5 @@ export function useNotificationFeedMode(): NotificationFeedMode {
   if (subscriptionStatus === null || !isPaidTier(subscriptionStatus)) {
     return "local";
   }
-  return cloudFeedSupport === "unsupported" ? "local" : "cloud";
+  return cloudFeedSupport === "supported" ? "cloud" : "local";
 }

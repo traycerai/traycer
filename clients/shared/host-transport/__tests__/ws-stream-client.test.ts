@@ -915,6 +915,51 @@ describe("WsStreamClient", () => {
     session.close();
   });
 
+  it("re-probes the full host manifest after reconnect and discovers a newly enabled method", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const session = client.subscribe("host.notifications.feed.subscribe", {
+      initialAttentionLimit: 50,
+      initialRecentLimit: 50,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    const firstSocket = sockets[0].socket;
+    firstSocket.fireOpen();
+    const firstOpen = parseText(firstSocket.textSent[0]);
+    const firstManifest = firstOpen.manifest as Record<
+      string,
+      { major: number; minor: number }
+    >;
+    const methodlessManifest = { ...firstManifest };
+    delete methodlessManifest["host.notifications.cloudFeed.subscribe"];
+    firstSocket.fireText(streamOpenAck(methodlessManifest, undefined));
+    expect(
+      client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
+    ).toBe("unsupported");
+
+    client.reconnectAll("host-endpoint-change");
+    expect(
+      client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
+    ).toBe("unknown");
+    await vi.advanceTimersByTimeAsync(10);
+    expect(sockets).toHaveLength(2);
+    completeHandshake(sockets[1].socket);
+    expect(
+      client.getMethodSupport("host.notifications.cloudFeed.subscribe"),
+    ).toBe("supported");
+
+    session.close();
+  });
+
   it("closes the socket after two missed pongs and triggers a reconnect", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 

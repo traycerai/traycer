@@ -49,12 +49,14 @@ interface HostState {
 interface StreamState {
   client: WsStreamClient<HostStreamRpcRegistry> | null;
   cloudFeedSupport: StreamMethodSupport | null;
+  useClientSupport: boolean;
 }
 
 const hostState = vi.hoisted<HostState>(() => ({ id: "host-a", client: null }));
 const streamState = vi.hoisted<StreamState>(() => ({
   client: null,
   cloudFeedSupport: null,
+  useClientSupport: false,
 }));
 
 const mockAuth = {
@@ -72,7 +74,10 @@ vi.mock("@/lib/host", () => ({
 
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useWsStreamClient: () => streamState.client,
-  useStreamMethodSupport: () => streamState.cloudFeedSupport,
+  useStreamMethodSupport: (method: keyof HostStreamRpcRegistry & string) =>
+    streamState.useClientSupport
+      ? (streamState.client?.getMethodSupport(method) ?? null)
+      : streamState.cloudFeedSupport,
 }));
 
 vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
@@ -550,7 +555,8 @@ describe("<NotificationsSessionProvider />", () => {
     hostState.id = "host-a";
     hostState.client = null;
     streamState.client = null;
-    streamState.cloudFeedSupport = null;
+    streamState.cloudFeedSupport = "supported";
+    streamState.useClientSupport = false;
     mockAuth.onChange.mockClear();
     mockAuth.revalidateCurrentContext.mockClear();
     mockAuth.onChange.mockImplementation(
@@ -792,12 +798,44 @@ describe("<NotificationsSessionProvider />", () => {
     });
   });
 
-  it("falls back to the v1 local feed for an entitled user on a methodless host", async () => {
+  it("keeps retained v1 rows for an entitled user while a rebuilt client is offline", async () => {
     const queryClient = new QueryClient();
-    const streamClient = new MockWsStreamClient();
+    const streamClient = new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: () => null,
+      bearer: () => null,
+      auth: null,
+      webSocketFactory: {
+        create: () => {
+          throw new Error("offline client must not dial");
+        },
+      },
+      dialTimeoutMs: 1_000,
+      openAckTimeoutMs: 1_000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const subscribeSpy = vi.spyOn(streamClient, "subscribe");
     hostState.id = mockLocalHostEntry.hostId;
     streamState.client = streamClient;
-    streamState.cloudFeedSupport = "unknown";
+    streamState.useClientSupport = true;
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [
+          hostEntry({
+            id: "retained-local-row",
+            epicId: "epic-local",
+            chatId: "chat-local",
+            severity: "done",
+          }),
+        ],
+        nextCursor: null,
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
 
     const view = render(
       <QueryClientProvider client={queryClient}>
@@ -811,78 +849,21 @@ describe("<NotificationsSessionProvider />", () => {
       useAuthStore.setState({ subscriptionStatus: "PRO" });
     });
     await waitFor(() => {
-      expect(streamClient.subscribedMethods).toEqual([
-        "host.notifications.cloudFeed.subscribe",
-      ]);
-    });
-
-    act(() => {
-      streamState.cloudFeedSupport = "unsupported";
-      view.rerender(
-        <QueryClientProvider client={queryClient}>
-          <NotificationsSessionProvider>
-            <div />
-          </NotificationsSessionProvider>
-        </QueryClientProvider>,
-      );
-    });
-    await waitFor(() => {
-      expect(streamClient.session.closeCount).toBe(1);
-      expect(useCloudNotificationsStore.getState().connectionState).toBe(
-        "unavailable",
-      );
-      expect(streamClient.subscribedMethods).toEqual([
-        "host.notifications.cloudFeed.subscribe",
+      expect(subscribeSpy.mock.calls.map(([method]) => method)).toEqual([
         "notifications.subscribe",
         "host.notifications.feed.subscribe",
       ]);
     });
-
-    // The fallback is not merely a mode label: the v1 host stream is live and
-    // its rows reach the local store for the entitled user.
-    act(() => {
-      streamClient.session.emitServerFrame({
-        kind: "snapshot",
-        hasBinaryPayload: false,
-        attention: { entries: [], nextCursor: null },
-        recent: {
-          entries: [
-            hostEntry({
-              id: "flag-off-local-row",
-              epicId: "epic-local",
-              chatId: "chat-local",
-              severity: "done",
-            }),
-          ],
-          nextCursor: null,
-        },
-        summary: { unreadCount: 1, attentionCount: 0 },
-      });
-    });
-    await waitFor(() => {
-      expect(
-        useHostNotificationsStore.getState().byId["flag-off-local-row"],
-      ).toBeDefined();
-    });
-
-    act(() => {
-      streamState.cloudFeedSupport = "supported";
-      view.rerender(
-        <QueryClientProvider client={queryClient}>
-          <NotificationsSessionProvider>
-            <div />
-          </NotificationsSessionProvider>
-        </QueryClientProvider>,
-      );
-    });
-    await waitFor(() => {
-      expect(streamClient.subscribedMethods).toEqual([
+    expect(
+      useHostNotificationsStore.getState().byId["retained-local-row"],
+    ).toBeDefined();
+    expect(
+      streamClient.getMethodSupport(
         "host.notifications.cloudFeed.subscribe",
-        "notifications.subscribe",
-        "host.notifications.feed.subscribe",
-        "host.notifications.cloudFeed.subscribe",
-      ]);
-    });
+      ),
+    ).toBe("unknown");
+    view.unmount();
+    streamClient.close("test-complete");
   });
 
   it("reopens the stream and resets the local replica on signed-in user switches", async () => {

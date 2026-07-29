@@ -18,7 +18,10 @@ import type {
   RevalidateOutcome,
   StreamAuthRevalidator,
 } from "@traycer-clients/shared/auth/bearer-revalidator";
-import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type {
+  ConnectionManifest,
+  FatalErrorDetails,
+} from "@traycer/protocol/framework/ws-protocol";
 import {
   hostStreamOpenAckFrameSchema,
   hostStreamFatalErrorFrameSchema,
@@ -221,6 +224,8 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       onMethodSupport: (nextMethod, support, schemaVersion) => {
         this.setMethodSupport(nextMethod, support, schemaVersion);
       },
+      onManifest: (manifest) => this.applyHostManifest(manifest),
+      onTransportReconnect: () => this.resetMethodSupport(),
     });
     removeSession = () => {
       this.ownedSessions.delete(session);
@@ -361,6 +366,19 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     support: StreamMethodSupport,
     schemaVersion: SchemaVersion | null,
   ): void {
+    if (!this.updateMethodSupport(method, support, schemaVersion)) {
+      return;
+    }
+    for (const listener of Array.from(this.methodSupportListeners)) {
+      listener();
+    }
+  }
+
+  private updateMethodSupport(
+    method: string,
+    support: StreamMethodSupport,
+    schemaVersion: SchemaVersion | null,
+  ): boolean {
     const previous = this.methodSupport.get(method) ?? "unknown";
     const previousVersion = this.methodSchemaVersions.get(method) ?? null;
     if (
@@ -377,9 +395,43 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       previous === support &&
       schemaVersionEqual(previousVersion, nextVersion)
     ) {
-      return;
+      return false;
     }
     this.methodSupport.set(method, support);
+    return true;
+  }
+
+  private applyHostManifest(theirManifest: ConnectionManifest): void {
+    const myManifest = buildStreamManifest(this.options.registry);
+    let changed = false;
+    for (const method of Object.keys(myManifest)) {
+      const compat = checkStreamMethodCompatibility(
+        this.options.registry,
+        myManifest,
+        theirManifest,
+        "client",
+        method,
+      );
+      changed =
+        this.updateMethodSupport(
+          method,
+          compat.ok ? "supported" : "unsupported",
+          compat.ok ? (theirManifest[method] ?? null) : null,
+        ) || changed;
+    }
+    if (changed) {
+      for (const listener of Array.from(this.methodSupportListeners)) {
+        listener();
+      }
+    }
+  }
+
+  private resetMethodSupport(): void {
+    if (this.methodSupport.size === 0 && this.methodSchemaVersions.size === 0) {
+      return;
+    }
+    this.methodSupport.clear();
+    this.methodSchemaVersions.clear();
     for (const listener of Array.from(this.methodSupportListeners)) {
       listener();
     }
@@ -442,6 +494,8 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     support: StreamMethodSupport,
     schemaVersion: SchemaVersion | null,
   ) => void;
+  readonly onManifest: (manifest: ConnectionManifest) => void;
+  readonly onTransportReconnect: () => void;
 }
 
 /**
@@ -889,6 +943,7 @@ class StreamSession<
 
     const myManifest = buildStreamManifest(this.config.registry);
     const theirManifest = ackParse.data.manifest;
+    this.config.onManifest(theirManifest);
     const compat = checkStreamMethodCompatibility(
       this.config.registry,
       myManifest,
@@ -1226,6 +1281,7 @@ class StreamSession<
    * that decides whether to reconnect or go terminal.
    */
   private resetForReconnect(): void {
+    this.config.onTransportReconnect();
     this.clearHeartbeat();
     if (this.openAckTimer !== null) {
       clearTimeout(this.openAckTimer);
