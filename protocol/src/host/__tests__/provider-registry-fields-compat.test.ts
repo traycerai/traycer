@@ -25,6 +25,7 @@ import {
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
+  providersListResponseSchemaV60,
   providersSetEnabledResponseSchema,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -463,11 +464,11 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
 });
 
 describe("providers.list old-host upgrade fills honest defaults for the new fields", () => {
-  it("upgrades a pre-registry v3.0 response to v6.0 with the new fields null/false", () => {
+  it("upgrades a pre-registry v3.0 response to v7.0 with the new fields null/false", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 3, minor: 0 },
-      { major: 6, minor: 0 },
+      { major: 7, minor: 0 },
       providersListResponseSchemaV30.parse({
         providers: [providerState("amp")],
       }),
@@ -477,11 +478,11 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
     expect(upgraded.providers[0].advisory).toBeNull();
   });
 
-  it("upgrades a v2.0 response to v6.0 with the new fields null along the chain", () => {
+  it("upgrades a v2.0 response to v7.0 with the new fields null along the chain", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 2, minor: 0 },
-      { major: 6, minor: 0 },
+      { major: 7, minor: 0 },
       providersListResponseSchemaV20.parse({
         providers: [providerState("codex")],
       }),
@@ -491,7 +492,7 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
     expect(upgraded.providers[0].advisory).toBeNull();
   });
 
-  it("upgrades a v4.0 response to v6.0 - the path a released host actually takes", () => {
+  it("upgrades a v4.0 response to v7.0 - the path a released host actually takes", () => {
     // The case that was missing, and the only one that runs in the field:
     // `host-v1.1.7` tops out at `providers.list` 4.0. The earlier cases both
     // route through the v3->v4 bridge, which is where the fill used to live -
@@ -500,7 +501,7 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 4, minor: 0 },
-      { major: 6, minor: 0 },
+      { major: 7, minor: 0 },
       providersListResponseSchemaV40.parse({
         providers: [{ ...providerState("amp"), profiles: [] }],
       }),
@@ -510,11 +511,11 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
     expect(upgraded.providers[0].advisory).toBeNull();
   });
 
-  it("upgrades a v5.0 response to v6.0, where the fill now lives", () => {
+  it("upgrades a v5.0 response to v7.0 across the re-homed fill", () => {
     const upgraded = upgradeResponseToVersion(
       hostRpcRegistry["providers.list"],
       { major: 5, minor: 0 },
-      { major: 6, minor: 0 },
+      { major: 7, minor: 0 },
       providersListResponseSchemaV50.parse({
         providers: [{ ...providerState("amp"), profiles: [] }],
       }),
@@ -522,6 +523,61 @@ describe("providers.list old-host upgrade fills honest defaults for the new fiel
     expect(upgraded.providers[0].managedInstallState).toBeNull();
     expect(upgraded.providers[0].versionVisibility).toBeNull();
     expect(upgraded.providers[0].advisory).toBeNull();
+  });
+
+  it("upgrades a v6.0 response to v7.0, where the fill now lives", () => {
+    // `cli-v1.1.9` froze v6.0 without the registry fields, so v6->v7 is the
+    // first bridge whose target models them - the same reason the fill moved
+    // from v3->v4 to v5->v6 when `cli-v1.1.8` froze v5.0.
+    const upgraded = upgradeResponseToVersion(
+      hostRpcRegistry["providers.list"],
+      { major: 6, minor: 0 },
+      { major: 7, minor: 0 },
+      providersListResponseSchemaV60.parse({
+        providers: [{ ...providerState("amp"), profiles: [] }],
+      }),
+    );
+    expect(upgraded.providers[0].managedInstallState).toBeNull();
+    expect(upgraded.providers[0].versionVisibility).toBeNull();
+    expect(upgraded.providers[0].advisory).toBeNull();
+  });
+});
+
+describe("providers.list v6.0 is frozen against the registry fields", () => {
+  it("v6.0 does not model them, so a v7.0 -> v6.0 downgrade strips them", () => {
+    // `cli-v1.1.9` shipped v6.0 while the registry fields were still growing
+    // it - the same defect `cli-v1.1.8` exposed on v5.0, one version later.
+    // v6.0 now pins the frozen v4.0 base shape, so a field added to the LIVE
+    // base shape cannot reach a client that negotiated v6.0.
+    const downgraded = downgradeResponseAcrossMajors(
+      hostRpcRegistry["providers.list"],
+      7,
+      6,
+      { providers: [stateWithRegistryFields] },
+    );
+    expect(downgraded.ok).toBe(true);
+    if (!downgraded.ok) return;
+    expect(downgraded.value.providers[0]).not.toHaveProperty(
+      "managedInstallState",
+    );
+    expect(downgraded.value.providers[0]).not.toHaveProperty(
+      "versionVisibility",
+    );
+    expect(downgraded.value.providers[0]).not.toHaveProperty("advisory");
+  });
+
+  it("parses a v6.0 payload that carries the fields by dropping them", () => {
+    const parsed = providersListResponseSchemaV60.parse({
+      providers: [stateWithRegistryFields],
+    });
+    expect(parsed.providers[0]).not.toHaveProperty("managedInstallState");
+  });
+
+  it("still carries omp to a v6.0 caller - only the registry fields are cut", () => {
+    const parsed = providersListResponseSchemaV60.parse({
+      providers: [{ ...stateWithRegistryFields, providerId: "omp" }],
+    });
+    expect(parsed.providers[0].providerId).toBe("omp");
   });
 });
 
