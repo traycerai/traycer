@@ -310,6 +310,7 @@ type ActiveHostWorkspaceControlsProps = {
   readonly disabled: boolean;
 };
 
+/** Resolves the active host and renders its workspace-selection controls. */
 export function ActiveHostWorkspaceControls(
   props: ActiveHostWorkspaceControlsProps,
 ) {
@@ -481,6 +482,7 @@ function fixedUnavailableHostEntry(
   };
 }
 
+/** Renders editable pre-creation workspace rows from the active source. */
 function HomeWorkspaceRows(props: {
   readonly workspaceSource: HomeWorkspaceSource;
   readonly resolvedFolders: ReadonlyArray<ResolvedFolder>;
@@ -1114,6 +1116,7 @@ function homeSelectionFields(input: {
   };
 }
 
+/** Builds a picker row contract for a folder resolved on the active host. */
 function workspaceRunItemForResolvedFolder(input: {
   readonly entry: ResolvedFolder;
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
@@ -1248,6 +1251,7 @@ type HomeSelectionFields = Pick<
   | "onTogglePin"
 >;
 
+/** Builds a fallback row when a saved folder is unresolved on this host. */
 function workspaceRunItemForUnresolvedFolder(input: {
   readonly activeHostClient: HostClient<HostRpcRegistry> | null;
   readonly announcePrimaryChange: (folderName: string) => void;
@@ -1430,6 +1434,7 @@ function unresolvedWorkspaceRunItem(input: {
   };
 }
 
+/** Builds a loading row while the host resolves a saved folder's metadata. */
 function pendingWorkspaceRunItem(input: {
   readonly path: string;
   readonly name: string;
@@ -1533,8 +1538,10 @@ interface InEpicSurfaceProps {
   readonly directoryEntries: ReadonlyArray<HostDirectoryEntry>;
 }
 
-// Coordinates host-bound folder metadata, staged worktree edits, add/remove
-// mutations, and terminal resume state in one owner-scoped surface.
+/**
+ * Coordinates host-bound folder metadata, staged worktree edits, add/remove
+ * mutations, and terminal resume state in one owner-scoped surface.
+ */
 // eslint-disable-next-line complexity
 function InEpicSurface(props: InEpicSurfaceProps) {
   const { surface } = props;
@@ -2041,6 +2048,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     ],
   );
 
+  /** Picks, saves, and sequentially adds folders to the current owner. */
   const addFoldersToOwnerBinding = async (): Promise<boolean> => {
     const result = await folderActions.pickAndPrepareFolders();
     if (result === null) return false;

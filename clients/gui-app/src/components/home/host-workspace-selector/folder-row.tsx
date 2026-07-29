@@ -505,6 +505,7 @@ function EnvironmentButton(props: {
   );
 }
 
+/** Removes a saved project after explicit destructive confirmation. */
 function RemoveFolderButton(props: { readonly item: WorkspaceRunItem }) {
   const { item } = props;
   // Deleting a saved project is confirmed first: the trash sits beside

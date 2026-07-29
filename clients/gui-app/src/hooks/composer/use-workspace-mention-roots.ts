@@ -36,6 +36,7 @@ export function useWorkspaceMentionRoots(
   }, [fallbackToGlobalWhenEmpty, preferredRoots, workspaceFolders]);
 }
 
+/** Resolves mention roots from the active draft or blank-landing selection. */
 export function useLandingComposerMentionRoots(
   draftId: string | null,
 ): ReadonlyArray<string> {

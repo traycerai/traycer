@@ -227,6 +227,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Merges resolved folders while preserving a valid primary and pinned path. */
 function mergeWorkspaceFolderInfo(
   state: WorkspaceFoldersStore,
   folders: ReadonlyArray<WorkspaceFolderInfo>,

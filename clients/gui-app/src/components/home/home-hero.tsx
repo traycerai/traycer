@@ -45,6 +45,7 @@ interface HomeHeroProps {
   readonly workspacePrimaryPath: string | null;
 }
 
+/** Renders the landing greeting for the active or pending main project. */
 export function HomeHero({
   workspaceFolders,
   workspacePrimaryPath,

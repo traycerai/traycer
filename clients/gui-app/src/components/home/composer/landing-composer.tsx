@@ -96,6 +96,7 @@ interface LandingComposerProps {
   readonly workspaceControls: (disabled: boolean) => ReactNode;
 }
 
+/** Renders and coordinates the composer used by landing-page drafts. */
 export function LandingComposer(props: LandingComposerProps) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const createdUnboundDraftIdRef = useRef<string | null>(null);

@@ -1043,6 +1043,7 @@ function useLatestConversationSettingsSeed(): {
   }, [defaults, fallbackComposerMode, projection]);
 }
 
+/** Builds the pinned-only workspace seed for a brand-new conversation. */
 function useGlobalWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
   // A brand-new conversation (no latest-conversation seed) starts with ONLY
   // the pinned default project selected - the rest of the saved list stays

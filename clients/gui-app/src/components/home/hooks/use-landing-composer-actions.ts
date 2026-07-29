@@ -871,6 +871,7 @@ interface LandingWorkspaceContext {
   readonly draftId: string | null;
 }
 
+/** Resolves the workspace and staged intent used for a landing launch. */
 function readLandingWorkspaceContext(
   draftId: string | null,
   queryClient: QueryClient,
