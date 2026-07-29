@@ -944,6 +944,43 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     ).toBe("entry-later");
   });
 
+  it("quotes the newest version to clear-all even when the rendered feed did not change", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    const row = cloudDone("entry-a", 1, null);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [row],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // A relay frame whose rendered rows are identical but whose version moved:
+    // something changed in the feed that this build cannot display. The
+    // clear-all the user issues next must name THAT feed, not the one from
+    // before - otherwise the change it could not render also escapes the
+    // clear.
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [row],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 11,
+      });
+    });
+    act(() => {
+      result.current.clearAll();
+    });
+
+    await waitFor(() => {
+      const call = hostRequestMock.mock.calls.find(
+        (entry) => entry[0] === "host.notifications.cloudFeed.clearAll",
+      );
+      expect(call?.[1]).toEqual({ observedVersion: 11 });
+    });
+  });
+
   it("retains the rows it has when a command reports unavailable", async () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";

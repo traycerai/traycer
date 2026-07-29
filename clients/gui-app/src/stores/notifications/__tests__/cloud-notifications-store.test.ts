@@ -204,6 +204,32 @@ describe("cloud notifications store", () => {
     });
   });
 
+  it("adopts a newer version from a content-identical snapshot", () => {
+    const row = cloudRow("entry-a", 1, "host-a");
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [row],
+      summary,
+      version: 10,
+    });
+
+    // The relay only sends this when the feed genuinely moved. The rendered
+    // rows can still be identical - an entry this build cannot display may
+    // have been superseded by another it also cannot display - and the
+    // version is the part that changed. Holding the old one would make this
+    // client's own `clearAll` name a feed that no longer exists and quietly
+    // leave the newcomer uncleared.
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [row],
+      summary,
+      version: 11,
+    });
+
+    const cloud = useCloudNotificationsStore.getState();
+    expect(cloud.version).toBe(11);
+    expect(cloud.rows).toEqual({ [cloudNotificationFeedId("entry-a")]: row });
+    expect(cloud.summary).toEqual(summary);
+  });
+
   it("ignores a delayed snapshot from below the version already rendered", () => {
     const newest = cloudRow("entry-b", 10, "host-a");
     useCloudNotificationsStore.getState().applySnapshot({
