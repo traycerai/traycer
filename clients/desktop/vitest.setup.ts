@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import { join } from "node:path";
 import { afterAll } from "vitest";
@@ -55,6 +56,14 @@ if (process.platform === "win32") {
 (os as { homedir: () => string }).homedir = () =>
   (process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME) ??
   baselineHome;
+// vite-node-transformed modules (every first-party file and test) read the
+// property off the module object at import time, so they see the patch
+// without this. But an UNTRANSFORMED dependency running as real Node ESM
+// holds static named bindings (`import { homedir } from "node:os"`) that
+// only re-sync with the module object when this is called. One call
+// suffices: the installed function is a closure over the env, so its
+// identity never changes again.
+syncBuiltinESMExports();
 
 afterAll(() => {
   rmSync(baselineHome, { recursive: true, force: true });
