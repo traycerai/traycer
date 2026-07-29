@@ -72,14 +72,31 @@ export function useProviderPackGate(
   return usePackGateFromProviders(providersQuery.data?.providers, harnessId);
 }
 
-/** Client-scoped variant, for tab-bound surfaces that must gate on THEIR host. */
+/**
+ * Client-scoped variant, for tab-bound surfaces that must gate on THEIR host.
+ *
+ * `active` carries the caller's focus state, and it gates the `providers.list`
+ * SUBSCRIPTION rather than the gate's answer - the same treatment
+ * `useProviderReauthGate` and `useProfileRateLimitSwitchPrompt` already get in
+ * the chat composer, where only the focused top-level surface owns its catalog
+ * subscriptions. An unfocused split partner renders its body but cannot send,
+ * so a live subscription there buys nothing and costs a per-host stream.
+ *
+ * Passing `false` is not a behaviour change for the common case: two tiles on
+ * the SAME host share one query key, so the focused tile's subscription keeps
+ * the cache warm and the unfocused one still reads it. Only a tile bound to a
+ * host no focused surface is watching goes without data, and that resolves to
+ * the documented fail-open - nothing blocks, and the host resolver's typed
+ * `preparing` outcome remains the authoritative backstop.
+ */
 export function useProviderPackGateForClient(
   client: HostClient<HostRpcRegistry> | null,
   harnessId: GuiHarnessId | null,
+  active: boolean,
 ): ProviderPackGate {
   const providersQuery = useProvidersListForClient(client, {
-    enabled: true,
-    subscribed: true,
+    enabled: active,
+    subscribed: active,
   });
   return usePackGateFromProviders(providersQuery.data?.providers, harnessId);
 }

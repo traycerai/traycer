@@ -36,8 +36,12 @@ export interface RailEntry {
    *  decision log's "V1 surfaces" row). `null` renders no dot at all. */
   readonly accentDot: ProfileAccentDotInput | null;
   /** Non-null while this provider's managed pack is downloading or stuck on an
-   *  error. The entry stays VISIBLE and labelled but is not selectable - the
-   *  dictation-mic treatment, not a hidden row. */
+   *  error. The entry always stays VISIBLE and labelled - the dictation-mic
+   *  treatment, not a hidden row - but this field alone does NOT decide
+   *  selectability. `railEntryPackGated` does, and it gates only when
+   *  `providerPackBlocksExecution` is also true; a pack downloading behind a
+   *  bundled, PATH or custom binary the host would still spawn stays fully
+   *  selectable and renders its progress as pure information. */
   readonly preparing: ProviderPackPreparing | null;
 }
 

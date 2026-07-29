@@ -275,7 +275,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // must gate on that host's packs, never the app-wide default's. Same shape as
   // the reauth gate above: block send and say why, so a doomed turn can't
   // start. The host resolver still refuses independently; this is the UX half.
-  const packGate = useProviderPackGateForClient(hostClient, harnessId);
+  const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
   const { sendBlocked, sendBlockedHint } = resolveSendBlock({
     workspaceDisabledHint: workspaceAvailability.disabledHint,
     signedOut: reauthGate.signedOut,

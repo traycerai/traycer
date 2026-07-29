@@ -9,11 +9,26 @@ import type {
 
 const testState = vi.hoisted(() => ({
   providers: undefined as ReadonlyArray<ProviderCliState> | undefined,
+  // The activity options the client-scoped gate asked its query for. Captured
+  // rather than asserted through behaviour because the whole point of the
+  // `active` parameter is that it changes NOTHING about the gate's answer -
+  // only whether a subscription is held - so a behavioural assertion could not
+  // tell the two wirings apart.
+  lastClientActivity: null as {
+    enabled: boolean;
+    subscribed: boolean;
+  } | null,
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({ data: providersResponse() }),
-  useProvidersListForClient: () => ({ data: providersResponse() }),
+  useProvidersListForClient: (
+    _client: unknown,
+    activity: { enabled: boolean; subscribed: boolean },
+  ) => {
+    testState.lastClientActivity = activity;
+    return { data: providersResponse() };
+  },
 }));
 
 function providersResponse() {
@@ -22,7 +37,10 @@ function providersResponse() {
     : { providers: testState.providers };
 }
 
-import { useProviderPackGate } from "@/hooks/providers/use-provider-pack-gate";
+import {
+  useProviderPackGate,
+  useProviderPackGateForClient,
+} from "@/hooks/providers/use-provider-pack-gate";
 
 // `candidates: []` is the load-bearing default here: no bundled binary, no
 // PATH install, nothing to fall back to. Every "blocks" assertion below depends
@@ -220,5 +238,49 @@ describe("useProviderPackGate", () => {
     });
     expect(claude.current.blocked).toBe(true);
     expect(codex.current.blocked).toBe(false);
+  });
+});
+
+describe("useProviderPackGateForClient", () => {
+  beforeEach(() => {
+    testState.lastClientActivity = null;
+  });
+
+  // Only the focused top-level surface owns its catalog subscriptions - the
+  // rule the chat composer already applies to the reauth gate and the
+  // rate-limit prompt beside this one. An unfocused split partner renders its
+  // body but cannot send, so a live `providers.list` stream there is a
+  // per-host cost with no reader.
+  it("holds the providers.list subscription only while active", () => {
+    testState.providers = [providerState("claude-code", null)];
+    const { rerender } = renderHook(
+      ({ active }: { active: boolean }) =>
+        useProviderPackGateForClient(null, "claude", active),
+      { wrapper, initialProps: { active: true } },
+    );
+    expect(testState.lastClientActivity).toEqual({
+      enabled: true,
+      subscribed: true,
+    });
+    rerender({ active: false });
+    expect(testState.lastClientActivity).toEqual({
+      enabled: false,
+      subscribed: false,
+    });
+  });
+
+  // Dropping the subscription must not turn into a gate that blocks. An
+  // unfocused tile reading a cache no query is refreshing lands on the same
+  // fail-open the loading state does, and the host resolver's typed
+  // `preparing` outcome stays the authoritative backstop either way.
+  it("still answers from cached providers while inactive", () => {
+    testState.providers = [
+      providerState("claude-code", { status: "downloading", percent: 5 }),
+    ];
+    const { result } = renderHook(
+      () => useProviderPackGateForClient(null, "claude", false),
+      { wrapper },
+    );
+    expect(result.current.blocked).toBe(true);
   });
 });
