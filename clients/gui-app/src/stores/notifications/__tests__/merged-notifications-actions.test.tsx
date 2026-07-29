@@ -5,7 +5,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   __resetAppLocalNotificationsStoreForTests,
   useAppLocalNotificationsStore,
@@ -15,6 +18,10 @@ import {
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import {
+  cloudNotificationFeedId,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
+import {
   useAttentionNotificationIds,
   useMergedNotificationRow,
   useMergedNotificationsActions,
@@ -22,6 +29,9 @@ import {
 import { __resetNotificationsStoreForTests } from "@/stores/notifications/notifications-store";
 
 const hostRequestMock = vi.hoisted(() => vi.fn());
+const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
+  value: "local",
+}));
 
 const hostBindingState = vi.hoisted(() => ({
   current: null as {
@@ -48,6 +58,15 @@ vi.mock("@/lib/host-error-toast", async (importActual) => {
   };
 });
 
+vi.mock("@/lib/notifications/notification-feed-mode", () => ({
+  useNotificationFeedMode: () => notificationFeedMode.value,
+}));
+
+vi.mock("@/hooks/host/use-reactive-active-host-id", () => ({
+  useReactiveActiveHostId: () =>
+    hostBindingState.current?.hostClient.getActiveHostId() ?? null,
+}));
+
 vi.mock("sonner", () => ({
   toast: {
     error: vi.fn(),
@@ -71,6 +90,24 @@ function createWrapper(): (props: {
   readonly children: ReactNode;
 }) => ReactNode {
   const queryClient = createTestQueryClient();
+  return function Wrapper(props: { readonly children: ReactNode }): ReactNode {
+    return (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+  };
+}
+
+function createRetryingMutationWrapper(): (props: {
+  readonly children: ReactNode;
+}) => ReactNode {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: 1, retryDelay: 0 },
+    },
+  });
   return function Wrapper(props: { readonly children: ReactNode }): ReactNode {
     return (
       <QueryClientProvider client={queryClient}>
@@ -130,6 +167,38 @@ function hostDone(
       taskTitle: "Checkout notifications",
       outcome: "completed",
     },
+  };
+}
+
+/** One occurrence of the `agent.stopped:chat-1` group. A reopen is a DIFFERENT
+ * `entryId` under the same `coalesceKey`, never an edit of this one. */
+function cloudDone(
+  entryId: string,
+  createdAt: number,
+  readAt: number | null,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: "host-cloud",
+    coalesceKey: "agent.stopped:chat-1",
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt,
+      kind: "agent.stopped",
+      sourceRef: entryId,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Cloud epic", chatTitle: "Cloud chat" },
   };
 }
 
@@ -269,10 +338,12 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
     hostRequestMock.mockReset();
     hostRequestMock.mockImplementation(defaultHostRequest);
     hostBindingState.current = null;
+    notificationFeedMode.value = "local";
     vi.mocked(toastFromHostError).mockClear();
     vi.mocked(toast.error).mockClear();
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
     __resetAppLocalNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
     useHostNotificationsStore.getState().applySnapshot({
@@ -285,7 +356,9 @@ describe("useMergedNotificationsActions markAllAsRead composition", () => {
   afterEach(() => {
     cleanup();
     hostBindingState.current = null;
+    notificationFeedMode.value = "local";
     __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
     __resetAppLocalNotificationsStoreForTests();
   });
 
@@ -563,10 +636,15 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     hostRequestMock.mockReset();
     hostRequestMock.mockImplementation(defaultHostRequest);
     hostBindingState.current = null;
+    notificationFeedMode.value = "local";
     vi.mocked(toastFromHostError).mockClear();
     vi.mocked(toast.error).mockClear();
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
+    // The feed version is monotonic within a session, so a snapshot below the
+    // one already applied is dropped as a stale frame. Leaking it across tests
+    // would silently swallow the next test's seed.
+    useCloudNotificationsStore.getState().reset();
     __resetAppLocalNotificationsStoreForTests();
     useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
   });
@@ -574,7 +652,9 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
   afterEach(() => {
     cleanup();
     hostBindingState.current = null;
+    notificationFeedMode.value = "local";
     __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
     __resetAppLocalNotificationsStoreForTests();
   });
 
@@ -690,6 +770,295 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     await waitFor(() => {
       expect(queryClient.getQueryState(rowKey)?.isInvalidated).toBe(true);
       expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(true);
+    });
+  });
+
+  it("addresses the entry captured by the click, even after that coalesceKey reopened", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    const original = cloudDone("entry-a", 1, null);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [original],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+
+    // The group reopens: a NEW entry supersedes the captured one, and it
+    // arrives under its own feed id rather than mutating the old row.
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-b", 2, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 2,
+    });
+    act(() => {
+      result.current.actions.clear(captured);
+    });
+
+    // The command still names `entry-a`. That is the whole guard: a stale
+    // action can only reference a superseded entry, where the cloud no-ops it
+    // - so no occurrence token is needed to keep it off `entry-b`.
+    await waitFor(() => {
+      const call = hostRequestMock.mock.calls.find(
+        (entry) => entry[0] === "host.notifications.cloudFeed.clear",
+      );
+      expect(call?.[1]).toEqual({ entryId: "entry-a" });
+    });
+    expect(
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId("entry-b")
+      ]?.entryId,
+    ).toBe("entry-b");
+  });
+
+  it("keeps a reopened entry unread after the entry it superseded was read", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        readRow: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+        reopenedRow: useMergedNotificationRow(
+          cloudNotificationFeedId("entry-b"),
+        ),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.readRow;
+    if (captured === null) throw new Error("expected cloud row");
+    act(() => {
+      result.current.actions.markAsRead(captured);
+    });
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-a" },
+      );
+    });
+
+    // `entry-a` is now read in the cloud, and the reopen arrives as its own
+    // immutable entry with its own null markers. Nothing can carry the read
+    // across: there is no shared row for a marker to have been written on.
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 11,
+      });
+    });
+
+    expect(result.current.reopenedRow?.readAt).toBeNull();
+    expect(result.current.readRow).toBeNull();
+  });
+
+  it("sends an identical body on a retried mutation - a set-once marker needs no idempotency key", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    let attempts = 0;
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markRead") {
+        attempts += 1;
+        if (attempts === 1) return Promise.reject(unsupportedResolveError());
+        return Promise.resolve({ status: "applied", version: 11 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      }),
+      { wrapper: createRetryingMutationWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+
+    act(() => {
+      result.current.actions.markAsRead(captured);
+    });
+
+    await waitFor(() => {
+      const calls = hostRequestMock.mock.calls.filter(
+        (call) => call[0] === "host.notifications.cloudFeed.markRead",
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.[1]).toEqual({ entryId: "entry-a" });
+      expect(calls[1]?.[1]).toEqual(calls[0]?.[1]);
+    });
+  });
+
+  it("captures clear-all at the observed version while a newer entry survives", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-observed", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.clearAll();
+      // A newer entry lands between the click and the request. Membership is
+      // decided by the observed version, not by a timestamp threshold, so this
+      // one is simply not in the set - whatever its clock says.
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-later", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 11,
+      });
+    });
+
+    await waitFor(() => {
+      const call = hostRequestMock.mock.calls.find(
+        (entry) => entry[0] === "host.notifications.cloudFeed.clearAll",
+      );
+      expect(call?.[1]).toEqual({ observedVersion: 10 });
+    });
+    expect(
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId("entry-later")
+      ]?.entryId,
+    ).toBe("entry-later");
+  });
+
+  it("retains the rows it has when a command reports unavailable", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return Promise.resolve({ status: "unavailable", version: null });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+
+    act(() => {
+      result.current.actions.markAsRead(captured);
+    });
+
+    await waitFor(() => {
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "unavailable",
+      );
+    });
+    // Nothing was mutated anywhere - the host keeps no local shadow of the
+    // cloud feed - so the row the user is looking at must still be there.
+    expect(
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId("entry-a")
+      ]?.entryId,
+    ).toBe("entry-a");
+    expect(result.current.row?.readAt).toBeNull();
+  });
+
+  it("does not acknowledge a retained v1 row while cloud is authoritative", () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostDone("retained-local", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+    act(() => {
+      result.current.markAsRead("host:retained-local");
+    });
+
+    expect(hostRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a cloud command completion from a replaced ownership epoch", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    let settleRequest: (() => void) | null = null;
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return new Promise((resolve) => {
+          settleRequest = () =>
+            resolve({ status: "unavailable", version: null });
+        });
+      }
+      return defaultHostRequest(method);
+    });
+
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+    act(() => {
+      result.current.actions.markAsRead(captured);
+    });
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        expect.any(Object),
+      );
+    });
+
+    act(() => {
+      useCloudNotificationsStore.getState().reset();
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 2,
+      });
+      if (settleRequest === null) {
+        throw new Error("expected pending cloud request");
+      }
+      settleRequest();
+    });
+    await waitFor(() => {
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "connected",
+      );
     });
   });
 });

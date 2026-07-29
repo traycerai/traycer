@@ -66,6 +66,10 @@ const hostBindingState = vi.hoisted(() => ({
       readonly request: typeof hostRequestMock;
       readonly getActiveHostId: () => string | null;
     };
+    readonly directory?: {
+      readonly findById: (hostId: string) => typeof mockLocalHostEntry | null;
+      readonly selectById: (hostId: string) => void;
+    };
   } | null,
 }));
 
@@ -414,6 +418,11 @@ function bindHostClient(): void {
     hostClient: {
       request: hostRequestMock,
       getActiveHostId: () => mockLocalHostEntry.hostId,
+    },
+    directory: {
+      findById: (hostId: string) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      selectById: () => {},
     },
   };
 }

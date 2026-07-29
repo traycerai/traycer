@@ -4,7 +4,10 @@ import {
   feedIdFromEnvelopeFeed,
   parseNotificationActivationPayload,
 } from "@/lib/notifications/notification-activation-envelope";
-import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
+import {
+  notificationPayloadRequiresOriginHost,
+  useNotificationActivation,
+} from "@/hooks/notifications/use-notification-activation";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import {
@@ -89,10 +92,15 @@ export function NotificationFocusBridge(): null {
         useNotificationsPopoverStore.getState().setOpen(true);
         return;
       }
+      if (notificationPayloadRequiresOriginHost(parsed.payload)) {
+        useNotificationsPopoverStore.getState().setOpen(true);
+        return;
+      }
       activate({
         payload: parsed.payload,
         receivedAt: notificationEvent.receivedAt,
         feedId: null,
+        originHostId: null,
         onResult: null,
       });
       return;
@@ -103,9 +111,13 @@ export function NotificationFocusBridge(): null {
       useNotificationsPopoverStore.getState().setOpen(true);
       return;
     }
+    const requiresOriginHost = notificationPayloadRequiresOriginHost(
+      envelope.route,
+    );
     if (
-      envelope.originHostId !== null &&
-      envelope.originHostId !== activeHostId
+      requiresOriginHost &&
+      (envelope.originHostId === null ||
+        originHostEntry?.status !== "available")
     ) {
       useNotificationsPopoverStore
         .getState()
@@ -117,6 +129,7 @@ export function NotificationFocusBridge(): null {
       payload: envelope.route,
       receivedAt: notificationEvent.receivedAt,
       feedId,
+      originHostId: envelope.originHostId,
       onResult: activationResultHandler({
         row: candidateRow,
         feedId,

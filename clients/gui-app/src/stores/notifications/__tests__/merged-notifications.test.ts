@@ -449,6 +449,7 @@ describe("merged notifications feed", () => {
       outcome: null,
       resolvedAt: null,
       sourceRef: null,
+      originHostId: null,
       category: "system",
     });
   });

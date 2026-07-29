@@ -3,6 +3,7 @@ export {
   isNotificationPayloadRoutable,
   parseNotificationPayload,
   routeNotification,
+  routeNotificationForHost,
   type ApprovalNotificationPayload,
   type ArtifactNotificationPayload,
   type ChatNotificationPayload,
