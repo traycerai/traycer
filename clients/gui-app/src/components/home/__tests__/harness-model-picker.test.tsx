@@ -170,7 +170,20 @@ const queryMock = vi.hoisted(() => ({
       readonly enabled: boolean;
       readonly subscribed: boolean;
     }>,
+    ensurePack: [] as string[],
   },
+}));
+
+vi.mock("@/hooks/providers/use-providers-ensure-pack-mutation", () => ({
+  // Mocked alongside its sibling `use-providers-list-query` below: both are
+  // host-backed and this suite runs without a QueryClient/HostRuntimeProvider.
+  // The retry click is recorded so the rail's gated-tab behaviour can be
+  // asserted without a real mutation.
+  useProvidersEnsurePackForClient: () => ({
+    mutate: (variables: { readonly providerId: string }) => {
+      queryMock.calls.ensurePack.push(variables.providerId);
+    },
+  }),
 }));
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
@@ -599,6 +612,9 @@ function providerCliState(input: {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: [],
   };
 }
@@ -633,6 +649,9 @@ function providerCliStateWithProfiles(input: {
         ? { oauthArgs: ["auth", "login"], token: null, codePaste: null }
         : input.loginCapability,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: input.profiles,
   };
 }
@@ -845,6 +864,7 @@ describe("<HarnessModelPicker />", () => {
     queryMock.calls.models = [];
     queryMock.calls.providers = [];
     queryMock.calls.commands = [];
+    queryMock.calls.ensurePack = [];
     profileUsageHookMock.runTargetHostIds = [];
     profileUsageHookMock.calls = [];
     openSettingsMock.mockClear();
@@ -1435,6 +1455,262 @@ describe("<HarnessModelPicker />", () => {
     expect(
       screen.getByRole("tab", { name: "Codex" }).getAttribute("data-degraded"),
     ).toBeNull();
+  });
+
+  // R11 · the settled UX decision, at the surface it was decided for. On a
+  // first boot the host converges every enabled provider (~1.6 GB), so a rail
+  // tab whose pack is still downloading is the COMMON early state - it must be
+  // visible, labelled, and not selectable. The host resolver refuses the turn
+  // regardless; this is the half that tells the user before they try.
+  function preparingClaudeSetup(
+    managedInstallState: ProviderCliState["managedInstallState"],
+  ): void {
+    const codex = codexModels();
+    const unavailableClaude: HarnessOption = {
+      ...CLAUDE_HARNESS,
+      available: false,
+      error: null,
+    };
+    queryMock.harnesses = [unavailableClaude, CODEX_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(unavailableClaude, []),
+      catalogHarness(CODEX_HARNESS, codex),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", []],
+    ]);
+    queryMock.providerStates = [
+      {
+        ...providerCliState({
+          providerId: "claude-code",
+          authStatus: "authenticated",
+          apiKey: { supported: false, configured: false, source: null },
+        }),
+        managedInstallState,
+      },
+    ];
+  }
+
+  it("keeps a downloading provider visible, labelled with its percent, and not selectable", async () => {
+    preparingClaudeSetup({ status: "downloading", percent: 42 });
+
+    const { selections } = renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", {
+      name: "Preparing Claude… 42%",
+    });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("downloading");
+    expect(claudeTab.getAttribute("aria-disabled")).toBe("true");
+
+    // Clicking a downloading tab does nothing at all - it neither switches the
+    // browsed provider nor fires a retry (there is nothing to retry).
+    fireEvent.click(claudeTab);
+    expect(queryMock.calls.ensurePack).toEqual([]);
+    expect(selections).toEqual([]);
+  });
+
+  // P1. Every other test in this file leaves `candidates: []`, so
+  // `fallbackRunnable` has always been false and the picker's "is this provider
+  // selectable" logic has only ever been exercised against packs that DO block.
+  // The state below - downloading behind a runnable binary - is the common one
+  // on a first boot, and it is the one the rail deliberately keeps selectable.
+  // P6. An ungated tab is an ordinary destination, so its accessible NAME is
+  // the plain harness label - the progress sentence lives in its description,
+  // where a number that changes every 1.5s belongs. It used to be the name, so
+  // arrowing across a converging rail announced thirteen nine-word sentences.
+  const PREPARING_TAB_NAME = "Claude";
+  // The same fact, as the rail's non-blocking SHORT copy: it leads with what
+  // matters to the user (the provider works right now) and reports the
+  // download second.
+  const PREPARING_TAB_DESCRIPTION = "Ready · installing… 30%";
+
+  function tabDescription(tab: HTMLElement): string {
+    const id = tab.getAttribute("aria-describedby");
+    expect(id).not.toBeNull();
+    return document.getElementById(id ?? "")?.textContent ?? "";
+  }
+
+  function downloadingBehindRunnableBinarySetup(): void {
+    const codex = codexModels();
+    // available: true - the bundled binary is on disk and the host will spawn
+    // it. The managed pack downloading in the background is an upgrade, not a
+    // prerequisite.
+    queryMock.harnesses = [CLAUDE_HARNESS, CODEX_HARNESS];
+    queryMock.catalogHarnesses = [
+      catalogHarness(CLAUDE_HARNESS, []),
+      catalogHarness(CODEX_HARNESS, codex),
+    ];
+    queryMock.selectedModelsByHarness = new Map([
+      ["codex", codex],
+      ["claude", []],
+    ]);
+    queryMock.providerStates = [
+      {
+        ...providerCliState({
+          providerId: "claude-code",
+          authStatus: "authenticated",
+          apiKey: { supported: false, configured: false, source: null },
+        }),
+        candidates: [
+          {
+            kind: "bundled",
+            path: "/opt/traycer/resources/providers/claude/claude",
+            version: "1.0.0",
+            available: true,
+            versionPending: false,
+          },
+        ],
+        managedInstallState: { status: "downloading", percent: 30 },
+      },
+    ];
+  }
+
+  it("offers the tab of a provider downloading behind a runnable binary", async () => {
+    // The PRECONDITION for the bounce below, pinned separately because it is
+    // the rail's decision (`railEntryPackGated`) and not the picker's: this
+    // assertion passes with or without the resolveActiveProviderId fix. The tab
+    // is labelled, because the download is real and worth reporting, and NOT
+    // disabled, because nothing about it stops the user running a turn - which
+    // is precisely why the selection landing elsewhere was a visible bounce
+    // rather than a harmless no-op.
+    downloadingBehindRunnableBinarySetup();
+
+    renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", { name: PREPARING_TAB_NAME });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("downloading");
+    expect(claudeTab.getAttribute("aria-disabled")).toBeNull();
+    // ...and the detail is not lost by keeping it out of the name: the
+    // description still reports the install, which is the half that makes the
+    // shorter name a relocation rather than a deletion.
+    expect(tabDescription(claudeTab)).toContain(PREPARING_TAB_DESCRIPTION);
+  });
+
+  it("does not bounce the selection off a provider downloading behind a runnable binary", async () => {
+    // The failure P1 named: the rail offered the tab, `handleRailEntryChange`
+    // committed the selection, and `resolveActiveProviderId` then recomputed
+    // and threw it away - so the tab visibly sprang back, once per provider,
+    // until the whole ~1.6 GB queue drained. Asserted on the browsed provider
+    // rather than the click handler because the bounce happened AFTER the
+    // commit: a test that only checked the click would have passed throughout.
+    downloadingBehindRunnableBinarySetup();
+
+    renderPicker(undefined);
+    await openPicker();
+
+    fireEvent.click(screen.getByRole("tab", { name: PREPARING_TAB_NAME }));
+
+    expect(
+      screen
+        .getByRole("tab", { name: PREPARING_TAB_NAME })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("labels an unknown-progress download without inventing a percent", async () => {
+    // N13: a live sibling host owns the transfer, so there is no byte count to
+    // report. "0%" would read as stalled; the honest label omits it.
+    preparingClaudeSetup({ status: "downloading", percent: null });
+
+    renderPicker(undefined);
+    await openPicker();
+
+    expect(
+      screen.getByRole("tab", { name: "Preparing Claude…" }),
+    ).not.toBeNull();
+  });
+
+  it("makes a FAILED pack's tab a retry affordance that reaches ensurePack", async () => {
+    preparingClaudeSetup({
+      status: "error",
+      reason: "network",
+      message: "registry unreachable",
+      retryAtMs: 1_700_000_000_000,
+    });
+
+    const { selections } = renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", {
+      name: /Claude setup failed/,
+    });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("error");
+    expect(claudeTab.getAttribute("aria-disabled")).toBe("true");
+
+    fireEvent.click(claudeTab);
+
+    // The click is a retry, NOT a provider switch. Reaching the host through
+    // `providers.ensurePack` is what marks it user-initiated.
+    expect(queryMock.calls.ensurePack).toEqual(["claude-code"]);
+    expect(selections).toEqual([]);
+  });
+
+  // The exception to the exception above. `unrepairable` is TERMINAL host-side:
+  // the bytes verified against their signed digest and were defective anyway,
+  // so the manager refuses further installs for the cell and `ensurePack` is a
+  // guaranteed no-op. A clickable tab here is not a harmless dead button - it
+  // is the UI promising an action the wire contract says cannot exist, and the
+  // only feedback the user gets is the same failure again.
+  it("withholds the retry affordance entirely for a TERMINAL unrepairable pack", async () => {
+    preparingClaudeSetup({
+      status: "error",
+      reason: "unrepairable",
+      message: "pack.json failed schema validation",
+      retryAtMs: null,
+    });
+
+    const { selections } = renderPicker(undefined);
+    await openPicker();
+
+    const claudeTab = screen.getByRole("tab", {
+      name: /Claude setup failed/,
+    });
+    expect(claudeTab.getAttribute("data-pack-preparing")).toBe("error");
+    expect(claudeTab.getAttribute("aria-disabled")).toBe("true");
+    // Not reachable by keyboard either - the retry WAS its only action.
+    expect(claudeTab.getAttribute("tabindex")).toBe("-1");
+    // The accessible name may not invite the click.
+    expect(claudeTab.getAttribute("aria-label")).not.toMatch(/retry/i);
+    // The hover copy lives in the tooltip now, not a `title` attribute: a
+    // native `title` beside a Radix tooltip put two on one trigger. Asserting
+    // its ABSENCE rather than its content keeps that fix pinned - and the
+    // retry sentence itself is gated by `providerPackRetryable`, which
+    // `provider-pack-readiness` tests directly.
+    expect(claudeTab.getAttribute("title")).toBeNull();
+
+    fireEvent.click(claudeTab);
+
+    // Dead in both directions: no no-op RPC, and still not a provider switch.
+    expect(queryMock.calls.ensurePack).toEqual([]);
+    expect(selections).toEqual([]);
+  });
+
+  it("never opens onto a preparing provider", async () => {
+    preparingClaudeSetup({ status: "downloading", percent: 5 });
+
+    renderPicker(undefined);
+    await openPicker();
+
+    // Claude is the composer's selected harness in this suite's default
+    // fixture, but it cannot be browsed while its pack is being readied - the
+    // picker must land on a provider whose models it can actually list.
+    expect(
+      screen.getByRole("tab", { name: "Codex" }).getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("keeps a ready provider entirely ungated while a sibling downloads", async () => {
+    preparingClaudeSetup({ status: "downloading", percent: 42 });
+
+    renderPicker(undefined);
+    await openPicker();
+
+    const codexTab = screen.getByRole("tab", { name: "Codex" });
+    expect(codexTab.getAttribute("data-pack-preparing")).toBeNull();
+    expect(codexTab.getAttribute("aria-disabled")).toBeNull();
   });
 
   it("keeps signed-out providers visible as degraded rail items", async () => {

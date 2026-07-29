@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import {
@@ -16,8 +16,11 @@ import {
   ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE,
   ONBOARDING_DRAFT_STALE_ERROR_POLL_LANE,
   PROVIDERS_INITIAL_ERROR_POLL_LANE,
+  PROVIDERS_INSTALLING_POLL_LANE,
   PROVIDERS_LIMITED_POLL_LANE,
   PROVIDERS_PENDING_POLL_LANE,
+  PROVIDERS_RETRY_OBSERVATION_GRACE_MS,
+  PROVIDERS_RETRY_SCHEDULED_POLL_LANE,
   PROVIDERS_STALE_ERROR_POLL_LANE,
   PROVIDERS_STEADY_POLL_LANE,
   SPEECH_MODEL_INITIAL_ERROR_POLL_LANE,
@@ -141,10 +144,45 @@ describe("host method poll policy table", () => {
     expect(policy.classify(data)).toBe(PROVIDERS_PENDING_POLL_LANE);
   });
 
-  it("orders providers lanes pending, limited, then steady", () => {
+  it("orders providers lanes installing, pending, retry, limited, then steady", () => {
     const policy = HOST_METHOD_POLL_TABLE["providers.list"].poll;
 
     expect(policy.classify(undefined)).toBe(false);
+    // Ahead of the probe lane, and the fixture proves the ordering rather than
+    // the arm: both conditions hold at once here, which is the ordinary first
+    // boot (shell probe running, packs converging). Classified as `pending` a
+    // download's progress would decay to a 30-second refresh.
+    expect(
+      policy.classify({
+        providers: [
+          {
+            enabled: true,
+            authPending: true,
+            availabilityPending: false,
+            candidates: [],
+            profiles: [],
+            managedInstallState: { status: "downloading", percent: 40 },
+          },
+        ],
+      }),
+    ).toBe(PROVIDERS_INSTALLING_POLL_LANE);
+    // ...and it is the DOWNLOADING arm specifically, not "a managed pack
+    // exists". A settled pack must fall straight through to steady, or every
+    // host with a registry would poll `providers.list` every 5s forever.
+    expect(
+      policy.classify({
+        providers: [
+          {
+            enabled: true,
+            authPending: false,
+            availabilityPending: false,
+            candidates: [],
+            profiles: [],
+            managedInstallState: { status: "installed" },
+          },
+        ],
+      }),
+    ).toBe(PROVIDERS_STEADY_POLL_LANE);
     expect(
       policy.classify({
         providers: [
@@ -172,6 +210,168 @@ describe("host method poll policy table", () => {
       }),
     ).toBe(PROVIDERS_LIMITED_POLL_LANE);
     expect(policy.classify({ providers: [] })).toBe(PROVIDERS_STEADY_POLL_LANE);
+  });
+
+  // Not cosmetic, and the reason it is asserted as a bound rather than as two
+  // magic numbers: `providers.list` is the ONLY source of managed-install
+  // progress, and the host reports `downloading` at a full fraction for the
+  // whole extract-and-verify phase. At the pending lane's 30s ceiling - let
+  // alone steady's 15 minutes - a finished-looking bar sits frozen on screen
+  // for exactly the stretch where a user concludes the install is hung.
+  it("keeps the installing lane fast enough to animate a progress bar", () => {
+    expect(PROVIDERS_INSTALLING_POLL_LANE.maxDelayMs).toBeLessThanOrEqual(
+      5 * 1_000,
+    );
+    expect(PROVIDERS_INSTALLING_POLL_LANE.maxDelayMs).toBeLessThan(
+      PROVIDERS_PENDING_POLL_LANE.maxDelayMs,
+    );
+  });
+
+  // P7. Before this lane an `error` cell fell straight to `providers.steady`,
+  // so a wifi blip the host recovered from in a minute left "Setup failed" on
+  // screen for up to fifteen - and post-cutover that is a user who cannot run
+  // the turn that would have refreshed the list.
+  describe("the providers retry-scheduled lane", () => {
+    const NOW_MS = 1_800_000_000_000;
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const classifyAt = (
+      nowMs: number,
+      retryAtMs: number | null,
+    ): ConditionPollLane | false => {
+      vi.useFakeTimers();
+      vi.setSystemTime(nowMs);
+      return HOST_METHOD_POLL_TABLE["providers.list"].poll.classify({
+        providers: [
+          {
+            enabled: true,
+            authPending: false,
+            availabilityPending: false,
+            candidates: [],
+            profiles: [],
+            managedInstallState: {
+              status: "error",
+              reason: "network",
+              retryAtMs,
+            },
+          },
+        ],
+      });
+    };
+
+    it("watches a failure whose retry is still ahead", () => {
+      expect(classifyAt(NOW_MS, NOW_MS + 45_000)).toBe(
+        PROVIDERS_RETRY_SCHEDULED_POLL_LANE,
+      );
+    });
+
+    // The half that a bare `retryAtMs > now` check would get wrong. Nothing on
+    // the host fires AT `retryAtMs` - it is a backoff memo, and the attempt
+    // rides on the next kick - so the transition lands after eligibility, not
+    // at it. Dropping to steady the instant the deadline passes would miss
+    // exactly the window the lane was added for.
+    it("keeps watching through the grace window after eligibility arrives", () => {
+      expect(
+        classifyAt(
+          NOW_MS,
+          NOW_MS - PROVIDERS_RETRY_OBSERVATION_GRACE_MS + 1_000,
+        ),
+      ).toBe(PROVIDERS_RETRY_SCHEDULED_POLL_LANE);
+    });
+
+    // ...and the bound is real. A cell whose retry came due long ago is not
+    // about to heal; it is waiting for a kick nobody scheduled, and the kick's
+    // own arrival refreshes the list anyway.
+    it("stops watching once the grace window closes", () => {
+      expect(
+        classifyAt(NOW_MS, NOW_MS - PROVIDERS_RETRY_OBSERVATION_GRACE_MS),
+      ).toBe(PROVIDERS_STEADY_POLL_LANE);
+    });
+
+    // `unrepairable` and the deliberately un-memoed failures report
+    // `retryAtMs: null`. Watching them would poll forever for a transition the
+    // host has already said will never come.
+    it("leaves a terminal failure on the steady lane", () => {
+      expect(classifyAt(NOW_MS, null)).toBe(PROVIDERS_STEADY_POLL_LANE);
+    });
+
+    it("yields to a download in flight and to an unsettled probe", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW_MS);
+      const failing = {
+        enabled: true,
+        authPending: false,
+        availabilityPending: false,
+        candidates: [],
+        profiles: [],
+        managedInstallState: {
+          status: "error",
+          reason: "network",
+          retryAtMs: NOW_MS + 45_000,
+        },
+      };
+      const policy = HOST_METHOD_POLL_TABLE["providers.list"].poll;
+      expect(
+        policy.classify({
+          providers: [
+            failing,
+            {
+              enabled: true,
+              authPending: false,
+              availabilityPending: false,
+              candidates: [],
+              profiles: [],
+              managedInstallState: { status: "downloading", percent: 12 },
+            },
+          ],
+        }),
+      ).toBe(PROVIDERS_INSTALLING_POLL_LANE);
+      expect(
+        policy.classify({
+          providers: [
+            failing,
+            {
+              enabled: true,
+              authPending: true,
+              availabilityPending: false,
+              candidates: [],
+              profiles: [],
+            },
+          ],
+        }),
+      ).toBe(PROVIDERS_PENDING_POLL_LANE);
+      // ...but it outranks the rate-limit lane, which starts at the ceiling
+      // this one only decays to.
+      expect(
+        policy.classify({
+          providers: [
+            failing,
+            {
+              enabled: true,
+              authPending: false,
+              availabilityPending: false,
+              candidates: [],
+              profiles: [{ rateLimitStatus: "near_limit" }],
+            },
+          ],
+        }),
+      ).toBe(PROVIDERS_RETRY_SCHEDULED_POLL_LANE);
+    });
+
+    // The whole point of the lane, stated as a bound rather than as the two
+    // numbers: it has to be faster than the lane it replaces, or it is a new
+    // id doing nothing.
+    it("is faster than the steady lane it takes the cell off", () => {
+      expect(PROVIDERS_RETRY_SCHEDULED_POLL_LANE.maxDelayMs).toBeLessThan(
+        PROVIDERS_STEADY_POLL_LANE.initialDelayMs,
+      );
+      expect(PROVIDERS_RETRY_SCHEDULED_POLL_LANE.initialDelayMs).toBeLessThan(
+        PROVIDERS_RETRY_OBSERVATION_GRACE_MS,
+      );
+    });
   });
 
   it("keeps condition error counters independent from their data lanes", () => {

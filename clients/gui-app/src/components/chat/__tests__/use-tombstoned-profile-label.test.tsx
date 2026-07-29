@@ -48,6 +48,9 @@ function claudeState(profileIds: readonly string[]): ProviderCliState {
     envOverrides: [],
     loginCapability: null,
     availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
     profiles: profileIds.map((profileId) => ({
       profileId,
       kind:

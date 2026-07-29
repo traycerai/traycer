@@ -66,7 +66,40 @@ const PRODUCT_NAME = pkg.build.productName;
 const APP_ID = pkg.build.appId;
 const CONFIG_PATH = path.resolve(__dirname, "..", "..", "src", "config.ts");
 const CLI_BINARY_NAME = "traycer";
-const HOST_START_COMPAT_LAUNCHER = "traycer-host-start";
+// The launcher's BASENAME is what the user reads in System Settings → Login
+// Items, so it is a product name, not a filename.
+//
+// BTM records `Name` as the verbatim basename of the plist's `BundleProgram`
+// and is NOT bundle-aware — live-probed 2026-07-29 on macOS 26.5 with a
+// signed throwaway app registering four variants through the real
+// `SMAppService.agent(plistName:)` and read back with `sfltool dumpbtm`:
+//
+//   BundleProgram basename        BTM Name
+//   probe-host-start          →   probe-host-start
+//   probeexec (CFBundleExecutable) →  probeexec
+//   Probe Launcher Named      →   Probe Launcher Named
+//   Probe Host (RunAtLoad)    →   Probe Host          (exit code 0)
+//
+// The helper bundle's `CFBundleDisplayName`, `CFBundleName` and even its own
+// `.app` directory name were all ignored — including in the variant whose
+// `BundleProgram` pointed at that bundle's `CFBundleExecutable`. So the
+// obvious-looking fix (retarget `BundleProgram` at `CFBundleExecutable`) does
+// NOT surface a product name; it would have shipped `Name: traycer`. Renaming
+// the launcher file is the only lever, which is the same conclusion the CLI
+// path reached for `/bin/sh` (see `HOST_START_LAUNCHER_BASENAME`).
+//
+// Spaces are load-bearing-safe: the probe's space-named variant both
+// registered AND was exec'd by launchd with `$0` intact.
+//
+// This name is NOT the CLI's `HOST_START_LAUNCHER_BASENAME`, and must not be
+// unified with it. That constant is the one
+// `attestTraycerRegistration`/`isHostStartInvocation` matches on for the
+// CLI's `~/.traycer/service/<label-id>/…` launcher form, where a rename is a
+// field-compatibility and eviction-attestation change. The bundled agent
+// below never matches that arm (its launcher's parent directory is `MacOS`,
+// not the label id) — it attests through its label signal — so this basename
+// is free to be chosen for the human reading it.
+const HOST_START_COMPAT_LAUNCHER = `${PRODUCT_NAME} Host`;
 const HOST_NODE_OPTIONS = "--max-semi-space-size=16";
 const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
 // Matches `PRODUCTION_LABEL.id` in `src/electron-main/host/host-paths.ts`.

@@ -50,6 +50,10 @@ import {
 } from "./add-provider-profile-dialog";
 import { ProviderProfileScopedSection } from "./provider-profile-scoped-section";
 import { defaultSelectedProfileId } from "@/components/providers/provider-profile-model";
+import {
+  providerCanStartProfileOauth,
+  providerSignInUnavailableHint,
+} from "@/components/providers/provider-signin-availability";
 import { ProviderApiKeySection } from "./provider-api-key-section";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
@@ -587,6 +591,10 @@ function ProviderDetail({
         hostId={hostId}
         isSelectedHostLocal={isSelectedHostLocal}
         canAddProfile={canAddProfile}
+        signInUnavailableHint={providerSignInUnavailableHint(
+          state,
+          isSelectedHostLocal,
+        )}
         startInReauth={shouldStartInReauth}
         failedAttempt={failedProfileAttempt}
         onAddProfile={() => setAddProfileOpen(true)}
@@ -622,12 +630,4 @@ function ProviderDetail({
       ) : null}
     </div>
   );
-}
-
-function providerCanStartProfileOauth(
-  state: ProviderCliState,
-  isSelectedHostLocal: boolean,
-): boolean {
-  const oauthArgs = state.loginCapability?.oauthArgs ?? null;
-  return isSelectedHostLocal && oauthArgs !== null && oauthArgs.length > 0;
 }

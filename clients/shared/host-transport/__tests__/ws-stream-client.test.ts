@@ -1034,6 +1034,78 @@ describe("WsStreamClient", () => {
     vi.useRealTimers();
   });
 
+  it("emits availability recovery when a session re-opens after a drop, not on the initial clean open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    completeHandshake(sockets[0].socket);
+    // The first clean connect is not recovery - nothing was stranded yet.
+    expect(recovered).not.toHaveBeenCalled();
+
+    // Recoverable drop → backoff → fresh dial → handshake completes: the host
+    // just proved it is reachable again.
+    sockets[0].socket.fireClose(1006, "connection-lost", false);
+    vi.advanceTimersByTime(1_000);
+    expect(sockets).toHaveLength(2);
+    completeHandshake(sockets[1].socket);
+    expect(recovered).toHaveBeenCalledTimes(1);
+
+    session.close();
+    vi.useRealTimers();
+  });
+
+  it("emits availability recovery when a pong lands after a stall-length gap without any drop", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "t",
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+    const recovered = vi.fn();
+    client.subscribeAvailabilityRecovered(recovered);
+
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    const socket = sockets[0].socket;
+    completeHandshake(socket);
+
+    // Healthy cadence: the pong answering the t=25s ping arrives one ping
+    // interval after `lastPongAt` was seeded at openAck - below the
+    // interval-plus-slack recovery threshold, so no emission.
+    vi.advanceTimersByTime(25_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).not.toHaveBeenCalled();
+
+    // Host event-loop stall: the t=50s ping goes unanswered until t=60s. The
+    // 35s pong gap exceeds pingIntervalMs + 5s slack → recovery evidence,
+    // while staying under the 50s missed-pong cutoff → the socket never
+    // dropped and the reconnect-recovery path never ran.
+    vi.advanceTimersByTime(25_000);
+    vi.advanceTimersByTime(10_000);
+    socket.fireText({ kind: "pong", hasBinaryPayload: false });
+    expect(recovered).toHaveBeenCalledTimes(1);
+    expect(socket.closed).toBeNull();
+
+    session.close();
+    vi.useRealTimers();
+  });
+
   it("requestReconnect drops the live socket and redials through existing backoff without disposing the session", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: false });
 

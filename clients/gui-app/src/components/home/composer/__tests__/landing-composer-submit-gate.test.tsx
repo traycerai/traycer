@@ -189,6 +189,19 @@ vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
 vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
   useLandingComposerMentionRoots: () => [],
 }));
+vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
+  // Same treatment as `use-composer-dictation` above: a host-backed readiness
+  // hook stubbed to its "nothing to report" answer so these gate tests stay
+  // about the gate they name. `blocked: false` is also the hook's real
+  // fail-open answer before `providers.list` resolves.
+  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
+  useProviderPackGateForClient: () => ({
+    blocked: false,
+    hint: null,
+    preparing: null,
+  }),
+}));
+
 vi.mock("@/hooks/composer/use-composer-dictation", () => ({
   useComposerDictation: () => ({
     dictationControl: null,
