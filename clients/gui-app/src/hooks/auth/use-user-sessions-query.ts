@@ -28,7 +28,7 @@ function userSessionsQueryOptions(auth: AuthService | null, enabled: boolean) {
   });
 }
 
-export function useUserSessions(): UseQueryResult<ListUserSessionsResponse | null> {
+export function useAuthFetchUserSessions(): UseQueryResult<ListUserSessionsResponse | null> {
   const binding = useHostBinding();
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const auth = binding === null ? null : binding.auth;

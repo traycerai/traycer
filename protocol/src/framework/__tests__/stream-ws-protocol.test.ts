@@ -213,6 +213,46 @@ describe("stream-ws-protocol cross-version compatibility", () => {
       ).toBe(false);
     });
 
+    // `Date.parse` accepts all four of the following, so a permissive
+    // `refine(!Number.isNaN(Date.parse(value)))` schema would let them
+    // through. `isoMillisecondTimestampSchema` requires an offset and
+    // millisecond precision instead, so this is what actually pins the
+    // tightening rather than re-testing what the old schema already rejected.
+    it("rejects date-only, human-readable, and non-millisecond-precision provisionedAt", () => {
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          provisionedAt: "2026-07-08",
+        }).success,
+      ).toBe(false);
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          provisionedAt: "Tue, 08 Jul 2026 12:00:00 GMT",
+        }).success,
+      ).toBe(false);
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          provisionedAt: "2026-07-08T12:00:00.123456Z",
+        }).success,
+      ).toBe(false);
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          provisionedAt: "2026-07-08T12:00:00Z",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("accepts the canonical toISOString() millisecond-precision form", () => {
+      const parsed = clientStreamHostCredentialProvisionFrameSchema.safeParse({
+        ...validFrame,
+        provisionedAt: new Date("2026-07-08T12:00:00.123Z").toISOString(),
+      });
+      expect(parsed.success).toBe(true);
+    });
+
     it("rejects a frame missing familyId or provisionedAt", () => {
       const { familyId: _f, ...withoutFamily } = validFrame;
       void _f;

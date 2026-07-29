@@ -29,12 +29,18 @@ afterEach(() => {
 });
 
 function mockReadline(options: {
-  readonly question: () => Promise<string> | string;
+  readonly question: (
+    query: string,
+    questionOptions: { readonly signal: AbortSignal } | undefined,
+  ) => Promise<string> | string;
   readonly close?: () => void;
 }): void {
   // Partial readline double: production only calls question/close.
   createInterfaceMock.mockReturnValue({
-    question: async (): Promise<string> => await options.question(),
+    question: async (
+      query: string,
+      questionOptions: { readonly signal: AbortSignal } | undefined,
+    ): Promise<string> => await options.question(query, questionOptions),
     close: options.close ?? (() => undefined),
   });
 }
@@ -279,5 +285,152 @@ describe("createCliHostCredentialMintFlow", () => {
       flow({ hostId: "host-1", reason: "missing" }),
     ).resolves.toEqual({ kind: "unavailable" });
     expect(mintMock).not.toHaveBeenCalled();
+  });
+
+  it("returns unavailable when the bearer is an empty string at start", async () => {
+    const flow = createCliHostCredentialMintFlow({
+      authnBaseUrl: "https://authn.example.test",
+      bearer: () => "",
+      interactive: true,
+      diag: () => undefined,
+    });
+
+    await expect(
+      flow({ hostId: "host-1", reason: "missing" }),
+    ).resolves.toEqual({ kind: "unavailable" });
+    expect(mintMock).not.toHaveBeenCalled();
+  });
+
+  it("returns declined when the prompt is not answered within the timeout", async () => {
+    // Nobody at the terminal: promptWithinBudget aborts → null answer → declined
+    // (a human non-answer), not unavailable (a system failure).
+    vi.useFakeTimers();
+    try {
+      mintMock.mockResolvedValue({ kind: "step-up-required" });
+      challengeMock.mockResolvedValue({
+        kind: "ok",
+        response: { ok: true, expires_in: 300 },
+      });
+      mockReadline({
+        question: (_query, options) =>
+          new Promise<string>((_resolve, reject) => {
+            const signal = options?.signal;
+            if (signal === undefined) {
+              reject(new Error("expected AbortSignal on question options"));
+              return;
+            }
+            if (signal.aborted) {
+              reject(new Error("aborted"));
+              return;
+            }
+            signal.addEventListener(
+              "abort",
+              () => {
+                reject(new Error("aborted"));
+              },
+              { once: true },
+            );
+          }),
+      });
+
+      const flow = createCliHostCredentialMintFlow({
+        authnBaseUrl: "https://authn.example.test",
+        bearer: () => "user-jwt",
+        interactive: true,
+        diag: () => undefined,
+      });
+
+      const outcomePromise = flow({ hostId: "host-1", reason: "missing" });
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(outcomePromise).resolves.toEqual({ kind: "declined" });
+      expect(verifyMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns unavailable when the bearer is lost mid-prompt before verify", async () => {
+    // Re-read on each attempt: a long pause can outlive the token that
+    // requested the challenge. That is a system loss, not a user decline.
+    mintMock.mockResolvedValue({ kind: "step-up-required" });
+    challengeMock.mockResolvedValue({
+      kind: "ok",
+      response: { ok: true, expires_in: 300 },
+    });
+    const question = vi.fn(async () => "123456");
+    mockReadline({ question });
+
+    let reads = 0;
+    const flow = createCliHostCredentialMintFlow({
+      authnBaseUrl: "https://authn.example.test",
+      bearer: () => {
+        reads += 1;
+        // First two reads: mint gate + challenge send. Third: re-read before verify.
+        return reads >= 3 ? null : "user-jwt";
+      },
+      interactive: true,
+      diag: () => undefined,
+    });
+
+    await expect(
+      flow({ hostId: "host-1", reason: "missing" }),
+    ).resolves.toEqual({ kind: "unavailable" });
+    expect(verifyMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: "unauthorized" as const },
+    { kind: "network-error" as const },
+  ])(
+    "returns unavailable when challenge send fails with $kind",
+    async ({ kind }) => {
+      mintMock.mockResolvedValue({ kind: "step-up-required" });
+      challengeMock.mockResolvedValue({ kind });
+      const diag = vi.fn();
+      const flow = createCliHostCredentialMintFlow({
+        authnBaseUrl: "https://authn.example.test",
+        bearer: () => "user-jwt",
+        interactive: true,
+        diag,
+      });
+
+      await expect(
+        flow({ hostId: "host-1", reason: "missing" }),
+      ).resolves.toEqual({ kind: "unavailable" });
+      expect(createInterfaceMock).not.toHaveBeenCalled();
+      expect(diag).toHaveBeenCalledWith(
+        expect.stringContaining(`could not send a verification code (${kind})`),
+      );
+    },
+  );
+
+  it.each([
+    { kind: "unauthorized" as const },
+    { kind: "network-error" as const },
+  ])("returns unavailable when verify fails with $kind", async ({ kind }) => {
+    mintMock.mockResolvedValue({ kind: "step-up-required" });
+    challengeMock.mockResolvedValue({
+      kind: "ok",
+      response: { ok: true, expires_in: 300 },
+    });
+    verifyMock.mockResolvedValue({ kind });
+    const question = vi.fn(async () => "123456");
+    mockReadline({ question });
+    const diag = vi.fn();
+
+    const flow = createCliHostCredentialMintFlow({
+      authnBaseUrl: "https://authn.example.test",
+      bearer: () => "user-jwt",
+      interactive: true,
+      diag,
+    });
+
+    await expect(
+      flow({ hostId: "host-1", reason: "missing" }),
+    ).resolves.toEqual({ kind: "unavailable" });
+    expect(question).toHaveBeenCalledTimes(1);
+    expect(diag).toHaveBeenCalledWith(
+      expect.stringContaining(`verification failed (${kind})`),
+    );
   });
 });

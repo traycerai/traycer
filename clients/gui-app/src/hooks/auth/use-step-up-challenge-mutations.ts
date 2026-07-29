@@ -35,7 +35,7 @@ function unwrapStepUpVerifyResult(
   throw new Error("Couldn't verify that code. Try again.");
 }
 
-export function useRequestStepUpChallenge(): UseMutationResult<
+export function useAuthRequestStepUpChallenge(): UseMutationResult<
   StepUpChallengeResponse,
   Error,
   void
@@ -54,7 +54,7 @@ export function useRequestStepUpChallenge(): UseMutationResult<
   });
 }
 
-export function useVerifyStepUpChallenge(): UseMutationResult<
+export function useAuthVerifyStepUpChallenge(): UseMutationResult<
   RetainedStepUpVerifyResponse,
   Error,
   string

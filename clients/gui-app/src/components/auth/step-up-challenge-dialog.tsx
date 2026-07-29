@@ -13,8 +13,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
-  useRequestStepUpChallenge,
-  useVerifyStepUpChallenge,
+  useAuthRequestStepUpChallenge,
+  useAuthVerifyStepUpChallenge,
 } from "@/hooks/auth/use-step-up-challenge-mutations";
 import {
   createStepUpCredential,
@@ -75,8 +75,8 @@ function StepUpChallengeDialogActive(props: {
   readonly onVerified: (credential: StepUpCredential) => void;
   readonly onCancel: () => void;
 }) {
-  const requestChallenge = useRequestStepUpChallenge();
-  const verifyChallenge = useVerifyStepUpChallenge();
+  const requestChallenge = useAuthRequestStepUpChallenge();
+  const verifyChallenge = useAuthVerifyStepUpChallenge();
   const [code, setCode] = useState("");
   const [challengeSent, setChallengeSent] = useState(false);
   const [error, setError] = useState<string | null>(null);

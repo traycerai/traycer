@@ -87,14 +87,14 @@ export function createCliHostCredentialMintFlow(
       return { kind: "unavailable" };
     }
 
-    const stepUpToken = await verifyStepUpInteractively(options);
-    if (stepUpToken === null) {
-      return { kind: "declined" };
+    const attempt = await verifyStepUpInteractively(options);
+    if (attempt.kind !== "token") {
+      return { kind: attempt.kind };
     }
 
     const second = await mintHostCredentialViaHttp(
       options.authnBaseUrl,
-      stepUpToken,
+      attempt.token,
       { hostId: request.hostId, hostLabel: hostLabel(), platform: null },
     );
     if (second.kind === "ok") {
@@ -108,27 +108,43 @@ export function createCliHostCredentialMintFlow(
 }
 
 /**
+ * How the terminal round trip ended.
+ *
+ * The split matters because the flow contract reads `declined` as the USER's
+ * answer - "stop asking" - while `unavailable` is "nothing to hand over right
+ * now". Collapsing both into one `null` reported a dropped network connection
+ * as a deliberate refusal, which is a claim about a person that the code has no
+ * evidence for.
+ */
+type StepUpAttempt =
+  | { readonly kind: "token"; readonly token: string }
+  | { readonly kind: "declined" }
+  | { readonly kind: "unavailable" };
+
+/**
  * Emails a code and reads it back from the terminal. Returns the verified
- * step-up bearer, or `null` when the user declined, ran out of attempts, or the
- * challenge could not be sent - all of which are "carry on without a host
- * credential", not failures.
+ * step-up bearer, `declined` when the human answered no (an empty line, a
+ * prompt nobody was there to answer, or every attempt used up), or
+ * `unavailable` when the round trip could not be completed at all.
  */
 async function verifyStepUpInteractively(
   options: CliHostCredentialMintOptions,
-): Promise<string | null> {
+): Promise<StepUpAttempt> {
   const bearer = options.bearer();
   if (bearer === null || bearer.length === 0) {
-    return null;
+    return { kind: "unavailable" };
   }
   const challenge = await requestStepUpChallengeViaHttp(
     options.authnBaseUrl,
     bearer,
   );
   if (challenge.kind !== "ok") {
+    // `unauthorized` / `network-error` - the user was never even shown a
+    // prompt, so there is no decision here to report as one.
     options.diag(
       `could not send a verification code (${challenge.kind}); continuing without a host credential.`,
     );
-    return null;
+    return { kind: "unavailable" };
   }
 
   // Prompt on stderr: stdout is the agent-facing stream for `traycer monitor`
@@ -142,11 +158,14 @@ async function verifyStepUpInteractively(
     for (let attempt = 1; attempt <= MAX_CODE_ATTEMPTS; attempt += 1) {
       const answer = await promptWithinBudget(rl, "Email code: ");
       if (answer === null) {
-        return null;
+        // Nobody answered inside the budget. Same class as the non-interactive
+        // early return above: a prompt no human is going to answer, not a
+        // system that failed.
+        return { kind: "declined" };
       }
       const code = answer.trim();
       if (code.length === 0) {
-        return null;
+        return { kind: "declined" };
       }
       if (!CODE_PATTERN.test(code)) {
         process.stderr.write("Enter the 6-digit code from your email.\n");
@@ -156,7 +175,7 @@ async function verifyStepUpInteractively(
       // the token the challenge was requested with.
       const current = options.bearer();
       if (current === null || current.length === 0) {
-        return null;
+        return { kind: "unavailable" };
       }
       const verified = await verifyStepUpChallengeViaHttp(
         options.authnBaseUrl,
@@ -164,13 +183,15 @@ async function verifyStepUpInteractively(
         code,
       );
       if (verified.kind === "ok") {
-        return verified.response.access_token;
+        return { kind: "token", token: verified.response.access_token };
       }
       if (verified.kind !== "invalid") {
+        // `unauthorized` / `network-error`. The user typed a code and the
+        // system could not judge it - that is not them saying no.
         options.diag(
           `verification failed (${verified.kind}); continuing without a host credential.`,
         );
-        return null;
+        return { kind: "unavailable" };
       }
       if (attempt < MAX_CODE_ATTEMPTS) {
         process.stderr.write("That code was not accepted. Try again.\n");
@@ -179,7 +200,7 @@ async function verifyStepUpInteractively(
     options.diag(
       "too many incorrect codes; continuing without a host credential.",
     );
-    return null;
+    return { kind: "declined" };
   } finally {
     rl.close();
   }

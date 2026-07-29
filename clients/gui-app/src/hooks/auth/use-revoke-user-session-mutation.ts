@@ -37,7 +37,7 @@ function unwrapRevokeUserSessionResult(
   throw new Error("Couldn't reach Traycer to sign out this session.");
 }
 
-export function useRevokeUserSession(
+export function useAuthRevokeUserSession(
   familyId: string,
 ): UseMutationResult<
   RevokeUserSessionResponse,

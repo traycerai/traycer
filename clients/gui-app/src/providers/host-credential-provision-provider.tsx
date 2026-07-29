@@ -48,6 +48,18 @@ export function HostCredentialProvisionProvider(props: {
   const directory = useHostDirectory();
   const runnerHost = useRunnerHostOrNull();
   const [prompt, setPrompt] = useState<ActivePrompt | null>(null);
+  /**
+   * Mirrors `prompt` so a settle can read the request it is answering WITHOUT
+   * reaching inside the `setPrompt` updater. State updaters must be pure, and
+   * React is free to invoke one more than once (StrictMode, a concurrent
+   * re-render) - promise settlement being idempotent makes that harmless today,
+   * but nothing in the shape of the code says it has to stay that way.
+   */
+  const promptRef = useRef<ActivePrompt | null>(null);
+  const applyPrompt = useCallback((next: ActivePrompt | null) => {
+    promptRef.current = next;
+    setPrompt(next);
+  }, []);
   const promptIdRef = useRef(0);
   /**
    * Rejects the prompt currently on screen. Held in a ref so an identity change
@@ -90,7 +102,7 @@ export function HostCredentialProvisionProvider(props: {
         promptIdRef.current = id;
         return new Promise<StepUpCredential>((resolve, reject) => {
           pendingRejectRef.current = reject;
-          setPrompt({
+          applyPrompt({
             // Stamped with the identity that raised it. The render below drops
             // the dialog when this no longer matches, so a sign-out cannot
             // leave the previous user's question on screen for the next one.
@@ -114,24 +126,25 @@ export function HostCredentialProvisionProvider(props: {
       );
       return queued;
     },
-    [],
+    [applyPrompt],
   );
 
-  const handleVerified = useCallback((credential: StepUpCredential) => {
-    pendingRejectRef.current = null;
-    setPrompt((current) => {
+  const handleVerified = useCallback(
+    (credential: StepUpCredential) => {
+      pendingRejectRef.current = null;
+      const current = promptRef.current;
+      applyPrompt(null);
       current?.request.resolve(credential);
-      return null;
-    });
-  }, []);
+    },
+    [applyPrompt],
+  );
 
   const handleCanceled = useCallback(() => {
     pendingRejectRef.current = null;
-    setPrompt((current) => {
-      current?.request.reject(new StepUpCanceledError());
-      return null;
-    });
-  }, []);
+    const current = promptRef.current;
+    applyPrompt(null);
+    current?.request.reject(new StepUpCanceledError());
+  }, [applyPrompt]);
 
   useEffect(() => {
     const run = async (

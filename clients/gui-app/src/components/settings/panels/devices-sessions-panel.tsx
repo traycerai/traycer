@@ -19,10 +19,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   type RevokeUserSessionInput,
-  useRevokeUserSession,
+  useAuthRevokeUserSession,
 } from "@/hooks/auth/use-revoke-user-session-mutation";
-import { useRevokeAllSessions } from "@/hooks/auth/use-revoke-all-sessions-mutation";
-import { useUserSessions } from "@/hooks/auth/use-user-sessions-query";
+import { useAuthRevokeAllSessions } from "@/hooks/auth/use-revoke-all-sessions-mutation";
+import { useAuthFetchUserSessions } from "@/hooks/auth/use-user-sessions-query";
 import {
   isStepUpRequiredError,
   runStepUpProtectedAction,
@@ -30,7 +30,7 @@ import {
 } from "@/lib/auth/step-up-flow";
 import { StepUpChallengeDialog } from "@/components/auth/step-up-challenge-dialog";
 import {
-  messageFromError,
+  actionErrorFromStepUpError,
   StepUpCanceledError,
   type StepUpPromptPurpose,
   type StepUpPromptRequest,
@@ -71,6 +71,9 @@ function sessionDisplayLine(session: UserSessionListItem): string {
     session.displayLabel,
     session.platform,
     session.appVersion === null ? null : `App ${session.appVersion}`,
+    // Coarse (city/region-level) and the strongest "is this me?" signal on the
+    // row - a session in the wrong place is what a user actually scans for.
+    session.location,
   ].filter((part): part is string => part !== null && part.trim().length > 0);
   return parts.length === 0 ? "No device details recorded" : parts.join(" / ");
 }
@@ -140,8 +143,8 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
 export function DevicesSessionsPanel() {
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const binding = useHostBinding();
-  const query = useUserSessions();
-  const revokeAllSessions = useRevokeAllSessions();
+  const query = useAuthFetchUserSessions();
+  const revokeAllSessions = useAuthRevokeAllSessions();
   const [actionError, setActionError] = useState<string | null>(null);
   const [stepUpPrompt, setStepUpPrompt] = useState<StepUpPromptRequest | null>(
     null,
@@ -219,7 +222,7 @@ export function DevicesSessionsPanel() {
           await binding.auth.signOut();
         }
       } catch (error) {
-        setActionError(messageFromError(error));
+        setActionError(actionErrorFromStepUpError(error));
       } finally {
         setActiveSessionFamilyId(null);
       }
@@ -245,7 +248,7 @@ export function DevicesSessionsPanel() {
       }
       await binding.auth.signOut();
     } catch (error) {
-      setActionError(messageFromError(error));
+      setActionError(actionErrorFromStepUpError(error));
     }
   }, [binding, requestStepUpCredential, revokeAllSessions]);
 
@@ -260,7 +263,8 @@ export function DevicesSessionsPanel() {
             <div className="min-w-0 space-y-1">
               <h2 className="text-ui font-medium">Sessions</h2>
               <p className="text-ui-xs text-muted-foreground">
-                Browser, desktop, CLI, and extension access for this account.
+                Browser, desktop, CLI, extension, and host access for this
+                account.
               </p>
             </div>
             <Button
@@ -386,7 +390,7 @@ function SessionRow(props: {
   ) => Promise<void>;
 }) {
   const { session } = props;
-  const mutation = useRevokeUserSession(session.familyId);
+  const mutation = useAuthRevokeUserSession(session.familyId);
   const pending =
     mutation.isPending || props.activeSessionFamilyId === session.familyId;
   const disabled = session.revoked || (props.actionBusy && !pending);

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas";
 
 /**
  * Client-side mirror of authn-v3's Devices & Sessions account-security DTOs.
@@ -149,15 +150,12 @@ export const mintHostCredentialResponseSchema: z.ZodType<MintHostCredentialRespo
       familyId: z.string().min(1),
       hostId: z.string().min(1),
       expiresIn: z.number().int().positive(),
-      // Parseability is checked here rather than left to the host: the host's
-      // adoption rule ORDERS by this value, and an unparseable one degrades to
-      // `NaN` comparisons that silently answer "neither is newer". Failing at
-      // the HTTP boundary keeps that from becoming a stuck-tokenless host.
-      provisionedAt: z
-        .string()
-        .refine((value) => !Number.isNaN(Date.parse(value)), {
-          message: "provisionedAt must be a parseable timestamp",
-        }),
+      // The exact wire form is checked here rather than left to the host: the
+      // host's adoption rule ORDERS by this value, so a shape the rule was not
+      // written for - a date-only string, a coarser or finer sub-second
+      // resolution - orders wrongly rather than loudly. Failing at the HTTP
+      // boundary keeps that from becoming a stuck-tokenless host.
+      provisionedAt: isoMillisecondTimestampSchema,
     })
     .strict();
 

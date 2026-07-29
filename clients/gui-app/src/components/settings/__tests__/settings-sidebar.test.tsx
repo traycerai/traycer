@@ -94,8 +94,8 @@ describe("<SettingsSidebar /> leader hints", () => {
       </KeybindingProvider>,
     );
 
-    const link = (await screen.findByText("Devices")).closest("a");
-    expect(link?.getAttribute("href")).toBe("/settings/devices");
+    const link = await screen.findByRole("link", { name: "Devices" });
+    expect(link.getAttribute("href")).toBe("/settings/devices");
   });
 
   it("SETTINGS_SECTIONS does not contain the legacy Service id", () => {

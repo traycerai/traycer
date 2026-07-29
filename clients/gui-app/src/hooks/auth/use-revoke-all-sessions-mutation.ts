@@ -29,7 +29,7 @@ function unwrapRevokeAllSessionsResult(
   throw new Error("Couldn't reach Traycer to sign out everywhere.");
 }
 
-export function useRevokeAllSessions(): UseMutationResult<
+export function useAuthRevokeAllSessions(): UseMutationResult<
   RevokeAllSessionsResponse,
   Error,
   void,

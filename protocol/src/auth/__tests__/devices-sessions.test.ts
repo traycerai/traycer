@@ -70,6 +70,45 @@ describe("devices and sessions auth DTO schemas", () => {
       expect(result.success).toBe(false);
     });
 
+    // Each of these parses fine under `Date.parse`, so a permissive
+    // `refine(!Number.isNaN(Date.parse(value)))` schema would accept them -
+    // they are exactly what proves `isoMillisecondTimestampSchema` (offset +
+    // millisecond precision required) tightened the contract.
+    it("rejects date-only, human-readable, and non-millisecond-precision provisionedAt", () => {
+      expect(
+        mintHostCredentialResponseSchema.safeParse({
+          ...validBody,
+          provisionedAt: "2026-07-08",
+        }).success,
+      ).toBe(false);
+      expect(
+        mintHostCredentialResponseSchema.safeParse({
+          ...validBody,
+          provisionedAt: "Tue, 08 Jul 2026 12:00:00 GMT",
+        }).success,
+      ).toBe(false);
+      expect(
+        mintHostCredentialResponseSchema.safeParse({
+          ...validBody,
+          provisionedAt: "2026-07-08T12:00:00.123456Z",
+        }).success,
+      ).toBe(false);
+      expect(
+        mintHostCredentialResponseSchema.safeParse({
+          ...validBody,
+          provisionedAt: "2026-07-08T12:00:00Z",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("accepts the canonical toISOString() millisecond-precision form", () => {
+      const result = mintHostCredentialResponseSchema.safeParse({
+        ...validBody,
+        provisionedAt: new Date("2026-07-08T12:00:00.123Z").toISOString(),
+      });
+      expect(result.success).toBe(true);
+    });
+
     it("rejects a body missing provisionedAt", () => {
       const { provisionedAt: _drop, ...without } = validBody;
       void _drop;

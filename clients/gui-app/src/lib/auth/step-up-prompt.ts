@@ -50,3 +50,17 @@ export function messageFromError(error: unknown): string {
   }
   return "Action failed. Try again.";
 }
+
+/**
+ * Banner text for an action that ended in `error`, or `null` when there is
+ * nothing to report because the user dismissed the dialog.
+ *
+ * A cancel reaches a catch block the same way a transport failure does, but it
+ * is the user's own answer - surfacing it in an alert-styled banner tells them
+ * their deliberate choice went wrong. Callers that render a failure surface go
+ * through this rather than {@link messageFromError} directly, which would
+ * otherwise fall through to the `StepUpCanceledError` message text.
+ */
+export function actionErrorFromStepUpError(error: unknown): string | null {
+  return isStepUpCanceledError(error) ? null : messageFromError(error);
+}

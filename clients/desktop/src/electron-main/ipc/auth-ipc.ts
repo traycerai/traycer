@@ -52,16 +52,6 @@ function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
     : null;
 }
 
-function activeRetainedStepUpToken(
-  credential: RetainedStepUpCredential | null,
-  nowMs: number,
-): string | null {
-  if (credential === null) {
-    return null;
-  }
-  return credential.expiresAtMs > nowMs ? credential.accessToken : null;
-}
-
 /**
  * Auth IPC handlers: token *validation* against the authn service, plus the
  * credentials-file token store (tech plan §3). Credential persistence now lives
@@ -72,6 +62,28 @@ function activeRetainedStepUpToken(
  */
 export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   let retainedStepUpCredential: RetainedStepUpCredential | null = null;
+  /**
+   * The retained step-up bearer if it is still usable, dropping an expired one
+   * on the way out.
+   *
+   * The drop is the point. An expired token is already refused by the server, so
+   * holding it grants nothing - but it is still a secret sitting in main-process
+   * memory with no remaining reason to be there, kept alive until some later
+   * `step-up-required`, `revokeAllSessions`, or session change happens to clear
+   * it. `MockRunnerHost.activeRetainedStepUpToken` self-nulls for the same
+   * reason; a closure rather than a free function is what lets this one do it
+   * too, so the pair cannot drift.
+   */
+  const activeRetainedStepUpToken = (nowMs: number): string | null => {
+    if (retainedStepUpCredential === null) {
+      return null;
+    }
+    if (retainedStepUpCredential.expiresAtMs <= nowMs) {
+      retainedStepUpCredential = null;
+      return null;
+    }
+    return retainedStepUpCredential.accessToken;
+  };
   const provisionClaims = new HostProvisionClaimRegistry(() => Date.now());
   // Identity the provisioning memo currently belongs to. Compared - rather
   // than resetting on every auth-session change - because the session snapshot
@@ -166,7 +178,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         "revokeUserSession.useStepUpCredential",
       );
       const stepUpToken = useStepUpCredential
-        ? activeRetainedStepUpToken(retainedStepUpCredential, Date.now())
+        ? activeRetainedStepUpToken(Date.now())
         : null;
       const result = await revokeUserSessionViaHttp(
         bridge.options.authnBaseUrl,
@@ -184,10 +196,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.revokeAllSessions,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "revokeAllSessions.bearerToken");
-      const stepUpToken = activeRetainedStepUpToken(
-        retainedStepUpCredential,
-        Date.now(),
-      );
+      const stepUpToken = activeRetainedStepUpToken(Date.now());
       const result = await revokeAllSessionsViaHttp(
         bridge.options.authnBaseUrl,
         stepUpToken ?? bearerToken,
@@ -211,7 +220,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         "mintHostCredential.useStepUpCredential",
       );
       const stepUpToken = useStepUpCredential
-        ? activeRetainedStepUpToken(retainedStepUpCredential, Date.now())
+        ? activeRetainedStepUpToken(Date.now())
         : null;
       const result = await mintHostCredentialViaHttp(
         bridge.options.authnBaseUrl,

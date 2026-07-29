@@ -7,6 +7,7 @@ import {
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/ws-protocol";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas";
 
 /**
  * Control frames exchanged on the `/stream` WS before (and alongside) the
@@ -203,13 +204,12 @@ export const clientStreamHostCredentialProvisionFrameSchema = z.object({
   token: z.string().min(1),
   refreshToken: z.string().min(1),
   familyId: z.string().min(1),
-  // Parseability is enforced here, not left to the host: the adoption rule
-  // ORDERS by this value, and an unparseable one degrades to `NaN` comparisons
-  // that silently answer "neither is newer" - which would strand a host on a
-  // credential the server had already retired.
-  provisionedAt: z.string().refine((value) => !Number.isNaN(Date.parse(value)), {
-    message: "provisionedAt must be a parseable timestamp",
-  }),
+  // The exact wire form is enforced here, not left to the host: the adoption
+  // rule ORDERS by this value, so a shape it was not written for - a date-only
+  // string, a coarser or finer sub-second resolution - orders wrongly rather
+  // than loudly, and would strand a host on a credential the server had already
+  // retired. Same schema as the HTTP mint response, so the two cannot drift.
+  provisionedAt: isoMillisecondTimestampSchema,
 });
 
 export const clientStreamFatalErrorFrameSchema = z.object({
