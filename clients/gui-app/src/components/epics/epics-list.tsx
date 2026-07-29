@@ -22,7 +22,9 @@ export function EpicsList(props: EpicsListProps) {
     >
       <EpicsListPanel
         variant="page"
+        className={undefined}
         onSelectEpic={null}
+        onOpenItem={null}
         routeSearch={props.routeSearch}
         historyNowMs={props.historyNowMs}
         autoFocusSearch={false}

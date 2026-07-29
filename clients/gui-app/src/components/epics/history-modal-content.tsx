@@ -21,7 +21,9 @@ export function HistoryModalContent(
     <div className="flex min-h-0 flex-1 flex-col">
       <EpicsListPanel
         variant="page"
+        className={undefined}
         onSelectEpic={props.onSelectEpic}
+        onOpenItem={null}
         routeSearch={null}
         historyNowMs={null}
         autoFocusSearch

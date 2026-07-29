@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { readHostPidMetadata } from "../../host/pid-metadata";
@@ -9,7 +9,7 @@ import type { CliInvocation } from "../cli-binary";
 import { HOST_V8_FLAGS } from "../host-node-options";
 import { escapeXml } from "../escape-xml";
 import {
-  buildCompatibleHostStartScript,
+  buildHostStartLauncherScript,
   COMPATIBLE_HOST_START_SCRIPT_PREFIX,
 } from "./host-start-script";
 import { fileExists } from "../install-binary";
@@ -18,6 +18,7 @@ import {
   STOP_EXIT_GRACE_MARGIN_MS,
 } from "@traycer/protocol/host/lifecycle-constants";
 import {
+  serviceLauncherScriptPath,
   serviceManifestPath,
   smAppServiceAgentLabelId,
   type ServiceLabel,
@@ -298,6 +299,19 @@ async function installService(
       exitCode: 1,
     });
   }
+  // The launcher file must exist (and be executable) before the plist that
+  // points at it is bootstrapped - launchd spawns `ProgramArguments[0]`
+  // directly. `chmod` runs unconditionally after the write because
+  // `writeFile`'s `mode` only applies when the file is created, not when an
+  // existing launcher is rewritten.
+  const launcherPath = serviceLauncherScriptPath(options.label);
+  await mkdir(dirname(launcherPath), { recursive: true });
+  await writeFile(
+    launcherPath,
+    buildHostStartLauncherScript(options.label.id),
+    "utf8",
+  );
+  await chmod(launcherPath, 0o755);
   const manifestPath = serviceManifestPath(options.label);
   await mkdir(dirname(manifestPath), { recursive: true });
   await writeFile(
@@ -721,6 +735,12 @@ async function uninstallService(
     });
   }
   await rm(serviceManifestPath(options.label), { force: true });
+  // The launcher directory is per-label and exists solely for the plist
+  // that was just removed.
+  await rm(dirname(serviceLauncherScriptPath(options.label)), {
+    recursive: true,
+    force: true,
+  });
 }
 
 function isBenignBootoutFailure(cause: unknown): boolean {
@@ -1602,10 +1622,15 @@ function hostAgentPath(): string {
 
 function buildPlist(options: BuildPlistOptions): string {
   const home = homedir();
+  // `ProgramArguments[0]` is the launcher FILE, not `/bin/sh -c <script>`:
+  // macOS background-task management names the login item after the
+  // executable, and the inline form surfaced as a bare "sh" from an
+  // "Unknown Developer" in System Settings on every CLI-registered
+  // install. The launcher carries the same N-1 capability probe; see
+  // `buildHostStartLauncherScript`. `installService` writes the file
+  // before this plist is bootstrapped.
   const programArgs = [
-    "/bin/sh",
-    "-c",
-    buildCompatibleHostStartScript(options.label.id),
+    serviceLauncherScriptPath(options.label),
     options.cli.command,
     ...options.cli.args,
   ];
@@ -1673,12 +1698,19 @@ ${programArgsXml}
  * repoints the service" contract while still refreshing the definition.
  *
  * Only ever parses a plist this module's `buildPlist` wrote, so the shape is
- * closed at exactly two members: the current `/bin/sh -c <compat-script>
- * <cli> <args...>` vector, and the legacy vector that ends at `host start`.
- * There is deliberately no third branch for a plist whose ProgramArguments
- * end in `--service-label <label>` - no version of `buildPlist` has ever
- * emitted that shape, and a speculative parse arm on a closed set is a
- * liability, not tolerance.
+ * closed at exactly three members: the current `<launcher-file> <cli>
+ * <args...>` vector - matched by exact equality against
+ * `serviceLauncherScriptPath(label)`, this label's own deterministic
+ * launcher path, not merely a `traycer-host-start` basename suffix, since a
+ * basename-only match would treat an attacker-writable plist pointing at
+ * ANY same-named file as this label's registration and preserve whatever
+ * command it named across the next `host update` - the prior inline
+ * `/bin/sh -c <compat-script> <cli> <args...>` vector still on disk
+ * wherever the definition has not been rewritten since, and the legacy
+ * vector that ends at `host start`. There is deliberately no fourth branch
+ * for a plist whose ProgramArguments end in `--service-label <label>` - no
+ * version of `buildPlist` has ever emitted that shape, and a speculative
+ * parse arm on a closed set is a liability, not tolerance.
  */
 async function readRegisteredCliInvocation(
   label: ServiceLabel,
@@ -1699,6 +1731,11 @@ async function readRegisteredCliInvocation(
     .map((m) => m[1])
     .filter((value): value is string => value !== undefined)
     .map(unescapeXml);
+  if (args.length >= 2 && args[0] === serviceLauncherScriptPath(label)) {
+    const command = args[1];
+    if (command === undefined || !(await fileExists(command))) return null;
+    return { command, args: args.slice(2) };
+  }
   if (
     args.length >= 4 &&
     args[0] === "/bin/sh" &&

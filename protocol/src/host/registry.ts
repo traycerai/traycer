@@ -280,6 +280,7 @@ import {
   hostNotificationsFeedSubscribeV11,
   hostNotificationsSubscribeV10,
   notificationsSubscribeV10,
+  notificationsSubscribeV11,
 } from "@traycer/protocol/host/notifications/contracts";
 import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
 import {
@@ -4899,10 +4900,18 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "notifications.subscribe": {
     1: {
-      latestMinor: 0,
+      // @1.1 adds the additive, server-only `awareness` frame (agent-activity
+      // presence on the per-user notification room). @1.0 stays installed and
+      // FROZEN: a client that negotiated it must never receive the new kind -
+      // the emitting resolver MUST gate on the negotiated version rather than
+      // assuming the peer will tolerate an unknown frame.
+      latestMinor: 1,
       versions: {
         0: {
           contract: notificationsSubscribeV10,
+        },
+        1: {
+          contract: notificationsSubscribeV11,
         },
       },
     },

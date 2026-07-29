@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  publishAgentActivity,
+  resetAgentActivityPresence,
+} from "@/__tests__/agent-activity-presence-harness";
 import { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import {
   createOpenEpicStore,
@@ -105,6 +108,11 @@ function buildTestHandle(id: string, clean: boolean): TestHandle {
 function h(t: TestHandle): OpenEpicStoreHandle {
   return t.handle;
 }
+
+afterEach(() => {
+  workingByEpic.clear();
+  resetAgentActivityPresence();
+});
 
 describe("OpenEpicSessionRegistry", () => {
   it("evicts the LRU clean entry when adding a sixth session", () => {
@@ -308,14 +316,32 @@ describe("OpenEpicSessionRegistry", () => {
   });
 });
 
+/**
+ * Prune eligibility now rides the per-user notification room's presence, not
+ * the epic's own collaboration awareness, so these helpers publish one host
+ * entry covering every epic that currently has work. Publishing the whole set
+ * each time mirrors the host, which republishes its full entry on every
+ * activity boundary.
+ */
+const workingByEpic = new Map<string, readonly string[]>();
+
+function publishWorkingSet(): void {
+  const byEpic: Record<
+    string,
+    { working: readonly string[]; turn: readonly string[] }
+  > = {};
+  for (const [epicId, agentIds] of workingByEpic) {
+    byEpic[epicId] = { working: agentIds, turn: agentIds };
+  }
+  publishAgentActivity([{ hostId: "host-registry", byEpic }]);
+}
+
 function markAgentWorking(handle: TestHandle, agentId: string): void {
-  handle.handle.awareness.setLocalState({
-    [AGENT_WORKING_AWARENESS_FIELD]: [agentId],
-  });
+  workingByEpic.set(handle.handle.epicId, [agentId]);
+  publishWorkingSet();
 }
 
 function clearAgentWorking(handle: TestHandle): void {
-  handle.handle.awareness.setLocalState({
-    [AGENT_WORKING_AWARENESS_FIELD]: [],
-  });
+  workingByEpic.set(handle.handle.epicId, []);
+  publishWorkingSet();
 }

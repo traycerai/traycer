@@ -301,6 +301,25 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
   }
 
   /**
+   * {@link notifyAvailabilityRecovered} for an explicitly-named host. Tabs
+   * bind a `hostId` for life, so a durable per-tab stream can heartbeat (and
+   * observe recovering) a host that is NOT the active one - that host's
+   * stranded unary queries are keyed by ITS id and would never be reached by
+   * the active-host variant. For the active host this delegates (including
+   * the change event); for any other host it invalidates that host's scope so
+   * active observers refetch, without announcing an active-host change.
+   */
+  notifyHostAvailabilityRecovered(hostId: string): void {
+    if (this.activeHost !== null && this.activeHost.hostId === hostId) {
+      this.notifyAvailabilityRecovered();
+      return;
+    }
+    this.invalidator.invalidateHostScope(hostId, {
+      refetchActive: true,
+    });
+  }
+
+  /**
    * Updates the `RequestContext` the messenger threads onto outgoing
    * requests. An identity transition (the previous and next contexts have
    * different `userId`s, OR one side is `null`) invalidates the

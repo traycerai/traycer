@@ -27,7 +27,9 @@ export function HistorySurface() {
     <div className="flex min-h-0 flex-1 flex-col" data-testid="history-surface">
       <EpicsListPanel
         variant="page"
+        className={undefined}
         onSelectEpic={null}
+        onOpenItem={null}
         routeSearch={routeSearch}
         historyNowMs={history?.historyNowMs ?? null}
         autoFocusSearch={false}
