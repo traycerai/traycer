@@ -6,6 +6,8 @@ export type {
   InstallHostResult,
   InstallSourceArg,
   StagedHostInstallSource,
+  SwapLockHolderProcess,
+  SwapLockRecovery,
 } from "./install";
 export {
   commitHostInstallSource,
