@@ -20,6 +20,26 @@ export function buildMessageIdToIndex(
   );
 }
 
+/**
+ * Ticket 10: `role: "user"` covers two visually distinct row shapes -
+ * genuinely human-sent turns and A2A agent-sent rows (`agentSenderInfo !==
+ * null` - decision #8's fourth anchor-triggering event). Sharing one
+ * LegendList item type meant they shared one recycling pool and one running
+ * measured-height average (`averageSizes[itemType]`), skewing the estimate
+ * LegendList uses for not-yet-measured rows of either shape and letting a
+ * container get reused across the two. Splitting keeps both honest; no other
+ * code keys off this string (verified - LegendList consumes it purely
+ * internally for container reuse and per-type size averaging). Lives here
+ * (not `chat-timeline.tsx`) so that component file keeps exporting only
+ * components (Fast Refresh).
+ */
+export function chatTimelineGetItemType(item: ChatMessageModel): string {
+  if (item.role === "user") {
+    return item.agentSenderInfo === null ? "user:human" : "user:a2a";
+  }
+  return item.role;
+}
+
 export interface ChatTimelineNavigationLocation {
   readonly index: number;
   readonly viewOffset: number;
@@ -38,6 +58,45 @@ export function chatTimelineLocationForMessage(
     viewOffset: CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
     animated,
   };
+}
+
+/** Ticket 10: the list-state slice `chatTimelineNavigationLandedAtLocation`
+ *  needs to validate a settled navigation - same content-relative-vs-DOM-
+ *  scroll shape as `ChatFreeScrollingMeasurementSource`/
+ *  `ChatViewportAnchorListState` (decision #18), but the caller supplies
+ *  `scroll` directly (the scroll NODE's own live `scrollTop`, not
+ *  `list.getState().scroll` - that internal value can lag a completed
+ *  animated scroll for exactly the reason this validation exists, see the
+ *  function's own doc comment). */
+export interface ChatTimelineNavigationListState {
+  readonly positionAtIndex: (index: number) => number | undefined;
+  readonly scroll: number;
+  readonly topOffsetAdjustment: number;
+}
+
+/**
+ * Ticket 10: whether `location`'s target row is CURRENTLY sitting at its
+ * intended `viewOffset` from the viewport top - the validation half of the
+ * settle/re-issue pattern (root-cause: rootcause-nav-landing report). An
+ * ANIMATED `scrollToIndex` targets ESTIMATED geometry; the installed
+ * LegendList 3.2.0 never retargets mid-flight as real measurements replace
+ * estimates during the animation, so a long jump across many unmeasured rows
+ * can settle short (video evidence: click 1 landed several viewports short,
+ * click 2 ~300-400px short). `false` for an unmeasured row - nothing to
+ * validate against yet, so the caller should treat it as needing another
+ * attempt rather than accepting blind.
+ */
+export function chatTimelineNavigationLandedAtLocation(
+  state: ChatTimelineNavigationListState,
+  location: ChatTimelineNavigationLocation,
+  epsilonPx: number,
+): boolean {
+  const position = state.positionAtIndex(location.index);
+  if (typeof position !== "number" || !Number.isFinite(position)) {
+    return false;
+  }
+  const actualOffset = position + state.topOffsetAdjustment - state.scroll;
+  return Math.abs(actualOffset - location.viewOffset) <= epsilonPx;
 }
 
 function isUserMessage(message: ChatMessageModel): boolean {

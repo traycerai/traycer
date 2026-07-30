@@ -1281,13 +1281,38 @@
     @apply my-0.5 border-l-2 border-primary/60 pl-3 leading-snug text-muted-foreground;
   }
 
-  /* Fade transcript rows as they pass beneath the top chrome (ported from
-     T3's `.chat-timeline-scroll-fade`). A mask stays visible even when the
-     header and timeline share the same background. The right-edge mask
-     excludes the scrollbar gutter (4px - matches the reserved `mr-1` gutter
-     on `.chat-scrollbar-native-thin`) so the fade never darkens the bar
-     itself. Opt-in via `topFadeEnabled` on `ChatTimeline` - unused until the
-     scroll-policy ticket wires it on. */
+  /* Fade transcript rows as they pass beneath the top chrome AND beneath the
+     composer dock (ported from T3's `.chat-timeline-scroll-fade`, extended
+     with a mirrored bottom band). A mask stays visible even when the chrome
+     and timeline share the same background. The right-edge mask excludes the
+     scrollbar gutter (4px - matches the reserved `mr-1` gutter on
+     `.chat-scrollbar-native-thin`) and stays fully opaque top-to-bottom so
+     the fade never darkens the bar itself. Opt-in via `topFadeEnabled` on
+     `ChatTimeline` - the same class carries both edges, since both are
+     "edge of the transcript" chrome.
+
+     The bottom band's own bottom edge sits `--chat-bottom-overlay-inset`
+     above the container's bottom edge - the dock's live measured height
+     (chat-messages.tsx writes the var from `endInset`, the same value used
+     for `contentInsetEndAdjustment`). The `inset` px strip below the band is
+     left uncovered by any mask layer (alpha 0): it renders behind the
+     opaque composer dock either way, so leaving it as the mask's natural
+     "uncovered = transparent" default avoids a fifth layer for a region
+     nothing ever shows through.
+
+     Positions below are plain `<length-percentage>` pairs measured from the
+     top-left, NOT the `[left|right] off? && [top|bottom] off?` edge-offset
+     grammar (e.g. `left bottom var(...)`) - mixing that grammar with `var()`
+     made the whole `mask-position` value invalid in this engine, silently
+     resetting EVERY layer to its `0% 0%` initial position (verified via
+     computed style; the old top-only mask happened to look right only
+     because 0% 0% and "top" coincide). And a lone `calc(100% - X)` in a
+     position (not size) is NOT "X px up from the bottom": background/mask
+     position percentages resolve against `(container - layer)`, so the
+     layer's own height is already subtracted once by the `100%` term -
+     writing `100% - fold - inset` double-subtracts `fold` and lands the
+     band a whole fold-height too high (verified pixel-by-pixel against an
+     isolated test page). `100% - inset` is the correct offset. */
   .chat-timeline-scroll-fade {
     --chat-timeline-scroll-fade-height: 2.5rem;
     -webkit-mask-image:
@@ -1301,12 +1326,33 @@
         rgb(0 0 0 / 96%) 82%,
         black 100%
       ),
-      linear-gradient(black, black), linear-gradient(black, black);
-    -webkit-mask-position: top, bottom, right;
+      linear-gradient(black, black),
+      linear-gradient(
+        to top,
+        transparent 0%,
+        rgb(0 0 0 / 10%) 10%,
+        rgb(0 0 0 / 30%) 24%,
+        rgb(0 0 0 / 58%) 42%,
+        rgb(0 0 0 / 82%) 62%,
+        rgb(0 0 0 / 96%) 82%,
+        black 100%
+      ),
+      linear-gradient(black, black);
+    -webkit-mask-position:
+      0px 0px,
+      0px var(--chat-timeline-scroll-fade-height),
+      0px calc(100% - var(--chat-bottom-overlay-inset, 0px)),
+      right;
     -webkit-mask-repeat: no-repeat;
     -webkit-mask-size:
       100% var(--chat-timeline-scroll-fade-height),
-      100% calc(100% - var(--chat-timeline-scroll-fade-height)),
+      100%
+        calc(
+          100% - var(--chat-timeline-scroll-fade-height) -
+            var(--chat-timeline-scroll-fade-height) -
+            var(--chat-bottom-overlay-inset, 0px)
+        ),
+      100% var(--chat-timeline-scroll-fade-height),
       4px 100%;
     mask-image:
       linear-gradient(
@@ -1319,12 +1365,33 @@
         rgb(0 0 0 / 96%) 82%,
         black 100%
       ),
-      linear-gradient(black, black), linear-gradient(black, black);
-    mask-position: top, bottom, right;
+      linear-gradient(black, black),
+      linear-gradient(
+        to top,
+        transparent 0%,
+        rgb(0 0 0 / 10%) 10%,
+        rgb(0 0 0 / 30%) 24%,
+        rgb(0 0 0 / 58%) 42%,
+        rgb(0 0 0 / 82%) 62%,
+        rgb(0 0 0 / 96%) 82%,
+        black 100%
+      ),
+      linear-gradient(black, black);
+    mask-position:
+      0px 0px,
+      0px var(--chat-timeline-scroll-fade-height),
+      0px calc(100% - var(--chat-bottom-overlay-inset, 0px)),
+      right;
     mask-repeat: no-repeat;
     mask-size:
       100% var(--chat-timeline-scroll-fade-height),
-      100% calc(100% - var(--chat-timeline-scroll-fade-height)),
+      100%
+        calc(
+          100% - var(--chat-timeline-scroll-fade-height) -
+            var(--chat-timeline-scroll-fade-height) -
+            var(--chat-bottom-overlay-inset, 0px)
+        ),
+      100% var(--chat-timeline-scroll-fade-height),
       4px 100%;
   }
 

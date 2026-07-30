@@ -3,6 +3,7 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import {
   buildMessageIdToIndex,
   chatTimelineLocationForMessage,
+  chatTimelineNavigationLandedAtLocation,
   chatViewportAnchorRowIndex,
   classifyChatEdgeMutation,
   CHAT_ARROW_SCROLL_STEP_PX,
@@ -95,6 +96,72 @@ describe("chatTimelineLocationForMessage", () => {
     expect(
       chatTimelineLocationForMessage("missing", indexById, false),
     ).toBeNull();
+  });
+});
+
+describe("chatTimelineNavigationLandedAtLocation (Ticket 10)", () => {
+  const location = {
+    index: 5,
+    viewOffset: CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
+    animated: true,
+  } as const;
+
+  it("returns true when the target row sits exactly at viewOffset", () => {
+    // position 900 + header 40 - scroll 892 = 48 viewOffset.
+    expect(
+      chatTimelineNavigationLandedAtLocation(
+        {
+          positionAtIndex: (index) => (index === 5 ? 900 : undefined),
+          scroll: 900 + 40 - CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
+          topOffsetAdjustment: 40,
+        },
+        location,
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false when the landing is off by more than epsilon (undershoot)", () => {
+    // Several viewports short - the video-evidence root cause class.
+    expect(
+      chatTimelineNavigationLandedAtLocation(
+        {
+          positionAtIndex: (index) => (index === 5 ? 900 : undefined),
+          scroll: 200,
+          topOffsetAdjustment: 40,
+        },
+        location,
+        1,
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false for an unmeasured row (no positionAtIndex)", () => {
+    expect(
+      chatTimelineNavigationLandedAtLocation(
+        {
+          positionAtIndex: () => undefined,
+          scroll: 0,
+          topOffsetAdjustment: 0,
+        },
+        location,
+        1,
+      ),
+    ).toBe(false);
+  });
+
+  it("tolerates floating-point noise within epsilon", () => {
+    expect(
+      chatTimelineNavigationLandedAtLocation(
+        {
+          positionAtIndex: (index) => (index === 5 ? 900 : undefined),
+          scroll: 900 + 40 - CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX + 0.4,
+          topOffsetAdjustment: 40,
+        },
+        location,
+        1,
+      ),
+    ).toBe(true);
   });
 });
 

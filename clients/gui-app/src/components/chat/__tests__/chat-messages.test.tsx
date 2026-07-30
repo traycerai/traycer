@@ -14,12 +14,17 @@ import {
   ChatMessages,
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
-import { CHAT_ARROW_SCROLL_STEP_PX } from "@/components/chat/chat-messages-scroll-helpers";
+import {
+  CHAT_ARROW_SCROLL_STEP_PX,
+  CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
+  chatTimelineGetItemType,
+} from "@/components/chat/chat-messages-scroll-helpers";
 import {
   captureChatFreeScrollingOffset,
   CHAT_LIST_ANCHOR_OFFSET,
   getChatNaturalMaxScrollWithoutAnchorReserve,
 } from "@/components/chat/chat-scroll-anchoring";
+import { preserveChatScrollAcrossDisclosureChange } from "@/components/chat/chat-scroll-disclosure";
 import {
   evictChatTabState,
   hasSavedChatTabState,
@@ -1059,8 +1064,14 @@ describe("ChatMessages scroll policy", () => {
       // First `true` report at the settled position: a ONE-SHOT token would
       // already have been consumed by whatever report preceded this (or, if
       // this were the very first, would be fine here but fail below).
+      // Checked via `dataset.scrollMode`, not pill visibility - the shrunk
+      // (3-row) transcript now genuinely fits one viewport, so LegendList's
+      // own `isContentLess` makes EVERY report `isAtEnd: true` regardless of
+      // scrollTop; Ticket 11 fix #3 correctly hides the pill for all of them
+      // (decision #16: nothing is out of view). Mode is the precise claim
+      // this test makes ("stays free-scrolling") and is unaffected by that.
       await fireScrollTopAndFlush(settledScrollTop);
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // Duplicate/correction `true` report: a slightly different scrollTop
       // (not an exact repeat, so LegendList does not skip it as a no-op)
@@ -1069,7 +1080,7 @@ describe("ChatMessages scroll policy", () => {
       // report above, so this one falls through to the normal
       // reconciliation path and incorrectly restores follow.
       await fireScrollTopAndFlush(Math.max(0, settledScrollTop - 20));
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // Settle the operation (scrollend) - suppression is NOT auto-cleared
       // by settle (no timer survives the collapse); still free regardless,
@@ -1077,7 +1088,7 @@ describe("ChatMessages scroll policy", () => {
       act(() => {
         scrollNode.dispatchEvent(new Event("scrollend"));
       });
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
     });
 
     it("minimap/navigateToMessage (animated) stays free-scrolling across false->true intermediate frames, then across a stream append", async () => {
@@ -1106,30 +1117,38 @@ describe("ChatMessages scroll policy", () => {
         scrollNode.scrollHeight - scrollNode.clientHeight,
       );
 
-      // Two intermediate "still animating toward the target" frames.
+      // Two intermediate "still animating toward the target" frames. Checked
+      // via `dataset.scrollMode`, not pill visibility - the shim's fixed
+      // `scrollHeight` (400 rows * 90px) is far beyond this 24-row
+      // transcript's REAL measured content, so every one of these
+      // `settledScrollTop`-derived offsets is already past the real content
+      // end (confirmed: `isAtEnd: true` from the very first report) -
+      // Ticket 11 fix #2's reader-position mirror correctly tracks that,
+      // which is the point of this test (mode/suppression persistence), not
+      // a claim about the pill's own decision-#16 visibility.
       await fireScrollTopAndFlush(Math.max(0, settledScrollTop - 500));
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       await fireScrollTopAndFlush(Math.max(0, settledScrollTop - 150));
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // Terminal `true` report at the animation's destination. A one-shot
       // token was already consumed by the FIRST intermediate `false` report
       // above, so THIS is the exact report that leaks under that design.
       await fireScrollTopAndFlush(settledScrollTop);
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // Duplicate/correction true report - a slightly different scrollTop,
       // still within the near-end band, so LegendList does not skip it as a
       // no-op.
       await fireScrollTopAndFlush(Math.max(0, settledScrollTop - 20));
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // Settle (scrollend). Still free - the operation's own reports never
       // restored follow.
       act(() => {
         scrollNode.dispatchEvent(new Event("scrollend"));
       });
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // Suppression is never cleared by settle alone (only a real gesture or
       // an explicit following-end transition clears it), and mode is still
@@ -1245,9 +1264,15 @@ describe("ChatMessages scroll policy", () => {
       );
       const midFlight = Math.max(0, settledScrollTop - 500);
 
-      // Mid-flight intermediate frame (still suppressed).
+      // Mid-flight intermediate frame (still suppressed). Checked via
+      // `dataset.scrollMode`, not pill visibility - the shim's fixed
+      // `scrollHeight` puts every one of these `settledScrollTop`-derived
+      // offsets past this 24-row transcript's REAL content end, so
+      // Ticket 11 fix #2/#3 correctly treat them as "at the live edge" and
+      // hide the pill; mode persistence (this test's actual claim) is
+      // unaffected.
       await fireScrollTopAndFlush(midFlight);
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // A bare pointerdown - NO accompanying scroll - is decision #6's "ANY
       // pointerdown relinquishes follow/anchor ownership" (text selection,
@@ -1257,7 +1282,7 @@ describe("ChatMessages scroll policy", () => {
       act(() => {
         fireEvent.pointerDown(scrollNode);
       });
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // Deliver what would have been the operation's terminal near-end
       // report, as if an already-in-flight native animation frame still
@@ -1265,7 +1290,7 @@ describe("ChatMessages scroll policy", () => {
       // real browser's scrollTo/scrollTop write reliably cancels the native
       // smooth-scroll immediately). Must NOT reverse the cancellation.
       await fireScrollTopAndFlush(settledScrollTop);
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       // The viewport must not keep moving on top of that either: a
       // subsequent stream append does not auto-follow.
@@ -1515,8 +1540,11 @@ describe("ChatMessages scroll policy", () => {
       rerenderMessages(shrunk);
       await settleLegendList();
       // Still free-scrolling (H3): the near-end landing did not silently
-      // restore follow.
-      expect(isJumpPillVisible()).toBe(true);
+      // restore follow. Checked via `dataset.scrollMode` directly, not pill
+      // visibility - the shrunk transcript now genuinely fits one viewport,
+      // so Ticket 11 fix #3 correctly hides the pill here (decision #16:
+      // nothing is out of view) even though mode stays free-scrolling.
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
       const parkedAtNearEnd = getScrollNode().scrollTop;
       rerenderMessages(appendAssistant(shrunk, "follow-gate-stream", 120_000));
@@ -1524,7 +1552,7 @@ describe("ChatMessages scroll policy", () => {
 
       expect(getScrollNode().scrollTop).toBe(parkedAtNearEnd);
       // Mode is still what actually matters here, not just the position.
-      expect(isJumpPillVisible()).toBe(true);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
     });
 
     it("following-end still catches up on append when parked at the true end (companion, no regression)", async () => {
@@ -3031,7 +3059,12 @@ describe("ChatMessages scroll policy", () => {
 
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(getScrollNode().dataset.scrollMode).not.toBe("anchoring-new-turn");
-      await waitForPillVisible();
+      // Ticket 11 fix #3: the restore lands exactly at the true content end
+      // (naturalMax, asserted below) - decision #16's "out of view" semantic
+      // correctly keeps the pill HIDDEN here even though mode is
+      // free-scrolling, not following-end (the no-follow contract -
+      // decision #14/#21 - is about MODE, not pill visibility).
+      expect(isJumpPillVisible()).toBe(false);
 
       // F3 geometry: restore lands on the true no-reserve max, not the
       // under-clamped reveal target (oldRevealBound = naturalMax - 64 here).
@@ -3276,6 +3309,882 @@ describe("ChatMessages scroll policy", () => {
           4500 + 40 - 3986,
         );
       });
+    });
+  });
+
+  describe("bottom fade replaces the legacy overpaint div", () => {
+    it("no longer renders the legacy bg-linear-to-t overpaint div", async () => {
+      const messages = makeCompletedTranscript(8);
+      const { container } = renderChatMessages({ messages });
+      await settleLegendList();
+
+      expect(container.querySelector(".bg-linear-to-t")).toBeNull();
+    });
+
+    it("writes --chat-bottom-overlay-inset on the transcript container from the measured dock inset, tracking dock resize", async () => {
+      const messages = makeCompletedTranscript(8);
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        composerOverlayHeight: 64,
+      });
+      await settleLegendList();
+
+      const container = screen.getByTestId("chat-transcript-container");
+      expect(
+        container.style.getPropertyValue("--chat-bottom-overlay-inset"),
+      ).toBe("64px");
+
+      // Dock grows (e.g. the files-changed panel opening) - the var must
+      // track the new measured height, not the value at mount.
+      rerenderWith({ composerOverlayHeight: 148 });
+      await settleLegendList();
+
+      expect(
+        container.style.getPropertyValue("--chat-bottom-overlay-inset"),
+      ).toBe("148px");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Ticket 11: live-edge reconciliation for mode + pill (scroll-only routes,
+  // suppressed-nav pill bookkeeping, strict epsilon vs loose near-end).
+  // -------------------------------------------------------------------------
+  describe("ticket 11: live-edge reconciliation for mode + pill", () => {
+    /**
+     * Drive the scroll node to an absolute `scrollTop` and fire a native
+     * `scroll` event ONLY - no wheel/touchmove/pointerdown. Models an OS
+     * scrollbar drag that never cancels generation ownership.
+     */
+    async function fireScrollOnlyTo(scrollTop: number): Promise<void> {
+      await fireScrollTopAndFlush(scrollTop);
+    }
+
+    async function setupOverflowingAnchoredTurn(options: {
+      readonly scrollStateKey: string;
+      readonly sendId: string;
+    }): Promise<{
+      rerenderMessages: (messages: ReadonlyArray<ChatMessageModel>) => void;
+      afterOverflow: ReadonlyArray<ChatMessageModel>;
+    }> {
+      const messages = makeCompletedTranscript(10);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: options.scrollStateKey,
+        localProvenanceMessageIds: new Set([options.sendId]),
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+
+      const afterSend = appendOptimisticUserSend(
+        messages,
+        options.sendId,
+        888_000,
+      );
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(
+          screen.getByTestId(`mock-message-${options.sendId}`),
+        ).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitForAnchorEngineSettle();
+
+      const afterOverflow = appendStreamingAssistantChunks(
+        afterSend,
+        14,
+        888_000,
+      );
+      rerenderMessages(afterOverflow);
+      await settleLegendList();
+      await act(async () => {
+        for (let frame = 0; frame < 6; frame += 1) {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        }
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 300);
+        });
+      });
+
+      await waitFor(
+        () => {
+          expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+          expect(isJumpPillVisible()).toBe(true);
+        },
+        { timeout: 4_000 },
+      );
+
+      return { rerenderMessages, afterOverflow };
+    }
+
+    it("(a) scroll-only overflow-to-tail flips to following-end, hides pill, next chunk advances", async () => {
+      const { rerenderMessages, afterOverflow } =
+        await setupOverflowingAnchoredTurn({
+          scrollStateKey: "t11-a-scroll-only",
+          sendId: "t11-a-send",
+        });
+
+      // Scroll-ONLY route: native scrollbar drag never fires wheel/pointerdown,
+      // so generation ownership stays matched for the whole anchoring session.
+      // Without Ticket 11 reconciliation the terminal true report hits the
+      // stale-true equality fast-path and mode stays stranded anchoring.
+      //
+      // Walk scrollTop upward from the parked anchor (not the shim's huge
+      // fixed scrollHeight max - that overshoots real content and leaves no
+      // room for maintainScrollAtEnd to advance on the next chunk).
+      const parkedAtAnchor = getScrollNode().scrollTop;
+      let flippedAt: number | null = null;
+      for (let top = parkedAtAnchor; top <= parkedAtAnchor + 4_000; top += 80) {
+        await fireScrollOnlyTo(top);
+        if (getScrollNode().dataset.scrollMode === "following-end") {
+          flippedAt = getScrollNode().scrollTop;
+          break;
+        }
+      }
+      expect(flippedAt).not.toBeNull();
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
+
+      // maintainScrollAtEnd re-engaged: subsequent stream growth advances
+      // past the content-end landing we just found.
+      const beforeChunk = getScrollNode().scrollTop;
+      let afterChunk: ReadonlyArray<ChatMessageModel> = afterOverflow;
+      for (let i = 0; i < 8; i += 1) {
+        afterChunk = appendOneStreamingChunk(afterChunk, 900 + i, 900_000 + i);
+      }
+      rerenderMessages(afterChunk);
+      await settleLegendList();
+      await waitForRevealPassTick();
+      await waitForRevealPassTick();
+
+      await waitFor(() => {
+        expect(getScrollNode().scrollTop).toBeGreaterThan(beforeChunk);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+    });
+
+    it("(b) ordinary wheel cancel + pill-click path stays green (no regression)", async () => {
+      // Companion to (a): the gesture-driven path must still cancel ownership
+      // and restore follow via the pill - Ticket 11's mirror must not break it.
+      const messages = makeTranscript(20);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "t11-b-wheel-path",
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(isJumpPillVisible()).toBe(true);
+
+      fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("(c) pill click while anchoring immediately enters following-end", async () => {
+      await setupOverflowingAnchoredTurn({
+        scrollStateKey: "t11-c-pill-while-anchoring",
+        sendId: "t11-c-send",
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(isJumpPillVisible()).toBe(true);
+
+      fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+      // scrollToEnd sets following-end unconditionally on click - no wait.
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
+    });
+
+    it("(d) suppressed nav at tail stays free, hides pill at edge, shows pill on offscreen growth without scroll event", async () => {
+      // Ticket 5 F1-style: free-scrolling restore seeds suppressFollowRestore
+      // from the first frame. A subsequent programmatic near-end landing
+      // (no wheel) must stay free AND hide the pill via Ticket 11 fix #3's
+      // suppressed-branch bookkeeping - then growth without a scroll event
+      // must re-show the pill via the reveal-pass branch.
+      const messages = makeCompletedTranscript(20);
+      const anchorId = messages[4]?.id;
+      expect(anchorId).toBeTruthy();
+      const scrollStateKey = `t11-d-suppressed-${Math.random().toString(36).slice(2)}`;
+
+      saveChatTabState({
+        key: scrollStateKey,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        offset: 40,
+      });
+
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey,
+      });
+      await settleLegendList();
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      // Programmatic near-end landing (still suppressed - no real gesture).
+      // Walk to a content-relative end from the restored mid-list park so we
+      // don't overshoot into the shim's fixed huge scrollHeight.
+      const start = getScrollNode().scrollTop;
+      for (let top = start; top <= start + 6_000; top += 120) {
+        await fireScrollTopAndFlush(top);
+        if (!isJumpPillVisible()) break;
+      }
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, PILL_SHOW_DEBOUNCE_MS + 40);
+        });
+      });
+
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      await waitFor(
+        () => {
+          expect(isJumpPillVisible()).toBe(false);
+        },
+        { timeout: 2_000 },
+      );
+
+      // Growth WITHOUT a scroll event: append enough that the parked free
+      // position is no longer at the end. Ticket 11 fix #3's reveal-pass
+      // branch is the only bookkeeping path for this (no native scroll).
+      let grown: ReadonlyArray<ChatMessageModel> = messages;
+      for (let i = 0; i < 20; i += 1) {
+        grown = appendOneStreamingChunk(grown, 2000 + i, 1_000_000 + i);
+      }
+      rerenderMessages(grown);
+      await settleLegendList();
+      await waitForRevealPassTick();
+      await waitForPillVisible();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(isJumpPillVisible()).toBe(true);
+    });
+
+    it("(e) strict 1px epsilon gates mode reconciliation, not loose isNearEnd alone", async () => {
+      await setupOverflowingAnchoredTurn({
+        scrollStateKey: "t11-e-strict-epsilon",
+        sendId: "t11-e-send",
+      });
+
+      // Find the minimal content-end scroll that flips to following-end via
+      // the Ticket 11 reconciliation (scrollDeltaToRevealEnd <= 1), walking
+      // from the parked anchor rather than the shim's fixed max scroll.
+      const parkedAtAnchor = getScrollNode().scrollTop;
+      let contentEndScroll: number | null = null;
+      for (let top = parkedAtAnchor; top <= parkedAtAnchor + 4_000; top += 40) {
+        await fireScrollOnlyTo(top);
+        if (getScrollNode().dataset.scrollMode === "following-end") {
+          contentEndScroll = getScrollNode().scrollTop;
+          break;
+        }
+      }
+      expect(contentEndScroll).not.toBeNull();
+
+      // Re-enter anchoring so we can probe the SHORT-OF-END case under the
+      // same overflow geometry. A fresh local-provenance send does that.
+      // Simpler: the probe above already proved the true edge flips; now
+      // re-setup and park well short of that edge while still inside a
+      // typical loose near-end band of the CONTENT range.
+      //
+      // Tear down and re-drive: park at contentEnd - 200 (strict fail) then
+      // contentEnd (strict pass). Re-setup is the honest way after the flip
+      // already consumed anchoring.
+      cleanup();
+      await setupOverflowingAnchoredTurn({
+        scrollStateKey: "t11-e-strict-epsilon-2",
+        sendId: "t11-e-send-2",
+      });
+      const end = contentEndScroll as number;
+
+      // ~200px short of the true content end: scrollDeltaToRevealEnd >> 1,
+      // so even if isNearEnd is true the strict gate must keep anchoring.
+      await fireScrollOnlyTo(Math.max(0, end - 200));
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 50);
+        });
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      // True live edge: strict epsilon satisfied → following-end.
+      await fireScrollOnlyTo(end);
+      await waitFor(
+        () => {
+          expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        },
+        { timeout: 2_000 },
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Ticket 10: settle/re-issue generalization + item-type split.
+  // ANIMATED undershoot itself is jsdom-blind (no real animation timing);
+  // pins exercise the settle/validate/re-issue LOGIC by driving geometry
+  // between issue and settle (F2-style).
+  // -------------------------------------------------------------------------
+  describe("ticket 10: settle/re-issue navigation + item-type split", () => {
+    /**
+     * Ticket 10 F2-style: force the scroll node to land short of wherever
+     * LegendList tries to place it, so the first settle's validate fails and
+     * the re-issue path must recover. `enable` toggles the undershoot so a
+     * later re-issue (or the final accept) can land honestly when cleared.
+     */
+    function installScrollUndershoot(
+      scrollNode: HTMLElement,
+      undershootPx: number,
+    ): { setEnabled: (enabled: boolean) => void; dispose: () => void } {
+      let enabled = true;
+      let stored = scrollNode.scrollTop;
+      Object.defineProperty(scrollNode, "scrollTop", {
+        configurable: true,
+        get() {
+          return stored;
+        },
+        set(value: number) {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) {
+            stored = 0;
+            return;
+          }
+          if (!enabled) {
+            stored = numeric;
+            return;
+          }
+          stored = Math.max(0, numeric - undershootPx);
+        },
+      });
+      return {
+        setEnabled: (next: boolean) => {
+          enabled = next;
+        },
+        dispose: () => {
+          // Leave the last stored value; the prototype setter from the
+          // viewport-metrics shim takes over again once this own-property
+          // is removed.
+          Reflect.deleteProperty(scrollNode, "scrollTop");
+          scrollNode.scrollTop = stored;
+        },
+      };
+    }
+
+    it("navigateToMessage settle detects a short landing and re-issues to the exact viewOffset", async () => {
+      // Target a MID-list human user row so the exact landing has a non-zero
+      // scrollTop - navigating Home→row 0 wants scrollTop≈0, where an
+      // undershoot is invisible and the pin would pass vacuously without
+      // re-issue.
+      const messages = makeCompletedTranscript(30);
+      // messages[10] is a user row (even indices); positionAtIndex ≈ 10*90.
+      const targetIndex = 10;
+      const targetId = messages[targetIndex]?.id;
+      expect(targetId).toBeTruthy();
+      expect(messages[targetIndex]?.role).toBe("user");
+
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "t10-nav-reissue",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      // First material scroll jump lands 500px short of the intended target;
+      // subsequent re-issues land honestly.
+      let corruptNextJump = true;
+      let stored = scrollNode.scrollTop;
+      Object.defineProperty(scrollNode, "scrollTop", {
+        configurable: true,
+        get() {
+          return stored;
+        },
+        set(value: number) {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) {
+            stored = 0;
+            return;
+          }
+          if (corruptNextJump && Math.abs(numeric - stored) > 100) {
+            corruptNextJump = false;
+            // From a bottom-following seed the jump is upward (numeric <
+            // stored). Landing "short" of an upward jump means stopping
+            // higher than the target (less travel) → numeric + 500.
+            stored = numeric + 500;
+            return;
+          }
+          stored = numeric;
+        },
+      });
+      try {
+        // Deep-link scrollRequest shares navigateToMessage's choke point
+        // (scrollToTimelineLocationSuppressingFollowRestore).
+        rerenderWith({
+          scrollRequest: {
+            requestId: 10_001,
+            messageId: targetId,
+            blockId: "",
+          },
+        });
+        await act(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 50);
+          });
+        });
+
+        await waitForAnchorEngineSettle();
+        await waitForAnchorEngineSettle();
+
+        // Exact landing: scrollTop = positionAtIndex + header - viewOffset.
+        // Row height is uniform 90px under the jsdom shim; header spacer 40.
+        const ROW_HEIGHT_PX = 90;
+        const HARNESS_HEADER_PX = 40;
+        const expectedScrollTop =
+          targetIndex * ROW_HEIGHT_PX +
+          HARNESS_HEADER_PX -
+          CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+        expect(
+          Math.abs(getScrollNode().scrollTop - expectedScrollTop),
+        ).toBeLessThanOrEqual(1);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      } finally {
+        Reflect.deleteProperty(scrollNode, "scrollTop");
+      }
+    });
+
+    it("scrollToEnd settle re-issues to the true end after a short first landing", async () => {
+      const messages = makeCompletedTranscript(24);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "t10-scroll-to-end-reissue",
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+      const freePark = getScrollNode().scrollTop;
+
+      const scrollNode = getScrollNode();
+      // Only the FIRST end-landing undershoots; re-issues land honestly so
+      // the settle/validate/re-issue chain can converge (mirrors estimate →
+      // measurement mid-flight, not permanent geometry sabotage).
+      let undershootNextIncrease = true;
+      let stored = scrollNode.scrollTop;
+      Object.defineProperty(scrollNode, "scrollTop", {
+        configurable: true,
+        get() {
+          return stored;
+        },
+        set(value: number) {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) {
+            stored = 0;
+            return;
+          }
+          if (undershootNextIncrease && numeric > stored + 100) {
+            undershootNextIncrease = false;
+            stored = Math.max(0, numeric - 600);
+            return;
+          }
+          stored = numeric;
+        },
+      });
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+
+        await waitForAnchorEngineSettle();
+        await waitForAnchorEngineSettle();
+
+        const recovered = getScrollNode().scrollTop;
+        // Recovered past the free-scroll park and past the intentional
+        // 600px undershoot of the first landing.
+        expect(recovered).toBeGreaterThan(freePark + 600);
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        expect(isJumpPillVisible()).toBe(false);
+
+        // A second clean pill click must not move further - exact end.
+        Reflect.deleteProperty(scrollNode, "scrollTop");
+        scrollNode.scrollTop = recovered;
+        fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+        await waitForAnchorEngineSettle();
+        expect(
+          Math.abs(getScrollNode().scrollTop - recovered),
+        ).toBeLessThanOrEqual(2);
+      } finally {
+        Reflect.deleteProperty(scrollNode, "scrollTop");
+      }
+    });
+
+    it("scrollToEnd retry exhaustion reconciles to free-scrolling with the pill visible (never stranded following-end)", async () => {
+      const messages = makeCompletedTranscript(24);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "t10-scroll-to-end-exhaust",
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+
+      const scrollNode = getScrollNode();
+      // Keep undershooting for every attempt so validate never passes across
+      // the bounded 3 retries + initial attempt.
+      const undershoot = installScrollUndershoot(scrollNode, 600);
+      try {
+        fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+
+        // initial settle + 3 re-issue settles = 4 * fallback.
+        await act(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, (CHAT_ANCHOR_SETTLE_FALLBACK_MS + 100) * 5);
+          });
+        });
+
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+        expect(isJumpPillVisible()).toBe(true);
+      } finally {
+        undershoot.dispose();
+      }
+    });
+
+    it("navigateToMessage settle chain aborts on a real mid-flight wheel gesture (no snap-back)", async () => {
+      const messages = makeCompletedTranscript(30);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "t10-nav-abort-gesture",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      const undershoot = installScrollUndershoot(scrollNode, 800);
+      try {
+        const minimapButton = screen.getByTestId("chat-turn-minimap-hit-strip");
+        fireEvent.keyDown(minimapButton, { key: "Home" });
+        await act(async () => {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        });
+        fireEvent.keyDown(minimapButton, { key: "Enter" });
+
+        // Mid-settle: a real wheel gesture must abort the re-issue chain
+        // (generation bump + suppression clear). Park at a known offset.
+        await act(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 120);
+          });
+        });
+        undershoot.setEnabled(false);
+        act(() => {
+          fireEvent.wheel(scrollNode, { deltaY: -80 });
+          scrollNode.scrollTop = 220;
+          fireEvent.scroll(scrollNode);
+        });
+        const parked = getScrollNode().scrollTop;
+        expect(parked).toBe(220);
+
+        // Wait well past any remaining settle/re-issue windows. A buggy
+        // non-aborted re-issue would snap scroll away from the user's park.
+        await act(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, (CHAT_ANCHOR_SETTLE_FALLBACK_MS + 100) * 4);
+          });
+        });
+
+        expect(getScrollNode().scrollTop).toBe(parked);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      } finally {
+        undershoot.dispose();
+      }
+    });
+
+    it("getItemType splits human-sent user rows from A2A agent-sent rows", () => {
+      const human = makeMessage(0, "user");
+      expect(human.agentSenderInfo).toBeNull();
+      expect(chatTimelineGetItemType(human)).toBe("user:human");
+
+      const a2a: ChatMessageModel = {
+        ...makeMessage(1, "user"),
+        agentSenderInfo: {
+          agentId: "agent-peer-1",
+          senderTitle: "Peer",
+          expectReply: false,
+          responseId: null,
+        },
+      };
+      expect(chatTimelineGetItemType(a2a)).toBe("user:a2a");
+      expect(chatTimelineGetItemType(makeMessage(2, "assistant"))).toBe(
+        "assistant",
+      );
+      // Distinct pools: the two user shapes must never collapse to one string.
+      expect(chatTimelineGetItemType(human)).not.toBe(
+        chatTimelineGetItemType(a2a),
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Ticket 12: viewport stability while free-scrolling (sizePreservationEnabled).
+  // Pure size-change MVCP simulation is jsdom-blind under the fixed-height
+  // shim (LegendList's size path needs real item-layout measurement churn
+  // that getBoundingClientRect overrides alone do not trigger). Interaction
+  // contracts that do not need a size event are pinned below.
+  // -------------------------------------------------------------------------
+  describe("ticket 12: sizePreservationEnabled interaction audit", () => {
+    // jsdom-blind: a mounted row's measured size changing after the initial
+    // estimate (MVCP size:true path). The shared shim uses fixed 90px row
+    // heights; LegendList's ScrollAdjust sizeDiff only fires when its own
+    // measurement pipeline observes a layout change, which the fixed-height
+    // getBoundingClientRect override never produces. Extending the shim's
+    // rect height alone is insufficient without driving LegendList's internal
+    // size-at-index cache. Declared honestly rather than faked.
+
+    it("(1) anchoring drift re-assert still holds with sizePreservationEnabled=false during anchoring-new-turn", async () => {
+      // Re-runs the existing Ticket 4 above-anchor growth pin under the
+      // Ticket 12 wiring: anchoring-new-turn never enables size:true, so the
+      // reveal-pass anchorPositionDrift re-assert must still single-correct.
+      const ROW_HEIGHT_PX = 90;
+      const initial = makeCompletedTranscript(4);
+      const turn1Id = "t12-drift-turn1";
+      const turn2Id = "t12-drift-turn2";
+      const { rerenderMessages } = renderChatMessages({
+        messages: initial,
+        scrollStateKey: "t12-anchor-drift",
+        localProvenanceMessageIds: new Set([turn1Id, turn2Id]),
+      });
+      await settleLegendList();
+
+      const afterTurn1Send = appendOptimisticUserSend(
+        initial,
+        turn1Id,
+        100_000,
+      );
+      rerenderMessages(afterTurn1Send);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${turn1Id}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+
+      const afterTurn1Reply: ReadonlyArray<ChatMessageModel> = [
+        ...afterTurn1Send,
+        {
+          ...makeMessageAt(0, "assistant", 100_001),
+          id: "t12-turn1-reply",
+          content: "OK",
+          completedAt: 100_002,
+          runState: null,
+        },
+      ];
+      rerenderMessages(afterTurn1Reply);
+      await settleLegendList();
+
+      const afterTurn2Send = appendOptimisticUserSend(
+        afterTurn1Reply,
+        turn2Id,
+        200_000,
+      );
+      rerenderMessages(afterTurn2Send);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${turn2Id}`)).toBeTruthy();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      await waitForAnchorEngineSettle();
+      const scrollAfterSettle = getScrollNode().scrollTop;
+      const turn2AnchorIndex = afterTurn2Send.length - 1;
+
+      const withLateMetadata: ReadonlyArray<ChatMessageModel> = [
+        ...afterTurn2Send.slice(0, turn2AnchorIndex),
+        {
+          ...makeMessageAt(0, "assistant", 100_003),
+          id: "t12-turn1-late-metadata",
+          content: "Thought for 4s",
+          completedAt: 100_004,
+          runState: null,
+        },
+        ...afterTurn2Send.slice(turn2AnchorIndex),
+      ];
+      rerenderMessages(withLateMetadata);
+      await settleLegendList();
+      await waitForRevealPassTick();
+      await waitForRevealPassTick();
+
+      // Reveal-pass re-assert: scroll advances by exactly one row (the
+      // late metadata), not double-corrected by an accidental size:true.
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().scrollTop - scrollAfterSettle).toBe(ROW_HEIGHT_PX);
+    });
+
+    it("(2) following-end maintainScrollAtEnd catch-up is unaffected (size:false there)", async () => {
+      const messages = makeTranscript(20);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t12-follow-catchup",
+      });
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+
+      const before = getScrollNode().scrollTop;
+      rerenderMessages(appendAssistant(messages, "t12-follow-stream", 130_000));
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(getScrollNode().scrollTop).toBeGreaterThan(before);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+    });
+
+    it("(3) disclosure helper applies a single geometric delta under free-scrolling (MVCP size double-correction is jsdom-blind)", async () => {
+      // ChatMessage is mocked in this suite, so a real activity-group expand
+      // cannot drive LegendList row remeasure. Pin the disclosure helper's
+      // own single-delta contract while free-scrolling (sizePreservation
+      // enabled in production wiring) - if MVCP size:true also corrected
+      // inside the same flushSync window we would need a size event, which
+      // the fixed-height shim cannot produce. See describe-level jsdom-blind
+      // note above for the double-correction gap.
+      const messages = makeCompletedTranscript(16);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "t12-disclosure-single-delta",
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      const scrollNode = getScrollNode();
+      await fireScrollTopAndFlush(300);
+      const before = scrollNode.scrollTop;
+
+      // Synthetic list handle mirroring what ChatMessages passes the helper.
+      const scrollToOffsetCalls: Array<{ offset: number }> = [];
+      const listHandle = {
+        getState: () => ({ scroll: before }),
+        scrollToOffset: (opts: { offset: number; animated: boolean }) => {
+          scrollToOffsetCalls.push({ offset: opts.offset });
+          scrollNode.scrollTop = opts.offset;
+        },
+      };
+      const anchor = document.createElement("div");
+      const rect = vi.spyOn(anchor, "getBoundingClientRect");
+      rect.mockReturnValueOnce({
+        x: 0,
+        y: 120,
+        width: 100,
+        height: 40,
+        top: 120,
+        left: 0,
+        right: 100,
+        bottom: 160,
+        toJSON: () => ({}),
+      });
+      // Expand pushes the anchor top down by 80px (content above grew).
+      rect.mockReturnValueOnce({
+        x: 0,
+        y: 200,
+        width: 100,
+        height: 40,
+        top: 200,
+        left: 0,
+        right: 100,
+        bottom: 240,
+        toJSON: () => ({}),
+      });
+
+      preserveChatScrollAcrossDisclosureChange({
+        list: listHandle as never,
+        anchorElement: anchor,
+        mutate: () => undefined,
+      });
+
+      // Single clean delta: exactly one scrollToOffset by +80, not twice.
+      expect(scrollToOffsetCalls).toEqual([{ offset: before + 80 }]);
+      expect(scrollNode.scrollTop).toBe(before + 80);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      rect.mockRestore();
+    });
+
+    it("(4) suppressed programmatic nav under free-scrolling never auto-restores follow (sizePreservation active)", async () => {
+      const messages = makeCompletedTranscript(20);
+      const anchorId = messages[4]?.id;
+      expect(anchorId).toBeTruthy();
+      const scrollStateKey = `t12-suppress-${Math.random().toString(36).slice(2)}`;
+
+      saveChatTabState({
+        key: scrollStateKey,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        offset: 40,
+      });
+
+      renderChatMessages({ messages, scrollStateKey });
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      // Programmatic near-end landing (no real gesture): suppression must
+      // hold even with sizePreservationEnabled=true on free-scrolling.
+      act(() => {
+        fireScrollToEnd();
+      });
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().dataset.scrollMode).not.toBe("following-end");
+    });
+
+    it("(5) ticket-5 free-scrolling restore bootstrap still lands the exact pixel with sizePreservation from first render", async () => {
+      const messages = makeCompletedTranscript(20);
+      const scrollStateKey = `t12-restore-${Math.random().toString(36).slice(2)}`;
+      const instanceId = `t12-restore-inst-${Math.random().toString(36).slice(2)}`;
+
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages,
+        scrollStateKey,
+        instanceId,
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await fireScrollTopAndFlush(360);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      const originalScrollTop = getScrollNode().scrollTop;
+      expect(originalScrollTop).toBe(360);
+
+      first.unmount();
+
+      const second = renderChatMessages({
+        messages,
+        scrollStateKey,
+        instanceId,
+      });
+      await settleLegendList();
+      await settleLegendList();
+
+      // Exact-pixel restore must not fight MVCP size-correction on bootstrap.
+      expect(getScrollNode().scrollTop).toBe(originalScrollTop);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      second.unmount();
     });
   });
 });

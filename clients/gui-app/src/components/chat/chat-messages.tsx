@@ -11,6 +11,7 @@ import {
   buildMessageIdToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
   chatTimelineLocationForMessage,
+  chatTimelineNavigationLandedAtLocation,
   classifyChatEdgeMutation,
   selectActiveUserMessageId,
   viewportActiveUserMessageId,
@@ -67,6 +68,7 @@ import type {
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { LegendListRef } from "@legendapp/list/react";
 import {
+  type CSSProperties,
   use,
   useCallback,
   useLayoutEffect,
@@ -120,6 +122,21 @@ const PILL_SHOW_DEBOUNCE_MS = 150;
  *  (jsdom, some browsers) - exported so tests can wait past it rather than
  *  hardcoding a copy of this number. */
 export const CHAT_ANCHOR_SETTLE_FALLBACK_MS = 750;
+/** Ticket 11: strict live-edge tolerance for reconciling `anchoring-new-turn`
+ *  back to `following-end` once the reader has scrolled to the turn's actual
+ *  end. Matches the reveal pass's own "close enough" tolerance
+ *  (`metrics.scrollDeltaToRevealEnd <= 1`) so a fitting anchor's still-
+ *  closing reserve near-end is never misread as "arrived". */
+const CHAT_TIMELINE_LIVE_EDGE_EPSILON_PX = 1;
+/** Ticket 10: pixel tolerance for the settle/re-issue validation below - a
+ *  navigation whose landing is off by more than this is treated as a real
+ *  undershoot, not float/rounding noise. */
+const CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX = 1;
+/** Ticket 10: bounded retry count for the settle/re-issue loop (ticket text:
+ *  "max 2-3") - the upper end, since the field bug this fixes needed
+ *  multiple manual pill re-clicks to converge and the goal is to absorb that
+ *  automatically in one operation. */
+const CHAT_TIMELINE_NAVIGATION_MAX_RETRIES = 3;
 
 /** Test-observability label for `ChatTimeline`'s `data-scroll-mode` prop -
  *  see that prop's own doc comment. */
@@ -371,6 +388,69 @@ function awaitScrollSettle(
 }
 
 /**
+ * Schedules `callback` two animation frames out - the reveal pass's own
+ * post-layout timing convention (waits for LegendList's measurement pass to
+ * settle before reading geometry). Returns a cleanup that cancels whichever
+ * frame is still pending.
+ */
+function scheduleChatTimelineDoubleRaf(callback: () => void): () => void {
+  let secondFrame: number | null = null;
+  const firstFrame = requestAnimationFrame(() => {
+    secondFrame = requestAnimationFrame(callback);
+  });
+  return (): void => {
+    cancelAnimationFrame(firstFrame);
+    if (secondFrame !== null) cancelAnimationFrame(secondFrame);
+  };
+}
+
+/**
+ * Ticket 10: generalizes the anchor engine's settle/re-issue pattern
+ * (`onTimelineAnchorReady`, ticket 3) to plain programmatic navigation
+ * (`navigateToMessage`/find/deep-link, `scrollToEnd`). An ANIMATED intent
+ * targets ESTIMATED geometry; the installed LegendList 3.2.0 has no
+ * mid-flight retargeting as real measurements replace estimates during the
+ * animation, so a long jump can settle short (root-cause: rootcause-nav-
+ * landing report). After `awaitScrollSettle`, `validate` checks the landing
+ * against fresh geometry; if off, `reissue` re-issues the SAME semantic
+ * target non-animated (which resolves synchronously - `scrollTo`'s
+ * `!animated` branch calls `updateScroll` directly) and this re-settles, up
+ * to `maxRetries` times. `isAborted` (checked before every validate AND
+ * before every re-issue) is the caller's own ownership check - a generation
+ * bump, a real gesture, or a mode change all supersede a still-in-flight
+ * operation; it must stop correcting a position nobody wants anymore, same
+ * as the anchor engine's own `positionedTimelineAnchorRef`/generation guards.
+ * `onSettledInvalid` runs once if every retry is exhausted and the landing
+ * is still off (never called if `isAborted` fires first).
+ */
+function settleChatTimelineNavigation(input: {
+  readonly scrollNode: HTMLElement;
+  readonly isAborted: () => boolean;
+  readonly validate: () => boolean;
+  readonly reissue: () => void;
+  readonly onSettledInvalid: () => void;
+  readonly maxRetries: number;
+}): void {
+  const attempt = (retriesLeft: number): void => {
+    awaitScrollSettle(
+      input.scrollNode,
+      () => {
+        if (input.isAborted()) return;
+        if (input.validate()) return;
+        if (retriesLeft <= 0) {
+          input.onSettledInvalid();
+          return;
+        }
+        input.reissue();
+        attempt(retriesLeft - 1);
+      },
+      CHAT_ANCHOR_SETTLE_FALLBACK_MS,
+    );
+  };
+  attempt(input.maxRetries);
+}
+
+/**
  * Virtualized chat transcript. The full derived row history is handed to
  * `ChatTimeline` (LegendList), which windows the mounted DOM to the viewport.
  * This component owns the T3-ported three-mode scroll policy
@@ -588,6 +668,25 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(
     initialModeSeed.showScrollToBottom,
   );
+  // Ticket 11: mirrors the latest REAL scroll-driven isAtEnd/isNearEnd
+  // report, updated unconditionally at the very top of onIsAtEndChange -
+  // independent of the mode machine's "owned"/suppressed filtering below it.
+  // A scroll-only route (native OS scrollbar drag) fires no wheel/touchmove/
+  // pointerdown, so this is the only signal for "where is the reader right
+  // now" while anchoring; the anchoring-mode pill (below) consults it
+  // directly instead of pure turn geometry (root-cause: field bug 4 - pill
+  // shown while the reader is already at the live edge).
+  //
+  // Seeded from `isFollowingEnd`, NOT `initialModeSeed.isAtEnd` - that flag
+  // is `true` for BOTH the `following-end` seed (genuinely at the edge) AND
+  // decision #15's fresh-open `anchoring-new-turn` seed (anchored near the
+  // TOP of a long final reply - the reader is, by construction, NOT at the
+  // edge; that's the entire point of the seed). `isAtEnd` there means "the
+  // owned/mid-flight baseline for the equality fast-path", a different
+  // contract than "is the reader standing at the live edge".
+  const [isReaderAtLiveEdge, setIsReaderAtLiveEdge] = useState(
+    initialModeSeed.isFollowingEnd,
+  );
   // Whether the anchored turn's real content extends past the usable
   // viewport - gates the pill while `isAnchoringNewTurn` (decision #16: the
   // pill only matters when there's something hidden below the fold).
@@ -785,14 +884,43 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   );
 
   // scrollToEnd reset (pill click / any future explicit "go live" action).
+  // Ticket 10: this is an explicit user action - the `setTimelineMode`
+  // call below is decision-sanctioned and unconditional, same as before;
+  // the settle/re-issue only corrects the LANDING it produces, never
+  // re-decides whether the click counts as "following".
   const scrollToEnd = useCallback(
     (animated: boolean): void => {
       setTimelineMode("following-end");
       pendingTimelineAnchorRef.current = null;
       activeTimelineAnchorIndexRef.current = null;
-      void chatTimelineRef.current?.scrollToEnd({ animated });
+      const generationAtIssue = anchorUserScrollGenerationRef.current;
+      const list = chatTimelineRef.current;
+      void list?.scrollToEnd({ animated });
+      if (!list) return;
+      const scrollNode = list.getScrollableNode();
+      settleChatTimelineNavigation({
+        scrollNode,
+        isAborted: () =>
+          anchorUserScrollGenerationRef.current !== generationAtIssue ||
+          timelineScrollModeRef.current !== "following-end",
+        validate: () => list.getState().isAtEnd,
+        reissue: () => {
+          void list.scrollToEnd({ animated: false });
+        },
+        onSettledInvalid: () => {
+          // Ticket 10: the video-evidence stranded state - a failed
+          // end-landing must never leave `following-end` idling mid-list
+          // outside maintainScrollAtEnd's threshold. Reconcile honestly
+          // instead: free-scrolling with the pill visible beats silently
+          // claiming to follow from wherever this settled.
+          setTimelineMode("free-scrolling");
+          cancelPillShow();
+          setShowScrollToBottom(true);
+        },
+        maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
+      });
     },
-    [setTimelineMode],
+    [cancelPillShow, setTimelineMode],
   );
 
   // Enters `anchoring-new-turn` for `messageId` - the ref sequence T3's
@@ -827,6 +955,15 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       setIsAnchoringNewTurn(true);
       anchoredTurnOverflowsViewportRef.current = false;
       setAnchoredTurnOverflowsViewport(false);
+      // Ticket 11 fix #2: every anchoring session starts with the anchored
+      // row positioned near the TOP (decision #12's flat offset) - the
+      // reader is, by construction, never at the live edge the instant this
+      // begins. Without this reset, a session that starts FROM
+      // `following-end` (genuinely at the edge, mirror `true`) would leave
+      // the mirror stale, permanently gating the overflow pill hidden for
+      // the whole turn (`anchoredTurnOverflowsViewport && !isReaderAtLiveEdge`
+      // never turns visible).
+      setIsReaderAtLiveEdge(false);
       setHasUnseenTurnCompletion(false);
       setTimelineAnchorMessageId(messageId);
     },
@@ -1091,6 +1228,18 @@ function ChatMessagesInner(props: ChatMessagesProps) {
 
   const onIsAtEndChange = useCallback(
     (isAtEnd: boolean): void => {
+      // Ticket 11: unconditional reader-position mirror - ahead of every
+      // filter below, since those filters exist to gate MODE decisions, not
+      // "where does the reader physically appear to be right now". Uses the
+      // STRICT `isAtEnd` flag (LegendList's own small-epsilon "truly at the
+      // bottom" computation), NOT the lenient `isAtEnd` parameter this
+      // callback receives (that one prefers `isNearEnd`, the 10% decision-#5
+      // threshold that restores follow - too generous for "did the reader
+      // reach the LIVE edge", ticket 11's own wording for fix #2/#3).
+      const strictAtLiveEdge =
+        chatTimelineRef.current?.getState().isAtEnd ?? isAtEnd;
+      setIsReaderAtLiveEdge(strictAtLiveEdge);
+
       if (
         !isAtEnd &&
         liveFollowUserScrollGenerationRef.current ===
@@ -1112,6 +1261,22 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         // to following-end. Cleared only by the next real gesture cancel or
         // an explicit setTimelineMode("following-end").
         isAtEndRef.current = isAtEnd;
+        // Ticket 11 fix #3: the no-follow contract stays intact (mode is
+        // untouched above) but the pill's OWN bookkeeping was never wired
+        // here - hide it once a real scroll lands the reader at the ACTUAL
+        // (strict) live edge; show it (debounced, same as the ordinary
+        // free-scrolling path) while they're away from it. Strict, not the
+        // lenient `isAtEnd` param - the 10% isNearEnd band is generous enough
+        // that "still visibly approaching the tail" would otherwise register
+        // as "arrived" and hide the pill prematurely. Decision #16's "out of
+        // view" semantic governs pill visibility independently of the mode
+        // machine's follow-restore suppression.
+        if (strictAtLiveEdge) {
+          cancelPillShow();
+          setShowScrollToBottom(false);
+        } else {
+          maybeShowPillDebounced();
+        }
         return;
       }
       if (justFrozeProgrammaticScrollRef.current) {
@@ -1123,6 +1288,36 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         justFrozeProgrammaticScrollRef.current = false;
         isAtEndRef.current = isAtEnd;
         return;
+      }
+      // Ticket 11 fix #1: mode reconciliation BEFORE the equality fast-path
+      // below. A scroll-only route (native OS scrollbar drag; no
+      // wheel/touchmove/pointerdown ever fires) reaching the true end of an
+      // OVERFLOWED anchored turn must still reconcile mode even though
+      // `isAtEndRef` was pre-seeded `true` at `beginAnchoringNewTurn` and
+      // every intermediate `false` report along the way was swallowed by the
+      // "owned, not a gesture" filter above (`liveFollowUserScrollGenerationRef`
+      // stays matched for the WHOLE anchoring session, not just the initial
+      // positioning) - so the terminal `true` report would otherwise hit the
+      // stale-true equality fast-path and never reconcile (root-cause: field
+      // bug 3, at-bottom streaming does not auto-follow). Gated on the
+      // overflow flag (never written here - see its own doc comment, it
+      // gates the reveal pass's stop-at-overflow) so a fitting anchor's
+      // still-closing reserve near-end is never misread as "arrived".
+      if (
+        isAtEnd &&
+        timelineScrollModeRef.current === "anchoring-new-turn" &&
+        anchoredTurnOverflowsViewportRef.current
+      ) {
+        const list = chatTimelineRef.current;
+        const metrics = list ? getActiveTimelineTurnMetrics(list) : null;
+        if (
+          metrics !== null &&
+          metrics.scrollDeltaToRevealEnd <= CHAT_TIMELINE_LIVE_EDGE_EPSILON_PX
+        ) {
+          isAtEndRef.current = isAtEnd;
+          setTimelineMode("following-end");
+          return;
+        }
       }
       if (isAtEndRef.current === isAtEnd) return;
       isAtEndRef.current = isAtEnd;
@@ -1136,17 +1331,48 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         maybeShowPillDebounced();
       }
     },
-    [cancelPillShow, maybeShowPillDebounced, setTimelineMode],
+    [
+      cancelPillShow,
+      getActiveTimelineTurnMetrics,
+      maybeShowPillDebounced,
+      setTimelineMode,
+    ],
   );
 
   // Streaming reveal + following-end catch-up: two-rAF pass per data change,
   // gated on the live-follow generation so free-scrolling never moves.
   useLayoutEffect(() => {
-    if (
-      liveFollowUserScrollGenerationRef.current !==
-      anchorUserScrollGenerationRef.current
-    ) {
-      return;
+    const generationOwned =
+      liveFollowUserScrollGenerationRef.current ===
+      anchorUserScrollGenerationRef.current;
+    if (!generationOwned) {
+      // Ticket 11 fix #3: a suppressed programmatic nav that landed at/near
+      // the tail (decision #14/#21 - stays free-scrolling, never restores
+      // follow via position) fires no scroll event of its own when LATER
+      // streaming growth pushes content back off-screen - nothing moves the
+      // scroll, so no native `scroll` event exists to drive
+      // `onIsAtEndChange`. This per-`messages`-change effect is the only
+      // EXISTING hook that already reacts to content growth without a real
+      // scroll; piggyback on it purely for pill bookkeeping (no scroll
+      // mutation here - the no-follow contract is untouched).
+      if (!suppressFollowRestoreRef.current) return;
+      return scheduleChatTimelineDoubleRaf(() => {
+        if (!suppressFollowRestoreRef.current) return;
+        const list = chatTimelineRef.current;
+        if (!list) return;
+        // Strict `isAtEnd`, not `resolveChatTimelineIsAtEnd`'s lenient
+        // isNearEnd preference - same reasoning as the `onIsAtEndChange`
+        // suppressed branch this mirrors (ticket 11 fix #3's "actual live
+        // edge" wording).
+        const isAtEnd = list.getState().isAtEnd;
+        setIsReaderAtLiveEdge(isAtEnd);
+        if (isAtEnd) {
+          cancelPillShow();
+          setShowScrollToBottom(false);
+        } else {
+          maybeShowPillDebounced();
+        }
+      });
     }
     let secondFrame: number | null = null;
     const frame = requestAnimationFrame(() => {
@@ -1246,6 +1472,8 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     messages,
     getActiveTimelineTurnMetrics,
     timelineRealContentOverflowsViewport,
+    cancelPillShow,
+    maybeShowPillDebounced,
   ]);
 
   // --- Keyboard scrolling (existing window-level claiming survives) ---------
@@ -1519,10 +1747,53 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // gesture - a near-tail target landing in the near-end band must not
   // silently re-enable follow (H3). Suppresses the same way the
   // edge-mutation classifier's scroll-to-index does.
+  //
+  // Ticket 10: settle/re-issue against the CURRENT geometry - same
+  // root-cause class as `scrollToEnd` (an ANIMATED long jump targets
+  // ESTIMATED heights; no mid-flight retargeting in the installed
+  // LegendList). No mode reconciliation on exhaustion here (unlike
+  // `scrollToEnd`) - this path never claims to be "following"; it accepts
+  // wherever the bounded retries land, still correctly free-scrolling.
   const scrollToTimelineLocationSuppressingFollowRestore = useCallback(
     (location: ChatTimelineNavigationLocation): void => {
       suppressFollowRestoreRef.current = true;
+      const generationAtIssue = anchorUserScrollGenerationRef.current;
       scrollToTimelineLocation(location);
+      const list = chatTimelineRef.current;
+      if (!list) return;
+      const scrollNode = list.getScrollableNode();
+      settleChatTimelineNavigation({
+        scrollNode,
+        isAborted: () =>
+          anchorUserScrollGenerationRef.current !== generationAtIssue ||
+          !suppressFollowRestoreRef.current,
+        validate: () =>
+          chatTimelineNavigationLandedAtLocation(
+            {
+              positionAtIndex: (index) =>
+                list.getState().positionAtIndex(index),
+              scroll: scrollNode.scrollTop,
+              topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
+            },
+            location,
+            CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX,
+          ),
+        reissue: () => {
+          void list.scrollToIndex({
+            index: location.index,
+            animated: false,
+            viewPosition: 0,
+            viewOffset: location.viewOffset,
+          });
+        },
+        onSettledInvalid: () => {
+          // Accept - already correctly free-scrolling/suppressed wherever
+          // the bounded retries landed; nothing claims to be "at this exact
+          // spot" the way following-end does, so there is no mode to
+          // reconcile.
+        },
+        maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
+      });
     },
     [scrollToTimelineLocation],
   );
@@ -1737,13 +2008,25 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   const workingVerb =
     contextWorkingVerb ?? pickWorkingVerb(timelineAnchorMessageId ?? taskId);
   const scrollToEndPillState = resolveScrollToEndPillState({
+    // Ticket 11 fix #2: anchoring-mode visibility now also consults reader
+    // position - `anchoredTurnOverflowsViewport` alone is pure turn geometry
+    // and stays true for the rest of the turn even after the reader has
+    // scrolled themselves to the actual live edge via a scroll-only route
+    // (root-cause: field bug 4). `anchoredTurnOverflowsViewport` itself is
+    // untouched - it still gates the reveal pass's stop-at-overflow.
     visible: isAnchoringNewTurn
-      ? anchoredTurnOverflowsViewport
+      ? anchoredTurnOverflowsViewport && !isReaderAtLiveEdge
       : showScrollToBottom,
     turnRunning,
     unseenCompletion: hasUnseenTurnCompletion,
     workingVerb,
   });
+
+  // Ticket 12: the third mode, purely derived - no new state. Gates
+  // `sizePreservationEnabled` below (reading stability while free-scrolling;
+  // `following-end`/`anchoring-new-turn` each already own their own
+  // correction path and must not double it with MVCP's).
+  const isFreeScrolling = !isFollowingEnd && !isAnchoringNewTurn;
 
   return (
     <ChatOpenStoreScopeProvider value={instanceId}>
@@ -1755,6 +2038,11 @@ function ChatMessagesInner(props: ChatMessagesProps) {
             ref={transcriptContainerRef}
             data-testid="chat-transcript-container"
             className="relative flex-1 overflow-hidden"
+            style={
+              {
+                "--chat-bottom-overlay-inset": `${endInset}px`,
+              } as CSSProperties
+            }
           >
             <ChatTimeline
               messages={messages}
@@ -1774,17 +2062,13 @@ function ChatMessagesInner(props: ChatMessagesProps) {
               contentInsetEndAdjustment={endInset}
               onIsAtEndChange={onIsAtEndChange}
               followEnabled={isFollowingEnd}
+              sizePreservationEnabled={isFreeScrolling}
               onListMetricsChange={onListMetricsChange}
               data-testid="chat-messages-scroll"
               data-scroll-mode={chatScrollModeDataAttribute(
                 isAnchoringNewTurn,
                 isFollowingEnd,
               )}
-            />
-            <div
-              aria-hidden="true"
-              style={{ bottom: endInset }}
-              className="pointer-events-none absolute inset-x-0 h-10 bg-linear-to-t from-background to-transparent"
             />
             {hasContent ? (
               <ChatTurnMinimap

@@ -21,6 +21,7 @@ import {
   resolveChatListAnchoredEndSpace,
   resolveChatTimelineIsAtEnd,
 } from "@/components/chat/chat-scroll-anchoring";
+import { chatTimelineGetItemType } from "@/components/chat/chat-messages-scroll-helpers";
 import {
   computeStableChatTimelineRows,
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
@@ -135,6 +136,22 @@ export interface ChatTimelineProps {
    */
   readonly followEnabled?: boolean;
   /**
+   * Ticket 12: gates `maintainVisibleContentPosition.size` - whether
+   * LegendList compensates scrollTop when an already-rendered row's
+   * estimated height is replaced by its real measured height
+   * (`ScrollAdjustHandler`). `true` only in `free-scrolling` (decision:
+   * reading stability governs there - a reader scrolling through
+   * still-estimated rows must not see the abrupt jump `size:false` produces
+   * when a later measurement pass corrects an earlier row's position from
+   * under them). `false` in `following-end` (end-stick governs via
+   * `maintainScrollAtEnd`) and `anchoring-new-turn` (the anchor engine owns
+   * motion; its own reveal-pass drift re-assert already handles above-anchor
+   * growth under `size:false` - enabling this too would double-correct the
+   * same shift). `false` by default so ticket-2/3-era callers keep today's
+   * `size:false` semantics unless they opt in.
+   */
+  readonly sizePreservationEnabled?: boolean;
+  /**
    * Ticket 5: LegendList's measured header/footer sizes. The free-scrolling
    * save path needs `headerSize` as the top-offset adjustment that
    * `initialScrollIndex` / `scrollToIndex` re-add on restore (decision #18
@@ -172,6 +189,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   contentInsetEndAdjustment = 0,
   onIsAtEndChange,
   followEnabled = true,
+  sizePreservationEnabled,
   onListMetricsChange,
   ...rest
 }: ChatTimelineProps) {
@@ -280,7 +298,9 @@ export const ChatTimeline = memo(function ChatTimeline({
         }
         maintainVisibleContentPosition={{
           data: true,
-          size: false,
+          size: resolveChatTimelineSizePreservationEnabled(
+            sizePreservationEnabled,
+          ),
         }}
         onScroll={handleScroll}
         {...(onListMetricsChange !== undefined
@@ -307,8 +327,13 @@ function chatTimelineKeyExtractor(item: ChatMessageModel): string {
   return item.id;
 }
 
-function chatTimelineGetItemType(item: ChatMessageModel): string {
-  return item.role;
+/** Resolves `sizePreservationEnabled`'s default out of the component body -
+ *  a second defaulted destructure param (alongside `followEnabled`) pushed
+ *  `ChatTimeline`'s own cyclomatic complexity over the lint limit. */
+function resolveChatTimelineSizePreservationEnabled(
+  sizePreservationEnabled: boolean | undefined,
+): boolean {
+  return sizePreservationEnabled ?? false;
 }
 
 /** Returns a structurally-shared copy of `rows`: for each row whose content
