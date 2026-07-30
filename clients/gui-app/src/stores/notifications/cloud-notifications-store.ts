@@ -45,7 +45,11 @@ export interface CloudNotificationsState {
     readonly rows: ReadonlyArray<HostNotificationsCloudFeedRow>;
     readonly summary: HostNotificationsCloudFeedSummary;
     readonly version: number;
-  }): void;
+  }): ReadonlyArray<HostNotificationsCloudFeedRow>;
+  /** Optimistic set-once marker application. A later authoritative snapshot
+   * reconciles the row, but the common successful mutation never waits on a
+   * wake or the relay's correctness poll to look read. */
+  markReadLocally(entryId: string, readAt: number): void;
   setConnectionState(state: CloudNotificationsConnectionState): void;
   reset(): void;
 }
@@ -66,7 +70,8 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
     connectionState: "unavailable",
     hasSnapshot: false,
     sessionEpoch: 0,
-    applySnapshot: (input) =>
+    applySnapshot: (input) => {
+      const arrivals: HostNotificationsCloudFeedRow[] = [];
       set((state) => {
         // The feed version is a monotonic change sequence, so a snapshot below
         // the one already rendered can only be a delayed frame from a
@@ -76,13 +81,40 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
           return state;
         }
         const rows: Partial<Record<string, HostNotificationsCloudFeedRow>> = {};
-        for (const row of input.rows) rows[rowKey(row)] = row;
+        for (const row of input.rows) {
+          const key = rowKey(row);
+          rows[key] = row;
+          if (state.hasSnapshot && state.rows[key] === undefined) {
+            arrivals.push(row);
+          }
+        }
         return {
           rows,
           summary: input.summary,
           version: input.version,
           connectionState: "connected",
           hasSnapshot: true,
+        };
+      });
+      return arrivals;
+    },
+    markReadLocally: (entryId, readAt) =>
+      set((state) => {
+        const key = cloudNotificationFeedId(entryId);
+        const row = state.rows[key];
+        if (row === undefined || row.entry.readAt !== null) return state;
+        return {
+          rows: {
+            ...state.rows,
+            [key]: { ...row, entry: { ...row.entry, readAt } },
+          },
+          summary:
+            state.summary === null
+              ? null
+              : {
+                  ...state.summary,
+                  unreadCount: Math.max(0, state.summary.unreadCount - 1),
+                },
         };
       }),
     setConnectionState: (connectionState) =>
@@ -111,6 +143,9 @@ export function openCloudNotificationsStream(
   wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   onEntitlementDenied: (() => void) | null,
+  onArrivals: (
+    (rows: ReadonlyArray<HostNotificationsCloudFeedRow>) => void
+  ) | null,
 ): () => void {
   let disposed = false;
   let currentSession: IStreamSession | null = null;
@@ -149,10 +184,14 @@ export function openCloudNotificationsStream(
         return;
       }
       switch (parsed.data.kind) {
-        case "snapshot":
-          useCloudNotificationsStore.getState().applySnapshot(parsed.data);
+        case "snapshot": {
+          const arrivals = useCloudNotificationsStore
+            .getState()
+            .applySnapshot(parsed.data);
+          if (arrivals.length > 0) onArrivals?.(arrivals);
           reopenScheduler.resetBackoff();
           return;
+        }
         case "connectionState":
           useCloudNotificationsStore
             .getState()

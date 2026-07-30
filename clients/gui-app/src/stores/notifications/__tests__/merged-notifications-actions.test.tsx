@@ -844,6 +844,12 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     act(() => {
       result.current.actions.markAsRead(captured);
     });
+    const optimisticallyRead =
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId("entry-a")
+      ];
+    expect(optimisticallyRead?.entry.readAt).toBeTypeOf("number");
+    expect(useCloudNotificationsStore.getState().summary?.unreadCount).toBe(0);
     await waitFor(() => {
       expect(hostRequestMock).toHaveBeenCalledWith(
         "host.notifications.cloudFeed.markRead",
@@ -981,7 +987,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     });
   });
 
-  it("retains the rows it has when a command reports unavailable", async () => {
+  it("retains an optimistic read marker until a later snapshot reconciles an unavailable command", async () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";
     hostRequestMock.mockImplementation((method: string) => {
@@ -1014,13 +1020,22 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
         "unavailable",
       );
     });
-    // Nothing was mutated anywhere - the host keeps no local shadow of the
-    // cloud feed - so the row the user is looking at must still be there.
+    // The row stays present and the set-once marker remains optimistic while
+    // unavailable; no rollback timer makes perceived state depend on a poll.
     expect(
       useCloudNotificationsStore.getState().rows[
         cloudNotificationFeedId("entry-a")
       ]?.entryId,
     ).toBe("entry-a");
+    expect(result.current.row?.readAt).toBeTypeOf("number");
+
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-a", 1, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 11,
+      });
+    });
     expect(result.current.row?.readAt).toBeNull();
   });
 

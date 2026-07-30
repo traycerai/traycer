@@ -953,6 +953,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         if (parsed === null) return;
         if (parsed.source === "cloud") {
           if (feedMode !== "cloud" || typeof target === "string") return;
+          useCloudNotificationsStore
+            .getState()
+            .markReadLocally(target.sourceId, Date.now());
           cloudMarkRead.mutate({ entryId: target.sourceId });
           return;
         }
@@ -998,10 +1001,14 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       },
       markAllAsRead: () => {
         if (feedMode === "cloud") {
+          const readAt = Date.now();
           for (const row of Object.values(
             useCloudNotificationsStore.getState().rows,
           )) {
             if (row !== undefined && row.entry.readAt === null) {
+              useCloudNotificationsStore
+                .getState()
+                .markReadLocally(row.entryId, readAt);
               cloudMarkRead.mutate({ entryId: row.entryId });
             }
           }

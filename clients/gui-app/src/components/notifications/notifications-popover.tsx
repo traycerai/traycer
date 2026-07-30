@@ -18,7 +18,10 @@ import { useNotificationActivation } from "@/hooks/notifications/use-notificatio
 import { useNotificationCenterArrivals } from "@/hooks/notifications/use-notification-center-arrivals";
 import { useNotificationCenterScrollAnchor } from "@/hooks/notifications/use-notification-center-scroll-anchor";
 import { useStreamMethodSupport } from "@/lib/host/stream-runtime-context";
-import { useNotificationFeedMode } from "@/lib/notifications/notification-feed-mode";
+import {
+  useNotificationFeedMode,
+  type NotificationFeedMode,
+} from "@/lib/notifications/notification-feed-mode";
 import {
   Analytics,
   AnalyticsEvent,
@@ -126,6 +129,13 @@ function localNotificationsSubtitle(input: {
     return "Task activity isn't available on this host version";
   }
   return "Task activity is unavailable right now";
+}
+
+function notificationsSubtitle(
+  feedMode: NotificationFeedMode,
+  input: Parameters<typeof localNotificationsSubtitle>[0],
+): string | null {
+  return feedMode === "local" ? localNotificationsSubtitle(input) : null;
 }
 
 /**
@@ -410,15 +420,11 @@ export function NotificationsPopover(
           }
           onClearAll={handleClearAll}
           onOpenSettings={handleOpenSettings}
-          subtitle={
-            feedMode === "local"
-              ? localNotificationsSubtitle({
-                  isPartial: hostState.isPartial,
-                  hostLabel: hostState.hostLabel,
-                  notificationsSupport,
-                })
-              : null
-          }
+          subtitle={notificationsSubtitle(feedMode, {
+            isPartial: hostState.isPartial,
+            hostLabel: hostState.hostLabel,
+            notificationsSupport,
+          })}
         />
 
         <OriginUnavailableBanner />

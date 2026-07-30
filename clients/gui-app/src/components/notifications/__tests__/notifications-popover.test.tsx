@@ -51,12 +51,16 @@ import {
   NOTIFICATIONS_ARRAY_KEY,
   createNotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-category";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 
 const hostRequestMock = vi.hoisted(() => vi.fn());
 
@@ -75,6 +79,10 @@ const hostBindingState = vi.hoisted(() => ({
 
 const activeHostIdRef = vi.hoisted(() => ({
   value: null as string | null,
+}));
+
+const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
+  value: "local",
 }));
 
 const directoryRef = vi.hoisted(() => ({
@@ -100,6 +108,10 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
     if (hostId.length === 0 || directoryRef.value === null) return null;
     return directoryRef.value.findById(hostId);
   },
+}));
+
+vi.mock("@/lib/notifications/notification-feed-mode", () => ({
+  useNotificationFeedMode: () => notificationFeedMode.value,
 }));
 
 vi.mock("@/lib/host-error-toast", async (importActual) => {
@@ -341,6 +353,34 @@ function hostDone(
   });
 }
 
+function cloudDone(entryId: string): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: mockLocalHostEntry.hostId,
+    coalesceKey: "agent.stopped:chat-cloud",
+    entry: {
+      id: entryId,
+      updatedAt: 200,
+      readAt: null,
+      kind: "agent.stopped",
+      sourceRef: entryId,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-cloud",
+      chatId: "chat-cloud",
+      payload: {
+        kind: "chat",
+        epicId: "epic-cloud",
+        chatId: "chat-cloud",
+        agentName: "Cloud agent",
+        taskTitle: "Cloud task",
+        outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Cloud task", chatTitle: "Cloud agent" },
+  };
+}
+
 function threadEntry(
   id: string,
   epicId: string,
@@ -572,6 +612,8 @@ describe("NotificationsPopover", () => {
     __resetNotificationsStoreForTests();
     __resetHostNotificationsStoreForTests();
     __resetAppLocalNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    notificationFeedMode.value = "local";
     resetPopoverFilters();
     activeHostIdRef.value = mockLocalHostEntry.hostId;
     directoryRef.value = {
@@ -596,6 +638,42 @@ describe("NotificationsPopover", () => {
     __resetTabNavigationControllerForTesting();
     hostBindingState.current = null;
     __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    notificationFeedMode.value = "local";
+  });
+
+  it("routes a cloud row through its activation button to the owning chat", async () => {
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud")],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    const onNavigate = vi.fn();
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, onNavigate);
+    renderRouter(router);
+
+    const row = await screen.findByTestId("notification-entry");
+    expect(row.dataset.notificationId).toBe("cloud:entry-cloud");
+    const activationButton = activateButtonFor(row);
+    expect(activationButton.disabled).toBe(false);
+    fireEvent.click(activationButton);
+
+    await waitFor(() => {
+      expect(captured.epicId).toBe("epic-cloud");
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+    });
+    expect(hostRequestMock).toHaveBeenCalledWith(
+      "host.notifications.cloudFeed.markRead",
+      { entryId: "entry-cloud" },
+    );
   });
 
   it("renders a relative timestamp on every notification row", async () => {

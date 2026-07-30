@@ -34,6 +34,7 @@ import { useNotificationActivationWithNavigate } from "@/hooks/notifications/use
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import {
+  displayCloudSnapshotArrivals,
   displayHostChannelEmission,
   playNotificationChime,
 } from "@/lib/notifications/notification-display";
@@ -317,6 +318,13 @@ export function NotificationsSessionProvider(
         wsStreamClient,
         onAuthError,
         onEntitlementDenied,
+        (entries) => {
+          displayCloudSnapshotArrivals(entries, {
+            showNotification,
+            playChime: playNotificationChime,
+            onToastClick: (row) => onToastClickRef.current(row),
+          });
+        },
       );
       return;
     }

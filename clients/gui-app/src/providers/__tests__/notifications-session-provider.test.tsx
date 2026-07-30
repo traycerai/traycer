@@ -40,6 +40,7 @@ import {
   type NotificationRoomEntryMap,
 } from "@traycer/protocol/notifications/notification-room";
 import type { NotificationNavigate } from "@/lib/notifications";
+import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 
 interface HostState {
   id: string | null;
@@ -91,8 +92,12 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   },
 }));
 
+const showNotificationMock = vi.hoisted(() =>
+  vi.fn<NotificationShow>(() => Promise.resolve()),
+);
+
 vi.mock("@/hooks/notifications/use-notifications", () => ({
-  useNotificationShow: () => () => Promise.resolve(),
+  useNotificationShow: () => showNotificationMock,
 }));
 
 const activateMock = vi.hoisted(() =>
@@ -407,6 +412,8 @@ function cloudRow(
         kind: "chat",
         epicId: "epic-cloud",
         chatId: "chat-cloud",
+        taskTitle: "Cloud epic",
+        agentName: "Cloud chat",
         outcome: "completed",
       },
     },
@@ -558,6 +565,7 @@ describe("<NotificationsSessionProvider />", () => {
     streamState.useClientSupport = false;
     mockAuth.onChange.mockClear();
     mockAuth.revalidateCurrentContext.mockClear();
+    showNotificationMock.mockClear();
     mockAuth.onChange.mockImplementation(
       (_handler: (status: string) => void) => ({
         dispose: vi.fn(),
@@ -627,6 +635,76 @@ describe("<NotificationsSessionProvider />", () => {
       expect(useAppLocalNotificationsStore.getState().orderedIds).toEqual([]);
       expect(useNotificationsStore.getState().entryIds).toEqual([]);
     });
+  });
+
+  it("turns only post-baseline cloud snapshot arrivals into notification displays", async () => {
+    const queryClient = new QueryClient();
+    const streamClient = new MockWsStreamClient();
+    hostState.id = mockLocalHostEntry.hostId;
+    streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <NotificationsSessionProvider>
+          <div />
+        </NotificationsSessionProvider>
+      </QueryClientProvider>,
+    );
+    act(() => {
+      resetAuth("signed-in", "alice@example.com", "alice@example.com");
+    });
+    await waitFor(() => {
+      expect(streamClient.subscribedMethods).toEqual([
+        "host.notifications.cloudFeed.subscribe",
+      ]);
+    });
+
+    const baseline = cloudRow("entry-baseline", 7);
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 7,
+        rows: [baseline],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      });
+    });
+    expect(showNotificationMock).not.toHaveBeenCalled();
+
+    const arrived = cloudRow("entry-arrived", 8);
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 8,
+        rows: [baseline, arrived],
+        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      });
+    });
+    await waitFor(() => {
+      expect(showNotificationMock).toHaveBeenCalledTimes(1);
+    });
+    expect(showNotificationMock.mock.calls[0]?.[0]).toMatchObject({
+      payload: {
+        feed: { source: "cloud", id: "entry-arrived" },
+        originHostId: "host-a",
+      },
+    });
+
+    act(() => {
+      streamClient.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 8,
+        rows: [baseline, arrived],
+        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      });
+    });
+    expect(showNotificationMock).toHaveBeenCalledTimes(1);
   });
 
   it("drops a cloud snapshot across an A to null to A binding cycle", async () => {

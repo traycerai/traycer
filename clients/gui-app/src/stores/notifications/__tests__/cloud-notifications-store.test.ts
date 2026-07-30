@@ -230,6 +230,41 @@ describe("cloud notifications store", () => {
     expect(cloud.summary).toEqual(summary);
   });
 
+  it("reports only post-baseline entry arrivals from accepted snapshot diffs", () => {
+    const baseline = cloudRow("entry-a", 1, "host-a");
+    expect(
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [baseline],
+        summary,
+        version: 10,
+      }),
+    ).toEqual([]);
+
+    const arrived = cloudRow("entry-b", 2, "host-b");
+    expect(
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [baseline, arrived],
+        summary,
+        version: 11,
+      }),
+    ).toEqual([arrived]);
+
+    expect(
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [baseline, arrived],
+        summary,
+        version: 11,
+      }),
+    ).toEqual([]);
+    expect(
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudRow("entry-stale", 0, "host-a")],
+        summary: staleSummary,
+        version: 9,
+      }),
+    ).toEqual([]);
+  });
+
   it("ignores a delayed snapshot from below the version already rendered", () => {
     const newest = cloudRow("entry-b", 10, "host-a");
     useCloudNotificationsStore.getState().applySnapshot({
@@ -295,7 +330,7 @@ describe("cloud notifications store", () => {
   it("opens the distinct cloud method and creates a fresh session after terminal failure", () => {
     vi.useFakeTimers();
     const client = new ControlledWsStreamClient();
-    const close = openCloudNotificationsStream(client, null, null);
+    const close = openCloudNotificationsStream(client, null, null, null);
 
     expect(client.subscribedMethods).toEqual([
       "host.notifications.cloudFeed.subscribe",
@@ -314,7 +349,7 @@ describe("cloud notifications store", () => {
   it("does not retry an incompatible cloud-feed method", () => {
     vi.useFakeTimers();
     const client = new ControlledWsStreamClient();
-    const close = openCloudNotificationsStream(client, null, null);
+    const close = openCloudNotificationsStream(client, null, null, null);
 
     client.sessions[0].emitClosed(fatalClose("INCOMPATIBLE"));
     vi.advanceTimersByTime(2 * NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
@@ -334,6 +369,7 @@ describe("cloud notifications store", () => {
       client,
       null,
       onEntitlementDenied,
+      null,
     );
 
     client.sessions[0].emitClosed(fatalClose("FREE_TIER_NO_CLOUD_SYNC"));
@@ -349,7 +385,7 @@ describe("cloud notifications store", () => {
 
   it("parses authoritative frames and remains unavailable before its first snapshot", () => {
     const client = new ControlledWsStreamClient();
-    const close = openCloudNotificationsStream(client, null, null);
+    const close = openCloudNotificationsStream(client, null, null, null);
     const session = client.sessions[0];
 
     session.emitServerFrame({
