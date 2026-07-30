@@ -1947,6 +1947,35 @@ describe("ChatMessages scroll policy", () => {
       }
     });
 
+    it("dismisses an external-jump highlight on transcript pointerdown", async () => {
+      const messages = makeCompletedTranscript(6);
+      const target = messages[2];
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-highlight-user-takeover",
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: {
+          messageId: target.id,
+          blockId: null,
+          requestId: 42,
+        },
+      });
+
+      const targetRow = document.querySelector<HTMLElement>(
+        `[data-message-id="${target.id}"]`,
+      );
+      expect(targetRow?.dataset.navigationHighlighted).toBe("true");
+
+      act(() => {
+        fireEvent.pointerDown(getScrollNode());
+      });
+
+      expect(targetRow?.dataset.navigationHighlighted).toBeUndefined();
+    });
+
     it("does not highlight an in-tile minimap navigation", async () => {
       renderChatMessages({
         messages: makeCompletedTranscript(6),

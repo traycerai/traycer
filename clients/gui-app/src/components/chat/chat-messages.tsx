@@ -567,6 +567,13 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   const [navigationHighlightedMessageId, setNavigationHighlightedMessageId] =
     useState<string | null>(null);
   const navigationHighlightTimeoutRef = useRef<number | null>(null);
+  const clearNavigationHighlight = useCallback((): void => {
+    if (navigationHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(navigationHighlightTimeoutRef.current);
+      navigationHighlightTimeoutRef.current = null;
+    }
+    setNavigationHighlightedMessageId(null);
+  }, []);
   const showNavigationHighlight = useCallback((messageId: string): void => {
     if (navigationHighlightTimeoutRef.current !== null) {
       window.clearTimeout(navigationHighlightTimeoutRef.current);
@@ -878,13 +885,20 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     },
     [cancelPillShow],
   );
+  const cancelTimelineLiveFollowForRealUserGesture = useCallback(
+    (freezeInFlightScroll: boolean): void => {
+      clearNavigationHighlight();
+      cancelTimelineLiveFollowForUserNavigation(freezeInFlightScroll);
+    },
+    [cancelTimelineLiveFollowForUserNavigation, clearNavigationHighlight],
+  );
   const cancelTimelineLiveFollowForUserNavigationRef = useRef(
-    cancelTimelineLiveFollowForUserNavigation,
+    cancelTimelineLiveFollowForRealUserGesture,
   );
   useLayoutEffect(() => {
     cancelTimelineLiveFollowForUserNavigationRef.current =
-      cancelTimelineLiveFollowForUserNavigation;
-  }, [cancelTimelineLiveFollowForUserNavigation]);
+      cancelTimelineLiveFollowForRealUserGesture;
+  }, [cancelTimelineLiveFollowForRealUserGesture]);
 
   // ChatTimeline unmounts LegendList entirely for an empty transcript
   // (ChatEmptyState instead), so this - not just `messages` identity - is
@@ -1540,10 +1554,10 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       // Keyboard scrolling steps the scroller itself right below - a plain
       // release, no freeze needed (that step's own movement takes over
       // immediately).
-      cancelTimelineLiveFollowForUserNavigation(false);
+      cancelTimelineLiveFollowForRealUserGesture(false);
       applyChatKeyboardScroll(scroller, scrollAction);
     },
-    [cancelTimelineLiveFollowForUserNavigation],
+    [cancelTimelineLiveFollowForRealUserGesture],
   );
 
   useLayoutEffect(() => {
