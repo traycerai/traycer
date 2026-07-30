@@ -173,6 +173,11 @@ export function AddProviderProfileDialog({
     if (trimmedLabel.length === 0) return;
     if (trimmedLabel === profile.label) {
       setNamingCommittedFor(profile.profileId);
+      // Claim the attempt before finalizing directly - otherwise the render
+      // this triggers flips `naming` to null, and the effect below (which
+      // has no dependency array) sees an unclaimed `finalizeAttemptRef` and
+      // calls `finalizeProfile` a second time.
+      finalizeAttemptRef.current = profile.profileId;
       finalizeProfile(profile);
       return;
     }
@@ -185,6 +190,7 @@ export function AddProviderProfileDialog({
       {
         onSuccess: () => {
           setNamingCommittedFor(profile.profileId);
+          finalizeAttemptRef.current = profile.profileId;
           finalizeProfile(profile);
         },
       },

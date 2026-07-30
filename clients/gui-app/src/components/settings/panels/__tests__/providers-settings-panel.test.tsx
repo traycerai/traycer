@@ -4485,6 +4485,7 @@ describe("<ProvidersSettingsPanel />", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     expect(providerMocks.renameProfileMutate).not.toHaveBeenCalled();
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
 
     const [, recolorOptions] = firstRecolorProfileCall();
     act(() => recolorOptions.onSuccess());
@@ -4571,6 +4572,7 @@ describe("<ProvidersSettingsPanel />", () => {
       label: "Work org",
     });
     act(() => renameOptions.onSuccess());
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
 
     const [, recolorOptions] = firstRecolorProfileCall();
     act(() => recolorOptions.onSuccess());
@@ -4686,6 +4688,7 @@ describe("<ProvidersSettingsPanel />", () => {
       throw new Error("Expected a second rename call.");
     }
     act(() => retryRenameOptions.onSuccess());
+    expect(providerMocks.recolorProfileMutate).toHaveBeenCalledTimes(1);
 
     const [, recolorOptions] = firstRecolorProfileCall();
     act(() => recolorOptions.onSuccess());
