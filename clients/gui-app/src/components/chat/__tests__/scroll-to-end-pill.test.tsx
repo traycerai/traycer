@@ -63,11 +63,15 @@ describe("ScrollToEndPill", () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 
-  it("invokes the activation handler while visible", () => {
+  it("moves focus away before invoking the visible pill's activation handler", () => {
     const { onClick } = renderPill({ kind: "plain" });
+    const pill = screen.getByRole("button", { name: "Scroll to end" });
+    pill.focus();
+    expect(document.activeElement).toBe(pill);
 
-    fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+    fireEvent.click(pill);
 
+    expect(document.activeElement).not.toBe(pill);
     expect(onClick).toHaveBeenCalledOnce();
   });
 });

@@ -1,4 +1,5 @@
 import { ChevronDown } from "lucide-react";
+import type { MouseEvent } from "react";
 
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
@@ -38,12 +39,16 @@ export function ScrollToEndPill({
   bottomOffsetPx,
 }: ScrollToEndPillProps) {
   const visible = state.kind !== "hidden";
+  const handleClick = (event: MouseEvent<HTMLButtonElement>): void => {
+    event.currentTarget.blur();
+    onClick();
+  };
   return (
     <button
       type="button"
       aria-hidden={visible ? undefined : true}
       aria-label="Scroll to end"
-      onClick={visible ? onClick : undefined}
+      onClick={visible ? handleClick : undefined}
       tabIndex={visible ? 0 : -1}
       style={{ bottom: bottomOffsetPx }}
       className={cn(
