@@ -147,6 +147,7 @@ function sampleLifecycleHandle(): ServiceInstallLifecycleHandle {
     lifecycle: {
       beforeSwap: async () => {},
       afterSwap: async () => {},
+      swapLockRecovery: null,
     },
   };
 }
@@ -252,6 +253,7 @@ describe("buildHostInstallCommand", () => {
     const bytesOnlyLifecycle = {
       beforeSwap: vi.fn(async () => {}),
       afterSwap: vi.fn(async () => {}),
+      swapLockRecovery: null,
     };
     mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
     mocks.createBytesOnlyInstallLifecycleMock.mockReturnValue(
