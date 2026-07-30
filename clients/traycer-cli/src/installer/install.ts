@@ -1030,10 +1030,21 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     // why.
     if (targetExists) {
       await renameWithRetryPlan(trash, target, swapRenamePlan).catch(
-        (restoreCause) => {
+        async (restoreCause) => {
+          // The `holders` in the enclosing scope were collected right after
+          // the SWAP-IN failure, before this restore ever ran its own
+          // retries/re-kills - they don't necessarily describe who (if
+          // anyone) still holds `target` now that the restore has also
+          // exhausted. Re-scan so this, the worst failure in the file (no
+          // `install/` at all), gets a diagnosis of its own rather than a
+          // stale one.
+          const restoreHolders = await collectSwapLockHolders(
+            opts.swapLockRecovery,
+            logger,
+          );
           logger.error(
             "Host install rollback failed - previous install left aside",
-            { target, trash },
+            { target, trash, holders: restoreHolders.map(logLockHolder) },
             errorFromUnknown(restoreCause),
           );
         },
