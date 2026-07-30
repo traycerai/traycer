@@ -59,7 +59,7 @@ function createReportAction(
       const current = useDesktopDialogStore.getState();
       if (!current.reportIssueAvailable) return;
       Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
-        source: "direct_ui",
+        source: "notification",
       });
       current.openReportIssueWithContext(context);
     },

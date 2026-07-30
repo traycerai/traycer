@@ -125,7 +125,7 @@ describe("reportableErrorToast", () => {
     clickErrorReportAction();
 
     expect(track).toHaveBeenCalledWith(AnalyticsEvent.ReportIssueOpened, {
-      source: "direct_ui",
+      source: "notification",
     });
     expect(useDesktopDialogStore.getState().reportIssueContext).toEqual(
       SAFE_CONTEXT,
