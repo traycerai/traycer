@@ -2038,8 +2038,10 @@ function ChatMessagesInner(props: ChatMessagesProps) {
 
   // --- Accessibility (decision #24): polite turn-completion announcement ----
 
-  const [turnCompletionAnnouncement, setTurnCompletionAnnouncement] =
-    useState("");
+  const [turnCompletionAnnouncement, setTurnCompletionAnnouncement] = useState<{
+    readonly key: string;
+    readonly text: string;
+  } | null>(null);
   const lastAssistantCompletionRef = useRef<{
     readonly id: string;
     readonly completedAt: number | null;
@@ -2064,7 +2066,10 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       lastAssistant.completedAt !== null &&
       !lastAssistant.stopped
     ) {
-      setTurnCompletionAnnouncement(`${taskTitle} finished responding.`);
+      setTurnCompletionAnnouncement({
+        key: `${lastAssistant.id}:${lastAssistant.completedAt}`,
+        text: `${taskTitle} finished responding.`,
+      });
       // Decision #10/#16: turn completion below the fold stays anchored - no
       // auto-reveal. The pill flips to "New reply" instead, unless the
       // reader is already at the tail (nothing to signal).
@@ -2177,7 +2182,11 @@ function ChatMessagesInner(props: ChatMessagesProps) {
             ) : null}
           </div>
           <div aria-live="polite" className="sr-only">
-            {turnCompletionAnnouncement}
+            {turnCompletionAnnouncement === null ? null : (
+              <span key={turnCompletionAnnouncement.key}>
+                {turnCompletionAnnouncement.text}
+              </span>
+            )}
           </div>
         </ChatMeasuredItemChangeContext.Provider>
       </ActivityGroupOpenStoreProvider>

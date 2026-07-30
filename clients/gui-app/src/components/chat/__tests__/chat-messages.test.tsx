@@ -964,6 +964,67 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("replaces the live-region child when a later turn repeats the same announcement", async () => {
+      const firstUser = makeMessage(0, "user");
+      const firstAssistantStreaming: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const firstAssistantCompleted: ChatMessageModel = {
+        ...firstAssistantStreaming,
+        completedAt: 1_700_000_000_000,
+        runState: null,
+      };
+      const secondUser = makeMessage(2, "user");
+      const secondAssistantStreaming: ChatMessageModel = {
+        ...makeMessage(3, "assistant"),
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [firstUser, firstAssistantStreaming],
+        scrollStateKey: "aria-repeat",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      rerenderMessages([firstUser, firstAssistantCompleted]);
+      await settleLegendList();
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+      const firstAnnouncementNode = live?.firstElementChild;
+      expect(firstAnnouncementNode).not.toBeNull();
+
+      rerenderMessages([
+        firstUser,
+        firstAssistantCompleted,
+        secondUser,
+        secondAssistantStreaming,
+      ]);
+      await settleLegendList();
+      rerenderMessages([
+        firstUser,
+        firstAssistantCompleted,
+        secondUser,
+        {
+          ...secondAssistantStreaming,
+          completedAt: 1_700_000_001_000,
+          runState: null,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+        expect(live?.firstElementChild).not.toBe(firstAnnouncementNode);
+      });
+    });
+
     it("does not announce when the turn was user-stopped", async () => {
       const userMsg = makeMessage(0, "user");
       const assistantStreaming: ChatMessageModel = {

@@ -261,6 +261,14 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
     // content-relative comparison (decision #18).
     const state = {
       ...rawState,
+      // The composer and queued-message dock overlay the list viewport. Keep
+      // rows hidden behind that first-class end inset out of the visible band,
+      // matching the shortened minimap rail and the transcript's usable
+      // viewport contract.
+      scrollLength: Math.max(
+        0,
+        rawState.scrollLength - Math.max(0, bottomInset),
+      ),
       topOffsetAdjustment: topOffsetAdjustmentRef.current,
     };
     for (const item of items) {
@@ -273,7 +281,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
         ? "true"
         : "false";
     }
-  }, [items, listRef, stripMap, topOffsetAdjustmentRef]);
+  }, [bottomInset, items, listRef, stripMap, topOffsetAdjustmentRef]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(updateInView);

@@ -585,6 +585,29 @@ describe("ChatTurnMinimap in-view highlighting", () => {
     });
   });
 
+  it("excludes rows hidden behind the bottom overlay inset", async () => {
+    const messages = makeTwoTurnTranscript();
+    const listState: FakeListState = {
+      scroll: 0,
+      scrollLength: 300,
+      positions: [0, 80, 250, 330],
+      sizes: [60, 60, 60, 60],
+    };
+    renderMinimap({ messages, listState, bottomInset: 100 });
+    await flushMinimapFrames(3);
+
+    const firstStrip = document.querySelector(
+      '[data-chat-turn-minimap-strip][data-message-id="message-0"]',
+    );
+    const coveredStrip = document.querySelector(
+      '[data-chat-turn-minimap-strip][data-message-id="message-2"]',
+    );
+    await waitFor(() => {
+      expect(firstStrip?.getAttribute("data-in-view")).toBe("true");
+      expect(coveredStrip?.getAttribute("data-in-view")).toBe("false");
+    });
+  });
+
   it("updates data-in-view when the list scroll node fires a scroll event", async () => {
     const messages = makeTwoTurnTranscript();
     const listState: FakeListState = {
