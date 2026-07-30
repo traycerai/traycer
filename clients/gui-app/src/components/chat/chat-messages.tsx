@@ -1009,6 +1009,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         anchorIndex,
         endInset,
         anchorOffset,
+        topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
       });
     },
     [endInset, anchorOffset],

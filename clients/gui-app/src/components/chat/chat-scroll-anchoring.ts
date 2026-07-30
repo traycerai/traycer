@@ -99,17 +99,24 @@ export function getChatRowBottom(
  * after it is, and how far the list must scroll (from its CURRENT position)
  * to reveal the real end of that content within the usable viewport (the
  * viewport minus the bottom overlay inset and the top anchor offset).
+ *
+ * LegendList reports row positions in content-relative coordinates while
+ * `state.scroll` includes its header/top pad. Normalize the scroll before
+ * deriving every positional metric so the live-edge delta does not reach
+ * zero one header-height early.
  */
 export function getChatAnchoredTurnMetrics({
   state,
   anchorIndex,
   endInset,
   anchorOffset,
+  topOffsetAdjustment,
 }: {
   readonly state: ChatTimelineListMeasurementState;
   readonly anchorIndex: number;
   readonly endInset: number;
   readonly anchorOffset: number;
+  readonly topOffsetAdjustment: number;
 }): ChatAnchoredTurnMetrics | null {
   if (state.data.length === 0) {
     return null;
@@ -134,14 +141,15 @@ export function getChatAnchoredTurnMetrics({
     state.scrollLength - endInset - anchorOffset,
   );
   const turnHeight = Math.max(0, lastBottom - anchorTop);
-  const visibleUsableBottom = state.scroll + usableViewportHeight;
+  const contentRelativeScroll = state.scroll - topOffsetAdjustment;
+  const visibleUsableBottom = contentRelativeScroll + usableViewportHeight;
   const targetScrollToRevealEnd = Math.max(
     0,
     lastBottom - usableViewportHeight,
   );
   const scrollDeltaToRevealEnd = Math.max(
     0,
-    targetScrollToRevealEnd - state.scroll,
+    targetScrollToRevealEnd - contentRelativeScroll,
   );
 
   return {

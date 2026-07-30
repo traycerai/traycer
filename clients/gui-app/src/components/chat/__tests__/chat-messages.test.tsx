@@ -55,6 +55,7 @@ import {
 const VIEWPORT_HEIGHT_PX = 700;
 const VIEWPORT_WIDTH_PX = 800;
 const PILL_SHOW_DEBOUNCE_MS = 150;
+const LEGEND_LIST_HEADER_PX = 40;
 
 const platformMock = vi.hoisted(() => ({ isMac: true }));
 // Default false matches an empty canvas store (existing tests never seed live
@@ -4306,6 +4307,32 @@ describe("ChatMessages scroll policy", () => {
 
       // True live edge: strict epsilon satisfied → following-end.
       await fireScrollOnlyTo(end);
+      await waitFor(
+        () => {
+          expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        },
+        { timeout: 2_000 },
+      );
+    });
+
+    it("(f) includes the LegendList header pad in the anchored live-edge gate", async () => {
+      const { afterOverflow } = await setupOverflowingAnchoredTurn({
+        scrollStateKey: "t11-f-header-adjusted-edge",
+        sendId: "t11-f-send",
+      });
+
+      const usableViewportHeight =
+        VIEWPORT_HEIGHT_PX - 80 - CHAT_LIST_ANCHOR_OFFSET;
+      const oldEarlyThreshold =
+        afterOverflow.length * 90 - usableViewportHeight;
+
+      // Row positions are content-relative, while scrollTop includes the
+      // measured 40px LegendList header. The old mixed-coordinate gate
+      // declared following-end here, one whole header before the real edge.
+      await fireScrollOnlyTo(oldEarlyThreshold);
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+
+      await fireScrollOnlyTo(oldEarlyThreshold + LEGEND_LIST_HEADER_PX);
       await waitFor(
         () => {
           expect(getScrollNode().dataset.scrollMode).toBe("following-end");

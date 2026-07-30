@@ -87,6 +87,7 @@ describe("getChatAnchoredTurnMetrics", () => {
         anchorIndex: 0,
         endInset: 80,
         anchorOffset: 16,
+        topOffsetAdjustment: 0,
       }),
     ).toBeNull();
   });
@@ -105,6 +106,7 @@ describe("getChatAnchoredTurnMetrics", () => {
         anchorIndex: 0,
         endInset: 0,
         anchorOffset: 16,
+        topOffsetAdjustment: 0,
       }),
     ).toBeNull();
   });
@@ -125,6 +127,7 @@ describe("getChatAnchoredTurnMetrics", () => {
       anchorIndex: 0,
       endInset: 100,
       anchorOffset: 16,
+      topOffsetAdjustment: 0,
     });
     expect(shortMetrics).toEqual({
       anchorTop: 0,
@@ -153,6 +156,7 @@ describe("getChatAnchoredTurnMetrics", () => {
       anchorIndex: 1,
       endInset: 80,
       anchorOffset: 16,
+      topOffsetAdjustment: 0,
     });
     expect(tallMetrics).toMatchObject({
       anchorTop: 200,
@@ -163,6 +167,32 @@ describe("getChatAnchoredTurnMetrics", () => {
       overflowsUsableViewport: true,
       targetScrollToRevealEnd: 296,
       scrollDeltaToRevealEnd: 196,
+    });
+  });
+
+  it("normalizes the header-inclusive scroll before comparing the content-relative end", () => {
+    const state = makeState({
+      dataLength: 3,
+      scroll: 296,
+      scrollLength: 700,
+      positions: [0, 200, 700],
+      sizes: [200, 500, 200],
+    });
+    const metrics = getChatAnchoredTurnMetrics({
+      state,
+      anchorIndex: 1,
+      endInset: 80,
+      anchorOffset: 16,
+      topOffsetAdjustment: 40,
+    });
+
+    // lastBottom=900 and usable=604. The content-relative viewport starts at
+    // scroll-header=256, so its usable bottom is 860 and 40px remain. A bare
+    // comparison against the header-inclusive scroll would incorrectly say 0.
+    expect(metrics).toMatchObject({
+      visibleUsableBottom: 860,
+      targetScrollToRevealEnd: 296,
+      scrollDeltaToRevealEnd: 40,
     });
   });
 
@@ -179,6 +209,7 @@ describe("getChatAnchoredTurnMetrics", () => {
       anchorIndex: 0,
       endInset: 80,
       anchorOffset: 16,
+      topOffsetAdjustment: 0,
     });
     expect(metrics?.usableViewportHeight).toBe(0);
     expect(metrics?.targetScrollToRevealEnd).toBe(200);
@@ -198,6 +229,7 @@ describe("getChatAnchoredTurnMetrics", () => {
       anchorIndex: 99,
       endInset: 0,
       anchorOffset: 0,
+      topOffsetAdjustment: 0,
     });
     // Clamped to last row (index 1).
     expect(metrics?.anchorTop).toBe(100);
