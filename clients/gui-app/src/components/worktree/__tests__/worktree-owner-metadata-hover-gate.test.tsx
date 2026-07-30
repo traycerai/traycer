@@ -71,6 +71,7 @@ function renderTooltip(onClick: (() => void) | undefined): HTMLElement {
       ownerId="owner-1"
       ownerKind="chat"
       supplementalContent={null}
+      side="right"
     />,
   );
   return screen.getByTestId("row");

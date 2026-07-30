@@ -248,6 +248,7 @@ describe("ChatMarkdownLinkProvider", () => {
           markdown="[Open app](src/app.ts)"
           proseSize="compact"
           quotable={false}
+          components={null}
         />,
       );
 
@@ -417,6 +418,7 @@ describe("ChatMarkdownLinkProvider", () => {
         markdown={`[Artifact](${SAME_EPIC_ARTIFACT_PATH}) [External](https://example.com)`}
         proseSize="compact"
         quotable={false}
+        components={null}
       />,
     );
 
