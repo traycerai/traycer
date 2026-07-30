@@ -69,13 +69,13 @@ vi.mock("sonner", () => ({
 
 // Real `useHostSupportsMethod` fails closed (no negotiated manifest exists
 // under jsdom), which would silently skip the preflight in every test here.
-// Stubbed `true` so the ordering test below can actually exercise the
-// preflight-before-worktree path; harmless for every other test in this file
-// since none of them combine a non-null `sourceTuiAgentId` with a
-// `profileId` that differs from `sourceProfileId` (the other half of
-// `resolveForkProfilePreflightTarget`'s gate).
+// Stubbed `true` by default so the ordering test below can actually exercise
+// the preflight-before-worktree path. Individual tests can override via
+// `useTuiForkProfileSupportedMock.mockReturnValueOnce(false)` for the
+// capability-unsupported case.
+const useTuiForkProfileSupportedMock = vi.hoisted(() => vi.fn(() => true));
 vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
-  useTuiForkProfileSupported: () => true,
+  useTuiForkProfileSupported: () => useTuiForkProfileSupportedMock(),
 }));
 
 import { toast } from "sonner";
@@ -171,6 +171,8 @@ describe("useCreateTuiAgent", () => {
     hookMocks.markArtifactPendingCreate.mockReset();
     hookMocks.unmarkArtifactPendingCreate.mockReset();
     hookMocks.navigateNested.mockClear();
+    useTuiForkProfileSupportedMock.mockReset();
+    useTuiForkProfileSupportedMock.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -585,6 +587,7 @@ describe("useCreateTuiAgent", () => {
     expect(persistCall).toBeDefined();
     const preparePayload = prepareCall?.payload as {
       readonly forkSourceHarnessSessionId: string | null;
+      readonly forkSourceTuiAgentId: string | null;
       readonly harnessSessionId: string | null;
       readonly terminalAgentArgs: string | null;
     };
@@ -599,6 +602,7 @@ describe("useCreateTuiAgent", () => {
     expect(preparePayload.forkSourceHarnessSessionId).toBe(
       "source-harness-session",
     );
+    expect(preparePayload.forkSourceTuiAgentId).toBe("source-tui-agent-id");
     expect(preparePayload.harnessSessionId).toBeNull();
     expect(preparePayload.terminalAgentArgs).toBe("--allowedTools Edit");
     expect(persistPayload.parentId).toBe("source-parent");
@@ -772,6 +776,59 @@ describe("useCreateTuiAgent", () => {
     expect(calls.map((c) => c.method)).not.toContain(
       "agent.tui.validateForkProfile",
     );
+
+    queryClient.clear();
+  });
+
+  it("capability-unsupported host skips preflight on cross-profile fork but still threads forkSourceTuiAgentId onto prepareLaunch", async () => {
+    // Host does not advertise agent.tui.validateForkProfile - client must
+    // fail closed (skip preflight) and defer entirely to prepareLaunch's
+    // authoritative guard. forkSourceTuiAgentId is still sent so the host
+    // can take the exact-id path.
+    useTuiForkProfileSupportedMock.mockReturnValue(false);
+    const { calls } = setupSequencedMock();
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: "source-parent",
+        title: "Continue - profile-b (unsupported host)",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        agentMode: "regular",
+        forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: "profile-a",
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+        // Genuinely cross-profile - would preflight if supported.
+        profileId: "profile-b",
+      });
+    });
+
+    const methodOrder = calls.map((c) => c.method);
+    expect(methodOrder).not.toContain("agent.tui.validateForkProfile");
+    expect(methodOrder).toContain("agent.tui.prepareLaunch");
+    const prepareCall = calls.find(
+      (c) => c.method === "agent.tui.prepareLaunch",
+    );
+    expect(prepareCall).toBeDefined();
+    const preparePayload = prepareCall?.payload as {
+      readonly forkSourceTuiAgentId: string | null;
+      readonly profileId: string | null;
+    };
+    expect(preparePayload.forkSourceTuiAgentId).toBe("source-tui-agent-id");
+    expect(preparePayload.profileId).toBe("profile-b");
 
     queryClient.clear();
   });
