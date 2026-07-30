@@ -1,6 +1,7 @@
 import {
+  BASIC_AUTH_PATTERN,
   BEARER_PATTERN,
-  SENSITIVE_INLINE_VALUE_PATTERN,
+  QUOTED_SENSITIVE_INLINE_VALUE_PATTERN,
   SENSITIVE_KEY_PATTERN,
   SENSITIVE_QUERY_PARAM_PATTERN,
 } from "./sensitive-text-patterns";
@@ -28,7 +29,11 @@ import {
 // routinely carry API-route-looking text ("GET /api/v1/host/status 200")
 // that is not a filesystem path and is useful un-redacted, while every real
 // leak this scrubber has to stop - workspace/project directories, install
-// paths, home directories - lives under one of these roots on a real machine.
+// paths, home directories, external volumes - lives under one of these roots
+// on a real machine. Code review (ticket 09, finding #2) widened this list
+// after `/workspace` and `/Volumes` were found passing through unredacted;
+// at this boundary a missed root is a privacy leak, so err on including more
+// rather than fewer plausible top-level directories.
 const POSIX_PATH_ROOT_NAMES = [
   "Users",
   "home",
@@ -47,19 +52,59 @@ const POSIX_PATH_ROOT_NAMES = [
   "srv",
   "data",
   "proc",
+  "workspace",
+  "Volumes",
 ] as const;
 
-// A path segment is anything up to whitespace or a character that would
-// terminate it in the free-text this runs over: quotes, angle brackets,
-// pipes, and backticks (the same boundary `redactLogText`'s own patterns
-// use), plus the punctuation stack traces commonly wrap a path in -
-// `(/Users/x/y.ts:12:34)` must pseudonymize to `(<path-1>)`, not swallow the
-// closing paren into the match and leave it unbalanced.
-const PATH_SEGMENT_BOUNDARY =
-  String.raw`[^\s"'` + "`" + String.raw`<>|()[\]{},;]`;
+// One character of path-component content: anything except a hard
+// terminator (whitespace incl. newlines, quotes, backtick, angle brackets,
+// pipe, the bracket/brace/paren punctuation stack traces commonly wrap a
+// path in, and field separators comma/semicolon). Slash and backslash are
+// EXCLUDED here even though they're not "terminators" in the usual sense -
+// they are the explicit separators the surrounding patterns supply between
+// components, not component content, so the outer repetition (below) does
+// real per-directory-level work instead of one greedy run silently
+// consuming several real path levels as if they were "one segment".
+const PATH_COMPONENT_CHAR =
+  String.raw`[^\s\/\\"'` + "`" + String.raw`<>|()[\]{},;]`;
+
+// One path component, tolerating embedded whitespace runs only when the
+// word after each one looks like a name continuation - starts with an
+// uppercase letter, as in a macOS full-name home directory
+// ("/Users/John Doe/...", "/Users/Mary Jane Watson/..."). This is
+// deliberately narrow: code review (finding #2) first caught spaces
+// terminating the match early and leaking the path's tail
+// (`/Users/John Doe/...` -> `<path-1> Doe/...`); the first fix allowed ANY
+// embedded space, which over-corrected into swallowing unbounded trailing
+// prose whenever a path had no trailing quote/paren/EOL. Requiring each
+// continuation word to be capitalized catches the real multi-word-name case
+// (any number of them - a single optional continuation missed "Watson" in
+// three-word names, and a single literal space missed runs of 2+ spaces)
+// while leaving an ordinary lowercase sentence-continuation word
+// ("...x.ts then") outside the match.
+const PATH_COMPONENT = String.raw`${PATH_COMPONENT_CHAR}+(?: +[A-Z]${PATH_COMPONENT_CHAR}*)*`;
+
+// Windows/UNC separators can be `\` or `/`; POSIX roots only ever use `/`.
+// `+` (one-or-more), not exactly one: a JSON-stringified Windows path doubles
+// every backslash ("C:\\Users\\...", i.e. two literal backslash characters
+// between each level), and matching exactly one separator left the second
+// backslash of each pair unconsumed for a LATER pattern (UNC) to grab
+// instead, fragmenting one path into several pseudonyms with a bare
+// directory name ("Users") leaking through in between.
+const WINDOWS_PATH_SEPARATOR = String.raw`[\\/]+`;
 
 const POSIX_ABSOLUTE_PATH_PATTERN = new RegExp(
-  String.raw`\/(?:${POSIX_PATH_ROOT_NAMES.join("|")})(?:\/${PATH_SEGMENT_BOUNDARY}*)*`,
+  String.raw`\/(?:${POSIX_PATH_ROOT_NAMES.join("|")})(?:\/${PATH_COMPONENT})*`,
+  "g",
+);
+
+// `~/...` home-relative paths (code review, finding #2 - passed through
+// unredacted entirely before this). Bare `~` with no following `/` is left
+// alone: on its own it names "the user's home directory" as a concept, not a
+// path to a specific file or project. `+` (not `*`) requires at least one
+// `/component` so a bare trailing `~` never matches.
+const TILDE_HOME_PATH_PATTERN = new RegExp(
+  String.raw`~(?:\/${PATH_COMPONENT})+`,
   "g",
 );
 
@@ -71,13 +116,13 @@ const POSIX_ABSOLUTE_PATH_PATTERN = new RegExp(
 // "S:/" - the lookbehind requires the letter not be preceded by another
 // letter/digit, which a real single-letter drive designation never is.
 const WINDOWS_ABSOLUTE_PATH_PATTERN = new RegExp(
-  String.raw`(?<![A-Za-z0-9])[A-Za-z]:[\\/](?:${PATH_SEGMENT_BOUNDARY}+[\\/]?)*`,
+  String.raw`(?<![A-Za-z0-9])[A-Za-z]:${WINDOWS_PATH_SEPARATOR}(?:${PATH_COMPONENT}(?:${WINDOWS_PATH_SEPARATOR}${PATH_COMPONENT})*)?`,
   "g",
 );
 
 // `\\server\share\...` UNC paths.
 const UNC_PATH_PATTERN = new RegExp(
-  String.raw`\\\\${PATH_SEGMENT_BOUNDARY}+`,
+  String.raw`\\\\${PATH_COMPONENT}(?:${WINDOWS_PATH_SEPARATOR}${PATH_COMPONENT})*`,
   "g",
 );
 
@@ -106,7 +151,12 @@ function scrubLine(line: string, pathPseudonyms: Map<string, string>): string {
   const redacted = line
     .replace(SENSITIVE_QUERY_PARAM_PATTERN, "$1<redacted>")
     .replace(BEARER_PATTERN, "Bearer <redacted>")
-    .replace(SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>");
+    .replace(BASIC_AUTH_PATTERN, "Basic <redacted>")
+    // The quoted-key-tolerant superset (code review, finding #3): matches
+    // everything the plain `SENSITIVE_INLINE_VALUE_PATTERN` logger.ts still
+    // uses unchanged, plus JSON/YAML-style `"password": "value"` forms whose
+    // closing key-quote sits between the word and the separator.
+    .replace(QUOTED_SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>");
   return pseudonymizeAbsolutePaths(redacted, pathPseudonyms);
 }
 
@@ -130,9 +180,18 @@ function pseudonymizeAbsolutePaths(
     pathPseudonyms.set(match, pseudonym);
     return pseudonym;
   };
+  // Windows MUST run before UNC (code review, finding #2): a JSON-escaped
+  // Windows path doubles every backslash ("C:\\Users\\...", i.e. two literal
+  // backslash characters after the drive letter), which is indistinguishable
+  // from a genuine UNC prefix to a regex that isn't anchored on what precedes
+  // it. Running UNC first let it claim everything from the doubled backslash
+  // onward as its own match, leaving the bare drive letter ("C:") behind,
+  // unredacted. Windows running first consumes the whole thing starting at
+  // the drive letter, so there is nothing left for UNC's pattern to find.
   return text
-    .replace(UNC_PATH_PATTERN, replace)
     .replace(WINDOWS_ABSOLUTE_PATH_PATTERN, replace)
+    .replace(UNC_PATH_PATTERN, replace)
+    .replace(TILDE_HOME_PATH_PATTERN, replace)
     .replace(POSIX_ABSOLUTE_PATH_PATTERN, replace);
 }
 

@@ -118,7 +118,7 @@ export function ReportIssueDialog(
         buildReportIssueFormRequest(submission, draftContext),
       );
     },
-    onSuccess: async (result, submission) => {
+    onSuccess: (result, submission) => {
       Analytics.getInstance().track(
         AnalyticsEvent.ReportIssuePrivateSubmit,
         reportIssuePrivateSubmitPropertiesFromResult(result),
@@ -127,8 +127,14 @@ export function ReportIssueDialog(
       // banner (see DeliveryOutcomeBanner) instead of the GitHub hand-off -
       // only a confirmed delivery is terminal here.
       if (result.status !== "delivered") return;
-      await openPublicDraftInBrowser(submission);
-      closeReportIssueDraft(submission.draftId);
+      // Only close the draft once the public draft actually opened -
+      // `openPublicDraftMutation`'s own `onError` keeps the dialog and
+      // offers a retry otherwise (code review, finding #4: closing here
+      // unconditionally used to discard the confirmed-delivery state having
+      // done nothing whenever `buildPublicDraft` itself failed).
+      openPublicDraftMutation.mutate(submission, {
+        onSuccess: () => closeReportIssueDraft(submission.draftId),
+      });
     },
     onError: (error) => {
       Analytics.getInstance().track(AnalyticsEvent.ReportIssuePrivateSubmit, {
@@ -149,8 +155,12 @@ export function ReportIssueDialog(
     },
     onSuccess: () => {
       toast.success("Diagnostic bundle saved", {
+        // Flow 4 Case B's mandated copy: the bundle now ships both frozen
+        // log tails (scrubbed, ticket 09) - the opposite of log-free had
+        // been claimed here before that landed, which was a false
+        // disclosure about what the file actually contains.
         description:
-          "It's been revealed in your file browser. Review it before sharing publicly - it contains no logs yet.",
+          "It's been revealed in your file browser. It contains scrubbed logs - review it before sharing publicly.",
       });
     },
     onError: () => {
@@ -204,30 +214,49 @@ export function ReportIssueDialog(
   // dialog can produce a public URL except via the main-process scrub
   // boundary. `buildGitHubIssueUrl` is a pure field-to-URL assembler; every
   // text transform already happened server-side.
-  const openPublicDraftInBrowser = async (
-    submission: ReportIssueSubmission,
-  ): Promise<void> => {
-    if (support === null) return;
-    const draft = await support
-      .buildPublicDraft(buildReportIssueFormRequest(submission, draftContext))
-      .catch(() => null);
-    if (draft === null) return;
-    const url = buildGitHubIssueUrl(draft);
-    // openExternalLink is Promise<void> across the shared contract; the
-    // underlying open success boolean is not available here. Emit
-    // "attempted" after the await only - never claim GitHub publication.
-    try {
-      await runnerHost.openExternalLink(url);
-    } catch {
-      // Browser open can fail; the attempt still happened and is tracked.
-    }
-    Analytics.getInstance().track(
-      AnalyticsEvent.ReportIssuePublicOpenAttempted,
-      null,
-    );
-  };
-  const openGithubFallback = (): Promise<void> =>
-    openPublicDraftInBrowser({ draftId, form, snapshot });
+  //
+  // A real `useMutation` (not a bare async function) on purpose: code review
+  // (finding #4) caught that mapping a `buildPublicDraft` rejection to `null`
+  // and returning silently left the delivered-submit path closing the dialog
+  // having done nothing, and left a fallback button click doing nothing
+  // visible. Failure now surfaces as a toast with a retry action, and the
+  // dialog/confirmation state is never discarded on its account.
+  const openPublicDraftMutation = useMutation({
+    mutationKey: runnerMutationKeys.supportBuildPublicDraft(),
+    mutationFn: async (submission: ReportIssueSubmission): Promise<void> => {
+      if (support === null) throw new Error("Support bridge unavailable");
+      const draft = await support.buildPublicDraft(
+        buildReportIssueFormRequest(submission, draftContext),
+      );
+      const url = buildGitHubIssueUrl(draft);
+      // openExternalLink is Promise<void> across the shared contract; the
+      // underlying open success boolean is not available here. Emit
+      // "attempted" after the await only - never claim GitHub publication.
+      // A browser-open failure is tolerated here (pre-existing behavior,
+      // orthogonal to whether `buildPublicDraft` itself succeeded) - only
+      // `buildPublicDraft`'s own rejection should surface as a mutation error.
+      try {
+        await runnerHost.openExternalLink(url);
+      } catch {
+        // Browser open can fail; the attempt still happened and is tracked.
+      }
+      Analytics.getInstance().track(
+        AnalyticsEvent.ReportIssuePublicOpenAttempted,
+        null,
+      );
+    },
+    onError: (_error, submission) => {
+      toast.error("Could not open the GitHub draft", {
+        description: "Your report is safe - you can try opening it again.",
+        action: {
+          label: "Try again",
+          onClick: () => openPublicDraftMutation.mutate(submission),
+        },
+      });
+    },
+  });
+  const openGithubFallback = (): void =>
+    openPublicDraftMutation.mutate({ draftId, form, snapshot });
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -342,8 +371,9 @@ export function ReportIssueDialog(
             canSubmit={form.title.trim().length !== 0 && reportId !== null}
             isSubmitPending={submitMutation.isPending}
             isSaveBundlePending={saveDiagnosticBundleMutation.isPending}
+            isOpeningPublicDraft={openPublicDraftMutation.isPending}
             onSubmitOrRetry={retry}
-            onOpenGithubFallback={() => void openGithubFallback()}
+            onOpenGithubFallback={openGithubFallback}
             onSaveDiagnosticBundle={() =>
               saveDiagnosticBundleMutation.mutate({ draftId, form, snapshot })
             }
@@ -359,6 +389,7 @@ function ReportIssueFooterActions({
   canSubmit,
   isSubmitPending,
   isSaveBundlePending,
+  isOpeningPublicDraft,
   onSubmitOrRetry,
   onOpenGithubFallback,
   onSaveDiagnosticBundle,
@@ -367,6 +398,7 @@ function ReportIssueFooterActions({
   readonly canSubmit: boolean;
   readonly isSubmitPending: boolean;
   readonly isSaveBundlePending: boolean;
+  readonly isOpeningPublicDraft: boolean;
   readonly onSubmitOrRetry: () => void;
   readonly onOpenGithubFallback: () => void;
   readonly onSaveDiagnosticBundle: () => void;
@@ -388,14 +420,34 @@ function ReportIssueFooterActions({
           ) : null}
           Save diagnostic bundle
         </Button>
-        <Button onClick={onOpenGithubFallback}>Open a GitHub issue</Button>
+        <Button onClick={onOpenGithubFallback} disabled={isOpeningPublicDraft}>
+          {isOpeningPublicDraft ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Open a GitHub issue
+        </Button>
       </>
     );
   }
   if (deliveryResult !== null && deliveryResult.status !== "delivered") {
     return (
       <>
-        <Button variant="outline" onClick={onOpenGithubFallback}>
+        <Button
+          variant="outline"
+          onClick={onOpenGithubFallback}
+          disabled={isOpeningPublicDraft}
+        >
+          {isOpeningPublicDraft ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
           Report on GitHub instead
         </Button>
         <Button onClick={onSubmitOrRetry} disabled={isSubmitPending}>

@@ -96,6 +96,106 @@ describe("scrubSupportText", () => {
       expect(line).toBe(`line ${i}: Bearer <redacted>`);
     }
   });
+
+  // Code-review findings (ticket 09 follow-up): the reviewer's exact failing
+  // strings, verified by executing the scrubber directly before and after
+  // the fix - not re-derived from reading the regex.
+  describe("code review findings", () => {
+    it("redacts a POSIX path whole even when a segment contains a single space (finding #2)", () => {
+      // Was: "<path-1> Doe/acme-secret/x.ts" - the space terminated the
+      // match early and leaked everything after it.
+      expect(scrubSupportText("/Users/John Doe/acme-secret/x.ts")).toBe(
+        "<path-1>",
+      );
+    });
+
+    it("redacts a Windows path whole even when a segment contains a single space (finding #2)", () => {
+      expect(scrubSupportText("C:\\Users\\John Doe\\project\\x.ts")).toBe(
+        "<path-1>",
+      );
+    });
+
+    it("redacts a path whole with a run of 2+ spaces in a segment (finding #2)", () => {
+      expect(scrubSupportText("/Users/John    Doe/x.ts")).toBe("<path-1>");
+    });
+
+    it("redacts a three-word capitalized name segment whole, not just the first two words (finding #2)", () => {
+      // An earlier fix allowed only ONE embedded-space continuation, which
+      // still leaked " Watson/x.ts" for a three-word name.
+      expect(scrubSupportText("/Users/Mary Jane Watson/x.ts")).toBe("<path-1>");
+    });
+
+    it("redacts a ~/ home-relative path (finding #2 - previously passed through unchanged)", () => {
+      expect(scrubSupportText("~/project/secret.ts")).toBe("<path-1>");
+    });
+
+    it("leaves a bare ~ with no following path alone", () => {
+      const input = "cd ~ && ls";
+      expect(scrubSupportText(input)).toBe(input);
+    });
+
+    it("redacts /workspace and /Volumes roots (finding #2 - previously unlisted)", () => {
+      expect(scrubSupportText("/workspace/acme-corp/x.ts")).toBe("<path-1>");
+      expect(scrubSupportText("/Volumes/External/acme/x.ts")).toBe("<path-1>");
+    });
+
+    it("redacts a JSON-stringified Windows path whole, not leaving a bare drive letter (finding #2)", () => {
+      // Was: `{"path":"C:<path-1>"}` - the doubled backslashes JSON.stringify
+      // produces between each level were matched one-at-a-time, leaving the
+      // second backslash of each pair (and the bare "C:") for a later
+      // pattern to mis-claim instead.
+      const jsonStringified = JSON.stringify({
+        path: "C:\\Users\\anurag\\file.txt",
+      });
+      expect(scrubSupportText(jsonStringified)).toBe('{"path":"<path-1>"}');
+    });
+
+    it("does not merge two separate path mentions on one line into one match", () => {
+      // A path with no trailing quote/paren/EOL must still stop before the
+      // NEXT path mention, not swallow the connecting prose and the second
+      // path into a single token.
+      const result = scrubSupportText(
+        "first /Users/anurag/project/a.ts then again /Users/anurag/project/a.ts",
+      );
+      expect(result).toBe("first <path-1> then again <path-1>");
+    });
+
+    it("redacts a quoted-key password assignment (finding #3)", () => {
+      // Plain SENSITIVE_INLINE_VALUE_PATTERN requires `\s*[:=]` right after
+      // the key word; a JSON key's closing quote sits in between and broke
+      // the match entirely, so this used to pass through verbatim.
+      expect(scrubSupportText('{"password":"hunter2"}')).toBe(
+        '{"password":<redacted>}',
+      );
+    });
+
+    it("redacts a quoted-key api_key assignment (finding #3)", () => {
+      expect(scrubSupportText('{"api_key":"sk-secret"}')).toBe(
+        '{"api_key":<redacted>}',
+      );
+    });
+
+    it("redacts a quoted-key camelCase clientSecret with a spaced value (finding #3)", () => {
+      expect(scrubSupportText('{"clientSecret":"value with spaces"}')).toBe(
+        '{"clientSecret":<redacted>}',
+      );
+    });
+
+    it("redacts a quoted-key authorization Basic-auth value (finding #3)", () => {
+      expect(scrubSupportText('{"authorization":"Basic dXNlcjpwYXNz"}')).toBe(
+        '{"authorization":<redacted>}',
+      );
+    });
+
+    it("redacts an unquoted Basic-auth header value in full, not just the word Basic (finding #3)", () => {
+      // The bare-value branch of the inline patterns stops at the first
+      // whitespace, so without a dedicated Basic-auth pattern only the word
+      // "Basic" was redacted and the base64 credential right after it
+      // survived untouched.
+      const result = scrubSupportText("Authorization: Basic dXNlcjpwYXNz");
+      expect(result).not.toContain("dXNlcjpwYXNz");
+    });
+  });
 });
 
 describe("deepScrubSupportValue", () => {

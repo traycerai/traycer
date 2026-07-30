@@ -43,8 +43,18 @@ import type {
 } from "@/stores/epics/open-epic/store";
 import { EMPTY_PROJECTED_SLICES } from "@/stores/epics/open-epic/types";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { toast } from "sonner";
 
 const cloudEpicTasks = vi.hoisted((): { data: TaskLight[] } => ({ data: [] }));
+
+vi.mock("sonner", () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    message: vi.fn(),
+  },
+}));
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({
@@ -256,6 +266,48 @@ function createRunnerHostWithSubmit(
       saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
       getFingerprintOccurrence: () => Promise.resolve(null),
       buildPublicDraft: echoPublicDraft,
+    },
+  });
+}
+
+function createRunnerHostWithFailingPublicDraft(
+  openedLinks: string[],
+  buildPublicDraft: () => Promise<DesktopSupportBuildPublicDraftResult>,
+): IRunnerHost {
+  return Object.assign(createRunnerHost([], openedLinks, []), {
+    support: {
+      getSnapshot: () => Promise.resolve(snapshot),
+      revealLog: (target: DesktopSupportLogTarget) =>
+        Promise.resolve({ target, path: "" }),
+      submitReport: () =>
+        Promise.resolve({
+          status: "delivered" as const,
+          reportId: "rpt_test",
+        }),
+      tailLog: (input: {
+        readonly target: DesktopSupportLogTarget;
+        readonly tailLines: number;
+      }) =>
+        Promise.resolve({
+          target: input.target,
+          path: "",
+          lines: [],
+          truncated: false,
+        }),
+      freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
+      discardFrozenEvidence: () => Promise.resolve(),
+      readFrozenLogTail: (input: {
+        readonly target: DesktopSupportLogTarget;
+      }) =>
+        Promise.resolve({
+          target: input.target,
+          path: "",
+          lines: [],
+          truncated: false,
+        }),
+      saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
+      getFingerprintOccurrence: () => Promise.resolve(null),
+      buildPublicDraft,
     },
   });
 }
@@ -859,6 +911,73 @@ describe("<DesktopDialogHost />", () => {
       reportIssueContext: draftBContext,
     });
     expect(screen.getByDisplayValue("Edited Draft B")).not.toBeNull();
+  });
+
+  it("keeps the confirmed-delivery state and offers a retry when the public draft fails to open (code review, finding #4)", async () => {
+    const openedLinks: string[] = [];
+    let buildPublicDraftCalls = 0;
+    const buildPublicDraft = vi.fn(
+      (): Promise<DesktopSupportBuildPublicDraftResult> => {
+        buildPublicDraftCalls += 1;
+        if (buildPublicDraftCalls === 1) {
+          return Promise.reject(new Error("public draft unavailable"));
+        }
+        return Promise.resolve({
+          title: "Retried",
+          fields: {
+            "what-happened": "",
+            version: "",
+            os: "",
+            component: "Desktop app",
+            repro: "",
+          },
+          truncated: false,
+        });
+      },
+    );
+    useDesktopDialogStore.getState().openReportIssueWithContext(
+      createReportIssueContext({
+        title: "Draft with failing public draft",
+        message: null,
+        code: null,
+        source: "Test",
+      }),
+    );
+    renderDesktopDialogHost(
+      createRunnerHostWithFailingPublicDraft(openedLinks, buildPublicDraft),
+      "/",
+    );
+    await flushDialogEffects();
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit Report" }));
+    await waitFor(() => {
+      expect(buildPublicDraft).toHaveBeenCalledTimes(1);
+    });
+
+    // The private submit itself was delivered, but opening the public draft
+    // failed - this must never close the dialog having done nothing, and
+    // nothing should have opened in the browser yet.
+    expect(
+      screen.getByRole("heading", { name: "Report an Issue" }),
+    ).not.toBeNull();
+    expect(openedLinks).toHaveLength(0);
+    expect(toast.error).toHaveBeenCalledWith(
+      "Could not open the GitHub draft",
+      expect.anything(),
+    );
+    const [, toastOptions] = vi.mocked(toast.error).mock.calls[0] as [
+      string,
+      { action?: { label?: string } },
+    ];
+    expect(toastOptions.action?.label).toBe("Try again");
+
+    // Retryable: clicking Submit Report again reuses the same (idempotent)
+    // report id and re-attempts opening the public draft, which succeeds
+    // this time.
+    fireEvent.click(screen.getByRole("button", { name: "Submit Report" }));
+    await waitFor(() => {
+      expect(openedLinks).toHaveLength(1);
+    });
   });
 
   it("does not surface an older failed submission in a newer draft", async () => {

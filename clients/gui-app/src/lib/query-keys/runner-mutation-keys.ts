@@ -35,6 +35,8 @@ export const runnerMutationKeys = {
   supportSubmitReport: () => ["runner.support.submitReport"] as const,
   supportSaveDiagnosticBundle: () =>
     ["runner.support.saveDiagnosticBundle"] as const,
+  // Builds the scrubbed public draft and opens it in the browser (ticket 09).
+  supportBuildPublicDraft: () => ["runner.support.buildPublicDraft"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).
   revealLog: () => ["runner.support.revealLog"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h
