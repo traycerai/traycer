@@ -1416,13 +1416,16 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
     });
 
-    it("Round-2 finding 1: a bare pointerdown mid-animation during the STANDARD SEND-ANCHOR path still freezes (the anchor engine's own scrollToIndex must join the same ownership)", async () => {
+    it("Round-2 finding 1: a bare pointerdown mid-animation during the STANDARD SEND-ANCHOR path still freezes (the anchor engine's own animated scroll must be covered by the same freeze condition)", async () => {
       // Root cause: EVERY real send/steer/edit/queued-flush/A2A anchor is
       // ANIMATED (decision #12) and beginAnchoringNewTurn clears
       // suppressFollowRestoreRef unconditionally - the same gap the pill-click
       // pin above closes, but reachable via the single most ordinary path in
       // the whole app: send a message, then pointerdown to select text while
-      // the anchor is still animating into position.
+      // the anchor is still animating into position. Covered by the
+      // mode-based freeze condition (overengineering-audit collapse): the
+      // send-anchor animation always runs during `anchoring-new-turn`, so
+      // `modeAtEntry !== "free-scrolling"` holds for the whole flight.
       const sendId = "round2-f1-send";
       const messages = makeCompletedTranscript(10);
       const { rerenderMessages } = renderChatMessages({
@@ -1441,17 +1444,19 @@ describe("ChatMessages scroll policy", () => {
 
       // Let the anchor engine's OWN async chain (onAnchorReady -> two nested
       // requestAnimationFrame calls inside positionAnchor) actually ISSUE its
-      // ANIMATED scrollToIndex - arming the ownership token - WITHOUT waiting
-      // for its full settle (CHAT_ANCHOR_SETTLE_FALLBACK_MS is 750ms; this is
-      // ~2 frames + 20ms, deliberately short of that).
+      // ANIMATED scrollToIndex WITHOUT waiting for its full settle
+      // (CHAT_ANCHOR_SETTLE_FALLBACK_MS is 750ms; this is ~2 frames + 20ms,
+      // deliberately short of that) - the mode stays "anchoring-new-turn"
+      // for the whole flight, which is what the freeze condition below reads.
       await waitForRevealPassTick();
 
       const scrollNode = getScrollNode();
 
       // A bare pointerdown - NO accompanying scroll - mid-animation. Decision
       // #6: cancels follow AND must freeze the anchor engine's still-in-flight
-      // positioning animation (round-2 finding 1 - this is the NEW coverage;
-      // pre-fix, nothing armed the ownership token for this call site).
+      // positioning animation (round-2 finding 1 - this is the coverage that
+      // was missing pre-fix, when the freeze condition read suppression
+      // alone).
       act(() => {
         fireEvent.pointerDown(scrollNode);
       });
@@ -1465,15 +1470,17 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
     });
 
-    it("Round-2 finding 2: op1's late stale settle does not clobber op2's freshly-armed ownership (operation-token, not a boolean)", async () => {
-      // Root cause: a bare boolean is not operation-safe. onFirstSettle (and
-      // the anchor engine's own settle callback) fire unconditionally
-      // regardless of isAborted, and each used to write `false`
-      // unconditionally - op1's late 750ms fallback (its awaitScrollSettle
-      // cancellation is never invoked, only ever left to expire) could clear
-      // op2's freshly-armed ownership if op2 started before op1's fallback
-      // fired. Fixed with a monotonic operation id: each operation clears
-      // the shared ref ONLY if it still owns it (captured id === current).
+    it("Round-2 regression: an earlier suppressed nav's own pending settle timer must not prevent a later mode-changing pill click's animated scroll from freezing on pointerdown", async () => {
+      // Scenario-regression pin (overengineering-audit collapse of round-2
+      // finding 2's operation-token mechanism into the mode-based freeze
+      // condition): op1 (a suppressed minimap nav, mode stays
+      // "free-scrolling") and op2 (a pill click, mode becomes
+      // "following-end") overlap in flight - op1's own 750ms settle fallback
+      // is still pending when op2 issues, and still pending when the
+      // pointerdown below fires. The freeze must hold on `modeAtEntry`
+      // (captured at "following-end", set by op2) regardless of op1's
+      // in-flight settle timer - no per-operation bookkeeping is involved
+      // anymore, so there is nothing left for op1's stale settle to clobber.
       const messages = makeTranscript(24);
       renderChatMessages({
         messages,
@@ -1486,12 +1493,11 @@ describe("ChatMessages scroll policy", () => {
       });
       await waitForPillVisible();
 
-      // OP1: an animated minimap navigation - arms the shared ownership
-      // token and starts its OWN 750ms awaitScrollSettle fallback (jsdom
-      // never fires native scrollend). Its returned cancellation is
-      // discarded by design (settleChatTimelineNavigation never invokes
-      // it), so this fallback timer keeps running even once op1 is
-      // superseded by a later operation.
+      // OP1: an animated minimap navigation - suppresses follow-restore and
+      // starts its OWN 750ms awaitScrollSettle fallback (jsdom never fires
+      // native scrollend). Its returned cancellation is discarded by design
+      // (settleChatTimelineNavigation never invokes it), so this fallback
+      // timer keeps running in the background for the rest of the test.
       await selectLastChatTurnMinimapItem();
 
       // Real gap so op1's and op2's independent 750ms fallbacks land at
@@ -1504,11 +1510,12 @@ describe("ChatMessages scroll policy", () => {
         });
       });
 
-      // OP2: pill click (scrollToEnd, animated). Unlike minimap nav, this
-      // path clears suppressFollowRestoreRef unconditionally (explicit
-      // go-live) - so from this point on, ONLY the operation-token
-      // mechanism (not suppression) can protect a subsequent pointerdown,
-      // isolating exactly what this fix changed.
+      // OP2: pill click (scrollToEnd, animated) - setTimelineMode
+      // ("following-end") both changes the mode AND clears
+      // suppressFollowRestoreRef unconditionally (explicit go-live), so from
+      // this point on the freeze below is held up ONLY by
+      // `modeAtEntry !== "free-scrolling"`, isolating exactly what this pin
+      // exercises.
       act(() => {
         fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
       });
@@ -1518,9 +1525,10 @@ describe("ChatMessages scroll policy", () => {
       // issued = 900ms from op1, a 150ms margin matching this file's own
       // waitForAnchorEngineSettle convention) but comfortably SHORT of op2's
       // own fallback (750ms after op2 = 1000ms from op1, still 100ms away at
-      // T=900ms) - isolates "op1's stale settle fires and is a no-op" from
+      // T=900ms) - isolates "op1's stale callback fires and is a no-op" from
       // "op2 also happens to have genuinely settled on its own", so the
-      // assertion below can only pass because the ownership check held.
+      // assertion below can only pass because mode is still "following-end"
+      // independent of either settle callback having run.
       await act(async () => {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 650);
@@ -1529,9 +1537,9 @@ describe("ChatMessages scroll policy", () => {
 
       const scrollNode = getScrollNode();
       // A bare pointerdown now must STILL freeze op2's still-in-flight
-      // animation - proving the shared ownership ref is still non-null
-      // (owned by op2), i.e. op1's late, superseded settle did NOT clear it
-      // out from under op2 (the bug this operation-token conversion fixes).
+      // animation - the mode is "following-end" (set by op2, unaffected by
+      // op1's pending or fired settle callback), so the freeze condition
+      // holds regardless of op1's timer state.
       act(() => {
         fireEvent.pointerDown(scrollNode);
       });
