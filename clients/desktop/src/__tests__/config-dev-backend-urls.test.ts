@@ -15,7 +15,9 @@ describe("desktop config dev backend URL overrides", () => {
     const { config } = await import("../config");
     expect(config.authnBaseUrl).toBe("https://authn.traycer.ai");
     expect(config.cloudUiBaseUrl).toBe("https://platform.traycer.ai");
-    expect(config.relayBaseUrl).toBe("wss://relay.traycer.ai/attach");
+    expect(config.relayBaseUrl).toBe(
+      "wss://traycer-relay-do.traycer.workers.dev/attach",
+    );
   });
 
   it("honors loopback overrides and keeps everything else baked", async () => {

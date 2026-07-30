@@ -54,7 +54,11 @@ const bakedConfig = {
   // in source); not stamped per-environment by the deploy script. Overridable
   // in dev via `TRAYCER_DEV_RELAY_BASE_URL` (see `devRelayBaseUrlFromEnv`
   // below) so `make dev-remote` can point it at a local relay worker.
-  relayBaseUrl: "wss://relay.traycer.ai/attach",
+  // A workers.dev hostname on purpose (not relay.traycer.ai): traycer.ai DNS
+  // is served outside Cloudflare, so the worker is dialed at its own URL —
+  // the hostname is the deployed worker's name and must move in lockstep
+  // with it.
+  relayBaseUrl: "wss://traycer-relay-do.traycer.workers.dev/attach",
   // Sentry crash-reporting DSN for the main process. Empty for local
   // (reporting disabled); the deploy script bakes the staging/production DSN.
   sentryDsn: "",

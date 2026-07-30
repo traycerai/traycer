@@ -8,7 +8,7 @@ import {
 } from "../dev-backend-urls";
 
 const BAKED = "https://authn.traycer.ai";
-const BAKED_RELAY = "wss://relay.traycer.ai/attach";
+const BAKED_RELAY = "wss://traycer-relay-do.traycer.workers.dev/attach";
 
 describe("dev-backend-urls", () => {
   it("pins the env var names (contract with the internal dev orchestrator)", () => {

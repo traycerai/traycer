@@ -72,7 +72,8 @@ export interface IRunnerHost {
 
   /**
    * Browser-safe WebSocket attach endpoint for the Remote Host Support relay
-   * (Architecture §3/§4b, S2/T14), e.g. `wss://relay.traycer.ai/attach`.
+   * (Architecture §3/§4b, S2/T14), e.g.
+   * `wss://traycer-relay-do.traycer.workers.dev/attach`.
    * Shell-owned, read-only, parity with `authnBaseUrl`. Populated onto a
    * connectable `RemoteHostDirectoryEntry.websocketUrl` so the existing
    * `kind === "remote"` transport branch (`createRemoteHostTransport`) can
