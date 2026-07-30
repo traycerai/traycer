@@ -197,6 +197,17 @@ describe("<DevicesSessionsPanel />", () => {
     ).toBeDefined();
   });
 
+  it("labels the active credential as this session", () => {
+    sessionsState.sessions = [
+      makeSession({ familyId: "family-current", current: true }),
+    ];
+
+    render(<DevicesSessionsPanel />);
+
+    expect(screen.getByText("This session")).toBeDefined();
+    expect(screen.queryByText("This device")).toBeNull();
+  });
+
   it("includes session location in the display line", () => {
     sessionsState.sessions = [
       makeSession({
@@ -237,6 +248,22 @@ describe("<DevicesSessionsPanel />", () => {
     expect(screen.getByText("Web session / Windows")).toBeDefined();
     expect(screen.queryByText(/ \/ $/)).toBeNull();
     expect(screen.queryByText(/\/\s*\//)).toBeNull();
+  });
+
+  it("uses a neutral icon and honest labels for explicit and unrecognized client kinds", () => {
+    sessionsState.sessions = [
+      makeSession({ familyId: "family-unknown", clientKind: "unknown" }),
+      makeSession({
+        familyId: "family-future",
+        clientKind: "future-client",
+      }),
+    ];
+    const { container } = render(<DevicesSessionsPanel />);
+
+    expect(screen.getAllByText("Unknown client")).toHaveLength(2);
+    expect(
+      container.querySelectorAll("svg.lucide-circle-question-mark"),
+    ).toHaveLength(2);
   });
 
   it("does not show an alert banner when the user cancels step-up during revoke", async () => {

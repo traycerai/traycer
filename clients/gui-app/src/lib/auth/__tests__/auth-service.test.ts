@@ -6,9 +6,11 @@ import type {
   StoredCredentialsIdentity,
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
+import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import {
   AuthService,
   type AuthSessionSnapshot,
+  type ExternalSession,
   AUTH_ERROR_DEVICE_DENIED,
   AUTH_ERROR_DEVICE_EXPIRED,
   AUTH_ERROR_LAUNCH_FAILED,
@@ -36,6 +38,7 @@ interface DeferredResponse {
 
 const VALIDATION_URL = "http://localhost:5005/api/v3/user";
 const REFRESH_URL = "http://localhost:5005/api/v3/auth/refresh";
+const SESSIONS_URL = "http://localhost:5005/api/v3/user/sessions";
 
 // The default `/device/authorize` user code the `MockDeviceFlowHost` hands back,
 // and the pre-filled verification URL the controller asks the shell to open.
@@ -210,8 +213,157 @@ function okWithRefreshToken(token: string): Promise<Response> {
   );
 }
 
+function okWithSessions(
+  sessions: readonly UserSessionListItem[],
+): Promise<Response> {
+  return Promise.resolve(
+    new Response(JSON.stringify({ sessions }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+}
+
+function externalSessionForUser(
+  userId: string,
+  token: string,
+): ExternalSession {
+  const now = new Date("2026-07-30T10:00:00.000Z");
+  return {
+    status: "signed-in",
+    token,
+    profile: {
+      userId,
+      userName: `${userId} display`,
+      email: `${userId}@example.com`,
+      avatarUrl: null,
+    },
+    user: {
+      user: {
+        id: userId,
+        name: `${userId} display`,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: now,
+        updatedAt: now,
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: now,
+        updatedAt: now,
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+    },
+  };
+}
+
 function status(code: number): Promise<Response> {
   return Promise.resolve(new Response(null, { status: code }));
+}
+
+function refreshTokenFromRequest(
+  init:
+    | {
+        readonly body?: BodyInit | null;
+      }
+    | undefined,
+): string | null {
+  const body = init?.body;
+  if (typeof body !== "string") {
+    return null;
+  }
+  const marker = '"refreshToken":"';
+  const valueStart = body.indexOf(marker);
+  if (valueStart < 0) {
+    return null;
+  }
+  const start = valueStart + marker.length;
+  const end = body.indexOf('"', start);
+  return end < 0 ? null : body.slice(start, end);
+}
+
+function repairedSessionsFetch(
+  input: unknown,
+  init:
+    | {
+        readonly headers?: Record<string, string>;
+      }
+    | undefined,
+  repairedList: DeferredResponse,
+  seenSessionBearers: string[],
+): Promise<Response> | null {
+  const url = typeof input === "string" ? input : String(input);
+  if (url !== SESSIONS_URL) {
+    return null;
+  }
+  const bearer = init?.headers?.Authorization ?? "";
+  seenSessionBearers.push(bearer);
+  if (bearer === "Bearer account-a-token") {
+    return okWithSessions([]);
+  }
+  if (bearer === "Bearer account-a-rotated-token") {
+    return repairedList.promise;
+  }
+  throw new Error(`unexpected sessions bearer: ${bearer}`);
+}
+
+function repairedRaceFetch(
+  repairedList: DeferredResponse,
+  refreshResponse: DeferredResponse,
+  seenSessionBearers: string[],
+  seenRefreshTokens: string[],
+): FetchHandler {
+  return (input, init) => {
+    const url = typeof input === "string" ? input : String(input);
+    const sessionsResponse = repairedSessionsFetch(
+      input,
+      init,
+      repairedList,
+      seenSessionBearers,
+    );
+    if (sessionsResponse !== null) {
+      return sessionsResponse;
+    }
+    if (url === REFRESH_URL) {
+      const refreshToken = refreshTokenFromRequest(init);
+      if (refreshToken !== null) {
+        seenRefreshTokens.push(refreshToken);
+      }
+      return refreshResponse.promise;
+    }
+    if (
+      url === VALIDATION_URL &&
+      init?.headers?.Authorization === "Bearer account-b-token"
+    ) {
+      return okWithProfileForUser("user-2");
+    }
+    if (
+      url === VALIDATION_URL &&
+      (init?.headers?.Authorization === "Bearer account-a-token" ||
+        init?.headers?.Authorization === "Bearer account-a-rotated-token")
+    ) {
+      return okWithProfileForUser("user-1");
+    }
+    return status(500);
+  };
 }
 
 /**
@@ -315,6 +467,246 @@ describe("AuthService", () => {
     expect(service.getCurrentSessionSnapshot().token).toBe("persisted-token");
     expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-1");
     expect(seenAuthHeaders).toContain("Bearer persisted-token");
+  });
+
+  it("refreshes and refetches when a running desktop session predates tracking", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "legacy-token", refreshToken: "legacy-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await service.start();
+
+    restoreFetch();
+    const seenSessionBearers: string[] = [];
+    const seenRefreshBodies: unknown[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === SESSIONS_URL) {
+        const bearer = init?.headers?.Authorization ?? "";
+        seenSessionBearers.push(bearer);
+        if (bearer === "Bearer legacy-token") {
+          return okWithSessions([]);
+        }
+        return okWithSessions([
+          {
+            familyId: "family-desktop",
+            clientKind: "desktop",
+            displayLabel: "Desktop app",
+            platform: "macOS",
+            appVersion: null,
+            location: null,
+            createdAt: "2026-07-30T10:00:00.000Z",
+            lastSeenAt: "2026-07-30T10:00:00.000Z",
+            revoked: false,
+            revokedAt: null,
+            revokedBy: null,
+            current: true,
+          },
+        ]);
+      }
+      if (url === REFRESH_URL) {
+        const body: unknown =
+          typeof init?.body === "string" ? JSON.parse(init.body) : null;
+        seenRefreshBodies.push(body);
+        return okWithRefreshToken("tracked-token");
+      }
+      if (url === VALIDATION_URL) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    const response = await service.fetchUserSessions();
+
+    expect(response?.sessions).toEqual([
+      expect.objectContaining({
+        familyId: "family-desktop",
+        clientKind: "desktop",
+        current: true,
+      }),
+    ]);
+    expect(seenSessionBearers).toEqual([
+      "Bearer legacy-token",
+      "Bearer tracked-token",
+    ]);
+    expect(seenRefreshBodies).toEqual([
+      { refreshToken: "legacy-refresh", clientKind: "desktop" },
+    ]);
+  });
+
+  it("does not repeat the repair refresh on a later poll when the session still cannot be identified", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "legacy-token", refreshToken: "legacy-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await service.start();
+
+    restoreFetch();
+    const seenSessionBearers: string[] = [];
+    const refreshCalls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === SESSIONS_URL) {
+        seenSessionBearers.push(init?.headers?.Authorization ?? "");
+        // Simulates a session that never becomes identifiable: every list,
+        // including one right after a repair refresh, comes back empty.
+        return okWithSessions([]);
+      }
+      if (url === REFRESH_URL) {
+        refreshCalls.push(String(init?.headers?.Authorization));
+        return okWithRefreshToken(`repaired-${refreshCalls.length}`);
+      }
+      if (url === VALIDATION_URL) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    // First poll: repair is attempted once, then the unrepaired listing
+    // still surfaces the error so the caller/UI can report the problem.
+    await expect(service.fetchUserSessions()).rejects.toThrow(
+      "Couldn't register this signed-in session yet.",
+    );
+    expect(refreshCalls).toHaveLength(1);
+
+    // A later poll (every 30s, or on window focus) with the SAME
+    // now-current bearer must not re-spend another refresh rotation or
+    // throw indefinitely; it returns the unidentified listing instead.
+    await expect(service.fetchUserSessions()).resolves.toEqual({
+      sessions: [],
+    });
+    expect(refreshCalls).toHaveLength(1);
+    expect(seenSessionBearers).toEqual([
+      "Bearer legacy-token",
+      "Bearer repaired-1",
+      "Bearer repaired-1",
+    ]);
+  });
+
+  it("drops an account A session-list response that resolves after account B replaces it", async () => {
+    const { service, host } = makeService();
+    await service.start();
+    await deviceSignIn(service, host, "account-a-token");
+
+    const initialList = createDeferredResponse();
+    let initialListCalls = 0;
+    const seenSessionBearers: string[] = [];
+    const refreshCalls: string[] = [];
+    restoreFetch();
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === SESSIONS_URL) {
+        initialListCalls += 1;
+        seenSessionBearers.push(init?.headers?.Authorization ?? "");
+        return initialList.promise;
+      }
+      if (url === REFRESH_URL) {
+        refreshCalls.push(String(init?.headers?.Authorization));
+        return okWithRefreshToken("unexpected-account-a-rotation");
+      }
+      if (
+        url === VALIDATION_URL &&
+        init?.headers?.Authorization === "Bearer account-b-token"
+      ) {
+        return okWithProfileForUser("user-2");
+      }
+      return status(500);
+    });
+
+    const staleList = service.fetchUserSessions();
+    await vi.waitFor(() => {
+      expect(initialListCalls).toBe(1);
+    });
+
+    const generationBeforeProjection = service.getIdentityGeneration();
+    service.applyExternalSession(
+      externalSessionForUser("user-2", "account-b-token"),
+    );
+    expect(service.getIdentityGeneration()).toBe(generationBeforeProjection);
+    expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+    expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-2");
+
+    initialList.resolve(await okWithSessions([]));
+
+    await expect(staleList).resolves.toBeNull();
+    expect(seenSessionBearers).toEqual(["Bearer account-a-token"]);
+    expect(refreshCalls).toEqual([]);
+    expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+    const stored = await host.tokenStore.get();
+    expect(stored?.token).toBe("account-a-token");
+    expect(stored?.user.id).toBe("user-1");
+    expect(useAuthStore.getState().status).toBe("signed-in");
+  });
+
+  it("drops a repaired account A session-list response after account B replaces it", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "account-a-token", refreshToken: "account-a-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await service.start();
+
+    const repairedList = createDeferredResponse();
+    const refreshResponse = createDeferredResponse();
+    const seenSessionBearers: string[] = [];
+    const seenRefreshTokens: string[] = [];
+    restoreFetch();
+    restoreFetch = installFetch(
+      repairedRaceFetch(
+        repairedList,
+        refreshResponse,
+        seenSessionBearers,
+        seenRefreshTokens,
+      ),
+    );
+
+    const staleList = service.fetchUserSessions();
+    await vi.waitFor(() => {
+      expect(seenRefreshTokens).toEqual(["account-a-refresh"]);
+    });
+
+    refreshResponse.resolve(
+      await okWithRefreshToken("account-a-rotated-token"),
+    );
+    await vi.waitFor(() => {
+      expect(seenSessionBearers).toEqual([
+        "Bearer account-a-token",
+        "Bearer account-a-rotated-token",
+      ]);
+    });
+
+    await service.signOut();
+    await deviceSignIn(service, host, "account-b-token");
+    expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+    expect(useAuthStore.getState().contextMetadata?.userId).toBe("user-2");
+
+    repairedList.resolve(
+      await okWithSessions([
+        {
+          familyId: "account-a-family",
+          clientKind: "desktop",
+          displayLabel: "Account A desktop",
+          platform: "macOS",
+          appVersion: null,
+          location: null,
+          createdAt: "2026-07-30T10:00:00.000Z",
+          lastSeenAt: "2026-07-30T10:00:00.000Z",
+          revoked: false,
+          revokedAt: null,
+          revokedBy: null,
+          current: true,
+        },
+      ]),
+    );
+
+    await expect(staleList).resolves.toBeNull();
+    expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+    const stored = await host.tokenStore.get();
+    expect(stored?.token).toBe("account-b-token");
+    expect(stored?.user.id).toBe("user-2");
+    expect(useAuthStore.getState().status).toBe("signed-in");
   });
 
   it("does not drive auth transitions when disposed during startup validation", async () => {

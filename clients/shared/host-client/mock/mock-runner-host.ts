@@ -378,6 +378,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: stored.token,
         refreshToken: stored.refreshToken,
+        clientKind: "desktop",
         signal: null,
       });
       if (refreshed.kind === "network-error") {
@@ -431,6 +432,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: legacy.token,
         refreshToken: legacy.refreshToken,
+        clientKind: "desktop",
         signal: null,
       });
       if (refreshed.kind === "network-error") return "retryable";

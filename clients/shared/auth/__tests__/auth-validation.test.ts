@@ -23,6 +23,7 @@ interface MockFetchCall {
   readonly url: string;
   readonly method: string;
   readonly authorization: string | null;
+  readonly body: string | null;
   readonly hasSignal: boolean;
 }
 
@@ -52,6 +53,7 @@ function installMockFetch(specs: ReadonlyArray<MockSpec>): MockFetchCall[] {
       url,
       method,
       authorization: headers.get("Authorization"),
+      body: typeof init?.body === "string" ? init.body : null,
       hasSignal: init?.signal instanceof AbortSignal,
     });
     const spec = specs[index] ?? specs[specs.length - 1];
@@ -102,6 +104,7 @@ describe("exchangeCodeForTokens - timeout without retry", () => {
         url: EXCHANGE_ENDPOINT,
         method: init?.method ?? "GET",
         authorization: null,
+        body: typeof init?.body === "string" ? init.body : null,
         hasSignal: init?.signal instanceof AbortSignal,
       });
       // Mirror what a fired `AbortSignal.timeout` throws into `fetch`.
@@ -218,6 +221,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "access",
       refreshToken: "refresh",
+      clientKind: null,
       signal: AbortSignal.abort(),
     });
 
@@ -227,7 +231,7 @@ describe("refreshOnceAbortable", () => {
     expect(fetchCalls === 0 || fetchCalls === 1).toBe(true);
   });
 
-  it("returns the rotated pair on a 200 — a single POST, one spend", async () => {
+  it("returns the rotated pair and identifies the refreshing desktop client on a single POST", async () => {
     installMockFetch([
       {
         status: 200,
@@ -239,6 +243,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      clientKind: "desktop",
       signal: null,
     });
 
@@ -252,6 +257,10 @@ describe("refreshOnceAbortable", () => {
     expect(calls[0].url).toBe(REFRESH_ENDPOINT);
     expect(calls[0].method).toBe("POST");
     expect(calls[0].authorization).toBe("Bearer stale-bearer");
+    expect(JSON.parse(calls[0].body ?? "null")).toEqual({
+      refreshToken: "stale-refresh",
+      clientKind: "desktop",
+    });
   });
 
   it("maps a 409 refresh-grace race to network-error WITHOUT retrying", async () => {
@@ -266,6 +275,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      clientKind: null,
       signal: null,
     });
 
@@ -280,6 +290,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "dead-refresh",
+      clientKind: null,
       signal: null,
     });
 
@@ -297,6 +308,7 @@ describe("refreshOnceAbortable", () => {
       authnBaseUrl: AUTHN_BASE_URL,
       token: "stale-bearer",
       refreshToken: "stale-refresh",
+      clientKind: null,
       signal: null,
     });
 
