@@ -1,4 +1,4 @@
-import type { InstallHostLifecycle } from "../installer";
+import type { InstallHostLifecycle, SwapLockRecovery } from "../installer";
 import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
 import { resolveServiceCliInvocation, type CliInvocation } from "./cli-binary";
@@ -10,7 +10,26 @@ import {
   type ServiceState,
 } from "./index";
 import { readRegisteredCliInvocation } from "./platforms/macos";
+import {
+  describeSlotLockHolders,
+  killLingeringSlotProcesses,
+} from "./platforms/windows";
 import type { Environment } from "../runner/environment";
+
+// Windows only: the pre-swap stop kills every process the slot scan can
+// see, but a handle it cannot (an orphaned child whose CWD is inside
+// `install/`, an AV scan) still fails the swap rename with EBUSY. This
+// seam lets the installer re-kill between rename attempts and, when the
+// retries exhaust anyway, name the processes still matching the slot in
+// the error it throws. POSIX renames don't contend with open handles, so
+// other platforms carry no recovery.
+function swapLockRecoveryFor(label: ServiceLabel): SwapLockRecovery | null {
+  if (process.platform !== "win32") return null;
+  return {
+    killLingeringProcesses: () => killLingeringSlotProcesses(label, null),
+    describeLockHolders: () => describeSlotLockHolders(label, null),
+  };
+}
 
 // State captured by the lifecycle hooks so the command can render an
 // accurate `serviceLifecycle` block in its result.
@@ -106,6 +125,7 @@ export function createServiceInstallLifecycle(
   // pre-cooperative contract this flag exists to scope.
   let cooperativeStopBeforeSwap = false;
   const lifecycle: InstallHostLifecycle = {
+    swapLockRecovery: swapLockRecoveryFor(label),
     beforeSwap: async () => {
       const status = await controller.status(label);
       state.priorState = status.state;
@@ -324,6 +344,7 @@ export function createBytesOnlyInstallLifecycle(
   label: ServiceLabel,
 ): InstallHostLifecycle {
   return {
+    swapLockRecovery: swapLockRecoveryFor(label),
     beforeSwap: (): Promise<void> =>
       process.platform === "win32" ? controller.stop(label) : Promise.resolve(),
     afterSwap: (): Promise<void> => Promise.resolve(),
