@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { toast, type ExternalToast } from "sonner";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
@@ -57,6 +58,9 @@ function createReportAction(
     onClick: () => {
       const current = useDesktopDialogStore.getState();
       if (!current.reportIssueAvailable) return;
+      Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
+        source: "direct_ui",
+      });
       current.openReportIssueWithContext(context);
     },
   };

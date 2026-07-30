@@ -357,7 +357,8 @@ export enum AnalyticsEvent {
   UpdateInstallGuidanceOpened = "update_install_guidance_opened",
   UpdateFailed = "update_failed",
   ReportIssueOpened = "report_issue_opened",
-  ReportIssueHandedOff = "report_issue_handed_off",
+  ReportIssuePrivateSubmit = "report_issue_private_submit",
+  ReportIssuePublicOpenAttempted = "report_issue_public_open_attempted",
   AppQuitRequested = "app_quit_requested",
   TabCloseBlocked = "tab_close_blocked",
 }
@@ -730,9 +731,11 @@ export interface AnalyticsEventProperties {
     readonly blocker: AnalyticsBlocker;
   };
   readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties;
-  readonly [AnalyticsEvent.ReportIssueHandedOff]:
+  readonly [AnalyticsEvent.ReportIssuePrivateSubmit]:
+    | { readonly outcome: "confirmed"; readonly blocker: null }
     | { readonly outcome: "failed"; readonly blocker: AnalyticsBlocker }
-    | { readonly outcome: "succeeded"; readonly blocker: null };
+    | { readonly outcome: "unavailable"; readonly blocker: null };
+  readonly [AnalyticsEvent.ReportIssuePublicOpenAttempted]: null;
   readonly [AnalyticsEvent.AppQuitRequested]: SourceProperties;
   readonly [AnalyticsEvent.TabCloseBlocked]: {
     readonly decision: "cancel" | "discard";
@@ -1250,7 +1253,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["source", "section", "setting"],
   ),
   ...eventKeyEntries(
-    [AnalyticsEvent.ReportIssueHandedOff],
+    [AnalyticsEvent.ReportIssuePrivateSubmit],
     ["outcome", "blocker"],
   ),
   ...eventKeyEntries([AnalyticsEvent.TabCloseBlocked], ["decision"]),
@@ -1276,6 +1279,7 @@ const EVENTS_WITHOUT_PROPERTIES = new Set<AnalyticsEvent>([
   AnalyticsEvent.CommentDeleted,
   AnalyticsEvent.VoiceDictationCancelled,
   AnalyticsEvent.UpdateDownloadSucceeded,
+  AnalyticsEvent.ReportIssuePublicOpenAttempted,
 ]);
 
 function eventPropertyKeys(
@@ -1496,9 +1500,14 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["person", "team"]),
   ),
   ...eventValueEntries(
-    [AnalyticsEvent.WorktreeDeleted, AnalyticsEvent.ReportIssueHandedOff],
+    [AnalyticsEvent.WorktreeDeleted],
     "outcome",
     new Set(["failed", "succeeded"]),
+  ),
+  ...eventValueEntries(
+    [AnalyticsEvent.ReportIssuePrivateSubmit],
+    "outcome",
+    new Set(["confirmed", "failed", "unavailable"]),
   ),
 ]);
 
@@ -1560,7 +1569,7 @@ function isAnalyticsPropertyValue(
     if (value === null) {
       return (
         event === AnalyticsEvent.WorktreeDeleted ||
-        event === AnalyticsEvent.ReportIssueHandedOff
+        event === AnalyticsEvent.ReportIssuePrivateSubmit
       );
     }
     return typeof value === "string" && ANALYTICS_BLOCKERS.has(value);
@@ -1584,19 +1593,37 @@ function isAnalyticsPropertyValue(
   );
 }
 
+function analyticsOutcomeBlockerPairIsValid(
+  properties: Record<string, unknown>,
+  successOutcomes: ReadonlySet<string>,
+): boolean {
+  if (
+    typeof properties.outcome === "string" &&
+    successOutcomes.has(properties.outcome)
+  ) {
+    return properties.blocker === null;
+  }
+  return (
+    properties.outcome === "failed" &&
+    typeof properties.blocker === "string" &&
+    ANALYTICS_BLOCKERS.has(properties.blocker)
+  );
+}
+
 function analyticsPropertiesAreRelationallyValid(
   event: AnalyticsEvent,
   properties: Record<string, unknown>,
 ): boolean {
-  if (
-    event === AnalyticsEvent.WorktreeDeleted ||
-    event === AnalyticsEvent.ReportIssueHandedOff
-  ) {
-    return (
-      (properties.outcome === "succeeded" && properties.blocker === null) ||
-      (properties.outcome === "failed" &&
-        typeof properties.blocker === "string" &&
-        ANALYTICS_BLOCKERS.has(properties.blocker))
+  if (event === AnalyticsEvent.WorktreeDeleted) {
+    return analyticsOutcomeBlockerPairIsValid(
+      properties,
+      new Set(["succeeded"]),
+    );
+  }
+  if (event === AnalyticsEvent.ReportIssuePrivateSubmit) {
+    return analyticsOutcomeBlockerPairIsValid(
+      properties,
+      new Set(["confirmed", "unavailable"]),
     );
   }
   if (event === AnalyticsEvent.WorktreesBulkDeleted) {
@@ -1915,6 +1942,25 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
     ANALYTICS_BLOCKER_PATTERNS.find(({ pattern }) => pattern.test(text))
       ?.blocker ?? "unknown"
   );
+}
+
+/**
+ * Maps today's nullable `reportId` into honest private-submit outcomes.
+ * Non-null means the private sink confirmed a report id (`confirmed`);
+ * null means private delivery was unavailable or unconfirmed (`unavailable`).
+ * Definite submit failures stay on the mutation error path (`failed`) and
+ * are not derived from reportId presence. Ticket 04 re-maps this when the
+ * four-state delivery result lands.
+ */
+export function reportIssuePrivateSubmitPropertiesFromReportId(
+  reportId: string | null,
+):
+  | { readonly outcome: "confirmed"; readonly blocker: null }
+  | { readonly outcome: "unavailable"; readonly blocker: null } {
+  if (reportId === null) {
+    return { outcome: "unavailable", blocker: null };
+  }
+  return { outcome: "confirmed", blocker: null };
 }
 
 /**

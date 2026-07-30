@@ -27,6 +27,7 @@ import {
   Analytics,
   AnalyticsEvent,
   analyticsBlockerFromError,
+  reportIssuePrivateSubmitPropertiesFromReportId,
 } from "@/lib/analytics";
 
 interface ReportIssueForm {
@@ -78,11 +79,11 @@ export function ReportIssueDialog(
       const result = await support.submitReport(submission.form);
       return result.reportId;
     },
-    onSuccess: (reportId, submission) => {
-      Analytics.getInstance().track(AnalyticsEvent.ReportIssueHandedOff, {
-        outcome: "succeeded",
-        blocker: null,
-      });
+    onSuccess: async (reportId, submission) => {
+      Analytics.getInstance().track(
+        AnalyticsEvent.ReportIssuePrivateSubmit,
+        reportIssuePrivateSubmitPropertiesFromReportId(reportId),
+      );
       // The hand-off to GitHub is the primary channel and must survive a
       // Sentry outage, so a failed diagnostics upload does not block it. It
       // does have to be visible: this dialog closes below, so the warning goes
@@ -98,11 +99,22 @@ export function ReportIssueDialog(
         submission.form,
         reportId,
       );
-      void runnerHost.openExternalLink(url);
+      // openExternalLink is Promise<void> across the shared contract; the
+      // underlying open success boolean is not available here. Emit
+      // "attempted" after the await only - never claim GitHub publication.
+      try {
+        await runnerHost.openExternalLink(url);
+      } catch {
+        // Browser open can fail; the attempt still happened and is tracked.
+      }
+      Analytics.getInstance().track(
+        AnalyticsEvent.ReportIssuePublicOpenAttempted,
+        null,
+      );
       closeReportIssueDraft(submission.draftId);
     },
     onError: (error) => {
-      Analytics.getInstance().track(AnalyticsEvent.ReportIssueHandedOff, {
+      Analytics.getInstance().track(AnalyticsEvent.ReportIssuePrivateSubmit, {
         outcome: "failed",
         blocker: analyticsBlockerFromError(error),
       });
