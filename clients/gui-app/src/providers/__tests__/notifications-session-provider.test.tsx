@@ -311,9 +311,8 @@ function resetAuth(
       status,
       profile: { userId, userName: userId, email },
       contextMetadata: { userId, username: userId },
-      // This suite exercises the legacy local stream. Paid/cloud behavior is
-      // covered separately; keeping this fixture non-entitled pins that it
-      // does not create a cloud subscription.
+      // Tier is deliberately irrelevant to feed selection. Most cases in
+      // this suite pin the methodless-host fallback configured in beforeEach.
       subscriptionStatus: "FREE",
     });
     return;
@@ -555,7 +554,7 @@ describe("<NotificationsSessionProvider />", () => {
     hostState.id = "host-a";
     hostState.client = null;
     streamState.client = null;
-    streamState.cloudFeedSupport = "supported";
+    streamState.cloudFeedSupport = "unsupported";
     streamState.useClientSupport = false;
     mockAuth.onChange.mockClear();
     mockAuth.revalidateCurrentContext.mockClear();
@@ -586,11 +585,12 @@ describe("<NotificationsSessionProvider />", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens only the cloud relay for a paid user", async () => {
+  it("opens only the cloud relay for a free-tier user when the host confirms support", async () => {
     const queryClient = new QueryClient();
     const streamClient = new MockWsStreamClient();
     hostState.id = mockLocalHostEntry.hostId;
     streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
     useAppLocalNotificationsStore
       .getState()
       .activateIdentity("alice@example.com");
@@ -618,7 +618,6 @@ describe("<NotificationsSessionProvider />", () => {
 
     act(() => {
       resetAuth("signed-in", "alice@example.com", "alice@example.com");
-      useAuthStore.setState({ subscriptionStatus: "PRO" });
     });
 
     await waitFor(() => {
@@ -635,6 +634,7 @@ describe("<NotificationsSessionProvider />", () => {
     const streamClient = new MockWsStreamClient();
     hostState.id = mockLocalHostEntry.hostId;
     streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
 
     const view = render(
       <QueryClientProvider client={queryClient}>
@@ -646,7 +646,6 @@ describe("<NotificationsSessionProvider />", () => {
 
     act(() => {
       resetAuth("signed-in", "alice@example.com", "alice@example.com");
-      useAuthStore.setState({ subscriptionStatus: "PRO" });
     });
     await waitFor(() => {
       expect(streamClient.subscribedMethods).toEqual([
@@ -704,6 +703,7 @@ describe("<NotificationsSessionProvider />", () => {
     const replacementClient = new MockWsStreamClient();
     hostState.id = mockLocalHostEntry.hostId;
     streamState.client = firstClient;
+    streamState.cloudFeedSupport = "supported";
 
     const view = render(
       <QueryClientProvider client={queryClient}>
@@ -714,7 +714,6 @@ describe("<NotificationsSessionProvider />", () => {
     );
     act(() => {
       resetAuth("signed-in", "alice@example.com", "alice@example.com");
-      useAuthStore.setState({ subscriptionStatus: "PRO" });
     });
     await waitFor(() => {
       expect(firstClient.subscribedMethods).toEqual([
@@ -748,11 +747,12 @@ describe("<NotificationsSessionProvider />", () => {
     });
   });
 
-  it("reopens a free-tier-closed cloud feed when entitlement is restored", async () => {
+  it("keeps the dormant entitlement refusal on a stable unavailable wall", async () => {
     const queryClient = new QueryClient();
     const streamClient = new MockWsStreamClient();
     hostState.id = mockLocalHostEntry.hostId;
     streamState.client = streamClient;
+    streamState.cloudFeedSupport = "supported";
     __setNotificationsStreamFactoryForTests(() => ({
       applyUpdate: () => undefined,
       close: () => undefined,
@@ -767,7 +767,6 @@ describe("<NotificationsSessionProvider />", () => {
     );
     act(() => {
       resetAuth("signed-in", "alice@example.com", "alice@example.com");
-      useAuthStore.setState({ subscriptionStatus: "PRO" });
     });
     await waitFor(() => {
       expect(streamClient.subscribedMethods).toEqual([
@@ -784,21 +783,18 @@ describe("<NotificationsSessionProvider />", () => {
         "unavailable",
       );
       expect(mockAuth.revalidateCurrentContext).toHaveBeenCalledTimes(1);
-    });
-
-    act(() => {
-      useAuthStore.setState({ subscriptionStatus: "PRO" });
-    });
-    await waitFor(() => {
       expect(
         streamClient.subscribedMethods.filter(
           (method) => method === "host.notifications.cloudFeed.subscribe",
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
+      expect(streamClient.subscribedMethods).not.toContain(
+        "host.notifications.feed.subscribe",
+      );
     });
   });
 
-  it("keeps retained v1 rows for an entitled user while a rebuilt client is offline", async () => {
+  it("keeps retained v1 rows while a rebuilt client's capability is pending offline", async () => {
     const queryClient = new QueryClient();
     const streamClient = new WsStreamClient({
       registry: hostStreamRpcRegistry,
@@ -846,7 +842,6 @@ describe("<NotificationsSessionProvider />", () => {
     );
     act(() => {
       resetAuth("signed-in", "alice@example.com", "alice@example.com");
-      useAuthStore.setState({ subscriptionStatus: "PRO" });
     });
     await waitFor(() => {
       expect(subscribeSpy.mock.calls.map(([method]) => method)).toEqual([

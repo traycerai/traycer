@@ -18,17 +18,16 @@ describe("useNotificationFeedMode", () => {
     cloudFeedSupport.value = null;
   });
 
-  it("keeps non-entitled users on the local feed without cloud negotiation", () => {
+  it("selects cloud for a free-tier user when the host confirms support", () => {
     useAuthStore.setState({ subscriptionStatus: "FREE" });
-    cloudFeedSupport.value = "unsupported";
+    cloudFeedSupport.value = "supported";
 
     expect(renderHook(() => useNotificationFeedMode()).result.current).toBe(
-      "local",
+      "cloud",
     );
   });
 
-  it("keeps pending capability local and upgrades only after confirmed support", () => {
-    useAuthStore.setState({ subscriptionStatus: "PRO" });
+  it("keeps methodless and pending capability local and upgrades only after confirmed support", () => {
     cloudFeedSupport.value = null;
     const hook = renderHook(() => useNotificationFeedMode());
 

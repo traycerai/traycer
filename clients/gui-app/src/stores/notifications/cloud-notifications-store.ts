@@ -184,6 +184,9 @@ export function openCloudNotificationsStream(
         reason?.kind === "fatalError" &&
         reason.details.code === "FREE_TIER_NO_CLOUD_SYNC"
       ) {
+        // Dormant defense: today's server never emits this refusal. If a
+        // server-side entitlement gate appears later, translate it into a
+        // stable unavailable wall instead of an undefined terminal state.
         onEntitlementDenied?.();
       }
     });

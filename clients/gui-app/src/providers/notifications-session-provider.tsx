@@ -98,7 +98,7 @@ export function NotificationsSessionProvider(
   const openedStreamClientRef =
     useRef<WsStreamClient<HostStreamRpcRegistry> | null>(null);
   const previousHostIdRef = useRef<string | null>(activeHostId);
-  // Start unset so an initially paid/cloud session also clears the legacy
+  // Start unset so an initially cloud-capable session also clears the legacy
   // local sources before opening its first relay stream.
   const previousFeedModeRef = useRef<
     "local" | "cloud" | "upgrade-required" | null
@@ -299,9 +299,9 @@ export function NotificationsSessionProvider(
       void authService.revalidateCurrentContext();
     };
     const onEntitlementDenied = (): void => {
-      // The host's typed refusal is authoritative enough to fail closed now;
-      // revalidation then projects an upgrade/restore without requiring a
-      // host/client restart.
+      // Dormant defense for a future server-side entitlement gate: preserve a
+      // defined unavailable wall and revalidate auth instead of leaving the
+      // session in an unclassified terminal state.
       useAuthStore.getState().setSubscriptionStatus("FREE");
       void authService.revalidateCurrentContext();
     };
@@ -435,7 +435,7 @@ export function NotificationsSessionProvider(
     if (previousFeedModeRef.current !== notificationFeedMode) {
       previousFeedModeRef.current = notificationFeedMode;
       tearDown();
-      // A cloud-to-local entitlement change must never leave cloud rows on
+      // A cloud-to-local capability change must never leave cloud rows on
       // screen, and the reverse must begin with no local fallback rows.
       useCloudNotificationsStore.getState().reset();
       // Entering either cloud-only state must also discard the retained v1

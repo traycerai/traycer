@@ -486,9 +486,9 @@ export function useNotificationCenterHostState(): NotificationCenterHostState {
   const feedMode = useNotificationFeedMode();
   const localSummary = useHostNotificationsStore(selectHostNotificationSummary);
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
-  // The cloud relay is the complete authority for a paid cloud session. The
-  // v1 replica is intentionally discarded at the mode boundary, so using its
-  // null summary here would make an exact cloud feed look perpetually cold.
+  // The cloud relay is the complete authority once the host confirms support.
+  // The v1 replica is intentionally discarded at the mode boundary, so using
+  // its null summary here would make an exact cloud feed look perpetually cold.
   const summary = feedMode === "cloud" ? cloudSummary : localSummary;
   return {
     hostLabel: hostEntry?.label ?? null,
