@@ -535,6 +535,56 @@ describe("AuthService", () => {
     ]);
   });
 
+  it("does not repeat the repair refresh on a later poll when the session still cannot be identified", async () => {
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "legacy-token", refreshToken: "legacy-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await service.start();
+
+    restoreFetch();
+    const seenSessionBearers: string[] = [];
+    const refreshCalls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === SESSIONS_URL) {
+        seenSessionBearers.push(init?.headers?.Authorization ?? "");
+        // Simulates a session that never becomes identifiable: every list,
+        // including one right after a repair refresh, comes back empty.
+        return okWithSessions([]);
+      }
+      if (url === REFRESH_URL) {
+        refreshCalls.push(String(init?.headers?.Authorization));
+        return okWithRefreshToken(`repaired-${refreshCalls.length}`);
+      }
+      if (url === VALIDATION_URL) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    // First poll: repair is attempted once, then the unrepaired listing
+    // still surfaces the error so the caller/UI can report the problem.
+    await expect(service.fetchUserSessions()).rejects.toThrow(
+      "Couldn't register this signed-in session yet.",
+    );
+    expect(refreshCalls).toHaveLength(1);
+
+    // A later poll (every 30s, or on window focus) with the SAME
+    // now-current bearer must not re-spend another refresh rotation or
+    // throw indefinitely; it returns the unidentified listing instead.
+    await expect(service.fetchUserSessions()).resolves.toEqual({
+      sessions: [],
+    });
+    expect(refreshCalls).toHaveLength(1);
+    expect(seenSessionBearers).toEqual([
+      "Bearer legacy-token",
+      "Bearer repaired-1",
+      "Bearer repaired-1",
+    ]);
+  });
+
   it("drops an account A session-list response that resolves after account B replaces it", async () => {
     const { service, host } = makeService();
     await service.start();
@@ -542,13 +592,14 @@ describe("AuthService", () => {
 
     const initialList = createDeferredResponse();
     let initialListCalls = 0;
+    const seenSessionBearers: string[] = [];
     const refreshCalls: string[] = [];
     restoreFetch();
     restoreFetch = installFetch((input, init) => {
       const url = typeof input === "string" ? input : String(input);
       if (url === SESSIONS_URL) {
         initialListCalls += 1;
-        expect(init?.headers?.Authorization).toBe("Bearer account-a-token");
+        seenSessionBearers.push(init?.headers?.Authorization ?? "");
         return initialList.promise;
       }
       if (url === REFRESH_URL) {
@@ -580,6 +631,7 @@ describe("AuthService", () => {
     initialList.resolve(await okWithSessions([]));
 
     await expect(staleList).resolves.toBeNull();
+    expect(seenSessionBearers).toEqual(["Bearer account-a-token"]);
     expect(refreshCalls).toEqual([]);
     expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
     const stored = await host.tokenStore.get();

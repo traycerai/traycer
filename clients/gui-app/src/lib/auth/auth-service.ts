@@ -309,6 +309,12 @@ export class AuthService {
   // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
   private currentForceRefresh: Promise<void> | null = null;
   private currentForceRefreshAuthority: LiveSessionAuthority | null = null;
+  // The bearer `fetchUserSessions()` already spent a repair refresh on without
+  // reaching an identified current session. Skips repeating that rotation on
+  // every 30s poll/focus refetch for an unchanging bearer; a bearer change
+  // (sign-in, sign-out, or any other rotation) naturally clears this by no
+  // longer matching.
+  private unrepairableSessionsBearer: string | null = null;
   // §4 reconcile worker: single-flight + trailing re-run so overlapping watcher
   // events never interleave applies. Never writes, never spends.
   private currentReconcile: Promise<void> | null = null;
@@ -1168,6 +1174,19 @@ export class AuthService {
         (session) => session.current && session.clientKind !== "unknown",
       )
     ) {
+      this.unrepairableSessionsBearer = null;
+      return initial.response;
+    }
+
+    // A prior repair already rotated this exact bearer without reaching an
+    // identified current session (e.g. the server-side condition is stuck,
+    // not transient). Repeating the rotate on every 30s poll/focus refetch
+    // would keep spending `/api/v3/auth/refresh` against an unchanging bearer
+    // forever and permanently error the panel; return what we have instead.
+    if (
+      initial.kind === "ok" &&
+      this.unrepairableSessionsBearer === initialAuthority.bearer
+    ) {
       return initial.response;
     }
 
@@ -1202,8 +1221,10 @@ export class AuthService {
       (session) => session.current && session.clientKind !== "unknown",
     );
     if (!hasIdentifiedCurrentSession) {
+      this.unrepairableSessionsBearer = repairedAuthority.bearer;
       throw new Error("Couldn't register this signed-in session yet.");
     }
+    this.unrepairableSessionsBearer = null;
     return repaired.response;
   }
 
