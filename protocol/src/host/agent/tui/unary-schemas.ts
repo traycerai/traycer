@@ -176,11 +176,16 @@ export type ValidateTuiForkProfileRequest = z.infer<
 
 // Mirrors `TuiForkScopeGuardSubcode` in the host's `tui-fork-scope-guard.ts`
 // (kept as an independent literal union here - the wire schema must not
-// import host domain code).
+// import host domain code), plus `TARGET_PROFILE_UNAVAILABLE` for a
+// candidate-specific profile-lifecycle rejection (unknown/tombstoned/
+// setup-pending/unsupported-provider) that is NOT a `TuiForkScopeGuardError` -
+// the bulk resolver reshapes that error family into its own verdict row
+// (amend-01, T3 review) rather than aborting the whole batch.
 export const tuiForkProfileAdmissionSubcodeSchema = z.enum([
   "SCOPE_MISMATCH",
   "FORK_SOURCE_NOT_FOUND",
   "FORK_SOURCE_AMBIGUOUS",
+  "TARGET_PROFILE_UNAVAILABLE",
 ]);
 export type TuiForkProfileAdmissionSubcode = z.infer<
   typeof tuiForkProfileAdmissionSubcodeSchema

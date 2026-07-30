@@ -469,6 +469,7 @@ export function useCreateTuiAgentForClient(
   return {
     create,
     isPending:
+      validateForkProfile.isPending ||
       startSession.isPending ||
       createTuiAgent.isPending ||
       worktreeCreate.isPending,

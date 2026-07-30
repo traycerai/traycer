@@ -833,6 +833,103 @@ describe("useCreateTuiAgent", () => {
     queryClient.clear();
   });
 
+  it("composite isPending is true while the preflight is held, and settles false once the whole create resolves (amend-01 P2)", async () => {
+    const calls: CapturedCall[] = [];
+    const preflightState: {
+      resolve: ((value: unknown) => void) | null;
+    } = { resolve: null };
+    hookMocks.request.mockImplementation((method, payload) => {
+      calls.push({ method, payload });
+      if (method === "agent.tui.validateForkProfile") {
+        return new Promise<unknown>((resolve) => {
+          preflightState.resolve = resolve;
+        });
+      }
+      if (method === "agent.tui.prepareLaunch") {
+        return Promise.resolve(startSessionResponse);
+      }
+      if (method === "epic.createTuiAgent") {
+        return Promise.resolve({
+          tuiAgentId:
+            (payload as { tuiAgentId?: string | null }).tuiAgentId ??
+            "server-id",
+        });
+      }
+      return Promise.resolve(worktreeCreateOkResponse(payload));
+    });
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+    expect(result.current.isPending).toBe(false);
+
+    const createState: {
+      promise: Promise<string | null> | null;
+    } = { promise: null };
+    act(() => {
+      createState.promise = result.current.create({
+        epicId: EPIC_ID,
+        tabId: TAB_ID,
+        parentId: "source-parent",
+        title: "Continue - profile-b",
+        placement: { kind: "active-tile" },
+        harnessId: "claude",
+        model: null,
+        reasoningEffort: null,
+        agentMode: "regular",
+        forkSourceHarnessSessionId: "source-harness-session",
+        sourceTuiAgentId: "source-tui-agent-id",
+        sourceProfileId: "profile-a",
+        onStatusChange: null,
+        workspaceMode: "inherit",
+        worktreeIntent: null,
+        terminalAgentArgs: null,
+        // Genuinely cross-profile so the preflight actually fires and holds.
+        profileId: "profile-b",
+      });
+    });
+
+    await waitFor(() => {
+      expect(preflightState.resolve).not.toBeNull();
+    });
+    // The preflight mutation is the ONLY one in flight at this point - if the
+    // composite excluded it, isPending would read false here even though a
+    // resubmission mid-preflight is exactly what the composite exists to
+    // prevent.
+    expect(result.current.isPending).toBe(true);
+    expect(calls.map((c) => c.method)).toEqual([
+      "agent.tui.validateForkProfile",
+    ]);
+
+    const resolvePreflight = preflightState.resolve;
+    const pendingCreate = createState.promise;
+    if (resolvePreflight === null || pendingCreate === null) {
+      throw new Error("preflight did not start");
+    }
+    await act(async () => {
+      resolvePreflight({
+        verdicts: [
+          {
+            targetProfileId: "profile-b",
+            admitted: true,
+            subcode: null,
+            message: null,
+          },
+        ],
+      });
+      await pendingCreate;
+    });
+
+    // The underlying mutations' own `isPending` flags settle on their own
+    // subsequent render tick after their promises resolve.
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(false);
+    });
+
+    queryClient.clear();
+  });
+
   it("opens the canvas tab placeholder BEFORE agent.tui.prepareLaunch blocks on setup", async () => {
     // Acceptance: "landing Worktree-mode terminal-agent navigates and
     // opens/persists a terminal-agent placeholder before setup
