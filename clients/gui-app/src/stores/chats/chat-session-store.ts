@@ -1129,8 +1129,15 @@ export function createChatSessionStore(
               state.queue,
               frame.clientActionId,
             ),
+            // Single slot, first writer wins until `ackFailedSendRestoration`
+            // clears it - the same rule `reconcileSnapshotChange` and the
+            // settled-turn pass already follow. Two rejections landing before
+            // the composer consumes the first would otherwise leave the
+            // earlier (longer-waiting) content unreachable.
             failedSendRestoration:
-              pending?.action === "send" && pending.restoreContent !== null
+              state.failedSendRestoration === null &&
+              pending?.action === "send" &&
+              pending.restoreContent !== null
                 ? {
                     clientActionId: frame.clientActionId,
                     content: pending.restoreContent,

@@ -1976,6 +1976,55 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
   });
 
+  it("keeps the first restoration when a second send is rejected before the composer consumes it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    const rejectSend = (index: number, reason: string): string => {
+      harness.handle.store
+        .getState()
+        .sendMessage(
+          index === 0 ? CONTENT : IMAGE_CONTENT,
+          { type: "user", userId: OWNER_ID },
+          SETTINGS,
+          "auto",
+        );
+      const frame = harness.sent[index];
+      if (frame.kind !== "send") throw new Error("Expected send frame");
+      callbacks.onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        clientActionId: frame.clientActionId,
+        action: "send",
+        status: "rejected",
+        reason,
+        code: "ACTION_REJECTED",
+        backgroundStopTaskIds: [],
+      });
+      return frame.clientActionId;
+    };
+
+    const firstActionId = rejectSend(0, "First rejection.");
+    rejectSend(1, "Second rejection.");
+
+    // The slot is single-consumer: the second rejection must not clobber
+    // content the composer has not restored yet.
+    expect(harness.handle.store.getState().failedSendRestoration).toMatchObject(
+      {
+        clientActionId: firstActionId,
+        content: CONTENT,
+        reason: "First rejection.",
+      },
+    );
+
+    // Once acked, the slot is free again for the next failure.
+    harness.handle.store.getState().ackFailedSendRestoration(firstActionId);
+    expect(harness.handle.store.getState().failedSendRestoration).toBeNull();
+  });
+
   it("does not send owner actions for read-only viewers", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "viewer");
