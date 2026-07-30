@@ -22,3 +22,30 @@ export function createActivityGroupOpenStore(): StoreApi<ActivityGroupOpenState>
       }),
   }));
 }
+
+// Ticket 5: chat tiles fully remount per tab switch (decision #17). Retaining
+// the same store instance across that remount (instead of always creating a
+// fresh one) is what makes expanded activity groups survive it. Keyed by tile
+// instance id, at module scope so it outlives the React tree; evicted only
+// when a tab permanently closes (see the canvas store's tile-removal
+// subscriber in `stores/epics/canvas/store.ts`), never on a mere remount.
+const activityGroupOpenStoreRegistry = new Map<
+  string,
+  StoreApi<ActivityGroupOpenState>
+>();
+
+export function getOrCreateActivityGroupOpenStore(
+  tileInstanceId: string,
+): StoreApi<ActivityGroupOpenState> {
+  const existing = activityGroupOpenStoreRegistry.get(tileInstanceId);
+  if (existing !== undefined) return existing;
+  const store = createActivityGroupOpenStore();
+  activityGroupOpenStoreRegistry.set(tileInstanceId, store);
+  return store;
+}
+
+export function evictActivityGroupOpenStores(
+  tileInstanceIds: ReadonlyArray<string>,
+): void {
+  tileInstanceIds.forEach((id) => activityGroupOpenStoreRegistry.delete(id));
+}

@@ -5411,3 +5411,83 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
     expect(harness.nudgeCount()).toBe(1);
   });
 });
+
+describe("localProvenanceMessageIds (chat-scroller-refactor decision #8/#9, review round 3)", () => {
+  // The chat transcript's anchor classifier anchors a new/replaced user row
+  // UNCONDITIONALLY iff its id is in this registry, otherwise gates it on
+  // `isFollowingEnd`. A queued send (turn running) has NO optimistic
+  // transcript row until the host drains the queue - that drain must ride
+  // the SAME gated path as any other passive arrival (a queued flush, an
+  // A2A row), never anchor unconditionally. Registration must therefore
+  // mirror `shouldRenderSendAsPendingUserMessage` exactly, not fire
+  // unconditionally on every successful dispatch.
+  it("registers provenance for an idle send (creates the optimistic pendingUserMessage row)", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    emitSnapshot(callbacks, "owner");
+
+    expect(harness.handle.store.getState().localProvenanceMessageIds.size).toBe(
+      0,
+    );
+
+    const sent = harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    expect(sent).not.toBeNull();
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+
+    // Idle send renders an optimistic row same-frame (ticket-1 binding
+    // finding) AND registers provenance for it.
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([
+      expect.objectContaining({ messageId: frame.messageId }),
+    ]);
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has(frame.messageId),
+    ).toBe(true);
+  });
+
+  it("does NOT register provenance for a queued send (turn running, no optimistic transcript row)", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    startRunningTurn(callbacks);
+
+    expect(harness.handle.store.getState().localProvenanceMessageIds.size).toBe(
+      0,
+    );
+
+    const sent = harness.handle.store
+      .getState()
+      .sendMessage(
+        CONTENT,
+        { type: "user", userId: OWNER_ID },
+        SETTINGS,
+        "auto",
+      );
+    expect(sent).not.toBeNull();
+    const frame = harness.sent[0];
+    if (frame.kind !== "send") throw new Error("Expected send frame");
+
+    // Send-while-running becomes an optimistic QUEUED item (queue surface),
+    // not a transcript row - and must NOT be locally provenanced. Its
+    // eventual flush into the transcript is a passive arrival gated on
+    // `isFollowingEnd` like any other queued flush.
+    expect(harness.handle.store.getState().pendingUserMessages).toEqual([]);
+    expect(harness.handle.store.getState().queue.items).toHaveLength(1);
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has(frame.messageId),
+    ).toBe(false);
+    expect(harness.handle.store.getState().localProvenanceMessageIds.size).toBe(
+      0,
+    );
+  });
+});

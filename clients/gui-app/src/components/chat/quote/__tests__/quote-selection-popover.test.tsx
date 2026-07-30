@@ -87,6 +87,7 @@ function renderPopover(
         snapshot={snapshot}
         onDismiss={onDismiss}
         boundaryRef={NO_BOUNDARY}
+        bottomOverlayInsetPx={0}
       />
     </TooltipProvider>,
   );
@@ -234,6 +235,7 @@ describe("QuoteSelectionPopover - scrolled-past-start (viewport clipping)", () =
           snapshot={snapshot}
           onDismiss={onDismiss}
           boundaryRef={boundaryRef}
+          bottomOverlayInsetPx={0}
         />
       </TooltipProvider>,
     );

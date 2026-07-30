@@ -41,6 +41,12 @@ import type {
 } from "@/lib/windows/types";
 import type { DesktopPerWindowProjectionBridge } from "@/lib/windows/per-window-projection-debounce";
 import { useTileScrollAnchorStore } from "@/stores/epics/canvas/tile-scroll-anchor-store";
+import { evictChatTabState } from "@/stores/chats/chat-tab-state-cache";
+import { evictActivityGroupOpenStores } from "@/stores/chats/activity-group-open-store-core";
+import { evictA2AOpenStores } from "@/stores/chats/a2a-open-store-context";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
+import { evictTileFindUi } from "@/stores/tile-find/tile-find-store";
 import {
   closeAllTabs,
   closeOtherTabs as closeOtherTileTabs,
@@ -2495,6 +2501,24 @@ useEpicCanvasStore.subscribe((state) => {
   previousTileInstanceIds = current;
   if (removed.length > 0) {
     useTileScrollAnchorStore.getState().clearAnchors(removed);
+    // Ticket 5: chat-tile-only per-tab persistence, evicted the same way -
+    // proactively on a permanent close, not just LRU/registry-capped. The
+    // reading-position cache and the collapse-state registries key by the
+    // exact same tile instanceId, so one `removed` list covers all of them;
+    // tool/subagent are global stores namespaced by that id via `reset`.
+    evictChatTabState(removed);
+    evictActivityGroupOpenStores(removed);
+    evictA2AOpenStores(removed);
+    // F4 (ticket 5 review): tile-find serves every tile kind, not just chat -
+    // a tile whose adapter unregistered while still live (switched-away, not
+    // closed) is skipped by scheduleUiReclaim's own liveness check and never
+    // revisited if it is later closed without remounting. This sweep is that
+    // revisit.
+    evictTileFindUi(removed);
+    removed.forEach((instanceId) => {
+      useToolOpenStore.getState().reset(instanceId);
+      useSubagentOpenStore.getState().reset(instanceId);
+    });
   }
 });
 

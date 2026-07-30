@@ -1,6 +1,15 @@
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import {
   createUnavailableTileFindAdapter,
+  evictTileFindUi,
   useTileFindStore,
   type TileFindAdapter,
   type TileFindCapability,
@@ -10,6 +19,14 @@ import {
   type TileReplaceInput,
 } from "@/stores/tile-find";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
+
+// Ticket 5: scheduleUiReclaim also checks canvas liveness. Default false
+// preserves existing "permanently torn down" reclaim coverage (empty canvas).
+const tileLiveness = vi.hoisted(() => ({ live: false }));
+
+vi.mock("@/stores/epics/canvas/tile-instance-liveness", () => ({
+  isEpicCanvasTileInstanceLive: () => tileLiveness.live,
+}));
 
 const FIND_CAPABILITY = new Set<TileFindCapability>(["find"]);
 const REPLACE_CAPABILITY = new Set<TileFindCapability>([
@@ -142,7 +159,12 @@ function register(adapter: TileFindAdapter, isEligible: boolean): () => void {
 }
 
 describe("useTileFindStore", () => {
+  beforeEach(() => {
+    tileLiveness.live = false;
+  });
+
   afterEach(() => {
+    tileLiveness.live = false;
     useTileFindStore.getState().resetForTests();
   });
 
@@ -619,6 +641,72 @@ describe("useTileFindStore", () => {
       useTileFindStore.getState().targetsByTileInstanceId["tile-a"],
     ).toBeUndefined();
   });
+
+  it("keeps per-tile ui state when a live tile unregisters (tab switch remount)", async () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "tile-live",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    const unregister = register(adapter, true);
+    useTileFindStore.getState().openForTile("tile-live");
+    useTileFindStore.getState().setQuery("tile-live", "needle");
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-live"]?.query,
+    ).toBe("needle");
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-live"]?.isOpen,
+    ).toBe(true);
+
+    // Live in the canvas (switched-away chat tile will remount with the same
+    // instanceId) - Ticket 5 must NOT reclaim ui after the deferred microtask.
+    tileLiveness.live = true;
+    unregister();
+    await Promise.resolve();
+
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-live"]?.query,
+    ).toBe("needle");
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-live"]?.isOpen,
+    ).toBe(true);
+  });
+
+  it(
+    "F4: evicts ui for a tile that unregistered while live once the canvas " +
+      "sweep later evicts it (real close sequence, not a re-register trick)",
+    async () => {
+      const adapter = createTestAdapter({
+        tileInstanceId: "tile-live-then-closed",
+        tileKind: "chat",
+        capabilities: FIND_CAPABILITY,
+      });
+      const unregister = register(adapter, true);
+      useTileFindStore.getState().openForTile("tile-live-then-closed");
+      useTileFindStore.getState().setQuery("tile-live-then-closed", "needle");
+
+      // Switch-away: unregisters while still live in the canvas -
+      // scheduleUiReclaim skips reclaiming (see the test above).
+      tileLiveness.live = true;
+      unregister();
+      await Promise.resolve();
+      expect(
+        useTileFindStore.getState().uiByTileInstanceId["tile-live-then-closed"],
+      ).toBeDefined();
+
+      // The tab is later closed directly (never switched back to, so the
+      // adapter never re-registers) - the canvas store's tile-removal
+      // subscriber calls evictTileFindUi with the closed instanceId. This is
+      // the ONLY path that can ever reclaim this tile's ui now: nothing else
+      // re-fires scheduleUiReclaim for an instanceId that never unregisters
+      // again.
+      evictTileFindUi(["tile-live-then-closed"]);
+
+      expect(
+        useTileFindStore.getState().uiByTileInstanceId["tile-live-then-closed"],
+      ).toBeUndefined();
+    },
+  );
 
   it("keeps per-tile session state across an unregister/re-register swap", async () => {
     const firstAdapter = createTestAdapter({

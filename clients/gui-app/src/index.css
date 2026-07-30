@@ -1280,6 +1280,59 @@
   [data-composer-editor] blockquote {
     @apply my-0.5 border-l-2 border-primary/60 pl-3 leading-snug text-muted-foreground;
   }
+
+  /* Fade transcript rows as they pass beneath the top chrome (ported from
+     T3's `.chat-timeline-scroll-fade`). A mask stays visible even when the
+     header and timeline share the same background. The right-edge mask
+     excludes the scrollbar gutter (4px - matches the reserved `mr-1` gutter
+     on `.chat-scrollbar-native-thin`) so the fade never darkens the bar
+     itself. Opt-in via `topFadeEnabled` on `ChatTimeline` - unused until the
+     scroll-policy ticket wires it on. */
+  .chat-timeline-scroll-fade {
+    --chat-timeline-scroll-fade-height: 2.5rem;
+    -webkit-mask-image:
+      linear-gradient(
+        to bottom,
+        transparent 0%,
+        rgb(0 0 0 / 10%) 10%,
+        rgb(0 0 0 / 30%) 24%,
+        rgb(0 0 0 / 58%) 42%,
+        rgb(0 0 0 / 82%) 62%,
+        rgb(0 0 0 / 96%) 82%,
+        black 100%
+      ),
+      linear-gradient(black, black), linear-gradient(black, black);
+    -webkit-mask-position: top, bottom, right;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-size:
+      100% var(--chat-timeline-scroll-fade-height),
+      100% calc(100% - var(--chat-timeline-scroll-fade-height)),
+      4px 100%;
+    mask-image:
+      linear-gradient(
+        to bottom,
+        transparent 0%,
+        rgb(0 0 0 / 10%) 10%,
+        rgb(0 0 0 / 30%) 24%,
+        rgb(0 0 0 / 58%) 42%,
+        rgb(0 0 0 / 82%) 62%,
+        rgb(0 0 0 / 96%) 82%,
+        black 100%
+      ),
+      linear-gradient(black, black), linear-gradient(black, black);
+    mask-position: top, bottom, right;
+    mask-repeat: no-repeat;
+    mask-size:
+      100% var(--chat-timeline-scroll-fade-height),
+      100% calc(100% - var(--chat-timeline-scroll-fade-height)),
+      4px 100%;
+  }
+
+  @media (min-width: 40rem) {
+    .chat-timeline-scroll-fade {
+      --chat-timeline-scroll-fade-height: 3rem;
+    }
+  }
 }
 
 /*

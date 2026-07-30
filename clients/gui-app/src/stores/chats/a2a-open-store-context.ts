@@ -33,6 +33,30 @@ export function createA2AOpenStore(): StoreApi<A2AOpenState> {
   }));
 }
 
+// Ticket 5: chat tiles fully remount per tab switch (decision #17). Retaining
+// the same store instance across that remount (instead of always creating a
+// fresh one) is what makes expanded A2A send/received cards survive it. Keyed
+// by tile instance id, at module scope so it outlives the React tree; evicted
+// only when a tab permanently closes (see the canvas store's tile-removal
+// subscriber in `stores/epics/canvas/store.ts`), never on a mere remount.
+const a2aOpenStoreRegistry = new Map<string, StoreApi<A2AOpenState>>();
+
+export function getOrCreateA2AOpenStore(
+  tileInstanceId: string,
+): StoreApi<A2AOpenState> {
+  const existing = a2aOpenStoreRegistry.get(tileInstanceId);
+  if (existing !== undefined) return existing;
+  const store = createA2AOpenStore();
+  a2aOpenStoreRegistry.set(tileInstanceId, store);
+  return store;
+}
+
+export function evictA2AOpenStores(
+  tileInstanceIds: ReadonlyArray<string>,
+): void {
+  tileInstanceIds.forEach((id) => a2aOpenStoreRegistry.delete(id));
+}
+
 export const A2AOpenStoreContext = createContext<StoreApi<A2AOpenState> | null>(
   null,
 );

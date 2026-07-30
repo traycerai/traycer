@@ -64,7 +64,8 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   // preview while thinking, or the collapsed "Thought for Xs" line once done. A
   // click toggles and sticks for the segment's lifetime.
   const [expanded, setExpanded] = useState(false);
-  const toggle = useChatMeasuredBooleanToggle(setExpanded);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const toggle = useChatMeasuredBooleanToggle(setExpanded, triggerRef);
   const bodyId = useId();
 
   // Make the body itself a click target so clicking anywhere on the block (not
@@ -131,6 +132,7 @@ export function ReasoningSegment(props: ReasoningSegmentProps) {
   return (
     <div className="text-ui-sm text-muted-foreground">
       <button
+        ref={triggerRef}
         type="button"
         data-find-include="true"
         data-chat-find-unit={findUnitId ?? undefined}

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -59,10 +60,6 @@ import { SteerSettingsConflictDialog } from "@/components/chat/segments/steer-se
 import { accumulatedFileChangesFromMessages } from "@/lib/chat/accumulated-file-changes-from-messages";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { buildPinnedTodoRenderState } from "@/components/chat/chat-pinned-todos";
-import {
-  buildChatUserMessageMinimapItems,
-  type ChatUserMinimapItem,
-} from "@/components/chat/chat-user-message-minimap-items";
 import type { ChatMessageActions } from "@/components/chat/chat-message";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
@@ -567,6 +564,32 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
     useState<ChatMessageScrollRequest | null>(null);
   const backgroundScrollRequestIdRef = useRef(0);
+  // The composer + queue/pinned/agents/background dock now overlays the
+  // transcript (decision log #3, #13) instead of pushing it via flex height,
+  // so its reply stream can flow visually behind it. Measuring the whole
+  // overlay as one unit (rather than composer/queued-surface separately) is
+  // a deliberate ticket-3 scope narrowing - see ticket-3 report for the
+  // follow-up split.
+  const [lowerSurfacesElement, setLowerSurfacesElement] =
+    useState<HTMLDivElement | null>(null);
+  const [lowerSurfacesHeight, setLowerSurfacesHeight] = useState(0);
+  useLayoutEffect(() => {
+    if (!lowerSurfacesElement) return;
+    const updateHeight = () => {
+      const nextHeight = Math.ceil(
+        lowerSurfacesElement.getBoundingClientRect().height,
+      );
+      if (nextHeight <= 0) return;
+      setLowerSurfacesHeight((current) =>
+        current === nextHeight ? current : nextHeight,
+      );
+    };
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(lowerSurfacesElement);
+    return () => observer.disconnect();
+  }, [lowerSurfacesElement]);
   // Shared transcript jump: resolve the owning message, expand the card via its
   // open-store, and bump the scroll request the messages surface watches. Both
   // the Background panel rows and the autonomous-resume marker route through
@@ -673,57 +696,81 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
           data-active={props.isActive ? "true" : "false"}
           className="flex h-full min-h-0 flex-col"
         >
-          <ChatSessionMessagesSurface
-            snapshotLoaded={view.snapshotLoaded}
-            fatalClose={view.fatalClose}
-            onRetry={view.onChatRetry}
-            restoreContext={view.restoreContext}
-            node={view.node}
-            epicId={view.currentEpicId}
-            viewTabId={view.viewTabId}
-            tabHostId={view.tabHostId}
-            workspaceRoots={view.linkResolutionRoots}
-            messages={view.messages}
-            backgroundItems={view.lower.backgroundItems}
-            minimapItems={view.minimapItems}
-            scrollRequest={backgroundScrollRequest}
-            surfaceVisible={view.surfaceVisible}
-            systemOverlayActive={systemOverlayActive}
-            getMessageActions={view.getMessageActions}
-            nextStepActions={view.nextStepActions}
-            planActions={view.planActions}
-          />
+          {/* A flex CONTAINER (not just an item): ChatSessionMessagesSurface's
+           * transcript root relies on `flex-1` from ITS immediate parent to
+           * get a definite height (h-full on LegendList needs a real
+           * containing block all the way up). The overlay dock below is
+           * absolutely positioned, so it does not participate in this flex
+           * layout regardless. */}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <ChatSessionMessagesSurface
+              snapshotLoaded={view.snapshotLoaded}
+              fatalClose={view.fatalClose}
+              onRetry={view.onChatRetry}
+              restoreContext={view.restoreContext}
+              node={view.node}
+              epicId={view.currentEpicId}
+              viewTabId={view.viewTabId}
+              tabHostId={view.tabHostId}
+              workspaceRoots={view.linkResolutionRoots}
+              messages={view.messages}
+              localProvenanceMessageIds={view.localProvenanceMessageIds}
+              consumeLocalProvenance={view.consumeLocalProvenance}
+              backgroundItems={view.lower.backgroundItems}
+              scrollRequest={backgroundScrollRequest}
+              surfaceVisible={view.surfaceVisible}
+              systemOverlayActive={systemOverlayActive}
+              getMessageActions={view.getMessageActions}
+              nextStepActions={view.nextStepActions}
+              planActions={view.planActions}
+              composerOverlayHeight={lowerSurfacesHeight}
+            />
+            {/*
+             * SurfaceActivityProvider narrows catalog/provider query subscriptions
+             * to the one focused pane+tab. A visible split partner keeps rendering
+             * its transcript and scroll state, but releases catalog/provider query
+             * observers and cannot own palette/composer-global work.
+             *
+             * Absolutely overlays the transcript (decision log #3) instead of
+             * pushing its height via flex, so streamed replies flow visually
+             * behind it; `lowerSurfacesHeight` (measured here) feeds the
+             * transcript's bottom content inset.
+             */}
+            {view.snapshotLoaded ? (
+              <div
+                ref={setLowerSurfacesElement}
+                className="pointer-events-none absolute inset-x-0 bottom-0 z-10"
+              >
+                <div className="pointer-events-auto">
+                  <SurfaceActivityProvider active={view.surfaceFocused}>
+                    <ChatLowerInteractionSurfaces
+                      epicId={view.currentEpicId}
+                      viewTabId={view.viewTabId}
+                      chatId={view.node.id}
+                      runtime={view.lower.runtime}
+                      access={view.lower.access}
+                      turn={view.lower.turn}
+                      interview={view.lower.interview}
+                      approvals={view.lower.approvals}
+                      queue={view.lower.queue}
+                      composer={view.lower.composer}
+                      todo={view.todo}
+                      restoreContext={view.restoreContext}
+                      backgroundItems={view.lower.backgroundItems}
+                      backgroundStopPendingTaskIds={
+                        view.lower.backgroundStopPendingTaskIds
+                      }
+                      backgroundStopAllPending={
+                        view.lower.backgroundStopAllPending
+                      }
+                      onBackgroundItemClick={scrollToBackgroundItem}
+                    />
+                  </SurfaceActivityProvider>
+                </div>
+              </div>
+            ) : null}
+          </div>
           <ChatTileErrorNoticeToasts handle={view.handle} />
-          {/*
-           * SurfaceActivityProvider narrows catalog/provider query subscriptions
-           * to the one focused pane+tab. A visible split partner keeps rendering
-           * its transcript and scroll state, but releases catalog/provider query
-           * observers and cannot own palette/composer-global work.
-           */}
-          {view.snapshotLoaded ? (
-            <SurfaceActivityProvider active={view.surfaceFocused}>
-              <ChatLowerInteractionSurfaces
-                epicId={view.currentEpicId}
-                viewTabId={view.viewTabId}
-                chatId={view.node.id}
-                runtime={view.lower.runtime}
-                access={view.lower.access}
-                turn={view.lower.turn}
-                interview={view.lower.interview}
-                approvals={view.lower.approvals}
-                queue={view.lower.queue}
-                composer={view.lower.composer}
-                todo={view.todo}
-                restoreContext={view.restoreContext}
-                backgroundItems={view.lower.backgroundItems}
-                backgroundStopPendingTaskIds={
-                  view.lower.backgroundStopPendingTaskIds
-                }
-                backgroundStopAllPending={view.lower.backgroundStopAllPending}
-                onBackgroundItemClick={scrollToBackgroundItem}
-              />
-            </SurfaceActivityProvider>
-          ) : null}
           <RevertOnEditDialog
             open={view.revertOnEdit.open}
             onOpenChange={view.revertOnEdit.onOpenChange}
@@ -895,6 +942,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingActions: s.pendingActions,
       acceptedActions: s.acceptedActions,
       pendingUserMessages: s.pendingUserMessages,
+      localProvenanceMessageIds: s.localProvenanceMessageIds,
       currentComposerSettings: s.currentComposerSettings,
       liveAssistantMessage: s.liveAssistantMessage,
       worktreeBinding: s.worktreeBinding,
@@ -1245,13 +1293,6 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   const pinnedTodoRenderState = useMemo(
     () => buildPinnedTodoRenderState(displayedMessages),
     [displayedMessages],
-  );
-  // Minimap rail entries mirror the user rows Virtuoso renders; ids are the
-  // rendered row ids (including queue-steer rows), so minimap clicks resolve
-  // directly against the list.
-  const minimapItems = useMemo(
-    () => buildChatUserMessageMinimapItems(pinnedTodoRenderState.messages),
-    [pinnedTodoRenderState.messages],
   );
   const hostPendingInterviewIds = useMemo(
     () =>
@@ -1857,7 +1898,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
-    minimapItems,
+    localProvenanceMessageIds: state.localProvenanceMessageIds,
+    consumeLocalProvenance: handle.store.getState().consumeLocalProvenance,
     surfaceVisible,
     surfaceFocused,
     getMessageActions: messageActionsFor,
@@ -1900,8 +1942,9 @@ interface ChatSessionMessagesSurfaceProps {
   readonly tabHostId: string | null;
   readonly workspaceRoots: ReadonlyArray<string>;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly localProvenanceMessageIds: ReadonlySet<string>;
+  readonly consumeLocalProvenance: (messageId: string) => void;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
-  readonly minimapItems: ReadonlyArray<ChatUserMinimapItem>;
   readonly scrollRequest: ChatMessageScrollRequest | null;
   readonly surfaceVisible: boolean;
   readonly systemOverlayActive: boolean;
@@ -1910,6 +1953,8 @@ interface ChatSessionMessagesSurfaceProps {
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler;
   readonly planActions: ChatPlanActionsContextValue;
+  /** Measured height of the overlaid composer/queue/pinned/agents dock. */
+  readonly composerOverlayHeight: number;
 }
 
 /**
@@ -2016,8 +2061,9 @@ function ChatSessionMessagesSurface(
               taskTitle={props.node.name}
               taskId={props.node.id}
               messages={props.messages}
+              localProvenanceMessageIds={props.localProvenanceMessageIds}
+              consumeLocalProvenance={props.consumeLocalProvenance}
               backgroundItems={props.backgroundItems}
-              minimapItems={props.minimapItems}
               scrollRequest={props.scrollRequest}
               scrollStateKey={props.node.instanceId}
               getMessageActions={props.getMessageActions}
@@ -2025,6 +2071,7 @@ function ChatSessionMessagesSurface(
               instanceId={props.node.instanceId}
               visible={props.surfaceVisible}
               systemOverlayActive={props.systemOverlayActive}
+              composerOverlayHeight={props.composerOverlayHeight}
             />
           </ChatMarkdownLinkProvider>
         </WorkingVerbContext.Provider>

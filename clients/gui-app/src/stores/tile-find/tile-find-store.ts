@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { isEpicCanvasTileInstanceLive } from "@/stores/epics/canvas/tile-instance-liveness";
 import type {
   TileFindActiveOwner,
   TileFindAdapter,
@@ -394,11 +395,29 @@ function flushPendingSearch(tileInstanceId: string): boolean {
 // waiting a microtask and only dropping `ui` when no registration re-created the
 // target, re-registration keeps its per-tile session state (query, replace text,
 // open/expanded flags) intact.
+//
+// Ticket 5: a chat tile fully remounts on every tab switch (decision #17), so
+// its adapter unregisters far more than one microtask apart from switching
+// back - the swap-window check above never catches it. Also requiring the
+// tile to be gone from the canvas (a real close, not a live-but-unmounted
+// switch-away) is what makes the find session (query, open state, active
+// match) survive that remount: a live tile's fresh adapter re-registers on
+// return and `replayRegisteredAdapterSearch` (below) restores the session
+// onto it.
+//
+// F4 (ticket 5 review): this liveness check means a tile that unregisters
+// WHILE live is skipped here and never revisited - if that tile is later
+// closed without ever remounting (closed directly from an inactive tab, no
+// switch-back), nothing calls `scheduleUiReclaim` again and `ui` would leak
+// for the rest of the session. `evictTileFindUi` below is the complementary
+// proactive path: the canvas store's tile-removal subscriber calls it
+// alongside the other per-tab registry evictions on every real close.
 function scheduleUiReclaim(tileInstanceId: string): void {
   queueMicrotask(() => {
     const state = useTileFindStore.getState();
     if (state.targetsByTileInstanceId[tileInstanceId] !== undefined) return;
     if (state.uiByTileInstanceId[tileInstanceId] === undefined) return;
+    if (isEpicCanvasTileInstanceLive(tileInstanceId)) return;
     useTileFindStore.setState((current) => {
       if (current.targetsByTileInstanceId[tileInstanceId] !== undefined) {
         return current;
@@ -407,6 +426,26 @@ function scheduleUiReclaim(tileInstanceId: string): void {
       delete uiByTileInstanceId[tileInstanceId];
       return { uiByTileInstanceId };
     });
+  });
+}
+
+/**
+ * F4 (ticket 5 review): drops `ui` entries outright for tiles removed from
+ * the canvas for good - called from the canvas store's tile-removal
+ * subscriber, the same sweep that evicts the other per-tab registries.
+ * Complements `scheduleUiReclaim`'s deferred, liveness-gated path: that path
+ * alone never revisits a tile that unregistered while still live (a chat tab
+ * switched away, not closed) if it is later closed without ever remounting.
+ */
+export function evictTileFindUi(tileInstanceIds: ReadonlyArray<string>): void {
+  useTileFindStore.setState((state) => {
+    const idsToRemove = tileInstanceIds.filter(
+      (id) => state.uiByTileInstanceId[id] !== undefined,
+    );
+    if (idsToRemove.length === 0) return state;
+    const uiByTileInstanceId = { ...state.uiByTileInstanceId };
+    idsToRemove.forEach((id) => delete uiByTileInstanceId[id]);
+    return { uiByTileInstanceId };
   });
 }
 
