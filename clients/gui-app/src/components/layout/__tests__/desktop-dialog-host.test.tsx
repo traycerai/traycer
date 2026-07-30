@@ -189,6 +189,7 @@ function createRunnerHost(
           truncated: false,
         }),
       saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
+      getFingerprintOccurrence: () => Promise.resolve(null),
     },
   });
 }
@@ -227,6 +228,7 @@ function createRunnerHostWithSubmit(
           truncated: false,
         }),
       saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
+      getFingerprintOccurrence: () => Promise.resolve(null),
     },
   });
 }
@@ -264,6 +266,7 @@ function createRunnerHostWithoutPrivateDelivery(
           truncated: false,
         }),
       saveDiagnosticBundle,
+      getFingerprintOccurrence: () => Promise.resolve(null),
     },
   });
 }

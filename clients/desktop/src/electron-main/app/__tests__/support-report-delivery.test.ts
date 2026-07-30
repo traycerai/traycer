@@ -41,6 +41,14 @@ vi.mock("../logger", () => ({
   resolveDesktopLogPath: (): string => loggerMock.desktopLogPath,
 }));
 
+const reportLedgerMock = vi.hoisted(() => ({
+  recordFingerprintSighting: vi.fn(async (): Promise<void> => undefined),
+  recordFiledReport: vi.fn(async (): Promise<void> => undefined),
+  getFingerprintOccurrence: vi.fn(async () => null),
+}));
+
+vi.mock("../report-ledger", () => reportLedgerMock);
+
 import { DesktopSupportService } from "../support";
 import type { HostFsLayout } from "../../host/host-paths";
 import type { SupportSubmitReportRequest } from "../../../ipc-contracts/window-types";
@@ -87,7 +95,7 @@ function buildService(): DesktopSupportService {
 }
 
 async function freezeAndSubmit(service: DesktopSupportService) {
-  await service.freezeEvidence(KEY);
+  await service.freezeEvidence(KEY, null);
   return service.submitReport(FORM, KEY);
 }
 
@@ -125,6 +133,47 @@ describe("DesktopSupportService.submitReport - delivered", () => {
       /^rpt_[0-9a-f]{32}$/,
     );
     expect(sentryMock.captureFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a filed report on delivered only when a fingerprint is present", async () => {
+    const service = buildService();
+    await service.freezeEvidence(KEY, null);
+    const result = await service.submitReport(
+      {
+        ...FORM,
+        privateDiagnostics: {
+          cause: null,
+          registry: {
+            routeTemplate: { status: "unavailable" },
+            hostId: { status: "unavailable" },
+            epicId: { status: "unavailable" },
+            tabId: { status: "unavailable" },
+            artifactId: { status: "unavailable" },
+            chatId: { status: "unavailable" },
+            agentId: { status: "unavailable" },
+            harnessId: { status: "unavailable" },
+            model: { status: "unavailable" },
+            profileId: { status: "unavailable" },
+            providerSelectionClass: { status: "unavailable" },
+            providerVersion: { status: "unavailable" },
+          },
+          fingerprint: "fp:v1:abc",
+          stackFamily: null,
+          correlationId: "corr-1",
+        },
+      },
+      KEY,
+    );
+    expect(result.status).toBe("delivered");
+    expect(reportLedgerMock.recordFiledReport).toHaveBeenCalledWith(
+      result.status === "delivered" ? result.reportId : "",
+      "fp:v1:abc",
+    );
+  });
+
+  it("does not record a filed report when the submit has no fingerprint", async () => {
+    await freezeAndSubmit(buildService());
+    expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
   });
 
   it("tags the feedback event with the id it hands back", async () => {
@@ -169,6 +218,7 @@ describe("DesktopSupportService.submitReport - unavailable", () => {
     expect(result).toEqual({ status: "unavailable" });
     expect(sentryMock.captureFeedback).not.toHaveBeenCalled();
     expect(sentryMock.flush).not.toHaveBeenCalled();
+    expect(reportLedgerMock.recordFiledReport).not.toHaveBeenCalled();
   });
 
   it("reflects DSN presence on the support snapshot as privateDeliveryAvailable", async () => {
@@ -231,10 +281,31 @@ describe("DesktopSupportService.submitReport - failed", () => {
   });
 });
 
+describe("DesktopSupportService - fingerprint sightings on freeze", () => {
+  it("records a sighting on first freeze admission when fingerprint is present", async () => {
+    await buildService().freezeEvidence(KEY, "fp:v1:sight");
+    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledWith(
+      "fp:v1:sight",
+    );
+  });
+
+  it("does not re-record a sighting on the idempotent second freeze of a live key", async () => {
+    const service = buildService();
+    await service.freezeEvidence(KEY, "fp:v1:sight");
+    await service.freezeEvidence(KEY, "fp:v1:sight");
+    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the sighting when fingerprint is null", async () => {
+    await buildService().freezeEvidence(KEY, null);
+    expect(reportLedgerMock.recordFingerprintSighting).not.toHaveBeenCalled();
+  });
+});
+
 describe("DesktopSupportService - evidence freeze semantics", () => {
   it("ships the tails captured at freeze time even after further log writes", async () => {
     const service = buildService();
-    await service.freezeEvidence(KEY);
+    await service.freezeEvidence(KEY, null);
 
     // The crash-looping host that keeps writing while the dialog is open is
     // exactly the scenario the freeze exists for - the failing line must
@@ -252,7 +323,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
 
   it("drops the frozen evidence on discard, so a later submit fails honestly", async () => {
     const service = buildService();
-    await service.freezeEvidence(KEY);
+    await service.freezeEvidence(KEY, null);
     service.discardFrozenEvidence(KEY);
 
     const result = await service.submitReport(FORM, KEY);
@@ -268,7 +339,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
     // inserting the pending map entry) runs before this call returns, so the
     // discard below reliably lands before the file reads resolve - the exact
     // race a cancel-during-freeze produces in the real dialog.
-    const freezePromise = service.freezeEvidence(KEY);
+    const freezePromise = service.freezeEvidence(KEY, null);
     service.discardFrozenEvidence(KEY);
     await freezePromise;
 
@@ -279,7 +350,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
 
   it("serves readFrozenLogTail from the frozen copy, not a live read", async () => {
     const service = buildService();
-    await service.freezeEvidence(KEY);
+    await service.freezeEvidence(KEY, null);
     await writeFile(hostLogPath, "line written after freeze\n", "utf8");
 
     const tail = await service.readFrozenLogTail(KEY, "host");
@@ -289,7 +360,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
 
   it("returns an empty tail from readFrozenLogTail once discarded", async () => {
     const service = buildService();
-    await service.freezeEvidence(KEY);
+    await service.freezeEvidence(KEY, null);
     service.discardFrozenEvidence(KEY);
 
     const tail = await service.readFrozenLogTail(KEY, "host");
@@ -313,7 +384,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
     await writeFile(hostLogPath, fatLog, "utf8");
 
     const service = buildService();
-    await service.freezeEvidence(KEY);
+    await service.freezeEvidence(KEY, null);
     const tail = await service.readFrozenLogTail(KEY, "host");
     // Fewer than 500 lines were written, so the line-count cap never fires -
     // only the byte cap did, and that alone must still flag `truncated`.
@@ -337,7 +408,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
 describe("DesktopSupportService - freeze idempotency per key", () => {
   it("mints one reportId per draft and reuses it across every submit call", async () => {
     const service = buildService();
-    const { reportId } = await service.freezeEvidence(KEY);
+    const { reportId } = await service.freezeEvidence(KEY, null);
 
     const first = await service.submitReport(FORM, KEY);
     const second = await service.submitReport(FORM, KEY);
@@ -355,8 +426,8 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
 
   it("returns the existing reportId when freezeEvidence is called again for an already-frozen live draft", async () => {
     const service = buildService();
-    const { reportId: first } = await service.freezeEvidence(KEY);
-    const { reportId: second } = await service.freezeEvidence(KEY);
+    const { reportId: first } = await service.freezeEvidence(KEY, null);
+    const { reportId: second } = await service.freezeEvidence(KEY, null);
 
     // Not a fresh mint: a second freeze of a still-live draft (React
     // StrictMode's dev double-effect, or an accidental duplicate call) must
@@ -368,8 +439,8 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
     const service = buildService();
 
     const [a, b] = await Promise.all([
-      service.freezeEvidence(KEY),
-      service.freezeEvidence(KEY),
+      service.freezeEvidence(KEY, null),
+      service.freezeEvidence(KEY, null),
     ]);
 
     expect(a.reportId).toBe(b.reportId);
@@ -377,9 +448,9 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
 
   it("mints a fresh reportId when freezing again after a discard - a genuinely new draft", async () => {
     const service = buildService();
-    const { reportId: first } = await service.freezeEvidence(KEY);
+    const { reportId: first } = await service.freezeEvidence(KEY, null);
     service.discardFrozenEvidence(KEY);
-    const { reportId: second } = await service.freezeEvidence(KEY);
+    const { reportId: second } = await service.freezeEvidence(KEY, null);
 
     expect(second).not.toBe(first);
   });

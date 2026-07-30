@@ -80,7 +80,13 @@ export function ReportIssueDialog(
 
   useEffect(() => {
     if (support === null) return;
-    void support.freezeEvidence(draftId).then(
+    // Fingerprint (when present) records an install-local sighting on first
+    // freeze admission - powers "Nth time on this install". Null for manual
+    // opens with no error envelope. Read of the occurrence is ticket 07's
+    // evidence strip; the write path lands here so a freeze without a later
+    // dialog redesign still advances the ledger.
+    const fingerprint = draftContext?.privateDiagnostics.fingerprint ?? null;
+    void support.freezeEvidence({ draftId, fingerprint }).then(
       (result) => setReportId(result.reportId),
       () => null,
     );
@@ -90,7 +96,8 @@ export function ReportIssueDialog(
     // draftId is this component's identity for its whole mounted lifetime -
     // the host remounts it under a fresh `key` per draft, so this effect
     // only ever re-runs here if `support` itself changes identity.
-  }, [draftId, support]);
+    // draftContext is captured at open and is immutable for the draft's life.
+  }, [draftId, support, draftContext]);
 
   useEffect(() => {
     if (!open || support === null) return;

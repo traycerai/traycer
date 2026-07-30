@@ -89,6 +89,7 @@ describe("<RootErrorBoundary />", () => {
           readFrozenLogTail: () => Promise.reject(new Error("log unavailable")),
           saveDiagnosticBundle: () =>
             Promise.reject(new Error("bundle unavailable")),
+          getFingerprintOccurrence: () => Promise.resolve(null),
         },
       },
     );

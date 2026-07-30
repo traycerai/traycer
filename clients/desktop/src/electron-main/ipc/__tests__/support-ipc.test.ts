@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseSupportFreezeEvidenceInput,
   parseSupportReadFrozenLogTailInput,
   parseSupportSubmitReportRequest,
 } from "../support-ipc";
@@ -290,5 +291,55 @@ describe("parseSupportReadFrozenLogTailInput", () => {
         extra: true,
       }),
     ).toThrow();
+  });
+});
+
+describe("parseSupportFreezeEvidenceInput", () => {
+  it("accepts a well-formed input with a fingerprint", () => {
+    expect(
+      parseSupportFreezeEvidenceInput({
+        draftId: 1,
+        fingerprint: "fp:v1:abc",
+      }),
+    ).toEqual({ draftId: 1, fingerprint: "fp:v1:abc" });
+  });
+
+  it("accepts a null fingerprint - the manual-open / no-envelope case", () => {
+    expect(
+      parseSupportFreezeEvidenceInput({ draftId: 2, fingerprint: null }),
+    ).toEqual({ draftId: 2, fingerprint: null });
+  });
+
+  it("rejects a missing fingerprint key - the wire always carries it", () => {
+    expect(() => parseSupportFreezeEvidenceInput({ draftId: 1 })).toThrow();
+  });
+
+  it("rejects a non-integer draftId", () => {
+    expect(() =>
+      parseSupportFreezeEvidenceInput({
+        draftId: 1.5,
+        fingerprint: null,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a non-string non-null fingerprint", () => {
+    expect(() =>
+      parseSupportFreezeEvidenceInput({ draftId: 1, fingerprint: 42 }),
+    ).toThrow();
+  });
+
+  it("rejects an unlisted top-level field", () => {
+    expect(() =>
+      parseSupportFreezeEvidenceInput({
+        draftId: 1,
+        fingerprint: null,
+        extra: true,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a bare draftId number - the pre-ledger shape", () => {
+    expect(() => parseSupportFreezeEvidenceInput(1)).toThrow();
   });
 });

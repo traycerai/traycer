@@ -358,10 +358,32 @@ export interface SupportLogTailResult {
   readonly truncated: boolean;
 }
 
+export interface SupportFreezeEvidenceInput {
+  readonly draftId: number;
+  /**
+   * Client-side defect fingerprint (`fp:v1:...`) when known at report-open.
+   * A non-null value records an install-local *sighting* (distinct from a
+   * filed report) so the dialog can show "Nth time on this install". Null
+   * for manual opens with no error envelope.
+   */
+  readonly fingerprint: string | null;
+}
+
 export interface SupportFreezeEvidenceResult {
   // Minted once per draft, at freeze time - not per submit call. Every retry
   // (T2) and the GitHub fallback prefill reuse this same id.
   readonly reportId: string;
+}
+
+/**
+ * Install-local occurrence of a fingerprint from the per-install report
+ * ledger. Powers the dialog's "Nth time on this install" strip - never a
+ * cross-device / per-account count.
+ */
+export interface SupportFingerprintOccurrence {
+  readonly firstSeen: number;
+  readonly lastSeen: number;
+  readonly count: number;
 }
 
 export interface SupportReadFrozenLogTailInput {

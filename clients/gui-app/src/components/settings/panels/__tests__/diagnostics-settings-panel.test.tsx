@@ -226,6 +226,7 @@ function makeSupportBridge(overrides: {
         truncated: false,
       }),
     saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
+    getFingerprintOccurrence: () => Promise.resolve(null),
   };
 }
 

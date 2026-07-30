@@ -23,6 +23,7 @@ import type {
   PerWindowStateCapabilities,
   PerWindowStatePatch,
   PerWindowStateUpdateAcknowledgement,
+  SupportFingerprintOccurrence,
   SupportFreezeEvidenceResult,
   SupportLogTarget,
   SupportLogTailResult,
@@ -244,6 +245,7 @@ export interface IpcSupportService {
   }): Promise<SupportLogTailResult>;
   freezeEvidence(
     frozenEvidenceKey: string,
+    fingerprint: string | null,
   ): Promise<SupportFreezeEvidenceResult>;
   discardFrozenEvidence(frozenEvidenceKey: string): void;
   readFrozenLogTail(
@@ -254,6 +256,9 @@ export interface IpcSupportService {
     form: SupportSubmitReportRequest,
     frozenEvidenceKey: string,
   ): Promise<SupportSaveDiagnosticBundleResult>;
+  getFingerprintOccurrence(
+    fingerprint: string,
+  ): Promise<SupportFingerprintOccurrence | null>;
 }
 
 type HostChangeListener = (snapshot: DesktopLocalHostSnapshot | null) => void;
@@ -1383,6 +1388,7 @@ class NullSupportService implements IpcSupportService {
 
   freezeEvidence(
     _frozenEvidenceKey: string,
+    _fingerprint: string | null,
   ): Promise<SupportFreezeEvidenceResult> {
     return Promise.resolve({ reportId: "" });
   }
@@ -1406,6 +1412,12 @@ class NullSupportService implements IpcSupportService {
     _frozenEvidenceKey: string,
   ): Promise<SupportSaveDiagnosticBundleResult> {
     return Promise.resolve({ path: "" });
+  }
+
+  getFingerprintOccurrence(
+    _fingerprint: string,
+  ): Promise<SupportFingerprintOccurrence | null> {
+    return Promise.resolve(null);
   }
 }
 

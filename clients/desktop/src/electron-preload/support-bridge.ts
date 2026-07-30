@@ -4,6 +4,8 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  SupportFingerprintOccurrence,
+  SupportFreezeEvidenceInput,
   SupportFreezeEvidenceResult,
   SupportLogTarget,
   SupportLogTailResult,
@@ -46,7 +48,9 @@ export interface SupportBridgeSurface {
       readonly target: SupportLogTarget;
       readonly tailLines: number;
     }): Promise<SupportLogTailResult>;
-    freezeEvidence(draftId: number): Promise<SupportFreezeEvidenceResult>;
+    freezeEvidence(
+      input: SupportFreezeEvidenceInput,
+    ): Promise<SupportFreezeEvidenceResult>;
     discardFrozenEvidence(draftId: number): Promise<void>;
     readFrozenLogTail(
       input: SupportReadFrozenLogTailInput,
@@ -54,6 +58,9 @@ export interface SupportBridgeSurface {
     saveDiagnosticBundle(
       form: SupportSubmitReportRequest,
     ): Promise<SupportSaveDiagnosticBundleResult>;
+    getFingerprintOccurrence(
+      fingerprint: string,
+    ): Promise<SupportFingerprintOccurrence | null>;
   };
 }
 
@@ -117,10 +124,10 @@ export function buildSupportBridge(): SupportBridgeSurface {
           RunnerHostInvoke.supportTailLog,
           input,
         ) as Promise<SupportLogTailResult>,
-      freezeEvidence: (draftId) =>
+      freezeEvidence: (input) =>
         ipcRenderer.invoke(
           RunnerHostInvoke.supportFreezeEvidence,
-          draftId,
+          input,
         ) as Promise<SupportFreezeEvidenceResult>,
       discardFrozenEvidence: (draftId) =>
         ipcRenderer.invoke(
@@ -137,6 +144,11 @@ export function buildSupportBridge(): SupportBridgeSurface {
           RunnerHostInvoke.supportSaveDiagnosticBundle,
           form,
         ) as Promise<SupportSaveDiagnosticBundleResult>,
+      getFingerprintOccurrence: (fingerprint) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportGetFingerprintOccurrence,
+          fingerprint,
+        ) as Promise<SupportFingerprintOccurrence | null>,
     },
   };
 }

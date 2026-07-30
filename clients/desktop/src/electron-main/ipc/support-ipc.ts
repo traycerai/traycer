@@ -15,6 +15,7 @@ import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import type {
   SupportCapturedField,
   SupportContextRegistrySnapshot,
+  SupportFreezeEvidenceInput,
   SupportLogTarget,
   SupportPrivateDiagnostics,
   SupportPrivateDiagnosticsCause,
@@ -150,9 +151,25 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.supportFreezeEvidence,
-    (event, draftId: unknown) => {
-      assertInteger(draftId, "supportFreezeEvidence.draftId");
-      return bridge.support.freezeEvidence(frozenEvidenceKey(event, draftId));
+    (event, input: unknown) => {
+      const parsed = parseSupportFreezeEvidenceInput(input);
+      return bridge.support.freezeEvidence(
+        frozenEvidenceKey(event, parsed.draftId),
+        parsed.fingerprint,
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.supportGetFingerprintOccurrence,
+    (_event, fingerprint: unknown) => {
+      assertString(fingerprint, "supportGetFingerprintOccurrence.fingerprint");
+      if (fingerprint.length === 0) {
+        throw new Error(
+          "supportGetFingerprintOccurrence.fingerprint must be non-empty",
+        );
+      }
+      return bridge.support.getFingerprintOccurrence(fingerprint);
     },
   );
 
@@ -516,5 +533,26 @@ export function parseSupportReadFrozenLogTailInput(
   return {
     draftId: input.draftId,
     target: parseSupportLogTarget(input.target),
+  };
+}
+
+const FREEZE_EVIDENCE_KEYS = new Set(["draftId", "fingerprint"]);
+
+export function parseSupportFreezeEvidenceInput(
+  input: unknown,
+): SupportFreezeEvidenceInput {
+  const context = "supportFreezeEvidence";
+  assertPlainObject(input, context);
+  assertOnlyAllowedKeys(input, FREEZE_EVIDENCE_KEYS, context);
+  assertInteger(input.draftId, `${context}.draftId`);
+  // fingerprint is always present on the wire (null when unknown) - a missing
+  // key is a contract violation, not an optional field left out.
+  assertHasKey(input, "fingerprint", context);
+  return {
+    draftId: input.draftId,
+    fingerprint: parseNullableString(
+      input.fingerprint,
+      `${context}.fingerprint`,
+    ),
   };
 }

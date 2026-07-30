@@ -184,7 +184,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
-        await service.freezeEvidence(KEY);
+        await service.freezeEvidence(KEY, null);
         await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
@@ -212,7 +212,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
   it("tags an absent layer0 record without fabricating a structured context", async () => {
     await withPidMetadataFile(undefined, async (hostLayout) => {
       const service = buildService(hostLayout);
-      await service.freezeEvidence(KEY);
+      await service.freezeEvidence(KEY, null);
       await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
       expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
@@ -252,7 +252,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
-        await service.freezeEvidence(KEY);
+        await service.freezeEvidence(KEY, null);
         await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
@@ -302,7 +302,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
-        await service.freezeEvidence(KEY);
+        await service.freezeEvidence(KEY, null);
         await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);

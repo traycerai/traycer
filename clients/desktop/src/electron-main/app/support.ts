@@ -24,6 +24,12 @@ import type {
   SupportSubmitReportResult,
 } from "../../ipc-contracts/window-types";
 import { buildSupportLinks, TRAYCER_SUPPORT_EMAIL } from "./support-links";
+import {
+  getFingerprintOccurrence,
+  recordFiledReport,
+  recordFingerprintSighting,
+  type FingerprintOccurrence,
+} from "./report-ledger";
 
 const LOG_TAIL_LINES = 500;
 // Per attachment. Two logs stay well inside Sentry's envelope limits, and the
@@ -158,6 +164,7 @@ export class DesktopSupportService {
    */
   async freezeEvidence(
     frozenEvidenceKey: string,
+    fingerprint: string | null,
   ): Promise<SupportFreezeEvidenceResult> {
     const existing = this.frozenEvidenceByKey.get(frozenEvidenceKey);
     if (existing !== undefined) {
@@ -166,6 +173,13 @@ export class DesktopSupportService {
       return { reportId: evidence.reportId };
     }
     const reportId = generateReportId();
+    // Sighting is recorded only on first admission of this key, not on the
+    // StrictMode / duplicate-freeze idempotent path above - those must not
+    // inflate "Nth time on this install". Fire-and-forget: a ledger blip
+    // must never block freeze / dialog open.
+    if (fingerprint !== null && fingerprint.length > 0) {
+      void recordFingerprintSighting(fingerprint);
+    }
     const promise = captureFrozenEvidence(
       reportId,
       resolveDesktopLogPath(),
@@ -186,6 +200,16 @@ export class DesktopSupportService {
       this.setFrozenEvidence(frozenEvidenceKey, { kind: "ready", evidence });
     }
     return { reportId };
+  }
+
+  /**
+   * Install-local occurrence info for the dialog's "Nth time on this install"
+   * strip. Backed by the report ledger (userData), never renderer localStorage.
+   */
+  getFingerprintOccurrence(
+    fingerprint: string,
+  ): Promise<FingerprintOccurrence | null> {
+    return getFingerprintOccurrence(fingerprint);
   }
 
   /** Cancel, or a dialog replacing this draft, drops its frozen evidence. */
@@ -355,6 +379,18 @@ export class DesktopSupportService {
         reportId: frozen.reportId,
       });
       return { status: "unconfirmed", reportId: frozen.reportId };
+    }
+    // Only confirmed deliveries land in the filed-report half of the ledger.
+    // unconfirmed/failed/unavailable must not - a phantom entry would inflate
+    // later router counts and fixed-in work. Fire-and-forget: ledger failure
+    // must not turn a successful upload into a failed submit result.
+    const deliveredFingerprint = privateDiagnostics?.fingerprint;
+    if (
+      deliveredFingerprint !== null &&
+      deliveredFingerprint !== undefined &&
+      deliveredFingerprint.length > 0
+    ) {
+      void recordFiledReport(frozen.reportId, deliveredFingerprint);
     }
     return { status: "delivered", reportId: frozen.reportId };
   }

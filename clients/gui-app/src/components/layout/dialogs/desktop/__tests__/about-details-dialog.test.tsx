@@ -32,6 +32,7 @@ function unavailableSupport(): DesktopSupportBridge {
     discardFrozenEvidence: vi.fn(),
     readFrozenLogTail: vi.fn(),
     saveDiagnosticBundle: vi.fn(),
+    getFingerprintOccurrence: vi.fn(),
   };
 }
 

@@ -206,8 +206,26 @@ export interface DesktopSupportLogTailResult {
   readonly truncated: boolean;
 }
 
+export interface DesktopSupportFreezeEvidenceInput {
+  readonly draftId: number;
+  /**
+   * Client-side defect fingerprint when known at report-open. Non-null
+   * records an install-local sighting for "Nth time on this install".
+   */
+  readonly fingerprint: string | null;
+}
+
 export interface DesktopSupportFreezeEvidenceResult {
   readonly reportId: string;
+}
+
+/**
+ * Install-local occurrence of a fingerprint. Copy must say "on this install".
+ */
+export interface DesktopFingerprintOccurrence {
+  readonly firstSeen: number;
+  readonly lastSeen: number;
+  readonly count: number;
 }
 
 export interface DesktopSupportReadFrozenLogTailInput {
@@ -427,7 +445,9 @@ export interface DesktopSupportBridge {
     readonly target: DesktopSupportLogTarget;
     readonly tailLines: number;
   }): Promise<DesktopSupportLogTailResult>;
-  freezeEvidence(draftId: number): Promise<DesktopSupportFreezeEvidenceResult>;
+  freezeEvidence(
+    input: DesktopSupportFreezeEvidenceInput,
+  ): Promise<DesktopSupportFreezeEvidenceResult>;
   discardFrozenEvidence(draftId: number): Promise<void>;
   readFrozenLogTail(
     input: DesktopSupportReadFrozenLogTailInput,
@@ -435,6 +455,9 @@ export interface DesktopSupportBridge {
   saveDiagnosticBundle(
     form: DesktopReportIssueForm,
   ): Promise<DesktopSupportSaveDiagnosticBundleResult>;
+  getFingerprintOccurrence(
+    fingerprint: string,
+  ): Promise<DesktopFingerprintOccurrence | null>;
 }
 
 export interface DesktopPowerBridge {
