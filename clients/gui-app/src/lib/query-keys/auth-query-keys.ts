@@ -10,4 +10,16 @@ export const authQueryKeys = {
     "user",
     authService,
   ],
+  // Devices & Sessions account-security list, keyed to the live AuthService
+  // instance so sign-out/cross-user invalidation drops it with other auth data.
+  userSessions: (authService: object): readonly unknown[] => [
+    "auth",
+    "user-sessions",
+    authService,
+  ],
+  userSessionsMissing: (): readonly unknown[] => [
+    "auth",
+    "user-sessions",
+    "missing",
+  ],
 };

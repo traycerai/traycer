@@ -153,6 +153,35 @@ export const providerIdSchemaV50 = z.enum([
 ]);
 export type ProviderIdV50 = z.infer<typeof providerIdSchemaV50>;
 
+/**
+ * Frozen provider id set as shipped in protocol v6.0 (v5.0 plus omp).
+ *
+ * This line IS released - `cli-v1.1.9` (tagged 2026-07-29) shipped v6.0, so it
+ * is frozen for the same reason v5.0 is: a client in the field strict-decodes
+ * exactly these ids. A new provider opens v7.0 rather than growing this enum.
+ */
+export const providerIdSchemaV60 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+]);
+export type ProviderIdV60 = z.infer<typeof providerIdSchemaV60>;
+
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   "claude-code": "Claude Code",
@@ -1001,7 +1030,8 @@ export const providersListResponseSchemaV40 = z.object({
  * `providerCliStateBaseShapeV40` is the right pin: v4.0 and v5.0 differ only by
  * the id enum, so the twelve keys below are precisely what `cli-v1.1.8` shipped
  * on v5.0. The registry fields live on the live shape and therefore reach
- * clients only through v6.0.
+ * clients only through v7.0 (they briefly rode v6.0 - see
+ * `providerCliStateSchemaV60` for why that line is now pinned too).
  */
 export const providerCliStateSchemaV50 = z.object({
   providerId: providerIdSchemaV50,
@@ -1013,6 +1043,35 @@ export type ProviderCliStateV50 = z.infer<typeof providerCliStateSchemaV50>;
 export const providersListResponseSchemaV50 = z.object({
   providers: z.array(providerCliStateSchemaV50),
 });
+
+/**
+ * Frozen `providers.list` response as shipped in protocol v6.0.
+ *
+ * `cli-v1.1.9` (tagged 2026-07-29) shipped v6.0, which froze it - and the
+ * provider-pack-registry fields were still growing it, exactly as they grew
+ * v5.0 before `cli-v1.1.8` froze that line. Same defect, one version later:
+ * v6.0 pointed at the LIVE response schema, so every field added to the live
+ * base shape landed on an already-released line.
+ *
+ * Pinned the same way v5.0 is: `providerCliStateBaseShapeV40` is the twelve
+ * keys v6.0 actually shipped, since v6.0 differs from v5.0 only by the omp id.
+ * The registry fields live on the live shape and now reach clients only
+ * through v7.0; the v7->v6 downgrade drops them by reparsing through this
+ * schema, which strips keys it does not model.
+ */
+export const providerCliStateSchemaV60 = z.object({
+  providerId: providerIdSchemaV60,
+  ...providerCliStateBaseShapeV40,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+});
+export type ProviderCliStateV60 = z.infer<typeof providerCliStateSchemaV60>;
+
+export const providersListResponseSchemaV60 = z.object({
+  providers: z.array(providerCliStateSchemaV60),
+});
+export type ProvidersListResponseV60 = z.infer<
+  typeof providersListResponseSchemaV60
+>;
 export type ProvidersListResponseV40 = z.infer<
   typeof providersListResponseSchemaV40
 >;

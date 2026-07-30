@@ -88,6 +88,7 @@ function makeWsStreamClient(
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
+    hostCredentialMint: null,
     webSocketFactory: factory,
     dialTimeoutMs: 1000,
     openAckTimeoutMs: 1000,

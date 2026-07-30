@@ -292,6 +292,7 @@ function stubStreamClient(): WsStreamClient<HostStreamRpcRegistry> {
     endpoint: () => null,
     bearer: () => null,
     auth: null,
+    hostCredentialMint: null,
     webSocketFactory: {
       create: () => {
         throw new Error("stream WS factory must not be dialled in tests");

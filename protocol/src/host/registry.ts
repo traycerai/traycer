@@ -412,6 +412,7 @@ import {
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
   providersListResponseSchemaV50,
+  providersListResponseSchemaV60,
   downgradeProviderCliStateToV10,
   downgradeProviderCliStateListToV20,
   downgradeProviderCliStateListToV30,
@@ -1129,6 +1130,16 @@ export const providersListV60 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 6, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
+  // Frozen: `cli-v1.1.9` shipped this line. It pointed at the canonical schema
+  // until then, which is how the provider-pack-registry fields grew an
+  // already-released version - the same way `omp` first tried to ride v5.0.
+  responseSchema: providersListResponseSchemaV60,
+});
+
+export const providersListV70 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 7, minor: 0 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
 });
 
@@ -1138,18 +1149,30 @@ export const providersListUpgradeV5ToV6 = defineUpgradePath<
 >({
   from: { major: 5, minor: 0 },
   to: { major: 6, minor: 0 },
-  // Additive in both directions that matter: a v5.0 provider set is already a
-  // valid v6.0 one (omp simply never appears), and v6.0 adds the
-  // provider-pack-registry fields.
+  // Purely additive: a v5.0 provider set is already a valid v6.0 one (omp
+  // simply never appears).
   //
-  // This is the fill's real home. A v5.0 host predates the registry entirely,
-  // so its providers upgrade to the honest "this host has no managed packs"
-  // reading - same "old host never had this feature" semantics as the
-  // `profiles: []` fill on the v3->v4 hop. It must happen here rather than on
-  // an earlier hop because this is the first bridge whose TARGET schema
-  // actually models the fields; `upgradeResponseToVersion` chains these
-  // callbacks by cast with no re-parse, so a fill onto a frozen target is
-  // simply dropped.
+  // The provider-pack-registry fields are deliberately NOT filled here. Once
+  // `cli-v1.1.9` froze v6.0, `providersListResponseSchemaV60` stopped modelling
+  // them, and `upgradeResponseToVersion` chains these callbacks by cast with no
+  // re-parse - so a fill onto a frozen target is simply dropped. They are
+  // filled on the v6.0 -> v7.0 hop instead, whose target is the live shape.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersListUpgradeV6ToV7 = defineUpgradePath<
+  typeof providersListV60,
+  typeof providersListV70
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 7, minor: 0 },
+  // The fill's home, moved up one line for the same reason it moved from
+  // v3->v4 to v5->v6 before: this is now the first bridge whose TARGET schema
+  // actually models the provider-pack-registry fields. A v6.0 host either
+  // predates the registry or never reported it on this line, so "nothing to
+  // show" is the honest projection - same semantics as the `profiles: []` fill
+  // on the v3->v4 hop.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({
     providers: response.providers.map((provider) => ({
@@ -1225,6 +1248,100 @@ export const providersListDowngradeV6ToV1 = defineDowngradePath<
   typeof providersListV10
 >({
   from: { major: 6, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV10.parse({
+      providers: downgradeProviderStateListForV10(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV6 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV60
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // The id sets are identical, so this hop exists purely to strip the
+  // provider-pack-registry fields: reparsing through the frozen v6.0 schema
+  // drops the keys it does not model, which is exactly what `cli-v1.1.9`
+  // expects to receive.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV60.parse({
+      providers: response.providers,
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV5 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV50
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV50.parse({
+      providers: downgradeProviderCliStateListToV50(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV4 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV40
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV40.parse({
+      providers: downgradeProviderCliStateListToV40(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV3 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV30
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV30.parse({
+      providers: downgradeProviderCliStateListToV30(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV2 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV20
+>({
+  from: { major: 7, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: providersListResponseSchemaV20.parse({
+      providers: downgradeProviderCliStateListToV20(response.providers),
+    }),
+  }),
+});
+
+export const providersListDowngradeV7ToV1 = defineDowngradePath<
+  typeof providersListV70,
+  typeof providersListV10
+>({
+  from: { major: 7, minor: 0 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -4316,6 +4433,23 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         3: providersListDowngradeV6ToV3,
         4: providersListDowngradeV6ToV4,
         5: providersListDowngradeV6ToV5,
+      },
+    },
+    7: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersListV70,
+          upgradeFromPreviousVersion: providersListUpgradeV6ToV7,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: providersListDowngradeV7ToV1,
+        2: providersListDowngradeV7ToV2,
+        3: providersListDowngradeV7ToV3,
+        4: providersListDowngradeV7ToV4,
+        5: providersListDowngradeV7ToV5,
+        6: providersListDowngradeV7ToV6,
       },
     },
   },
