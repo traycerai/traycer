@@ -109,6 +109,14 @@ function createDeferredResponse(): DeferredResponse {
   };
 }
 
+/**
+ * The signal a live TanStack query hands `fetchUserSessions`: never aborted, so
+ * these cases exercise the ordinary read rather than the cancellation path.
+ */
+function liveQuerySignal(): AbortSignal {
+  return new AbortController().signal;
+}
+
 function ok(): Promise<Response> {
   return Promise.resolve(new Response("{}", { status: 200 }));
 }
@@ -517,7 +525,7 @@ describe("AuthService", () => {
       return status(500);
     });
 
-    const response = await service.fetchUserSessions();
+    const response = await service.fetchUserSessions(liveQuerySignal());
 
     expect(response?.sessions).toEqual([
       expect.objectContaining({
@@ -566,7 +574,7 @@ describe("AuthService", () => {
 
     // First poll: repair is attempted once, then the unrepaired listing
     // still surfaces the error so the caller/UI can report the problem.
-    await expect(service.fetchUserSessions()).rejects.toThrow(
+    await expect(service.fetchUserSessions(liveQuerySignal())).rejects.toThrow(
       "Couldn't register this signed-in session yet.",
     );
     expect(refreshCalls).toHaveLength(1);
@@ -574,15 +582,60 @@ describe("AuthService", () => {
     // A later poll (every 30s, or on window focus) with the SAME
     // now-current bearer must not re-spend another refresh rotation or
     // throw indefinitely; it returns the unidentified listing instead.
-    await expect(service.fetchUserSessions()).resolves.toEqual({
-      sessions: [],
-    });
+    await expect(service.fetchUserSessions(liveQuerySignal())).resolves.toEqual(
+      {
+        sessions: [],
+      },
+    );
     expect(refreshCalls).toHaveLength(1);
     expect(seenSessionBearers).toEqual([
       "Bearer legacy-token",
       "Bearer repaired-1",
       "Bearer repaired-1",
     ]);
+  });
+
+  it("does not spend the repair refresh rotation for a read cancelled while the list is in flight", async () => {
+    // Identity fencing cannot cover this on its own: a revoke invalidating the
+    // panel query, an unmount, or a focus refetch superseding the 30s poll all
+    // leave the SAME account signed in, so every authority check still passes.
+    // Only the query's signal says nobody is waiting - and the repair below
+    // spends a single-use, cross-process refresh rotation.
+    const { service, host } = makeService();
+    await host.tokenStore.signIn(
+      { token: "legacy-token", refreshToken: "legacy-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    await service.start();
+
+    restoreFetch();
+    const listRequest = createDeferredResponse();
+    const refreshCalls: string[] = [];
+    restoreFetch = installFetch((input, init) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === SESSIONS_URL) {
+        return listRequest.promise;
+      }
+      if (url === REFRESH_URL) {
+        refreshCalls.push(String(init?.headers?.Authorization));
+        return okWithRefreshToken("repaired-1");
+      }
+      if (url === VALIDATION_URL) {
+        return okWithProfile();
+      }
+      return status(500);
+    });
+
+    const controller = new AbortController();
+    const pending = service.fetchUserSessions(controller.signal);
+    controller.abort();
+
+    // The listing lands needing repair - an empty list for a pre-tracking
+    // credential is exactly the shape that would otherwise rotate.
+    listRequest.resolve(await okWithSessions([]));
+
+    await expect(pending).rejects.toThrow();
+    expect(refreshCalls).toEqual([]);
   });
 
   it("drops an account A session-list response that resolves after account B replaces it", async () => {
@@ -615,7 +668,7 @@ describe("AuthService", () => {
       return status(500);
     });
 
-    const staleList = service.fetchUserSessions();
+    const staleList = service.fetchUserSessions(liveQuerySignal());
     await vi.waitFor(() => {
       expect(initialListCalls).toBe(1);
     });
@@ -662,7 +715,7 @@ describe("AuthService", () => {
       ),
     );
 
-    const staleList = service.fetchUserSessions();
+    const staleList = service.fetchUserSessions(liveQuerySignal());
     await vi.waitFor(() => {
       expect(seenRefreshTokens).toEqual(["account-a-refresh"]);
     });
