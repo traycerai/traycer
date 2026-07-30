@@ -160,20 +160,57 @@ export function decodeHostLayer0Record(
   return { status: "unrecognized", raw: JSON.stringify(record) };
 }
 
+type Layer0UnavailableStringCause = Extract<Layer0UnavailableCause, string>;
+type Layer0UnavailableObjectCause = Exclude<Layer0UnavailableCause, string>;
+type Layer0UnavailableObjectKind = Layer0UnavailableObjectCause["kind"];
+
+type GuardedLayer0UnavailableStringCause =
+  | "addon-load-failed"
+  | "fs-unsupported"
+  | "lock-path-invalid"
+  | "sharing-violation-unattested";
+type GuardedLayer0UnavailableObjectKind = "os-error";
+
+type AssertNever<TValue extends never> = TValue;
+
+/**
+ * Compile-time-only, bidirectional coverage tripwires for the runtime guard
+ * below. A guarded literal outside the protocol union, or a protocol string
+ * cause/object kind missing from the guard, fails the desktop compile. Runtime
+ * decoding remains fail-open for version skew.
+ */
+type _Layer0UnavailableStringGuardCoverage = [
+  AssertNever<
+    Exclude<GuardedLayer0UnavailableStringCause, Layer0UnavailableStringCause>
+  >,
+  AssertNever<
+    Exclude<Layer0UnavailableStringCause, GuardedLayer0UnavailableStringCause>
+  >,
+];
+type _Layer0UnavailableObjectGuardCoverage = [
+  AssertNever<
+    Exclude<GuardedLayer0UnavailableObjectKind, Layer0UnavailableObjectKind>
+  >,
+  AssertNever<
+    Exclude<Layer0UnavailableObjectKind, GuardedLayer0UnavailableObjectKind>
+  >,
+];
+
 function isLayer0UnavailableCause(
   value: unknown,
 ): value is Layer0UnavailableCause {
   if (
-    value === "addon-load-failed" ||
-    value === "fs-unsupported" ||
-    value === "lock-path-invalid" ||
-    value === "sharing-violation-unattested"
+    value === ("addon-load-failed" satisfies Layer0UnavailableStringCause) ||
+    value === ("fs-unsupported" satisfies Layer0UnavailableStringCause) ||
+    value === ("lock-path-invalid" satisfies Layer0UnavailableStringCause) ||
+    value ===
+      ("sharing-violation-unattested" satisfies Layer0UnavailableStringCause)
   ) {
     return true;
   }
   return (
     isPlainObject(value) &&
-    value.kind === "os-error" &&
+    value.kind === ("os-error" satisfies Layer0UnavailableObjectKind) &&
     typeof value.syscall === "string" &&
     typeof value.code === "string" &&
     (typeof value.fsType === "string" || value.fsType === null)
