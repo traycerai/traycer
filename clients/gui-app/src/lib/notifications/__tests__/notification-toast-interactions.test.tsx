@@ -22,6 +22,7 @@ const NOTIFICATION: MergedNotificationRow = {
   feedId: "host:n-1",
   source: "host",
   sourceId: "n-1",
+  originHostId: null,
   createdAt: 10,
   readAt: null,
   title: "Checkout notifications",

@@ -278,6 +278,11 @@ import {
   hostNotificationsSetConfig,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
+  hostNotificationsCloudFeedSubscribeV10,
+  hostNotificationsCloudFeedMarkRead,
+  hostNotificationsCloudFeedResolve,
+  hostNotificationsCloudFeedClear,
+  hostNotificationsCloudFeedClearAll,
   hostNotificationsSubscribeV10,
   notificationsSubscribeV10,
   notificationsSubscribeV11,
@@ -2752,6 +2757,58 @@ const HOST_RPC_REGISTRY_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "host.notifications.cloudFeed.markRead": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsCloudFeedMarkRead,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.cloudFeed.resolve": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsCloudFeedResolve,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.cloudFeed.clear": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsCloudFeedClear,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "host.notifications.cloudFeed.clearAll": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsCloudFeedClearAll,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "host.notifications.indicatorState": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5079,6 +5136,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         1: {
           contract: hostNotificationsFeedSubscribeV11,
+        },
+      },
+    },
+  },
+  "host.notifications.cloudFeed.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostNotificationsCloudFeedSubscribeV10,
         },
       },
     },

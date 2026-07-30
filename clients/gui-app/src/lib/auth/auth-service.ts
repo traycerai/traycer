@@ -1319,6 +1319,14 @@ export class AuthService {
     }
 
     if (outcome.kind === "valid") {
+      // Subscription entitlement can change without a bearer rotation (for
+      // example after a purchase or restore). Project every successful
+      // validation so entitlement-gated surfaces react without an app restart.
+      useAuthStore
+        .getState()
+        .setSubscriptionStatus(
+          outcome.user.userSubscription.subscriptionStatus,
+        );
       if (outcome.user.user.id !== currentUserId) {
         // The bearer now validates to a different user (a cross-user re-seed) -
         // treat as a fresh sign-in so the old context aborts cleanly.

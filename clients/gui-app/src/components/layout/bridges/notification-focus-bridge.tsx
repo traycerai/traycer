@@ -8,8 +8,12 @@ import {
 import {
   feedIdFromEnvelopeFeed,
   parseNotificationActivationPayload,
+  type NotificationActivationEnvelopeFeedSource,
 } from "@/lib/notifications/notification-activation-envelope";
-import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
+import {
+  notificationPayloadRequiresOriginHost,
+  useNotificationActivation,
+} from "@/hooks/notifications/use-notification-activation";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import {
@@ -109,10 +113,15 @@ export function NotificationFocusBridge(): null {
         useNotificationsPopoverStore.getState().setOpen(true);
         return;
       }
+      if (notificationPayloadRequiresOriginHost(parsed.payload)) {
+        useNotificationsPopoverStore.getState().setOpen(true);
+        return;
+      }
       activate({
         payload: parsed.payload,
         receivedAt: notificationEvent.receivedAt,
         feedId: null,
+        originHostId: null,
         onResult: null,
       });
       return;
@@ -123,12 +132,17 @@ export function NotificationFocusBridge(): null {
       useNotificationsPopoverStore.getState().setOpen(true);
       return;
     }
+    const requiresOriginHost = notificationPayloadRequiresOriginHost(
+      envelope.route,
+    );
     if (
-      envelope.originHostId !== null &&
-      envelope.originHostId !== activeHostId &&
-      !switchToOriginHost({
+      isOriginUnavailable({
         route: envelope.route,
+        feedSource: envelope.feed.source,
         originHostId: envelope.originHostId,
+        originHostAvailable: originHostEntry?.status === "available",
+        activeHostId,
+        requiresOriginHost,
         directory: hostDirectory,
         client: hostClient,
       })
@@ -143,6 +157,7 @@ export function NotificationFocusBridge(): null {
       payload: envelope.route,
       receivedAt: notificationEvent.receivedAt,
       feedId,
+      originHostId: envelope.originHostId,
       onResult: activationResultHandler({
         row: candidateRow,
         feedId,
@@ -164,6 +179,36 @@ export function NotificationFocusBridge(): null {
   ]);
 
   return null;
+}
+
+function isOriginUnavailable(input: {
+  readonly route: NotificationPayload;
+  readonly feedSource: NotificationActivationEnvelopeFeedSource;
+  readonly originHostId: string | null;
+  readonly originHostAvailable: boolean;
+  readonly activeHostId: string | null;
+  readonly requiresOriginHost: boolean;
+  readonly directory: HostDirectoryService | null;
+  readonly client: HostClient<HostRpcRegistry> | null;
+}): boolean {
+  if (input.requiresOriginHost) {
+    return input.originHostId === null || !input.originHostAvailable;
+  }
+  if (input.feedSource === "cloud" && input.route.kind !== "hostSurface") {
+    return false;
+  }
+  if (
+    input.originHostId === null ||
+    input.originHostId === input.activeHostId
+  ) {
+    return false;
+  }
+  return !switchToOriginHost({
+    route: input.route,
+    originHostId: input.originHostId,
+    directory: input.directory,
+    client: input.client,
+  });
 }
 
 /**
