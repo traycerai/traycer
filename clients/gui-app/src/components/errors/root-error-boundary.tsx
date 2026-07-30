@@ -11,6 +11,8 @@ interface RootErrorBoundaryProps {
 
 interface RootErrorBoundaryState {
   readonly error: unknown;
+  readonly componentStack: string | null;
+  readonly timestamp: number;
 }
 
 /**
@@ -28,17 +30,19 @@ export class RootErrorBoundary extends Component<
 > {
   constructor(props: RootErrorBoundaryProps) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, componentStack: null, timestamp: 0 };
   }
 
   static getDerivedStateFromError(error: unknown): RootErrorBoundaryState {
-    return { error };
+    return { error, componentStack: null, timestamp: 0 };
   }
 
   override componentDidCatch(error: unknown, info: ErrorInfo): void {
+    const componentStack = info.componentStack ?? null;
+    this.setState({ componentStack, timestamp: Date.now() });
     appLogger.errorSummary(
       "[renderer] uncaught error reached RootErrorBoundary",
-      { componentStack: info.componentStack ?? null },
+      { componentStack },
       error,
     );
   }
@@ -59,6 +63,8 @@ export class RootErrorBoundary extends Component<
     return (
       <AppErrorScreen
         error={this.state.error}
+        componentStack={this.state.componentStack}
+        timestamp={this.state.timestamp}
         onRefresh={this.handleRefresh}
         onReturnHome={this.handleReturnHome}
       />

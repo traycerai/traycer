@@ -1,5 +1,9 @@
 import { create } from "zustand";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
+import {
+  buildReportIssueDraftContext,
+  type ReportIssueDraftContext,
+} from "@/lib/report-issue-draft-context";
 
 export type DesktopDialogKind =
   | "about-details"
@@ -12,12 +16,22 @@ export interface DesktopDialogState {
   readonly activeDialog: DesktopDialogKind | null;
   readonly reportIssueAvailable: boolean;
   readonly reportIssueContext: ReportIssueContext | null;
+  /**
+   * Full draft context (public prefill + private diagnostics), captured
+   * immutably at open time alongside `reportIssueDraftId`. `reportIssueContext`
+   * stays the back-compat field existing readers use; this is additive so
+   * ticket 04's IPC wiring can read `privateDiagnostics` without touching the
+   * existing contract.
+   */
+  readonly reportIssueDraftContext: ReportIssueDraftContext | null;
   readonly reportIssueDraftId: number;
   readonly openAboutDetails: () => void;
   readonly openLogs: () => void;
   readonly openEpicInNewWindow: () => void;
   readonly openReportIssue: () => void;
   readonly openReportIssueWithContext: (context: ReportIssueContext) => void;
+  /** Used by surfaces that captured a structured private cause (T3 migration). */
+  readonly openReportIssueDraft: (draft: ReportIssueDraftContext) => void;
   readonly closeReportIssueDraft: (draftId: number) => void;
   readonly setReportIssueAvailable: (available: boolean) => void;
   readonly openInstallGuidance: () => void;
@@ -28,6 +42,7 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
   activeDialog: null,
   reportIssueAvailable: false,
   reportIssueContext: null,
+  reportIssueDraftContext: null,
   reportIssueDraftId: 0,
   openAboutDetails: () => {
     set({ activeDialog: "about-details" });
@@ -42,6 +57,7 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
     set((state) => ({
       activeDialog: "report-issue",
       reportIssueContext: null,
+      reportIssueDraftContext: null,
       reportIssueDraftId: state.reportIssueDraftId + 1,
     }));
   },
@@ -49,6 +65,15 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
     set((state) => ({
       activeDialog: "report-issue",
       reportIssueContext: context,
+      reportIssueDraftContext: buildReportIssueDraftContext(context, null),
+      reportIssueDraftId: state.reportIssueDraftId + 1,
+    }));
+  },
+  openReportIssueDraft: (draft) => {
+    set((state) => ({
+      activeDialog: "report-issue",
+      reportIssueContext: draft.publicPrefill,
+      reportIssueDraftContext: draft,
       reportIssueDraftId: state.reportIssueDraftId + 1,
     }));
   },
@@ -56,7 +81,11 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
     set((state) =>
       state.activeDialog === "report-issue" &&
       state.reportIssueDraftId === draftId
-        ? { activeDialog: null, reportIssueContext: null }
+        ? {
+            activeDialog: null,
+            reportIssueContext: null,
+            reportIssueDraftContext: null,
+          }
         : state,
     );
   },
@@ -67,6 +96,10 @@ export const useDesktopDialogStore = create<DesktopDialogState>((set) => ({
     set({ activeDialog: "install-guidance" });
   },
   close: () => {
-    set({ activeDialog: null, reportIssueContext: null });
+    set({
+      activeDialog: null,
+      reportIssueContext: null,
+      reportIssueDraftContext: null,
+    });
   },
 }));

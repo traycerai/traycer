@@ -1,7 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { appLogger } from "@/lib/logger";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
-import { createReportIssueContext } from "@/lib/report-issue-context";
+import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context";
 
 interface BlockErrorBoundaryProps {
   /** Headline shown in the fallback panel. */
@@ -13,6 +13,7 @@ interface BlockErrorBoundaryProps {
 
 interface BlockErrorBoundaryState {
   readonly error: Error | null;
+  readonly componentStack: string | null;
 }
 
 /**
@@ -35,29 +36,29 @@ export class BlockErrorBoundary extends Component<
 > {
   constructor(props: BlockErrorBoundaryProps) {
     super(props);
-    this.state = { error: null };
+    this.state = { error: null, componentStack: null };
   }
 
   static getDerivedStateFromError(error: Error): BlockErrorBoundaryState {
-    return { error };
+    return { error, componentStack: null };
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {
+    const componentStack = info.componentStack ?? null;
+    this.setState({ componentStack });
     appLogger.errorSummary(
       "[artifact-editor] block NodeView crashed",
-      {
-        componentStack: info.componentStack ?? null,
-      },
+      { componentStack },
       error,
     );
   }
 
   private reset = (): void => {
-    this.setState({ error: null });
+    this.setState({ error: null, componentStack: null });
   };
 
   override render(): ReactNode {
-    const { error } = this.state;
+    const { error, componentStack } = this.state;
     if (error === null) {
       return this.props.children;
     }
@@ -81,11 +82,22 @@ export class BlockErrorBoundary extends Component<
             Retry
           </button>
           <ReportIssueAction
-            context={createReportIssueContext({
+            context={createReportIssueDraftContext({
               title: this.props.title,
+              // Real error text goes ONLY into `cause` below, never here -
+              // this is the public GitHub-issue prefill.
               message: null,
               code: null,
               source: "Artifact editor",
+              cause: {
+                type: error.name,
+                message: error.message,
+                stack: error.stack ?? null,
+                componentStack,
+                errorCode: null,
+                sourceAction: "Artifact editor",
+                timestamp: Date.now(),
+              },
             })}
             presentation="icon"
             className={undefined}

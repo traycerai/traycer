@@ -2,12 +2,25 @@ import type { ReactNode } from "react";
 import { toast, type ExternalToast } from "sonner";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
+import {
+  isReportIssueDraftContext,
+  type ReportIssueDraftContext,
+} from "@/lib/report-issue-draft-context";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+
+/**
+ * Widened rather than given a new parameter (guardrail G9): the ~50+
+ * existing callers all pass a plain {@link ReportIssueContext} and are
+ * untouched. A caller with a structured private cause to attach can pass a
+ * {@link ReportIssueDraftContext} instead - `showReportableToast` branches
+ * on which one it got.
+ */
+type ReportableToastContext = ReportIssueContext | ReportIssueDraftContext;
 
 export function reportableErrorToast(
   message: ReactNode,
   options: ExternalToast | undefined,
-  privacySafeContext: ReportIssueContext,
+  privacySafeContext: ReportableToastContext,
 ): string | number {
   return showReportableToast(message, options, privacySafeContext, toast.error);
 }
@@ -15,7 +28,7 @@ export function reportableErrorToast(
 export function reportableWarningToast(
   message: ReactNode,
   options: ExternalToast | undefined,
-  privacySafeContext: ReportIssueContext,
+  privacySafeContext: ReportableToastContext,
 ): string | number {
   return showReportableToast(
     message,
@@ -28,7 +41,7 @@ export function reportableWarningToast(
 function showReportableToast(
   message: ReactNode,
   options: ExternalToast | undefined,
-  privacySafeContext: ReportIssueContext,
+  privacySafeContext: ReportableToastContext,
   showToast: typeof toast.error,
 ): string | number {
   const state = useDesktopDialogStore.getState();
@@ -51,7 +64,7 @@ function showReportableToast(
 }
 
 function createReportAction(
-  context: ReportIssueContext,
+  context: ReportableToastContext,
 ): NonNullable<ExternalToast["cancel"]> {
   return {
     label: "Report issue",
@@ -61,7 +74,11 @@ function createReportAction(
       Analytics.getInstance().track(AnalyticsEvent.ReportIssueOpened, {
         source: "notification",
       });
-      current.openReportIssueWithContext(context);
+      if (isReportIssueDraftContext(context)) {
+        current.openReportIssueDraft(context);
+      } else {
+        current.openReportIssueWithContext(context);
+      }
     },
   };
 }

@@ -14,6 +14,8 @@ describe("<AppErrorScreen />", () => {
     render(
       <AppErrorScreen
         error={new Error("Cannot subscribe with a closed WsStreamClient.")}
+        componentStack={null}
+        timestamp={0}
         onRefresh={onRefresh}
         onReturnHome={onReturnHome}
       />,
@@ -38,6 +40,8 @@ describe("<AppErrorScreen />", () => {
     render(
       <AppErrorScreen
         error={null}
+        componentStack={null}
+        timestamp={0}
         onRefresh={() => undefined}
         onReturnHome={() => undefined}
       />,
@@ -56,6 +60,8 @@ describe("<AppErrorScreen />", () => {
     render(
       <AppErrorScreen
         error={new Error("x".repeat(500))}
+        componentStack={null}
+        timestamp={0}
         onRefresh={() => undefined}
         onReturnHome={() => undefined}
       />,

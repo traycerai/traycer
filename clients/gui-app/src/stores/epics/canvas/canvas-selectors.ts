@@ -177,6 +177,38 @@ export function useActiveEpicArtifactId(
 }
 
 /**
+ * Same active-tile resolution and filtering as
+ * {@link makeSelectActiveEpicArtifactId}, but returns the ref itself rather
+ * than just its id - callers that need to discriminate the active tile's
+ * kind (e.g. "chat" vs "terminal-agent" for support-context capture) would
+ * otherwise have to re-walk the pane tree.
+ */
+export function makeSelectActiveEpicArtifactRef(tabId: string | undefined) {
+  return (state: EpicCanvasStore): EpicCanvasTileRef | null => {
+    if (tabId === undefined) return null;
+    const canvas = state.canvasByTabId[tabId] ?? EMPTY_CANVAS;
+    if (canvas.activePaneId === null) return null;
+    const pane = findPaneById(canvas.root, canvas.activePaneId);
+    if (pane === null || pane.activeTabId === null) return null;
+    const active = canvas.tilesByInstanceId[pane.activeTabId];
+    if (active === undefined) return null;
+    if (active.type === WORKSPACE_FILE_TAB_KIND) return null;
+    if (isDiffTileRef(active)) return null;
+    return active;
+  };
+}
+
+export function useActiveEpicArtifactRef(
+  tabId: string | undefined,
+): EpicCanvasTileRef | null {
+  const selector = useMemo(
+    () => makeSelectActiveEpicArtifactRef(tabId),
+    [tabId],
+  );
+  return useEpicCanvasStore(selector);
+}
+
+/**
  * Whether `nodeId` is the active artifact in `tabId`, as a boolean. Sidebar tree
  * nodes subscribe per-node via this instead of receiving the tab-wide
  * `activeArtifactId` as a prop: with the id threaded to every node, selecting an
