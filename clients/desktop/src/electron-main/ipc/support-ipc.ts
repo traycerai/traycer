@@ -202,6 +202,20 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
       );
     },
   );
+
+  // Ticket 09 / T6: same wire shape as `supportSubmitReport` (draftId + the
+  // five public fields + optional privateDiagnostics), so it reuses that
+  // parser rather than duplicating an identical one.
+  bridge.handleInvoke(
+    RunnerHostInvoke.supportBuildPublicDraft,
+    (event, form: unknown) => {
+      const parsed = parseSupportSubmitReportRequest(form);
+      return bridge.support.buildPublicDraft(
+        parsed,
+        frozenEvidenceKey(event, parsed.draftId),
+      );
+    },
+  );
 }
 
 // A draftId is only unique within one renderer realm (`desktop-dialog-store`

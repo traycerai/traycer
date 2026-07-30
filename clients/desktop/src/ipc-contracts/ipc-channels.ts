@@ -96,6 +96,9 @@ export const RunnerHostInvoke = {
   // filed reports write on delivered submit - neither is renderer-writable.
   supportGetFingerprintOccurrence:
     "runnerHost:support:ledger:fingerprintOccurrence:get",
+  // Ticket 09 / T6: the sole main-process producer of public (GitHub-bound)
+  // text, always behind the deep scrubber.
+  supportBuildPublicDraft: "runnerHost:support:publicDraft:build",
   serviceInstall: "runnerHost:service:install",
   serviceUninstall: "runnerHost:service:uninstall",
   serviceStart: "runnerHost:service:start",

@@ -4,6 +4,7 @@ import {
   RunnerHostInvoke,
 } from "../ipc-contracts/ipc-channels";
 import type {
+  SupportBuildPublicDraftResult,
   SupportFingerprintOccurrence,
   SupportFreezeEvidenceInput,
   SupportFreezeEvidenceResult,
@@ -61,6 +62,9 @@ export interface SupportBridgeSurface {
     getFingerprintOccurrence(
       fingerprint: string,
     ): Promise<SupportFingerprintOccurrence | null>;
+    buildPublicDraft(
+      form: SupportSubmitReportRequest,
+    ): Promise<SupportBuildPublicDraftResult>;
   };
 }
 
@@ -149,6 +153,11 @@ export function buildSupportBridge(): SupportBridgeSurface {
           RunnerHostInvoke.supportGetFingerprintOccurrence,
           fingerprint,
         ) as Promise<SupportFingerprintOccurrence | null>,
+      buildPublicDraft: (form) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.supportBuildPublicDraft,
+          form,
+        ) as Promise<SupportBuildPublicDraftResult>,
     },
   };
 }

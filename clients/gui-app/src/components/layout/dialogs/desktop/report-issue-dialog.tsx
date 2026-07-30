@@ -19,8 +19,12 @@ import { cn } from "@/lib/utils";
 import { buildGitHubIssueUrl } from "@traycer-clients/shared/support/issue-reporter";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
-import { serializeReportIssuePrivateDiagnostics } from "@/lib/report-issue-draft-context";
+import {
+  serializeReportIssuePrivateDiagnostics,
+  type ReportIssueDraftContext,
+} from "@/lib/report-issue-draft-context";
 import type {
+  DesktopReportIssueForm,
   DesktopSubmitReportResult,
   DesktopSupportSnapshot,
 } from "@/lib/windows/types";
@@ -110,17 +114,9 @@ export function ReportIssueDialog(
       submission: ReportIssueSubmission,
     ): Promise<DesktopSubmitReportResult> => {
       if (support === null) throw new Error("Support bridge unavailable");
-      return support.submitReport({
-        draftId: submission.draftId,
-        ...submission.form,
-        ...(draftContext === null
-          ? {}
-          : {
-              privateDiagnostics: serializeReportIssuePrivateDiagnostics(
-                draftContext.privateDiagnostics,
-              ),
-            }),
-      });
+      return support.submitReport(
+        buildReportIssueFormRequest(submission, draftContext),
+      );
     },
     onSuccess: async (result, submission) => {
       Analytics.getInstance().track(
@@ -131,23 +127,7 @@ export function ReportIssueDialog(
       // banner (see DeliveryOutcomeBanner) instead of the GitHub hand-off -
       // only a confirmed delivery is terminal here.
       if (result.status !== "delivered") return;
-      const url = buildSupportIssueUrl(
-        submission.snapshot,
-        submission.form,
-        reportId,
-      );
-      // openExternalLink is Promise<void> across the shared contract; the
-      // underlying open success boolean is not available here. Emit
-      // "attempted" after the await only - never claim GitHub publication.
-      try {
-        await runnerHost.openExternalLink(url);
-      } catch {
-        // Browser open can fail; the attempt still happened and is tracked.
-      }
-      Analytics.getInstance().track(
-        AnalyticsEvent.ReportIssuePublicOpenAttempted,
-        null,
-      );
+      await openPublicDraftInBrowser(submission);
       closeReportIssueDraft(submission.draftId);
     },
     onError: (error) => {
@@ -217,18 +197,37 @@ export function ReportIssueDialog(
       setForm((prev) => ({ ...prev, [field]: e.target.value }));
 
   const retry = () => submitMutation.mutate({ draftId, form, snapshot });
-  const openGithubFallback = async (): Promise<void> => {
-    const url = buildSupportIssueUrl(snapshot, form, reportId);
+
+  // Sole call site for `support:buildPublicDraft` (ticket 09 / T6) - the
+  // terminal-delivered hand-off and every fallback ("Report on GitHub
+  // instead", "Open a GitHub issue") route through here, so no path in this
+  // dialog can produce a public URL except via the main-process scrub
+  // boundary. `buildGitHubIssueUrl` is a pure field-to-URL assembler; every
+  // text transform already happened server-side.
+  const openPublicDraftInBrowser = async (
+    submission: ReportIssueSubmission,
+  ): Promise<void> => {
+    if (support === null) return;
+    const draft = await support
+      .buildPublicDraft(buildReportIssueFormRequest(submission, draftContext))
+      .catch(() => null);
+    if (draft === null) return;
+    const url = buildGitHubIssueUrl(draft);
+    // openExternalLink is Promise<void> across the shared contract; the
+    // underlying open success boolean is not available here. Emit
+    // "attempted" after the await only - never claim GitHub publication.
     try {
       await runnerHost.openExternalLink(url);
     } catch {
-      // Attempt still happened and is tracked below.
+      // Browser open can fail; the attempt still happened and is tracked.
     }
     Analytics.getInstance().track(
       AnalyticsEvent.ReportIssuePublicOpenAttempted,
       null,
     );
   };
+  const openGithubFallback = (): Promise<void> =>
+    openPublicDraftInBrowser({ draftId, form, snapshot });
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -454,45 +453,23 @@ function reportIssueFormFromContext(
   };
 }
 
-function buildSupportIssueUrl(
-  snapshot: DesktopSupportSnapshot | null,
-  form: ReportIssueForm,
-  reportId: string | null,
-): string {
-  return buildGitHubIssueUrl({
-    ...supportSnapshotIssueFields(snapshot),
-    title: form.title,
-    whatHappened: form.whatHappened,
-    stepsToReproduce: form.stepsToReproduce,
-    expectedBehavior: form.expectedBehavior,
-    actualBehavior: form.actualBehavior,
-    reportId,
-  });
-}
-
-function supportSnapshotIssueFields(snapshot: DesktopSupportSnapshot | null) {
+// Shared by `submitReport` and `buildPublicDraft`: both take the identical
+// wire shape (draftId + the five public fields + optional privateDiagnostics)
+// - see `SupportSubmitReportRequest` (`ipc-contracts/window-types.ts`).
+function buildReportIssueFormRequest(
+  submission: ReportIssueSubmission,
+  draftContext: ReportIssueDraftContext | null,
+): DesktopReportIssueForm {
   return {
-    appVersion: snapshot?.appVersion ?? "unknown",
-    platform: snapshot?.platform ?? "unknown",
-    arch: snapshot?.arch ?? "unknown",
-    ...supportRuntimeIssueFields(snapshot),
-    ...supportHostIssueFields(snapshot),
-  };
-}
-
-function supportRuntimeIssueFields(snapshot: DesktopSupportSnapshot | null) {
-  return {
-    electronVersion: snapshot?.versions.electron ?? null,
-    chromeVersion: snapshot?.versions.chrome ?? null,
-    nodeVersion: snapshot?.versions.node ?? null,
-  };
-}
-
-function supportHostIssueFields(snapshot: DesktopSupportSnapshot | null) {
-  return {
-    hostVersion: snapshot?.host.version ?? null,
-    hostStatus: snapshot?.host.status ?? null,
-    hostPid: snapshot?.host.pid ?? null,
+    draftId: submission.draftId,
+    ...submission.form,
+    ...(draftContext === null
+      ? {}
+      : {
+          privateDiagnostics: serializeReportIssuePrivateDiagnostics(
+            draftContext.privateDiagnostics,
+          ),
+        }),
   };
 }
 

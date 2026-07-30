@@ -13,6 +13,7 @@ import { handleGetMetrics } from "./diagnostics";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 import type {
   DesktopAuthSessionSnapshot,
+  SupportBuildPublicDraftResult,
   SupportHostLayer0Snapshot,
   SupportFreezeEvidenceResult,
   SupportLogTarget,
@@ -30,6 +31,8 @@ import {
   recordFingerprintSighting,
   type FingerprintOccurrence,
 } from "./report-ledger";
+import { buildPublicDraftFields } from "./support-public-draft";
+import { deepScrubSupportValue, scrubSupportText } from "./support-scrubber";
 
 const LOG_TAIL_LINES = 500;
 // Per attachment. Two logs stay well inside Sentry's envelope limits, and the
@@ -270,21 +273,38 @@ export class DesktopSupportService {
       return null;
     });
 
-    const message = [
-      `Title: ${form.title}`,
-      layer0MessageLine(snapshot.host.layer0),
-      form.whatHappened && `What happened:\n${form.whatHappened}`,
-      form.stepsToReproduce && `Steps to reproduce:\n${form.stepsToReproduce}`,
-      form.expectedBehavior && `Expected:\n${form.expectedBehavior}`,
-      form.actualBehavior && `Actual:\n${form.actualBehavior}`,
-      `Report ID: ${frozen.reportId}`,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    // Scrubbed as one composed string, not field-by-field: every piece
+    // (title, narrative, steps, expected/actual) is user- or error-derived
+    // free text, and `scrubSupportText` operates line-wise with no length
+    // cap either way, so there is no correctness difference - just one call
+    // instead of five.
+    const message = scrubSupportText(
+      [
+        `Title: ${form.title}`,
+        layer0MessageLine(snapshot.host.layer0),
+        form.whatHappened && `What happened:\n${form.whatHappened}`,
+        form.stepsToReproduce &&
+          `Steps to reproduce:\n${form.stepsToReproduce}`,
+        form.expectedBehavior && `Expected:\n${form.expectedBehavior}`,
+        form.actualBehavior && `Actual:\n${form.actualBehavior}`,
+        `Report ID: ${frozen.reportId}`,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    );
 
     const userEmail = snapshot.user.email;
     const privateDiagnostics = form.privateDiagnostics;
-    const contexts: Record<string, Record<string, unknown>> = {
+    // Deep-scrubbed as a whole right before it rides in the Sentry event:
+    // `layer0.evidence`/`raw` are free text off a filesystem error and can
+    // carry absolute paths (host.log is unredacted at source), and
+    // `errorCause.stack`/`.message` are exactly the private strings this
+    // scrubber exists for. `registry` and `processMetrics` are opaque
+    // ids/numbers by contract - scrubbing them is a no-op, not a risk.
+    const contexts: Record<
+      string,
+      Record<string, unknown>
+    > = deepScrubSupportValue({
       ...(snapshot.host.layer0 === null
         ? {}
         : { layer0: { ...snapshot.host.layer0 } }),
@@ -300,7 +320,7 @@ export class DesktopSupportService {
       ...(privateDiagnostics === undefined
         ? {}
         : { registry: { ...privateDiagnostics.registry } }),
-    };
+    });
     try {
       Sentry.captureFeedback(
         {
@@ -397,9 +417,10 @@ export class DesktopSupportService {
 
   /**
    * Written on the unavailable path (Flow 4 Case B's "Save diagnostic
-   * bundle"). Ships without log tails until ticket 09's scrubber lands - a
-   * host.log line is never redacted at source, and this bundle is a local
-   * file the user can hand to anyone, so it must not carry one unscrubbed.
+   * bundle"). Every private string is scrubbed, and - now that ticket 09's
+   * scrubber exists - the bundle gains both frozen log tails (already
+   * scrubbed at freeze time, see `captureLogTail`): this is a local file the
+   * user can hand to anyone, so nothing in it may ship unscrubbed.
    */
   async saveDiagnosticBundle(
     form: SupportSubmitReportRequest,
@@ -410,16 +431,20 @@ export class DesktopSupportService {
     const bundle = {
       reportId: frozen?.reportId ?? null,
       generatedAt: new Date().toISOString(),
-      title: form.title,
-      whatHappened: form.whatHappened,
-      stepsToReproduce: form.stepsToReproduce,
-      expectedBehavior: form.expectedBehavior,
-      actualBehavior: form.actualBehavior,
+      title: scrubSupportText(form.title),
+      whatHappened: scrubSupportText(form.whatHappened),
+      stepsToReproduce: scrubSupportText(form.stepsToReproduce),
+      expectedBehavior: scrubSupportText(form.expectedBehavior),
+      actualBehavior: scrubSupportText(form.actualBehavior),
       appVersion: snapshot.appVersion,
       platform: snapshot.platform,
       arch: snapshot.arch,
       versions: snapshot.versions,
       host: { status: snapshot.host.status, version: snapshot.host.version },
+      logs: {
+        desktop: frozen?.desktop.content ?? "",
+        host: frozen?.host.content ?? "",
+      },
     };
     const dir = await mkdtemp(join(tmpdir(), "traycer-diagnostic-bundle-"));
     const path = join(dir, `${frozen?.reportId ?? "report"}.json`);
@@ -429,6 +454,34 @@ export class DesktopSupportService {
     // the user can immediately see and inspect what a "local file" means.
     shell.showItemInFolder(path);
     return { path };
+  }
+
+  /**
+   * `support:buildPublicDraft` (ticket 09 / T6): the single main-process
+   * producer of all public (GitHub-bound) text, always behind the deep
+   * scrubber. Resolves its own frozen evidence rather than depending on a
+   * prior `submitReport` result, so it is callable regardless of delivery
+   * outcome (delivered/unconfirmed/unavailable/failed) - including when no
+   * submit was ever attempted (Flow 4 Case B's no-DSN "Open a GitHub issue").
+   */
+  async buildPublicDraft(
+    form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
+  ): Promise<SupportBuildPublicDraftResult> {
+    const frozen = await this.resolveFrozenEvidence(frozenEvidenceKey);
+    const snapshot = await this.getSnapshot();
+    return buildPublicDraftFields({
+      title: form.title,
+      whatHappened: form.whatHappened,
+      stepsToReproduce: form.stepsToReproduce,
+      expectedBehavior: form.expectedBehavior,
+      actualBehavior: form.actualBehavior,
+      appVersion: snapshot.appVersion,
+      platform: snapshot.platform,
+      arch: snapshot.arch,
+      reportId: frozen?.reportId ?? null,
+      privateDiagnostics: form.privateDiagnostics,
+    });
   }
 
   /** Resolves to `undefined` if never frozen, discarded, or evicted. */
@@ -501,9 +554,16 @@ async function captureLogTail(
   const allLines = splitLogLines(content);
   const truncatedByLineCount = allLines.length > lines;
   const tail = allLines.slice(-lines).join("\n");
-  const truncatedByByteCount = Buffer.byteLength(tail, "utf8") > maxBytes;
+  // Scrub BEFORE the byte cap below, never after: `host.log` is written with
+  // zero redaction at source, so this is the only point that ever sees the
+  // raw tail. Truncating first could cut a token/path mid-match so the
+  // scrubber's regexes miss the remainder, and the byte budget itself must
+  // measure what will actually ship (the scrubbed text), not the raw text -
+  // ticket 09's "field bounds enforced after scrubbing, never before".
+  const scrubbed = scrubSupportText(tail);
+  const truncatedByByteCount = Buffer.byteLength(scrubbed, "utf8") > maxBytes;
   return {
-    content: truncateToTrailingBytes(tail, maxBytes),
+    content: truncateToTrailingBytes(scrubbed, maxBytes),
     truncated: truncatedByLineCount || truncatedByByteCount,
   };
 }

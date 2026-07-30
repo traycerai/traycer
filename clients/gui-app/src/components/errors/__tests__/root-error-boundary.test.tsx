@@ -90,6 +90,8 @@ describe("<RootErrorBoundary />", () => {
           saveDiagnosticBundle: () =>
             Promise.reject(new Error("bundle unavailable")),
           getFingerprintOccurrence: () => Promise.resolve(null),
+          buildPublicDraft: () =>
+            Promise.reject(new Error("public draft unavailable")),
         },
       },
     );

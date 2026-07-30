@@ -394,3 +394,33 @@ export interface SupportReadFrozenLogTailInput {
 export interface SupportSaveDiagnosticBundleResult {
   readonly path: string;
 }
+
+/**
+ * Per-field values for the GitHub issue form (ticket 01's mapping,
+ * `.github/ISSUE_TEMPLATE/bug_report.yml`). Keys match the form's field ids
+ * verbatim so `issue-reporter.ts` can assemble `URLSearchParams` straight
+ * from this object with zero composition of its own.
+ */
+export interface SupportBuildPublicDraftFields {
+  readonly "what-happened": string;
+  readonly version: string;
+  readonly os: string;
+  readonly component: string;
+  readonly repro: string;
+}
+
+/**
+ * Response of `support:buildPublicDraft` (ticket 09 / T6): the single
+ * main-process producer of all public text, always behind the deep scrubber,
+ * callable regardless of delivery outcome (delivered/unconfirmed/unavailable/
+ * failed) since it resolves its own frozen evidence rather than depending on
+ * a prior `submitReport` result.
+ */
+export interface SupportBuildPublicDraftResult {
+  readonly title: string;
+  readonly fields: SupportBuildPublicDraftFields;
+  // True if any field was shortened to fit the GitHub issue form URL's 8 KiB
+  // budget (see `support-public-draft.ts`) - surfaced so the preview can say
+  // so, alongside the inline truncation marker the shortened field carries.
+  readonly truncated: boolean;
+}

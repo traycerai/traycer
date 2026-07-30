@@ -23,6 +23,7 @@ import type {
   PerWindowStateCapabilities,
   PerWindowStatePatch,
   PerWindowStateUpdateAcknowledgement,
+  SupportBuildPublicDraftResult,
   SupportFingerprintOccurrence,
   SupportFreezeEvidenceResult,
   SupportLogTarget,
@@ -259,6 +260,10 @@ export interface IpcSupportService {
   getFingerprintOccurrence(
     fingerprint: string,
   ): Promise<SupportFingerprintOccurrence | null>;
+  buildPublicDraft(
+    form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
+  ): Promise<SupportBuildPublicDraftResult>;
 }
 
 type HostChangeListener = (snapshot: DesktopLocalHostSnapshot | null) => void;
@@ -1418,6 +1423,23 @@ class NullSupportService implements IpcSupportService {
     _fingerprint: string,
   ): Promise<SupportFingerprintOccurrence | null> {
     return Promise.resolve(null);
+  }
+
+  buildPublicDraft(
+    _form: SupportSubmitReportRequest,
+    _frozenEvidenceKey: string,
+  ): Promise<SupportBuildPublicDraftResult> {
+    return Promise.resolve({
+      title: "",
+      fields: {
+        "what-happened": "",
+        version: "",
+        os: "",
+        component: "",
+        repro: "",
+      },
+      truncated: false,
+    });
   }
 }
 

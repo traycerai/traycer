@@ -54,6 +54,7 @@ function unavailableSupport(): DesktopSupportBridge {
     readFrozenLogTail: vi.fn(),
     saveDiagnosticBundle: vi.fn(),
     getFingerprintOccurrence: vi.fn(),
+    buildPublicDraft: vi.fn(),
   };
 }
 
@@ -69,6 +70,7 @@ function supportWithFailingTail(): DesktopSupportBridge {
     readFrozenLogTail: vi.fn(),
     saveDiagnosticBundle: vi.fn(),
     getFingerprintOccurrence: vi.fn(),
+    buildPublicDraft: vi.fn(),
   };
 }
 

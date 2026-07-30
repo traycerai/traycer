@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -453,5 +453,164 @@ describe("DesktopSupportService - freeze idempotency per key", () => {
     const { reportId: second } = await service.freezeEvidence(KEY, null);
 
     expect(second).not.toBe(first);
+  });
+});
+
+describe("DesktopSupportService.buildPublicDraft", () => {
+  it("returns a reportId-aware draft after freeze, independent of Sentry", async () => {
+    const service = buildService();
+    const { reportId } = await service.freezeEvidence(KEY, null);
+    expect(reportId).toMatch(/^rpt_[0-9a-f]{32}$/);
+
+    const draft = await service.buildPublicDraft(FORM, KEY);
+
+    expect(draft.truncated).toBe(false);
+    expect(draft.title).toBe(FORM.title);
+    expect(draft.fields["what-happened"]).toContain(FORM.whatHappened);
+    expect(draft.fields.version).toBe("1.1.9");
+    expect(draft.fields.component).toBe("Desktop app");
+    // Non-empty stepsToReproduce pass through (scrubbed), not the placeholder.
+    expect(draft.fields.repro).toBe(FORM.stepsToReproduce);
+    expect(draft.fields.repro).not.toContain(reportId);
+  });
+
+  it("uses the reportId-aware placeholder when steps are empty", async () => {
+    const service = buildService();
+    const { reportId } = await service.freezeEvidence(KEY, null);
+    const draft = await service.buildPublicDraft(
+      { ...FORM, stepsToReproduce: "" },
+      KEY,
+    );
+    expect(draft.fields.repro).toBe(
+      `Not captured step-by-step - see the private support report ${reportId}.`,
+    );
+    expect(reportId).toMatch(/^rpt_[0-9a-f]{32}$/);
+  });
+
+  it("is callable and correct when Sentry has no DSN", async () => {
+    sentryMock.isInitialized.mockReturnValue(false);
+    const service = buildService();
+    const { reportId } = await service.freezeEvidence(KEY, null);
+
+    const draft = await service.buildPublicDraft(
+      { ...FORM, stepsToReproduce: "" },
+      KEY,
+    );
+
+    expect(draft.title).toBe(FORM.title);
+    expect(draft.fields.repro).toBe(
+      `Not captured step-by-step - see the private support report ${reportId}.`,
+    );
+    // buildPublicDraft must not consult Sentry at all (unlike submitReport).
+    expect(sentryMock.captureFeedback).not.toHaveBeenCalled();
+  });
+
+  it("is callable and correct after a submitReport that returned failed", async () => {
+    sentryMock.captureFeedback.mockImplementation(() => {
+      throw new Error("DSN rejected");
+    });
+    const service = buildService();
+    await service.freezeEvidence(KEY, null);
+
+    const submitResult = await service.submitReport(FORM, KEY);
+    expect(submitResult).toEqual({ status: "failed", reason: "error" });
+
+    const draft = await service.buildPublicDraft(
+      { ...FORM, stepsToReproduce: "" },
+      KEY,
+    );
+
+    expect(draft.title).toBe(FORM.title);
+    expect(draft.fields.repro).toMatch(
+      /^Not captured step-by-step - see the private support report rpt_[0-9a-f]{32}\.$/,
+    );
+    expect(draft.fields.component).toBe("Desktop app");
+  });
+
+  it("scrubs every emitted field (paths and tokens never leave raw)", async () => {
+    const service = buildService();
+    await service.freezeEvidence(KEY, null);
+
+    const sensitiveForm: SupportSubmitReportRequest = {
+      ...FORM,
+      whatHappened:
+        "It broke, see /Users/anurag/project/log.txt for the Bearer abc123token",
+      stepsToReproduce: "Check password: secretvalue",
+      title: "Crash at /Users/anurag/project/x.ts",
+    };
+
+    const draft = await service.buildPublicDraft(sensitiveForm, KEY);
+
+    expect(draft.fields["what-happened"]).not.toContain("/Users/anurag");
+    expect(draft.fields["what-happened"]).not.toContain("abc123token");
+    expect(draft.fields["what-happened"]).toContain("Bearer <redacted>");
+    expect(draft.fields.repro).not.toContain("secretvalue");
+    expect(draft.fields.repro).toContain("password: <redacted>");
+    expect(draft.title).not.toContain("/Users/anurag");
+  });
+});
+
+describe("DesktopSupportService.saveDiagnosticBundle", () => {
+  it("writes scrubbed form fields and frozen log tails under logs.desktop/host", async () => {
+    // Seed real log content with a path/token so freeze captures scrubbed tails.
+    await writeFile(
+      loggerMock.desktopLogPath,
+      "desktop saw Bearer desktopsecret at /Users/anurag/desktop-leak.ts\n",
+      "utf8",
+    );
+    await writeFile(
+      hostLogPath,
+      "host saw password: hostsecret near /Users/anurag/host-leak.ts\n",
+      "utf8",
+    );
+
+    const service = buildService();
+    await service.freezeEvidence(KEY, null);
+
+    const sensitiveForm: SupportSubmitReportRequest = {
+      ...FORM,
+      title: "Bundle title /Users/anurag/title-leak.ts",
+      whatHappened: "Bundle body Bearer formtoken",
+      stepsToReproduce: "path /Users/anurag/steps.ts",
+    };
+
+    const { path } = await service.saveDiagnosticBundle(sensitiveForm, KEY);
+    const raw = await readFile(path, "utf8");
+    const bundle: unknown = JSON.parse(raw);
+    expect(bundle).toEqual(
+      expect.objectContaining({
+        logs: expect.objectContaining({
+          desktop: expect.any(String),
+          host: expect.any(String),
+        }),
+      }),
+    );
+
+    const typed = bundle as {
+      title: string;
+      whatHappened: string;
+      stepsToReproduce: string;
+      logs: { desktop: string; host: string };
+    };
+
+    // Frozen log tails are present and were scrubbed at freeze time.
+    expect(typed.logs.desktop).toContain("desktop saw");
+    expect(typed.logs.desktop).toContain("Bearer <redacted>");
+    expect(typed.logs.desktop).not.toContain("desktopsecret");
+    expect(typed.logs.desktop).not.toContain("/Users/anurag");
+    expect(typed.logs.host).toContain("host saw");
+    expect(typed.logs.host).toContain("password: <redacted>");
+    expect(typed.logs.host).not.toContain("hostsecret");
+    expect(typed.logs.host).not.toContain("/Users/anurag");
+
+    // Form fields written into the bundle are scrubbed.
+    expect(typed.title).not.toContain("/Users/anurag");
+    expect(typed.whatHappened).not.toContain("formtoken");
+    expect(typed.whatHappened).toContain("Bearer <redacted>");
+    expect(typed.stepsToReproduce).not.toContain("/Users/anurag");
+    expect(raw).not.toContain("/Users/anurag");
+    expect(raw).not.toContain("formtoken");
+    expect(raw).not.toContain("desktopsecret");
+    expect(raw).not.toContain("hostsecret");
   });
 });

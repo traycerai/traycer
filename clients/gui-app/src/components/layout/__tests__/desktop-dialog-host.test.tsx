@@ -26,6 +26,7 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import type {
   DesktopReportIssueForm,
   DesktopSubmitReportResult,
+  DesktopSupportBuildPublicDraftResult,
   DesktopWindowsBridge,
   DesktopSupportLogTarget,
   DesktopSupportSnapshot,
@@ -143,6 +144,30 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve: resolveValue, reject: rejectValue };
 }
 
+// A faithful-enough stand-in for `support:buildPublicDraft` (ticket 09 / T6):
+// echoes the form back the way the real builder would with no
+// `privateDiagnostics.cause` (these tests never attach one) - the derived
+// title falls back to the user's own (unmodified, since these fixtures never
+// contain anything the scrubber would touch), and the narrative/repro map
+// straight through. Good enough for assertions that check the opened URL's
+// `title`/`what-happened` params; it does not model scrubbing or the 8 KiB
+// truncation budget.
+function echoPublicDraft(
+  form: DesktopReportIssueForm,
+): Promise<DesktopSupportBuildPublicDraftResult> {
+  return Promise.resolve({
+    title: form.title,
+    fields: {
+      "what-happened": form.whatHappened,
+      version: "1.2.3",
+      os: "darwin (arm64)",
+      component: "Desktop app",
+      repro: form.stepsToReproduce,
+    },
+    truncated: false,
+  });
+}
+
 function createRunnerHost(
   revealed: DesktopSupportLogTarget[],
   openedLinks: string[],
@@ -190,6 +215,7 @@ function createRunnerHost(
         }),
       saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
       getFingerprintOccurrence: () => Promise.resolve(null),
+      buildPublicDraft: echoPublicDraft,
     },
   });
 }
@@ -229,6 +255,7 @@ function createRunnerHostWithSubmit(
         }),
       saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
       getFingerprintOccurrence: () => Promise.resolve(null),
+      buildPublicDraft: echoPublicDraft,
     },
   });
 }
@@ -267,6 +294,7 @@ function createRunnerHostWithoutPrivateDelivery(
         }),
       saveDiagnosticBundle,
       getFingerprintOccurrence: () => Promise.resolve(null),
+      buildPublicDraft: echoPublicDraft,
     },
   });
 }

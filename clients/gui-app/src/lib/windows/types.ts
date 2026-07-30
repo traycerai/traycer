@@ -238,6 +238,31 @@ export interface DesktopSupportSaveDiagnosticBundleResult {
 }
 
 /**
+ * Field-for-field match with ticket 09's `SupportBuildPublicDraftFields`
+ * (`ipc-contracts/window-types.ts`). Keys match the GitHub issue form's field
+ * ids verbatim so `buildGitHubIssueUrl` (`@traycer-clients/shared/support/
+ * issue-reporter`) can assemble `URLSearchParams` straight from this object.
+ */
+export interface DesktopSupportBuildPublicDraftFields {
+  readonly "what-happened": string;
+  readonly version: string;
+  readonly os: string;
+  readonly component: string;
+  readonly repro: string;
+}
+
+/**
+ * Result of `support.buildPublicDraft`: the single main-process producer of
+ * all public text, always behind the deep scrubber. Field-for-field match
+ * with ticket 09's `SupportBuildPublicDraftResult`.
+ */
+export interface DesktopSupportBuildPublicDraftResult {
+  readonly title: string;
+  readonly fields: DesktopSupportBuildPublicDraftFields;
+  readonly truncated: boolean;
+}
+
+/**
  * Field-for-field match with ticket 05's `PrivateErrorCause`
  * (`@/lib/report-issue-draft-context`).
  */
@@ -458,6 +483,9 @@ export interface DesktopSupportBridge {
   getFingerprintOccurrence(
     fingerprint: string,
   ): Promise<DesktopFingerprintOccurrence | null>;
+  buildPublicDraft(
+    form: DesktopReportIssueForm,
+  ): Promise<DesktopSupportBuildPublicDraftResult>;
 }
 
 export interface DesktopPowerBridge {

@@ -227,6 +227,18 @@ function makeSupportBridge(overrides: {
       }),
     saveDiagnosticBundle: () => Promise.resolve({ path: "/tmp/bundle.json" }),
     getFingerprintOccurrence: () => Promise.resolve(null),
+    buildPublicDraft: () =>
+      Promise.resolve({
+        title: "",
+        fields: {
+          "what-happened": "",
+          version: "",
+          os: "",
+          component: "",
+          repro: "",
+        },
+        truncated: false,
+      }),
   };
 }
 

@@ -167,7 +167,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
     vi.mocked(Sentry.captureFeedback).mockClear();
   });
 
-  it("tags a degraded layer0 record and carries the full record in a Sentry context", async () => {
+  it("tags a degraded layer0 record and carries the full record in a Sentry context, path-pseudonymized (ticket 09)", async () => {
     await withPidMetadataFile(
       {
         pid: 25149,
@@ -190,6 +190,11 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
         const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock
           .calls[0];
+        // The deep scrubber (ticket 09) runs on `contexts` right before this
+        // call: the absolute path in `evidence` is pseudonymized (host.log
+        // and stack-carried paths are the dominant leak vector this scrubber
+        // exists for), while the rest of the record - status/attemptId/cause,
+        // none of them path-shaped - survives untouched.
         expect(hint?.captureContext).toMatchObject({
           tags: expect.objectContaining({ layer0Status: "degraded" }),
           contexts: {
@@ -197,8 +202,7 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
               status: "degraded",
               attemptId: "sea-addon-degraded",
               cause: "addon-load-failed",
-              evidence:
-                "Cannot find module '/Applications/Traycer.app/Contents/Resources/lifecycle_lock.node'",
+              evidence: "Cannot find module '<path-1>'",
             },
           },
         });
