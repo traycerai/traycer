@@ -8,7 +8,7 @@ import type {
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import {
-  mapStartLoginToMcpAuth,
+  mapMcpAuthResponse,
   type McpAuthData,
 } from "@/hooks/providers/native-response-map";
 import { providersMutationKeys } from "@/lib/query-keys";
@@ -67,11 +67,11 @@ function toMcpAuthAction(variables: McpAuthVariables): NativeAuthAction {
 }
 
 /**
- * Starts an MCP auth action via `providers.startLogin` with `mcpAuth`.
+ * Starts an MCP auth action via the dedicated `providers.mcpAuth` method.
  * Callers open `authorizationUrl` when returned. Login/forceReauth may return
- * `{ kind: "pending" }` immediately — poll list (and optionally awaitLogin
- * with the same scope tuple) for settlement. Success invalidates the mcp list
- * so status dots update promptly.
+ * `{ kind: "pending" }` immediately — poll list (and optionally
+ * `providers.awaitMcpAuth` with the same scope tuple) for settlement. Success
+ * invalidates the mcp list so status dots update promptly.
  */
 export function useProvidersMcpAuth(): UseMutationResult<
   McpAuthData,
@@ -89,13 +89,11 @@ export function useProvidersMcpAuth(): UseMutationResult<
   >({
     mutationKey: providersMutationKeys.mcpAuth(),
     mutationFn: async (variables) => {
-      const response = await client.request("providers.startLogin", {
+      const response = await client.request("providers.mcpAuth", {
         providerId: variables.providerId,
-        mcpAuth: toMcpAuthAction(variables),
-        profileId: null,
-        createProfile: null,
+        action: toMcpAuthAction(variables),
       });
-      return mapStartLoginToMcpAuth({ response });
+      return mapMcpAuthResponse({ response });
     },
     onMutate: (variables) => ({
       hostId: client.getActiveHostId(),

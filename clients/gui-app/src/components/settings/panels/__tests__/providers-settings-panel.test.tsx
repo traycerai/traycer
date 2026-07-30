@@ -2033,7 +2033,6 @@ describe("<ProvidersSettingsPanel />", () => {
     });
     expect(firstStartLoginCall()[0]).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "ambient",
       createProfile: null,
     });
@@ -2508,7 +2507,6 @@ describe("<ProvidersSettingsPanel />", () => {
     const [startVariables, startOptions] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
     });
@@ -2523,7 +2521,6 @@ describe("<ProvidersSettingsPanel />", () => {
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
     expect(awaitVariables).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "managed-1",
     });
     expect(typeof awaitOptions.onSuccess).toBe("function");
@@ -3159,7 +3156,6 @@ describe("<ProvidersSettingsPanel />", () => {
     const [startVariables, startOptions] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "ambient",
       createProfile: null,
     });
@@ -3181,7 +3177,6 @@ describe("<ProvidersSettingsPanel />", () => {
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
     expect(awaitVariables).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "ambient",
     });
     act(() => {
@@ -3202,7 +3197,6 @@ describe("<ProvidersSettingsPanel />", () => {
     }
     expect(repollCall[0]).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "ambient",
     });
     act(() => {
@@ -3287,7 +3281,6 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "ambient",
     });
 
@@ -3928,7 +3921,6 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "managed-pending",
     });
     expect(providerMocks.awaitLoginMutate).not.toHaveBeenCalled();
@@ -3993,7 +3985,6 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "managed-1",
     });
     expect(screen.queryByRole("dialog", { name: "Add profile" })).toBeNull();
@@ -4061,7 +4052,6 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "managed-1",
     });
     expect(screen.queryByText("Switching account")).toBeNull();
@@ -4222,7 +4212,6 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "managed-1",
     });
     act(() => {
@@ -4317,7 +4306,6 @@ describe("<ProvidersSettingsPanel />", () => {
       expect(providerMocks.startLoginMutate).toHaveBeenCalledWith(
         {
           providerId: "claude-code",
-          mcpAuth: null,
           profileId: "work-profile",
           createProfile: null,
         },
@@ -4396,7 +4384,6 @@ describe("<ProvidersSettingsPanel />", () => {
     const [startVariables, startOptions] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "managed-1",
       createProfile: null,
     });
@@ -4412,7 +4399,6 @@ describe("<ProvidersSettingsPanel />", () => {
     const [awaitVariables, awaitOptions] = firstAwaitLoginCall();
     expect(awaitVariables).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "managed-1",
     });
     act(() => {
@@ -4458,7 +4444,6 @@ describe("<ProvidersSettingsPanel />", () => {
     }
     expect(retryCall[0]).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "managed-1",
       createProfile: null,
     });
@@ -4467,7 +4452,6 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledTimes(1);
     expect(providerMocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "codex",
-      mcpAuth: null,
       profileId: "managed-1",
     });
 
@@ -4683,7 +4667,6 @@ describe("<ProvidersSettingsPanel />", () => {
     const [startVariables] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "claude-code",
-      mcpAuth: null,
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: false },
     });
@@ -4736,7 +4719,6 @@ describe("<ProvidersSettingsPanel />", () => {
     const [startVariables] = firstStartLoginCall();
     expect(startVariables).toEqual({
       providerId: "claude-code",
-      mcpAuth: null,
       profileId: null,
       createProfile: { label: "New profile", shareSkillsAndPlugins: true },
     });
@@ -5059,7 +5041,6 @@ describe("<ProvidersSettingsPanel />", () => {
 
     expect(firstStartLoginCall()[0]).toEqual({
       providerId: "codex",
-      mcpAuth: null,
       profileId: null,
       createProfile: {
         label: "Work",

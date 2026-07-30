@@ -16,13 +16,13 @@ export type ProvidersListWireResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.list"
 >;
-export type ProvidersSetEnabledWireResponse = ResponseOfMethod<
+export type ProvidersNativeMutateWireResponse = ResponseOfMethod<
   HostRpcRegistry,
-  "providers.setEnabled"
+  "providers.nativeMutate"
 >;
-export type ProvidersStartLoginWireResponse = ResponseOfMethod<
+export type ProvidersMcpAuthWireResponse = ResponseOfMethod<
   HostRpcRegistry,
-  "providers.startLogin"
+  "providers.mcpAuth"
 >;
 
 /** External list shapes preserved for tab consumers. */
@@ -36,7 +36,7 @@ export type McpMutateData = McpListData;
 export type PluginsMutateData = PluginsListData;
 export type SkillsMutateData = SkillsListData;
 
-/** External auth result shape (unwraps `mcpAuth` from startLogin). */
+/** External auth result shape (unwraps `providers.mcpAuth`'s result). */
 export type McpAuthData = { readonly result: NativeAuthResult };
 
 export class ProviderNativeRpcError extends HostRpcError {
@@ -131,70 +131,63 @@ export function mapProvidersListToMcpDiscover(args: {
   return { server: native.server };
 }
 
-export function mapSetEnabledToMcpMutate(args: {
-  readonly response: ProvidersSetEnabledWireResponse;
+export function mapNativeMutateToMcpMutate(args: {
+  readonly response: ProvidersNativeMutateWireResponse;
 }): McpMutateData {
-  const native = args.response.native;
-  throwIfNativeError(native, "providers.setEnabled");
-  if (native === null || native.kind !== "mcp") {
+  const result = args.response.result;
+  throwIfNativeError(result, "providers.nativeMutate");
+  if (result.kind !== "mcp") {
     throw new ProviderNativeRpcError({
       code: "unsupported_action",
       detail: "MCP mutation returned no servers payload.",
-      method: "providers.setEnabled",
+      method: "providers.nativeMutate",
     });
   }
-  return { servers: native.servers };
+  return { servers: result.servers };
 }
 
-export function mapSetEnabledToPluginsMutate(args: {
-  readonly response: ProvidersSetEnabledWireResponse;
+export function mapNativeMutateToPluginsMutate(args: {
+  readonly response: ProvidersNativeMutateWireResponse;
 }): PluginsMutateData {
-  const native = args.response.native;
-  throwIfNativeError(native, "providers.setEnabled");
-  if (native === null || native.kind !== "plugins") {
+  const result = args.response.result;
+  throwIfNativeError(result, "providers.nativeMutate");
+  if (result.kind !== "plugins") {
     throw new ProviderNativeRpcError({
       code: "unsupported_action",
       detail: "Plugins mutation returned no plugins payload.",
-      method: "providers.setEnabled",
+      method: "providers.nativeMutate",
     });
   }
-  return { plugins: native.plugins };
+  return { plugins: result.plugins };
 }
 
-export function mapSetEnabledToSkillsMutate(args: {
-  readonly response: ProvidersSetEnabledWireResponse;
+export function mapNativeMutateToSkillsMutate(args: {
+  readonly response: ProvidersNativeMutateWireResponse;
 }): SkillsMutateData {
-  const native = args.response.native;
-  throwIfNativeError(native, "providers.setEnabled");
-  if (native === null || native.kind !== "skills") {
+  const result = args.response.result;
+  throwIfNativeError(result, "providers.nativeMutate");
+  if (result.kind !== "skills") {
     throw new ProviderNativeRpcError({
       code: "unsupported_action",
       detail: "Skills mutation returned no skills payload.",
-      method: "providers.setEnabled",
+      method: "providers.nativeMutate",
     });
   }
-  return { skills: native.skills };
+  return { skills: result.skills };
 }
 
-export function mapStartLoginToMcpAuth(args: {
-  readonly response: ProvidersStartLoginWireResponse;
+export function mapMcpAuthResponse(args: {
+  readonly response: ProvidersMcpAuthWireResponse;
 }): McpAuthData {
-  const mcpAuth = args.response.mcpAuth;
-  if (mcpAuth === null) {
+  const result = args.response.result;
+  if (result.kind === "error") {
     throw new ProviderNativeRpcError({
-      code: "unsupported_action",
-      detail: "MCP auth returned no result payload.",
-      method: "providers.startLogin",
+      code: result.code,
+      detail: result.detail,
+      method: "providers.mcpAuth",
     });
   }
-  if (mcpAuth.kind === "error") {
-    throw new ProviderNativeRpcError({
-      code: mcpAuth.code,
-      detail: mcpAuth.detail,
-      method: "providers.startLogin",
-    });
-  }
-  return { result: mcpAuth };
+  return { result };
 }
 
 /**

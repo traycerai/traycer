@@ -14,15 +14,14 @@ import type {
   ProviderMcpServer,
   ProviderNativeErrorResult,
 } from "@traycer/protocol/host/provider-native-schemas";
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import {
   isProviderNativeRpcError,
   mapProvidersListToMcpServers,
-  mapSetEnabledToMcpMutate,
-  mapStartLoginToMcpAuth,
+  mapNativeMutateToMcpMutate,
+  mapMcpAuthResponse,
 } from "@/hooks/providers/native-response-map";
 import { useProvidersMcpList } from "@/hooks/providers/use-providers-mcp-list-query";
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
@@ -73,53 +72,23 @@ const EMPTY_SERVER: ProviderMcpServer = {
   stdioDegraded: false,
 };
 
-function stubProviderState(): ProviderCliState {
-  return {
-    providerId: "codex",
-    enabled: true,
-    disabledBy: null,
-    selected: { kind: "path" },
-    candidates: [],
-    auth: {
-      status: "authenticated",
-      badgeText: null,
-      label: null,
-      detail: null,
-    },
-    authPending: false,
-    checkedAt: null,
-    apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
-    envOverrides: [],
-    loginCapability: null,
-    availabilityPending: false,
-    nativeCapabilities: {
-      supportedTabs: ["mcp"],
-      mcp: null,
-      plugins: null,
-      skills: null,
-    },
-    profiles: [],
-  };
-}
-
 function createFixture(handlers: {
   list: (
     params: RequestOfMethod<HostRpcRegistry, "providers.list">,
   ) =>
     | ResponseOfMethod<HostRpcRegistry, "providers.list">
     | Promise<ResponseOfMethod<HostRpcRegistry, "providers.list">>;
-  setEnabled:
+  nativeMutate:
     | ((
-        params: RequestOfMethod<HostRpcRegistry, "providers.setEnabled">,
+        params: RequestOfMethod<HostRpcRegistry, "providers.nativeMutate">,
       ) =>
-        | ResponseOfMethod<HostRpcRegistry, "providers.setEnabled">
-        | Promise<ResponseOfMethod<HostRpcRegistry, "providers.setEnabled">>)
+        | ResponseOfMethod<HostRpcRegistry, "providers.nativeMutate">
+        | Promise<ResponseOfMethod<HostRpcRegistry, "providers.nativeMutate">>)
     | undefined;
 }) {
   const queryClient = createAppQueryClient();
   const listCalls: unknown[] = [];
-  const setEnabledCalls: unknown[] = [];
+  const nativeMutateCalls: unknown[] = [];
   const client = new HostClient<HostRpcRegistry>({
     registry: hostRpcRegistry,
     invalidator: createHostQueryInvalidator(queryClient),
@@ -131,12 +100,12 @@ function createFixture(handlers: {
           listCalls.push(params);
           return handlers.list(params);
         },
-        "providers.setEnabled": (params) => {
-          setEnabledCalls.push(params);
-          if (handlers.setEnabled === undefined) {
-            throw new Error("setEnabled not mocked");
+        "providers.nativeMutate": (params) => {
+          nativeMutateCalls.push(params);
+          if (handlers.nativeMutate === undefined) {
+            throw new Error("nativeMutate not mocked");
           }
-          return handlers.setEnabled(params);
+          return handlers.nativeMutate(params);
         },
       },
     }),
@@ -159,7 +128,7 @@ function createFixture(handlers: {
     queryClient,
     client,
     listCalls,
-    setEnabledCalls,
+    nativeMutateCalls,
     Wrapper,
     hostId: mockLocalHostEntry.hostId,
   };
@@ -189,26 +158,20 @@ describe("native response mappers", () => {
       detail: "already exists",
     };
     expect(() =>
-      mapSetEnabledToMcpMutate({
-        response: {
-          state: stubProviderState(),
-          native: err,
-        },
+      mapNativeMutateToMcpMutate({
+        response: { result: err },
       }),
     ).toThrow(expect.objectContaining({ nativeCode: "duplicate_name" }));
   });
 
-  it("maps startLogin mcpAuth authorizationUrl", () => {
+  it("maps providers.mcpAuth authorizationUrl", () => {
     expect(
-      mapStartLoginToMcpAuth({
+      mapMcpAuthResponse({
         response: {
-          url: "https://auth.example",
-          started: true,
-          mcpAuth: {
+          result: {
             kind: "authorizationUrl",
             authorizationUrl: "https://auth.example",
           },
-          profileId: null,
         },
       }),
     ).toEqual({
@@ -239,7 +202,7 @@ describe("useProvidersMcpList fold", () => {
           },
         };
       },
-      setEnabled: undefined,
+      nativeMutate: undefined,
     });
 
     const rendered = renderHook(
@@ -282,7 +245,7 @@ describe("useProvidersMcpList fold", () => {
         providers: [],
         native: { ok: true, kind: "mcp", servers: [] },
       }),
-      setEnabled: undefined,
+      nativeMutate: undefined,
     });
 
     renderHook(
@@ -303,16 +266,15 @@ describe("useProvidersMcpList fold", () => {
 });
 
 describe("useProvidersMcpMutate fold", () => {
-  it("sends setEnabled native arm and writes list cache", async () => {
+  it("sends providers.nativeMutate and writes list cache", async () => {
     const updated = { ...EMPTY_SERVER, enabled: false };
     const fixture = createFixture({
       list: () => ({
         providers: [],
         native: { ok: true, kind: "mcp", servers: [EMPTY_SERVER] },
       }),
-      setEnabled: (params) => {
-        expect(params.enabled).toBeNull();
-        expect(params.native).toMatchObject({
+      nativeMutate: (params) => {
+        expect(params.mutation).toMatchObject({
           kind: "mcp",
           mutation: {
             action: "toggleServer",
@@ -320,10 +282,7 @@ describe("useProvidersMcpMutate fold", () => {
             enabled: false,
           },
         });
-        return {
-          state: stubProviderState(),
-          native: { ok: true, kind: "mcp", servers: [updated] },
-        };
+        return { result: { ok: true, kind: "mcp", servers: [updated] } };
       },
     });
 
@@ -356,7 +315,7 @@ describe("useProvidersMcpMutate fold", () => {
       });
     });
 
-    expect(fixture.setEnabledCalls).toHaveLength(1);
+    expect(fixture.nativeMutateCalls).toHaveLength(1);
     await waitFor(() => {
       expect(listRendered.result.current.data?.servers[0]?.enabled).toBe(false);
     });
@@ -368,9 +327,8 @@ describe("useProvidersMcpMutate fold", () => {
         providers: [],
         native: { ok: true, kind: "mcp", servers: [EMPTY_SERVER] },
       }),
-      setEnabled: () => ({
-        state: stubProviderState(),
-        native: {
+      nativeMutate: () => ({
+        result: {
           ok: false,
           code: "no_change_detected",
           detail: "unchanged",

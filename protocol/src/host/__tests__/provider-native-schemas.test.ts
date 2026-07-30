@@ -29,6 +29,14 @@ import {
   providersSetApiKeyRequestSchema,
   providersSetApiKeyResponseSchemaV20,
   providersSetEnabledRequestSchema,
+  providersMcpAuthRequestSchema,
+  providersMcpAuthResponseSchema,
+  providersAwaitMcpAuthRequestSchema,
+  providersAwaitMcpAuthResponseSchema,
+  providersCancelMcpAuthRequestSchema,
+  providersCancelMcpAuthResponseSchema,
+  providersNativeMutateRequestSchema,
+  providersNativeMutateResponseSchema,
   providersSetEnabledRequestSchemaV20,
   providersSetEnabledResponseSchema,
   providersSetEnabledResponseSchemaV20,
@@ -339,7 +347,6 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
           },
         },
       ],
-      native: null,
     });
     const result = providersListDowngradeV7ToV3.downgradeResponse(v31);
     expect(result.ok).toBe(true);
@@ -363,7 +370,6 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
           nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
         },
       ],
-      native: null,
     });
     const result = providersListDowngradeV7ToV2.downgradeResponse(v31);
     expect(result.ok).toBe(true);
@@ -396,7 +402,6 @@ describe("providers.list@7.0 upgrade/downgrade bridges", () => {
 
     const list = providersListResponseSchema.parse({
       providers: [latest],
-      native: null,
     });
     const listResult = providersListDowngradeV7ToV1.downgradeResponse(list);
     expect(listResult.ok).toBe(true);
@@ -472,48 +477,54 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     ).toBe("mcp");
   });
 
-  it("XOR-validates setEnabled@2.1 enabled vs native", () => {
+  // Regression guard for the compat break this surface originally shipped:
+  // `native` was folded onto the RELEASED `providers.setEnabled@2.1` and
+  // `enabled` was demoted to optional so native-only callers could omit it.
+  // Both are wire breaks against every `cli-v1.1.7+` / `host-v1.1.7+` peer.
+  // Native mutations live on `providers.nativeMutate@1.0` now.
+  it("keeps setEnabled@2.1 at its released shape: enabled required, no native", () => {
     expect(
       providersSetEnabledRequestSchema.safeParse({
         providerId: "claude-code",
         enabled: true,
-        native: null,
       }).success,
     ).toBe(true);
+    // Omitting `enabled` must FAIL. If this ever passes, this tree emits
+    // payloads a released peer cannot parse.
     expect(
       providersSetEnabledRequestSchema.safeParse({
         providerId: "claude-code",
-        enabled: null,
-        native: {
-          kind: "mcp",
-          scope: "global",
-          workspaceRoot: null,
-          mutation: { action: "remove", name: "playwright" },
-        },
-      }).success,
-    ).toBe(true);
-    expect(
-      providersSetEnabledRequestSchema.safeParse({
-        providerId: "claude-code",
-        enabled: true,
-        native: {
-          kind: "mcp",
-          scope: "global",
-          workspaceRoot: null,
-          mutation: { action: "remove", name: "playwright" },
-        },
       }).success,
     ).toBe(false);
     expect(
       providersSetEnabledRequestSchema.safeParse({
         providerId: "claude-code",
         enabled: null,
-        native: null,
       }).success,
     ).toBe(false);
+    // `native` is not part of this carrier - a non-strict object ignores it
+    // rather than rejecting, so assert it is dropped, not carried.
+    expect(
+      providersSetEnabledRequestSchema.parse({
+        providerId: "claude-code",
+        enabled: true,
+        native: {
+          kind: "mcp",
+          scope: "global",
+          workspaceRoot: null,
+          mutation: { action: "remove", name: "playwright" },
+        },
+      }),
+    ).not.toHaveProperty("native");
+    expect(
+      providersSetEnabledResponseSchema.parse({
+        state: providerCliStateSchema.parse(baseState("cursor")),
+        native: { ok: true, kind: "mcp", servers: [] },
+      }),
+    ).not.toHaveProperty("native");
   });
 
-  it("upgrades setEnabled 2.0→2.1 with native:null", () => {
+  it("upgrades setEnabled 2.0→2.1 without a native field", () => {
     const classic = providersSetEnabledRequestSchemaV20.parse({
       providerId: "cursor",
       enabled: false,
@@ -522,13 +533,12 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     expect(upgraded).toEqual({
       providerId: "cursor",
       enabled: false,
-      native: null,
       profileAction: null,
     });
     const upgradedResp = providersSetEnabledUpgradeV20ToV21.upgradeResponse({
       state: providerMutationCliStateSchemaV20.parse(baseState("cursor")),
     });
-    expect(upgradedResp.native).toBeNull();
+    expect(upgradedResp).not.toHaveProperty("native");
     // The mutation echo is pinned to the frozen `providerMutationCliStateSchemaV21`,
     // which deliberately does NOT model `nativeCapabilities` - a state echo
     // cannot change what is installed, so capability facts ride
@@ -536,19 +546,13 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     expect(upgradedResp.state).not.toHaveProperty("nativeCapabilities");
   });
 
-  it("refuses native setEnabled downgrade to 2.0", () => {
+  it("downgrades a classic setEnabled 2.1 request to 2.0", () => {
     const result = providersSetEnabledDowngradeV21ToV20.downgradeRequest({
       providerId: "claude-code",
-      enabled: null,
+      enabled: true,
       profileAction: null,
-      native: {
-        kind: "mcp",
-        scope: "global",
-        workspaceRoot: null,
-        mutation: { action: "remove", name: "x" },
-      },
     });
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
   });
 
   it("models full NativeAuthAction set and result variants", () => {
@@ -591,31 +595,36 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     }
   });
 
-  it("startLogin/cancelLogin/awaitLogin upgrade defaults mcpAuth to null", () => {
+  // Companion guard to the setEnabled one above: the three released login
+  // minors must not grow a native field either.
+  it("keeps the login family carriers free of mcpAuth", () => {
     expect(
       providersStartLoginUpgradeV10ToV11.upgradeRequest({
         providerId: "claude-code",
-      }).mcpAuth,
-    ).toBeNull();
+      }),
+    ).not.toHaveProperty("mcpAuth");
     expect(
       providersStartLoginUpgradeV10ToV11.upgradeResponse({
         url: null,
         started: true,
-      }).mcpAuth,
-    ).toBeNull();
+      }),
+    ).not.toHaveProperty("mcpAuth");
     expect(
       providersCancelLoginUpgradeV10ToV11.upgradeRequest({
         providerId: "claude-code",
-      }).mcpAuth,
-    ).toBeNull();
+      }),
+    ).not.toHaveProperty("mcpAuth");
     expect(
       providersAwaitLoginUpgradeV20ToV21.upgradeRequest({
         providerId: "claude-code",
-      }).mcpAuth,
-    ).toBeNull();
-  });
-
-  it("accepts mcpAuth on login family carriers", () => {
+      }),
+    ).not.toHaveProperty("mcpAuth");
+    // Non-strict objects ignore unknown keys, so prove the field is DROPPED
+    // by the parse rather than merely unvalidated. Every carrier the compat
+    // gate flagged is asserted here, request AND response: a `.default(null)`
+    // field reintroduced on any one of them re-breaks the released line, and
+    // the upgrade-path assertions above cannot see that (they spread a plain
+    // object and never run the schema).
     expect(
       providersStartLoginRequestSchema.parse({
         providerId: "droid",
@@ -625,50 +634,115 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
           workspaceRoot: null,
           serverName: "linear",
         },
-      }).mcpAuth?.action,
-    ).toBe("login");
+      }),
+    ).not.toHaveProperty("mcpAuth");
     expect(
       providersStartLoginResponseSchema.parse({
         url: null,
         started: false,
-        mcpAuth: {
-          kind: "authorizationUrl",
-          authorizationUrl: "https://example.com/oauth",
-        },
-      }).mcpAuth?.kind,
-    ).toBe("authorizationUrl");
+        mcpAuth: { kind: "done" },
+      }),
+    ).not.toHaveProperty("mcpAuth");
     expect(
       providersAwaitLoginRequestSchema.parse({
         providerId: "droid",
-        mcpAuth: {
-          scope: "global",
-          workspaceRoot: null,
-          serverName: "linear",
-        },
-      }).mcpAuth?.serverName,
-    ).toBe("linear");
+        mcpAuth: { scope: "global", workspaceRoot: null, serverName: "linear" },
+      }),
+    ).not.toHaveProperty("mcpAuth");
     expect(
       providersAwaitLoginResponseSchema.parse({
         state: null,
         mcpAuth: { kind: "pending" },
-      }).mcpAuth?.kind,
-    ).toBe("pending");
+      }),
+    ).not.toHaveProperty("mcpAuth");
     expect(
       providersCancelLoginRequestSchema.parse({
         providerId: "droid",
-        mcpAuth: {
-          scope: "global",
-          workspaceRoot: null,
-          serverName: "linear",
-        },
-      }).mcpAuth?.serverName,
-    ).toBe("linear");
+        mcpAuth: { scope: "global", workspaceRoot: null, serverName: "linear" },
+      }),
+    ).not.toHaveProperty("mcpAuth");
     expect(
       providersCancelLoginResponseSchema.parse({
         cancelled: true,
         mcpAuth: { kind: "done" },
-      }).mcpAuth?.kind,
-    ).toBe("done");
+      }),
+    ).not.toHaveProperty("mcpAuth");
+  });
+
+  it("carries the native payloads on the dedicated optional methods", () => {
+    expect(
+      providersMcpAuthRequestSchema.parse({
+        providerId: "droid",
+        action: {
+          action: "login",
+          scope: "global",
+          workspaceRoot: null,
+          serverName: "linear",
+        },
+      }).action.action,
+    ).toBe("login");
+    expect(
+      providersMcpAuthResponseSchema.parse({
+        result: {
+          kind: "authorizationUrl",
+          authorizationUrl: "https://example.com/oauth",
+        },
+      }).result.kind,
+    ).toBe("authorizationUrl");
+    expect(
+      providersAwaitMcpAuthRequestSchema.parse({
+        providerId: "droid",
+        context: { scope: "global", workspaceRoot: null, serverName: "linear" },
+      }).context.serverName,
+    ).toBe("linear");
+    expect(
+      providersAwaitMcpAuthResponseSchema.parse({ result: { kind: "pending" } })
+        .result.kind,
+    ).toBe("pending");
+    expect(
+      providersCancelMcpAuthRequestSchema.parse({
+        providerId: "droid",
+        context: { scope: "global", workspaceRoot: null, serverName: "linear" },
+      }).context.serverName,
+    ).toBe("linear");
+    const cancelled = providersCancelMcpAuthResponseSchema.parse({
+      cancelled: true,
+      result: { kind: "done" },
+    });
+    expect(cancelled.cancelled).toBe(true);
+    expect(cancelled.result.kind).toBe("done");
+    expect(
+      providersNativeMutateRequestSchema.parse({
+        providerId: "claude-code",
+        mutation: {
+          kind: "mcp",
+          scope: "global",
+          workspaceRoot: null,
+          mutation: { action: "remove", name: "playwright" },
+        },
+      }).mutation.kind,
+    ).toBe("mcp");
+    expect(
+      providersNativeMutateResponseSchema.parse({
+        result: { ok: true, kind: "mcp", servers: [] },
+      }).result,
+    ).toEqual({ ok: true, kind: "mcp", servers: [] });
+  });
+
+  // `result` is deliberately REQUIRED on these methods: they exist only to
+  // serve native actions, so "no payload" is not a reachable success state.
+  it("requires a result on every dedicated native response", () => {
+    expect(providersMcpAuthResponseSchema.safeParse({}).success).toBe(false);
+    expect(providersAwaitMcpAuthResponseSchema.safeParse({}).success).toBe(
+      false,
+    );
+    expect(
+      providersCancelMcpAuthResponseSchema.safeParse({ cancelled: true })
+        .success,
+    ).toBe(false);
+    expect(providersNativeMutateResponseSchema.safeParse({}).success).toBe(
+      false,
+    );
   });
 
   it("wire scope is global|project only", () => {
@@ -792,12 +866,8 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
     }
     expect(mutation.mutation.transport.type).toBe("stdio");
 
-    const result = providersSetEnabledResponseSchema.parse({
-      state: providerCliStateSchema.parse({
-        ...baseState("claude-code"),
-        nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
-      }),
-      native: {
+    const result = providersNativeMutateResponseSchema.parse({
+      result: {
         ok: true,
         kind: "mcp",
         servers: [
@@ -821,7 +891,7 @@ describe("carrier envelopes (object-preserving, no unions)", () => {
         ],
       },
     });
-    expect(result.native?.ok).toBe(true);
+    expect(result.result.ok).toBe(true);
   });
 
   it("requires inputSchema to be a JSON-Schema object or null", () => {
@@ -1054,20 +1124,39 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
 });
 
 describe("registry method-name fold", () => {
-  it("does not advertise the eight unreleased native method names", () => {
-    const names = Object.keys(hostRpcRegistry);
-    for (const method of [
-      "providers.mcpList",
-      "providers.mcpMutate",
-      "providers.mcpDiscover",
+  // This used to assert the native surface added NO method names at all,
+  // because a new name was once handshake-fatal against a released peer, so
+  // every native payload folded onto an existing carrier. The optional
+  // capability channel lifted that constraint, and folding turned out to be
+  // the more dangerous option - it grew four ALREADY-RELEASED wire shapes.
+  //
+  // The invariant that replaces it: a native method may exist, but only off
+  // the released floor and only with a degrade story, which is exactly what
+  // keeps it non-fatal for a peer that lacks it.
+  it("keeps every native method off the released floor with a degrade story", () => {
+    const nativeMethods = [
       "providers.mcpAuth",
-      "providers.pluginsList",
-      "providers.pluginsMutate",
-      "providers.skillsList",
-      "providers.skillsMutate",
-    ]) {
-      expect(names).not.toContain(method);
+      "providers.awaitMcpAuth",
+      "providers.cancelMcpAuth",
+      "providers.nativeMutate",
+    ] as const;
+    for (const method of nativeMethods) {
+      const entry = hostRpcRegistry[method];
+      expect(entry).toBeDefined();
+      // On the floor => a peer that lacks it fails the WHOLE handshake.
+      expect(releasedMethodNames).not.toContain(method);
+      // No degrade story => `checkOptionalUnary` raises a blocking finding.
+      expect(entry.degrade).toEqual({ kind: "unsupported" });
     }
+  });
+
+  // The list/discover surface still rides `providers.list`, but on a brand-new
+  // MAJOR (7.0), which is additive rather than a change to a released line.
+  it("carries native list/discover on an unreleased providers.list major", () => {
+    const listMajors = Object.keys(hostRpcRegistry["providers.list"])
+      .filter((key) => /^\d+$/.test(key))
+      .map(Number);
+    expect(Math.max(...listMajors)).toBeGreaterThan(6);
   });
 
   it("retains every released-floor method name (113)", () => {

@@ -236,7 +236,6 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
   it("downgrades provider-state mutation responses for v1.0 callers", () => {
     const state = providersListResponseSchema.parse({
       providers: [providerState("cursor", "unavailable")],
-      native: null,
     }).providers[0];
     const setApiKey = providersSetApiKeyDowngradeV21ToV10.downgradeResponse({
       state,
@@ -251,7 +250,6 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
 
     const awaitLogin = providersAwaitLoginDowngradeV21ToV10.downgradeResponse({
       state,
-      mcpAuth: null,
       existingProfileId: null,
       codeRejected: false,
     });
@@ -262,7 +260,6 @@ describe("post-v1.0 GUI harness non-breaking v2→v1 downgrade bridges", () => {
     expect(
       providersAwaitLoginDowngradeV21ToV10.downgradeResponse({
         state: null,
-        mcpAuth: null,
         existingProfileId: null,
         codeRejected: false,
       }),
@@ -414,7 +411,6 @@ describe("post-v2.0 Amp non-breaking v3→v2 / v3→v1 downgrade bridges", () =>
         providerState("cursor", "unknown"),
         providerState("amp", "unknown"),
       ],
-      native: null,
     });
 
     const toV3 = providersListDowngradeV6ToV3.downgradeResponse(liveResponse);

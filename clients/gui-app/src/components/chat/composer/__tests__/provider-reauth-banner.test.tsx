@@ -504,7 +504,7 @@ describe("<ProviderReauthBanner />", () => {
     // 2s `forceAuthRefresh` poll.
     expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
     expect(mocks.awaitLoginMutate).toHaveBeenCalledWith(
-      { providerId: "claude-code", mcpAuth: null, profileId: null },
+      { providerId: "claude-code", profileId: null },
       expect.anything(),
     );
   });
@@ -1060,7 +1060,6 @@ describe("<ProviderReauthBanner />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
       providerId: "claude-code",
-      mcpAuth: null,
       profileId: null,
     });
   });

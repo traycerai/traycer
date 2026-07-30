@@ -1248,36 +1248,19 @@ export type ProvidersSetEnabledRequestV20 = z.infer<
 >;
 
 /**
- * `providers.setEnabled@2.1` request. Object-preserving envelope: classic
- * callers set `enabled` with `native: null`; native mutations set `native`
- * with `enabled: null`. Exactly one of the two must be non-null (runtime XOR).
+ * `providers.setEnabled@2.1` request (classic enable/disable).
+ *
+ * `enabled` is REQUIRED and stays required: 2.1 is a released line, and
+ * demoting a required property to optional is a wire break in the dangerous
+ * direction - this tree would start emitting payloads omitting `enabled` that
+ * a released peer cannot parse. Native mutations therefore do NOT fold onto
+ * this carrier; they ride the dedicated optional `providers.nativeMutate@1.0`
+ * method instead (see `registry.ts`).
  */
-export const providersSetEnabledRequestSchema = z
-  .object({
-    providerId: providerIdSchema,
-    /**
-     * Classic enable/disable arm. Null when `native` is set. Defaults to null
-     * when omitted so native-only callers can send just `{providerId, native}`.
-     */
-    enabled: z.boolean().nullable().default(null),
-    /**
-     * Native mutation arm. Null for classic enable/disable. Defaults to null
-     * when omitted so classic callers can send just `{providerId, enabled}`.
-     */
-    native: nativeMutationSchema.nullable().default(null),
-  })
-  .superRefine((value, ctx) => {
-    const hasEnabled = value.enabled !== null;
-    const hasNative = value.native !== null;
-    if (hasEnabled === hasNative) {
-      ctx.addIssue({
-        code: "custom",
-        path: hasEnabled ? ["native"] : ["enabled"],
-        message:
-          'providers.setEnabled@2.1 requires exactly one of "enabled" or "native"',
-      });
-    }
-  });
+export const providersSetEnabledRequestSchema = z.object({
+  providerId: providerIdSchema,
+  enabled: z.boolean(),
+});
 export const providersSetEnabledRequestSchemaV10 = z.strictObject({
   providerId: providerIdSchemaV10,
   enabled: z.boolean(),
@@ -1287,13 +1270,12 @@ export type ProvidersSetEnabledRequest = z.infer<
 >;
 
 /**
- * `providers.setEnabled@2.1` response. Always returns classic `state`; native
- * mutations also populate `native` (ok payload or typed error). Classic
- * enable/disable returns `native: null`.
+ * `providers.setEnabled@2.1` response. Returns classic `state` only - 2.1 is
+ * released and its response shape is frozen. Native mutation results come back
+ * on `providers.nativeMutate@1.0` instead.
  */
 export const providersSetEnabledResponseSchema = z.object({
   state: providerMutationCliStateSchemaV21,
-  native: nativeMutationResultSchema.nullable().default(null),
 });
 export const providersSetEnabledResponseSchemaV20 = z.object({
   state: providerMutationCliStateSchemaV20,
@@ -1486,25 +1468,23 @@ export type ProvidersStartLoginResponseV10 = z.infer<
 >;
 
 /**
- * `providers.startLogin@1.1` request. Classic callers set `mcpAuth: null`;
- * MCP auth folds the full NativeAuthAction set onto this carrier.
+ * `providers.startLogin@1.1` request (classic provider login only). MCP auth
+ * does NOT fold onto this released carrier - it rides the dedicated optional
+ * `providers.mcpAuth@1.0` method (see `registry.ts`).
  */
 export const providersStartLoginRequestSchema = z.object({
   providerId: providerIdSchema,
-  mcpAuth: nativeAuthActionSchema.nullable().default(null),
 });
 export type ProvidersStartLoginRequest = z.infer<
   typeof providersStartLoginRequestSchema
 >;
 
 /**
- * `providers.startLogin@1.1` response. Classic arm returns url/started with
- * `mcpAuth: null`; MCP auth populates `mcpAuth` with the action result.
+ * `providers.startLogin@1.1` response (classic provider login only).
  */
 export const providersStartLoginResponseSchema = z.object({
   url: z.string().nullable(),
   started: z.boolean(),
-  mcpAuth: nativeAuthResultSchema.nullable().default(null),
 });
 export type ProvidersStartLoginResponse = z.infer<
   typeof providersStartLoginResponseSchema
@@ -1578,13 +1558,12 @@ export type ProvidersStartLoginResponseV11 = z.infer<
 >;
 
 /**
- * `providers.awaitLogin@2.1` request. With `mcpAuth` set this is a **bounded
- * status poll** (well under the 30s unary frame deadline), never the classic
- * provider-child long poll. Host pending-auth registry (R02) owns concurrency.
- * Otherwise blocks until an in-flight `providers.startLogin` child finishes
- * (the browser loopback completes or the CLI exits), then returns the
- * freshly re-probed state - the honest "did the reconnect work?" signal, so
- * the GUI awaits this instead of polling auth status.
+ * `providers.awaitLogin@2.1` request. Blocks until an in-flight
+ * `providers.startLogin` child finishes (the browser loopback completes or the
+ * CLI exits), then returns the freshly re-probed state - the honest "did the
+ * reconnect work?" signal, so the GUI awaits this instead of polling auth
+ * status. MCP auth polling is NOT folded onto this released carrier; it uses
+ * the dedicated optional `providers.awaitMcpAuth@1.0` method.
  */
 // `profileId` mirrors `providers.startLogin@1.1`'s request field so the
 // caller awaits the same profile-scoped login child it started. Ships with
@@ -1595,7 +1574,6 @@ export type ProvidersStartLoginResponseV11 = z.infer<
 // `providersAwaitLoginDowngradeV21ToV10`).
 export const providersAwaitLoginRequestSchema = z.object({
   providerId: providerIdSchema,
-  mcpAuth: nativeAuthPollContextSchema.nullable().default(null),
   profileId: z.string().nullable().default(null),
 });
 export const providersAwaitLoginRequestSchemaV10 = z.strictObject({
@@ -1606,14 +1584,12 @@ export type ProvidersAwaitLoginRequest = z.infer<
 >;
 
 /**
- * `providers.awaitLogin@2.1` response. Classic arm returns re-probed `state`
- * with `mcpAuth: null`; MCP poll returns status in `mcpAuth`.
+ * `providers.awaitLogin@2.1` response. Returns the re-probed `state`.
  */
 export const providersAwaitLoginResponseSchema = z.object({
   // The provider's state after the login child closed and auth was re-probed.
   // Null when no login was in flight for this provider (nothing to await).
   state: providerMutationCliStateSchemaV21.nullable(),
-  mcpAuth: nativeAuthResultSchema.nullable().default(null),
   // Create-profile only: when the authenticated account already belongs to
   // an active profile, the host discards the pending profile instead of
   // activating a duplicate and identifies the existing profile here. Ships
@@ -1680,12 +1656,11 @@ export type ProvidersCancelLoginResponseV10 = z.infer<
 >;
 
 /**
- * `providers.cancelLogin@1.1` request. MCP cancel folds server context onto
- * this carrier; classic callers set `mcpAuth: null`.
+ * `providers.cancelLogin@1.1` request (classic provider login only). MCP
+ * cancel rides the dedicated optional `providers.cancelMcpAuth@1.0` method.
  */
 export const providersCancelLoginRequestSchema = z.object({
   providerId: providerIdSchema,
-  mcpAuth: nativeAuthCancelContextSchema.nullable().default(null),
 });
 export type ProvidersCancelLoginRequest = z.infer<
   typeof providersCancelLoginRequestSchema
@@ -1705,15 +1680,116 @@ export type ProvidersCancelLoginRequestV11 = z.infer<
 >;
 
 /**
- * `providers.cancelLogin@1.1` response. Classic arm returns cancelled with
- * `mcpAuth: null`; MCP cancel may return a typed auth result (e.g. done).
+ * `providers.cancelLogin@1.1` response (classic provider login only).
  */
 export const providersCancelLoginResponseSchema = z.object({
   cancelled: z.boolean(),
-  mcpAuth: nativeAuthResultSchema.nullable().default(null),
 });
 export type ProvidersCancelLoginResponse = z.infer<
   typeof providersCancelLoginResponseSchema
+>;
+
+// ── Dedicated native methods (optional capability channel) ─────────────────
+//
+// These carry the MCP/plugins/skills payloads that used to fold onto the
+// released `providers.startLogin@1.1` / `awaitLogin@2.1` / `cancelLogin@1.1` /
+// `setEnabled@2.1` carriers. Folding grew already-released wire shapes, which
+// the compat gate correctly rejects: a released line is frozen. Because they
+// are brand-new METHOD NAMES they ride the optional-capability channel with
+// `degrade: { kind: "unsupported" }` (see `registry.ts`), so a host that
+// predates them fails these calls per-call with upgrade guidance instead of
+// failing the whole handshake.
+//
+// Unlike the carrier fields, `result` here is non-nullable: these methods
+// exist only to serve native actions, so "no payload" is not a reachable
+// success state - the resolver either answers with a result (including the
+// typed `error`/`unsupported` arms) or throws.
+
+/** `providers.mcpAuth@1.0` request - the full MCP auth action set. */
+export const providersMcpAuthRequestSchema = z.object({
+  providerId: providerIdSchema,
+  action: nativeAuthActionSchema,
+});
+export type ProvidersMcpAuthRequest = z.infer<
+  typeof providersMcpAuthRequestSchema
+>;
+
+/** `providers.mcpAuth@1.0` response. */
+export const providersMcpAuthResponseSchema = z.object({
+  result: nativeAuthResultSchema,
+});
+export type ProvidersMcpAuthResponse = z.infer<
+  typeof providersMcpAuthResponseSchema
+>;
+
+/**
+ * `providers.awaitMcpAuth@1.0` request - a **bounded status poll** (well under
+ * the 30s unary frame deadline), never a long poll. The host pending-auth
+ * registry (R02) owns concurrency.
+ */
+export const providersAwaitMcpAuthRequestSchema = z.object({
+  providerId: providerIdSchema,
+  context: nativeAuthPollContextSchema,
+});
+export type ProvidersAwaitMcpAuthRequest = z.infer<
+  typeof providersAwaitMcpAuthRequestSchema
+>;
+
+/** `providers.awaitMcpAuth@1.0` response. */
+export const providersAwaitMcpAuthResponseSchema = z.object({
+  result: nativeAuthResultSchema,
+});
+export type ProvidersAwaitMcpAuthResponse = z.infer<
+  typeof providersAwaitMcpAuthResponseSchema
+>;
+
+/** `providers.cancelMcpAuth@1.0` request. */
+export const providersCancelMcpAuthRequestSchema = z.object({
+  providerId: providerIdSchema,
+  context: nativeAuthCancelContextSchema,
+});
+export type ProvidersCancelMcpAuthRequest = z.infer<
+  typeof providersCancelMcpAuthRequestSchema
+>;
+
+/**
+ * `providers.cancelMcpAuth@1.0` response. `cancelled` reports whether a
+ * pending auth was actually found and torn down, distinct from `result`, which
+ * describes the server's resulting auth state - cancelling something that was
+ * never in flight is `cancelled: false` with a perfectly normal result.
+ */
+export const providersCancelMcpAuthResponseSchema = z.object({
+  cancelled: z.boolean(),
+  result: nativeAuthResultSchema,
+});
+export type ProvidersCancelMcpAuthResponse = z.infer<
+  typeof providersCancelMcpAuthResponseSchema
+>;
+
+/**
+ * `providers.nativeMutate@1.0` request - MCP/plugins/skills mutations. The
+ * scope tuple and its `scope`/`workspaceRoot` invariant live inside
+ * `nativeMutationSchema`, so no XOR refinement is needed on this envelope.
+ */
+export const providersNativeMutateRequestSchema = z.object({
+  providerId: providerIdSchema,
+  mutation: nativeMutationSchema,
+});
+export type ProvidersNativeMutateRequest = z.infer<
+  typeof providersNativeMutateRequestSchema
+>;
+
+/**
+ * `providers.nativeMutate@1.0` response. Returns only the mutated native
+ * collection: the old `setEnabled` carrier also echoed the full
+ * `ProviderCliState`, but no client ever read it on the native arm, and
+ * recomputing a whole provider catalog for a tool toggle is pure overhead.
+ */
+export const providersNativeMutateResponseSchema = z.object({
+  result: nativeMutationResultSchema,
+});
+export type ProvidersNativeMutateResponse = z.infer<
+  typeof providersNativeMutateResponseSchema
 >;
 
 export type {

@@ -475,7 +475,6 @@ describe("provider.* mutation major-2 lines predate profiles[]", () => {
     expect(upgraded).toEqual({
       providerId: "claude-code",
       profileId: null,
-      mcpAuth: null,
     });
   });
 
@@ -503,7 +502,6 @@ describe("providers.startLogin@1.1 (create profile / re-login to a profile)", ()
     );
     expect(upgradedRequest).toEqual({
       providerId: "claude-code",
-      mcpAuth: null,
       profileId: null,
       createProfile: null,
     });
@@ -517,17 +515,15 @@ describe("providers.startLogin@1.1 (create profile / re-login to a profile)", ()
     expect(upgradedResponse).toEqual({
       url: null,
       started: true,
-      mcpAuth: null,
       profileId: null,
     });
   });
 });
 
 describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
-  it("drops mcpAuth/profileId before the strict v1.0 request parse", () => {
+  it("drops profileId before the strict v1.0 request parse", () => {
     const downgraded = providersAwaitLoginDowngradeV21ToV10.downgradeRequest({
       providerId: "claude-code",
-      mcpAuth: null,
       profileId: "profile-1",
     });
     expect(downgraded).toEqual({
@@ -541,7 +537,7 @@ describe("providers.awaitLogin v2->v1 downgrade strips profileId", () => {
       hostRpcRegistry["providers.awaitLogin"],
       2,
       1,
-      { providerId: "codex", mcpAuth: null, profileId: "profile-1" },
+      { providerId: "codex", profileId: "profile-1" },
     );
     expect(downgraded).toEqual({ ok: true, value: { providerId: "codex" } });
   });
@@ -559,7 +555,6 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
       providerId: "claude-code",
       enabled: true,
       profileAction: null,
-      native: null,
     });
   });
 
@@ -584,7 +579,6 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
     const rename = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
       providerId: "claude-code",
       enabled: true,
-      native: null,
       profileAction: { type: "rename", profileId: "profile-1", label: "Work" },
     });
     expect(rename).toEqual({
@@ -595,7 +589,6 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
     const remove = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
       providerId: "claude-code",
       enabled: true,
-      native: null,
       profileAction: { type: "remove", profileId: "profile-1" },
     });
     expect(remove).toEqual({
@@ -606,7 +599,6 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
     const recolor = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
       providerId: "claude-code",
       enabled: true,
-      native: null,
       profileAction: {
         type: "recolor",
         profileId: "profile-1",
@@ -628,7 +620,6 @@ describe("providers.setEnabled@2.1 (profile rename/remove/recolor)", () => {
         providerId: "codex",
         enabled: false,
         profileAction: null,
-        native: null,
       },
     );
     expect(downgraded).toEqual({
@@ -664,7 +655,6 @@ describe("acknowledgeAmbientDrift profileAction (rides the unreleased @2.1)", ()
     const downgraded = providersSetEnabledDowngradeV2ToV1.downgradeRequest({
       providerId: "claude-code",
       enabled: true,
-      native: null,
       profileAction: { type: "acknowledgeAmbientDrift" },
     });
     expect(downgraded).toEqual({
@@ -681,7 +671,6 @@ describe("acknowledgeAmbientDrift profileAction (rides the unreleased @2.1)", ()
       {
         providerId: "codex",
         enabled: true,
-        native: null,
         profileAction: { type: "acknowledgeAmbientDrift" },
       },
     );

@@ -90,7 +90,6 @@ describe("provider profile mutation wrappers", () => {
     ).toEqual({
       providerId: "codex",
       enabled: true,
-      native: null,
       profileAction: {
         type: "rename",
         profileId: "profile-1",
@@ -120,7 +119,6 @@ describe("provider profile mutation wrappers", () => {
     ).toEqual({
       providerId: "codex",
       enabled: true,
-      native: null,
       profileAction: {
         type: "remove",
         profileId: "profile-1",
@@ -152,7 +150,6 @@ describe("provider profile mutation wrappers", () => {
     ).toEqual({
       providerId: "codex",
       enabled: true,
-      native: null,
       profileAction: {
         type: "recolor",
         profileId: "profile-1",
@@ -179,7 +176,6 @@ describe("provider profile mutation wrappers", () => {
     expect(getCaptured().mapVariables({ providerId: "codex" })).toEqual({
       providerId: "codex",
       enabled: true,
-      native: null,
       profileAction: { type: "acknowledgeAmbientDrift" },
     });
   });

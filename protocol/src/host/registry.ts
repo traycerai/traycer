@@ -382,8 +382,16 @@ import {
   providersAwaitLoginResponseSchemaV10,
   providersAwaitLoginResponseSchemaV20,
   providersCancelLoginRequestSchemaV10,
+  providersAwaitMcpAuthRequestSchema,
+  providersAwaitMcpAuthResponseSchema,
   providersCancelLoginRequestSchemaV11,
   providersCancelLoginResponseSchema,
+  providersCancelMcpAuthRequestSchema,
+  providersCancelMcpAuthResponseSchema,
+  providersMcpAuthRequestSchema,
+  providersMcpAuthResponseSchema,
+  providersNativeMutateRequestSchema,
+  providersNativeMutateResponseSchema,
   providersCancelLoginResponseSchemaV10,
   providersClearApiKeyRequestSchema,
   providersClearApiKeyRequestSchemaV10,
@@ -1770,9 +1778,8 @@ export const providersStartLoginV10 = defineRpcContract({
 // `worktree.listBindingsForEpic@1.1`'s note and the multi-profile decision
 // log). Shipped as a minor (not an in-place edit to v1.0): both new fields
 // default to `null`, which is byte-identical to today's request/response, so
-// a v1.0.0 host still negotiates and old clients are unaffected. Also carries
-// `mcpAuth` (MCP-scoped auth actions fold onto the same request/response
-// carrier; classic callers set/receive `mcpAuth: null`).
+// a v1.0.0 host still negotiates and old clients are unaffected. MCP auth does
+// NOT ride this carrier - see `providers.mcpAuth@1.0` below.
 export const providersStartLoginV11 = defineRpcContract({
   method: "providers.startLogin",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -1788,13 +1795,11 @@ export const providersStartLoginUpgradeV10ToV11 = defineUpgradePath<
   to: { major: 1, minor: 1 },
   upgradeRequest: (request) => ({
     ...request,
-    mcpAuth: null,
     profileId: null,
     createProfile: null,
   }),
   upgradeResponse: (response) => ({
     ...response,
-    mcpAuth: null,
     profileId: null,
   }),
 });
@@ -1852,7 +1857,6 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
   to: { major: 2, minor: 1 },
   upgradeRequest: (request) => ({
     ...request,
-    mcpAuth: null,
     profileId: null,
   }),
   upgradeResponse: (response) => ({
@@ -1866,7 +1870,6 @@ export const providersAwaitLoginUpgradeV20ToV21 = defineUpgradePath<
               response.state.loginCapability,
             ),
           },
-    mcpAuth: null,
     existingProfileId: null,
     codeRejected: false,
   }),
@@ -1905,11 +1908,11 @@ export const providersAwaitLoginDowngradeV21ToV10 = defineDowngradePath<
 >({
   from: { major: 2, minor: 1 },
   to: { major: 1, minor: 0 },
-  // Drop `mcpAuth`/`profileId` before the parse: `providersAwaitLoginRequestSchemaV10`
-  // is a strict object that never learned them, so passing the full request
+  // Drop `profileId` before the parse: `providersAwaitLoginRequestSchemaV10`
+  // is a strict object that never learned it, so passing the full request
   // through would fail the strict parse and drop the whole downgrade.
   downgradeRequest: (request) => {
-    const { mcpAuth, profileId, ...legacyRequest } = request;
+    const { profileId, ...legacyRequest } = request;
     return downgradeProviderRequestForV10(
       providersAwaitLoginRequestSchemaV10,
       legacyRequest,
@@ -1943,9 +1946,8 @@ export const providersCancelLoginV10 = defineRpcContract({
 // v1.1 adds `profileId`, mirroring `providers.startLogin@1.1` - cancel the
 // same profile-scoped login child that was started. Shipped as a minor (not
 // an in-place edit to v1.0): `profileId` defaults to `null`, so a v1.0.0
-// host still negotiates and old clients are unaffected. Also carries
-// `mcpAuth` (MCP cancel may return a typed auth result; classic callers set/
-// receive `mcpAuth: null`).
+// host still negotiates and old clients are unaffected. MCP cancel does NOT
+// ride this carrier - see `providers.cancelMcpAuth@1.0` below.
 export const providersCancelLoginV11 = defineRpcContract({
   method: "providers.cancelLogin",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -1961,13 +1963,63 @@ export const providersCancelLoginUpgradeV10ToV11 = defineUpgradePath<
   to: { major: 1, minor: 1 },
   upgradeRequest: (request) => ({
     ...request,
-    mcpAuth: null,
     profileId: null,
   }),
   upgradeResponse: (response) => ({
     ...response,
-    mcpAuth: null,
   }),
+});
+
+/**
+ * Native MCP/plugins/skills surface: four brand-new v1.0 methods, none of them
+ * on `RELEASED_FLOOR_METHOD_NAMES`, all registered below with
+ * `degrade: { kind: "unsupported" }`.
+ *
+ * These payloads originally folded onto the released `providers.startLogin@1.1`
+ * / `awaitLogin@2.1` / `cancelLogin@1.1` / `setEnabled@2.1` carriers, because a
+ * new method NAME used to be handshake-fatal against a released peer. The
+ * optional-capability channel removed that constraint, and folding was the
+ * worse trade: it grew four already-released wire shapes (and demoted
+ * `setEnabled`'s required `enabled` to optional), which the compat gate
+ * correctly rejects as breaking against every `cli-v1.1.7+` / `host-v1.1.7+`
+ * peer. Released lines are frozen; new capability belongs on new methods.
+ *
+ * Missing-peer behavior: a host that predates this surface reports
+ * `nativeCapabilities: null` for every provider (the `providers.list` response
+ * defaults it via `.catch`), and the GUI only renders the MCP/Plugins/Skills
+ * tabs when the matching capability is non-null. So these methods are
+ * unreachable on such a host by construction, and `E_HOST_UNSUPPORTED` is a
+ * backstop rather than the primary guard.
+ */
+export const providersMcpAuthV10 = defineRpcContract({
+  method: "providers.mcpAuth",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersMcpAuthRequestSchema,
+  responseSchema: providersMcpAuthResponseSchema,
+});
+
+/** Bounded status poll for an in-flight MCP auth. Never a long poll. */
+export const providersAwaitMcpAuthV10 = defineRpcContract({
+  method: "providers.awaitMcpAuth",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersAwaitMcpAuthRequestSchema,
+  responseSchema: providersAwaitMcpAuthResponseSchema,
+});
+
+/** Cancels an in-flight MCP auth. */
+export const providersCancelMcpAuthV10 = defineRpcContract({
+  method: "providers.cancelMcpAuth",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersCancelMcpAuthRequestSchema,
+  responseSchema: providersCancelMcpAuthResponseSchema,
+});
+
+/** MCP/plugins/skills mutations. */
+export const providersNativeMutateV10 = defineRpcContract({
+  method: "providers.nativeMutate",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: providersNativeMutateRequestSchema,
+  responseSchema: providersNativeMutateResponseSchema,
 });
 
 /**
@@ -2083,7 +2135,6 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
   upgradeRequest: (request) => ({
     ...request,
     profileAction: null,
-    native: null,
   }),
   upgradeResponse: (response) => ({
     state: {
@@ -2093,7 +2144,6 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
         response.state.loginCapability,
       ),
     },
-    native: null,
   }),
 });
 
@@ -2102,20 +2152,18 @@ export const providersSetEnabledUpgradeV20ToV21 = defineUpgradePath<
 // latest. Used directly by `provider-profiles-compat.test.ts` to assert
 // `profileAction` never reaches a v1.0 caller; the registered
 // `downgradePathsFromLatest` bridge is `providersSetEnabledDowngradeV21ToV10`
-// below, which additionally rejects native-only (`enabled: null`) requests.
+// below.
 export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
   typeof providersSetEnabledV21,
   typeof providersSetEnabledV10
 >({
   from: { major: 2, minor: 1 },
   to: { major: 1, minor: 0 },
-  // Drop `profileAction`/`native` before the parse: `providersSetEnabledRequestSchemaV10`
-  // is a strict object that never learned them, so passing the full request
-  // through would fail the strict parse and drop the whole downgrade. A
-  // native-only request (`enabled: null`) still correctly fails the strict
-  // parse below, since v1.0's `enabled` is a non-nullable boolean.
+  // Drop `profileAction` before the parse: `providersSetEnabledRequestSchemaV10`
+  // is a strict object that never learned it, so passing the full request
+  // through would fail the strict parse and drop the whole downgrade.
   downgradeRequest: (request) => {
-    const { profileAction, native, ...legacyRequest } = request;
+    const { profileAction, ...legacyRequest } = request;
     return downgradeProviderRequestForV10(
       providersSetEnabledRequestSchemaV10,
       legacyRequest,
@@ -2139,25 +2187,13 @@ export const providersSetEnabledDowngradeV21ToV20 = defineDowngradePath<
 >({
   from: { major: 2, minor: 1 },
   to: { major: 2, minor: 0 },
-  downgradeRequest: (request) => {
-    if (request.enabled === null) {
-      return {
-        ok: false,
-        error: {
-          code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Native providers.setEnabled@2.1 request cannot downgrade to @2.0",
-        },
-      };
-    }
-    return {
-      ok: true,
-      value: providersSetEnabledRequestSchemaV20.parse({
-        providerId: request.providerId,
-        enabled: request.enabled,
-      }),
-    };
-  },
+  downgradeRequest: (request) => ({
+    ok: true,
+    value: providersSetEnabledRequestSchemaV20.parse({
+      providerId: request.providerId,
+      enabled: request.enabled,
+    }),
+  }),
   downgradeResponse: (response) => {
     const state = downgradeProviderCliStateToMutationV20(response.state);
     return {
@@ -2173,22 +2209,11 @@ export const providersSetEnabledDowngradeV21ToV10 = defineDowngradePath<
 >({
   from: { major: 2, minor: 1 },
   to: { major: 1, minor: 0 },
-  downgradeRequest: (request) => {
-    if (request.enabled === null) {
-      return {
-        ok: false,
-        error: {
-          code: "DOWNGRADE_UNSUPPORTED",
-          message:
-            "Native providers.setEnabled@2.1 request cannot downgrade to @1.0",
-        },
-      };
-    }
-    return downgradeProviderRequestForV10(providersSetEnabledRequestSchemaV10, {
+  downgradeRequest: (request) =>
+    downgradeProviderRequestForV10(providersSetEnabledRequestSchemaV10, {
       providerId: request.providerId,
       enabled: request.enabled,
-    });
-  },
+    }),
   downgradeResponse: (response) => {
     const state = downgradeProviderStateForV10(response.state);
     if (!state.ok) return state;
@@ -4855,6 +4880,58 @@ const HOST_RPC_REGISTRY_DEFINITION = {
         1: {
           contract: providersCancelLoginV11,
           upgradeFromPreviousVersion: providersCancelLoginUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.mcpAuth": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersMcpAuthV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.awaitMcpAuth": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersAwaitMcpAuthV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.cancelMcpAuth": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersCancelMcpAuthV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "providers.nativeMutate": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersNativeMutateV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},

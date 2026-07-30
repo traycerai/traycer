@@ -9,7 +9,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import {
   isProviderNativeRpcError,
-  mapSetEnabledToSkillsMutate,
+  mapNativeMutateToSkillsMutate,
   type SkillsListData,
   type SkillsMutateData,
 } from "@/hooks/providers/native-response-map";
@@ -57,18 +57,16 @@ export function useProvidersSkillsMutate(): UseMutationResult<
   >({
     mutationKey: providersMutationKeys.skillsMutate(),
     mutationFn: async (variables) => {
-      const response = await client.request("providers.setEnabled", {
+      const response = await client.request("providers.nativeMutate", {
         providerId: variables.providerId,
-        enabled: null,
-        native: {
+        mutation: {
           kind: "skills",
           scope: variables.scope,
           workspaceRoot: variables.workspaceRoot,
           mutation: variables.mutation,
         },
-        profileAction: null,
       });
-      return mapSetEnabledToSkillsMutate({ response });
+      return mapNativeMutateToSkillsMutate({ response });
     },
     onMutate: (variables) => ({
       hostId: client.getActiveHostId(),

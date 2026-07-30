@@ -9,7 +9,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import {
   isProviderNativeRpcError,
-  mapSetEnabledToPluginsMutate,
+  mapNativeMutateToPluginsMutate,
   type PluginsListData,
   type PluginsMutateData,
 } from "@/hooks/providers/native-response-map";
@@ -57,18 +57,16 @@ export function useProvidersPluginsMutate(): UseMutationResult<
   >({
     mutationKey: providersMutationKeys.pluginsMutate(),
     mutationFn: async (variables) => {
-      const response = await client.request("providers.setEnabled", {
+      const response = await client.request("providers.nativeMutate", {
         providerId: variables.providerId,
-        enabled: null,
-        native: {
+        mutation: {
           kind: "plugins",
           scope: variables.scope,
           workspaceRoot: variables.workspaceRoot,
           mutation: variables.mutation,
         },
-        profileAction: null,
       });
-      return mapSetEnabledToPluginsMutate({ response });
+      return mapNativeMutateToPluginsMutate({ response });
     },
     onMutate: (variables) => ({
       hostId: client.getActiveHostId(),

@@ -220,7 +220,6 @@ export function OnboardingDetectedAgents() {
     setEnabled.mutate({
       providerId,
       enabled,
-      native: null,
       profileAction: null,
     });
   };

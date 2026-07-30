@@ -698,7 +698,6 @@ function ProviderDetail({
               setEnabled.mutate({
                 providerId: id,
                 enabled,
-                native: null,
                 profileAction: null,
               })
             }

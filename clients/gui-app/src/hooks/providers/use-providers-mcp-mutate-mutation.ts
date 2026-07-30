@@ -9,7 +9,7 @@ import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import {
   isProviderNativeRpcError,
-  mapSetEnabledToMcpMutate,
+  mapNativeMutateToMcpMutate,
   type McpListData,
   type McpMutateData,
 } from "@/hooks/providers/native-response-map";
@@ -41,7 +41,7 @@ interface McpMutateContext {
 }
 
 /**
- * Mutates MCP config via `providers.setEnabled` native arm and writes the
+ * Mutates MCP config via `providers.nativeMutate` and writes the
  * returned full server list into the semantic mcp list cache. Response-equals-
  * state: the host always returns the post-mutation list for the scope tuple.
  * Typed native errors (`ok: false`) surface as ProviderNativeRpcError so
@@ -63,18 +63,16 @@ export function useProvidersMcpMutate(): UseMutationResult<
   >({
     mutationKey: providersMutationKeys.mcpMutate(),
     mutationFn: async (variables) => {
-      const response = await client.request("providers.setEnabled", {
+      const response = await client.request("providers.nativeMutate", {
         providerId: variables.providerId,
-        enabled: null,
-        native: {
+        mutation: {
           kind: "mcp",
           scope: variables.scope,
           workspaceRoot: variables.workspaceRoot,
           mutation: variables.mutation,
         },
-        profileAction: null,
       });
-      return mapSetEnabledToMcpMutate({ response });
+      return mapNativeMutateToMcpMutate({ response });
     },
     onMutate: (variables) => {
       const hostId = client.getActiveHostId();
