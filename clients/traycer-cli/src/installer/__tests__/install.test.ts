@@ -533,6 +533,64 @@ describe("atomicSwap - swap-lock recovery", () => {
     ]);
   });
 
+  it("gives the rollback restore the SAME recovery-aware plan as the forward renames, not the bare default", async () => {
+    // CodeRabbit finding on PR #829: the restore rename (trash -> target,
+    // the worst failure path - it runs when the swap-in itself already
+    // failed, and its own failure leaves NO install dir at all) used the
+    // plain `renameWithRetry` default (~2.5s, no re-kill hook) while a
+    // comment claimed it "gets the same retry" as the forward renames.
+    // Both the swap-in and the restore target the SAME destination
+    // (`target`), so one shared call-count gate drives both: calls 1-4
+    // fail, call 5+ succeeds.
+    //   - swap-in: 3 calls (attempt, retry, retry) against a 2-entry test
+    //     schedule - exhausts and throws, invoking the kill hook twice.
+    //   - restore: call 4 fails (kill hook #3), call 5 succeeds.
+    // A regression back to the plain `renameWithRetry` restore would still
+    // retry (it has its own default schedule) but would NEVER invoke the
+    // kill hook, since that path hardcodes `onRetry: null` - so the fixed
+    // code is distinguished by the kill call COUNT, not merely by success.
+    await installVersion("v1", "1.0.0");
+    setSwapRenameDelaysForTests([1, 1]);
+    mocks.forceRenameFailureForDestination = installDirFor(ENV);
+    mocks.forceRenameFailureCode = "EBUSY";
+    mocks.forceRenameFailureUntilCall = 4;
+    const kill = vi.fn(async () => {});
+
+    const sourceDir = join(sandboxRoot, "source-v2");
+    writeLocalHostSource(sourceDir, "v2");
+    let thrown: unknown;
+    try {
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: sourceDir },
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {},
+          afterSwap: async () => {},
+          swapLockRecovery: {
+            killLingeringProcesses: kill,
+            describeLockHolders: async () => [],
+          },
+        },
+        recordVersionOverride: "2.0.0",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as CliError).message).toContain(
+      "failed to swap staging dir into place",
+    );
+    // 2 re-kills for the exhausted swap-in + 1 for the restore's own retry.
+    expect(kill).toHaveBeenCalledTimes(3);
+    // The restore itself succeeded (on its 2nd call) - the previous
+    // install is back in place rather than stranded as `install.old-*`.
+    expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(
+      "binary-v1",
+    );
+  });
+
   it("gives an actionable fallback when EBUSY exhausts every retry and the scan names nothing", async () => {
     // The field cohort the scan is structurally blind to: a CWD-only
     // holder has no install path in its exe or command line, so the

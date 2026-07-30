@@ -32,11 +32,7 @@ import {
   listAsideDirsNewestFirst,
   sweepDeadAsideDirs,
 } from "./aside-dirs";
-import {
-  isRetryableRenameCode,
-  renameWithRetry,
-  renameWithRetryPlan,
-} from "./rename-retry";
+import { isRetryableRenameCode, renameWithRetryPlan } from "./rename-retry";
 import { reconcileHostStage } from "./stage-reconcile";
 
 // Host installer - verify-before-replace per the Tech Plan.
@@ -1024,17 +1020,24 @@ async function atomicSwap(opts: AtomicSwapOptions): Promise<void> {
     );
     // Restore the previous install if the rename of the new one fails. The
     // same transient Windows lock that failed the swap can also fail the
-    // restore, so it gets the same retry; if it still fails we log rather
-    // than mask the swap error about to be thrown - but a silent failure
-    // here would leave no install at all with nothing pointing at why.
+    // restore, so it gets the SAME recovery-aware plan as the forward
+    // renames (schedule + re-kill) rather than the bare ~2.5s default -
+    // this is the worst failure in the file (no `install/` at all, the
+    // previous install stranded as `install.old-*`), so it needs every bit
+    // of the retry budget the forward renames get. If it still fails we log
+    // rather than mask the swap error about to be thrown - but a silent
+    // failure here would leave no install at all with nothing pointing at
+    // why.
     if (targetExists) {
-      await renameWithRetry(trash, target).catch((restoreCause) => {
-        logger.error(
-          "Host install rollback failed - previous install left aside",
-          { target, trash },
-          errorFromUnknown(restoreCause),
-        );
-      });
+      await renameWithRetryPlan(trash, target, swapRenamePlan).catch(
+        (restoreCause) => {
+          logger.error(
+            "Host install rollback failed - previous install left aside",
+            { target, trash },
+            errorFromUnknown(restoreCause),
+          );
+        },
+      );
     }
     throw cliError({
       code: CLI_ERROR_CODES.HOST_INSTALL_FAILED,
