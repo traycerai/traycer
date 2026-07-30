@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CHAT_TURN_MINIMAP_CONTENT_MAX_WIDTH,
+  CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
   CHAT_TURN_MINIMAP_HIT_STRIP_LEFT,
   CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH,
   CHAT_TURN_MINIMAP_ITEM_SPACING,
@@ -238,8 +239,13 @@ describe("resolveChatTurnMinimapInteractiveWidth", () => {
   });
 
   it("returns the expanded rem width once the preview is open", () => {
-    expect(resolveChatTurnMinimapInteractiveWidth(0, true)).toBe("22rem");
-    expect(resolveChatTurnMinimapInteractiveWidth(40, true)).toBe("22rem");
+    expect(resolveChatTurnMinimapInteractiveWidth(0, true)).toBe(
+      CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
+    );
+    expect(resolveChatTurnMinimapInteractiveWidth(40, true)).toBe(
+      CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH,
+    );
+    expect(CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH).toContain("100vw");
   });
 });
 

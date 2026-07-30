@@ -27,8 +27,6 @@ import {
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
 } from "./chat-stable-rows";
 
-const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
-
 /**
  * Shared, closure-free row context. Row components read business-logic
  * callbacks from context instead of a per-item closure, so `renderItem`
@@ -154,6 +152,8 @@ export interface ChatTimelineProps {
   readonly sizePreservationEnabled?: boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
+  /** Notifies presentational consumers after LegendList remeasures any row. */
+  readonly onItemSizeChanged?: () => void;
   /**
    * Ticket 5: LegendList's measured header/footer sizes. The free-scrolling
    * save path needs `headerSize` as the top-offset adjustment that
@@ -194,6 +194,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   followEnabled = true,
   sizePreservationEnabled,
   navigationHighlightedMessageId,
+  onItemSizeChanged,
   onListMetricsChange,
   ...rest
 }: ChatTimelineProps) {
@@ -319,6 +320,7 @@ export const ChatTimeline = memo(function ChatTimeline({
               }
         }
         maintainVisibleContentPosition={maintainVisibleContentPosition}
+        onItemSizeChanged={onItemSizeChanged}
         onScroll={handleScroll}
         {...(onListMetricsChange !== undefined
           ? { onMetricsChange: onListMetricsChange }
@@ -399,16 +401,19 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   message: ChatMessageModel;
 }) {
   const ctx = use(ChatTimelineRowCtx);
+  if (ctx === null) {
+    throw new Error("ChatTimelineRow must render inside ChatTimeline");
+  }
 
   return (
     <div
       data-message-id={message.id}
       data-navigation-highlighted={
-        ctx?.navigationHighlightedMessageId === message.id ? "true" : undefined
+        ctx.navigationHighlightedMessageId === message.id ? "true" : undefined
       }
       className={cn(
         "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style]",
-        ctx?.navigationHighlightedMessageId === message.id &&
+        ctx.navigationHighlightedMessageId === message.id &&
           "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse",
         message.role === "user"
           ? "[contain-intrinsic-size:auto_8rem]"
@@ -417,11 +422,9 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
     >
       <ChatMessage
         message={message}
-        actions={ctx?.getMessageActions(message) ?? null}
-        backgroundToolBlockIds={
-          ctx?.backgroundToolBlockIds ?? EMPTY_BACKGROUND_TOOL_BLOCK_IDS
-        }
-        nextStepActions={ctx?.nextStepActions ?? null}
+        actions={ctx.getMessageActions(message)}
+        backgroundToolBlockIds={ctx.backgroundToolBlockIds}
+        nextStepActions={ctx.nextStepActions}
       />
     </div>
   );

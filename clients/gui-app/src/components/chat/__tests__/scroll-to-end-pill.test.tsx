@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ScrollToEndPillState } from "@/components/chat/chat-scroll-to-end-pill-state";
 import { ScrollToEndPill } from "@/components/chat/scroll-to-end-pill";
@@ -48,7 +48,7 @@ describe("ScrollToEndPill", () => {
   });
 
   it("hides interaction when hidden (tabIndex -1, opacity-0, pointer-events-none)", () => {
-    renderPill({ kind: "hidden" });
+    const { onClick } = renderPill({ kind: "hidden" });
 
     const pill = screen.getByRole("button", {
       name: "Scroll to end",
@@ -57,5 +57,15 @@ describe("ScrollToEndPill", () => {
     expect(pill.tabIndex).toBe(-1);
     expect(pill.classList.contains("opacity-0")).toBe(true);
     expect(pill.classList.contains("pointer-events-none")).toBe(true);
+    fireEvent.click(pill);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("invokes the activation handler while visible", () => {
+    const { onClick } = renderPill({ kind: "plain" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+
+    expect(onClick).toHaveBeenCalledOnce();
   });
 });

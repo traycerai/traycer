@@ -1025,6 +1025,46 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("announces a completed assistant even when a queued turn appends a new running assistant in the same render", async () => {
+      const firstUser = makeMessage(0, "user");
+      const firstAssistantStreaming: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const secondUser = makeMessage(2, "user");
+      const secondAssistantStreaming: ChatMessageModel = {
+        ...makeMessage(3, "assistant"),
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [firstUser, firstAssistantStreaming],
+        scrollStateKey: "aria-queued-turn",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      rerenderMessages([
+        firstUser,
+        {
+          ...firstAssistantStreaming,
+          completedAt: 1_700_000_000_000,
+          runState: null,
+        },
+        secondUser,
+        secondAssistantStreaming,
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+    });
+
     it("does not announce when the turn was user-stopped", async () => {
       const userMsg = makeMessage(0, "user");
       const assistantStreaming: ChatMessageModel = {
@@ -2125,7 +2165,7 @@ describe("ChatMessages scroll policy", () => {
   });
 
   describe("quote gating under systemOverlayActive (coverage restore)", () => {
-    it("disables quote selection while a system overlay is active", async () => {
+    it("disables the quote-selection hook while a system overlay is active", async () => {
       useSettingsStore.setState({ quoteReplyEnabled: true });
       const messages: ReadonlyArray<ChatMessageModel> = [
         makeMessage(0, "user"),
@@ -2137,51 +2177,29 @@ describe("ChatMessages scroll policy", () => {
       const { rerenderWith } = renderChatMessages({
         messages,
         scrollStateKey: "quote-overlay",
-        systemOverlayActive: false,
+        systemOverlayActive: true,
       });
       await settleLegendList();
 
-      // Select quotable text inside the transcript.
-      const textNode = screen.getByText(
-        /Quotable assistant text for overlay gating/,
-      );
-      const range = document.createRange();
-      range.selectNodeContents(textNode);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      await act(async () => {
-        document.dispatchEvent(new Event("selectionchange"));
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
-      });
+      const transcript = screen.getByTestId("chat-transcript-container");
+      const addListenerSpy = vi.spyOn(transcript, "addEventListener");
+      const removeListenerSpy = vi.spyOn(transcript, "removeEventListener");
+      try {
+        rerenderWith({ systemOverlayActive: false });
+        expect(addListenerSpy).toHaveBeenCalledWith(
+          "mouseup",
+          expect.any(Function),
+        );
 
-      // May or may not show depending on quotable markup from mock ChatMessage.
-      // Drive the prop transition regardless and assert the enabled wiring via
-      // the store-facing path: when systemOverlayActive flips true, any
-      // existing quote affordance is dismissed / not interactive.
-      const quoteBefore = screen.queryByRole("button", { name: "Quote" });
-
-      rerenderWith({ systemOverlayActive: true });
-      await act(async () => {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
-      });
-
-      expect(screen.queryByRole("button", { name: "Quote" })).toBeNull();
-
-      rerenderWith({ systemOverlayActive: false });
-      // Re-enable: selection may need re-trigger; at minimum the prop path
-      // no longer forces disabled. Re-fire selectionchange.
-      await act(async () => {
-        document.dispatchEvent(new Event("selectionchange"));
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
-      });
-      void quoteBefore;
+        rerenderWith({ systemOverlayActive: true });
+        expect(removeListenerSpy).toHaveBeenCalledWith(
+          "mouseup",
+          expect.any(Function),
+        );
+      } finally {
+        addListenerSpy.mockRestore();
+        removeListenerSpy.mockRestore();
+      }
     });
   });
 

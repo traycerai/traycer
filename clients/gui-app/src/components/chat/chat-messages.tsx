@@ -541,6 +541,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     });
 
   const chatTimelineRef = useRef<LegendListRef | null>(null);
+  const minimapInViewRefreshRef = useRef<() => void>(() => undefined);
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef(messages);
   const messageIndexByIdRef = useRef(buildMessageIdToIndex(messages));
@@ -1718,6 +1719,9 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     },
     [],
   );
+  const onTimelineItemSizeChanged = useCallback((): void => {
+    minimapInViewRefreshRef.current();
+  }, []);
 
   // Quote-to-composer: track selections inside the transcript wrapper below and
   // surface the floating quote button. The hook attaches no listeners while the
@@ -2056,40 +2060,39 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     readonly key: string;
     readonly text: string;
   } | null>(null);
-  const lastAssistantCompletionRef = useRef<{
-    readonly id: string;
-    readonly completedAt: number | null;
-  } | null>(null);
+  const assistantCompletionByIdRef = useRef<ReadonlyMap<string, number | null>>(
+    new Map(),
+  );
   useLayoutEffect(() => {
-    const lastAssistant = messages
-      .filter((message) => message.role === "assistant")
-      .at(-1);
-    if (lastAssistant === undefined) {
-      lastAssistantCompletionRef.current = null;
-      return;
+    const previous = assistantCompletionByIdRef.current;
+    const current = new Map<string, number | null>();
+    let completedAssistant: ChatMessageModel | null = null;
+    for (const message of messages) {
+      if (message.role !== "assistant") continue;
+      current.set(message.id, message.completedAt);
+      if (
+        previous.get(message.id) === null &&
+        message.completedAt !== null &&
+        !message.stopped
+      ) {
+        completedAssistant = message;
+      }
     }
-    const previous = lastAssistantCompletionRef.current;
-    lastAssistantCompletionRef.current = {
-      id: lastAssistant.id,
-      completedAt: lastAssistant.completedAt,
-    };
-    if (
-      previous !== null &&
-      previous.id === lastAssistant.id &&
-      previous.completedAt === null &&
-      lastAssistant.completedAt !== null &&
-      !lastAssistant.stopped
-    ) {
-      setTurnCompletionAnnouncement({
-        key: `${lastAssistant.id}:${lastAssistant.completedAt}`,
+    assistantCompletionByIdRef.current = current;
+    if (completedAssistant !== null) {
+      const announcement = {
+        key: `${completedAssistant.id}:${completedAssistant.completedAt}`,
         text: `${taskTitle} finished responding.`,
-      });
+      };
       // Decision #10/#16: turn completion below the fold stays anchored - no
       // auto-reveal. The pill flips to "New reply" instead, unless the
       // reader is already at the tail (nothing to signal).
-      if (timelineScrollModeRef.current !== "following-end") {
-        setHasUnseenTurnCompletion(true);
-      }
+      const hasUnseenCompletion =
+        timelineScrollModeRef.current !== "following-end";
+      queueMicrotask(() => {
+        setTurnCompletionAnnouncement(announcement);
+        if (hasUnseenCompletion) setHasUnseenTurnCompletion(true);
+      });
     }
   }, [messages, taskTitle]);
 
@@ -2161,6 +2164,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
               followEnabled={isFollowingEnd}
               sizePreservationEnabled={isFreeScrolling}
               navigationHighlightedMessageId={navigationHighlightedMessageId}
+              onItemSizeChanged={onTimelineItemSizeChanged}
               onListMetricsChange={onListMetricsChange}
               data-testid="chat-messages-scroll"
               data-scroll-mode={chatScrollModeDataAttribute(
@@ -2171,6 +2175,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
             {hasContent ? (
               <ChatTurnMinimap
                 messages={messages}
+                inViewRefreshRef={minimapInViewRefreshRef}
                 listRef={chatTimelineRef}
                 topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
                 viewportRef={transcriptContainerRef}

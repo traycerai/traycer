@@ -5540,6 +5540,79 @@ describe("localProvenanceMessageIds (chat-scroller-refactor decision #8/#9, revi
       0,
     );
   });
+
+  it("registers the replacement message minted by editUserMessage", () => {
+    const harness = createHarness();
+    emitSnapshotFrame({
+      callbacks: harness.callbacks(),
+      access: "owner",
+      messages: [persistedUserMessage("message-edit-target")],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    const result = harness.handle.store.getState().editUserMessage({
+      targetMessageId: "message-edit-target",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+      revertFileChanges: false,
+      revertArtifacts: false,
+    });
+    expect(result).not.toBeNull();
+    if (result === null) throw new Error("Expected edit result");
+
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has(result.messageId),
+    ).toBe(true);
+  });
+
+  it("registers the pre-minted message sent by sendSeededUserMessage", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+
+    const result = harness.handle.store.getState().sendSeededUserMessage({
+      clientActionId: "seeded-action",
+      messageId: "seeded-message",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+    });
+    expect(result).not.toBeNull();
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has("seeded-message"),
+    ).toBe(true);
+  });
+
+  it("consumes existing local provenance and leaves an absent id as a no-op", () => {
+    const harness = createHarness();
+    emitSnapshot(harness.callbacks(), "owner");
+    harness.handle.store.getState().sendSeededUserMessage({
+      clientActionId: "consume-action",
+      messageId: "consume-message",
+      content: CONTENT,
+      sender: { type: "user", userId: OWNER_ID },
+      settings: SETTINGS,
+    });
+
+    const beforeAbsentConsume =
+      harness.handle.store.getState().localProvenanceMessageIds;
+    harness.handle.store.getState().consumeLocalProvenance("absent-message");
+    expect(harness.handle.store.getState().localProvenanceMessageIds).toBe(
+      beforeAbsentConsume,
+    );
+
+    harness.handle.store.getState().consumeLocalProvenance("consume-message");
+    expect(
+      harness.handle.store
+        .getState()
+        .localProvenanceMessageIds.has("consume-message"),
+    ).toBe(false);
+  });
 });
 
 describe("turn-settled stranded-send reconciliation", () => {

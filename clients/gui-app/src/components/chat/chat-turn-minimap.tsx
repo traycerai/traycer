@@ -41,6 +41,9 @@ export interface ChatTurnMinimapProps {
    *  than measuring a clipping parent, since it is positioned within the
    *  same relative box the dock overlays. */
   readonly bottomInset: number;
+  /** Imperative refresh registered here and invoked by the timeline's
+   *  row-remeasurement callback without re-rendering the controller. */
+  readonly inViewRefreshRef: RefObject<() => void>;
   /** Cancels manual-nav follow ownership, then animate-scrolls to the
    *  target row through the same suppression-arming wrapper find/deep-link
    *  navigation uses (decision #21). */
@@ -211,6 +214,7 @@ function ChatTurnMinimapPreview(props: {
 export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const {
     bottomInset,
+    inViewRefreshRef,
     listRef,
     messages,
     onSelect,
@@ -282,6 +286,15 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
         : "false";
     }
   }, [bottomInset, items, listRef, stripMap, topOffsetAdjustmentRef]);
+
+  useEffect(() => {
+    inViewRefreshRef.current = updateInView;
+    return () => {
+      if (inViewRefreshRef.current === updateInView) {
+        inViewRefreshRef.current = () => undefined;
+      }
+    };
+  }, [inViewRefreshRef, updateInView]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(updateInView);

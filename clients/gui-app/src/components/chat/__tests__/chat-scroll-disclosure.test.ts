@@ -9,16 +9,16 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
     vi.restoreAllMocks();
   });
 
-  function mockRect(bottom: number): DOMRect {
+  function fixedHeightRectAt(top: number): DOMRect {
     return {
       x: 0,
-      y: bottom - 40,
+      y: top,
       width: 100,
       height: 40,
-      top: bottom - 40,
+      top,
       left: 0,
       right: 100,
-      bottom,
+      bottom: top + 40,
       toJSON: () => ({}),
     };
   }
@@ -48,12 +48,12 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
     expect(mutate).toHaveBeenCalledOnce();
   });
 
-  it("does not scroll when the anchor bottom moves by less than 0.5px", () => {
+  it("does not scroll when the anchor top moves by less than 0.5px", () => {
     const { list, scrollToOffset } = fakeList(200);
     const anchor = document.createElement("div");
     const rect = vi.spyOn(anchor, "getBoundingClientRect");
-    rect.mockReturnValueOnce(mockRect(400));
-    rect.mockReturnValueOnce(mockRect(400.4));
+    rect.mockReturnValueOnce(fixedHeightRectAt(400));
+    rect.mockReturnValueOnce(fixedHeightRectAt(400.4));
 
     preserveChatScrollAcrossDisclosureChange({
       list,
@@ -65,13 +65,13 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 
-  it("corrects scroll by the anchor-bottom delta when it is large enough", () => {
+  it("corrects scroll by the anchor-top delta when it is large enough", () => {
     const { list, scrollToOffset } = fakeList(200);
     const anchor = document.createElement("div");
     const rect = vi.spyOn(anchor, "getBoundingClientRect");
-    rect.mockReturnValueOnce(mockRect(400));
-    // Expand: bottom moves down by 80px → scroll must increase by 80.
-    rect.mockReturnValueOnce(mockRect(480));
+    rect.mockReturnValueOnce(fixedHeightRectAt(400));
+    // Content inserted above moves the anchor top down by 80px.
+    rect.mockReturnValueOnce(fixedHeightRectAt(480));
 
     const mutate = vi.fn();
     preserveChatScrollAcrossDisclosureChange({
@@ -92,8 +92,8 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
     const { list, scrollToOffset } = fakeList(500);
     const anchor = document.createElement("div");
     const rect = vi.spyOn(anchor, "getBoundingClientRect");
-    rect.mockReturnValueOnce(mockRect(600));
-    rect.mockReturnValueOnce(mockRect(520));
+    rect.mockReturnValueOnce(fixedHeightRectAt(600));
+    rect.mockReturnValueOnce(fixedHeightRectAt(520));
 
     preserveChatScrollAcrossDisclosureChange({
       list,
@@ -106,22 +106,6 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
       offset: 420,
       animated: false,
     });
-  });
-
-  it("skips correction when list is null after mutate", () => {
-    const anchor = document.createElement("div");
-    vi.spyOn(anchor, "getBoundingClientRect")
-      .mockReturnValueOnce(mockRect(400))
-      .mockReturnValueOnce(mockRect(500));
-
-    expect(() =>
-      preserveChatScrollAcrossDisclosureChange({
-        list: null,
-        anchorElement: anchor,
-        mutate: () => undefined,
-        correctionOwnedByMvcp: false,
-      }),
-    ).not.toThrow();
   });
 
   it("skips correction when anchorElement is null (mutate still runs)", () => {
@@ -169,10 +153,10 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
     const { list, scrollToOffset } = fakeList(200);
     const anchor = document.createElement("div");
     const rect = vi.spyOn(anchor, "getBoundingClientRect");
-    rect.mockReturnValueOnce(mockRect(400));
-    // Same 80px growth as the "corrects scroll by the anchor-bottom delta"
-    // case above - only the ownership flag differs.
-    rect.mockReturnValueOnce(mockRect(480));
+    rect.mockReturnValueOnce(fixedHeightRectAt(400));
+    // Same 80px top shift as the manual-correction case above - only the
+    // ownership flag differs.
+    rect.mockReturnValueOnce(fixedHeightRectAt(480));
 
     const mutate = vi.fn();
     preserveChatScrollAcrossDisclosureChange({

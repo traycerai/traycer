@@ -1,5 +1,5 @@
 import { act } from "@testing-library/react";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 
 const VIEWPORT_HEIGHT_PX = 700;
 const VIEWPORT_WIDTH_PX = 800;
@@ -68,88 +68,99 @@ export function installLegendListViewportMetrics(): void {
     },
   );
 
-  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
-    configurable: true,
-    get(this: HTMLElement) {
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
+    function (this: HTMLElement) {
       return heightFor(this);
     },
-  });
-  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-    configurable: true,
-    get() {
+  );
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
+    function () {
       return VIEWPORT_WIDTH_PX;
     },
-  });
-  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-    configurable: true,
-    get(this: HTMLElement) {
+  );
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
+    function (this: HTMLElement) {
       return heightFor(this);
     },
-  });
-  Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
-    configurable: true,
-    get() {
+  );
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
+    function () {
       return VIEWPORT_WIDTH_PX;
     },
-  });
-  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
-    configurable: true,
-    get(this: HTMLElement) {
+  );
+  vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(
+    function (this: HTMLElement) {
       if (isListItemShell(this) || isSpacerShell(this)) {
         return heightFor(this);
       }
       // Large enough that virtualization has work to do.
       return LARGE_CONTENT_ROW_COUNT * ITEM_HEIGHT_PX;
     },
-  });
-  Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
-    configurable: true,
-    get() {
+  );
+  vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(
+    function () {
       return VIEWPORT_WIDTH_PX;
     },
-  });
+  );
 
   // jsdom's scrollTop setter is a no-op; LegendList's initialScrollAtEnd
   // bootstrap only converges when native scroll offsets stick.
-  Object.defineProperty(HTMLElement.prototype, "scrollTop", {
-    configurable: true,
-    get(this: HTMLElement) {
+  vi.spyOn(HTMLElement.prototype, "scrollTop", "get").mockImplementation(
+    function (this: HTMLElement) {
       return scrollTopByElement.get(this) ?? 0;
     },
-    set(this: HTMLElement, value: number) {
+  );
+  vi.spyOn(HTMLElement.prototype, "scrollTop", "set").mockImplementation(
+    function (this: HTMLElement, value: number) {
       scrollTopByElement.set(this, value);
     },
-  });
-  Object.defineProperty(HTMLElement.prototype, "scrollLeft", {
-    configurable: true,
-    get(this: HTMLElement) {
+  );
+  vi.spyOn(HTMLElement.prototype, "scrollLeft", "get").mockImplementation(
+    function (this: HTMLElement) {
       return scrollLeftByElement.get(this) ?? 0;
     },
-    set(this: HTMLElement, value: number) {
+  );
+  vi.spyOn(HTMLElement.prototype, "scrollLeft", "set").mockImplementation(
+    function (this: HTMLElement, value: number) {
       scrollLeftByElement.set(this, value);
     },
-  });
+  );
 
-  HTMLElement.prototype.scrollTo = function scrollToShim(
-    this: HTMLElement,
-    ...args: Array<number | ScrollToOptions | undefined>
-  ): void {
-    const first = args[0];
-    if (typeof first === "number") {
-      const second = args[1];
-      this.scrollLeft = first;
-      this.scrollTop = typeof second === "number" ? second : 0;
-      return;
-    }
-    if (typeof first === "object") {
-      if (typeof first.left === "number") {
-        this.scrollLeft = first.left;
+  // jsdom does not define HTMLElement.scrollTo. Seed a configurable no-op so
+  // Vitest can spy on it, then remove that seed after restoreAllMocks puts it
+  // back; the prototype leaves each test exactly as it entered.
+  if (!Object.hasOwn(HTMLElement.prototype, "scrollTo")) {
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      writable: true,
+      value: () => undefined,
+    });
+    onTestFinished(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+    });
+  }
+  vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(
+    function scrollToShim(
+      this: HTMLElement,
+      ...args: Array<number | ScrollToOptions | undefined>
+    ): void {
+      const first = args[0];
+      if (typeof first === "number") {
+        const second = args[1];
+        this.scrollLeft = first;
+        this.scrollTop = typeof second === "number" ? second : 0;
+        return;
       }
-      if (typeof first.top === "number") {
-        this.scrollTop = first.top;
+      if (typeof first === "object") {
+        if (typeof first.left === "number") {
+          this.scrollLeft = first.left;
+        }
+        if (typeof first.top === "number") {
+          this.scrollTop = first.top;
+        }
       }
-    }
-  };
+    },
+  );
 }
 
 /**

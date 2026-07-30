@@ -1314,6 +1314,7 @@
      isolated test page). `100% - inset` is the correct offset. */
   .chat-timeline-scroll-fade {
     --chat-timeline-scroll-fade-height: 2.5rem;
+
     -webkit-mask-image:
       linear-gradient(
         to bottom,
@@ -1340,16 +1341,23 @@
     -webkit-mask-position:
       0px 0px,
       0px var(--chat-timeline-scroll-fade-height),
-      0px calc(100% - var(--chat-bottom-overlay-inset, 0px)),
+      0px
+        max(
+          var(--chat-timeline-scroll-fade-height),
+          calc(100% - var(--chat-bottom-overlay-inset, 0px))
+        ),
       right;
     -webkit-mask-repeat: no-repeat;
     -webkit-mask-size:
       100% var(--chat-timeline-scroll-fade-height),
       100%
-        calc(
-          100% - var(--chat-timeline-scroll-fade-height) -
-            var(--chat-timeline-scroll-fade-height) -
-            var(--chat-bottom-overlay-inset, 0px)
+        max(
+          0px,
+          calc(
+            100% - var(--chat-timeline-scroll-fade-height) -
+              var(--chat-timeline-scroll-fade-height) -
+              var(--chat-bottom-overlay-inset, 0px)
+          )
         ),
       100% var(--chat-timeline-scroll-fade-height),
       4px 100%;
@@ -1379,16 +1387,23 @@
     mask-position:
       0px 0px,
       0px var(--chat-timeline-scroll-fade-height),
-      0px calc(100% - var(--chat-bottom-overlay-inset, 0px)),
+      0px
+        max(
+          var(--chat-timeline-scroll-fade-height),
+          calc(100% - var(--chat-bottom-overlay-inset, 0px))
+        ),
       right;
     mask-repeat: no-repeat;
     mask-size:
       100% var(--chat-timeline-scroll-fade-height),
       100%
-        calc(
-          100% - var(--chat-timeline-scroll-fade-height) -
-            var(--chat-timeline-scroll-fade-height) -
-            var(--chat-bottom-overlay-inset, 0px)
+        max(
+          0px,
+          calc(
+            100% - var(--chat-timeline-scroll-fade-height) -
+              var(--chat-timeline-scroll-fade-height) -
+              var(--chat-bottom-overlay-inset, 0px)
+          )
         ),
       100% var(--chat-timeline-scroll-fade-height),
       4px 100%;

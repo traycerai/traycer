@@ -165,6 +165,7 @@ interface RenderOptions {
   readonly viewportWidth?: number;
   readonly bottomInset?: number;
   readonly listState?: FakeListState;
+  readonly inViewRefreshRef?: RefObject<() => void>;
   readonly onSelect?: (messageId: string) => void;
   /** LegendList's live measured header size (decision #18's
    *  topOffsetAdjustment) - defaults to 0 (no header) unless a scenario
@@ -177,6 +178,7 @@ function renderMinimap(options: RenderOptions): {
   listState: FakeListState;
   scrollNode: HTMLElement;
   viewport: HTMLElement;
+  inViewRefreshRef: RefObject<() => void>;
   rerender: (next: RenderOptions) => void;
 } {
   const onSelect: OnSelectMock =
@@ -197,11 +199,15 @@ function renderMinimap(options: RenderOptions): {
   document.body.appendChild(viewport);
   mockElementWidth(viewport, options.viewportWidth ?? WIDE_VIEWPORT_PX);
   const viewportRef = { current: viewport };
+  const inViewRefreshRef: RefObject<() => void> = options.inViewRefreshRef ?? {
+    current: () => undefined,
+  };
   const topOffsetAdjustmentRef = { current: options.topOffsetAdjustment ?? 0 };
 
   const tree = (
     <ChatTurnMinimap
       messages={options.messages}
+      inViewRefreshRef={inViewRefreshRef}
       listRef={listRef}
       topOffsetAdjustmentRef={topOffsetAdjustmentRef}
       viewportRef={viewportRef}
@@ -216,12 +222,14 @@ function renderMinimap(options: RenderOptions): {
     listState,
     scrollNode,
     viewport,
+    inViewRefreshRef,
     rerender: (next: RenderOptions) => {
       mockElementWidth(viewport, next.viewportWidth ?? WIDE_VIEWPORT_PX);
       topOffsetAdjustmentRef.current = next.topOffsetAdjustment ?? 0;
       result.rerender(
         <ChatTurnMinimap
           messages={next.messages}
+          inViewRefreshRef={inViewRefreshRef}
           listRef={listRef}
           topOffsetAdjustmentRef={topOffsetAdjustmentRef}
           viewportRef={viewportRef}
@@ -241,6 +249,7 @@ describe("ChatTurnMinimap item derivation / filtering", () => {
           makeUser(0, undefined),
           makeAssistant(1, "only one human turn"),
         ]}
+        inViewRefreshRef={{ current: () => undefined }}
         listRef={createRef()}
         topOffsetAdjustmentRef={{ current: 0 }}
         viewportRef={createRef()}
@@ -386,7 +395,7 @@ describe("ChatTurnMinimap gutter gating", () => {
   });
 
   it("marks persistent gutter above the 48px side-gutter threshold and hover-reveal below it", async () => {
-    const { viewport, rerender } = renderMinimap({
+    renderMinimap({
       messages: makeTwoTurnTranscript(),
       viewportWidth: WIDE_VIEWPORT_PX,
     });
@@ -399,7 +408,6 @@ describe("ChatTurnMinimap gutter gating", () => {
 
     // Re-measure at a hover-only width by swapping the rect and forcing a
     // remount of the measure effect via a prop that still keeps 2+ items.
-    mockElementWidth(viewport, HOVER_ONLY_VIEWPORT_PX);
     // Trigger ResizeObserver? Mock is a no-op. Re-render alone won't re-run
     // the effect (viewportRef identity is stable). Force a remount.
     cleanup();
@@ -417,8 +425,6 @@ describe("ChatTurnMinimap gutter gating", () => {
     // Still interactive (non-zero strip) even without persistent gutter
     const hitStrip = screen.getByTestId("chat-turn-minimap-hit-strip");
     expect(hitStrip.hasAttribute("inert")).toBe(false);
-    // silence unused rerender (kept for call-site symmetry)
-    void rerender;
   });
 
   it("sizes the collapsed hit-strip width to the gutter-clamped budget", async () => {
@@ -639,6 +645,32 @@ describe("ChatTurnMinimap in-view highlighting", () => {
       expect(strip0?.getAttribute("data-in-view")).toBe("false");
       expect(strip2?.getAttribute("data-in-view")).toBe("true");
     });
+  });
+
+  it("updates data-in-view when LegendList reports a row remeasurement", async () => {
+    const messages = makeTwoTurnTranscript();
+    const listState: FakeListState = {
+      scroll: 0,
+      scrollLength: 300,
+      positions: [0, 80, 180, 260],
+      sizes: [60, 60, 60, 60],
+    };
+    const { inViewRefreshRef } = renderMinimap({ messages, listState });
+    await flushMinimapFrames(3);
+
+    const secondStrip = document.querySelector(
+      '[data-chat-turn-minimap-strip][data-message-id="message-2"]',
+    );
+    expect(secondStrip?.getAttribute("data-in-view")).toBe("true");
+
+    // An expanded row above the second user message moves it below the band
+    // without changing messages or scrollTop.
+    listState.positions = [0, 80, 380, 460];
+    act(() => {
+      inViewRefreshRef.current();
+    });
+
+    expect(secondStrip?.getAttribute("data-in-view")).toBe("false");
   });
 });
 

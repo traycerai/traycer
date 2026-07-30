@@ -80,7 +80,8 @@ export function resolveChatTurnMinimapHasPersistentGutter(
 
 export const CHAT_TURN_MINIMAP_HIT_STRIP_LEFT = 12;
 export const CHAT_TURN_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
-export const CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH = "22rem";
+export const CHAT_TURN_MINIMAP_EXPANDED_HIT_STRIP_WIDTH =
+  "min(22rem, calc(100vw - 1rem))";
 
 /**
  * The minimap overlays the viewport's left edge while the content column is

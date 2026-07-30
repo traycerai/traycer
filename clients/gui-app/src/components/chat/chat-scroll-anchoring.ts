@@ -310,7 +310,7 @@ export function resolveChatTimelineIsAtEnd(
  */
 export interface ChatFreeScrollingMeasurementSource {
   readonly getState: () => {
-    readonly positionAtIndex: (index: number) => number;
+    readonly positionAtIndex: (index: number) => number | undefined;
     readonly scroll: number;
     /**
      * LegendList top pad before row 0 (`headerSize` + `stylePaddingTop` +

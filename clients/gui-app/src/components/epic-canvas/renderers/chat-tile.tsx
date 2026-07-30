@@ -891,7 +891,9 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
               getMessageActions={view.getMessageActions}
               nextStepActions={view.nextStepActions}
               planActions={view.planActions}
-              composerOverlayHeight={lowerSurfacesHeight}
+              composerOverlayHeight={
+                lowerSurfacesElement === null ? 0 : lowerSurfacesHeight
+              }
             />
             {/*
              * SurfaceActivityProvider narrows catalog/provider query subscriptions

@@ -42,7 +42,7 @@ export function ScrollToEndPill({
     <button
       type="button"
       aria-label="Scroll to end"
-      onClick={onClick}
+      onClick={visible ? onClick : undefined}
       tabIndex={visible ? 0 : -1}
       style={{ bottom: bottomOffsetPx }}
       className={cn(

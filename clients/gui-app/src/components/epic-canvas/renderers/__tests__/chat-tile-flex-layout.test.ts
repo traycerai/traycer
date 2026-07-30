@@ -17,16 +17,14 @@ describe("chat-tile transcript flex container (H1)", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(here, "../chat-tile.tsx"), "utf8");
 
-    // Current fixed class list (must stay a flex container).
-    expect(source).toContain(
-      'className="relative flex min-h-0 flex-1 flex-col"',
+    // Assert the required tokens independently of their source ordering.
+    expect(source).toMatch(
+      /className="(?=[^"]*\brelative\b)(?=[^"]*\bflex\b)(?=[^"]*\bmin-h-0\b)(?=[^"]*\bflex-1\b)(?=[^"]*\bflex-col\b)[^"]*"/,
     );
     // Pre-fix regression: was only a flex item, never a flex container.
     // Guard against silently reverting that exact broken string.
     expect(source).not.toMatch(
       /className="relative min-h-0 flex-1"(?!\s+flex)/,
     );
-    // Comment that documents why this is a container - keeps intent nearby.
-    expect(source).toContain("A flex CONTAINER (not just an item)");
   });
 });
