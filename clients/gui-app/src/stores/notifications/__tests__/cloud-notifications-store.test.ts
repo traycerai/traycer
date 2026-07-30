@@ -111,6 +111,7 @@ class ControlledWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: {
         create: () => {
           throw new Error(
@@ -423,5 +424,46 @@ describe("cloud notifications store", () => {
     });
     expect(useCloudNotificationsStore.getState().rows).toEqual({});
     close();
+  });
+
+  it("ignores a snapshot from a relay controller whose ownership epoch was replaced", () => {
+    const oldClient = new ControlledWsStreamClient();
+    const closeOld = openCloudNotificationsStream(oldClient, null, null, null);
+    const oldSession = oldClient.sessions[0];
+
+    useCloudNotificationsStore.getState().reset();
+    const replacementClient = new ControlledWsStreamClient();
+    const closeReplacement = openCloudNotificationsStream(
+      replacementClient,
+      null,
+      null,
+      null,
+    );
+    const replacementRow = cloudRow("entry-new", 2, "host-b");
+
+    oldSession.emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 99,
+      rows: [cloudRow("entry-stale", 1, "host-a")],
+      summary,
+    });
+    expect(useCloudNotificationsStore.getState().rows).toEqual({});
+
+    replacementClient.sessions[0].emitServerFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      connectionState: "connected",
+      version: 1,
+      rows: [replacementRow],
+      summary,
+    });
+    expect(useCloudNotificationsStore.getState().rows).toEqual({
+      [cloudNotificationFeedId("entry-new")]: replacementRow,
+    });
+
+    closeOld();
+    closeReplacement();
   });
 });

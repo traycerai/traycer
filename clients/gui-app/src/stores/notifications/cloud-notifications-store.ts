@@ -143,12 +143,15 @@ export function openCloudNotificationsStream(
   wsStreamClient: WsStreamClient<HostStreamRpcRegistry>,
   onAuthError: (() => void) | null,
   onEntitlementDenied: (() => void) | null,
-  onArrivals: (
-    (rows: ReadonlyArray<HostNotificationsCloudFeedRow>) => void
-  ) | null,
+  onArrivals:
+    ((rows: ReadonlyArray<HostNotificationsCloudFeedRow>) => void) | null,
 ): () => void {
   let disposed = false;
   let currentSession: IStreamSession | null = null;
+  // Ownership is established when this relay controller opens. A replacement
+  // client resets the store before opening its controller; delayed callbacks
+  // from this one must never repopulate that new ownership epoch.
+  const sessionEpoch = useCloudNotificationsStore.getState().sessionEpoch;
   const reopenScheduler = createNotificationStreamReopenScheduler(() => {
     currentSession?.close();
     currentSession = null;
@@ -171,6 +174,9 @@ export function openCloudNotificationsStream(
     currentSession = session;
     session.onServerFrame((envelope, binaryPayload) => {
       if (currentSession !== session) return;
+      if (useCloudNotificationsStore.getState().sessionEpoch !== sessionEpoch) {
+        return;
+      }
       if (binaryPayload !== null) {
         reconnect();
         return;

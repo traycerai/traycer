@@ -676,6 +676,47 @@ describe("NotificationsPopover", () => {
     );
   });
 
+  it("requires confirmation before clearing the cloud feed", async () => {
+    notificationFeedMode.value = "cloud";
+    bindHostClient();
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud")],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    const captured: TargetCapture = {
+      epicId: null,
+      tabId: null,
+      focusArtifactId: null,
+      focusThreadId: null,
+    };
+    const { router } = buildRouterWithCapture(captured, () => undefined);
+    renderRouter(router);
+
+    fireEvent.click(await screen.findByTestId("notifications-clear-all"));
+    expect(screen.getByTestId("confirm-destructive-dialog")).toBeDefined();
+    expect(hostRequestMock).not.toHaveBeenCalledWith(
+      "host.notifications.cloudFeed.clearAll",
+      expect.anything(),
+    );
+
+    fireEvent.click(screen.getByTestId("confirm-cancel"));
+    expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    expect(hostRequestMock).not.toHaveBeenCalledWith(
+      "host.notifications.cloudFeed.clearAll",
+      expect.anything(),
+    );
+
+    fireEvent.click(screen.getByTestId("notifications-clear-all"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.clearAll",
+        { observedVersion: 1 },
+      );
+    });
+  });
+
   it("renders a relative timestamp on every notification row", async () => {
     const twoMinutesAgo = Date.now() - 150_000;
     const captured: TargetCapture = {

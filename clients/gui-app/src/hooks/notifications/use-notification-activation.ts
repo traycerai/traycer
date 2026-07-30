@@ -42,7 +42,7 @@ export function notificationPayloadRequiresOriginHost(
   return payload.kind === "approval" || payload.kind === "interview";
 }
 
-function selectNotificationOriginHost(input: {
+function ensureOriginHostSelected(input: {
   readonly payload: NotificationPayload;
   readonly originHostId: string | null | undefined;
   readonly directory: IHostDirectoryService | null;
@@ -114,7 +114,7 @@ export function useNotificationActivationWithNavigate(
   const activate = useCallback(
     (input: NotificationActivationInput) => {
       if (
-        !selectNotificationOriginHost({
+        !ensureOriginHostSelected({
           payload: input.payload,
           originHostId: input.originHostId,
           directory,
@@ -123,7 +123,7 @@ export function useNotificationActivationWithNavigate(
         input.onResult?.("failure");
         return;
       }
-      const originHostId = client?.getActiveHostId() ?? null;
+      const beforeRouteHostId = client?.getActiveHostId() ?? null;
       routeNotificationForHost(
         navigate,
         input.payload,
@@ -133,7 +133,7 @@ export function useNotificationActivationWithNavigate(
       if (
         !hostFeedStayedOnOrigin({
           feedId: input.feedId,
-          beforeRouteHostId: originHostId,
+          beforeRouteHostId,
           afterRouteHostId: client?.getActiveHostId() ?? null,
         })
       ) {

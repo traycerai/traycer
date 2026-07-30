@@ -851,6 +851,18 @@ describe("host.notifications.cloudFeed@1.0 immutable-entry surface", () => {
         version: null,
       }),
     ).toEqual({ status: "unavailable", version: null });
+    expect(
+      hostNotificationsCloudFeedMutationResponseSchema.safeParse({
+        status: "applied",
+        version: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostNotificationsCloudFeedMutationResponseSchema.safeParse({
+        status: "unavailable",
+        version: 9,
+      }).success,
+    ).toBe(false);
   });
 
   it("registers the whole family on the unary registry as optional methods", () => {

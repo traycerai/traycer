@@ -91,6 +91,7 @@ export function NotificationsSessionProvider(
   const notificationFeedMode = useNotificationFeedMode();
   const disposerRef = useRef<(() => void) | null>(null);
   const hostDisposerRef = useRef<(() => void) | null>(null);
+  const cloudDisposerRef = useRef<(() => void) | null>(null);
   // The stream client BOTH notification streams were opened against. Stream
   // ownership follows the client instance: when the provider context serves a
   // different client (the app-wide liveness rebuild, or any same-identity
@@ -228,6 +229,11 @@ export function NotificationsSessionProvider(
       hostDisposerRef.current = null;
       disposer();
     }
+    if (cloudDisposerRef.current !== null) {
+      const disposer = cloudDisposerRef.current;
+      cloudDisposerRef.current = null;
+      disposer();
+    }
   }, []);
 
   // Identity/sign-out owns the full reset: every user-owned replica (host,
@@ -314,7 +320,7 @@ export function NotificationsSessionProvider(
       // don't let the legacy Yjs feed act as an outage fallback or contribute
       // a composite badge while the relay is reconnecting.
       if (wsStreamClient === null) return;
-      hostDisposerRef.current = openCloudNotificationsStream(
+      cloudDisposerRef.current = openCloudNotificationsStream(
         wsStreamClient,
         onAuthError,
         onEntitlementDenied,
@@ -461,13 +467,19 @@ export function NotificationsSessionProvider(
     // rebind to the new client. The identity did not change, so the replica
     // is kept - the re-landed snapshot merges into the same doc.
     if (
-      (disposerRef.current !== null || hostDisposerRef.current !== null) &&
+      (disposerRef.current !== null ||
+        hostDisposerRef.current !== null ||
+        cloudDisposerRef.current !== null) &&
       openedStreamClientRef.current !== wsStreamClient
     ) {
       tearDown();
       resetCloudRelayOwnership();
     }
-    if (disposerRef.current === null && hostDisposerRef.current === null) {
+    if (
+      disposerRef.current === null &&
+      hostDisposerRef.current === null &&
+      cloudDisposerRef.current === null
+    ) {
       openForCurrentUser();
     }
   }, [

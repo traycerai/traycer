@@ -24,7 +24,16 @@ export function activationResultHandler(input: {
 }): (outcome: NotificationActivationOutcome) => void {
   return (outcome) => {
     if (input.row === null) {
-      if (outcome === "success") input.onSuccess?.();
+      if (outcome !== "success") return;
+      // Local feed mutations are keyed by the stable feed id, so a native
+      // click can still acknowledge a row that was pruned from the rendered
+      // projection between emission and activation. Cloud mutations need the
+      // captured immutable occurrence row; never substitute a potentially
+      // reopened entry with the same id.
+      if (!input.feedId.startsWith("cloud:")) {
+        input.markAsRead(input.feedId);
+      }
+      input.onSuccess?.();
       return;
     }
     Analytics.getInstance().track(

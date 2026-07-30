@@ -559,7 +559,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     method: "host.notifications.cloudFeed.markRead",
     mapVariables: (variables) => variables,
     options: {
-      mutationKey: notificationsMutationKeys.markRead(),
+      mutationKey: notificationsMutationKeys.cloudMarkRead(),
       onMutate: captureCloudMutationContext,
       onSuccess: (data, _variables, context) => {
         if (isCurrentCloudMutation(context)) {
@@ -583,7 +583,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     method: "host.notifications.cloudFeed.resolve",
     mapVariables: (variables) => variables,
     options: {
-      mutationKey: notificationsMutationKeys.resolve(),
+      mutationKey: notificationsMutationKeys.cloudResolve(),
       onMutate: captureCloudMutationContext,
       onSuccess: (data, _variables, context) => {
         if (isCurrentCloudMutation(context)) {
@@ -1002,16 +1002,30 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       markAllAsRead: () => {
         if (feedMode === "cloud") {
           const readAt = Date.now();
+          const unreadEntryIds: string[] = [];
           for (const row of Object.values(
             useCloudNotificationsStore.getState().rows,
           )) {
             if (row !== undefined && row.entry.readAt === null) {
+              unreadEntryIds.push(row.entryId);
               useCloudNotificationsStore
                 .getState()
                 .markReadLocally(row.entryId, readAt);
-              cloudMarkRead.mutate({ entryId: row.entryId });
             }
           }
+          // Optimistic set-once markers land as one immediate UI update, then
+          // the wire work is serialized so a large cross-device feed cannot
+          // burst hundreds of unary requests through one host connection.
+          void (async (): Promise<void> => {
+            for (const entryId of unreadEntryIds) {
+              try {
+                await cloudMarkRead.mutateAsync({ entryId });
+              } catch {
+                // The mutation's onError owns availability state. Continue so
+                // one failed entry does not prevent later entries being sent.
+              }
+            }
+          })();
           return;
         }
         if (feedMode !== "local") return;
@@ -1290,7 +1304,7 @@ export function rowFromCloudFeedRow(
     resolvedAt: "resolvedAt" in row.entry ? row.entry.resolvedAt : null,
     sourceRef: row.entry.sourceRef,
     originHostId: row.originHostId,
-    category: categoryForNotificationSource("host"),
+    category: categoryForNotificationSource("cloud"),
   };
 }
 

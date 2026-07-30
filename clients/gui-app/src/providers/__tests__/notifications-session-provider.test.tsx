@@ -880,6 +880,7 @@ describe("<NotificationsSessionProvider />", () => {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: {
         create: () => {
           throw new Error("offline client must not dial");
@@ -932,9 +933,7 @@ describe("<NotificationsSessionProvider />", () => {
       useHostNotificationsStore.getState().byId["retained-local-row"],
     ).toBeDefined();
     expect(
-      streamClient.getMethodSupport(
-        "host.notifications.cloudFeed.subscribe",
-      ),
+      streamClient.getMethodSupport("host.notifications.cloudFeed.subscribe"),
     ).toBe("unknown");
     view.unmount();
     streamClient.close("test-complete");

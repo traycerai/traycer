@@ -8,6 +8,7 @@ import {
 import {
   feedIdFromEnvelopeFeed,
   parseNotificationActivationPayload,
+  type NotificationActivationEnvelopeFeedSource,
 } from "@/lib/notifications/notification-activation-envelope";
 import {
   notificationPayloadRequiresOriginHost,
@@ -135,19 +136,16 @@ export function NotificationFocusBridge(): null {
       envelope.route,
     );
     if (
-      requiresOriginHost
-        ? envelope.originHostId === null ||
-          originHostEntry?.status !== "available"
-        : (envelope.feed.source !== "cloud" ||
-            envelope.route.kind === "hostSurface") &&
-          envelope.originHostId !== null &&
-          envelope.originHostId !== activeHostId &&
-          !switchToOriginHost({
-            route: envelope.route,
-            originHostId: envelope.originHostId,
-            directory: hostDirectory,
-            client: hostClient,
-          })
+      isOriginUnavailable({
+        route: envelope.route,
+        feedSource: envelope.feed.source,
+        originHostId: envelope.originHostId,
+        originHostAvailable: originHostEntry?.status === "available",
+        activeHostId,
+        requiresOriginHost,
+        directory: hostDirectory,
+        client: hostClient,
+      })
     ) {
       useNotificationsPopoverStore
         .getState()
@@ -181,6 +179,36 @@ export function NotificationFocusBridge(): null {
   ]);
 
   return null;
+}
+
+function isOriginUnavailable(input: {
+  readonly route: NotificationPayload;
+  readonly feedSource: NotificationActivationEnvelopeFeedSource;
+  readonly originHostId: string | null;
+  readonly originHostAvailable: boolean;
+  readonly activeHostId: string | null;
+  readonly requiresOriginHost: boolean;
+  readonly directory: HostDirectoryService | null;
+  readonly client: HostClient<HostRpcRegistry> | null;
+}): boolean {
+  if (input.requiresOriginHost) {
+    return input.originHostId === null || !input.originHostAvailable;
+  }
+  if (input.feedSource === "cloud" && input.route.kind !== "hostSurface") {
+    return false;
+  }
+  if (
+    input.originHostId === null ||
+    input.originHostId === input.activeHostId
+  ) {
+    return false;
+  }
+  return !switchToOriginHost({
+    route: input.route,
+    originHostId: input.originHostId,
+    directory: input.directory,
+    client: input.client,
+  });
 }
 
 /**

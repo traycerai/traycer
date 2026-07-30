@@ -624,10 +624,7 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     for (const method of Object.keys(myManifest)) {
       if (method === subscribedMethod) {
         changed =
-          this.updateMethodSupport(
-            method,
-            subscribedMethodSupport,
-          ) || changed;
+          this.updateMethodSupport(method, subscribedMethodSupport) || changed;
         continue;
       }
       const compat = checkStreamMethodCompatibility(
@@ -1360,11 +1357,7 @@ class StreamSession<
     }
 
     if (!compat.ok) {
-      this.config.onManifest(
-        theirManifest,
-        this.config.method,
-        "unsupported",
-      );
+      this.config.onManifest(theirManifest, this.config.method, "unsupported");
       const terminalFrame: ClientStreamFatalErrorFrame = {
         kind: "fatalError",
         details: compat.details,
@@ -1400,11 +1393,7 @@ class StreamSession<
       return;
     }
     this.negotiatedSchemaVersion = prepared.onWireVersion;
-    this.config.onManifest(
-      theirManifest,
-      this.config.method,
-      "supported",
-    );
+    this.config.onManifest(theirManifest, this.config.method, "supported");
     // Read BEFORE `transitionTo("open")` overwrites it: a session that was
     // "reconnecting" (dropped socket, or failed dial attempts) has just proved
     // the host is reachable again. The initial clean connect ("connecting" →

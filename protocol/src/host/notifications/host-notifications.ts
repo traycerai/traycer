@@ -1179,11 +1179,20 @@ export type HostNotificationsCloudFeedClearAllRequest = z.infer<
  * feed to mutate optimistically. The client keeps showing the rows it has and
  * surfaces the degraded state; it must not treat the mutation as applied.
  */
-export const hostNotificationsCloudFeedMutationResponseSchema = z.object({
-  status: z.enum(["applied", "unavailable"]),
-  /** The feed version after the mutation; `null` when `unavailable`. */
-  version: z.number().int().nonnegative().nullable(),
-});
+export const hostNotificationsCloudFeedMutationResponseSchema = z
+  .object({
+    status: z.enum(["applied", "unavailable"]),
+    /** The feed version after the mutation; `null` when unavailable. */
+    version: z.number().int().nonnegative().nullable(),
+  })
+  .superRefine((value, context) => {
+    if ((value.status === "unavailable") === (value.version === null)) return;
+    context.addIssue({
+      code: "custom",
+      path: ["version"],
+      message: "version must be null exactly when status is unavailable",
+    });
+  });
 export type HostNotificationsCloudFeedMutationResponse = z.infer<
   typeof hostNotificationsCloudFeedMutationResponseSchema
 >;

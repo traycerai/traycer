@@ -1057,6 +1057,76 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     expect(hostRequestMock).not.toHaveBeenCalled();
   });
 
+  it("optimistically marks the cloud feed at once while serializing mark-all RPCs", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    const settleRequests: Array<() => void> = [];
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return new Promise((resolve) => {
+          settleRequests.push(() => {
+            resolve({ status: "applied", version: 2 });
+          });
+        });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        cloudDone("entry-a", 1, null),
+        cloudDone("entry-b", 2, null),
+        cloudDone("entry-c", 3, null),
+      ],
+      summary: { totalCount: 3, unreadCount: 3, attentionCount: 0 },
+      version: 1,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    expect(useCloudNotificationsStore.getState().summary?.unreadCount).toBe(0);
+    expect(
+      Object.values(useCloudNotificationsStore.getState().rows).every(
+        (row) => row?.entry.readAt !== null,
+      ),
+    ).toBe(true);
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.filter(
+          (call) => call[0] === "host.notifications.cloudFeed.markRead",
+        ),
+      ).toHaveLength(1);
+    });
+
+    act(() => {
+      settleRequests[0]?.();
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.filter(
+          (call) => call[0] === "host.notifications.cloudFeed.markRead",
+        ),
+      ).toHaveLength(2);
+    });
+    act(() => {
+      settleRequests[1]?.();
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.filter(
+          (call) => call[0] === "host.notifications.cloudFeed.markRead",
+        ),
+      ).toHaveLength(3);
+    });
+    act(() => {
+      settleRequests[2]?.();
+    });
+  });
+
   it("ignores a cloud command completion from a replaced ownership epoch", async () => {
     bindHostClient();
     notificationFeedMode.value = "cloud";

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useMemo,
+  useState,
   type CSSProperties,
   type ReactNode,
   type RefObject,
@@ -8,6 +9,7 @@ import {
 import { BellOff, CheckCheck, Settings, Trash2 } from "lucide-react";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -161,6 +163,7 @@ export function NotificationsPopover(
   const recentIds = useRecentNotificationIds();
   const unreadCount = useMergedNotificationUnreadCount();
   const actions = useMergedNotificationsActions();
+  const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false);
   const hostState = useNotificationCenterHostState();
   const feedMode = useNotificationFeedMode();
   const cloudConnectionState = useCloudNotificationsStore(
@@ -334,7 +337,12 @@ export function NotificationsPopover(
   }, [actions, hostState.isPartial, unreadCount]);
 
   const handleClearAll = useCallback(() => {
+    setClearAllConfirmOpen(true);
+  }, []);
+
+  const handleConfirmClearAll = useCallback(() => {
     actions.clearAll();
+    setClearAllConfirmOpen(false);
   }, [actions]);
 
   const handleClear = useCallback(
@@ -528,6 +536,16 @@ export function NotificationsPopover(
           </footer>
         ) : null}
       </div>
+      <ConfirmDestructiveDialog
+        open={clearAllConfirmOpen}
+        onOpenChange={setClearAllConfirmOpen}
+        title="Clear all cloud notifications?"
+        description="This permanently clears every notification currently visible in your cloud feed across your devices."
+        cascadeSummary={null}
+        actionLabel="Clear all"
+        isPending={false}
+        onConfirm={handleConfirmClearAll}
+      />
     </TooltipProvider>
   );
 }

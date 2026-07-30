@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
 import { useRelativeTimestamp } from "@/lib/relative-time";
@@ -49,8 +50,8 @@ function isOriginUnavailable(input: {
   readonly originStatus: "available" | "unavailable" | undefined;
 }): boolean {
   const requiresOriginHost =
-    input.row.payload?.kind === "approval" ||
-    input.row.payload?.kind === "interview";
+    input.row.payload !== null &&
+    notificationPayloadRequiresOriginHost(input.row.payload);
   if (!requiresOriginHost) return false;
   if (input.row.originHostId === null) return true;
   return input.originStatus !== "available";

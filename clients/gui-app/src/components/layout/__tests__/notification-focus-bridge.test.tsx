@@ -211,8 +211,10 @@ describe("NotificationFocusBridge", () => {
     });
 
     expect(activate).toHaveBeenCalledTimes(1);
-    const input = activate.mock.calls[0]?.[0];
-    expect(input).toBeDefined();
+    const input = activate.mock.calls.at(0)?.at(0);
+    if (input === undefined) {
+      throw new Error("expected cloud activation input");
+    }
     input.onResult?.("success");
     expect(markAsRead).not.toHaveBeenCalled();
   });

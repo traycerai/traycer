@@ -941,7 +941,12 @@ describe("useNotificationActivation origin-host guard (P0-1)", () => {
     });
 
     expect(client.getActiveHostId()).toBe(hostA.hostId);
-    expect(navigateSpy.mock.calls[0]?.[0].search).not.toMatchObject({
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    const search = navigateSpy.mock.calls.at(0)?.at(0)?.search;
+    if (search === undefined) {
+      throw new Error("expected notification navigation search params");
+    }
+    expect(search).not.toMatchObject({
       focusTileInstanceId: "host-b-shared-chat",
     });
     expect(onResult).toHaveBeenCalledWith("success");
