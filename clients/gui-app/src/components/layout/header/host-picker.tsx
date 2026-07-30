@@ -14,6 +14,8 @@ import {
   registerHostPickerDirectory,
   useHostPickerList,
 } from "@/hooks/host/use-host-picker-list";
+import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
+import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -132,6 +134,7 @@ function HostPickerList(props: HostPickerListProps) {
   }, [hostClient]);
 
   const query = useHostPickerList(directoryId, revision);
+  const remoteRestricted = useRemoteHostsPlanRestricted();
 
   if (directory === null || query.isLoading) {
     return (
@@ -183,25 +186,61 @@ function HostPickerList(props: HostPickerListProps) {
   }
 
   const activeId = hostClient === null ? null : hostClient.getActiveHostId();
+  const showUpsell =
+    remoteRestricted && entries.some((entry) => entry.kind === "remote");
 
   return (
-    <div
-      role="radiogroup"
-      aria-label="Available hosts"
-      className="flex flex-col gap-2"
-    >
-      {entries.map((entry) => {
-        const selected = activeId === entry.hostId;
-        return (
-          <HostPickerOption
-            key={entry.hostId}
-            entry={entry}
-            selected={selected}
-            onSelect={props.onSelect}
-          />
-        );
-      })}
+    <div className="flex flex-col gap-2">
+      {showUpsell ? <RemoteHostsUpsellNotice /> : null}
+      <div
+        role="radiogroup"
+        aria-label="Available hosts"
+        className="flex flex-col gap-2"
+      >
+        {entries.map((entry) => {
+          const selected = activeId === entry.hostId;
+          return (
+            <HostPickerOption
+              key={entry.hostId}
+              entry={entry}
+              selected={selected}
+              planRestricted={remoteRestricted}
+              onSelect={props.onSelect}
+            />
+          );
+        })}
+      </div>
     </div>
+  );
+}
+
+/**
+ * Shown when the list contains remote hosts the current (free) plan cannot
+ * connect to. Presentation-side twin of CS's `plan_restricted` attach-grant
+ * denial — the server enforces the gate regardless of this notice.
+ */
+function RemoteHostsUpsellNotice() {
+  const runnerHost = useRunnerHost();
+  return (
+    <p
+      className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-ui-sm text-muted-foreground"
+      data-testid="host-picker-remote-upsell"
+    >
+      Remote hosts require a paid plan.{" "}
+      <button
+        type="button"
+        className="text-primary hover:underline"
+        data-testid="host-picker-remote-upsell-upgrade"
+        onClick={() => {
+          void runnerHost.openExternalLink(
+            resolveManageSubscriptionUrl(runnerHost.authnBaseUrl),
+          );
+        }}
+      >
+        Upgrade
+      </button>{" "}
+      to connect to your other machines from here.
+    </p>
   );
 }
 
@@ -212,18 +251,22 @@ interface HostPickerOptionProps {
     readonly kind: string;
   };
   readonly selected: boolean;
+  readonly planRestricted: boolean;
   readonly onSelect: (hostId: string) => void;
 }
 
 function HostPickerOption(props: HostPickerOptionProps) {
   const { entry, selected } = props;
+  const restricted = props.planRestricted && entry.kind === "remote";
   return (
     <Button
       type="button"
       role="radio"
       aria-checked={selected}
+      disabled={restricted}
       data-testid={`host-picker-option-${entry.hostId}`}
       data-selected={selected}
+      data-plan-restricted={restricted}
       variant={selected ? "secondary" : "outline"}
       onClick={() => {
         props.onSelect(entry.hostId);
@@ -233,6 +276,14 @@ function HostPickerOption(props: HostPickerOptionProps) {
       <span className="min-w-0 flex-1 truncate text-ui font-medium">
         {entry.label}
       </span>
+      {restricted ? (
+        <Badge
+          variant="outline"
+          className="shrink-0 border-border/70 bg-background/60 text-muted-foreground"
+        >
+          Paid plan
+        </Badge>
+      ) : null}
       <HostKindBadge kind={entry.kind} />
     </Button>
   );

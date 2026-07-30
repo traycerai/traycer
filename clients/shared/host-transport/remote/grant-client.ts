@@ -33,15 +33,39 @@ export interface AttachGrant {
 /**
  * Outcome of an attach-grant mint. Discriminated + structured-clone-safe, so it
  * can cross the Electron IPC boundary unchanged (mirrors `HostListFetchResult`):
- *  - `ok`            — the grant to present to the relay.
- *  - `unauthorized`  — the bearer was rejected OR the host is revoked / not
- *                      owned (401/403); the caller decides whether to revalidate.
- *  - `network-error` — transient transport/timeout/5xx or a malformed body.
+ *  - `ok`              — the grant to present to the relay.
+ *  - `unauthorized`    — the bearer was rejected OR the host is revoked / not
+ *                        owned (401/403); the caller decides whether to revalidate.
+ *  - `plan-restricted` — 403 with `reason: "plan_restricted"`: the account's
+ *                        plan does not include remote host connectivity. The
+ *                        bearer is VALID — never treat this as an auth failure
+ *                        or retry it; it clears only when the owner upgrades.
+ *  - `network-error`   — transient transport/timeout/5xx or a malformed body.
  */
 export type AttachGrantResult =
   | { readonly kind: "ok"; readonly grant: AttachGrant }
   | { readonly kind: "unauthorized" }
+  | { readonly kind: "plan-restricted" }
   | { readonly kind: "network-error" };
+
+/**
+ * Reads a 401/403 body looking for the attach-grant entitlement denial
+ * (`reason: "plan_restricted"` — CS's `HOST_CONNECTIVITY_DENIAL_REASON`).
+ * Any read/parse failure means "not plan-restricted": the caller then treats
+ * the status as an ordinary credential rejection, the safe default.
+ */
+async function isPlanRestrictedBody(response: Response): Promise<boolean> {
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return false;
+  }
+  if (typeof body !== "object" || body === null) {
+    return false;
+  }
+  return (body as Record<string, unknown>).reason === "plan_restricted";
+}
 
 function attachGrantUrl(authnBaseUrl: string, hostId: string): string {
   const base = authnBaseUrl.endsWith("/") ? authnBaseUrl : `${authnBaseUrl}/`;
@@ -77,6 +101,9 @@ export async function mintAttachGrantViaHttp(
   }
 
   if (response.status === 401 || response.status === 403) {
+    if (await isPlanRestrictedBody(response)) {
+      return { kind: "plan-restricted" };
+    }
     return { kind: "unauthorized" };
   }
   if (response.status < 200 || response.status >= 300) {
@@ -103,18 +130,27 @@ export async function mintAttachGrantViaHttp(
   };
 }
 
-/**
- * Injectable grant source the session calls on attach + resume + re-auth. It
- * returns a fresh grant or `null` when one cannot be minted (signed out, host
- * revoked, transient failure) — the session treats `null` as "stay in backoff".
- */
-export type AttachGrantProvider = () => Promise<AttachGrant | null>;
+/** What a grant-provider call yielded — the session picks its response by kind. */
+export type AttachGrantProvision =
+  | { readonly kind: "ok"; readonly grant: AttachGrant }
+  /**
+   * Entitlement denial (`plan_restricted`): the account's plan lacks remote
+   * connectivity. The session goes terminal-fatal — backoff cannot fix a plan.
+   */
+  | { readonly kind: "plan-restricted" }
+  /** Signed out / revoked / transient failure — stay in reconnect backoff. */
+  | { readonly kind: "unavailable" };
+
+/** Injectable grant source the session calls on attach + resume + re-auth. */
+export type AttachGrantProvider = () => Promise<AttachGrantProvision>;
 
 /**
- * Builds an `AttachGrantProvider` bound to a host + bearer source. Any non-`ok`
- * result yields `null` so a transient CS blip drops the session into reconnect
- * backoff rather than a hard failure (the re-auth bound still fail-closes a
- * genuinely revoked host at its next relay deadline).
+ * Builds an `AttachGrantProvider` bound to a host + bearer source. Every
+ * non-`ok` mint collapses to `unavailable` (reconnect backoff — a transient CS
+ * blip must not hard-fail the session; the re-auth bound still fail-closes a
+ * genuinely revoked host at its next relay deadline) EXCEPT the
+ * plan-restricted entitlement denial, which is surfaced so the session can go
+ * terminal instead of dialing a relay it will never be granted.
  */
 export function createAttachGrantProvider(deps: {
   readonly authnBaseUrl: string;
@@ -124,13 +160,19 @@ export function createAttachGrantProvider(deps: {
   return async () => {
     const bearerToken = deps.getBearerToken();
     if (bearerToken === null) {
-      return null;
+      return { kind: "unavailable" };
     }
     const result = await mintAttachGrantViaHttp(
       deps.authnBaseUrl,
       deps.hostId,
       bearerToken,
     );
-    return result.kind === "ok" ? result.grant : null;
+    if (result.kind === "ok") {
+      return { kind: "ok", grant: result.grant };
+    }
+    if (result.kind === "plan-restricted") {
+      return { kind: "plan-restricted" };
+    }
+    return { kind: "unavailable" };
   };
 }

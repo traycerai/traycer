@@ -577,15 +577,25 @@ export class RemoteSession<
     this.phase = "connecting";
     this.clearPhaseTimer();
 
-    const grant = await this.options.grantProvider();
+    const provision = await this.options.grantProvider();
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
     }
-    if (grant === null) {
+    if (provision.kind === "plan-restricted") {
+      // Entitlement denial: the account's plan lacks remote connectivity.
+      // Backoff cannot fix a plan — go terminal so the caller surfaces the
+      // upsell instead of silently redialing forever. A later attempt (after
+      // an upgrade) builds a fresh session; the closed one is evicted from
+      // the session cache on the next acquire.
+      this.goTerminalFatal(planRestrictedFatalDetails());
+      return;
+    }
+    if (provision.kind === "unavailable") {
       // No grant (signed out / revoked / transient CS failure): stay in backoff.
       this.scheduleReconnect();
       return;
     }
+    const grant = provision.grant;
 
     const scheduler = new PriorityScheduler<OutboundFrame>({
       write: (item) => this.writeFrame(generation, item),
@@ -1252,12 +1262,18 @@ export class RemoteSession<
     if (this.phase !== "ready" || connection === null) {
       return;
     }
-    const grant = await this.options.grantProvider();
+    const provision = await this.options.grantProvider();
     if (this.phase !== "ready" || this.connection !== connection) {
       return;
     }
-    if (grant !== null) {
-      connection.relaySocket.sendReauth(grant.grant);
+    if (provision.kind === "plan-restricted") {
+      // Mid-session downgrade: end the session now rather than letting the
+      // relay's client-leg deadline kill it opaquely later.
+      this.goTerminalFatal(planRestrictedFatalDetails());
+      return;
+    }
+    if (provision.kind === "ok") {
+      connection.relaySocket.sendReauth(provision.grant.grant);
     }
     // Re-arm regardless: a failed mint retries at the next cadence, still under
     // the relay's 60-min client-leg deadline (we mint at ~45 min with slack).
@@ -1596,6 +1612,22 @@ function asHostRpcError(
     method,
     fatalDetails: null,
   });
+}
+
+/**
+ * Fatal code for the attach-grant entitlement denial. UI layers key the
+ * paid-plan upsell on this instead of a generic session failure. Free-string
+ * `FatalErrorDetails.code` space, so no protocol change is involved.
+ */
+export const PLAN_RESTRICTED_FATAL_CODE = "PLAN_RESTRICTED";
+
+function planRestrictedFatalDetails(): FatalErrorDetails {
+  return {
+    code: PLAN_RESTRICTED_FATAL_CODE,
+    reason: "Remote host connectivity requires a paid plan",
+    incompatibleMethods: null,
+    upgradeGuidance: null,
+  };
 }
 
 function incompatibleStreamDetails(method: string): FatalErrorDetails {

@@ -33,6 +33,9 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
+import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
+import { resolveManageSubscriptionUrl } from "@/lib/auth/manage-subscription-url";
+import { useRunnerHost } from "@/providers/use-runner-host";
 import { useUpdateHostVersionPolicy } from "@/hooks/auth/use-update-host-version-mutation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useHostBinding } from "@/lib/host";
@@ -169,6 +172,7 @@ function MyHostsBody(props: MyHostsBodyProps) {
   };
   return (
     <div className="flex flex-col gap-2">
+      <RemoteHostsPlanNotice />
       {health.status === "degraded" ? <PresenceDegradedNotice /> : null}
       <ul className="flex flex-col gap-1.5" data-testid="my-hosts-list">
         {rows.map((host) => (
@@ -181,6 +185,43 @@ function MyHostsBody(props: MyHostsBodyProps) {
           />
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Free-plan notice: hosts still enroll, heartbeat and work locally, but the
+ * relay (remote connectivity) legs are plan-gated server-side
+ * (`plan_restricted`). Rendered only on definite unpaid evidence.
+ */
+function RemoteHostsPlanNotice() {
+  const restricted = useRemoteHostsPlanRestricted();
+  const runnerHost = useRunnerHost();
+  if (!restricted) {
+    return null;
+  }
+  return (
+    <div
+      className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-ui-xs text-amber-600 dark:text-amber-400"
+      data-testid="my-hosts-plan-restricted"
+    >
+      <TriangleAlert className="size-3.5 shrink-0" />
+      <span>
+        Connecting to these hosts remotely requires a paid plan — they keep
+        working locally.{" "}
+        <button
+          type="button"
+          className="text-primary hover:underline"
+          data-testid="my-hosts-plan-restricted-upgrade"
+          onClick={() => {
+            void runnerHost.openExternalLink(
+              resolveManageSubscriptionUrl(runnerHost.authnBaseUrl),
+            );
+          }}
+        >
+          Upgrade
+        </button>
+      </span>
     </div>
   );
 }

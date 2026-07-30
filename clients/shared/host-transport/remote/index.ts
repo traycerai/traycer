@@ -31,7 +31,9 @@ export {
   type AttachGrant,
   type AttachGrantResult,
   type AttachGrantProvider,
+  type AttachGrantProvision,
 } from "./grant-client";
+export { PLAN_RESTRICTED_FATAL_CODE } from "./remote-session";
 export {
   decodeHostPublicKey,
   InvalidHostPublicKeyError,

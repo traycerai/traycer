@@ -89,14 +89,45 @@ describe("mintAttachGrantViaHttp", () => {
   });
 });
 
+describe("mintAttachGrantViaHttp plan-restricted discrimination", () => {
+  it("403 + reason plan_restricted → plan-restricted (entitlement, not auth)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          {
+            statusCode: 403,
+            error: "Remote host connectivity requires a paid plan",
+            reason: "plan_restricted",
+          },
+          403,
+        ),
+      ),
+    );
+    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
+      kind: "plan-restricted",
+    });
+  });
+
+  it("403 with an unparsable body stays a credential rejection", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response("nope", { status: 403 })),
+    );
+    expect(await mintAttachGrantViaHttp(AUTHN, HOST_ID, BEARER)).toEqual({
+      kind: "unauthorized",
+    });
+  });
+});
+
 describe("createAttachGrantProvider", () => {
-  it("returns null when signed out (no bearer)", async () => {
+  it("returns unavailable when signed out (no bearer)", async () => {
     const provider = createAttachGrantProvider({
       authnBaseUrl: AUTHN,
       hostId: HOST_ID,
       getBearerToken: () => null,
     });
-    expect(await provider()).toBeNull();
+    expect(await provider()).toEqual({ kind: "unavailable" });
   });
 
   it("returns the minted grant on success", async () => {
@@ -115,8 +146,41 @@ describe("createAttachGrantProvider", () => {
       getBearerToken: () => BEARER,
     });
     expect(await provider()).toEqual({
-      grant: "jws-xyz",
-      expiresInSeconds: 300,
+      kind: "ok",
+      grant: { grant: "jws-xyz", expiresInSeconds: 300 },
     });
+  });
+
+  it("surfaces plan-restricted distinctly; collapses other failures to unavailable", async () => {
+    const provider = createAttachGrantProvider({
+      authnBaseUrl: AUTHN,
+      hostId: HOST_ID,
+      getBearerToken: () => BEARER,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse(
+          { statusCode: 403, error: "x", reason: "plan_restricted" },
+          403,
+        ),
+      ),
+    );
+    expect(await provider()).toEqual({ kind: "plan-restricted" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({ statusCode: 403, error: "revoked" }, 403),
+      ),
+    );
+    expect(await provider()).toEqual({ kind: "unavailable" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => jsonResponse({}, 503)),
+    );
+    expect(await provider()).toEqual({ kind: "unavailable" });
   });
 });

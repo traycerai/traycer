@@ -30,6 +30,7 @@ import {
   type HostRpcRegistry,
 } from "@/lib/host";
 import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
+import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useReactiveActiveHostId } from "@/hooks/host/use-reactive-active-host-id";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
@@ -905,6 +906,7 @@ function HostOnlySelect(props: {
   const binding = useHostBinding();
   const directory = binding === null ? null : binding.directory;
   const [open, setOpen] = useState<boolean>(false);
+  const remoteRestricted = useRemoteHostsPlanRestricted();
   useRefreshHostDirectoryOnOpen(open, directory);
   const options = hostSelectOptions(
     props.entries,
@@ -961,9 +963,16 @@ function HostOnlySelect(props: {
           <SelectItem
             key={host.hostId}
             value={host.hostId}
-            disabled={props.mode === "locked" || host.status === "unavailable"}
+            disabled={
+              props.mode === "locked" ||
+              host.status === "unavailable" ||
+              (remoteRestricted && host.kind === "remote")
+            }
           >
-            <HostSelectOptionContent host={host} />
+            <HostSelectOptionContent
+              host={host}
+              remoteRestricted={remoteRestricted}
+            />
           </SelectItem>
         ))}
       </SelectContent>
@@ -971,7 +980,10 @@ function HostOnlySelect(props: {
   );
 }
 
-function HostSelectOptionContent(props: { readonly host: HostDirectoryEntry }) {
+function HostSelectOptionContent(props: {
+  readonly host: HostDirectoryEntry;
+  readonly remoteRestricted: boolean;
+}) {
   return (
     <span className="flex min-w-0 items-center gap-2">
       <span className="min-w-0 truncate">
@@ -984,6 +996,15 @@ function HostSelectOptionContent(props: { readonly host: HostDirectoryEntry }) {
           data-testid={`composer-host-local-chip-${props.host.hostId}`}
         >
           Local
+        </Badge>
+      ) : null}
+      {props.remoteRestricted && props.host.kind === "remote" ? (
+        <Badge
+          variant="outline"
+          className="shrink-0 border-border/70 bg-background/60 text-muted-foreground [[data-slot=select-trigger]_&]:hidden"
+          data-testid={`composer-host-paid-plan-chip-${props.host.hostId}`}
+        >
+          Paid plan
         </Badge>
       ) : null}
     </span>

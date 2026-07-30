@@ -310,7 +310,10 @@ function buildSession(
     attachBaseUrl: "wss://relay.test/attach",
     hostStaticPublicKey: relay.hostStaticPublicKey,
     grantProvider: () =>
-      Promise.resolve({ grant: "grant-jws", expiresInSeconds: 300 }),
+      Promise.resolve({
+        kind: "ok" as const,
+        grant: { grant: "grant-jws", expiresInSeconds: 300 },
+      }),
     bearer: () => lease,
     auth,
     rpcRegistry: emptyRpcRegistry,
@@ -466,6 +469,56 @@ describe("RemoteSession terminal close notification", () => {
         expect(closedEvents).toBe(1);
         expect(revalidate).not.toHaveBeenCalled();
         expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession plan-restricted entitlement denial", () => {
+  it(
+    "goes terminal on a plan-restricted mint - one mint, no relay dial, no revalidation spend",
+    async () => {
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const revalidate = vi.fn(() => Promise.resolve("rotated" as const));
+      let mintCalls = 0;
+      let nextRequestId = 0;
+      const session = new RemoteSession({
+        hostId: "host-1",
+        attachBaseUrl: "wss://relay.test/attach",
+        hostStaticPublicKey: relay.hostStaticPublicKey,
+        grantProvider: () => {
+          mintCalls += 1;
+          return Promise.resolve({ kind: "plan-restricted" as const });
+        },
+        bearer: () => lease,
+        auth: { revalidateForReconnect: revalidate },
+        rpcRegistry: emptyRpcRegistry,
+        streamRegistry: emptyStreamRegistry,
+        webSocketFactory: relay.factory,
+        requestId: () => `req-${(nextRequestId += 1)}`,
+      });
+      const streamClient = new RemoteStreamClient(session);
+      let closedEvents = 0;
+      streamClient.onClosed(() => {
+        closedEvents += 1;
+      });
+      try {
+        session.start();
+        await vi.waitFor(
+          () => expect(streamClient.isClosed()).toBe(true),
+          WAIT,
+        );
+        // Terminal, not a backoff loop: exactly one mint, and the relay was
+        // never dialed with a grant the account is not entitled to.
+        expect(closedEvents).toBe(1);
+        expect(mintCalls).toBe(1);
+        expect(relay.openBearers).toEqual([]);
+        // An entitlement denial is NOT an auth failure - no revalidation.
+        expect(revalidate).not.toHaveBeenCalled();
       } finally {
         session.close();
       }
