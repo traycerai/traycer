@@ -85,6 +85,7 @@
         "@lobehub/icons": "catalog:",
         "@pierre/diffs": "catalog:",
         "@pierre/trees": "catalog:",
+        "@sentry/browser": "catalog:",
         "@tailwindcss/typography": "catalog:",
         "@tanstack/react-query": "catalog:",
         "@tanstack/react-router": "catalog:",
@@ -202,6 +203,7 @@
         "@typescript-eslint/parser": "catalog:",
         "eslint": "catalog:",
         "prettier": "catalog:",
+        "yaml": "catalog:",
       },
     },
     "clients/traycer-cli": {

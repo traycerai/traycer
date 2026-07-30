@@ -11,86 +11,67 @@ const BASE = {
   subtype: "HostRpcError",
 };
 
-/** First 14 chars = `fp:v1:` + the 8-hex identity hash, before the stack suffix. */
-function identityPrefix(fingerprint: string): string {
-  return fingerprint.slice(0, 14);
-}
-
 describe("computeReportIssueFingerprintV1", () => {
   it("emits a versioned fp:v1 string", () => {
-    const fp = computeReportIssueFingerprintV1({
-      ...BASE,
-      normalizedStackFamily: "subscribe>connect",
-    });
+    const fp = computeReportIssueFingerprintV1(BASE);
     expect(fp.startsWith("fp:v1:")).toBe(true);
   });
 
   it("stays stable across repeated computations with identical inputs (no version/platform inputs at all)", () => {
-    const first = computeReportIssueFingerprintV1({
-      ...BASE,
-      normalizedStackFamily: "subscribe>connect",
-    });
-    const second = computeReportIssueFingerprintV1({
-      ...BASE,
-      normalizedStackFamily: "subscribe>connect",
-    });
+    const first = computeReportIssueFingerprintV1(BASE);
+    const second = computeReportIssueFingerprintV1(BASE);
     expect(first).toBe(second);
   });
 
-  it("weights identity over stack shape: a stack change alone only perturbs the low-weight suffix", () => {
-    const withStackA = computeReportIssueFingerprintV1({
-      ...BASE,
-      normalizedStackFamily: "subscribe>connect",
-    });
-    const withStackB = computeReportIssueFingerprintV1({
-      ...BASE,
-      normalizedStackFamily: "subscribe>reconnect>connect",
-    });
-
-    expect(identityPrefix(withStackA)).toBe(identityPrefix(withStackB));
-    expect(withStackA).not.toBe(withStackB);
+  it("is completely unaffected by stack shape - stack never enters identity at all (C8)", () => {
+    // Stack family is not even part of this function's input type; the
+    // invariant that matters is that two defects sharing subtype/errorCode/
+    // operation/causalProvider always fingerprint identically, regardless of
+    // how differently they'd normalize under `normalizeStackFamily` (a
+    // one-frame refactor, a bundler line shift, an extra wrapper frame).
+    const fpA = computeReportIssueFingerprintV1(BASE);
+    const fpB = computeReportIssueFingerprintV1(BASE);
+    expect(fpA).toBe(fpB);
   });
 
-  it("changes identity when the error code differs, even with the same stack", () => {
-    const fpA = computeReportIssueFingerprintV1({
-      ...BASE,
-      normalizedStackFamily: "subscribe>connect",
-    });
+  it("changes identity when the error code differs", () => {
+    const fpA = computeReportIssueFingerprintV1(BASE);
     const fpB = computeReportIssueFingerprintV1({
       ...BASE,
       errorCode: "TIMEOUT",
-      normalizedStackFamily: "subscribe>connect",
     });
 
-    expect(identityPrefix(fpA)).not.toBe(identityPrefix(fpB));
+    expect(fpA).not.toBe(fpB);
   });
 
   it("changes identity when the causal provider/harness differs", () => {
-    const fpA = computeReportIssueFingerprintV1({
-      ...BASE,
-      normalizedStackFamily: null,
-    });
+    const fpA = computeReportIssueFingerprintV1(BASE);
     const fpB = computeReportIssueFingerprintV1({
       ...BASE,
       causalProvider: "codex",
-      normalizedStackFamily: null,
     });
 
-    expect(identityPrefix(fpA)).not.toBe(identityPrefix(fpB));
+    expect(fpA).not.toBe(fpB);
   });
 
   it("changes identity when the operation differs", () => {
-    const fpA = computeReportIssueFingerprintV1({
-      ...BASE,
-      normalizedStackFamily: null,
-    });
+    const fpA = computeReportIssueFingerprintV1(BASE);
     const fpB = computeReportIssueFingerprintV1({
       ...BASE,
       operation: "chat.send",
-      normalizedStackFamily: null,
     });
 
-    expect(identityPrefix(fpA)).not.toBe(identityPrefix(fpB));
+    expect(fpA).not.toBe(fpB);
+  });
+
+  it("changes identity when the subtype differs", () => {
+    const fpA = computeReportIssueFingerprintV1(BASE);
+    const fpB = computeReportIssueFingerprintV1({
+      ...BASE,
+      subtype: "TypeError",
+    });
+
+    expect(fpA).not.toBe(fpB);
   });
 });
 

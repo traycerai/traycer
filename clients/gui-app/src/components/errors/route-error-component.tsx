@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { AppErrorScreen } from "@/components/errors/app-error-screen";
+import { captureReportIssueError } from "@/lib/report-issue-error-capture";
 
 /**
  * Router `defaultErrorComponent`: the catch-all for any error thrown inside a
@@ -11,16 +12,22 @@ import { AppErrorScreen } from "@/components/errors/app-error-screen";
  */
 export function RouteErrorComponent(props: ErrorComponentProps): ReactNode {
   const router = useRouter();
-  // Lazy initializer, not a bare `Date.now()` in the render body: it runs
-  // once at mount (a fresh mount per crash, since TanStack remounts this on
-  // error), which is the sanctioned way to capture an impure "first render"
-  // value without making the render itself impure.
-  const [timestamp] = useState(() => Date.now());
+  // Lazy initializer, not a bare call in the render body: it runs once at
+  // mount (a fresh mount per crash, since TanStack remounts this on error),
+  // which is the sanctioned way to mint an id and report to Sentry exactly
+  // once without making the render itself impure or re-capturing on rerender.
+  const [capture] = useState(() =>
+    captureReportIssueError({
+      error: props.error,
+      componentStack: props.info?.componentStack ?? null,
+      errorCode: null,
+      sourceAction: "Route error",
+    }),
+  );
   return (
     <AppErrorScreen
       error={props.error}
-      componentStack={props.info?.componentStack ?? null}
-      timestamp={timestamp}
+      capture={capture}
       onRefresh={() => window.location.reload()}
       onReturnHome={() => {
         void router.navigate({ to: "/" });

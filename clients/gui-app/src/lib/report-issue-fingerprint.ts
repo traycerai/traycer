@@ -9,8 +9,6 @@ export interface ReportIssueFingerprintInputV1 {
   readonly causalProvider: string | null;
   /** Typed defect subtype, e.g. an `Error.name` or a boundary-declared kind. */
   readonly subtype: string;
-  /** Output of {@link normalizeStackFamily}, or `null` when no stack exists. */
-  readonly normalizedStackFamily: string | null;
 }
 
 /**
@@ -63,14 +61,15 @@ function djb2(input: string): string {
 }
 
 /**
- * Computes the versioned `fp:v1:<hash>` fingerprint (critique C8). Weighted
- * toward parts that survive a fix - error code, operation, causal
- * provider/harness, typed subtype - which make up the full-weight identity
- * hash; the normalized stack family only contributes a short low-weight
- * suffix, so stack drift alone (a refactor, a bundler line shift) perturbs
- * the fingerprint far less than an identity change does. App/host versions
- * and platform are deliberately NOT inputs here - they are facets, attached
- * as separate Sentry tags, never part of identity.
+ * Computes the versioned `fp:v1:<hash>` fingerprint (critique C8). Identity is
+ * error code + operation + causal provider/harness + typed subtype ONLY - the
+ * parts that survive a fix. Stack shape does NOT enter this hash at all: a
+ * one-frame refactor must never re-identify a defect. The normalized stack
+ * family is exposed as a separate `stackFamily` field on the serialized
+ * diagnostics (see `report-issue-draft-context.ts`) for maintainer-side
+ * sub-clustering, never folded into identity. App/host versions and platform
+ * are also NOT inputs here - they are facets, attached as separate Sentry
+ * tags, never part of identity.
  */
 export function computeReportIssueFingerprintV1(
   input: ReportIssueFingerprintInputV1,
@@ -81,9 +80,5 @@ export function computeReportIssueFingerprintV1(
     input.operation ?? "no-operation",
     input.causalProvider ?? "no-provider",
   ].join("|");
-  const stackToken = djb2(input.normalizedStackFamily ?? "no-stack").slice(
-    0,
-    4,
-  );
-  return `${FINGERPRINT_VERSION}:${djb2(identity)}${stackToken}`;
+  return `${FINGERPRINT_VERSION}:${djb2(identity)}`;
 }

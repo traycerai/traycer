@@ -2,10 +2,7 @@ import {
   createReportIssueContext,
   type ReportIssueContext,
 } from "@/lib/report-issue-context";
-import {
-  computeReportIssueFingerprintV1,
-  normalizeStackFamily,
-} from "@/lib/report-issue-fingerprint";
+import type { ReportIssueErrorCapture } from "@/lib/report-issue-error-capture";
 import {
   getSupportContextSnapshot,
   type SupportContextSnapshot,
@@ -22,6 +19,9 @@ import {
  * that only ever pass a plain {@link ReportIssueContext} are untouched; only
  * the migrated surfaces (block-error-boundary, app-error-screen) construct
  * one of these.
+ *
+ * Built by `captureReportIssueError` (`report-issue-error-capture.ts`) at
+ * catch time, never re-derived here.
  */
 export interface PrivateErrorCause {
   /** e.g. `error.name`, or a boundary-declared discriminant. */
@@ -40,6 +40,13 @@ export interface ReportIssuePrivateDiagnostics {
   readonly cause: PrivateErrorCause | null;
   readonly registry: SupportContextSnapshot;
   readonly fingerprint: string | null;
+  /**
+   * Normalized stack frame family (see `normalizeStackFamily`), for
+   * maintainer-side sub-clustering ONLY - deliberately NOT part of
+   * `fingerprint`'s identity (critique C8): a one-frame refactor must not
+   * re-identify a defect.
+   */
+  readonly stackFamily: string | null;
   readonly correlationId: string;
 }
 
@@ -62,62 +69,62 @@ export function isReportIssueDraftContext(
   return "publicPrefill" in value;
 }
 
-function readCapturedString(
-  field: SupportContextSnapshot["harnessId"],
-): string | null {
-  return field.status === "unavailable" ? null : field.value;
-}
-
 /**
  * Assembles the full draft context from an already-normalized public prefill
- * plus an optional cause: pulls the current support-context registry
- * snapshot (D5), computes the `fp:v1` fingerprint when a cause exists (C8),
- * and mints a fresh correlation id shared between this draft and the
- * renderer error event that produced `cause`.
+ * plus an optional error capture: pulls the current support-context registry
+ * snapshot (D5) for session state, and reuses the correlation id / fingerprint
+ * / stack family already minted by `captureReportIssueError` at catch time -
+ * it does NOT recompute them, so the private report stays joined to the
+ * actual Sentry event even if the registry has since drifted (user navigated
+ * away before opening the dialog).
  */
 export function buildReportIssueDraftContext(
   publicPrefill: ReportIssueContext,
-  cause: PrivateErrorCause | null,
+  capture: ReportIssueErrorCapture | null,
 ): ReportIssueDraftContext {
   const registry = getSupportContextSnapshot();
-  const fingerprint =
-    cause === null
-      ? null
-      : computeReportIssueFingerprintV1({
-          subtype: cause.type,
-          errorCode: cause.errorCode,
-          operation: cause.sourceAction,
-          causalProvider: readCapturedString(registry.harnessId),
-          normalizedStackFamily: normalizeStackFamily(cause.stack),
-        });
+  if (capture === null) {
+    return {
+      publicPrefill,
+      privateDiagnostics: {
+        cause: null,
+        registry,
+        fingerprint: null,
+        stackFamily: null,
+        correlationId: crypto.randomUUID(),
+      },
+    };
+  }
   return {
     publicPrefill,
     privateDiagnostics: {
-      cause,
+      cause: capture.cause,
       registry,
-      fingerprint,
-      correlationId: crypto.randomUUID(),
+      fingerprint: capture.fingerprint,
+      stackFamily: capture.stackFamily,
+      correlationId: capture.correlationId,
     },
   };
 }
 
 /**
  * Convenience factory for the migrated error surfaces: takes the same input
- * shape as `createReportIssueContext` plus a `cause`, and returns the fully
- * assembled draft. `cause`'s real message/stack reaches only
- * `privateDiagnostics` - `publicPrefill` goes through the unchanged
- * `createReportIssueContext` normalization exactly as before.
+ * shape as `createReportIssueContext` plus a `capture` (see
+ * `captureReportIssueError`), and returns the fully assembled draft.
+ * `capture.cause`'s real message/stack reaches only `privateDiagnostics` -
+ * `publicPrefill` goes through the unchanged `createReportIssueContext`
+ * normalization exactly as before.
  */
 export function createReportIssueDraftContext(input: {
   readonly title: string;
   readonly message: string | null | undefined;
   readonly code: string | null | undefined;
   readonly source: string | null | undefined;
-  readonly cause: PrivateErrorCause | null;
+  readonly capture: ReportIssueErrorCapture | null;
 }): ReportIssueDraftContext {
   return buildReportIssueDraftContext(
     createReportIssueContext(input),
-    input.cause,
+    input.capture,
   );
 }
 
@@ -126,7 +133,7 @@ export function createReportIssueDraftContext(input: {
  * separately (rather than trusting callers to serialize the interface ad
  * hoc) so the exact field list is a single, testable contract for ticket 04's
  * IPC wire shape to match: `cause` (type/message/stack/componentStack/
- * errorCode/sourceAction/timestamp), `registry`, `fingerprint`,
+ * errorCode/sourceAction/timestamp), `registry`, `fingerprint`, `stackFamily`,
  * `correlationId`.
  */
 export type SerializedReportIssuePrivateDiagnostics =
@@ -139,6 +146,7 @@ export function serializeReportIssuePrivateDiagnostics(
     cause: diagnostics.cause === null ? null : { ...diagnostics.cause },
     registry: { ...diagnostics.registry },
     fingerprint: diagnostics.fingerprint,
+    stackFamily: diagnostics.stackFamily,
     correlationId: diagnostics.correlationId,
   };
 }

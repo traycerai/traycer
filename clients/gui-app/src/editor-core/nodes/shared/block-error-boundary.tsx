@@ -2,6 +2,10 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 import { appLogger } from "@/lib/logger";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context";
+import {
+  captureReportIssueError,
+  type ReportIssueErrorCapture,
+} from "@/lib/report-issue-error-capture";
 
 interface BlockErrorBoundaryProps {
   /** Headline shown in the fallback panel. */
@@ -13,7 +17,7 @@ interface BlockErrorBoundaryProps {
 
 interface BlockErrorBoundaryState {
   readonly error: Error | null;
-  readonly componentStack: string | null;
+  readonly capture: ReportIssueErrorCapture | null;
 }
 
 /**
@@ -36,29 +40,37 @@ export class BlockErrorBoundary extends Component<
 > {
   constructor(props: BlockErrorBoundaryProps) {
     super(props);
-    this.state = { error: null, componentStack: null };
+    this.state = { error: null, capture: null };
   }
 
   static getDerivedStateFromError(error: Error): BlockErrorBoundaryState {
-    return { error, componentStack: null };
+    return { error, capture: null };
   }
 
   override componentDidCatch(error: Error, info: ErrorInfo): void {
-    const componentStack = info.componentStack ?? null;
-    this.setState({ componentStack });
+    // Captured here (catch time), not in render: mints the correlation id /
+    // fingerprint once and reports to Sentry - re-deriving in render would
+    // re-mint and re-capture on every re-render.
+    const capture = captureReportIssueError({
+      error,
+      componentStack: info.componentStack ?? null,
+      errorCode: null,
+      sourceAction: "Artifact editor",
+    });
+    this.setState({ capture });
     appLogger.errorSummary(
       "[artifact-editor] block NodeView crashed",
-      { componentStack },
+      { componentStack: capture.cause.componentStack },
       error,
     );
   }
 
   private reset = (): void => {
-    this.setState({ error: null, componentStack: null });
+    this.setState({ error: null, capture: null });
   };
 
   override render(): ReactNode {
-    const { error, componentStack } = this.state;
+    const { error, capture } = this.state;
     if (error === null) {
       return this.props.children;
     }
@@ -84,20 +96,12 @@ export class BlockErrorBoundary extends Component<
           <ReportIssueAction
             context={createReportIssueDraftContext({
               title: this.props.title,
-              // Real error text goes ONLY into `cause` below, never here -
+              // Real error text goes ONLY into `capture.cause`, never here -
               // this is the public GitHub-issue prefill.
               message: null,
               code: null,
               source: "Artifact editor",
-              cause: {
-                type: error.name,
-                message: error.message,
-                stack: error.stack ?? null,
-                componentStack,
-                errorCode: null,
-                sourceAction: "Artifact editor",
-                timestamp: Date.now(),
-              },
+              capture,
             })}
             presentation="icon"
             className={undefined}

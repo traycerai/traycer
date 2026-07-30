@@ -4,22 +4,21 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueDraftContext } from "@/lib/report-issue-draft-context";
+import type { ReportIssueErrorCapture } from "@/lib/report-issue-error-capture";
 
 export interface AppErrorScreenProps {
   /** The thrown value, surfaced as a short technical detail for support. */
   readonly error: unknown;
   /**
-   * React's component stack for the crash, when caught by a class boundary
-   * (`RootErrorBoundary`) or supplied by the router's error component. `null`
-   * when neither has one to give (e.g. a synthetic/test render).
+   * Captured ONCE by the caller at catch time (a class boundary's
+   * `componentDidCatch`, or a function component's lazy `useState`
+   * initializer) via `captureReportIssueError` - never derived here, since
+   * that call mints an id and reports to Sentry, both of which must not
+   * repeat on every re-render. `null` only when nothing was ever caught (this
+   * component is never rendered in that state by either real caller, but the
+   * type allows a synthetic/test render).
    */
-  readonly componentStack: string | null;
-  /**
-   * When the crash was caught, in epoch ms. Captured by the caller (a class
-   * boundary's `componentDidCatch`, or a lazy `useState` initializer) rather
-   * than read here with `Date.now()`, which would make this render impure.
-   */
-  readonly timestamp: number;
+  readonly capture: ReportIssueErrorCapture | null;
   /** Reload the renderer window (`window.location.reload()`). */
   readonly onRefresh: () => void;
   /** Navigate back to the home route and clear the error. */
@@ -84,26 +83,12 @@ export function AppErrorScreen(props: AppErrorScreenProps): ReactNode {
             <ReportIssueAction
               context={createReportIssueDraftContext({
                 title: "Something went wrong",
-                // Real error text goes ONLY into `cause` below, never here -
+                // Real error text goes ONLY into `capture.cause`, never here -
                 // this is the public GitHub-issue prefill.
                 message: "The app hit an unexpected error.",
                 code: null,
                 source: "Traycer app",
-                cause:
-                  detail === null
-                    ? null
-                    : {
-                        type: errorTypeName(props.error),
-                        // Reuses the same truncated detail rendered above,
-                        // rather than re-deriving a second, differently
-                        // bounded copy of the raw message.
-                        message: detail,
-                        stack: errorStack(props.error),
-                        componentStack: props.componentStack,
-                        errorCode: null,
-                        sourceAction: "App crash",
-                        timestamp: props.timestamp,
-                      },
+                capture: props.capture,
               })}
               presentation="text"
               className="w-full"
@@ -135,13 +120,4 @@ function readErrorMessage(error: unknown): string | null {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   return null;
-}
-
-function errorTypeName(error: unknown): string {
-  if (error instanceof Error) return error.name;
-  return typeof error;
-}
-
-function errorStack(error: unknown): string | null {
-  return error instanceof Error ? (error.stack ?? null) : null;
 }
