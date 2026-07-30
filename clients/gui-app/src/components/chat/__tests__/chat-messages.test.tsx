@@ -970,6 +970,60 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("announces when a pending live row is replaced by its completed persisted row", async () => {
+      const userMsg = makeMessage(0, "user");
+      const pendingAssistant: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        id: "assistant:live",
+        completedAt: null,
+        stopped: null,
+        runState: "running",
+      };
+      const { rerenderMessages } = renderChatMessages({
+        messages: [userMsg, pendingAssistant],
+        scrollStateKey: "aria-complete-row-replacement",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      const live = document.querySelector('[aria-live="polite"]');
+      expect(live?.textContent ?? "").toBe("");
+
+      rerenderMessages([
+        userMsg,
+        {
+          ...pendingAssistant,
+          id: "assistant:turn-1",
+          completedAt: 1_700_000_000_000,
+          runState: null,
+        },
+      ]);
+      await settleLegendList();
+
+      await waitFor(() => {
+        expect(live?.textContent).toBe("Build plan finished responding.");
+      });
+    });
+
+    it("does not announce completed history on initial mount", async () => {
+      const completedAssistant: ChatMessageModel = {
+        ...makeMessage(1, "assistant"),
+        completedAt: 1_700_000_000_000,
+        stopped: null,
+        runState: null,
+      };
+      renderChatMessages({
+        messages: [makeMessage(0, "user"), completedAssistant],
+        scrollStateKey: "aria-completed-history",
+        taskTitle: "Build plan",
+      });
+      await settleLegendList();
+
+      expect(
+        document.querySelector('[aria-live="polite"]')?.textContent ?? "",
+      ).toBe("");
+    });
+
     it("replaces the live-region child when a later turn repeats the same announcement", async () => {
       const firstUser = makeMessage(0, "user");
       const firstAssistantStreaming: ChatMessageModel = {

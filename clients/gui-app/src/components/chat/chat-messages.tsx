@@ -2204,12 +2204,19 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   useLayoutEffect(() => {
     const previous = assistantCompletionByIdRef.current;
     const current = new Map<string, number | null>();
-    let completedAssistant: ChatMessageModel | null = null;
     for (const message of messages) {
       if (message.role !== "assistant") continue;
       current.set(message.id, message.completedAt);
+    }
+    const replacedIncompleteAssistant = [...previous].some(
+      ([id, completedAt]) => completedAt === null && !current.has(id),
+    );
+    let completedAssistant: ChatMessageModel | null = null;
+    for (const message of messages) {
+      if (message.role !== "assistant") continue;
       if (
-        previous.get(message.id) === null &&
+        (previous.get(message.id) === null ||
+          (replacedIncompleteAssistant && !previous.has(message.id))) &&
         message.completedAt !== null &&
         !message.stopped
       ) {
