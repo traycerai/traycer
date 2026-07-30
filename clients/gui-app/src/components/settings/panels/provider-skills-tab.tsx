@@ -92,6 +92,15 @@ function ProviderSkillsTabBody({
 
   const skills = listQuery.data?.skills ?? [];
   const isMutating = mutate.isPending;
+  // `canList &&` is load-bearing: a disabled TanStack query stays `isPending`
+  // forever (pending status, idle fetchStatus), so without it a contract whose
+  // skills surface cannot list would sit on the spinner instead of falling
+  // through to the empty state. Hoisted out of JSX because `eslint --fix`
+  // (react/jsx-no-leaked-render) rewrites a logical `&&` inside a JSX attribute
+  // into `cond ? value : null`, which would make this `boolean | null` and fail
+  // `SkillsListBody`'s `listLoading: boolean` prop — same reason
+  // `deleteDialogPending` is hoisted in provider-mcp-tab.tsx.
+  const listLoading = canList && (listQuery.isLoading || listQuery.isPending);
 
   const nameError = useMemo(() => {
     const trimmed = createName.trim();
@@ -114,6 +123,9 @@ function ProviderSkillsTabBody({
         scope: "global",
         workspaceRoot: null,
         mutation,
+        // This surface renders the failure inline via `setLocalError` below,
+        // so the hook's global toast would double-report the same error.
+        suppressToast: true,
       },
       {
         onSuccess: () => {
@@ -257,7 +269,7 @@ function ProviderSkillsTabBody({
       ) : null}
 
       <SkillsListBody
-        listLoading={listQuery.isLoading || listQuery.isPending}
+        listLoading={listLoading}
         listError={listQuery.isError}
         errorMessage={listQuery.isError ? listQuery.error.message : null}
         skills={skills}

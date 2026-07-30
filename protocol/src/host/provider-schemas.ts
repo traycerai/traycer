@@ -1965,9 +1965,12 @@ export function downgradeProviderCliStateToV20(
 export function downgradeProviderCliStateToMutationV20(
   state: ProviderCliState | ProviderCliStateV30 | ProviderMutationCliStateV21,
 ): ProviderMutationCliStateV20 {
-  const { nativeCapabilities: _nativeCapabilities, ...rest } =
-    state as ProviderCliState;
-  return providerMutationCliStateSchemaV20.parse(rest);
+  // No destructure-and-cast to strip `nativeCapabilities`:
+  // `providerMutationCliStateSchemaV20` is a plain (non-strict) `z.object`, so
+  // the parse itself drops every key the frozen shape does not model. That is
+  // the same mechanism the v4.0->v3.0 bridge relies on to keep `profiles` off
+  // the wire - keep this schema non-strict or unmodeled fields start leaking.
+  return providerMutationCliStateSchemaV20.parse(state);
 }
 
 // Downgrades a latest-shaped provider-state list to the frozen v4.0 shape,

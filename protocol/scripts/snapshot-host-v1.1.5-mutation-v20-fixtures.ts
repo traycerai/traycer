@@ -23,7 +23,14 @@
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,6 +125,38 @@ function gitRevParse(repoRoot: string, rev: string): string {
     throw new Error(`git rev-parse ${rev} failed: ${result.stderr}`);
   }
   return result.stdout.trim();
+}
+
+/**
+ * Whether this clone can actually reach the two host-v1.1.5 blobs the
+ * generator reads. False in a clone that has no release tags at all
+ * (`actions/checkout` fetches none by default), and equally false in a shallow
+ * or partial clone that has the tag ref but not the objects behind it — hence
+ * `cat-file -e` on each blob rather than a bare `rev-parse` on the tag.
+ *
+ * Callers that regenerate (the emitter CLI) still fail loudly on a miss: the
+ * fixture must never be produced from something other than the tag. Only the
+ * regenerate-and-compare TEST consults this, so a tagless checkout reports the
+ * guard as skipped instead of failing a check it has no evidence for. What
+ * keeps the checked-in fixture honest there is `guarded-files-tripwire`, which
+ * needs no tag to notice the file being edited.
+ */
+export function hostV115TagObjectsAvailable(traycerRoot: string): boolean {
+  const reachable = (revPath: string): boolean =>
+    spawnSync("git", ["cat-file", "-e", revPath], {
+      cwd: traycerRoot,
+      encoding: "utf8",
+      env: gitEnv(),
+    }).status === 0;
+  return (
+    reachable(`${HOST_V115_MUTATION_V20_TAG}^{commit}`) &&
+    reachable(
+      `${HOST_V115_MUTATION_V20_TAG}:${HOST_V115_MUTATION_V20_SCHEMAS_PATH}`,
+    ) &&
+    reachable(
+      `${HOST_V115_MUTATION_V20_TAG}:${HOST_V115_MUTATION_V20_REGISTRY_PATH}`,
+    )
+  );
 }
 
 function extractStringEnum(
@@ -428,8 +467,9 @@ export async function importTaggedProviderSchemas(
     ];
     let zodPath: string | null = null;
     for (const candidate of zodCandidates) {
-      const probe = spawnSync("test", ["-d", candidate]);
-      if (probe.status === 0) {
+      if (
+        statSync(candidate, { throwIfNoEntry: false })?.isDirectory() === true
+      ) {
         zodPath = candidate;
         break;
       }
@@ -437,9 +477,19 @@ export async function importTaggedProviderSchemas(
     if (zodPath === null) {
       throw new Error("Could not locate zod package for tag schema import");
     }
-    spawnSync("ln", ["-sfn", zodPath, join(dir, "node_modules", "zod")], {
-      encoding: "utf8",
-    });
+    // `node:fs` rather than spawning `test -d` / `ln -sfn`: neither binary is
+    // guaranteed off POSIX, and `spawnSync("ln")`'s exit status went unchecked,
+    // so a failed link surfaced later as a confusing module-resolution error
+    // instead of here. `symlinkSync` throws at the real cause.
+    const zodLink = join(dir, "node_modules", "zod");
+    rmSync(zodLink, { recursive: true, force: true });
+    symlinkSync(
+      zodPath,
+      zodLink,
+      // Only consulted on Windows, where linking a directory as "junction"
+      // avoids the elevation a plain symlink there requires.
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
     const schemasPath = join(dir, "provider-schemas.ts");
     writeFileSync(schemasPath, taggedSchemasSource);

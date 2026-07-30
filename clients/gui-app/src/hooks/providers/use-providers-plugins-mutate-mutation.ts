@@ -8,6 +8,7 @@ import type {
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import { useHostClient } from "@/lib/host";
 import {
+  isProviderNativeRpcError,
   mapSetEnabledToPluginsMutate,
   type PluginsListData,
   type PluginsMutateData,
@@ -21,6 +22,14 @@ export type PluginsMutateVariables = {
   readonly scope: ProviderNativeScope;
   readonly workspaceRoot: string | null;
   readonly mutation: ProvidersPluginsMutateAction;
+  /**
+   * When true, the hook skips the global toast so the caller can render the
+   * native error inline. Same escape hatch as `useProvidersMcpMutate`: the
+   * plugins tab reports failures in its own error slot, and without this the
+   * user gets the toast AND the inline message for one failure. The toast
+   * still fires for non-native errors and when this is omitted/false.
+   */
+  readonly suppressToast: boolean | undefined;
 };
 
 interface PluginsMutateContext {
@@ -76,6 +85,11 @@ export function useProvidersPluginsMutate(): UseMutationResult<
         data,
       );
     },
-    onError: (error) => toastFromHostError(error, "Couldn't update plugins."),
+    onError: (error, variables) => {
+      if (variables.suppressToast === true && isProviderNativeRpcError(error)) {
+        return;
+      }
+      toastFromHostError(error, "Couldn't update plugins.");
+    },
   });
 }

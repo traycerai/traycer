@@ -118,6 +118,9 @@ function ProviderPluginsTabBody({
         scope: "global",
         workspaceRoot: null,
         mutation,
+        // This surface renders the failure inline via `setLocalError` below,
+        // so the hook's global toast would double-report the same error.
+        suppressToast: true,
       },
       {
         onSuccess: () => {
@@ -230,8 +233,12 @@ function sessionNoticeFor(
   providerId: ProviderId,
   caps: ProviderPluginsCapabilities,
 ): string | null {
+  // Cursor is by id because its copy differs; everything else that needs the
+  // notice is selected by capability. No `providerId === "amp"` arm: amp's
+  // contract sets `traycerSessionToolsNotice: true`, so it is already covered
+  // below, and an id arm here could never fire on its own anyway - the caller
+  // gates rendering on that same capability.
   if (providerId === "cursor") return CURSOR_SESSION_NOTICE;
-  if (providerId === "amp") return AMP_SESSION_NOTICE;
   if (caps.traycerSessionToolsNotice) return AMP_SESSION_NOTICE;
   return null;
 }

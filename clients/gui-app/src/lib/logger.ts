@@ -39,7 +39,23 @@ const AUTHORIZATION_HEADER_PATTERN =
  * pattern; the unquoted pattern stops at quotes around the key/value.
  */
 const QUOTED_JSON_AUTHORIZATION_PATTERN =
-  /((?:["'])(?:Proxy-Authorization|Authorization|X-Api-Key|X-Auth-Token)(?:["'])\s*:\s*)(["'])(?:([A-Za-z][A-Za-z0-9._+-]*)\s+)?([^"']*)\2/gi;
+  /((?:["'])(?:Proxy-Authorization|Authorization|X-Api-Key|X-Auth-Token)(?:["'])\s*:\s*)(["'])([^"']*)\2/gi;
+/**
+ * Splits the scheme off a quoted Authorization value. Captured as ONE group by
+ * the pattern above and split here rather than as two groups: a five-parameter
+ * replacer trips `max-params`, and the alternative — a rest-parameter tuple to
+ * carry them — is the shim the repo's type rules tell us not to write.
+ *
+ * A leading scheme token only counts when a credential still follows the
+ * whitespace after it, so `token abc` keeps `token` while a bare `abc` (or a
+ * `token   ` with nothing but trailing space) redacts whole.
+ */
+function redactQuotedAuthorizationValue(value: string): string {
+  const schemed = /^([A-Za-z][A-Za-z0-9._+-]*)\s+([\s\S]*)$/.exec(value);
+  if (schemed === null) return "<redacted>";
+  const [, scheme, credential] = schemed;
+  return credential.length > 0 ? `${scheme} <redacted>` : "<redacted>";
+}
 /**
  * Cookie / Set-Cookie header values. Redacts the full header value through
  * the rest of the field (stops at newline or multi-field `|` separators).
@@ -118,12 +134,8 @@ export function redactLogText(value: string): string {
     .replace(QUOTED_JSON_COOKIE_PATTERN, "$1$2<redacted>$2")
     .replace(
       QUOTED_JSON_AUTHORIZATION_PATTERN,
-      (...args: [string, string, string, string | undefined, string]) => {
-        const [, key, quote, scheme, rest] = args;
-        return scheme !== undefined && rest.length > 0
-          ? `${key}${quote}${scheme} <redacted>${quote}`
-          : `${key}${quote}<redacted>${quote}`;
-      },
+      (_match: string, key: string, quote: string, value: string) =>
+        `${key}${quote}${redactQuotedAuthorizationValue(value)}${quote}`,
     )
     .replace(
       AUTHORIZATION_HEADER_PATTERN,

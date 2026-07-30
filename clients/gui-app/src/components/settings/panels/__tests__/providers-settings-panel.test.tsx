@@ -630,6 +630,7 @@ function providerState(input: {
   readonly envOverrides: ProviderCliState["envOverrides"];
   readonly nativeCapabilities?: ProviderNativeCapabilities;
   readonly profiles?: readonly ProviderProfile[];
+  readonly terminalAgentArgs?: string;
 }): ProviderCliState {
   return {
     providerId: input.providerId,
@@ -646,7 +647,7 @@ function providerState(input: {
     authPending: false,
     checkedAt: null,
     apiKey: { supported: false, configured: false, source: null },
-    terminalAgentArgs: "",
+    terminalAgentArgs: input.terminalAgentArgs ?? "",
     envOverrides: [...input.envOverrides],
     loginCapability: null,
     availabilityPending: false,
@@ -1746,6 +1747,66 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.change(input, { target: { value: "--foo" } });
 
     expect(providerMocks.setTerminalAgentArgsMutate).not.toHaveBeenCalled();
+  });
+
+  it("saves terminal-agent args once across the post-save remount", () => {
+    // `TerminalAgentArgsSection` is keyed on `state.terminalAgentArgs`, so a
+    // successful save remounts it. That remount is the dangerous moment: any
+    // commit-on-unmount or commit-on-mount path would re-fire the mutation
+    // with the value it just saved. The `next === saved` guard in `commit()`
+    // plus having no unmount cleanup is what keeps it at exactly one call.
+    const args = "--foo";
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+        }),
+      ],
+    };
+    providerMocks.setTerminalAgentArgsMutate.mockClear();
+
+    const view = render(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    selectTab("General");
+    const input = screen.getByPlaceholderText("--dangerously-skip-permissions");
+    fireEvent.change(input, { target: { value: args } });
+    fireEvent.blur(input);
+
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledTimes(1);
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      terminalAgentArgs: args,
+    });
+
+    // The host now reports the saved value: the key changes and the section
+    // remounts with `saved === draft`.
+    providerMocks.listResult.data = {
+      providers: [
+        providerState({
+          providerId: "claude-code",
+          selected: { kind: "bundled" },
+          candidates: [],
+          envOverrides: [],
+          nativeCapabilities: FULL_TABS,
+          terminalAgentArgs: args,
+        }),
+      ],
+    };
+    view.rerender(
+      <TooltipProvider>
+        <ProvidersSettingsPanel />
+      </TooltipProvider>,
+    );
+
+    expect(providerMocks.setTerminalAgentArgsMutate).toHaveBeenCalledTimes(1);
   });
 
   it("does not render profile management when the host reports no profiles", () => {

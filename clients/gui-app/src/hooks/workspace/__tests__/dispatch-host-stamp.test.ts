@@ -13,39 +13,34 @@ const PREPARED: PreparedWorkspaceFolder = {
 };
 
 /**
- * Regression for the B6 host-stamp race: callers must use the hostId returned
- * from pickAndPrepareFolders (dispatch-time), never the client's host id at
- * completion time. These pure helpers are what production maps through.
+ * Contract of the two pure mappers `pickAndPrepareFolders` stamps results
+ * through: each takes the host id as an argument and applies it verbatim to
+ * every folder, adding no host lookup of its own.
+ *
+ * Scope note, so this file is not mistaken for more than it is: the B6 race
+ * lives in the CALLER, which captures the host at dispatch and re-checks
+ * `hostStillBound` after both awaits before returning. Nothing here can
+ * observe that — these mappers are only reachable with whatever id the caller
+ * hands them, so a caller that passed a completion-time host would still
+ * satisfy every assertion below. Proving the race needs
+ * `useWorkspaceFolderActionsForClient` driven with a client whose active host
+ * changes across `pickFolders`, asserting it refuses (returns null) instead of
+ * stamping; that harness does not exist yet.
  */
-describe("dispatch-time host stamp (B6 race)", () => {
-  it("stamps with dispatch host even if a different host is 'current' conceptually", () => {
-    const dispatchHostId = "host-A";
-    // Simulates completion-time client reading host-B — we must ignore it.
-    const completionTimeHostId = "host-B";
-    void completionTimeHostId;
-
-    const stamped = stampPreparedFoldersWithDispatchHost(
-      [PREPARED],
-      dispatchHostId,
-    );
+describe("prepared-folder host stamping (pure mappers)", () => {
+  it("applies the given host id to every folder it stamps", () => {
+    const stamped = stampPreparedFoldersWithDispatchHost([PREPARED], "host-A");
     expect(stamped).toHaveLength(1);
     expect(stamped[0]?.hostId).toBe("host-A");
     expect(stamped[0]?.path).toBe("/Users/a/scratch");
   });
 
-  it("never uses a post-await client host when mapping a single folder", () => {
-    const fromDispatch = preparedWorkspaceFolderToWorkspaceFolderInfo(
-      PREPARED,
-      "host-A",
-    );
-    const wronglyFromCompletion = preparedWorkspaceFolderToWorkspaceFolderInfo(
-      PREPARED,
-      "host-B",
-    );
-    // Production code paths only pass result.hostId (dispatch). This asserts
-    // the mapping is a pure function of the hostId argument.
-    expect(fromDispatch.hostId).toBe("host-A");
-    expect(wronglyFromCompletion.hostId).toBe("host-B");
-    expect(fromDispatch.hostId).not.toBe(wronglyFromCompletion.hostId);
+  it("takes the host id only from its argument when mapping one folder", () => {
+    expect(
+      preparedWorkspaceFolderToWorkspaceFolderInfo(PREPARED, "host-A").hostId,
+    ).toBe("host-A");
+    expect(
+      preparedWorkspaceFolderToWorkspaceFolderInfo(PREPARED, "host-B").hostId,
+    ).toBe("host-B");
   });
 });

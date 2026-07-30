@@ -1,4 +1,10 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -383,19 +389,48 @@ export function ProviderMcpTab(props: {
   // inside an effect.
   const prunedAuthAwaiting = pruneAuthAwaiting(authAwaitingNames, servers);
   if (prunedAuthAwaiting !== authAwaitingNames) {
-    const settled = [...authAwaitingNames].filter(
-      (name) => !prunedAuthAwaiting.has(name),
-    );
-    for (const name of settled) {
-      pendingAuthRemove({
-        providerId,
-        scope: effectiveScope,
-        workspaceRoot: listWorkspaceRoot,
-        serverName: name,
-      });
-    }
     setAuthAwaitingNames(prunedAuthAwaiting);
   }
+
+  // The store cleanup that used to run in the render body above. It cannot
+  // stay there: the write notifies this very component (it subscribes to
+  // `entries`), and a render React discards would have mutated it anyway. It
+  // also cannot be handed down from the prune — `setAuthAwaitingNames` above
+  // re-renders immediately with nothing left to diff, so by the time effects
+  // run for the committed render the retired names are gone. So this reads the
+  // store directly and re-derives settledness from the list, applying exactly
+  // `pruneAuthAwaiting`'s rule. Self-limiting: removing an entry is what
+  // changes `pendingAuthEntries`, and the next pass finds nothing to remove.
+  const listData = listQuery.data;
+  useEffect(() => {
+    // A list we have not received yet says nothing about what settled. Without
+    // this, first paint sees an empty `servers` and would wipe every pending
+    // entry the resume path just restored.
+    if (listData === undefined) return;
+    const byName = new Map(listData.servers.map((s) => [s.name, s]));
+    for (const entry of Object.values(pendingAuthEntries)) {
+      const key = entry.key;
+      if (
+        key.providerId !== providerId ||
+        key.scope !== effectiveScope ||
+        key.workspaceRoot !== listWorkspaceRoot
+      ) {
+        continue;
+      }
+      const server = byName.get(key.serverName);
+      const stillPending =
+        server !== undefined &&
+        (server.status === "connecting" || server.status === "needs_auth");
+      if (!stillPending) pendingAuthRemove(key);
+    }
+  }, [
+    listData,
+    pendingAuthEntries,
+    pendingAuthRemove,
+    providerId,
+    effectiveScope,
+    listWorkspaceRoot,
+  ]);
 
   const shadowedNames = useMemo(() => {
     if (effectiveScope !== "global") return new Set<string>();

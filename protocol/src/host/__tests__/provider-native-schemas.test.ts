@@ -82,6 +82,7 @@ import {
   gitShow,
   HOST_V115_MUTATION_V20_SCHEMAS_PATH,
   HOST_V115_MUTATION_V20_TAG,
+  hostV115TagObjectsAvailable,
   importTaggedProviderSchemas,
 } from "../../../scripts/snapshot-host-v1.1.5-mutation-v20-fixtures";
 import { releasedMethodNames } from "./__fixtures__/released-method-names";
@@ -890,59 +891,78 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
   const fixtures = hostV115MutationV20Fixtures;
   const responseMethods = fixtures.mutationResponseMethods;
   const requestMethods = fixtures.mutationRequestMethods;
+  // Everything below that reads the tag itself needs this clone to actually
+  // have the host-v1.1.5 objects. `actions/checkout` fetches no tags, so in CI
+  // those two are skipped rather than reported as failures for evidence they
+  // could not obtain; the tag-independent assertions in this block keep
+  // running there, and `guarded-files-tripwire` is what stops the checked-in
+  // fixture being hand-edited where the regeneration guard cannot run.
+  const tagReachable = hostV115TagObjectsAvailable(
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../../../"),
+  );
 
-  it("regenerate-and-compare: checked-in fixture equals live generator output", async () => {
-    // Catches ANY hand-edit to the checked-in fixture (not just enum/provenance
-    // fields): re-run the full generator against host-v1.1.5 and deep-equal.
-    const fixtureDir = dirname(fileURLToPath(import.meta.url));
-    const traycerRoot = resolve(fixtureDir, "../../../../");
-    const regenerated = await buildHostV115MutationV20Fixtures(traycerRoot);
-    // Strip `as const` readonly by JSON round-trip for stable deep equality.
-    expect(JSON.parse(JSON.stringify(fixtures))).toEqual(
-      JSON.parse(JSON.stringify(regenerated)),
-    );
-    // Cross-check: every tag-derived mutation provider id remains valid in
-    // the live schema. The live enum is allowed to grow beyond the tag's
-    // snapshot (e.g. Devin/Pi post-date host-v1.1.5) since
-    // `providerMutationCliStateSchemaV20` deliberately tracks it - it must
-    // never shrink or rename what the tag already proved accepted.
-    for (const providerId of fixtures.mutationProviderIds) {
-      expect(providerIdSchema.options).toContain(providerId);
-    }
-    // list@2.0 is frozen, so its tag-derived set must equal the frozen enum
-    // exactly - unlike the mutation set above, it must never grow.
-    expect([...fixtures.listV20ProviderIds]).toEqual([
-      ...providerIdSchemaV20.options,
-    ]);
-    expect(fixtures.mutationProviderIds).toContain("amp");
-    expect(fixtures.listV20ProviderIds).not.toContain("amp");
-  }, 30_000);
+  it.skipIf(!tagReachable)(
+    "regenerate-and-compare: checked-in fixture equals live generator output",
+    async () => {
+      // Catches ANY hand-edit to the checked-in fixture (not just
+      // enum/provenance fields): re-run the full generator against
+      // host-v1.1.5 and deep-equal.
+      const fixtureDir = dirname(fileURLToPath(import.meta.url));
+      const traycerRoot = resolve(fixtureDir, "../../../../");
+      const regenerated = await buildHostV115MutationV20Fixtures(traycerRoot);
+      // Strip `as const` readonly by JSON round-trip for stable deep equality.
+      expect(JSON.parse(JSON.stringify(fixtures))).toEqual(
+        JSON.parse(JSON.stringify(regenerated)),
+      );
+      // Cross-check: every tag-derived mutation provider id remains valid in
+      // the live schema. The live enum is allowed to grow beyond the tag's
+      // snapshot (e.g. Devin/Pi post-date host-v1.1.5) since
+      // `providerMutationCliStateSchemaV20` deliberately tracks it - it must
+      // never shrink or rename what the tag already proved accepted.
+      for (const providerId of fixtures.mutationProviderIds) {
+        expect(providerIdSchema.options).toContain(providerId);
+      }
+      // list@2.0 is frozen, so its tag-derived set must equal the frozen enum
+      // exactly - unlike the mutation set above, it must never grow.
+      expect([...fixtures.listV20ProviderIds]).toEqual([
+        ...providerIdSchemaV20.options,
+      ]);
+      expect(fixtures.mutationProviderIds).toContain("amp");
+      expect(fixtures.listV20ProviderIds).not.toContain("amp");
+    },
+    30_000,
+  );
 
-  it("tag-derived schemas reject deliberately invalid samples", async () => {
-    // Generation-time guarantee: samples must parse against host-v1.1.5 schemas.
-    // A wrong field type fails the tag-era parser (not the current branch).
-    const fixtureDir = dirname(fileURLToPath(import.meta.url));
-    const traycerRoot = resolve(fixtureDir, "../../../../");
-    const taggedSource = gitShow(
-      traycerRoot,
-      `${HOST_V115_MUTATION_V20_TAG}:${HOST_V115_MUTATION_V20_SCHEMAS_PATH}`,
-    );
-    const tagSchemas = await importTaggedProviderSchemas(taggedSource);
-    expect(() =>
-      assertParseAgainstTagSchema(
-        "providersSetApiKeyRequestSchema[bad]",
-        tagSchemas.providersSetApiKeyRequestSchema,
-        { providerId: "amp", apiKey: 123 },
-      ),
-    ).toThrow(/Tag-schema validation failed/);
-    expect(() =>
-      assertParseAgainstTagSchema(
-        "providerCliStateSchema[bad-enabled]",
-        tagSchemas.providerCliStateSchema,
-        { ...baseState("amp"), enabled: "yes" },
-      ),
-    ).toThrow(/Tag-schema validation failed/);
-  }, 30_000);
+  it.skipIf(!tagReachable)(
+    "tag-derived schemas reject deliberately invalid samples",
+    async () => {
+      // Generation-time guarantee: samples must parse against host-v1.1.5
+      // schemas. A wrong field type fails the tag-era parser (not the current
+      // branch).
+      const fixtureDir = dirname(fileURLToPath(import.meta.url));
+      const traycerRoot = resolve(fixtureDir, "../../../../");
+      const taggedSource = gitShow(
+        traycerRoot,
+        `${HOST_V115_MUTATION_V20_TAG}:${HOST_V115_MUTATION_V20_SCHEMAS_PATH}`,
+      );
+      const tagSchemas = await importTaggedProviderSchemas(taggedSource);
+      expect(() =>
+        assertParseAgainstTagSchema(
+          "providersSetApiKeyRequestSchema[bad]",
+          tagSchemas.providersSetApiKeyRequestSchema,
+          { providerId: "amp", apiKey: 123 },
+        ),
+      ).toThrow(/Tag-schema validation failed/);
+      expect(() =>
+        assertParseAgainstTagSchema(
+          "providerCliStateSchema[bad-enabled]",
+          tagSchemas.providerCliStateSchema,
+          { ...baseState("amp"), enabled: "yes" },
+        ),
+      ).toThrow(/Tag-schema validation failed/);
+    },
+    30_000,
+  );
 
   it("covers all ten tag-derived @2.0 request samples with amp", () => {
     expect(requestMethods).toHaveLength(10);

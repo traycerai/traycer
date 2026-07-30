@@ -805,6 +805,37 @@ describe("<ProviderMcpTab />", () => {
     expect(pollingCall).toBeDefined();
   });
 
+  it("drops the pending-auth store entry once the server settles", () => {
+    // The prune that retires a settled name happens during render, but the
+    // store write it triggers is deferred to an effect. That split is easy to
+    // get wrong in a way nothing else here would catch: the render-phase
+    // `setAuthAwaitingNames` re-renders immediately with an empty diff, so an
+    // implementation that recomputes the settled names for the effect instead
+    // of carrying them in state flushes an empty list and leaks the entry
+    // forever. This asserts the entry is actually gone.
+    const key = {
+      providerId: "codex",
+      scope: "global",
+      workspaceRoot: null,
+      serverName: "context7",
+    } as const;
+    useMcpPendingAuthStore.getState().upsert({
+      key,
+      hostId: "host-1",
+      startedAt: Date.now(),
+      authorizationUrl: "https://auth.example.com/oauth",
+      instruction: null,
+    });
+    // Settled: neither "connecting" nor "needs_auth", so the prune retires it.
+    mcpMocks.listResult.data = {
+      servers: [connectedServer({ status: "connected" })],
+    };
+
+    renderTab(FULL_CAPS, "codex");
+
+    expect(useMcpPendingAuthStore.getState().get(key)).toBeNull();
+  });
+
   it("redacts secrets in pendingInstruction auth text", () => {
     mcpMocks.listResult.data = {
       servers: [
