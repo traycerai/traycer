@@ -43,6 +43,19 @@ const mocks = vi.hoisted(() => ({
   // of the plain destination match above. `null` preserves every existing
   // test's behavior (fail on every call to the matched destination).
   forceRenameFailureForDestinationOnCall: null as number | null,
+  // Prefix-matched variant of the destination match above, for renames
+  // whose destination the test cannot hardcode - atomicSwap's aside rename
+  // targets `install.old-<Date.now()>`. Call counting keys on the prefix.
+  forceRenameFailureForDestinationPrefix: null as string | null,
+  // Error code the simulated failure carries. "EIO" (non-retryable) by
+  // default so a matched rename fails on the first attempt instead of
+  // spending the swap retry schedule; the swap-lock-recovery tests set
+  // "EBUSY" to exercise the retries.
+  forceRenameFailureCode: "EIO" as string,
+  // Retry-until-success gate: when set, calls 1..N to the matched
+  // destination fail and later calls succeed. Mutually exclusive with the
+  // exact-call gate above.
+  forceRenameFailureUntilCall: null as number | null,
   renameCallCountByDestination: new Map<string, number>(),
 }));
 
@@ -67,17 +80,26 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       return actual.rm(path, options);
     },
     rename: async (from: PathLike, to: PathLike) => {
-      if (to === mocks.forceRenameFailureForDestination) {
-        const toKey = String(to);
+      const toKey = String(to);
+      const prefix = mocks.forceRenameFailureForDestinationPrefix;
+      const prefixMatched = prefix !== null && toKey.startsWith(prefix);
+      if (to === mocks.forceRenameFailureForDestination || prefixMatched) {
+        const countKey = prefixMatched && prefix !== null ? prefix : toKey;
         const callNumber =
-          (mocks.renameCallCountByDestination.get(toKey) ?? 0) + 1;
-        mocks.renameCallCountByDestination.set(toKey, callNumber);
+          (mocks.renameCallCountByDestination.get(countKey) ?? 0) + 1;
+        mocks.renameCallCountByDestination.set(countKey, callNumber);
         const gate = mocks.forceRenameFailureForDestinationOnCall;
-        if (gate === null || callNumber === gate) {
-          // A non-retryable code so `renameWithRetry` fails on the first
-          // attempt instead of spending ~2.5s retrying EBUSY/EPERM/etc.
+        const until = mocks.forceRenameFailureUntilCall;
+        const shouldFail =
+          until !== null
+            ? callNumber <= until
+            : gate === null || callNumber === gate;
+        if (shouldFail) {
+          // "EIO" (non-retryable) unless a test overrides the code, so
+          // `renameWithRetry` fails on the first attempt instead of
+          // spending the retry schedule on EBUSY/EPERM/etc.
           throw Object.assign(new Error("simulated rename failure"), {
-            code: "EIO",
+            code: mocks.forceRenameFailureCode,
           });
         }
       }
@@ -131,11 +153,15 @@ import {
   currentInstallArch,
   currentInstallPlatform,
   installHost,
+  setSwapRenameDelaysForTests,
+  SWAP_RENAME_DELAYS_MS,
+  SWAP_RENAME_MAX_TOTAL_MS,
   sweepOldTrash,
   type StagedHostInstallSource,
 } from "../install";
 import { readHostInstallRecord } from "../../manifest/host-install";
 import { createCliLogger } from "../../logger";
+import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 
 const ENV: Environment = "production";
 
@@ -342,6 +368,326 @@ describe("commitInstallFromSource", () => {
     ).rejects.toThrow();
 
     expect(committed).toBe(false);
+  });
+});
+
+describe("atomicSwap - swap-lock recovery", () => {
+  beforeEach(() => {
+    sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-install-test-"));
+    osHome.current = sandboxRoot;
+  });
+
+  afterEach(() => {
+    mocks.forceUnlinkFailureForPath = null;
+    mocks.forceRmFailureForPath = null;
+    mocks.forceRenameFailureForDestination = null;
+    mocks.forceRenameFailureForDestinationOnCall = null;
+    mocks.forceRenameFailureForDestinationPrefix = null;
+    mocks.forceRenameFailureCode = "EIO";
+    mocks.forceRenameFailureUntilCall = null;
+    mocks.renameCallCountByDestination.clear();
+    setSwapRenameDelaysForTests(null);
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  async function installVersion(marker: string, version: string) {
+    const sourceDir = join(sandboxRoot, `source-${marker}`);
+    writeLocalHostSource(sourceDir, marker);
+    return installHost({
+      environment: ENV,
+      source: { kind: "local-file", path: sourceDir },
+      onProgress: () => {},
+      lifecycle: null,
+      recordVersionOverride: version,
+    });
+  }
+
+  it("re-kills lingering slot processes between retryable aside-rename attempts and then succeeds", async () => {
+    await installVersion("v1", "1.0.0");
+    // The aside rename targets `install.old-<Date.now()>` - only the
+    // prefix is predictable. Two EBUSY failures, then the rename goes
+    // through: the shape of a lingering handle that a re-kill releases.
+    mocks.forceRenameFailureForDestinationPrefix = `${installDirFor(ENV)}.old-`;
+    mocks.forceRenameFailureCode = "EBUSY";
+    mocks.forceRenameFailureUntilCall = 2;
+    const kill = vi.fn(async () => {});
+
+    const sourceDir = join(sandboxRoot, "source-v2");
+    writeLocalHostSource(sourceDir, "v2");
+    const { record } = await installHost({
+      environment: ENV,
+      source: { kind: "local-file", path: sourceDir },
+      onProgress: () => {},
+      lifecycle: {
+        beforeSwap: async () => {},
+        afterSwap: async () => {},
+        swapLockRecovery: {
+          killLingeringProcesses: kill,
+          describeLockHolders: async () => [],
+        },
+      },
+      recordVersionOverride: "2.0.0",
+    });
+
+    expect(record.version).toBe("2.0.0");
+    expect(kill).toHaveBeenCalledTimes(2);
+    expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(
+      "binary-v2",
+    );
+  });
+
+  it("wraps a stuck aside rename in a CliError naming the lock holders and leaves the previous install intact", async () => {
+    await installVersion("v1", "1.0.0");
+    // Default "EIO" fails the aside rename on the first attempt - the
+    // exhausted-retries shape without the schedule's wall-clock cost.
+    mocks.forceRenameFailureForDestinationPrefix = `${installDirFor(ENV)}.old-`;
+
+    const sourceDir = join(sandboxRoot, "source-v2");
+    writeLocalHostSource(sourceDir, "v2");
+    let thrown: unknown;
+    try {
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: sourceDir },
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {},
+          afterSwap: async () => {},
+          swapLockRecovery: {
+            killLingeringProcesses: async () => {},
+            describeLockHolders: async () => [
+              {
+                pid: 4242,
+                name: "claude.exe",
+                executablePath: "C:\\clients\\claude.exe",
+              },
+            ],
+          },
+        },
+        recordVersionOverride: "2.0.0",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const cliErr = thrown as CliError;
+    expect(cliErr.code).toBe(CLI_ERROR_CODES.HOST_INSTALL_FAILED);
+    expect(cliErr.message).toContain(
+      "failed to move the previous install aside",
+    );
+    expect(cliErr.message).toContain(
+      "processes still holding the install directory: pid 4242 (claude.exe) at C:\\clients\\claude.exe",
+    );
+    expect(cliErr.details?.lockHolders).toEqual([
+      {
+        pid: 4242,
+        name: "claude.exe",
+        executablePath: "C:\\clients\\claude.exe",
+      },
+    ]);
+    // The aside rename is the FIRST move - nothing has been swapped, so
+    // the previous install must still be fully in place.
+    expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(
+      "binary-v1",
+    );
+  });
+
+  it("names the lock holders when the swap-in rename fails too", async () => {
+    await installVersion("v1", "1.0.0");
+    mocks.forceRenameFailureForDestination = installDirFor(ENV);
+
+    const sourceDir = join(sandboxRoot, "source-v2");
+    writeLocalHostSource(sourceDir, "v2");
+    let thrown: unknown;
+    try {
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: sourceDir },
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {},
+          afterSwap: async () => {},
+          swapLockRecovery: {
+            killLingeringProcesses: async () => {},
+            describeLockHolders: async () => [
+              { pid: 77, name: null, executablePath: null },
+            ],
+          },
+        },
+        recordVersionOverride: "2.0.0",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const cliErr = thrown as CliError;
+    expect(cliErr.code).toBe(CLI_ERROR_CODES.HOST_INSTALL_FAILED);
+    expect(cliErr.message).toContain("failed to swap staging dir into place");
+    expect(cliErr.message).toContain(
+      "processes still holding the install directory: pid 77",
+    );
+    expect(cliErr.details?.lockHolders).toEqual([
+      { pid: 77, name: null, executablePath: null },
+    ]);
+  });
+
+  it("gives the rollback restore the SAME recovery-aware plan as the forward renames, not the bare default", async () => {
+    // CodeRabbit finding on PR #829: the restore rename (trash -> target,
+    // the worst failure path - it runs when the swap-in itself already
+    // failed, and its own failure leaves NO install dir at all) used the
+    // plain `renameWithRetry` default (~2.5s, no re-kill hook) while a
+    // comment claimed it "gets the same retry" as the forward renames.
+    // Both the swap-in and the restore target the SAME destination
+    // (`target`), so one shared call-count gate drives both: calls 1-4
+    // fail, call 5+ succeeds.
+    //   - swap-in: 3 calls (attempt, retry, retry) against a 2-entry test
+    //     schedule - exhausts and throws, invoking the kill hook twice.
+    //   - restore: call 4 fails (kill hook #3), call 5 succeeds.
+    // A regression back to the plain `renameWithRetry` restore would still
+    // retry (it has its own default schedule) but would NEVER invoke the
+    // kill hook, since that path hardcodes `onRetry: null` - so the fixed
+    // code is distinguished by the kill call COUNT, not merely by success.
+    await installVersion("v1", "1.0.0");
+    setSwapRenameDelaysForTests([1, 1]);
+    mocks.forceRenameFailureForDestination = installDirFor(ENV);
+    mocks.forceRenameFailureCode = "EBUSY";
+    mocks.forceRenameFailureUntilCall = 4;
+    const kill = vi.fn(async () => {});
+
+    const sourceDir = join(sandboxRoot, "source-v2");
+    writeLocalHostSource(sourceDir, "v2");
+    let thrown: unknown;
+    try {
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: sourceDir },
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {},
+          afterSwap: async () => {},
+          swapLockRecovery: {
+            killLingeringProcesses: kill,
+            describeLockHolders: async () => [],
+          },
+        },
+        recordVersionOverride: "2.0.0",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as CliError).message).toContain(
+      "failed to swap staging dir into place",
+    );
+    // 2 re-kills for the exhausted swap-in + 1 for the restore's own retry.
+    expect(kill).toHaveBeenCalledTimes(3);
+    // The restore itself succeeded (on its 2nd call) - the previous
+    // install is back in place rather than stranded as `install.old-*`.
+    expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(
+      "binary-v1",
+    );
+  });
+
+  it("gives an actionable fallback when EBUSY exhausts every retry and the scan names nothing", async () => {
+    // The field cohort the scan is structurally blind to: a CWD-only
+    // holder has no install path in its exe or command line, so the
+    // re-kill runs on every retry, releases nothing, and the detail scan
+    // comes back empty. The user must get told what actually unblocks
+    // them instead of a bare errno. Production timing would sleep the
+    // whole ~24s schedule here - inject a short one.
+    await installVersion("v1", "1.0.0");
+    setSwapRenameDelaysForTests([1, 1]);
+    mocks.forceRenameFailureForDestinationPrefix = `${installDirFor(ENV)}.old-`;
+    mocks.forceRenameFailureCode = "EBUSY";
+    const kill = vi.fn(async () => {});
+
+    const sourceDir = join(sandboxRoot, "source-v2");
+    writeLocalHostSource(sourceDir, "v2");
+    let thrown: unknown;
+    try {
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: sourceDir },
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {},
+          afterSwap: async () => {},
+          swapLockRecovery: {
+            killLingeringProcesses: kill,
+            describeLockHolders: async () => [],
+          },
+        },
+        recordVersionOverride: "2.0.0",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const cliErr = thrown as CliError;
+    expect(cliErr.code).toBe(CLI_ERROR_CODES.HOST_INSTALL_FAILED);
+    // One re-kill per schedule entry - the retries genuinely ran.
+    expect(kill).toHaveBeenCalledTimes(2);
+    expect(cliErr.message).toContain(
+      "no Traycer process matches the install directory",
+    );
+    expect(cliErr.message).toContain("restart Windows");
+    expect(cliErr.details?.lockHolders).toEqual([]);
+    // The previous install must survive the failed update untouched.
+    expect(readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8")).toBe(
+      "binary-v1",
+    );
+  });
+
+  it("keeps the raw error unembellished for a non-lock failure code", async () => {
+    // A genuine I/O failure is not lock contention - steering the user
+    // toward "close the program holding it" there would be a lie.
+    await installVersion("v1", "1.0.0");
+    mocks.forceRenameFailureForDestinationPrefix = `${installDirFor(ENV)}.old-`;
+
+    const sourceDir = join(sandboxRoot, "source-v2");
+    writeLocalHostSource(sourceDir, "v2");
+    let thrown: unknown;
+    try {
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: sourceDir },
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {},
+          afterSwap: async () => {},
+          swapLockRecovery: {
+            killLingeringProcesses: async () => {},
+            describeLockHolders: async () => [],
+          },
+        },
+        recordVersionOverride: "2.0.0",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as CliError).message).not.toContain(
+      "another program is holding it open",
+    );
+  });
+});
+
+describe("swap rename schedule contract", () => {
+  it("stays far above the default ~2.5s retry and is never truncated by its own ceiling", () => {
+    // The whole point of the schedule is outlasting AV scans and orphan
+    // handle release that the previous ~2.5s budget could not - pin the
+    // floor so a refactor cannot quietly regress it. The ceiling exists
+    // for slow RE-KILLS, so it must clear the sleep schedule itself with
+    // room for healthy (couple-of-seconds) hook passes.
+    const totalDelayMs = SWAP_RENAME_DELAYS_MS.reduce((sum, d) => sum + d, 0);
+    expect(totalDelayMs).toBeGreaterThanOrEqual(20_000);
+    expect(SWAP_RENAME_DELAYS_MS.length).toBeGreaterThanOrEqual(7);
+    expect(SWAP_RENAME_MAX_TOTAL_MS).toBeGreaterThanOrEqual(totalDelayMs * 2);
   });
 });
 

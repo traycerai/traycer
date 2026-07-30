@@ -86,7 +86,7 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(link?.getAttribute("href")).toBe("/settings/host");
   });
 
-  it("Devices entry links to /settings/devices", async () => {
+  it("Sessions entry links to the compatibility /settings/devices route", async () => {
     const router = buildRouter("/settings/general");
     render(
       <KeybindingProvider router={router}>
@@ -94,7 +94,7 @@ describe("<SettingsSidebar /> leader hints", () => {
       </KeybindingProvider>,
     );
 
-    const link = await screen.findByRole("link", { name: "Devices" });
+    const link = await screen.findByRole("link", { name: "Sessions" });
     expect(link.getAttribute("href")).toBe("/settings/devices");
   });
 

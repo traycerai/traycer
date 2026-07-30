@@ -16,9 +16,9 @@ export const NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS = 300_000;
  * Closes a reopen cannot fix: `caller` is the owner's own teardown,
  * `CLIENT_CLOSED` means the owning stream client itself is gone (the session
  * provider reopens on the replacement client), `INCOMPATIBLE` is permanent
- * for this host session, and `FREE_TIER_NO_CLOUD_SYNC` is the host's
- * deliberate terminal refusal for free-tier users — retrying any of these
- * would loop forever against a permanent answer.
+ * for this host session, and `FREE_TIER_NO_CLOUD_SYNC` is a dormant typed
+ * defense for any future server-side entitlement refusal — retrying any of
+ * these would loop forever against a permanent answer.
  */
 function isReopenableStreamClose(reason: StreamCloseReason | null): boolean {
   if (reason === null || reason.kind !== "fatalError") return false;

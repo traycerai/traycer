@@ -87,6 +87,7 @@ vi.mock("../../service/install-lifecycle", () => ({
           state.postSwapAction = mocks.lifecyclePostSwapAction;
           state.postSwapError = mocks.lifecyclePostSwapError;
         },
+        swapLockRecovery: null,
       },
     };
   },

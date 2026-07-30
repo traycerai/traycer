@@ -61,6 +61,7 @@ export function createCliCredentialsStore(): CredentialsMutationStore {
       refreshOnceAbortable({
         ...args,
         authnBaseUrl: effectiveAuthnBaseUrl(args.authnBaseUrl),
+        clientKind: "cli",
       }),
     lockWaitMs: LOCK_WAIT_MS,
     lockPollIntervalMs: LOCK_POLL_INTERVAL_MS,

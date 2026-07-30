@@ -111,7 +111,8 @@ export class FileTokenStore {
     const metaPath = `${credentialsPath}.meta.json`;
     this.store = createCredentialsMutationStore({
       paths: { credentialsPath, metaPath, lockPath },
-      refresh: refreshOnceAbortable,
+      refresh: (args) =>
+        refreshOnceAbortable({ ...args, clientKind: "desktop" }),
       lockWaitMs: LOCK_WAIT_MS,
       lockPollIntervalMs: LOCK_POLL_INTERVAL_MS,
       continuationRetryMs: CONTINUATION_RETRY_MS,
