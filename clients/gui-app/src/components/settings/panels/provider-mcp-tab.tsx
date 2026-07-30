@@ -394,12 +394,29 @@ export function ProviderMcpTab(props: {
     pollWhilePending: authAwaitingNames.size > 0,
   });
 
-  const servers = listQuery.data?.servers ?? EMPTY_MCP_SERVERS;
+  const listData = listQuery.data;
+  const servers = listData?.servers ?? EMPTY_MCP_SERVERS;
 
   // Adjust auth-awaiting set from latest list data during render (React
   // "storing information from previous renders" pattern) — avoids setState
   // inside an effect.
-  const prunedAuthAwaiting = pruneAuthAwaiting(authAwaitingNames, servers);
+  //
+  // Gated on having list data, for the same reason the store sweep below is:
+  // `servers` falls back to empty whenever a fetch is in flight, and an empty
+  // list reads as "everything awaited has settled".
+  //
+  // Reachable on a plain mount, not just in theory. `useResumeOauthPolling`
+  // runs during render, so a resumed entry lands in `authAwaitingNames` on the
+  // FIRST pass — and the second pass prunes it while the list request is still
+  // in flight. The set empties, `pollWhilePending` goes false, and nothing
+  // picks the finished OAuth up: `needs_auth` alone does not drive the poll
+  // cadence, only `discoveryPending`/`connecting` do. A scope or workspace
+  // switch mid-login hits the same window, since swapping the query key drops
+  // `data` back to undefined with no `placeholderData` covering the gap.
+  const prunedAuthAwaiting =
+    listData === undefined
+      ? authAwaitingNames
+      : pruneAuthAwaiting(authAwaitingNames, listData.servers);
   if (prunedAuthAwaiting !== authAwaitingNames) {
     setAuthAwaitingNames(prunedAuthAwaiting);
   }
@@ -413,7 +430,6 @@ export function ProviderMcpTab(props: {
   // store directly and re-derives settledness from the list through the same
   // `isServerAuthPending` rule the prune uses. Self-limiting: removing an entry is what
   // changes `pendingAuthEntries`, and the next pass finds nothing to remove.
-  const listData = listQuery.data;
   useEffect(() => {
     // A list we have not received yet says nothing about what settled. Without
     // this, first paint sees an empty `servers` and would wipe every pending

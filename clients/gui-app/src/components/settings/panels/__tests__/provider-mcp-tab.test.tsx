@@ -16,21 +16,35 @@ import { useMcpPendingAuthStore } from "@/stores/settings/mcp-pending-auth-store
 import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers-workspace-selection-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
+/**
+ * Mirrors what `useProvidersMcpList` really returns — in particular `data` is
+ * genuinely `undefined` before the first response, and returns there whenever a
+ * scope/workspace switch swaps the query key. Inferring the shape from a loaded
+ * literal instead made that window unrepresentable, which is how a bug living
+ * entirely inside it stayed invisible to this suite.
+ *
+ * Declared as a return type rather than an `as` on the literal so `lint --fix`
+ * cannot quietly narrow it back.
+ */
+function emptyListQueryMock(): {
+  data: { servers: ProviderMcpServer[] } | undefined;
+  isPending: boolean;
+  isError: boolean;
+  error: { message: string } | null;
+  isFetching: boolean;
+} {
+  return {
+    data: { servers: [] },
+    isPending: false,
+    isError: false,
+    error: null,
+    isFetching: false,
+  };
+}
+
 const mcpMocks = vi.hoisted(() => ({
-  listResult: {
-    data: { servers: [] as ProviderMcpServer[] },
-    isPending: false,
-    isError: false,
-    error: null as { message: string } | null,
-    isFetching: false,
-  },
-  projectListResult: {
-    data: { servers: [] as ProviderMcpServer[] },
-    isPending: false,
-    isError: false,
-    error: null as { message: string } | null,
-    isFetching: false,
-  },
+  listResult: emptyListQueryMock(),
+  projectListResult: emptyListQueryMock(),
   mutate: vi.fn(),
   mutateAsync: vi.fn(),
   mutateIsPending: false,
@@ -247,20 +261,10 @@ function renderTab(
 
 describe("<ProviderMcpTab />", () => {
   beforeEach(() => {
-    mcpMocks.listResult = {
-      data: { servers: [] },
-      isPending: false,
-      isError: false,
-      error: null,
-      isFetching: false,
-    };
-    mcpMocks.projectListResult = {
-      data: { servers: [] },
-      isPending: false,
-      isError: false,
-      error: null,
-      isFetching: false,
-    };
+    // Same factory as the initial value, so a reset can never re-narrow what
+    // the mock is able to represent.
+    mcpMocks.listResult = emptyListQueryMock();
+    mcpMocks.projectListResult = emptyListQueryMock();
     mcpMocks.mutate.mockReset();
     mcpMocks.mutateAsync.mockReset();
     mcpMocks.discoverMutate.mockReset();
@@ -803,6 +807,49 @@ describe("<ProviderMcpTab />", () => {
       (c) => c.scope === "global" && c.enabled && c.pollWhilePending,
     );
     expect(pollingCall).toBeDefined();
+  });
+
+  it("keeps resumed auth polling alive before the first list response", () => {
+    // The sibling resume test hands the component list data synchronously, so
+    // it never sees the window a real mount goes through: the query starts with
+    // `data === undefined`, and `servers` falls back to empty there.
+    //
+    // That window is reachable, not hypothetical. `useResumeOauthPolling` runs
+    // during render, so the resumed name is in `authAwaitingNames` by the end of
+    // the first pass — and the second pass prunes it against the empty
+    // fallback, reading "no such server" as "settled". Polling would then be
+    // switched off before the list that decides it ever arrives, and it is the
+    // only thing that would notice the OAuth completing: `needs_auth` on its
+    // own does not drive the poll cadence.
+    useMcpPendingAuthStore.getState().upsert({
+      key: {
+        providerId: "codex",
+        scope: "global",
+        workspaceRoot: null,
+        serverName: "context7",
+      },
+      hostId: "host-1",
+      startedAt: Date.now(),
+      authorizationUrl: "https://auth.example.com/oauth",
+      instruction: null,
+    });
+    // The list request is in flight: no data yet, exactly as on a cold mount.
+    mcpMocks.listResult = {
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: null,
+      isFetching: true,
+    };
+    renderTab(FULL_CAPS, "codex");
+
+    // Asserted on the LAST call, not on any call: the point is that the prune
+    // never retired the resumed name, so the newest render still asks to poll.
+    const globalCalls = mcpMocks.listCalls.filter(
+      (c) => c.scope === "global" && c.enabled,
+    );
+    expect(globalCalls.length).toBeGreaterThan(0);
+    expect(globalCalls[globalCalls.length - 1]?.pollWhilePending).toBe(true);
   });
 
   it("drops the pending-auth store entry once the server settles", () => {
