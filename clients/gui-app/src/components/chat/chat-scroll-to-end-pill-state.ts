@@ -1,7 +1,7 @@
 /**
  * Pure state resolution for the stateful scroll-to-end pill (decision log
- * #16, a T3 principle-8 adaptation). Split from `scroll-to-end-pill.tsx` so
- * the component file only exports the component (Fast Refresh boundary).
+ * #16). Split from `scroll-to-end-pill.tsx` so the component file only
+ * exports the component (Fast Refresh boundary).
  */
 export type ScrollToEndPillState =
   | { readonly kind: "hidden" }

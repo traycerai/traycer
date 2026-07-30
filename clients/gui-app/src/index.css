@@ -1282,14 +1282,13 @@
   }
 
   /* Fade transcript rows as they pass beneath the top chrome AND beneath the
-     composer dock (ported from T3's `.chat-timeline-scroll-fade`, extended
-     with a mirrored bottom band). A mask stays visible even when the chrome
-     and timeline share the same background. The right-edge mask excludes the
-     scrollbar gutter (4px - matches the reserved `mr-1` gutter on
-     `.chat-scrollbar-native-thin`) and stays fully opaque top-to-bottom so
-     the fade never darkens the bar itself. Opt-in via `topFadeEnabled` on
-     `ChatTimeline` - the same class carries both edges, since both are
-     "edge of the transcript" chrome.
+     composer dock, with a mirrored bottom band. A mask stays visible even
+     when the chrome and timeline share the same background. The right-edge
+     mask excludes the scrollbar gutter (4px - matches the reserved `mr-1`
+     gutter on `.chat-scrollbar-native-thin`) and stays fully opaque
+     top-to-bottom so the fade never darkens the bar itself. Opt-in via
+     `topFadeEnabled` on `ChatTimeline` - the same class carries both edges,
+     since both are "edge of the transcript" chrome.
 
      The bottom band's own bottom edge sits `--chat-bottom-overlay-inset`
      above the container's bottom edge - the dock's live measured height

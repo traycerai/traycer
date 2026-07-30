@@ -425,9 +425,9 @@ export function classifyChatEdgeMutation(input: {
   }
 
   if (isAppendOnlyChange(previousMessages, nextMessages)) {
-    // Streamed growth: the reveal-pass effect (ported from T3's ChatView)
-    // handles both the anchored-turn delta scroll and the plain
-    // following-end overflow-catchup; free-scrolling never moves.
+    // Streamed growth: the reveal-pass effect handles both the anchored-turn
+    // delta scroll and the plain following-end overflow catch-up;
+    // free-scrolling never moves.
     return NONE_OUTCOME;
   }
 

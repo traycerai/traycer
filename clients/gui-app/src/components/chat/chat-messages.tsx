@@ -464,9 +464,9 @@ function settleChatTimelineNavigation(input: {
 /**
  * Virtualized chat transcript. The full derived row history is handed to
  * `ChatTimeline` (LegendList), which windows the mounted DOM to the viewport.
- * This component owns the T3-ported three-mode scroll policy
- * (`following-end` / `anchoring-new-turn` / `free-scrolling` - decision log
- * #1) and the composer/queued-surface overlay inset math (decision #13).
+ * This component owns the three-mode scroll policy (`following-end` /
+ * `anchoring-new-turn` / `free-scrolling` - decision log #1) and the
+ * composer/queued-surface overlay inset math (decision #13).
  */
 export function ChatMessages(props: ChatMessagesProps) {
   // Ticket 5: registry-backed, keyed by tile instance id, so expanded A2A
@@ -573,7 +573,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   const previousMessagesForEdgeMutationRef =
     useRef<ReadonlyArray<ChatMessageModel> | null>(null);
 
-  // --- Three-mode scroll policy (decision log #1, T3 ditto) -----------------
+  // --- Three-mode scroll policy (decision log #1) ---------------------------
   //
   // `freshOpenAnchorMessageId` (decision #15) takes precedence over the
   // restored tab state's `mode` - see the seed's own doc comment for the
@@ -748,11 +748,11 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     }, PILL_SHOW_DEBOUNCE_MS);
   }, []);
 
-  // Ref-only (no React state): T3's minimap derives in-view highlighting
-  // from list state, not a stored active id, so nothing renders off this
-  // value anymore - only the ticket-5 unmount-save effect reads it
-  // imperatively. A state setter here would just re-render the whole
-  // component on every scroll tick for no observable effect.
+  // Ref-only (no React state): the minimap derives in-view highlighting from
+  // list state, not a stored active id, so nothing renders off this value
+  // anymore - only the ticket-5 unmount-save effect reads it imperatively. A
+  // state setter here would just re-render the whole component on every
+  // scroll tick for no observable effect.
   const setScrolledActiveUserMessageIdIfChanged = useCallback(
     (next: string | null): void => {
       scrolledActiveUserMessageIdRef.current = next;
@@ -783,9 +783,9 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     [cancelPillShow],
   );
 
-  // Verbatim T3 (decision #6): ANY pointerdown in the transcript - expanding a
-  // card, selecting text, clicking a link - relinquishes follow/anchor
-  // ownership, same as a wheel/touch/keyboard gesture (decision #5, #7).
+  // Decision #6: ANY pointerdown in the transcript - expanding a card,
+  // selecting text, clicking a link - relinquishes follow/anchor ownership,
+  // same as a wheel/touch/keyboard gesture (decision #5, #7).
   //
   // `freezeInFlightScroll` distinguishes the two ways a caller can cancel:
   // wheel/touchmove/keyboard scrolling, and navigateToMessage/find (a
@@ -830,9 +830,9 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       activeTimelineAnchorIndexRef.current = null;
       pendingAnchorScrollRestoreRef.current = null;
       // A real gesture (or a fresh navigation, which calls this first) wins
-      // immediately over a still-in-flight programmatic-scroll operation -
-      // T3 semantics, regardless of what that operation was in the middle of
-      // doing. `freezeInFlightScroll` (pointerdown only) additionally cancels
+      // immediately over a still-in-flight programmatic-scroll operation,
+      // regardless of what that operation was in the middle of doing.
+      // `freezeInFlightScroll` (pointerdown only) additionally cancels
       // the browser's native smooth-scroll animation in place; the other
       // callers' own immediate follow-up movement already takes over without
       // it (see the comment above).
@@ -968,15 +968,15 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     [cancelPillShow, setTimelineMode],
   );
 
-  // Enters `anchoring-new-turn` for `messageId` - the ref sequence T3's
-  // ChatView sets inline at send time (decisions #8/#9/#12), driven here from
-  // the data-diff layer (`classifyChatEdgeMutation`'s `anchor-new-turn`
-  // action) since composer send/steer/edit/queued-flush/A2A-row live outside
-  // this component. Setting `timelineAnchorMessageId` is what actually kicks
-  // off the anchor engine: `ChatTimeline` recomputes `anchoredEndSpace` from
-  // the new prop and LegendList calls back `onAnchorReady` once it resolves
-  // the row's index - the rest of the engine (positioning, settle, reveal) is
-  // ticket 3's dark, unmodified machinery.
+  // Enters `anchoring-new-turn` for `messageId` using the ref sequence from
+  // decisions #8/#9/#12, driven here from the data-diff layer
+  // (`classifyChatEdgeMutation`'s `anchor-new-turn` action) since composer
+  // send/steer/edit/queued-flush/A2A-row live outside this component. Setting
+  // `timelineAnchorMessageId` is what actually kicks off the anchor engine:
+  // `ChatTimeline` recomputes `anchoredEndSpace` from the new prop and
+  // LegendList calls back `onAnchorReady` once it resolves the row's index -
+  // the rest of the engine (positioning, settle, reveal) is ticket 3's dark,
+  // unmodified machinery.
   const beginAnchoringNewTurn = useCallback(
     (messageId: string, animated: boolean): void => {
       isAtEndRef.current = true;
@@ -1096,7 +1096,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     };
   }, [hasContent]);
 
-  // --- Anchor engine (ported from T3 ChatView.tsx) --------------------------
+  // --- Anchor engine --------------------------------------------------------
 
   const onTimelineAnchorReady = useCallback(
     (messageId: string, anchorIndex: number): void => {
@@ -1215,23 +1215,20 @@ function ChatMessagesInner(props: ChatMessagesProps) {
 
   const onTimelineAnchorSizeChanged = useCallback((messageId: string): void => {
     if (settledTimelineAnchorRef.current !== messageId) return;
-    // Verbatim T3 (ChatView.tsx `onTimelineAnchorSizeChanged`). While THIS
-    // generation still owns live-follow (mid-anchor, or plain following-end),
-    // the two-rAF reveal-pass effect is the sole owner of scroll adjustments
-    // in response to content growth - restoring here too would race it.
+    // While THIS generation still owns live-follow (mid-anchor, or plain
+    // following-end), the two-rAF reveal-pass effect is the sole owner of
+    // scroll adjustments in response to content growth - restoring here too
+    // would race it.
     //
     // The restore below is written for a settled anchor whose live-follow
     // generation has since been invalidated (a size change landing after the
-    // reader manually opted into free-scrolling). In BOTH T3's source and
-    // this port, every place that invalidates the generation
-    // (`cancelTimelineLiveFollowForUserNavigation`) also clears
-    // `settledTimelineAnchorRef` in the same breath, so the two conditions
-    // this function guards on - settled for `messageId`, AND generation
-    // mismatched - never hold at once today. This mirrors T3 exactly rather
-    // than a Traycer-introduced gap; treated as inherited, not a ticket-4
-    // regression, and left as dark/settled machinery per the anchor engine's
-    // ticket-3 review. (chat-messages.test.tsx pins the reachable half: the
-    // early-return above during active anchoring/following.)
+    // reader manually opted into free-scrolling). Every place that invalidates
+    // the generation (`cancelTimelineLiveFollowForUserNavigation`) also clears
+    // `settledTimelineAnchorRef` in the same breath, so the two conditions this
+    // function guards on - settled for `messageId`, AND generation mismatched -
+    // never hold at once today. This is treated as settled machinery rather
+    // than a ticket-4 regression. (chat-messages.test.tsx pins the reachable
+    // half: the early-return above during active anchoring/following.)
     if (
       liveFollowUserScrollGenerationRef.current ===
       anchorUserScrollGenerationRef.current
@@ -1448,17 +1445,17 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           anchoredTurnOverflowsViewportRef.current =
             metrics.overflowsUsableViewport;
           setAnchoredTurnOverflowsViewport(metrics.overflowsUsableViewport);
-          // Deliberate T3 divergence (live-E2E merge-blocker fix): T3's own
-          // reveal pass reveals the minimum delta toward the real end for
-          // the WHOLE turn, unconditionally - genuine bottom-follow-while-
-          // streaming. Decision #1 drops that default; decision #10 requires
-          // completion below the fold to stay anchored with no auto-reveal;
-          // decision #16's "streaming" pill state exists specifically for
-          // content that has accumulated below the fold. So once the
-          // anchored turn's real content overflows the usable viewport, this
-          // pass must STOP moving the scroll position - the anchor row stays
-          // at its offset for the rest of the turn, and the pill (now
-          // showing "streaming") is the sole affordance for what follows.
+          // Deliberate live-E2E merge-blocker fix: revealing the minimum delta
+          // toward the real end for the WHOLE turn would create genuine
+          // bottom-follow-while-streaming. Decision #1 drops that default;
+          // decision #10 requires completion below the fold to stay anchored
+          // with no auto-reveal; decision #16's "streaming" pill state exists
+          // specifically for content that has accumulated below the fold. So
+          // once the anchored turn's real content overflows the usable
+          // viewport, this pass must STOP moving the scroll position - the
+          // anchor row stays at its offset for the rest of the turn, and the
+          // pill (now showing "streaming") is the sole affordance for what
+          // follows.
           // Before this point (content still fits), continuing to reveal is
           // correct - it's what lets the anchored row's own reply fill the
           // space below it as it streams in.
@@ -1468,10 +1465,10 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           // already settled - can grow between settle and this pass,
           // pushing the anchor row down from its offset with nothing else
           // to correct it (`maintainVisibleContentPosition` is size:false,
-          // T3-ditto, so LegendList itself never compensates). Re-assert
-          // the anchor's own position first - the reveal-delta check below
-          // only accounts for growth BELOW the anchor, not a shift of the
-          // anchor's own position.
+          // so LegendList itself never compensates). Re-assert the anchor's
+          // own position first - the reveal-delta check below only accounts
+          // for growth BELOW the anchor, not a shift of the anchor's own
+          // position.
           // `positionAtIndex` is content-relative and excludes LegendList's
           // top pad (header/style padding/align-at-end - `topOffsetAdjustment`,
           // decision #18); DOM `scroll` includes it. Fold it in the same way
@@ -1531,10 +1528,10 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       if (scrollAction === null) return;
       event.preventDefault();
       event.stopPropagation();
-      // Decision #7: both directions now feed the same manual-navigation
-      // cancel (T3 makes no up/down distinction). Keyboard scrolling steps
-      // the scroller itself right below - a plain release, no freeze
-      // needed (that step's own movement takes over immediately).
+      // Decision #7: both directions feed the same manual-navigation cancel.
+      // Keyboard scrolling steps the scroller itself right below - a plain
+      // release, no freeze needed (that step's own movement takes over
+      // immediately).
       cancelTimelineLiveFollowForUserNavigation(false);
       applyChatKeyboardScroll(scroller, scrollAction);
     },

@@ -1,6 +1,5 @@
 /**
- * Pure geometry helpers for `chat-turn-minimap.tsx` - ported from T3's
- * `MessagesTimeline.logic.ts` minimap section (decision log #20). Kept
+ * Pure geometry helpers for `chat-turn-minimap.tsx` (decision log #20). Kept
  * dependency-free (no DOM reads) so they stay unit-testable without a
  * LegendList/jsdom harness.
  */

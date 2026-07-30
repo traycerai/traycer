@@ -3,8 +3,8 @@ import type { ChatMessage } from "@/stores/composer/chat-store";
 /**
  * Structural-sharing state for the chat timeline: the last row array handed
  * to LegendList plus a lookup from message id to the row object it produced.
- * Ported from T3's `computeStableMessagesTimelineRows` - see
- * `MessagesTimeline.logic.ts` in the reference client.
+ * Kept separate from the component so row-reference stability is explicit
+ * and unit-testable.
  */
 export interface StableChatTimelineRowsState {
   readonly byId: ReadonlyMap<string, ChatMessage>;

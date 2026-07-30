@@ -4,15 +4,14 @@ import type { LegendListRef } from "@legendapp/list/react";
 /**
  * Preserves an anchor's own visual position across a disclosure state change
  * (segment/activity-group expand-collapse, chat find force-opening a reveal
- * chain). Port of T3's `MessagesTimeline.tsx` `onToggleWorkGroup` pattern,
- * generalized to replace `ChatMeasuredItemChangeContext`'s old
- * scroll-modifier-based approach: measure the anchor's top edge, apply the state
+ * chain). This replaces `ChatMeasuredItemChangeContext`'s old scroll-
+ * modifier-based approach: measure the anchor's top edge, apply the state
  * change synchronously (`flushSync`, so the DOM already reflects it once
- * this returns), then correct the scroll offset by exactly how far that
- * edge moved. Applies regardless of follow mode - a following reader who
- * expands content in the message they're currently reading should not be
- * yanked to the tail; a subsequent `maintainScrollAtEnd`/reveal-pass catch-up
- * (if any) runs as its own effect.
+ * this returns), then correct the scroll offset by exactly how far that edge
+ * moved. Applies regardless of follow mode - a following reader who expands
+ * content in the message they're currently reading should not be yanked to
+ * the tail; a subsequent `maintainScrollAtEnd`/reveal-pass catch-up (if any)
+ * runs as its own effect.
  *
  * The TOP edge (not bottom) is deliberate: it stays invariant to the
  * anchor's OWN growth (content added below a fixed top never moves that

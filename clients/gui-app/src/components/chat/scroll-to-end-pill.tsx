@@ -27,8 +27,8 @@ interface ScrollToEndPillProps {
 /**
  * Floating "scroll to end" pill. Sibling of the scroll container, absolute-
  * positioned bottom-center so its geometry is decoupled from the scroller's
- * content. T3 visual shape (ChatView.tsx); fades in/out via opacity +
- * pointer-events so it never traps focus or clicks while hidden. The
+ * content. It fades in/out via opacity + pointer-events so it never traps
+ * focus or clicks while hidden. The
  * accessible name stays fixed to the pill's ACTION ("Scroll to end") across
  * every state - only the decorative visible label changes.
  */

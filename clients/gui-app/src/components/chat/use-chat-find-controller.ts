@@ -51,7 +51,7 @@ interface ChatFindControllerArgs {
    *  for resolving the row at the viewport's reading line. */
   readonly getViewportAnchorListState: () => ChatViewportAnchorListState | null;
   readonly scrollToLocation: (location: ChatTimelineNavigationLocation) => void;
-  /** T3-ported manual-navigation cancel (decision #21: find performs it first). */
+  /** Manual-navigation cancel (decision #21: find performs it first). */
   readonly cancelManualNavigation: () => void;
   readonly setScrolledActiveUserMessageIdIfChanged: (
     next: string | null,

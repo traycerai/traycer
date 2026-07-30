@@ -399,11 +399,11 @@ function enterFreeScrollingAwayFromEnd(): void {
 /**
  * Selects the last (most recent) turn on the minimap rail via keyboard - End
  * to move the active index to the last item, then Enter to select it. The
- * rail is a single hit-target button (T3 ditto), not a per-item button, so
- * this is the equivalent of the old per-item click. A frame must be awaited
- * between the two keydowns: `setActiveIndex` from End is still in flight
- * when Enter's own `onKeyDown` closure is captured, so firing both
- * synchronously reads the PRE-End `activeItem` (null) and no-ops.
+ * rail is a single hit-target button, not a per-item button, so this is the
+ * equivalent of the old per-item click. A frame must be awaited between the
+ * two keydowns: `setActiveIndex` from End is still in flight when Enter's own
+ * `onKeyDown` closure is captured, so firing both synchronously reads the
+ * PRE-End `activeItem` (null) and no-ops.
  */
 async function selectLastChatTurnMinimapItem(): Promise<void> {
   const minimapButton = screen.getByTestId("chat-turn-minimap-hit-strip");
@@ -1418,11 +1418,11 @@ describe("ChatMessages scroll policy", () => {
   });
 
   describe("M3b minimap hit-strip is fully inert at zero gutter budget, not just visually collapsed", () => {
-    // T3's rail sizes its hit-strip off the PANE'S WIDTH (side gutter around
+    // The rail sizes its hit-strip off the PANE'S WIDTH (side gutter around
     // the centered content column), not the composer dock height the old
     // top-right overlay clamped against - a materially different geometry
-    // axis, so this pin targets the transcript container's own measured
-    // width instead of `composerOverlayHeight`.
+    // axis, so this pin targets the transcript container's own measured width
+    // instead of `composerOverlayHeight`.
     function mockNarrowTranscriptWidth(widthPx: number): void {
       const container = screen.getByTestId("chat-transcript-container");
       vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
@@ -2406,9 +2406,9 @@ describe("ChatMessages scroll policy", () => {
       // The bug this guards: a prior turn's completion metadata (e.g. a
       // "Thought for Xs" disclosure) can land ABOVE the current anchor
       // AFTER this turn's anchor has already settled -
-      // `maintainVisibleContentPosition` is size:false (T3-ditto), so
-      // LegendList never compensates, and nothing else corrects it: the
-      // reveal-delta check only accounts for growth BELOW the anchor.
+      // `maintainVisibleContentPosition` has `size:false`, so LegendList never
+      // compensates, and nothing else corrects it: the reveal-delta check only
+      // accounts for growth BELOW the anchor.
       const ROW_HEIGHT_PX = 90;
       const initial = makeCompletedTranscript(4);
       const turn1Id = "user-turn1-send";

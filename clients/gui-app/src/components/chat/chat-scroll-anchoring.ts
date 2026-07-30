@@ -1,10 +1,9 @@
 /**
  * Pure scroll-anchoring math for the chat timeline's three-mode policy
- * (following-end / anchoring-new-turn / free-scrolling). Near-verbatim port
- * of T3's `timelineScrollAnchoring.ts` + the anchor-lookup helper from
- * `packages/shared/chatList.ts`, adapted to `@legendapp/list`'s
- * `LegendListState` shape. See decision log #11-13 for the Traycer-specific
- * inset adaptations (pinned stack / queued surface join the base offsets).
+ * (following-end / anchoring-new-turn / free-scrolling), adapted to
+ * `@legendapp/list`'s `LegendListState` shape. See decision log #11-13 for
+ * the inset adaptations (pinned stack / queued surface join the base
+ * offsets).
  */
 
 export type ChatTimelineScrollMode =

@@ -30,10 +30,10 @@ import {
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
 /**
- * Shared, closure-free row context - T3's `TimelineRowCtx` pattern. Row
- * components read business-logic callbacks from context instead of a
- * per-item closure, so `renderItem` stays referentially stable and
- * LegendList's own memo boundary is never invalidated by it.
+ * Shared, closure-free row context. Row components read business-logic
+ * callbacks from context instead of a per-item closure, so `renderItem`
+ * stays referentially stable and LegendList's own memo boundary is never
+ * invalidated by it.
  */
 interface ChatTimelineRowSharedState {
   readonly taskTitle: string;
@@ -87,7 +87,7 @@ export interface ChatTimelineProps {
    *  `scrollHeight` is a large fixed constant, not real content height, so
    *  position-based inference cannot reliably tell them apart). */
   readonly "data-scroll-mode"?: string;
-  /** T3 top-fade chrome; the scroll-policy ticket decides when it's on. */
+  /** Top-fade chrome; the scroll-policy ticket decides when it's on. */
   readonly topFadeEnabled?: boolean;
   /**
    * Whether the initial mount parks at the tail. `true` (the default) for a

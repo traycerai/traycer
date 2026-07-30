@@ -68,7 +68,7 @@ function compactMinimapPreview(text: string | null | undefined): string | null {
 }
 
 /** Last assistant row's text before the next user row of any kind (A2A rows
- *  still end a turn) - ditto T3's `resolveFinalAssistantTextForTurn`. */
+ *  still end a turn). */
 function resolveFinalAssistantTextForTurn(
   messages: ReadonlyArray<ChatMessageModel>,
   userRowIndex: number,
@@ -200,9 +200,9 @@ function ChatTurnMinimapPreview(props: {
 }
 
 /**
- * Left-rail turn minimap - T3's `TimelineMinimap` ditto (decision #20).
+ * Left-rail turn minimap (decision #20).
  * One evenly spaced strip per HUMAN user turn; hover/focus opens a 22rem
- * interactive preview (user text + the turn's last assistant text); a
+ * viewport-capped preview (user text + the turn's last assistant text); a
  * single hit-target button maps pointer Y / arrow keys to the nearest turn.
  * Fine-pointer only; the collapsed strip is capped to the actual side
  * gutter and goes fully inert (not just visually collapsed) at 0px so it
