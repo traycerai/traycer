@@ -227,9 +227,10 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
   const [hasPersistentGutter, setHasPersistentGutter] = useState(false);
   const [hitStripWidth, setHitStripWidth] = useState(0);
 
-  // Gutter/hit-strip geometry: recomputed on mount and whenever the pane's
-  // own width changes (zoom, split resize) - a pure function of viewport
-  // width, no per-scroll-tick measurement.
+  // Gutter/hit-strip geometry and in-view highlighting: recomputed on mount
+  // and whenever the pane's own box changes (zoom or split resize). A
+  // height-only resize changes LegendList's scrollLength without necessarily
+  // producing either a scroll event or a row remeasurement.
   useEffect(() => {
     const viewportElement = viewportRef.current;
     if (viewportElement === null) return;
@@ -241,6 +242,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
         return current === next ? current : next;
       });
       setHitStripWidth(resolveChatTurnMinimapHitStripWidth(viewportWidth));
+      inViewRefreshRef.current();
     };
 
     const frame = requestAnimationFrame(measure);
@@ -250,7 +252,7 @@ export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [viewportRef]);
+  }, [inViewRefreshRef, viewportRef]);
 
   // In-view strip highlighting from LegendList's own measured positions - no
   // DOM rect probing (jsdom/perf lesson; the old reading-line probe died on

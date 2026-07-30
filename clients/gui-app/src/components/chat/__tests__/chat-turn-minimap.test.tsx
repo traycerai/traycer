@@ -131,6 +131,52 @@ function mockElementWidth(element: HTMLElement, widthPx: number): void {
   });
 }
 
+function installControllableResizeObserver(): {
+  trigger: () => void;
+  restore: () => void;
+} {
+  let callback: ResizeObserverCallback | null = null;
+  const originalResizeObserver = globalThis.ResizeObserver;
+  const callbackObserver: ResizeObserver = {
+    observe: () => undefined,
+    unobserve: () => undefined,
+    disconnect: () => undefined,
+  };
+
+  class ControllableResizeObserver implements ResizeObserver {
+    constructor(nextCallback: ResizeObserverCallback) {
+      callback = nextCallback;
+    }
+
+    observe(): void {}
+
+    unobserve(): void {}
+
+    disconnect(): void {}
+  }
+
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: ControllableResizeObserver,
+  });
+  return {
+    restore: () => {
+      Object.defineProperty(globalThis, "ResizeObserver", {
+        configurable: true,
+        writable: true,
+        value: originalResizeObserver,
+      });
+    },
+    trigger: () => {
+      if (callback === null) {
+        throw new Error("ResizeObserver was not installed");
+      }
+      callback([], callbackObserver);
+    },
+  };
+}
+
 function mockRailGeometry(
   hitStrip: HTMLElement,
   input: { top: number; height: number },
@@ -671,6 +717,33 @@ describe("ChatTurnMinimap in-view highlighting", () => {
     });
 
     expect(secondStrip?.getAttribute("data-in-view")).toBe("false");
+  });
+
+  it("updates data-in-view when a pane resize changes the list viewport", async () => {
+    const resizeObserver = installControllableResizeObserver();
+    try {
+      const messages = makeTwoTurnTranscript();
+      const listState: FakeListState = {
+        scroll: 0,
+        scrollLength: 300,
+        positions: [0, 80, 250, 330],
+        sizes: [60, 60, 60, 60],
+      };
+      renderMinimap({ messages, listState });
+      await flushMinimapFrames(3);
+
+      const secondStrip = document.querySelector(
+        '[data-chat-turn-minimap-strip][data-message-id="message-2"]',
+      );
+      expect(secondStrip?.getAttribute("data-in-view")).toBe("true");
+
+      listState.scrollLength = 200;
+      act(() => resizeObserver.trigger());
+
+      expect(secondStrip?.getAttribute("data-in-view")).toBe("false");
+    } finally {
+      resizeObserver.restore();
+    }
   });
 });
 
