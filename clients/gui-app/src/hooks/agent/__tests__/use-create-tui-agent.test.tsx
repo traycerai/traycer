@@ -572,6 +572,7 @@ describe("useCreateTuiAgent", () => {
       readonly title: string;
       readonly harnessSessionId: string | null;
       readonly terminalAgentArgs: string | null;
+      readonly forkSourceHarnessSessionId: string | null;
     };
     expect(preparePayload.forkSourceHarnessSessionId).toBe(
       "source-harness-session",
@@ -582,6 +583,13 @@ describe("useCreateTuiAgent", () => {
     expect(persistPayload.title).toBe("Fork - Source terminal");
     expect(persistPayload.harnessSessionId).toBe("harness-session-1");
     expect(persistPayload.terminalAgentArgs).toBe("--allowedTools Edit");
+    // Renderer must thread the source into BOTH prepare and create - the
+    // host persists this create-side field as durable retry provenance
+    // (pendingForkSourceHarnessSessionId); if only prepare carried it, the
+    // direct-GUI fork would silently lose retry provenance again.
+    expect(persistPayload.forkSourceHarnessSessionId).toBe(
+      "source-harness-session",
+    );
     if (persistPayload.tuiAgentId === null) {
       throw new Error("fork create did not pass a client-minted tuiAgentId");
     }
