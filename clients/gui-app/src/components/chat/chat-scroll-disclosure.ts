@@ -24,13 +24,30 @@ import type { LegendListRef } from "@legendapp/list/react";
  * measurement would misfire in that second case, reporting the anchor's own
  * growth as a scroll-worthy shift when nothing above the viewport actually
  * moved.
+ *
+ * Review round (tickets 10/11/12, M2): `correctionOwnedByMvcp` - while
+ * `sizePreservationEnabled`/`maintainVisibleContentPosition.size` is `true`
+ * (free-scrolling), LegendList's OWN `ScrollAdjustHandler` ALSO reacts to
+ * this disclosure's row-size change and applies its own compensating
+ * `scrollTop` adjustment - proven additive (not self-cancelling) with this
+ * helper's manual delta, an over-correction. Ownership is exclusive per
+ * mode: `true` skips the manual correction below (the mutation still
+ * applies via `flushSync` - only the scroll write is skipped, MVCP owns the
+ * geometry); `false` (following-end / anchoring-new-turn, where
+ * `sizePreservationEnabled` is `false` and MVCP never fires) corrects
+ * exactly as before.
  */
 export function preserveChatScrollAcrossDisclosureChange(input: {
   readonly list: Pick<LegendListRef, "getState" | "scrollToOffset"> | null;
   readonly anchorElement: HTMLElement | null;
   readonly mutate: () => void;
+  readonly correctionOwnedByMvcp: boolean;
 }): void {
-  const { list, anchorElement, mutate } = input;
+  const { list, anchorElement, mutate, correctionOwnedByMvcp } = input;
+  if (correctionOwnedByMvcp) {
+    flushSync(mutate);
+    return;
+  }
   const anchorTopBefore = anchorElement?.getBoundingClientRect().top ?? null;
 
   flushSync(mutate);

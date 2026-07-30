@@ -421,7 +421,12 @@ function scheduleChatTimelineDoubleRaf(callback: () => void): () => void {
  * operation; it must stop correcting a position nobody wants anymore, same
  * as the anchor engine's own `positionedTimelineAnchorRef`/generation guards.
  * `onSettledInvalid` runs once if every retry is exhausted and the landing
- * is still off (never called if `isAborted` fires first).
+ * is still off (never called if `isAborted` fires first). `onFirstSettle`
+ * (H1 fix) runs exactly once, the moment the FIRST `awaitScrollSettle`
+ * resolves (scrollend or the fallback timeout) - regardless of `isAborted`/
+ * `validate` outcome - so a caller can release "an animated scroll is in
+ * flight" bookkeeping the instant the native animation genuinely stops,
+ * independent of whether settle/re-issue continues correcting the landing.
  */
 function settleChatTimelineNavigation(input: {
   readonly scrollNode: HTMLElement;
@@ -430,11 +435,17 @@ function settleChatTimelineNavigation(input: {
   readonly reissue: () => void;
   readonly onSettledInvalid: () => void;
   readonly maxRetries: number;
+  readonly onFirstSettle?: () => void;
 }): void {
+  let firstSettleFired = false;
   const attempt = (retriesLeft: number): void => {
     awaitScrollSettle(
       input.scrollNode,
       () => {
+        if (!firstSettleFired) {
+          firstSettleFired = true;
+          input.onFirstSettle?.();
+        }
         if (input.isAborted()) return;
         if (input.validate()) return;
         if (retriesLeft <= 0) {
@@ -627,6 +638,20 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // first real gesture cancel or an explicit go-live, same as any other
   // suppression.
   const suppressFollowRestoreRef = useRef(initialScrollIndexAnchor !== null);
+  // Review round (tickets 10/11/12, H1): whether an ANIMATED imperative
+  // scroll (pill-click `scrollToEnd`, minimap/find navigation) is currently
+  // in flight, tracked INDEPENDENTLY of `suppressFollowRestoreRef` - the
+  // freeze below was gated solely on suppression, but `scrollToEnd`'s
+  // pill-click path is an explicit user action that legitimately clears
+  // suppression (`setTimelineMode("following-end")`) BEFORE its own animated
+  // scroll settles. A bare pointerdown mid-animation then found nothing to
+  // freeze: the native smooth-scroll kept running, and its terminal
+  // near-end report re-enabled following against the cancellation. Set on
+  // every ANIMATED scrollToEnd/scrollToIndex issue, cleared once that
+  // operation's own settle fires (via `settleChatTimelineNavigation`'s
+  // `onFirstSettle`) or the operation aborts (the cancel path below always
+  // clears it, mirroring `suppressFollowRestoreRef`).
+  const hasActiveAnimatedImperativeScrollRef = useRef(false);
   // A real cancel while suppressed freezes the in-flight scroll (see
   // cancelTimelineLiveFollowForUserNavigation below) rather than just
   // clearing suppression: an ANIMATED scrollToIndex is the browser's native
@@ -816,7 +841,16 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       // never see the report it exists to absorb (see the ref's own comment
       // above) and must not leak into THIS cancel's own gesture.
       justFrozeProgrammaticScrollRef.current = false;
-      if (freezeInFlightScroll && suppressFollowRestoreRef.current) {
+      // H1 fix: freeze on suppression OR an in-flight animated imperative
+      // scroll - `scrollToEnd`'s pill-click path legitimately clears
+      // suppression before its own animation settles (see
+      // `hasActiveAnimatedImperativeScrollRef`'s own doc comment), so
+      // suppression alone under-covers exactly the case this ref exists for.
+      if (
+        freezeInFlightScroll &&
+        (suppressFollowRestoreRef.current ||
+          hasActiveAnimatedImperativeScrollRef.current)
+      ) {
         const list = chatTimelineRef.current;
         const currentScroll = list?.getState().scroll;
         if (list && typeof currentScroll === "number") {
@@ -825,6 +859,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         }
       }
       suppressFollowRestoreRef.current = false;
+      hasActiveAnimatedImperativeScrollRef.current = false;
       if (anchorScrollRestoreFrameRef.current !== null) {
         cancelAnimationFrame(anchorScrollRestoreFrameRef.current);
         anchorScrollRestoreFrameRef.current = null;
@@ -895,6 +930,13 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       activeTimelineAnchorIndexRef.current = null;
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
+      // H1 fix: an animated pill click legitimately clears
+      // `suppressFollowRestoreRef` (explicit go-live), so it's the freeze
+      // condition's OTHER input that must cover a bare pointerdown arriving
+      // mid-animation - see the ref's own doc comment.
+      if (animated) {
+        hasActiveAnimatedImperativeScrollRef.current = true;
+      }
       void list?.scrollToEnd({ animated });
       if (!list) return;
       const scrollNode = list.getScrollableNode();
@@ -916,6 +958,9 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           setTimelineMode("free-scrolling");
           cancelPillShow();
           setShowScrollToBottom(true);
+        },
+        onFirstSettle: () => {
+          hasActiveAnimatedImperativeScrollRef.current = false;
         },
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
@@ -1681,8 +1726,14 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     useCallback(
       (atBottom: boolean): void => {
         if (atBottom) {
+          // P4: same zero-human-row fallback as `viewportActiveUserMessageId`
+          // (see its own doc comment) - an A2A-only transcript has no
+          // candidate for the human-only gate, so at the tail the natural
+          // role-agnostic anchor is simply the last row, any role.
           setScrolledActiveUserMessageIdIfChanged(
-            selectActiveUserMessageId(messages, null, true),
+            selectActiveUserMessageId(messages, null, true) ??
+              messages.at(-1)?.id ??
+              null,
           );
           return;
         }
@@ -1758,6 +1809,12 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     (location: ChatTimelineNavigationLocation): void => {
       suppressFollowRestoreRef.current = true;
       const generationAtIssue = anchorUserScrollGenerationRef.current;
+      // H1 fix: already covered by suppression's own freeze condition, but
+      // set uniformly for every animated imperative scroll (same pattern as
+      // `scrollToEnd`) - see `hasActiveAnimatedImperativeScrollRef`'s doc.
+      if (location.animated) {
+        hasActiveAnimatedImperativeScrollRef.current = true;
+      }
       scrollToTimelineLocation(location);
       const list = chatTimelineRef.current;
       if (!list) return;
@@ -1791,6 +1848,9 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           // the bounded retries landed; nothing claims to be "at this exact
           // spot" the way following-end does, so there is no mode to
           // reconcile.
+        },
+        onFirstSettle: () => {
+          hasActiveAnimatedImperativeScrollRef.current = false;
         },
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
@@ -1842,6 +1902,13 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         list: chatTimelineRef.current,
         anchorElement,
         mutate,
+        // M2: MVCP owns the correction only in free-scrolling - the one mode
+        // `sizePreservationEnabled` turns `size:true` (see its own doc
+        // comment) - read from the ref (not a render-time boolean) since
+        // this callback fires imperatively from disclosure-toggle handlers,
+        // not during render.
+        correctionOwnedByMvcp:
+          timelineScrollModeRef.current === "free-scrolling",
       });
     },
     [],

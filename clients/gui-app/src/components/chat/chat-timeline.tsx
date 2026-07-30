@@ -265,6 +265,9 @@ export const ChatTimeline = memo(function ChatTimeline({
     return <ChatEmptyState />;
   }
 
+  const resolvedSizePreservationEnabled =
+    resolveChatTimelineSizePreservationEnabled(sizePreservationEnabled);
+
   return (
     <ChatTimelineRowCtx value={sharedState}>
       <LegendList<ChatMessageModel>
@@ -298,9 +301,7 @@ export const ChatTimeline = memo(function ChatTimeline({
         }
         maintainVisibleContentPosition={{
           data: true,
-          size: resolveChatTimelineSizePreservationEnabled(
-            sizePreservationEnabled,
-          ),
+          size: resolvedSizePreservationEnabled,
         }}
         onScroll={handleScroll}
         {...(onListMetricsChange !== undefined
@@ -317,6 +318,12 @@ export const ChatTimeline = memo(function ChatTimeline({
             : CHAT_TIMELINE_LIST_HEADER
         }
         ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
+        // Review round (L3), test-observability only: echoes the RESOLVED
+        // `sizePreservationEnabled` value verbatim (not a value recomputed
+        // from a different source at the call site) - same "not read by any
+        // production code" contract as `data-scroll-mode`. Placed before
+        // `{...rest}` is spread so a caller can never accidentally shadow it.
+        data-size-preservation-enabled={String(resolvedSizePreservationEnabled)}
         {...rest}
       />
     </ChatTimelineRowCtx>

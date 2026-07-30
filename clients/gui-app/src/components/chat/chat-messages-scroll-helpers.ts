@@ -208,6 +208,19 @@ export function chatViewportAnchorRowIndex(
  * the transcript row nearest the reading line from list state, then maps it
  * to the owning rail entry. `null` when the list state cannot be measured
  * (concealed surface, no rows yet).
+ *
+ * Sole caller is the ticket-5 free-scroll save path (`scheduleActiveViewportUpdate`
+ * in chat-messages.tsx) - NOT the minimap, which derives its own active-dot
+ * highlighting independently. That single-purpose scope is what makes the P4
+ * fallback below safe here: an A2A-only transcript (zero human user rows)
+ * has no candidate for `selectActiveUserMessageId`'s human-only gate (it
+ * returns `null` in that case ONLY - any human row anywhere in `messages`
+ * always resolves a candidate), which previously meant the ticket-5 anchor
+ * never tracked a reading position at all for that transcript shape -
+ * `viewportRowMessageId` (already resolved, any role) is the natural
+ * role-agnostic fallback. `selectActiveUserMessageId` itself is untouched,
+ * so the minimap rail and find-controller's own call to it stay strictly
+ * human-only as before.
  */
 export function viewportActiveUserMessageId(
   state: ChatViewportAnchorListState,
@@ -221,7 +234,10 @@ export function viewportActiveUserMessageId(
   const viewportRowMessageId =
     rowIndex === null ? null : (messages[rowIndex]?.id ?? null);
   if (viewportRowMessageId === null) return null;
-  return selectActiveUserMessageId(messages, viewportRowMessageId, false);
+  return (
+    selectActiveUserMessageId(messages, viewportRowMessageId, false) ??
+    viewportRowMessageId
+  );
 }
 
 // --- Edge-mutation classification -------------------------------------------

@@ -43,6 +43,7 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
       list: null,
       anchorElement: null,
       mutate,
+      correctionOwnedByMvcp: false,
     });
     expect(mutate).toHaveBeenCalledOnce();
   });
@@ -58,6 +59,7 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
       list,
       anchorElement: anchor,
       mutate: () => undefined,
+      correctionOwnedByMvcp: false,
     });
 
     expect(scrollToOffset).not.toHaveBeenCalled();
@@ -76,6 +78,7 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
       list,
       anchorElement: anchor,
       mutate,
+      correctionOwnedByMvcp: false,
     });
 
     expect(mutate).toHaveBeenCalledOnce();
@@ -96,6 +99,7 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
       list,
       anchorElement: anchor,
       mutate: () => undefined,
+      correctionOwnedByMvcp: false,
     });
 
     expect(scrollToOffset).toHaveBeenCalledWith({
@@ -115,6 +119,7 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
         list: null,
         anchorElement: anchor,
         mutate: () => undefined,
+        correctionOwnedByMvcp: false,
       }),
     ).not.toThrow();
   });
@@ -126,6 +131,7 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
       list,
       anchorElement: null,
       mutate,
+      correctionOwnedByMvcp: false,
     });
     expect(mutate).toHaveBeenCalledOnce();
     expect(scrollToOffset).not.toHaveBeenCalled();
@@ -147,8 +153,36 @@ describe("preserveChatScrollAcrossDisclosureChange", () => {
       list,
       anchorElement: anchor,
       mutate: () => undefined,
+      correctionOwnedByMvcp: false,
     });
 
+    expect(scrollToOffset).not.toHaveBeenCalled();
+  });
+
+  // Review round (M2): while `sizePreservationEnabled` is active (free-
+  // scrolling), LegendList's own MVCP size-correction ALSO reacts to this
+  // disclosure's row-size change - proven additive with this helper's own
+  // manual delta, not self-cancelling. Ownership is exclusive per mode:
+  // `correctionOwnedByMvcp: true` must skip the manual scroll write
+  // entirely (MVCP owns the geometry) while the mutate still runs.
+  it("skips the manual scroll correction when correctionOwnedByMvcp is true (MVCP owns it) - mutate still runs", () => {
+    const { list, scrollToOffset } = fakeList(200);
+    const anchor = document.createElement("div");
+    const rect = vi.spyOn(anchor, "getBoundingClientRect");
+    rect.mockReturnValueOnce(mockRect(400));
+    // Same 80px growth as the "corrects scroll by the anchor-bottom delta"
+    // case above - only the ownership flag differs.
+    rect.mockReturnValueOnce(mockRect(480));
+
+    const mutate = vi.fn();
+    preserveChatScrollAcrossDisclosureChange({
+      list,
+      anchorElement: anchor,
+      mutate,
+      correctionOwnedByMvcp: true,
+    });
+
+    expect(mutate).toHaveBeenCalledOnce();
     expect(scrollToOffset).not.toHaveBeenCalled();
   });
 });

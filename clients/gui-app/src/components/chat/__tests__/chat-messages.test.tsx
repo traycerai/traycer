@@ -174,6 +174,32 @@ function makeCompletedTranscript(count: number): ChatMessageModel[] {
   });
 }
 
+/** P4: a pure agent-to-agent child chat - every `role: "user"` row carries
+ *  `agentSenderInfo`, so ZERO rows pass `isHumanUserMessage`. Models the
+ *  transcript shape `selectActiveUserMessageId`'s human-only gate
+ *  previously starved of any candidate. */
+function makeA2AOnlyCompletedTranscript(count: number): ChatMessageModel[] {
+  return Array.from({ length: count }, (_unused, index) => {
+    const role: ChatMessageModel["role"] =
+      index % 2 === 0 ? "user" : "assistant";
+    const base = {
+      ...makeMessage(index, role),
+      completedAt: role === "assistant" ? 1_000 + index : null,
+      runState: null,
+    };
+    if (role !== "user") return base;
+    return {
+      ...base,
+      agentSenderInfo: {
+        agentId: `agent-peer-${index}`,
+        senderTitle: "Peer",
+        expectReply: false,
+        responseId: null,
+      },
+    };
+  });
+}
+
 /** Composer-send optimistic echo: persistentMessageId stays null (decision #8/#25). */
 function appendOptimisticUserSend(
   messages: ReadonlyArray<ChatMessageModel>,
@@ -1342,6 +1368,52 @@ describe("ChatMessages scroll policy", () => {
       await waitFor(() => {
         expect(isJumpPillVisible()).toBe(false);
       });
+    });
+
+    it("H1 review fix: a bare pointerdown mid-animation during a PILL-CLICK scrollToEnd still freezes (suppression alone under-covers this path)", async () => {
+      // Root cause: scrollToEnd's pill-click path clears
+      // suppressFollowRestoreRef unconditionally (setTimelineMode
+      // ("following-end") - an explicit go-live) BEFORE its own ANIMATED
+      // scroll settles. The freeze in cancelTimelineLiveFollowForUserNavigation
+      // was gated solely on suppression, so a bare pointerdown mid-animation
+      // found nothing to freeze - the native smooth-scroll kept running and
+      // its terminal near-end report re-enabled following against the
+      // cancellation. hasActiveAnimatedImperativeScrollRef closes that gap
+      // independently of suppression.
+      const messages = makeTranscript(24);
+      renderChatMessages({
+        messages,
+        scrollStateKey: "h1-pill-click-freeze",
+      });
+      await settleLegendList();
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+
+      const scrollNode = getScrollNode();
+
+      // A bare pointerdown - NO accompanying scroll - mid-animation (no
+      // scrollend/750ms fallback has fired yet). Decision #6: cancels follow
+      // AND must freeze the still-in-flight scrollToEnd animation.
+      act(() => {
+        fireEvent.pointerDown(scrollNode);
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      // Deliver what would be the animation's own terminal near-end report,
+      // as if it kept running unfrozen (the actual bug) or a stale frame
+      // still fired despite the freeze. Must NOT reverse the cancellation.
+      act(() => {
+        fireScrollToEnd();
+      });
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
     });
   });
 
@@ -2933,6 +3005,69 @@ describe("ChatMessages scroll policy", () => {
       },
     );
 
+    it(
+      "P4 review fix: an A2A-only transcript (zero human user rows) still " +
+        "persists and restores an exact free-scroll anchor",
+      async () => {
+        // Root cause: selectActiveUserMessageId/viewportActiveUserMessageId
+        // are human-only gated (isHumanUserMessage) - correct for the
+        // minimap rail, but the ticket-5 save path shares the same gate, so
+        // a transcript with ZERO human user rows (pure agent-to-agent child
+        // chat) never had a candidate to track, freezing the saved anchor at
+        // whatever it was on mount instead of the reader's actual position.
+        const messages = makeA2AOnlyCompletedTranscript(20);
+        expect(
+          messages.some(
+            (message) =>
+              message.role === "user" && message.agentSenderInfo === null,
+          ),
+        ).toBe(false);
+        const scrollStateKey = `t5-p4-a2a-only-${Math.random().toString(36).slice(2)}`;
+        const instanceId = `t5-p4-a2a-instance-${Math.random().toString(36).slice(2)}`;
+
+        tileLiveness.live = true;
+        const first = renderChatMessages({
+          messages,
+          scrollStateKey,
+          instanceId,
+        });
+        await settleLegendList();
+
+        act(() => {
+          enterFreeScrollingAwayFromEnd();
+        });
+        await fireScrollTopAndFlush(360);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+        const originalScrollTop = getScrollNode().scrollTop;
+        expect(originalScrollTop).toBe(360);
+
+        first.unmount();
+
+        // Red-on-baseline: before the fix, `anchorMessageId` is `null` here
+        // (the human-only gate never resolved a candidate for this
+        // transcript shape) and the position is lost.
+        const saved = restoreChatTabState(scrollStateKey, messages);
+        expect(saved.mode).toBe("free-scrolling");
+        expect(saved.anchorMessageId).not.toBeNull();
+        expect(typeof saved.offset).toBe("number");
+        expect(saved.offset).not.toBe(0);
+
+        const second = renderChatMessages({
+          messages,
+          scrollStateKey,
+          instanceId,
+        });
+        await settleLegendList();
+        await settleLegendList();
+
+        expect(getScrollNode().scrollTop).toBe(originalScrollTop);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+        second.unmount();
+      },
+    );
+
     it("F1: a restored free-scrolling position landing near the tail does not flip to following-end", async () => {
       const messages = makeCompletedTranscript(20);
       const anchorId = messages[4]?.id;
@@ -3952,6 +4087,44 @@ describe("ChatMessages scroll policy", () => {
     // rect height alone is insufficient without driving LegendList's internal
     // size-at-index cache. Declared honestly rather than faked.
 
+    it("L3 review fix: sizePreservationEnabled is wired true ONLY in free-scrolling, false in following-end AND anchoring-new-turn", async () => {
+      // `maintainVisibleContentPosition.size` has no DOM signature to read
+      // back directly - `data-size-preservation-enabled` (review-round
+      // test-observability, mirrors `data-scroll-mode`'s own "not read by
+      // any production code" contract) is the prop-level pin: the five
+      // interaction-audit tests below only re-confirm EXISTING contracts
+      // hold under the new wiring - none of them fail if the wiring itself
+      // silently regresses to always-false (a mutation flip confirmed this:
+      // all five stayed green).
+      const sendId = "t12-l3-send";
+      const messages = makeCompletedTranscript(10);
+      const { rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: "t12-l3-wiring",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(getScrollNode().dataset.sizePreservationEnabled).toBe("false");
+
+      act(() => {
+        enterFreeScrollingAwayFromEnd();
+      });
+      await waitForPillVisible();
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      expect(getScrollNode().dataset.sizePreservationEnabled).toBe("true");
+
+      const afterSend = appendOptimisticUserSend(messages, sendId, 500_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+      expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      expect(getScrollNode().dataset.sizePreservationEnabled).toBe("false");
+    });
+
     it("(1) anchoring drift re-assert still holds with sizePreservationEnabled=false during anchoring-new-turn", async () => {
       // Re-runs the existing Ticket 4 above-anchor growth pin under the
       // Ticket 12 wiring: anchoring-new-turn never enables size:true, so the
@@ -4046,14 +4219,20 @@ describe("ChatMessages scroll policy", () => {
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
     });
 
-    it("(3) disclosure helper applies a single geometric delta under free-scrolling (MVCP size double-correction is jsdom-blind)", async () => {
-      // ChatMessage is mocked in this suite, so a real activity-group expand
-      // cannot drive LegendList row remeasure. Pin the disclosure helper's
-      // own single-delta contract while free-scrolling (sizePreservation
-      // enabled in production wiring) - if MVCP size:true also corrected
-      // inside the same flushSync window we would need a size event, which
-      // the fixed-height shim cannot produce. See describe-level jsdom-blind
-      // note above for the double-correction gap.
+    it("(3) disclosure helper skips its OWN manual correction under free-scrolling - MVCP is the sole owner there (M2 fix)", async () => {
+      // Review round M2: static analysis proved the manual correction below
+      // and LegendList's own MVCP size-correction are ADDITIVE (not self-
+      // cancelling) when both fire for the same disclosure - an
+      // over-correction. Ownership is now exclusive per mode:
+      // `correctionOwnedByMvcp: true` (free-scrolling, sizePreservationEnabled)
+      // must skip the manual scrollToOffset write entirely (mutate still
+      // runs). ChatMessage is mocked in this suite, so a real activity-group
+      // expand cannot drive LegendList's own row remeasure to independently
+      // prove MVCP's side of the fix - the unit-level pins in
+      // chat-scroll-disclosure.test.ts cover both ownership branches
+      // directly; this test proves the free-scrolling INTEGRATION context
+      // (a real ChatMessages render) still reaches the "owned by MVCP,
+      // skip" branch, not just the pure-function contract in isolation.
       const messages = makeCompletedTranscript(16);
       renderChatMessages({
         messages,
@@ -4106,15 +4285,20 @@ describe("ChatMessages scroll policy", () => {
         toJSON: () => ({}),
       });
 
+      const mutate = vi.fn();
       preserveChatScrollAcrossDisclosureChange({
         list: listHandle as never,
         anchorElement: anchor,
-        mutate: () => undefined,
+        mutate,
+        // Mirrors `requestMeasuredItemChange`'s own
+        // `timelineScrollModeRef.current === "free-scrolling"` computation -
+        // true here since the mode was driven to free-scrolling above.
+        correctionOwnedByMvcp: true,
       });
 
-      // Single clean delta: exactly one scrollToOffset by +80, not twice.
-      expect(scrollToOffsetCalls).toEqual([{ offset: before + 80 }]);
-      expect(scrollNode.scrollTop).toBe(before + 80);
+      expect(mutate).toHaveBeenCalledOnce();
+      expect(scrollToOffsetCalls).toEqual([]);
+      expect(scrollNode.scrollTop).toBe(before);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       rect.mockRestore();
     });
