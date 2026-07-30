@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
 import {
   type NotificationEntry,
   NOTIFICATION_EVENT_TYPES,
@@ -8,6 +11,7 @@ import {
   appLocalFeedId,
   mergedUnreadCount,
   rowFromAppLocalEntry,
+  rowFromCloudFeedRow,
   rowFromGlobalEntry,
   rowFromHostEntry,
 } from "@/stores/notifications/merged-notifications";
@@ -94,6 +98,60 @@ describe("merged notifications feed", () => {
       approvalId: "approval-1",
       sessionId: undefined,
       artifactId: undefined,
+    });
+  });
+
+  it("uses embedded cloud payload titles when the presentation snapshot is absent", () => {
+    const embedded: HostNotificationsCloudFeedRow = {
+      entryId: "entry-legacy",
+      originHostId: "host-a",
+      coalesceKey: "agent.stopped:legacy",
+      entry: {
+        id: "agent.stopped:legacy",
+        updatedAt: 10,
+        readAt: null,
+        kind: "agent.stopped",
+        sourceRef: "legacy",
+        severity: "done",
+        outcome: "completed",
+        epicId: "epic-legacy",
+        chatId: "chat-legacy",
+        payload: {
+          kind: "chat",
+          epicId: "epic-legacy",
+          chatId: "chat-legacy",
+          agentName: "Legacy agent",
+          taskTitle: "Legacy task",
+          outcome: "completed",
+        },
+      },
+      presentation: { epicTitle: null, chatTitle: null },
+    };
+
+    expect(rowFromCloudFeedRow(embedded)).toMatchObject({
+      title: "Legacy task",
+      body: "Legacy agent • Done",
+    });
+    expect(
+      rowFromCloudFeedRow({
+        ...embedded,
+        entryId: "entry-untitled",
+        coalesceKey: "agent.stopped:untitled",
+        entry: {
+          ...embedded.entry,
+          id: "agent.stopped:untitled",
+          sourceRef: "untitled",
+          payload: {
+            kind: "chat",
+            epicId: "epic-legacy",
+            chatId: "chat-legacy",
+            outcome: "completed",
+          },
+        },
+      }),
+    ).toMatchObject({
+      title: "Task",
+      body: "Agent • Done",
     });
   });
 
