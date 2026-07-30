@@ -326,6 +326,28 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // Cloud-feed dispositions persist in the replicated feed and must retain
+  // their invocation order at the host boundary.
+  "host.notifications.cloudFeed.markRead": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.resolve": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.clear": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.clearAll": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "host.notifications.indicatorState": {
     ...LATEST_SCHEDULING,
     poll: defineConditionPolicy("host.notifications.indicatorState", {

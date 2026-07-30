@@ -193,7 +193,7 @@ describe("openNotificationsStream terminal-close reopen", () => {
     close();
   });
 
-  it("never reopens after the free-tier terminal refusal", () => {
+  it("never reopens after the dormant entitlement terminal refusal", () => {
     const close = openNotificationsStream(factory, null);
 
     clients[0].callbacks.onConnectionStatus(

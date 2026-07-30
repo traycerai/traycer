@@ -13,6 +13,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
+import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
 import { useRelativeTimestamp } from "@/lib/relative-time";
@@ -40,6 +42,24 @@ interface NotificationRowProps {
    * Only reached for blocking-tier Attention rows; every other row uses
    * `onAcknowledge`. */
   readonly onResolve: (row: MergedNotificationRow) => void;
+  readonly onClear: (row: MergedNotificationRow) => void;
+}
+
+function isOriginUnavailable(input: {
+  readonly row: MergedNotificationRow;
+  readonly originStatus: "available" | "unavailable" | undefined;
+}): boolean {
+  const requiresOriginHost =
+    input.row.payload !== null &&
+    notificationPayloadRequiresOriginHost(input.row.payload);
+  if (!requiresOriginHost) return false;
+  if (input.row.originHostId === null) return true;
+  return input.originStatus !== "available";
+}
+
+function isBlockingAttentionRow(row: MergedNotificationRow): boolean {
+  const lifecycle = classifyNotificationLifecycle(row);
+  return lifecycle.section === "attention" && lifecycle.tier === "blocking";
 }
 
 /**
@@ -61,16 +81,21 @@ interface NotificationRowProps {
  */
 export function NotificationRow(props: NotificationRowProps): ReactNode {
   const row = useMergedNotificationRow(props.feedId);
+  // Hooks must remain unconditional while an exact-removal frame makes this
+  // row disappear between renders.
+  const originHost = useHostDirectoryEntry(row?.originHostId ?? "");
   if (row === null) return null;
   const isRead = row.readAt !== null;
   const isNavigable = row.payload !== null;
+  const originUnavailable = isOriginUnavailable({
+    row,
+    originStatus: originHost?.status,
+  });
   const showRail = props.alwaysShowRail || !isRead;
   // A blocking-tier Attention row (unresolved `needs_action`) keeps its
   // trailing control even once navigation marked it read - its only exit from
   // Attention is `resolvedAt`, which `onAcknowledge` (readAt-only) can't set.
-  const lifecycle = classifyNotificationLifecycle(row);
-  const isBlockingAttention =
-    lifecycle.section === "attention" && lifecycle.tier === "blocking";
+  const isBlockingAttention = isBlockingAttentionRow(row);
   const glyph = notificationRowGlyph(row);
   const Icon = glyph.icon;
 
@@ -86,6 +111,9 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       data-notification-id={row.feedId}
       data-notification-read={isRead ? "true" : "false"}
       data-notification-severity={row.severity}
+      data-notification-origin-state={
+        originUnavailable ? "unavailable" : "available"
+      }
     >
       {showRail ? (
         <span
@@ -100,7 +128,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       >
         <Icon className={cn("size-4", glyph.colorClassName)} />
       </span>
-      {isNavigable ? (
+      {isNavigable && !originUnavailable ? (
         <button
           type="button"
           onClick={() => props.onActivate(row)}
@@ -111,6 +139,14 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       ) : (
         <div className="min-w-0 flex-1">
           <NotificationRowBody row={row} isRead={isRead} />
+          {originUnavailable ? (
+            <span
+              data-testid="notification-origin-unavailable"
+              className="block text-ui-xs text-muted-foreground"
+            >
+              The originating host is unavailable.
+            </span>
+          ) : null}
         </div>
       )}
       <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
@@ -122,6 +158,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
           isBlockingAttention={isBlockingAttention}
           onAcknowledge={props.onAcknowledge}
           onResolve={props.onResolve}
+          onClear={props.onClear}
         />
       </div>
     </li>
@@ -135,6 +172,7 @@ interface NotificationRowTrailingControlProps {
   readonly isBlockingAttention: boolean;
   readonly onAcknowledge: (row: MergedNotificationRow) => void;
   readonly onResolve: (row: MergedNotificationRow) => void;
+  readonly onClear: (row: MergedNotificationRow) => void;
 }
 
 /** The sibling trailing control. On an unresolved `needs_action` Attention row
@@ -159,18 +197,32 @@ function NotificationRowTrailingControl(
       />
     );
   }
-  if (props.isRead) return null;
-  return (
-    <NotificationRowControlButton
-      label={props.isNavigable ? "Mark as read" : "Acknowledge"}
-      testId={
-        props.isNavigable
-          ? "notification-mark-read"
-          : "notification-acknowledge"
-      }
-      onClick={() => props.onAcknowledge(props.row)}
-    />
-  );
+  // A cloud row which cannot route (for example an informational row) still
+  // needs its per-occurrence read action. Once read, Clear is the remaining
+  // cloud-specific disposition.
+  if (!props.isRead) {
+    return (
+      <NotificationRowControlButton
+        label={props.isNavigable ? "Mark as read" : "Acknowledge"}
+        testId={
+          props.isNavigable
+            ? "notification-mark-read"
+            : "notification-acknowledge"
+        }
+        onClick={() => props.onAcknowledge(props.row)}
+      />
+    );
+  }
+  if (props.row.source === "cloud") {
+    return (
+      <NotificationRowControlButton
+        label="Clear"
+        testId="notification-clear"
+        onClick={() => props.onClear(props.row)}
+      />
+    );
+  }
+  return null;
 }
 
 interface NotificationRowControlButtonProps {

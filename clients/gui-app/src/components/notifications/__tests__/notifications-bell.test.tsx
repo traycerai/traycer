@@ -480,6 +480,20 @@ describe("NotificationsBell", () => {
     ).toBe(`Task activity from ${mockLocalHostEntry.label}`);
   });
 
+  it("omits the subtitle row in cloud mode", async () => {
+    const streamClient = new MockWsStreamClient();
+    streamClient.methodSupportByName.set(
+      "host.notifications.cloudFeed.subscribe",
+      "supported",
+    );
+    const runnerHost = createRunnerHost();
+    mountBell(runnerHost, { wsStreamClient: streamClient });
+
+    fireEvent.click(screen.getByRole("button", { name: "Notifications" }));
+    expect(await screen.findByTestId("notifications-popover")).not.toBeNull();
+    expect(screen.queryByTestId("notifications-subtitle")).toBeNull();
+  });
+
   describe("notification center opened analytics", () => {
     it("fires once per open cycle with direct_ui entry and exact host buckets", async () => {
       const trackSpy = vi.spyOn(Analytics.getInstance(), "track");

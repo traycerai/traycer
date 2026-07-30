@@ -749,8 +749,14 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.validateAuthTokenIdentity(token);
   }
 
-  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult> {
-    return this.bridge.listUserSessions(bearerToken);
+  listUserSessions(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsFetchResult> {
+    return settleOnAbort(
+      () => this.bridge.listUserSessions(bearerToken),
+      signal,
+    );
   }
 
   revokeUserSession(
@@ -862,6 +868,39 @@ export class DesktopRunnerHost implements IRunnerHost {
       },
     };
   }
+}
+
+/**
+ * Runs `start()` and settles as soon as `signal` aborts, without waiting for
+ * the request it began.
+ *
+ * An `AbortSignal` is not cloneable across the context bridge, so the request
+ * itself lives in Electron main and cannot be cancelled from the renderer; it
+ * stays bounded by the fetcher's own 10s timeout and its reply is dropped. That
+ * is an acceptable amount of waste for an idempotent GET - what is NOT
+ * acceptable is the caller continuing. `AuthService.fetchUserSessions()` can
+ * follow a list with a repair that spends a single-use refresh rotation, so
+ * cancellation has to reach it promptly rather than 10s later.
+ */
+function settleOnAbort<T>(
+  start: () => Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  // A thunk, not a promise: an already-cancelled read should not put a request
+  // on the wire at all, and an argument would have been evaluated by now.
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  const pending = start();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
 }
 
 function toDisposable(subscription: { dispose: () => void }): Disposable {

@@ -209,10 +209,15 @@ export class MockRunnerHost implements IRunnerHost {
     return validateAuthTokenIdentityAccessOnly(this.authnBaseUrl, token);
   }
 
-  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult> {
+  listUserSessions(
+    bearerToken: string,
+    signal: AbortSignal,
+  ): Promise<ListUserSessionsFetchResult> {
     // The in-memory shell has no CORS boundary, so it calls the shared HTTP
     // helper directly (browser/dev parity with the auth validators above).
-    return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken);
+    // Owning the request in-process, it can hand the caller's signal straight
+    // to `fetch` and abort the real request.
+    return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken, signal);
   }
 
   async revokeUserSession(
@@ -378,6 +383,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: stored.token,
         refreshToken: stored.refreshToken,
+        clientKind: "desktop",
         signal: null,
       });
       if (refreshed.kind === "network-error") {
@@ -431,6 +437,7 @@ export class MockRunnerHost implements IRunnerHost {
         authnBaseUrl: this.authnBaseUrl,
         token: legacy.token,
         refreshToken: legacy.refreshToken,
+        clientKind: "desktop",
         signal: null,
       });
       if (refreshed.kind === "network-error") return "retryable";
