@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,7 @@ import {
   REPORT_LEDGER_MAX_FINGERPRINTS,
   REPORT_LEDGER_MAX_REPORTS,
   REPORT_LEDGER_TTL_MS,
+  __flushReportLedgerForTest,
   __resetReportLedgerForTest,
   getFingerprintOccurrence,
   parseReportLedgerState,
@@ -267,5 +268,76 @@ describe("recordFingerprintSighting / recordFiledReport persistence", () => {
     // No file written for pure no-ops that never mutates - or empty state.
     // Either way the occurrence must stay null.
     expect(await getFingerprintOccurrence("fp:v1:x")).toBeNull();
+  });
+
+  it("resets a TTL-expired fingerprint to count 1 instead of resurrecting the old count", async () => {
+    // Seed a row whose lastSeen is past the 180-day TTL. If the mutator ran
+    // before prune, it would increment count 42 → 43 and the post-mutator
+    // prune would keep it (lastSeen=now). Prune-before-mutate must treat
+    // this as a first sighting again.
+    const now = Date.now();
+    const stale = now - REPORT_LEDGER_TTL_MS - 1_000;
+    writeFileSync(
+      storeFile,
+      JSON.stringify({
+        version: 1,
+        fingerprints: {
+          "fp:v1:stale": {
+            firstSeen: stale - 10_000,
+            lastSeen: stale,
+            count: 42,
+          },
+        },
+        reports: [],
+      }),
+      "utf8",
+    );
+    // Drop the memoized handle so the next mutation reloads from disk.
+    __resetReportLedgerForTest({ storePath: storeFile });
+
+    await recordFingerprintSighting("fp:v1:stale");
+    const occurrence = await getFingerprintOccurrence("fp:v1:stale");
+    expect(occurrence).toMatchObject({ count: 1 });
+    // firstSeen must be the fresh sighting, not the pre-TTL value.
+    expect(occurrence?.firstSeen).toBeGreaterThan(stale);
+    expect(occurrence?.firstSeen).toBe(occurrence?.lastSeen);
+  });
+
+  it("getFingerprintOccurrence awaits in-flight mutations (read-after-write)", async () => {
+    // Mimic freeze's fire-and-forget: schedule a sighting without awaiting,
+    // then immediately read. The read must see count 1, not null/pre-write.
+    const write = recordFingerprintSighting("fp:v1:race");
+    const occurrence = await getFingerprintOccurrence("fp:v1:race");
+    expect(occurrence).toMatchObject({ count: 1 });
+    await write;
+  });
+
+  it("getFingerprintOccurrence persists TTL eviction so expired rows leave disk", async () => {
+    const now = Date.now();
+    const stale = now - REPORT_LEDGER_TTL_MS - 1_000;
+    writeFileSync(
+      storeFile,
+      JSON.stringify({
+        version: 1,
+        fingerprints: {
+          "fp:v1:gone": { firstSeen: stale, lastSeen: stale, count: 3 },
+          "fp:v1:live": { firstSeen: now - 100, lastSeen: now - 100, count: 1 },
+        },
+        reports: [],
+      }),
+      "utf8",
+    );
+    __resetReportLedgerForTest({ storePath: storeFile });
+
+    expect(await getFingerprintOccurrence("fp:v1:gone")).toBeNull();
+    expect(await getFingerprintOccurrence("fp:v1:live")).toMatchObject({
+      count: 1,
+    });
+    await __flushReportLedgerForTest();
+    const onDisk = JSON.parse(readFileSync(storeFile, "utf8")) as {
+      fingerprints: Record<string, unknown>;
+    };
+    expect(onDisk.fingerprints["fp:v1:gone"]).toBeUndefined();
+    expect(onDisk.fingerprints["fp:v1:live"]).toBeDefined();
   });
 });

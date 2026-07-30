@@ -232,8 +232,12 @@ function applyMutation(
   mutator: (state: ReportLedgerState, nowMs: number) => ReportLedgerState,
 ): Promise<void> {
   const run = mutationQueue.then(async () => {
-    const current = await getStore().load();
+    const loaded = await getStore().load();
     const nowMs = Date.now();
+    // Prune BEFORE the mutator so a >TTL-stale row cannot be resurrected
+    // with its pre-expiry count ("Nth time" for an expired defect). Cap
+    // prune also runs after so a mutator that inserts still respects bounds.
+    const current = pruneReportLedgerState(loaded, nowMs, defaultBounds());
     const next = pruneReportLedgerState(
       mutator(current, nowMs),
       nowMs,
@@ -255,6 +259,10 @@ function applyMutation(
  * for `fingerprint`. Bumps count and lastSeen; creates the row on first
  * sighting. Best-effort: a disk failure is logged and swallowed so a ledger
  * blip never blocks freeze / dialog open.
+ *
+ * Callers must treat an expired-and-gone row as a fresh first sighting
+ * (count 1) - `applyMutation` prunes before this mutator runs so a stale
+ * on-disk row cannot resurrect its old count.
  */
 export function recordFingerprintSighting(fingerprint: string): Promise<void> {
   if (fingerprint.length === 0) return Promise.resolve();
@@ -307,16 +315,30 @@ export function recordFiledReport(
 /**
  * Install-local occurrence info for the dialog's "Nth time on this install"
  * copy. Returns null when this fingerprint has never been sighted here.
+ *
+ * Awaits the mutation queue first so a fire-and-forget sighting scheduled by
+ * freezeEvidence is visible to a read that follows the freeze await (ticket
+ * 07's evidence strip). Without this, the strip can race and show the
+ * pre-sighting count on first open.
  */
 export async function getFingerprintOccurrence(
   fingerprint: string,
 ): Promise<FingerprintOccurrence | null> {
   if (fingerprint.length === 0) return null;
-  const state = pruneReportLedgerState(
-    await getStore().load(),
-    Date.now(),
-    defaultBounds(),
-  );
+  await mutationQueue;
+  const loaded = await getStore().load();
+  const nowMs = Date.now();
+  const state = pruneReportLedgerState(loaded, nowMs, defaultBounds());
+  // Opportunistic persist of TTL/LRU eviction so expired history does not sit
+  // on disk indefinitely. Cheap: only rewrite when prune actually dropped
+  // something. Fresh sightings already rewrite via applyMutation.
+  if (
+    Object.keys(state.fingerprints).length !==
+      Object.keys(loaded.fingerprints).length ||
+    state.reports.length !== loaded.reports.length
+  ) {
+    await getStore().save(state);
+  }
   const sighting = state.fingerprints[fingerprint];
   if (sighting === undefined) return null;
   return {
@@ -336,4 +358,12 @@ export function __resetReportLedgerForTest(options: {
   store = null;
   mutationQueue = Promise.resolve();
   storePathOverride = options.storePath;
+}
+
+/**
+ * Test-only: wait for every in-flight ledger mutation to settle. Production
+ * callers use `getFingerprintOccurrence`, which already awaits the queue.
+ */
+export function __flushReportLedgerForTest(): Promise<void> {
+  return mutationQueue;
 }

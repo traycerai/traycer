@@ -81,12 +81,24 @@ export interface SupportAuthSessionProvider {
   get(): DesktopAuthSessionSnapshot;
 }
 
+/**
+ * Survives `discardFrozenEvidence` so React StrictMode's
+ * setup → cleanup(discard) → setup sequence records ONE sighting, not two.
+ * Keyed by the frozen-evidence key (sender + draftId): a real second open
+ * mints a new draftId, so it still counts. Bounded + TTL so a long-lived
+ * process cannot grow the set forever.
+ */
+const SIGHTING_DEDUPE_TTL_MS = 10 * 60 * 1000;
+const SIGHTING_DEDUPE_MAX_ENTRIES = 200;
+
 export class DesktopSupportService {
   private readonly appName: string;
   private readonly host: SupportHostSnapshotProvider;
   private readonly authSession: SupportAuthSessionProvider;
   private readonly hostLayout: HostFsLayout;
   private readonly frozenEvidenceByKey = new Map<string, FrozenEvidenceEntry>();
+  // frozenEvidenceKey -> lastSightedAtMs. Intentionally NOT cleared on discard.
+  private readonly recentSightingKeys = new Map<string, number>();
 
   constructor(options: {
     readonly appName: string;
@@ -176,11 +188,20 @@ export class DesktopSupportService {
       return { reportId: evidence.reportId };
     }
     const reportId = generateReportId();
-    // Sighting is recorded only on first admission of this key, not on the
-    // StrictMode / duplicate-freeze idempotent path above - those must not
-    // inflate "Nth time on this install". Fire-and-forget: a ledger blip
-    // must never block freeze / dialog open.
-    if (fingerprint !== null && fingerprint.length > 0) {
+    // Sighting is recorded once per logical open of this frozen-evidence key,
+    // not per freeze-map admission. React StrictMode mounts under
+    // renderer-shell with setup → cleanup(discard) → setup, so the live-map
+    // check above alone is not enough - discard clears the key between the
+    // two setups and a second admission would inflate "Nth time on this
+    // install". The short-TTL recentSightingKeys set survives discard.
+    // Fire-and-forget onto the ledger mutation queue: a disk blip must never
+    // block freeze / dialog open. The queue is still scheduled synchronously
+    // so a later getFingerprintOccurrence (which awaits the queue) sees it.
+    if (
+      fingerprint !== null &&
+      fingerprint.length > 0 &&
+      this.claimSightingSlot(frozenEvidenceKey)
+    ) {
       void recordFingerprintSighting(fingerprint);
     }
     const promise = captureFrozenEvidence(
@@ -203,6 +224,32 @@ export class DesktopSupportService {
       this.setFrozenEvidence(frozenEvidenceKey, { kind: "ready", evidence });
     }
     return { reportId };
+  }
+
+  /**
+   * Returns true the first time `frozenEvidenceKey` is claimed within the
+   * dedupe window; false if a prior claim is still live. Survives discard so
+   * StrictMode's discard-between-setups cannot re-claim. A genuine second
+   * dialog open uses a new draftId (new key) and claims again.
+   */
+  private claimSightingSlot(frozenEvidenceKey: string): boolean {
+    const nowMs = Date.now();
+    for (const [key, claimedAt] of this.recentSightingKeys) {
+      if (nowMs - claimedAt > SIGHTING_DEDUPE_TTL_MS) {
+        this.recentSightingKeys.delete(key);
+      }
+    }
+    if (this.recentSightingKeys.has(frozenEvidenceKey)) {
+      return false;
+    }
+    // Bound the map: drop oldest (Map iteration order = insertion order).
+    while (this.recentSightingKeys.size >= SIGHTING_DEDUPE_MAX_ENTRIES) {
+      const oldestKey = this.recentSightingKeys.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.recentSightingKeys.delete(oldestKey);
+    }
+    this.recentSightingKeys.set(frozenEvidenceKey, nowMs);
+    return true;
   }
 
   /**

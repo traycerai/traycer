@@ -296,6 +296,28 @@ describe("DesktopSupportService - fingerprint sightings on freeze", () => {
     expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
   });
 
+  it("records ONE sighting across StrictMode freeze → discard → freeze of the same key", async () => {
+    // Real renderer mounts under <StrictMode> (renderer-shell/main.tsx):
+    // setup freezes, cleanup discards, setup freezes again with the SAME
+    // draftId/key. The live freeze-map alone is not enough - discard clears
+    // it between the two setups. A short-TTL recentSightingKeys set must
+    // suppress the second claim so first open never reads as "2nd time".
+    const service = buildService();
+    await service.freezeEvidence(KEY, "fp:v1:sight");
+    service.discardFrozenEvidence(KEY);
+    await service.freezeEvidence(KEY, "fp:v1:sight");
+    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(1);
+  });
+
+  it("still records a second sighting for a different frozen-evidence key (real re-open)", async () => {
+    const service = buildService();
+    await service.freezeEvidence(KEY, "fp:v1:sight");
+    service.discardFrozenEvidence(KEY);
+    // A genuine second dialog open mints a new draftId → new key.
+    await service.freezeEvidence("sender-1:2", "fp:v1:sight");
+    expect(reportLedgerMock.recordFingerprintSighting).toHaveBeenCalledTimes(2);
+  });
+
   it("skips the sighting when fingerprint is null", async () => {
     await buildService().freezeEvidence(KEY, null);
     expect(reportLedgerMock.recordFingerprintSighting).not.toHaveBeenCalled();
