@@ -23,24 +23,37 @@ const VALID_CAUSE = {
   timestamp: 1_700_000_000_000,
 };
 
-const VALID_SESSION = {
-  routeTemplate: "/epics/:epicId",
-  hostId: "host-1",
-  epicId: "epic-1",
-  tabId: "tab-1",
-  artifactId: null,
-  chatId: "chat-1",
-  agentId: "agent-1",
-  harness: "claude",
-  model: "opus",
-  profileId: "profile-1",
-  profileMode: "managed",
-  providerVersion: "1.2.3",
-  providerClass: "bundled" as const,
+const KNOWN_STRING = { status: "known", value: "epic-1" };
+const STALE_STRING = { status: "stale", value: "tab-1" };
+const UNAVAILABLE = { status: "unavailable" };
+
+// Field-for-field match with ticket 05's `SupportContextSnapshot`
+// (clients/gui-app/src/lib/support-context-registry.ts).
+const VALID_REGISTRY = {
+  routeTemplate: KNOWN_STRING,
+  hostId: KNOWN_STRING,
+  epicId: KNOWN_STRING,
+  tabId: STALE_STRING,
+  artifactId: UNAVAILABLE,
+  chatId: KNOWN_STRING,
+  agentId: KNOWN_STRING,
+  harnessId: KNOWN_STRING,
+  model: KNOWN_STRING,
+  profileId: { status: "known", value: null },
+  providerSelectionClass: { status: "known", value: "bundled" },
+  providerVersion: { status: "stale", value: null },
+};
+
+const VALID_PRIVATE_DIAGNOSTICS = {
+  cause: VALID_CAUSE,
+  registry: VALID_REGISTRY,
+  fingerprint: "fp:v1:abc",
+  stackFamily: "stack:v1:abc",
+  correlationId: "corr-1",
 };
 
 describe("parseSupportSubmitReportRequest", () => {
-  it("accepts a well-formed request with no optional fields", () => {
+  it("accepts a well-formed request with no privateDiagnostics", () => {
     expect(parseSupportSubmitReportRequest(VALID_FORM)).toEqual(VALID_FORM);
   });
 
@@ -76,46 +89,57 @@ describe("parseSupportSubmitReportRequest", () => {
     ).toThrow();
   });
 
-  it("accepts an optional fingerprint and correlationId", () => {
-    const result = parseSupportSubmitReportRequest({
-      ...VALID_FORM,
-      fingerprint: "fp:v1:abc",
-      correlationId: "corr-1",
-    });
-    expect(result.fingerprint).toBe("fp:v1:abc");
-    expect(result.correlationId).toBe("corr-1");
-  });
-
-  it("rejects a non-string fingerprint", () => {
-    expect(() =>
-      parseSupportSubmitReportRequest({ ...VALID_FORM, fingerprint: 123 }),
-    ).toThrow();
-  });
-
   it("accepts a fully-populated privateDiagnostics payload", () => {
     const result = parseSupportSubmitReportRequest({
       ...VALID_FORM,
-      privateDiagnostics: { cause: VALID_CAUSE, session: VALID_SESSION },
+      privateDiagnostics: VALID_PRIVATE_DIAGNOSTICS,
     });
-    expect(result.privateDiagnostics).toEqual({
-      cause: VALID_CAUSE,
-      session: VALID_SESSION,
-    });
+    expect(result.privateDiagnostics).toEqual(VALID_PRIVATE_DIAGNOSTICS);
   });
 
-  it("treats an omitted cause/session as null, not a rejection", () => {
+  it("accepts a null cause, fingerprint, and stackFamily - all real, non-error states", () => {
     const result = parseSupportSubmitReportRequest({
       ...VALID_FORM,
-      privateDiagnostics: {},
+      privateDiagnostics: {
+        ...VALID_PRIVATE_DIAGNOSTICS,
+        cause: null,
+        fingerprint: null,
+        stackFamily: null,
+      },
     });
-    expect(result.privateDiagnostics).toEqual({ cause: null, session: null });
+    expect(result.privateDiagnostics?.cause).toBeNull();
+    expect(result.privateDiagnostics?.fingerprint).toBeNull();
+    expect(result.privateDiagnostics?.stackFamily).toBeNull();
+  });
+
+  it.each(["cause", "registry", "fingerprint", "stackFamily", "correlationId"])(
+    "rejects privateDiagnostics missing the required %s key - the serializer never omits it",
+    (key) => {
+      const withoutKey = { ...VALID_PRIVATE_DIAGNOSTICS };
+      delete (withoutKey as Record<string, unknown>)[key];
+      expect(() =>
+        parseSupportSubmitReportRequest({
+          ...VALID_FORM,
+          privateDiagnostics: withoutKey,
+        }),
+      ).toThrow();
+    },
+  );
+
+  it("rejects a non-string correlationId", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateDiagnostics: { ...VALID_PRIVATE_DIAGNOSTICS, correlationId: 1 },
+      }),
+    ).toThrow();
   });
 
   it("rejects an unlisted key inside privateDiagnostics", () => {
     expect(() =>
       parseSupportSubmitReportRequest({
         ...VALID_FORM,
-        privateDiagnostics: { cause: null, session: null, extra: true },
+        privateDiagnostics: { ...VALID_PRIVATE_DIAGNOSTICS, extra: true },
       }),
     ).toThrow();
   });
@@ -125,6 +149,7 @@ describe("parseSupportSubmitReportRequest", () => {
       parseSupportSubmitReportRequest({
         ...VALID_FORM,
         privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
           cause: { ...VALID_CAUSE, workspacePath: "/Users/anurag/secret" },
         },
       }),
@@ -136,29 +161,93 @@ describe("parseSupportSubmitReportRequest", () => {
       parseSupportSubmitReportRequest({
         ...VALID_FORM,
         privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
           cause: { ...VALID_CAUSE, timestamp: Number.NaN },
         },
       }),
     ).toThrow();
   });
 
-  it("rejects an unlisted key inside privateDiagnostics.session", () => {
+  it("rejects an unlisted key inside privateDiagnostics.registry", () => {
     expect(() =>
       parseSupportSubmitReportRequest({
         ...VALID_FORM,
         privateDiagnostics: {
-          session: { ...VALID_SESSION, rawFilePath: "/etc/passwd" },
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          registry: { ...VALID_REGISTRY, rawFilePath: "/etc/passwd" },
         },
       }),
     ).toThrow();
   });
 
-  it("rejects a providerClass outside the bundled/custom/null allowlist", () => {
+  it("rejects a providerSelectionClass value outside bundled/path/custom", () => {
     expect(() =>
       parseSupportSubmitReportRequest({
         ...VALID_FORM,
         privateDiagnostics: {
-          session: { ...VALID_SESSION, providerClass: "unknown-vendor" },
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          registry: {
+            ...VALID_REGISTRY,
+            providerSelectionClass: { status: "known", value: "vendored" },
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it.each(["known", "stale", "unavailable"])(
+    "accepts a registry field with status %s",
+    (status) => {
+      const field =
+        status === "unavailable" ? UNAVAILABLE : { status, value: "epic-2" };
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          registry: { ...VALID_REGISTRY, epicId: field },
+        },
+      });
+      expect(result.privateDiagnostics?.registry.epicId).toEqual(field);
+    },
+  );
+
+  it("rejects a registry field with an unrecognized status", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          registry: {
+            ...VALID_REGISTRY,
+            epicId: { status: "fresh", value: "epic-1" },
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects a known registry field missing its value", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          registry: { ...VALID_REGISTRY, epicId: { status: "known" } },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects an unavailable registry field carrying a stray value", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        privateDiagnostics: {
+          ...VALID_PRIVATE_DIAGNOSTICS,
+          registry: {
+            ...VALID_REGISTRY,
+            epicId: { status: "unavailable", value: "epic-1" },
+          },
         },
       }),
     ).toThrow();
@@ -178,12 +267,28 @@ describe("parseSupportReadFrozenLogTailInput", () => {
     ).toThrow();
   });
 
-  it("falls back to the desktop target for an unrecognized value", () => {
-    // parseSupportLogTarget fails open by design (a bad target is not a
-    // security-relevant field the way draftId is) - pin that here so a
-    // future tightening is a deliberate choice, not an accidental regression.
-    expect(
+  it("rejects an unrecognized target instead of failing open", () => {
+    // Strict rejection everywhere: an unrecognized target used to silently
+    // fall back to "desktop", which is exactly the caller-discipline pattern
+    // this whole contract exists to close off.
+    expect(() =>
       parseSupportReadFrozenLogTailInput({ draftId: 1, target: "nonsense" }),
-    ).toEqual({ draftId: 1, target: "desktop" });
+    ).toThrow();
+  });
+
+  it("rejects a non-integer draftId", () => {
+    expect(() =>
+      parseSupportReadFrozenLogTailInput({ draftId: 1.5, target: "host" }),
+    ).toThrow();
+  });
+
+  it("rejects an unlisted top-level field", () => {
+    expect(() =>
+      parseSupportReadFrozenLogTailInput({
+        draftId: 1,
+        target: "host",
+        extra: true,
+      }),
+    ).toThrow();
   });
 });

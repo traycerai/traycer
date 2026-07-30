@@ -1,19 +1,23 @@
+import type { IpcMainInvokeEvent } from "electron";
 import { app, shell, systemPreferences } from "electron";
 import { log } from "../app/logger";
 import { showNativeNotification } from "../notifications";
 import { safelyOpenExternal } from "../app/security";
 import { RunnerHostInvoke } from "../../ipc-contracts/ipc-channels";
 import {
+  assertInteger,
   assertNumber,
   assertString,
   parseSupportLogTarget,
+  readSenderWebContentsId,
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 import type {
+  SupportCapturedField,
+  SupportContextRegistrySnapshot,
   SupportLogTarget,
   SupportPrivateDiagnostics,
   SupportPrivateDiagnosticsCause,
-  SupportPrivateDiagnosticsSession,
   SupportReadFrozenLogTailInput,
   SupportSubmitReportRequest,
 } from "../../ipc-contracts/window-types";
@@ -128,8 +132,12 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.supportSubmitReport,
-    (_event, form: unknown) => {
-      return bridge.support.submitReport(parseSupportSubmitReportRequest(form));
+    (event, form: unknown) => {
+      const parsed = parseSupportSubmitReportRequest(form);
+      return bridge.support.submitReport(
+        parsed,
+        frozenEvidenceKey(event, parsed.draftId),
+      );
     },
   );
 
@@ -142,37 +150,54 @@ export function registerSupportIpc(bridge: RunnerIpcBridge): void {
 
   bridge.handleInvoke(
     RunnerHostInvoke.supportFreezeEvidence,
-    (_event, draftId: unknown) => {
-      assertNumber(draftId, "supportFreezeEvidence.draftId");
-      return bridge.support.freezeEvidence(draftId);
+    (event, draftId: unknown) => {
+      assertInteger(draftId, "supportFreezeEvidence.draftId");
+      return bridge.support.freezeEvidence(frozenEvidenceKey(event, draftId));
     },
   );
 
   bridge.handleInvoke(
     RunnerHostInvoke.supportDiscardFrozenEvidence,
-    (_event, draftId: unknown) => {
-      assertNumber(draftId, "supportDiscardFrozenEvidence.draftId");
-      bridge.support.discardFrozenEvidence(draftId);
+    (event, draftId: unknown) => {
+      assertInteger(draftId, "supportDiscardFrozenEvidence.draftId");
+      bridge.support.discardFrozenEvidence(frozenEvidenceKey(event, draftId));
     },
   );
 
   bridge.handleInvoke(
     RunnerHostInvoke.supportReadFrozenLogTail,
-    (_event, input: unknown) => {
+    (event, input: unknown) => {
+      const parsed = parseSupportReadFrozenLogTailInput(input);
       return bridge.support.readFrozenLogTail(
-        parseSupportReadFrozenLogTailInput(input),
+        frozenEvidenceKey(event, parsed.draftId),
+        parsed.target,
       );
     },
   );
 
   bridge.handleInvoke(
     RunnerHostInvoke.supportSaveDiagnosticBundle,
-    (_event, form: unknown) => {
+    (event, form: unknown) => {
+      const parsed = parseSupportSubmitReportRequest(form);
       return bridge.support.saveDiagnosticBundle(
-        parseSupportSubmitReportRequest(form),
+        parsed,
+        frozenEvidenceKey(event, parsed.draftId),
       );
     },
   );
+}
+
+// A draftId is only unique within one renderer realm (`desktop-dialog-store`
+// resets its counter to 0 per window), and the frozen-evidence store is one
+// process-wide map - without the sender scoped in, two windows' draft 1 would
+// collide (overwritten freezes, cross-window discards, a submit consuming the
+// other window's report id). `-1` is a defensive fallback for the
+// (practically unreachable) case where the real Electron event carries no
+// sender id at all; it does not itself dedupe across such calls.
+const UNKNOWN_SENDER_ID = -1;
+
+function frozenEvidenceKey(event: IpcMainInvokeEvent, draftId: number): string {
+  return `${readSenderWebContentsId(event) ?? UNKNOWN_SENDER_ID}:${draftId}`;
 }
 
 function parseSupportTailLogInput(input: unknown): {
@@ -202,11 +227,20 @@ const SUPPORT_SUBMIT_REPORT_KEYS = new Set([
   "expectedBehavior",
   "actualBehavior",
   "privateDiagnostics",
-  "fingerprint",
-  "correlationId",
 ]);
 
-const PRIVATE_DIAGNOSTICS_KEYS = new Set(["cause", "session"]);
+// Exactly ticket 05's five `SerializedReportIssuePrivateDiagnostics` keys,
+// all required whenever `privateDiagnostics` is sent at all - the serializer
+// never omits one (an "empty" cause/registry is `null`/all-`unavailable`,
+// not a missing key), so a missing key here is a real contract violation,
+// not an optional field left out.
+const PRIVATE_DIAGNOSTICS_KEYS = new Set([
+  "cause",
+  "registry",
+  "fingerprint",
+  "stackFamily",
+  "correlationId",
+]);
 
 const PRIVATE_DIAGNOSTICS_CAUSE_KEYS = new Set([
   "type",
@@ -218,7 +252,7 @@ const PRIVATE_DIAGNOSTICS_CAUSE_KEYS = new Set([
   "timestamp",
 ]);
 
-const PRIVATE_DIAGNOSTICS_SESSION_KEYS = new Set([
+const CONTEXT_REGISTRY_KEYS = new Set([
   "routeTemplate",
   "hostId",
   "epicId",
@@ -226,13 +260,15 @@ const PRIVATE_DIAGNOSTICS_SESSION_KEYS = new Set([
   "artifactId",
   "chatId",
   "agentId",
-  "harness",
+  "harnessId",
   "model",
   "profileId",
-  "profileMode",
+  "providerSelectionClass",
   "providerVersion",
-  "providerClass",
 ]);
+
+const CAPTURED_FIELD_KNOWN_KEYS = new Set(["status", "value"]);
+const CAPTURED_FIELD_UNAVAILABLE_KEYS = new Set(["status"]);
 
 // Renderer and main ship from the same build in this Electron app (no
 // independent client/server versioning), so rejecting unknown fields outright
@@ -265,23 +301,124 @@ function parseNullableString(value: unknown, context: string): string | null {
   return value;
 }
 
-function parseOptionalString(
-  value: unknown,
+function assertHasKey(
+  record: Record<string, unknown>,
+  key: string,
   context: string,
-): string | undefined {
-  if (value === undefined) return undefined;
+): void {
+  if (!(key in record)) {
+    throw new Error(`${context} is missing required field: ${key}`);
+  }
+}
+
+function parseRequiredStringValue(value: unknown, context: string): string {
   assertString(value, context);
   return value;
 }
 
-function parsePrivateDiagnosticsProviderClass(
+function parseProviderSelectionClassValue(
   value: unknown,
-): "bundled" | "custom" | null {
-  if (value === null || value === undefined) return null;
-  if (value === "bundled" || value === "custom") return value;
+  context: string,
+): "bundled" | "path" | "custom" {
+  if (value === "bundled" || value === "path" || value === "custom") {
+    return value;
+  }
+  throw new Error(`${context} must be "bundled", "path", or "custom"`);
+}
+
+/**
+ * A `CapturedField<T>` is validated by its `status` first: `unavailable`
+ * allows no other keys (there is no value to carry), `known`/`stale` require
+ * exactly `{ status, value }` with `parseValue` applied to `value`.
+ */
+function parseCapturedField<T>(
+  value: unknown,
+  context: string,
+  parseValue: (value: unknown, context: string) => T,
+): SupportCapturedField<T> {
+  assertPlainObject(value, context);
+  const status = value.status;
+  if (status === "unavailable") {
+    assertOnlyAllowedKeys(value, CAPTURED_FIELD_UNAVAILABLE_KEYS, context);
+    return { status: "unavailable" };
+  }
+  if (status === "known" || status === "stale") {
+    assertOnlyAllowedKeys(value, CAPTURED_FIELD_KNOWN_KEYS, context);
+    return { status, value: parseValue(value.value, `${context}.value`) };
+  }
   throw new Error(
-    'supportSubmitReport.privateDiagnostics.session.providerClass must be "bundled", "custom", or null',
+    `${context}.status must be "known", "stale", or "unavailable"`,
   );
+}
+
+function parseContextRegistrySnapshot(
+  value: unknown,
+  context: string,
+): SupportContextRegistrySnapshot {
+  assertPlainObject(value, context);
+  assertOnlyAllowedKeys(value, CONTEXT_REGISTRY_KEYS, context);
+  return {
+    routeTemplate: parseCapturedField(
+      value.routeTemplate,
+      `${context}.routeTemplate`,
+      parseRequiredStringValue,
+    ),
+    hostId: parseCapturedField(
+      value.hostId,
+      `${context}.hostId`,
+      parseRequiredStringValue,
+    ),
+    epicId: parseCapturedField(
+      value.epicId,
+      `${context}.epicId`,
+      parseRequiredStringValue,
+    ),
+    tabId: parseCapturedField(
+      value.tabId,
+      `${context}.tabId`,
+      parseRequiredStringValue,
+    ),
+    artifactId: parseCapturedField(
+      value.artifactId,
+      `${context}.artifactId`,
+      parseRequiredStringValue,
+    ),
+    chatId: parseCapturedField(
+      value.chatId,
+      `${context}.chatId`,
+      parseRequiredStringValue,
+    ),
+    agentId: parseCapturedField(
+      value.agentId,
+      `${context}.agentId`,
+      parseRequiredStringValue,
+    ),
+    harnessId: parseCapturedField(
+      value.harnessId,
+      `${context}.harnessId`,
+      parseRequiredStringValue,
+    ),
+    model: parseCapturedField(
+      value.model,
+      `${context}.model`,
+      parseRequiredStringValue,
+    ),
+    profileId: parseCapturedField(
+      value.profileId,
+      `${context}.profileId`,
+      parseNullableString,
+    ),
+    providerSelectionClass: parseCapturedField(
+      value.providerSelectionClass,
+      `${context}.providerSelectionClass`,
+      parseProviderSelectionClassValue,
+    ),
+    providerVersion: parseCapturedField(
+      value.providerVersion,
+      `${context}.providerVersion`,
+      parseNullableString,
+    ),
+  };
 }
 
 function parsePrivateDiagnosticsCause(
@@ -311,39 +448,6 @@ function parsePrivateDiagnosticsCause(
   };
 }
 
-function parsePrivateDiagnosticsSession(
-  value: unknown,
-): SupportPrivateDiagnosticsSession | null {
-  if (value === null || value === undefined) return null;
-  const context = "supportSubmitReport.privateDiagnostics.session";
-  assertPlainObject(value, context);
-  assertOnlyAllowedKeys(value, PRIVATE_DIAGNOSTICS_SESSION_KEYS, context);
-  return {
-    routeTemplate: parseNullableString(
-      value.routeTemplate,
-      `${context}.routeTemplate`,
-    ),
-    hostId: parseNullableString(value.hostId, `${context}.hostId`),
-    epicId: parseNullableString(value.epicId, `${context}.epicId`),
-    tabId: parseNullableString(value.tabId, `${context}.tabId`),
-    artifactId: parseNullableString(value.artifactId, `${context}.artifactId`),
-    chatId: parseNullableString(value.chatId, `${context}.chatId`),
-    agentId: parseNullableString(value.agentId, `${context}.agentId`),
-    harness: parseNullableString(value.harness, `${context}.harness`),
-    model: parseNullableString(value.model, `${context}.model`),
-    profileId: parseNullableString(value.profileId, `${context}.profileId`),
-    profileMode: parseNullableString(
-      value.profileMode,
-      `${context}.profileMode`,
-    ),
-    providerVersion: parseNullableString(
-      value.providerVersion,
-      `${context}.providerVersion`,
-    ),
-    providerClass: parsePrivateDiagnosticsProviderClass(value.providerClass),
-  };
-}
-
 function parsePrivateDiagnostics(
   value: unknown,
 ): SupportPrivateDiagnostics | undefined {
@@ -351,9 +455,25 @@ function parsePrivateDiagnostics(
   const context = "supportSubmitReport.privateDiagnostics";
   assertPlainObject(value, context);
   assertOnlyAllowedKeys(value, PRIVATE_DIAGNOSTICS_KEYS, context);
+  for (const key of PRIVATE_DIAGNOSTICS_KEYS) {
+    assertHasKey(value, key, context);
+  }
+  assertString(value.correlationId, `${context}.correlationId`);
   return {
     cause: parsePrivateDiagnosticsCause(value.cause),
-    session: parsePrivateDiagnosticsSession(value.session),
+    registry: parseContextRegistrySnapshot(
+      value.registry,
+      `${context}.registry`,
+    ),
+    fingerprint: parseNullableString(
+      value.fingerprint,
+      `${context}.fingerprint`,
+    ),
+    stackFamily: parseNullableString(
+      value.stackFamily,
+      `${context}.stackFamily`,
+    ),
+    correlationId: value.correlationId,
   };
 }
 
@@ -366,21 +486,13 @@ export function parseSupportSubmitReportRequest(
     SUPPORT_SUBMIT_REPORT_KEYS,
     "supportSubmitReport",
   );
-  assertNumber(form.draftId, "supportSubmitReport.draftId");
+  assertInteger(form.draftId, "supportSubmitReport.draftId");
   assertString(form.title, "supportSubmitReport.title");
   assertString(form.whatHappened, "supportSubmitReport.whatHappened");
   assertString(form.stepsToReproduce, "supportSubmitReport.stepsToReproduce");
   assertString(form.expectedBehavior, "supportSubmitReport.expectedBehavior");
   assertString(form.actualBehavior, "supportSubmitReport.actualBehavior");
   const privateDiagnostics = parsePrivateDiagnostics(form.privateDiagnostics);
-  const fingerprint = parseOptionalString(
-    form.fingerprint,
-    "supportSubmitReport.fingerprint",
-  );
-  const correlationId = parseOptionalString(
-    form.correlationId,
-    "supportSubmitReport.correlationId",
-  );
   return {
     draftId: form.draftId,
     title: form.title,
@@ -389,17 +501,18 @@ export function parseSupportSubmitReportRequest(
     expectedBehavior: form.expectedBehavior,
     actualBehavior: form.actualBehavior,
     ...(privateDiagnostics === undefined ? {} : { privateDiagnostics }),
-    ...(fingerprint === undefined ? {} : { fingerprint }),
-    ...(correlationId === undefined ? {} : { correlationId }),
   };
 }
+
+const READ_FROZEN_LOG_TAIL_KEYS = new Set(["draftId", "target"]);
 
 export function parseSupportReadFrozenLogTailInput(
   input: unknown,
 ): SupportReadFrozenLogTailInput {
   const context = "supportReadFrozenLogTail";
   assertPlainObject(input, context);
-  assertNumber(input.draftId, `${context}.draftId`);
+  assertOnlyAllowedKeys(input, READ_FROZEN_LOG_TAIL_KEYS, context);
+  assertInteger(input.draftId, `${context}.draftId`);
   return {
     draftId: input.draftId,
     target: parseSupportLogTarget(input.target),

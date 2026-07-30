@@ -46,6 +46,10 @@ const EMPTY_REPORT_FORM: SupportSubmitReportRequest = {
   actualBehavior: "",
 };
 
+// Frozen-evidence key is composed in the IPC layer (sender id + draftId);
+// these tests exercise the service directly, so a fixed key stands in.
+const KEY = "sender-1:1";
+
 /**
  * The `layer0` bytes under test are copied from the real published record
  * (a packaged build's `pid.json`, `evidence` included) rather than invented
@@ -180,8 +184,8 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
-        await service.freezeEvidence(EMPTY_REPORT_FORM.draftId);
-        await service.submitReport(EMPTY_REPORT_FORM);
+        await service.freezeEvidence(KEY);
+        await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
         const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock
@@ -208,8 +212,8 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
   it("tags an absent layer0 record without fabricating a structured context", async () => {
     await withPidMetadataFile(undefined, async (hostLayout) => {
       const service = buildService(hostLayout);
-      await service.freezeEvidence(EMPTY_REPORT_FORM.draftId);
-      await service.submitReport(EMPTY_REPORT_FORM);
+      await service.freezeEvidence(KEY);
+      await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
       expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
       const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock.calls[0];
@@ -248,8 +252,8 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
-        await service.freezeEvidence(EMPTY_REPORT_FORM.draftId);
-        await service.submitReport(EMPTY_REPORT_FORM);
+        await service.freezeEvidence(KEY);
+        await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
         const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock
@@ -298,8 +302,8 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       },
       async (hostLayout) => {
         const service = buildService(hostLayout);
-        await service.freezeEvidence(EMPTY_REPORT_FORM.draftId);
-        await service.submitReport(EMPTY_REPORT_FORM);
+        await service.freezeEvidence(KEY);
+        await service.submitReport(EMPTY_REPORT_FORM, KEY);
 
         expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
         const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock

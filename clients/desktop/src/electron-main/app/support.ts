@@ -17,7 +17,6 @@ import type {
   SupportFreezeEvidenceResult,
   SupportLogTarget,
   SupportLogTailResult,
-  SupportReadFrozenLogTailInput,
   SupportRevealLogResult,
   SupportSaveDiagnosticBundleResult,
   SupportSnapshot,
@@ -41,9 +40,9 @@ const REPORT_ID_PREFIX = "rpt_";
 
 interface FrozenLogTail {
   readonly content: string;
-  // Whether the source had more than LOG_TAIL_LINES lines at freeze time -
-  // computed once, at freeze, since the live file can grow past that window
-  // for the rest of the dialog session.
+  // Whether either bound (line count or byte cap) cut the source at freeze
+  // time - computed once, at freeze, since the live file can grow past
+  // either window for the rest of the dialog session.
   readonly truncated: boolean;
 }
 
@@ -52,6 +51,18 @@ interface FrozenEvidence {
   readonly desktop: FrozenLogTail;
   readonly host: FrozenLogTail;
 }
+
+// The map key is scoped by sender (composed in support-ipc.ts), never a bare
+// draftId - a draftId is only unique within one renderer realm. `pending`
+// exists between the moment a freeze is admitted and its file reads
+// resolving, so a same-key freeze that arrives while one is already in
+// flight (React StrictMode's double-effect, a duplicate call) can await the
+// SAME operation and report instead of racing a second file read under a
+// second id, and so a discard that lands mid-read has something concrete to
+// cancel instead of racing an insert that hasn't happened yet.
+type FrozenEvidenceEntry =
+  | { readonly kind: "pending"; readonly promise: Promise<FrozenEvidence> }
+  | { readonly kind: "ready"; readonly evidence: FrozenEvidence };
 
 export interface SupportHostSnapshotProvider {
   getSnapshot(): DesktopLocalHostSnapshot | null;
@@ -66,7 +77,7 @@ export class DesktopSupportService {
   private readonly host: SupportHostSnapshotProvider;
   private readonly authSession: SupportAuthSessionProvider;
   private readonly hostLayout: HostFsLayout;
-  private readonly frozenEvidenceByDraftId = new Map<number, FrozenEvidence>();
+  private readonly frozenEvidenceByKey = new Map<string, FrozenEvidenceEntry>();
 
   constructor(options: {
     readonly appName: string;
@@ -139,28 +150,47 @@ export class DesktopSupportService {
    * and mints the draft's report id once; submit and every retry reuse both,
    * so a crash-looping host that keeps writing while the dialog is open can't
    * scroll the failing lines out of the window mid-session.
+   *
+   * Idempotent for a still-live key: a second call while the first is still
+   * reading (or already landed) returns the SAME report id rather than
+   * racing a second file read under a second one - React StrictMode's
+   * double-effect mount is exactly this case.
    */
-  async freezeEvidence(draftId: number): Promise<SupportFreezeEvidenceResult> {
-    const [desktop, host] = await Promise.all([
-      captureLogTail(
-        resolveDesktopLogPath(),
-        LOG_TAIL_LINES,
-        LOG_ATTACHMENT_MAX_BYTES,
-      ),
-      captureLogTail(
-        this.hostLayout.logFile,
-        LOG_TAIL_LINES,
-        LOG_ATTACHMENT_MAX_BYTES,
-      ),
-    ]);
+  async freezeEvidence(
+    frozenEvidenceKey: string,
+  ): Promise<SupportFreezeEvidenceResult> {
+    const existing = this.frozenEvidenceByKey.get(frozenEvidenceKey);
+    if (existing !== undefined) {
+      const evidence =
+        existing.kind === "ready" ? existing.evidence : await existing.promise;
+      return { reportId: evidence.reportId };
+    }
     const reportId = generateReportId();
-    this.setFrozenEvidence(draftId, { reportId, desktop, host });
+    const promise = captureFrozenEvidence(
+      reportId,
+      resolveDesktopLogPath(),
+      this.hostLayout.logFile,
+    );
+    this.setFrozenEvidence(frozenEvidenceKey, { kind: "pending", promise });
+    const evidence = await promise;
+    // Only commit if this exact in-flight operation is still the current
+    // entry for the key. A discard mid-read deletes the entry; a second
+    // freeze race installs its own pending entry first. Either way, a late
+    // resolution here must not resurrect or overwrite it.
+    const current = this.frozenEvidenceByKey.get(frozenEvidenceKey);
+    if (
+      current !== undefined &&
+      current.kind === "pending" &&
+      current.promise === promise
+    ) {
+      this.setFrozenEvidence(frozenEvidenceKey, { kind: "ready", evidence });
+    }
     return { reportId };
   }
 
   /** Cancel, or a dialog replacing this draft, drops its frozen evidence. */
-  discardFrozenEvidence(draftId: number): void {
-    this.frozenEvidenceByDraftId.delete(draftId);
+  discardFrozenEvidence(frozenEvidenceKey: string): void {
+    this.frozenEvidenceByKey.delete(frozenEvidenceKey);
   }
 
   /**
@@ -168,16 +198,17 @@ export class DesktopSupportService {
    * live read - what the user reviews here is exactly what submit ships.
    */
   async readFrozenLogTail(
-    input: SupportReadFrozenLogTailInput,
+    frozenEvidenceKey: string,
+    target: SupportLogTarget,
   ): Promise<SupportLogTailResult> {
-    const path = this.resolveSupportLogPath(input.target);
-    const frozen = this.frozenEvidenceByDraftId.get(input.draftId);
+    const path = this.resolveSupportLogPath(target);
+    const frozen = await this.resolveFrozenEvidence(frozenEvidenceKey);
     if (frozen === undefined) {
-      return { target: input.target, path, lines: [], truncated: false };
+      return { target, path, lines: [], truncated: false };
     }
-    const tail = input.target === "desktop" ? frozen.desktop : frozen.host;
+    const tail = target === "desktop" ? frozen.desktop : frozen.host;
     return {
-      target: input.target,
+      target,
       path,
       lines: splitLogLines(tail.content),
       truncated: tail.truncated,
@@ -186,14 +217,16 @@ export class DesktopSupportService {
 
   async submitReport(
     form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
   ): Promise<SupportSubmitReportResult> {
-    const frozen = this.frozenEvidenceByDraftId.get(form.draftId);
+    const frozen = await this.resolveFrozenEvidence(frozenEvidenceKey);
     if (frozen === undefined) {
       // The dialog always freezes evidence before it lets the user submit;
       // reaching here means that call was skipped or its draft already
       // expired. Failing honestly beats minting a fresh, non-idempotent id.
       log.error("[support] submitReport called with no frozen evidence", {
         draftId: form.draftId,
+        frozenEvidenceKey,
       });
       return { status: "failed", reason: "error" };
     }
@@ -226,6 +259,7 @@ export class DesktopSupportService {
       .join("\n\n");
 
     const userEmail = snapshot.user.email;
+    const privateDiagnostics = form.privateDiagnostics;
     const contexts: Record<string, Record<string, unknown>> = {
       ...(snapshot.host.layer0 === null
         ? {}
@@ -233,12 +267,15 @@ export class DesktopSupportService {
       ...(processMetrics === null
         ? {}
         : { processMetrics: { ...processMetrics } }),
-      ...(form.privateDiagnostics?.cause == null
+      ...(privateDiagnostics?.cause == null
         ? {}
-        : { errorCause: { ...form.privateDiagnostics.cause } }),
-      ...(form.privateDiagnostics?.session == null
+        : { errorCause: { ...privateDiagnostics.cause } }),
+      // D10: the registry's `hostId` is the tab-bound host, which can differ
+      // from the "local host" this file attaches logs and version from below -
+      // named `registry`, never `host`, so the two can't be read as one.
+      ...(privateDiagnostics === undefined
         ? {}
-        : { session: { ...form.privateDiagnostics.session } }),
+        : { registry: { ...privateDiagnostics.registry } }),
     };
     try {
       Sentry.captureFeedback(
@@ -258,15 +295,24 @@ export class DesktopSupportService {
               reportId: frozen.reportId,
               appVersion: snapshot.appVersion,
               platform: `${snapshot.platform}/${snapshot.arch}`,
-              hostVersion: snapshot.host.version ?? "unknown",
+              // "local" because it names the traycer-host this Electron
+              // process supervises, not necessarily the (possibly remote)
+              // host a failing tab is bound to - see the `registry` context.
+              localHostVersion: snapshot.host.version ?? "unknown",
               electronVersion: snapshot.versions.electron ?? "unknown",
               layer0Status: layer0StatusTag(snapshot.host.layer0),
-              ...(form.fingerprint === undefined
+              ...(privateDiagnostics?.fingerprint == null
                 ? {}
-                : { fingerprint: form.fingerprint }),
-              ...(form.correlationId === undefined
+                : { fingerprint: privateDiagnostics.fingerprint }),
+              // Sub-clustering only - deliberately not part of `fingerprint`
+              // (a one-frame refactor must not re-identify a defect), but
+              // still a bounded, filterable tag like fingerprint itself.
+              ...(privateDiagnostics?.stackFamily == null
                 ? {}
-                : { correlationId: form.correlationId }),
+                : { stackFamily: privateDiagnostics.stackFamily }),
+              ...(privateDiagnostics === undefined
+                ? {}
+                : { correlationId: privateDiagnostics.correlationId }),
             },
             ...(Object.keys(contexts).length === 0 ? {} : { contexts }),
           },
@@ -274,8 +320,11 @@ export class DesktopSupportService {
             ...(frozen.desktop.content
               ? [{ filename: "desktop.log", data: frozen.desktop.content }]
               : []),
+            // Named for the local traycer-host this Electron process
+            // supervises (D10) - a tab can be bound to a different host, so
+            // this must never be read as "the log for that host".
             ...(frozen.host.content
-              ? [{ filename: "host.log", data: frozen.host.content }]
+              ? [{ filename: "local-host.log", data: frozen.host.content }]
               : []),
           ],
         },
@@ -318,8 +367,9 @@ export class DesktopSupportService {
    */
   async saveDiagnosticBundle(
     form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
   ): Promise<SupportSaveDiagnosticBundleResult> {
-    const frozen = this.frozenEvidenceByDraftId.get(form.draftId);
+    const frozen = await this.resolveFrozenEvidence(frozenEvidenceKey);
     const snapshot = await this.getSnapshot();
     const bundle = {
       reportId: frozen?.reportId ?? null,
@@ -345,13 +395,22 @@ export class DesktopSupportService {
     return { path };
   }
 
-  private setFrozenEvidence(draftId: number, evidence: FrozenEvidence): void {
-    this.frozenEvidenceByDraftId.delete(draftId);
-    this.frozenEvidenceByDraftId.set(draftId, evidence);
-    while (this.frozenEvidenceByDraftId.size > FROZEN_EVIDENCE_MAX_ENTRIES) {
-      const oldestDraftId = this.frozenEvidenceByDraftId.keys().next().value;
-      if (oldestDraftId === undefined) break;
-      this.frozenEvidenceByDraftId.delete(oldestDraftId);
+  /** Resolves to `undefined` if never frozen, discarded, or evicted. */
+  private async resolveFrozenEvidence(
+    frozenEvidenceKey: string,
+  ): Promise<FrozenEvidence | undefined> {
+    const entry = this.frozenEvidenceByKey.get(frozenEvidenceKey);
+    if (entry === undefined) return undefined;
+    return entry.kind === "ready" ? entry.evidence : entry.promise;
+  }
+
+  private setFrozenEvidence(key: string, entry: FrozenEvidenceEntry): void {
+    this.frozenEvidenceByKey.delete(key);
+    this.frozenEvidenceByKey.set(key, entry);
+    while (this.frozenEvidenceByKey.size > FROZEN_EVIDENCE_MAX_ENTRIES) {
+      const oldestKey = this.frozenEvidenceByKey.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.frozenEvidenceByKey.delete(oldestKey);
     }
   }
 
@@ -385,6 +444,18 @@ async function ensureLogFile(path: string): Promise<void> {
   await handle.close();
 }
 
+async function captureFrozenEvidence(
+  reportId: string,
+  desktopLogPath: string,
+  hostLogPath: string,
+): Promise<FrozenEvidence> {
+  const [desktop, host] = await Promise.all([
+    captureLogTail(desktopLogPath, LOG_TAIL_LINES, LOG_ATTACHMENT_MAX_BYTES),
+    captureLogTail(hostLogPath, LOG_TAIL_LINES, LOG_ATTACHMENT_MAX_BYTES),
+  ]);
+  return { reportId, desktop, host };
+}
+
 async function captureLogTail(
   path: string,
   lines: number,
@@ -392,9 +463,13 @@ async function captureLogTail(
 ): Promise<FrozenLogTail> {
   const content = await readFile(path, "utf-8").catch(() => "");
   const allLines = splitLogLines(content);
-  const truncated = allLines.length > lines;
+  const truncatedByLineCount = allLines.length > lines;
   const tail = allLines.slice(-lines).join("\n");
-  return { content: truncateToTrailingBytes(tail, maxBytes), truncated };
+  const truncatedByByteCount = Buffer.byteLength(tail, "utf8") > maxBytes;
+  return {
+    content: truncateToTrailingBytes(tail, maxBytes),
+    truncated: truncatedByLineCount || truncatedByByteCount,
+  };
 }
 
 // A line count is not a size bound: one host log line can carry a multi-KB

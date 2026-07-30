@@ -231,6 +231,43 @@ function createRunnerHostWithSubmit(
   });
 }
 
+function createRunnerHostWithoutPrivateDelivery(
+  openedLinks: string[],
+  saveDiagnosticBundle: () => Promise<{ readonly path: string }>,
+): IRunnerHost {
+  return Object.assign(createRunnerHost([], openedLinks, []), {
+    support: {
+      getSnapshot: () =>
+        Promise.resolve({ ...snapshot, privateDeliveryAvailable: false }),
+      revealLog: (target: DesktopSupportLogTarget) =>
+        Promise.resolve({ target, path: "" }),
+      submitReport: () => Promise.resolve({ status: "unavailable" as const }),
+      tailLog: (input: {
+        readonly target: DesktopSupportLogTarget;
+        readonly tailLines: number;
+      }) =>
+        Promise.resolve({
+          target: input.target,
+          path: "",
+          lines: [],
+          truncated: false,
+        }),
+      freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
+      discardFrozenEvidence: () => Promise.resolve(),
+      readFrozenLogTail: (input: {
+        readonly target: DesktopSupportLogTarget;
+      }) =>
+        Promise.resolve({
+          target: input.target,
+          path: "",
+          lines: [],
+          truncated: false,
+        }),
+      saveDiagnosticBundle,
+    },
+  });
+}
+
 function createBaseRunnerHost(): IRunnerHost {
   return {
     signInUrl: "https://auth.example.invalid/sign-in",
@@ -833,6 +870,48 @@ describe("<DesktopDialogHost />", () => {
     expect(useDesktopDialogStore.getState()).toMatchObject({
       activeDialog: "report-issue",
       reportIssueContext: draftBContext,
+    });
+  });
+
+  it("states the no-private-channel case up front, with no Submit round-trip, when privateDeliveryAvailable is false", async () => {
+    const openedLinks: string[] = [];
+    const saveDiagnosticBundle = vi.fn(() =>
+      Promise.resolve({ path: "/tmp/bundle.json" }),
+    );
+    useDesktopDialogStore.getState().openReportIssueWithContext(
+      createReportIssueContext({
+        title: "No private channel",
+        message: null,
+        code: null,
+        source: "Test",
+      }),
+    );
+    renderDesktopDialogHost(
+      createRunnerHostWithoutPrivateDelivery(openedLinks, saveDiagnosticBundle),
+      "/",
+    );
+    await flushDialogEffects();
+
+    expect(
+      screen.getByText(
+        "Private reporting is not available in this build. You can save a diagnostic bundle and open a GitHub issue instead.",
+      ),
+    ).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Submit Report" })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save diagnostic bundle" }),
+    );
+    await waitFor(() => {
+      expect(saveDiagnosticBundle).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open a GitHub issue" }),
+    );
+    await waitFor(() => {
+      expect(openedLinks).toHaveLength(1);
     });
   });
 

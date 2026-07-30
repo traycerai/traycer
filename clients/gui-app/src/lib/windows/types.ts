@@ -219,6 +219,10 @@ export interface DesktopSupportSaveDiagnosticBundleResult {
   readonly path: string;
 }
 
+/**
+ * Field-for-field match with ticket 05's `PrivateErrorCause`
+ * (`@/lib/report-issue-draft-context`).
+ */
 export interface DesktopPrivateDiagnosticsCause {
   readonly type: string;
   readonly message: string;
@@ -229,25 +233,54 @@ export interface DesktopPrivateDiagnosticsCause {
   readonly timestamp: number;
 }
 
-export interface DesktopPrivateDiagnosticsSession {
-  readonly routeTemplate: string | null;
-  readonly hostId: string | null;
-  readonly epicId: string | null;
-  readonly tabId: string | null;
-  readonly artifactId: string | null;
-  readonly chatId: string | null;
-  readonly agentId: string | null;
-  readonly harness: string | null;
-  readonly model: string | null;
-  readonly profileId: string | null;
-  readonly profileMode: string | null;
-  readonly providerVersion: string | null;
-  readonly providerClass: "bundled" | "custom" | null;
+/**
+ * Mirrors ticket 05's `CapturedField<T>` (`@/lib/support-context-registry`):
+ * `known` is fresh, `stale` is a prior value no longer confirmed live,
+ * `unavailable` means never observed this session.
+ */
+export type DesktopCapturedField<T> =
+  | { readonly status: "known"; readonly value: T }
+  | { readonly status: "stale"; readonly value: T }
+  | { readonly status: "unavailable" };
+
+/**
+ * Field-for-field match with ticket 05's `SupportContextSnapshot`
+ * (`@/lib/support-context-registry`). `hostId` here is the tab-bound host,
+ * not necessarily the "local host" Electron main attaches logs from.
+ */
+export interface DesktopContextRegistrySnapshot {
+  readonly routeTemplate: DesktopCapturedField<string>;
+  readonly hostId: DesktopCapturedField<string>;
+  readonly epicId: DesktopCapturedField<string>;
+  readonly tabId: DesktopCapturedField<string>;
+  readonly artifactId: DesktopCapturedField<string>;
+  readonly chatId: DesktopCapturedField<string>;
+  readonly agentId: DesktopCapturedField<string>;
+  readonly harnessId: DesktopCapturedField<string>;
+  readonly model: DesktopCapturedField<string>;
+  readonly profileId: DesktopCapturedField<string | null>;
+  readonly providerSelectionClass: DesktopCapturedField<
+    "bundled" | "path" | "custom"
+  >;
+  readonly providerVersion: DesktopCapturedField<string | null>;
 }
 
+/**
+ * Wire mirror of ticket 05's `SerializedReportIssuePrivateDiagnostics`
+ * (`serializeReportIssuePrivateDiagnostics` in
+ * `@/lib/report-issue-draft-context`) - same five keys, always all present:
+ * `registry` is never itself absent, `correlationId` is always a fresh id.
+ */
 export interface DesktopPrivateDiagnostics {
   readonly cause: DesktopPrivateDiagnosticsCause | null;
-  readonly session: DesktopPrivateDiagnosticsSession | null;
+  readonly registry: DesktopContextRegistrySnapshot;
+  readonly fingerprint: string | null;
+  /**
+   * Normalized stack frame family, for maintainer-side sub-clustering ONLY -
+   * deliberately NOT part of `fingerprint`'s identity.
+   */
+  readonly stackFamily: string | null;
+  readonly correlationId: string;
 }
 
 export interface DesktopMenuBridge {
@@ -370,8 +403,6 @@ export interface DesktopReportIssueForm {
   readonly expectedBehavior: string;
   readonly actualBehavior: string;
   readonly privateDiagnostics?: DesktopPrivateDiagnostics;
-  readonly fingerprint?: string;
-  readonly correlationId?: string;
 }
 
 // Four states, not a nullable id: "no DSN" and "flush timed out" used to

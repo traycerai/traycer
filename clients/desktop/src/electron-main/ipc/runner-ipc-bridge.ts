@@ -230,20 +230,29 @@ export interface IpcZoomController {
 export interface IpcSupportService {
   getSnapshot(): Promise<SupportSnapshot>;
   revealLog(target: SupportLogTarget): Promise<SupportRevealLogResult>;
+  // `frozenEvidenceKey` is composed in the IPC layer (support-ipc.ts) from
+  // the sender's webContents id + the renderer-local draftId - a draftId
+  // alone is only unique within one renderer realm, and this service is one
+  // process-wide map shared by every window.
   submitReport(
     form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
   ): Promise<SupportSubmitReportResult>;
   tailLog(input: {
     readonly target: SupportLogTarget;
     readonly tailLines: number;
   }): Promise<SupportLogTailResult>;
-  freezeEvidence(draftId: number): Promise<SupportFreezeEvidenceResult>;
-  discardFrozenEvidence(draftId: number): void;
+  freezeEvidence(
+    frozenEvidenceKey: string,
+  ): Promise<SupportFreezeEvidenceResult>;
+  discardFrozenEvidence(frozenEvidenceKey: string): void;
   readFrozenLogTail(
-    input: SupportReadFrozenLogTailInput,
+    frozenEvidenceKey: string,
+    target: SupportLogTarget,
   ): Promise<SupportLogTailResult>;
   saveDiagnosticBundle(
     form: SupportSubmitReportRequest,
+    frozenEvidenceKey: string,
   ): Promise<SupportSaveDiagnosticBundleResult>;
 }
 
@@ -1355,6 +1364,7 @@ class NullSupportService implements IpcSupportService {
 
   submitReport(
     _form: SupportSubmitReportRequest,
+    _frozenEvidenceKey: string,
   ): Promise<SupportSubmitReportResult> {
     return Promise.resolve({ status: "unavailable" });
   }
@@ -1371,17 +1381,20 @@ class NullSupportService implements IpcSupportService {
     });
   }
 
-  freezeEvidence(_draftId: number): Promise<SupportFreezeEvidenceResult> {
+  freezeEvidence(
+    _frozenEvidenceKey: string,
+  ): Promise<SupportFreezeEvidenceResult> {
     return Promise.resolve({ reportId: "" });
   }
 
-  discardFrozenEvidence(_draftId: number): void {}
+  discardFrozenEvidence(_frozenEvidenceKey: string): void {}
 
   readFrozenLogTail(
-    input: SupportReadFrozenLogTailInput,
+    _frozenEvidenceKey: string,
+    target: SupportLogTarget,
   ): Promise<SupportLogTailResult> {
     return Promise.resolve({
-      target: input.target,
+      target,
       path: "",
       lines: [],
       truncated: false,
@@ -1390,6 +1403,7 @@ class NullSupportService implements IpcSupportService {
 
   saveDiagnosticBundle(
     _form: SupportSubmitReportRequest,
+    _frozenEvidenceKey: string,
   ): Promise<SupportSaveDiagnosticBundleResult> {
     return Promise.resolve({ path: "" });
   }

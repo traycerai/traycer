@@ -45,6 +45,11 @@ import { DesktopSupportService } from "../support";
 import type { HostFsLayout } from "../../host/host-paths";
 import type { SupportSubmitReportRequest } from "../../../ipc-contracts/window-types";
 
+// The frozen-evidence key is composed in the IPC layer (sender id + draftId) -
+// the service itself just takes an opaque string, so tests stand in with a
+// fixed key rather than a bare draftId.
+const KEY = "sender-1:1";
+
 const FORM: SupportSubmitReportRequest = {
   draftId: 1,
   title: "Host will not start",
@@ -82,8 +87,8 @@ function buildService(): DesktopSupportService {
 }
 
 async function freezeAndSubmit(service: DesktopSupportService) {
-  await service.freezeEvidence(FORM.draftId);
-  return service.submitReport(FORM);
+  await service.freezeEvidence(KEY);
+  return service.submitReport(FORM, KEY);
 }
 
 function lastHint(): CapturedHint {
@@ -139,12 +144,12 @@ describe("DesktopSupportService.submitReport - delivered", () => {
     expect(lastHint().event_id).toBe(reportId.slice("rpt_".length));
   });
 
-  it("attaches both log tails", async () => {
+  it("attaches both log tails, the host one labeled local-host (D10)", async () => {
     await freezeAndSubmit(buildService());
 
     expect(lastHint().attachments.map((a) => a.filename)).toEqual([
       "desktop.log",
-      "host.log",
+      "local-host.log",
     ]);
   });
 
@@ -213,13 +218,13 @@ describe("DesktopSupportService.submitReport - failed", () => {
     expect(sentryMock.flush).not.toHaveBeenCalled();
   });
 
-  it("returns failed when submit is called with no frozen evidence for the draft", async () => {
+  it("returns failed when submit is called with no frozen evidence for the key", async () => {
     const service = buildService();
 
     // No freezeEvidence call first - the dialog always freezes at report-open,
     // so reaching this means that call was skipped or the draft already
     // expired. Minting a fresh id here would break the idempotency invariant.
-    const result = await service.submitReport(FORM);
+    const result = await service.submitReport(FORM, KEY);
 
     expect(result).toEqual({ status: "failed", reason: "error" });
     expect(sentryMock.captureFeedback).not.toHaveBeenCalled();
@@ -229,17 +234,17 @@ describe("DesktopSupportService.submitReport - failed", () => {
 describe("DesktopSupportService - evidence freeze semantics", () => {
   it("ships the tails captured at freeze time even after further log writes", async () => {
     const service = buildService();
-    await service.freezeEvidence(FORM.draftId);
+    await service.freezeEvidence(KEY);
 
     // The crash-looping host that keeps writing while the dialog is open is
     // exactly the scenario the freeze exists for - the failing line must
     // still be in the shipped tail even though the file has moved on.
     await writeFile(hostLogPath, "line written after freeze\n", "utf8");
 
-    await service.submitReport(FORM);
+    await service.submitReport(FORM, KEY);
 
     const hostAttachment = lastHint().attachments.find(
-      (a) => a.filename === "host.log",
+      (a) => a.filename === "local-host.log",
     );
     expect(hostAttachment?.data).toContain("host log line");
     expect(hostAttachment?.data).not.toContain("line written after freeze");
@@ -247,37 +252,47 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
 
   it("drops the frozen evidence on discard, so a later submit fails honestly", async () => {
     const service = buildService();
-    await service.freezeEvidence(FORM.draftId);
-    service.discardFrozenEvidence(FORM.draftId);
+    await service.freezeEvidence(KEY);
+    service.discardFrozenEvidence(KEY);
 
-    const result = await service.submitReport(FORM);
+    const result = await service.submitReport(FORM, KEY);
 
+    expect(result).toEqual({ status: "failed", reason: "error" });
+    expect(sentryMock.captureFeedback).not.toHaveBeenCalled();
+  });
+
+  it("never lands evidence discarded while its file reads are still in flight", async () => {
+    const service = buildService();
+
+    // Not awaited: the synchronous prefix of `freezeEvidence` (up through
+    // inserting the pending map entry) runs before this call returns, so the
+    // discard below reliably lands before the file reads resolve - the exact
+    // race a cancel-during-freeze produces in the real dialog.
+    const freezePromise = service.freezeEvidence(KEY);
+    service.discardFrozenEvidence(KEY);
+    await freezePromise;
+
+    const result = await service.submitReport(FORM, KEY);
     expect(result).toEqual({ status: "failed", reason: "error" });
     expect(sentryMock.captureFeedback).not.toHaveBeenCalled();
   });
 
   it("serves readFrozenLogTail from the frozen copy, not a live read", async () => {
     const service = buildService();
-    await service.freezeEvidence(FORM.draftId);
+    await service.freezeEvidence(KEY);
     await writeFile(hostLogPath, "line written after freeze\n", "utf8");
 
-    const tail = await service.readFrozenLogTail({
-      draftId: FORM.draftId,
-      target: "host",
-    });
+    const tail = await service.readFrozenLogTail(KEY, "host");
 
     expect(tail.lines).toEqual(["host log line"]);
   });
 
   it("returns an empty tail from readFrozenLogTail once discarded", async () => {
     const service = buildService();
-    await service.freezeEvidence(FORM.draftId);
-    service.discardFrozenEvidence(FORM.draftId);
+    await service.freezeEvidence(KEY);
+    service.discardFrozenEvidence(KEY);
 
-    const tail = await service.readFrozenLogTail({
-      draftId: FORM.draftId,
-      target: "host",
-    });
+    const tail = await service.readFrozenLogTail(KEY, "host");
 
     expect(tail).toEqual({
       target: "host",
@@ -287,7 +302,7 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
     });
   });
 
-  it("bounds each frozen attachment by bytes, not just line count", async () => {
+  it("bounds each frozen attachment by bytes, not just line count, and flags it truncated", async () => {
     // 500 lines is not a size bound: one host log line can carry a multi-KB
     // payload, and an oversized envelope is dropped by Sentry after the event
     // is otherwise accepted.
@@ -297,10 +312,16 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
     ).join("\n");
     await writeFile(hostLogPath, fatLog, "utf8");
 
-    await freezeAndSubmit(buildService());
+    const service = buildService();
+    await service.freezeEvidence(KEY);
+    const tail = await service.readFrozenLogTail(KEY, "host");
+    // Fewer than 500 lines were written, so the line-count cap never fires -
+    // only the byte cap did, and that alone must still flag `truncated`.
+    expect(tail.truncated).toBe(true);
 
+    await service.submitReport(FORM, KEY);
     const hostAttachment = lastHint().attachments.find(
-      (a) => a.filename === "host.log",
+      (a) => a.filename === "local-host.log",
     );
     expect(hostAttachment).toBeDefined();
     const data = hostAttachment?.data ?? "";
@@ -313,13 +334,13 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
   });
 });
 
-describe("DesktopSupportService - retry reuses the frozen reportId", () => {
+describe("DesktopSupportService - freeze idempotency per key", () => {
   it("mints one reportId per draft and reuses it across every submit call", async () => {
     const service = buildService();
-    const { reportId } = await service.freezeEvidence(FORM.draftId);
+    const { reportId } = await service.freezeEvidence(KEY);
 
-    const first = await service.submitReport(FORM);
-    const second = await service.submitReport(FORM);
+    const first = await service.submitReport(FORM, KEY);
+    const second = await service.submitReport(FORM, KEY);
 
     expect(first.status === "delivered" && first.reportId).toBe(reportId);
     expect(second.status === "delivered" && second.reportId).toBe(reportId);
@@ -332,10 +353,33 @@ describe("DesktopSupportService - retry reuses the frozen reportId", () => {
     expect(eventIds[0]).toBe(eventIds[1]);
   });
 
-  it("mints a fresh reportId when a new freeze replaces the draft's evidence", async () => {
+  it("returns the existing reportId when freezeEvidence is called again for an already-frozen live draft", async () => {
     const service = buildService();
-    const { reportId: first } = await service.freezeEvidence(FORM.draftId);
-    const { reportId: second } = await service.freezeEvidence(FORM.draftId);
+    const { reportId: first } = await service.freezeEvidence(KEY);
+    const { reportId: second } = await service.freezeEvidence(KEY);
+
+    // Not a fresh mint: a second freeze of a still-live draft (React
+    // StrictMode's dev double-effect, or an accidental duplicate call) must
+    // not straddle a retry-vs-submit across two different report/event ids.
+    expect(second).toBe(first);
+  });
+
+  it("resolves concurrent in-flight freezes of the same key to one shared reportId", async () => {
+    const service = buildService();
+
+    const [a, b] = await Promise.all([
+      service.freezeEvidence(KEY),
+      service.freezeEvidence(KEY),
+    ]);
+
+    expect(a.reportId).toBe(b.reportId);
+  });
+
+  it("mints a fresh reportId when freezing again after a discard - a genuinely new draft", async () => {
+    const service = buildService();
+    const { reportId: first } = await service.freezeEvidence(KEY);
+    service.discardFrozenEvidence(KEY);
+    const { reportId: second } = await service.freezeEvidence(KEY);
 
     expect(second).not.toBe(first);
   });

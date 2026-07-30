@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { buildGitHubIssueUrl } from "@traycer-clients/shared/support/issue-reporter";
 import { runnerMutationKeys } from "@/lib/query-keys";
 import type { ReportIssueContext } from "@/lib/report-issue-context";
+import { serializeReportIssuePrivateDiagnostics } from "@/lib/report-issue-draft-context";
 import type {
   DesktopSubmitReportResult,
   DesktopSupportSnapshot,
@@ -61,6 +62,9 @@ export function ReportIssueDialog(
   const { draftId, onOpenChange, open, support } = props;
   const runnerHost = useRunnerHost();
   const context = useDesktopDialogStore((state) => state.reportIssueContext);
+  const draftContext = useDesktopDialogStore(
+    (state) => state.reportIssueDraftContext,
+  );
   const closeReportIssueDraft = useDesktopDialogStore(
     (state) => state.closeReportIssueDraft,
   );
@@ -102,6 +106,13 @@ export function ReportIssueDialog(
       return support.submitReport({
         draftId: submission.draftId,
         ...submission.form,
+        ...(draftContext === null
+          ? {}
+          : {
+              privateDiagnostics: serializeReportIssuePrivateDiagnostics(
+                draftContext.privateDiagnostics,
+              ),
+            }),
       });
     },
     onSuccess: async (result, submission) => {
@@ -161,6 +172,20 @@ export function ReportIssueDialog(
   });
 
   const deliveryResult = submitMutation.isSuccess ? submitMutation.data : null;
+  // Known unavailable up front (DSN presence is known at startup) synthesizes
+  // the same terminal state a submit attempt would eventually reach, so the
+  // dialog can state it and offer the two honest actions before the user
+  // invests any effort - never a submit round-trip whose only possible
+  // outcome is "unavailable".
+  const effectiveDeliveryResult: DesktopSubmitReportResult | null =
+    deliveryResult ??
+    (snapshot !== null && !snapshot.privateDeliveryAvailable
+      ? { status: "unavailable" }
+      : null);
+  // Deliberately keyed off the real `deliveryResult`, not the synthesized
+  // `effectiveDeliveryResult`: the upfront unavailable case already gets its
+  // own copy in the description below, and repeating it in an alert-styled
+  // banner would be redundant, not honest-er.
   const showsHonestBanner =
     submitMutation.isError ||
     (deliveryResult !== null && deliveryResult.status !== "delivered");
@@ -207,17 +232,15 @@ export function ReportIssueDialog(
             Report an Issue
           </DialogTitle>
           <DialogDescription>
-            Your report is uploaded privately so the team can diagnose it. A
-            pre-filled GitHub issue will open after submitting.
+            {effectiveDeliveryResult?.status === "unavailable"
+              ? "Private reporting is not available in this build. You can save a diagnostic bundle and open a GitHub issue instead."
+              : "Your report is uploaded privately so the team can diagnose it. A pre-filled GitHub issue will open after submitting."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto">
           <div className="grid gap-4 py-1 pr-1">
             {snapshot !== null && <EnvBadge snapshot={snapshot} />}
-            {snapshot !== null && !snapshot.privateDeliveryAvailable && (
-              <PrivateDeliveryUnavailableNote />
-            )}
 
             <Field htmlFor="report-issue-title" label="Title" required>
               <Input
@@ -309,7 +332,7 @@ export function ReportIssueDialog(
             Cancel
           </Button>
           <ReportIssueFooterActions
-            deliveryResult={deliveryResult}
+            deliveryResult={effectiveDeliveryResult}
             canSubmit={form.title.trim().length !== 0 && reportId !== null}
             isSubmitPending={submitMutation.isPending}
             isSaveBundlePending={saveDiagnosticBundleMutation.isPending}
@@ -518,15 +541,6 @@ function LogPathsInfo(): ReactNode {
         <span className="shrink-0 text-destructive">*</span>
         Log files are shared privately with your report.
       </p>
-    </div>
-  );
-}
-
-function PrivateDeliveryUnavailableNote(): ReactNode {
-  return (
-    <div className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-ui-xs text-muted-foreground">
-      Private reporting is not available in this build. Submitting will save a
-      diagnostic bundle and let you open a GitHub issue instead.
     </div>
   );
 }

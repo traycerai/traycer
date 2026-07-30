@@ -256,8 +256,8 @@ export interface SupportRevealLogResult {
 /**
  * Structured private cause, allowlisted onto the wire field by field so an
  * error boundary can never smuggle an arbitrary object past this contract.
- * Populated by the renderer's `ReportIssueDraftContext` (ticket 05); until
- * that lands, callers omit it.
+ * Field-for-field match with ticket 05's `PrivateErrorCause`
+ * (`clients/gui-app/src/lib/report-issue-draft-context.ts`).
  */
 export interface SupportPrivateDiagnosticsCause {
   readonly type: string;
@@ -270,30 +270,62 @@ export interface SupportPrivateDiagnosticsCause {
 }
 
 /**
- * Last-known session state (ticket 05's support-context registry). Every
- * field is opaque (ids, not full URLs/paths) and independently nullable -
- * provider data especially can be stale during a host failure and must say
- * so, never fabricate a healthy-looking value.
+ * One captured field's availability. `known` is fresh; `stale` is a prior
+ * value the write side no longer confirms live (e.g. provider state read
+ * before the host went unreachable) - never silently reported as current;
+ * `unavailable` means never observed this session. Mirrors ticket 05's
+ * `CapturedField<T>` (`clients/gui-app/src/lib/support-context-registry.ts`).
  */
-export interface SupportPrivateDiagnosticsSession {
-  readonly routeTemplate: string | null;
-  readonly hostId: string | null;
-  readonly epicId: string | null;
-  readonly tabId: string | null;
-  readonly artifactId: string | null;
-  readonly chatId: string | null;
-  readonly agentId: string | null;
-  readonly harness: string | null;
-  readonly model: string | null;
-  readonly profileId: string | null;
-  readonly profileMode: string | null;
-  readonly providerVersion: string | null;
-  readonly providerClass: "bundled" | "custom" | null;
+export type SupportCapturedField<T> =
+  | { readonly status: "known"; readonly value: T }
+  | { readonly status: "stale"; readonly value: T }
+  | { readonly status: "unavailable" };
+
+/**
+ * Last-known session state (ticket 05's support-context registry). Every
+ * field is opaque (ids, not full URLs/paths); `hostId` here is the tab-bound
+ * host, which is not necessarily the same host `submitReport` attaches logs
+ * from (see the "local host" labeling in `support.ts` - D10).
+ * Field-for-field match with ticket 05's `SupportContextSnapshot`.
+ */
+export interface SupportContextRegistrySnapshot {
+  readonly routeTemplate: SupportCapturedField<string>;
+  readonly hostId: SupportCapturedField<string>;
+  readonly epicId: SupportCapturedField<string>;
+  readonly tabId: SupportCapturedField<string>;
+  readonly artifactId: SupportCapturedField<string>;
+  readonly chatId: SupportCapturedField<string>;
+  readonly agentId: SupportCapturedField<string>;
+  readonly harnessId: SupportCapturedField<string>;
+  readonly model: SupportCapturedField<string>;
+  /** `null` value = ambient/host login, distinct from `unavailable`. */
+  readonly profileId: SupportCapturedField<string | null>;
+  readonly providerSelectionClass: SupportCapturedField<
+    "bundled" | "path" | "custom"
+  >;
+  /** `null` value = version not yet probed, distinct from `unavailable`. */
+  readonly providerVersion: SupportCapturedField<string | null>;
 }
 
+/**
+ * Wire mirror of ticket 05's `SerializedReportIssuePrivateDiagnostics`
+ * (`serializeReportIssuePrivateDiagnostics` in
+ * `report-issue-draft-context.ts`) - same five keys, always all present when
+ * this object is sent at all: `registry` is never itself absent (an "empty"
+ * session is all-`unavailable` fields, not a missing registry), and
+ * `correlationId` is always a fresh id minted at draft-open.
+ */
 export interface SupportPrivateDiagnostics {
   readonly cause: SupportPrivateDiagnosticsCause | null;
-  readonly session: SupportPrivateDiagnosticsSession | null;
+  readonly registry: SupportContextRegistrySnapshot;
+  readonly fingerprint: string | null;
+  /**
+   * Normalized stack frame family, for maintainer-side sub-clustering ONLY -
+   * deliberately NOT part of `fingerprint`'s identity, so a one-frame
+   * refactor can't re-identify a defect.
+   */
+  readonly stackFamily: string | null;
+  readonly correlationId: string;
 }
 
 export interface SupportSubmitReportRequest {
@@ -306,10 +338,6 @@ export interface SupportSubmitReportRequest {
   readonly expectedBehavior: string;
   readonly actualBehavior: string;
   readonly privateDiagnostics?: SupportPrivateDiagnostics;
-  // fp:v1 fingerprint string and correlation id (ticket 05); Sentry tags, not
-  // part of the message body.
-  readonly fingerprint?: string;
-  readonly correlationId?: string;
 }
 
 // Four states, not three: "no DSN" and "flush timed out" used to collapse
