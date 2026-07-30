@@ -1813,7 +1813,11 @@ function ChatMessagesInner(props: ChatMessagesProps) {
               getState: () => ({
                 positionAtIndex: (index: number) =>
                   list.getState().positionAtIndex(index),
-                scroll: list.getState().scroll,
+                // LegendList's tracked scroll can lag the DOM while an
+                // animated navigation is still settling. Persist the pixels
+                // the reader can actually see at unmount; row positions still
+                // come from the library's measured state.
+                scroll: list.getScrollableNode().scrollTop,
                 topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
               }),
             };

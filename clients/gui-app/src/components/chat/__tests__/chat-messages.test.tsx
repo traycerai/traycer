@@ -3481,6 +3481,52 @@ describe("ChatMessages scroll policy", () => {
       },
     );
 
+    it("captures the live DOM offset when an animated navigation has not settled before unmount", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 10;
+      const targetId = messages[targetIndex]?.id;
+      expect(targetId).toBeTruthy();
+      const scrollStateKey = `t5-live-dom-capture-${Math.random().toString(36).slice(2)}`;
+      const instanceId = `t5-live-dom-instance-${Math.random().toString(36).slice(2)}`;
+
+      tileLiveness.live = true;
+      const first = renderChatMessages({
+        messages,
+        scrollStateKey,
+        instanceId,
+      });
+      await settleLegendList();
+
+      first.rerenderWith({
+        scrollRequest: {
+          requestId: 5_001,
+          messageId: targetId,
+          blockId: null,
+        },
+      });
+      const liveScrollTop = getScrollNode().scrollTop;
+      expect(liveScrollTop).toBeGreaterThan(0);
+
+      // Unmount before scrollend/the fallback can reconcile LegendList's
+      // tracked scroll. The DOM is already at the visible navigation landing,
+      // so persistence must capture that live position rather than the
+      // controller's previous internal value.
+      first.unmount();
+
+      const second = renderChatMessages({
+        messages,
+        scrollStateKey,
+        instanceId,
+      });
+      await settleLegendList();
+      await settleLegendList();
+
+      expect(getScrollNode().scrollTop).toBe(liveScrollTop);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      second.unmount();
+    });
+
     it(
       "P4 review fix: an A2A-only transcript (zero human user rows) still " +
         "persists and restores an exact free-scroll anchor",
