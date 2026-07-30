@@ -3,7 +3,31 @@ import {
   RunnerHostInvoke,
 } from "../../ipc-contracts/ipc-channels";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
+import type {
+  HostRestartRequestResult,
+  MutationOutcome,
+} from "../../ipc-contracts/host-management-types";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+
+// Collapses a restart-intent outcome to the wire result both restart
+// surfaces resolve (this handler and `traycerHostRestart`). `busy` and
+// `deferred` become a resolved `declined` - the host was deliberately NOT
+// restarted (in-progress work denied the shutdown claim, removed-by-user,
+// lock contention), a state that clears on its own or on a later retry -
+// so the renderer can present it as information. Every other non-"ok"
+// kind still rejects the invoke, keeping genuine failures on the existing
+// catch-based reportable-error path (field RCA 2026-07-28: throwing the
+// busy denial produced a "Report issue" error toast for a self-recovering
+// condition).
+export function restartRequestResultFromOutcome<TOk>(
+  outcome: MutationOutcome<TOk>,
+): HostRestartRequestResult {
+  if (outcome.kind === "ok") return { kind: "restarted" };
+  if (outcome.kind === "busy" || outcome.kind === "deferred") {
+    return { kind: "declined", message: outcome.message };
+  }
+  throw new Error(outcome.message);
+}
 
 export function registerHostIpc(bridge: RunnerIpcBridge): void {
   // Renderer-driven host respawn.
@@ -15,14 +39,16 @@ export function registerHostIpc(bridge: RunnerIpcBridge): void {
   // SMAppService unregister/register cycles) and the routing between the
   // SMAppService cycle (macOS host-owned login item) and the CLI restart
   // path. `HostController` never rejects (wait-never-reject); this handler
-  // re-throws a non-"ok" outcome so the renderer's existing catch-based
-  // error handling for this invoke keeps working unchanged.
-  bridge.handleInvoke(RunnerHostInvoke.requestHostRespawn, async () => {
-    const outcome = await bridge.options.hostController.respawn();
-    if (outcome.kind !== "ok") {
-      throw new Error(outcome.message);
-    }
-  });
+  // resolves ok/busy/deferred as a `HostRestartRequestResult` and re-throws
+  // the rest so the renderer's catch-based error handling stays for
+  // genuine failures.
+  bridge.handleInvoke(
+    RunnerHostInvoke.requestHostRespawn,
+    async (): Promise<HostRestartRequestResult> => {
+      const outcome = await bridge.options.hostController.respawn();
+      return restartRequestResultFromOutcome(outcome);
+    },
+  );
 
   const onHostChange = (snapshot: DesktopLocalHostSnapshot | null): void => {
     bridge.fanOut(RunnerHostEvent.localHostChange, snapshot);

@@ -18,12 +18,14 @@ import type {
 } from "../../ipc-contracts/window-types";
 import {
   parseJsonRecord,
+  parseJsonValue,
   parseLandingDrafts,
 } from "../../ipc-contracts/window-state-parsers";
 import type {
   StoredAuthTokens,
   StoredCredentialsIdentity,
 } from "../../ipc-contracts/auth-types";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 
 export {
   parseJsonRecord,
@@ -65,6 +67,28 @@ export function parseStoredAuthTokens(value: unknown): StoredAuthTokens {
  * `tokenStore.signIn`. The main store stamps `authnBaseUrl` + `savedAt`, so only
  * the user identity crosses here. Fail-closed on any non-string field.
  */
+/**
+ * Parses the delegated host-credential mint request. `hostId` is required (the
+ * mint is meaningless without it and the server rejects a bad one anyway);
+ * `hostLabel` and `platform` are display metadata, so anything that is not a
+ * string collapses to `null` rather than throwing - a missing label must not
+ * cost the user a credential.
+ */
+export function parseMintHostCredentialRequest(
+  value: unknown,
+): MintHostCredentialRequest {
+  if (value === null || typeof value !== "object") {
+    throw new Error("mintHostCredential requires a request object");
+  }
+  const record = value as Record<string, unknown>;
+  assertString(record.hostId, "mintHostCredential.hostId");
+  return {
+    hostId: record.hostId,
+    hostLabel: typeof record.hostLabel === "string" ? record.hostLabel : null,
+    platform: typeof record.platform === "string" ? record.platform : null,
+  };
+}
+
 export function parseStoredCredentialsIdentity(
   value: unknown,
 ): StoredCredentialsIdentity {
@@ -262,6 +286,16 @@ export function parsePerWindowStatePatch(value: unknown): PerWindowStatePatch {
           : null,
     });
   }
+  if ("tabStripLayout" in obj) {
+    Object.assign(patch, {
+      tabStripLayout: parseJsonValue(obj.tabStripLayout) ?? null,
+    });
+  }
+  if ("activeRoute" in obj) {
+    Object.assign(patch, {
+      activeRoute: typeof obj.activeRoute === "string" ? obj.activeRoute : null,
+    });
+  }
   return patch;
 }
 
@@ -294,8 +328,31 @@ export function parsePerWindowEpicTabs(
       return [];
     }
     seen.add(obj.id);
-    return [{ id: obj.id, epicId: obj.epicId, name: obj.name }];
+    const surfaceMode = parsePerWindowEpicSurfaceMode(obj.surfaceMode);
+    return [
+      surfaceMode === null
+        ? { id: obj.id, epicId: obj.epicId, name: obj.name }
+        : { id: obj.id, epicId: obj.epicId, name: obj.name, surfaceMode },
+    ];
   });
+}
+
+function parsePerWindowEpicSurfaceMode(
+  value: unknown,
+): { readonly kind: "phase-migration"; readonly phaseId: string } | null {
+  if (!isPlainRecord(value)) return null;
+  if (
+    value.kind === "phase-migration" &&
+    typeof value.phaseId === "string" &&
+    value.phaseId.length > 0
+  ) {
+    return { kind: "phase-migration", phaseId: value.phaseId };
+  }
+  return null;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function parseDesktopAuthSession(

@@ -7,6 +7,8 @@ import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/
 import type {
   HostListFetchResult,
   ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  MintHostCredentialRequest,
   RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
@@ -78,6 +80,10 @@ export interface AuthBridgeSurface {
     useStepUpCredential: boolean,
   ): Promise<RevokeUserSessionFetchResult>;
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult>;
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;
@@ -127,6 +133,13 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.revokeAllSessions,
         bearerToken,
       ) as Promise<RevokeAllSessionsFetchResult>,
+
+    mintHostCredential: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintHostCredential,
+        bearerToken,
+        request,
+      ) as Promise<MintHostCredentialFetchResult>,
 
     requestStepUpChallenge: (bearerToken) =>
       ipcRenderer.invoke(

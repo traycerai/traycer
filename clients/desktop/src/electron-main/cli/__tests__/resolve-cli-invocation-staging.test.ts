@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 
 // Internal-only `staging` deploy slot. Like dev, staging is a NON-production
 // build, but unlike dev it is NOT `isDevBuild`. CLI discovery must still skip
@@ -100,10 +101,7 @@ beforeEach(() => {
   resourcesDir = join(work, "resources");
   mkdirSync(homeDir, { recursive: true });
   mkdirSync(resourcesDir, { recursive: true });
-  process.env.HOME = homeDir;
-  if (process.platform === "win32") {
-    process.env.USERPROFILE = homeDir;
-  }
+  sandboxHome(homeDir);
   Object.defineProperty(process, "resourcesPath", {
     value: resourcesDir,
     configurable: true,

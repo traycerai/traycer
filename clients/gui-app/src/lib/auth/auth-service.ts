@@ -11,9 +11,13 @@ import type {
 import { shouldWipeLegacyCredentials } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
-import type { ListUserSessionsResponse } from "@traycer/protocol/auth/devices-sessions";
+import type {
+  ListUserSessionsResponse,
+  MintHostCredentialRequest,
+} from "@traycer/protocol/auth/devices-sessions";
 import type { HostListResponse } from "@traycer/protocol/host/host-status";
 import type {
+  MintHostCredentialFetchResult,
   RetainedStepUpVerifyFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
@@ -207,6 +211,13 @@ export interface DeviceFlowProgress {
   readonly verificationUri: string;
   readonly verificationUriComplete: string;
   readonly expiresAtMs: number;
+  /**
+   * `waiting-approval` while the `/device/token` poll is outstanding;
+   * `finalizing` once the poll returned `authorized` and the token is being
+   * validated/persisted - the surface must stop saying "Waiting for approval"
+   * the moment the approval has actually landed.
+   */
+  readonly phase: "waiting-approval" | "finalizing";
 }
 
 export type DeviceFlowProgressListener = (
@@ -786,6 +797,7 @@ export class AuthService {
       verificationUri: authorization.verificationUri,
       verificationUriComplete: authorization.verificationUriComplete,
       expiresAtMs: Date.now() + authorization.expiresInSeconds * 1000,
+      phase: "waiting-approval",
     });
     // The attempt times out at the `device_code` TTL (`expires_in`); the handler
     // is epoch-scoped so a superseded attempt's timer can't kill a newer one.
@@ -1160,6 +1172,20 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.revokeAllSessions(this.currentBearer);
+  }
+
+  /**
+   * Mints a device credential for a connected host. A single attempt on the
+   * ordinary bearer: unlike `revokeUserSession` there is no step-up retry,
+   * because the mint is not step-up gated (see the mint route's doc comment).
+   */
+  async mintHostCredential(
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult> {
+    if (this.currentBearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintHostCredential(this.currentBearer, request);
   }
 
   async requestStepUpChallenge(): Promise<StepUpChallengeFetchResult> {
@@ -1748,6 +1774,23 @@ export class AuthService {
       return;
     }
     if (result.kind === "authorized") {
+      // Set BEFORE the first await, like every other terminal outcome below:
+      // an overlapping start() invoked after this attempt's signIn() shares
+      // its identityGeneration (nothing bumps it again until a fresh sign-in
+      // /out), so the generation fence alone cannot stop a straggling
+      // rehydration from clobbering the identity applyTokenInternal is about
+      // to establish. `authResolvedDuringStart` is the only guard for that.
+      if (this.starting) {
+        this.authResolvedDuringStart = true;
+      }
+      // The approval has landed; only token validation/persistence remains.
+      // Flip the surface off "Waiting for approval" NOW - validation can take
+      // seconds (network retries, credentials-file lock), and through that
+      // window the panel would otherwise claim the approval never arrived.
+      const progress = this.deviceProgress;
+      if (progress !== null) {
+        this.setDeviceProgress({ ...progress, phase: "finalizing" });
+      }
       await this.applyTokenInternal(
         result.token,
         result.refreshToken,

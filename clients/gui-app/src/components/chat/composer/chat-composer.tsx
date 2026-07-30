@@ -9,6 +9,7 @@ import {
 import { useStore } from "zustand";
 import { AlertTriangle } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type {
   ChatActiveTurn,
   ChatQueueDeliveryPolicy,
@@ -41,8 +42,9 @@ import {
   type ChatComposerSubmitSource,
 } from "@/lib/chats/resolve-steer-submit";
 import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabBodySelected } from "@/components/epic-canvas/canvas/tab-body-selected-context";
-import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { chatTileCatalogActivity } from "@/components/epic-canvas/renderers/chat-tile-surface-activity";
 import type { Attachment } from "@/lib/composer/types";
 import { cn } from "@/lib/utils";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -64,6 +66,7 @@ import {
   type ProviderReauthGate,
   type ProviderReauthReason,
 } from "./use-provider-reauth-gate";
+import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import {
@@ -205,20 +208,17 @@ function ChatComposerImpl(props: ChatComposerProps) {
   );
   const [pickerStore] = useState(() => createComposerPickerStore());
 
-  // The mention/slash menu renders through a body portal, so a left-open menu
-  // keeps painting over whichever surface the keep-alive host swaps in next.
-  // This composer is concealed (display:none) once either its canvas tab is no
-  // longer the selected body or its epic pane goes hidden, yet the portal
-  // escapes that container - so close the picker whenever the surface stops
-  // being actually visible. Both signals default to `true` outside their
-  // providers (standalone/mobile chat), so this is a no-op there.
-  const tabBodySelected = useTabBodySelected();
-  const paneVisible = usePaneVisible();
-  const surfaceVisible = tabBodySelected && paneVisible;
+  // The mention/slash menu renders through a body portal. It belongs to the
+  // one focused canvas tile, not merely every visible split member, so close
+  // its logical picker state whenever the exact focused owner changes. All
+  // three context signals default to `true` outside Epic surfaces.
+  const paneFocused = usePaneFocused();
+  const tabSelected = useTabBodySelected();
+  const focused = chatComposerFocused(isActive, paneFocused, tabSelected);
   useEffect(() => {
-    if (surfaceVisible) return;
+    if (focused) return;
     pickerStore.getState().close();
-  }, [surfaceVisible, pickerStore]);
+  }, [focused, pickerStore]);
 
   const {
     initialContent,
@@ -235,7 +235,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
 
   const { dictationControl, dictationPreparing } = useComposerDictation({
     editorRef,
-    isActive,
+    isActive: focused,
   });
 
   // S11: one seed source, computed once and consumed identically by both the
@@ -252,11 +252,10 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // slices it consumes (harness id for the picker/editor, selected model for
   // the image gate); everything else - permission, reasoning, tier, the
   // catalog churn - stays inside the toolbar leaves and the submit path.
-  // Note for the chat-tile owner: SurfaceActivityContext defaults to `true`
-  // here (the old hardcoded `activityEnabled`); wiring per-tile activity for
-  // keep-alive chat panes is a follow-up at the tile level.
+  // Only the focused top-level surface owns composer controls, automatic focus,
+  // and their catalog subscriptions. Visible split partners retain their body.
   const toolbarStore = useComposerToolbarStore(
-    isActive ? "chat-tile" : null,
+    focused ? "chat-tile" : null,
     seedSource,
     onSettingsChange,
     false,
@@ -269,13 +268,19 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const reauthGate = useProviderReauthGate(
     harnessId,
     profileId,
-    isActive,
+    focused,
     seedSource.kind,
   );
-  const sendBlocked = sendDisabled === true || reauthGate.signedOut;
-  const sendBlockedHint = resolveSendBlockedHint({
+  // Managed-pack gate, scoped to the TAB's host - a tab bound to another host
+  // must gate on that host's packs, never the app-wide default's. Same shape as
+  // the reauth gate above: block send and say why, so a doomed turn can't
+  // start. The host resolver still refuses independently; this is the UX half.
+  const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
+  const { sendBlocked, sendBlockedHint } = resolveSendBlock({
     workspaceDisabledHint: workspaceAvailability.disabledHint,
     signedOut: reauthGate.signedOut,
+    packPreparingHint: packGate.hint,
+    packBlocked: packGate.blocked,
     sendDisabled,
     sendDisabledHint,
   });
@@ -287,14 +292,22 @@ function ChatComposerImpl(props: ChatComposerProps) {
     harnessId,
     profileId,
     selectedModel,
-    active: isActive,
+    active: focused,
     client: hostClient,
   });
   // Keeps the switch prompt's own `providers.list` read converging with a
   // turn's passive rate-limit capture: without this, a turn that just pushed
   // this harness's profile into near/hard limit wouldn't surface the banner
   // until `providers.list`'s next unrelated 15-minute refetch.
-  useRefreshProvidersListOnTurn(harnessId, tabHostId);
+  const providerRefreshInputs = focusedProviderRefreshInputs(
+    focused,
+    harnessId,
+    tabHostId,
+  );
+  useRefreshProvidersListOnTurn(
+    providerRefreshInputs.harnessId,
+    providerRefreshInputs.hostId,
+  );
   const onSwitchProfile = useCallback(
     (nextProfileId: string | null) => {
       commitProfileSelection(toolbarStore, nextProfileId);
@@ -306,7 +319,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const taskProfileSwitch = useTaskProfileRateLimitSwitch({
     enabled:
       rateLimitPrompt.kind === "visible" &&
-      rateLimitPrompt.primaryTarget !== null,
+      rateLimitPrompt.destinations.some(
+        (destination) => destination.selectable,
+      ),
     harnessId,
     profileId,
     selectedModel,
@@ -325,7 +340,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     harnessId,
     mentionRoots: resolvedMentionRoots,
     currentEpicId,
-    isActive,
+    isActive: focused,
   });
 
   const {
@@ -512,7 +527,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   slashProviderId={harnessId}
                   hasPastedImageBytes={hasPastedImageBytes}
                   ingestPastedComposerImages={null}
-                  isActive={isActive}
+                  isActive={focused}
                   onSnapshot={handleSnapshot}
                   onSubmit={handleSubmitDraft}
                   steerHintActive={steerHintActive}
@@ -566,6 +581,32 @@ function ChatComposerImpl(props: ChatComposerProps) {
       />
     </>
   );
+}
+
+/**
+ * The composer owns exactly what the tile it lives in owns, so it answers with
+ * the tile's own predicate rather than a second, shorter one. `tabSelected` is
+ * the part that is easy to lose: keep-alive leaves a background tab's body
+ * mounted inside a focused pane, so pane focus plus tile-active is `true` for a
+ * composer that is not on screen - which would let it hold catalog
+ * subscriptions, own dictation, and mark its editor active from behind
+ * whichever tab the user is actually looking at.
+ */
+function chatComposerFocused(
+  isActive: boolean,
+  paneFocused: boolean,
+  tabSelected: boolean,
+): boolean {
+  return chatTileCatalogActivity(paneFocused, tabSelected, isActive);
+}
+
+function focusedProviderRefreshInputs(
+  focused: boolean,
+  harnessId: GuiHarnessId | null,
+  hostId: string | null,
+): { readonly harnessId: GuiHarnessId | null; readonly hostId: string | null } {
+  if (!focused) return { harnessId: null, hostId: null };
+  return { harnessId, hostId };
 }
 
 export const ChatComposer = memo(ChatComposerImpl);
@@ -652,15 +693,38 @@ interface CanSubmitDraftArgs {
 }
 
 /**
- * Every blocked-send reason gets a hover/focus hint on the send button — a
- * silently grey button reads as broken. Priority mirrors severity: the
- * workspace gate (can't run anywhere), then the signed-out gate (the reauth
- * banner has the full story), then the caller's reason (connection loss /
- * view-only access).
+ * Whether send is blocked, and the one hint that explains it. Returned together
+ * so a reason can never block send without also supplying its copy — a silently
+ * grey button reads as broken.
+ */
+function resolveSendBlock(args: {
+  readonly workspaceDisabledHint: string | null;
+  readonly signedOut: boolean;
+  readonly packPreparingHint: string | null;
+  readonly packBlocked: boolean;
+  readonly sendDisabled: boolean | undefined;
+  readonly sendDisabledHint: string | null | undefined;
+}): {
+  readonly sendBlocked: boolean;
+  readonly sendBlockedHint: string | null;
+} {
+  return {
+    sendBlocked:
+      args.sendDisabled === true || args.signedOut || args.packBlocked,
+    sendBlockedHint: resolveSendBlockedHint(args),
+  };
+}
+
+/**
+ * Priority mirrors severity: the workspace gate (can't run anywhere), then the
+ * signed-out gate (the reauth banner has the full story), then the managed-pack
+ * gate (self-resolving — it says so, and ranks below the two the user must act
+ * on), then the caller's reason (connection loss / view-only access).
  */
 function resolveSendBlockedHint(args: {
   readonly workspaceDisabledHint: string | null;
   readonly signedOut: boolean;
+  readonly packPreparingHint: string | null;
   readonly sendDisabled: boolean | undefined;
   readonly sendDisabledHint: string | null | undefined;
 }): string | null {
@@ -668,6 +732,7 @@ function resolveSendBlockedHint(args: {
   if (args.signedOut) {
     return "Signed out of the provider — sign in to send messages";
   }
+  if (args.packPreparingHint !== null) return args.packPreparingHint;
   if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
   return null;
 }

@@ -16,6 +16,7 @@ import {
   hostDownloadCacheDir,
   HOST_DOWNLOAD_CACHE_SUBDIR,
 } from "../store/paths";
+import { isProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import {
   currentProcessIdentityToken,
   verifyProcessIdentityAsync,
@@ -503,7 +504,10 @@ async function identityVerdictFor(
   token: ProcessIdentityToken,
   cache: IdentityVerdictCache,
 ): Promise<ProcessIdentityVerdict> {
-  const key = `${token.pid}:${token.startedAtMs ?? "unknown"}`;
+  // Keyed on the operand the verdict is actually derived from. Keying on
+  // `startedAtMs` (which nothing reads any more) would let two tokens with
+  // the same pid but different creation stamps share one cached verdict.
+  const key = `${token.pid}:${token.startIdentity ?? "unknown"}`;
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
   const verdict = await verifyProcessIdentityAsync(token);
@@ -614,6 +618,9 @@ function parseOwnerToken(raw: string): ProcessIdentityToken | null {
   return {
     pid: obj.pid,
     startedAtMs: typeof obj.startedAtMs === "number" ? obj.startedAtMs : null,
+    startIdentity: isProcessStartIdentity(obj.startIdentity)
+      ? obj.startIdentity
+      : null,
   };
 }
 

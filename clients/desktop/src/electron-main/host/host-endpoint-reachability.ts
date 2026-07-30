@@ -1,3 +1,4 @@
+import type { ProcessStartIdentity } from "@traycer/protocol/host/lifecycle";
 import { getPublishedProcessIdentityVerdict } from "./process-identity";
 
 /** Real-endpoint-reachability probe signature for host pid metadata. */
@@ -44,18 +45,26 @@ export function isCurrentHostWebsocketUrl(url: string): boolean {
  * (`waitForHostReady`), and steady-state health monitoring all call this
  * predicate. Other pid readers may report structural metadata, but must not
  * conclude that the host is live/reachable without this check.
+ *
+ * `startIdentity` is `pid.json`'s `processStartIdentity`. It replaced a
+ * publication-timestamp comparison that a wall-clock adjustment could turn
+ * into a false `"mismatch"` - which, because this predicate reads
+ * `"mismatch"` as unreachable, is how traycerai/traycer#740 reported a host
+ * answering in 8ms as down. The identity operands are kernel-recorded and
+ * immune to that; when either is missing the verdict is `"indeterminate"` and
+ * the successful handshake carries the decision, as documented above.
  */
 export async function isPublishedHostEndpointReachable(
   websocketUrl: string,
   pid: number,
-  publishedAt: string | null,
+  startIdentity: ProcessStartIdentity | null,
   probe: HostEndpointReachabilityProbe,
 ): Promise<boolean> {
   if (!isCurrentHostWebsocketUrl(websocketUrl)) return false;
   if (!(await probe(websocketUrl))) return false;
   const identityVerdict = await getPublishedProcessIdentityVerdict(
     pid,
-    publishedAt,
+    startIdentity,
   );
   return identityVerdict !== "dead" && identityVerdict !== "mismatch";
 }

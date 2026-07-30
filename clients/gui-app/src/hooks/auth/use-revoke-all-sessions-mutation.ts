@@ -29,7 +29,7 @@ function unwrapRevokeAllSessionsResult(
   throw new Error("Couldn't reach Traycer to sign out everywhere.");
 }
 
-export function useRevokeAllSessions(): UseMutationResult<
+export function useAuthRevokeAllSessions(): UseMutationResult<
   RevokeAllSessionsResponse,
   Error,
   void,
@@ -57,6 +57,8 @@ export function useRevokeAllSessions(): UseMutationResult<
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.userSessions(context.auth),
       });
+      // Sign-out-everywhere also revokes host sessions server-side, so the
+      // Remote Host registry list must refetch to reflect it.
       void queryClient.invalidateQueries({
         queryKey: authQueryKeys.registeredHosts(context.auth),
       });

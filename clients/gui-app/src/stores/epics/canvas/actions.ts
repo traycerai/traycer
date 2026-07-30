@@ -30,7 +30,6 @@ import {
   isBlankTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
-  isPrDiffTileRef,
 } from "./types";
 import {
   activationHistoryEqual,
@@ -1157,23 +1156,23 @@ function resolveSplitSource(
   if (sourcePane === null) return null;
   const fromIndex = sourcePane.tabInstanceIds.indexOf(source.tabId);
   if (fromIndex === -1) return null;
-  // Splitting a single-tab source pane onto its own edge would just
-  // rearrange the same pane - reject as no-op.
-  if (
-    source.sourcePaneId === targetPaneId &&
-    sourcePane.tabInstanceIds.length === 1
-  ) {
-    return null;
-  }
   const ref = state.tilesByInstanceId[source.tabId];
   if (ref === undefined) return null;
   const removed = removeTabAtIndexWithSyntheticFallback(sourcePane, fromIndex);
   const root = replacePane(state.root, source.sourcePaneId, () => removed.pane);
+  // An emptied source pane normally collapses - a tab dragged OUT of a pane
+  // shouldn't leave a hole behind. But when the drop targets that same pane,
+  // collapsing would undo the very split the drop preview just promised (the
+  // sole-tab case: open a Git Diff or Terminal, drag it to the pane edge). Keep
+  // the emptied pane as the split's other half, where it renders the standard
+  // opener - the same shape the "Split group" button produces.
+  const emptiedSourcePane = removed.pane.tabInstanceIds.length === 0;
+  const splitsIntoItself = source.sourcePaneId === targetPaneId;
   return {
     state: { ...state, root },
     node: ref,
     collapseSourcePaneId:
-      removed.pane.tabInstanceIds.length === 0 ? source.sourcePaneId : null,
+      emptiedSourcePane && !splitsIntoItself ? source.sourcePaneId : null,
   };
 }
 
@@ -1426,46 +1425,11 @@ export function toggleSnapshotDiffBundleFileCollapsed(
   );
 }
 
-export function updatePrDiffTileView(
-  state: EpicCanvasState,
-  tileId: string,
-  view: GitDiffTileViewState,
-): EpicCanvasState {
-  return updateTilesWhere(
-    state,
-    (ref) => ref.id === tileId && isPrDiffTileRef(ref),
-    (ref) => ({ ...ref, view }),
-  );
-}
-
-/**
- * No `ref.diff.kind` gate, unlike the git and snapshot pairs: a PR diff tile
- * is ALWAYS the multi-file view (there is no single-file PR diff tile), so
- * there is no non-bundle variant to exclude.
- */
-export function togglePrDiffFileCollapsed(
-  state: EpicCanvasState,
-  tileId: string,
-  filePath: string,
-): EpicCanvasState {
-  return updateTilesWhere(
-    state,
-    (ref) => ref.id === tileId && isPrDiffTileRef(ref),
-    (ref) => toggleCollapsedFilePath(ref, filePath),
-  );
-}
-
 function toggleCollapsedFilePath(
   ref: EpicCanvasTileRef,
   filePath: string,
 ): EpicCanvasTileRef {
-  if (
-    !isGitDiffTileRef(ref) &&
-    !isSnapshotDiffTileRef(ref) &&
-    !isPrDiffTileRef(ref)
-  ) {
-    return ref;
-  }
+  if (!isGitDiffTileRef(ref) && !isSnapshotDiffTileRef(ref)) return ref;
   const collapsed = new Set(ref.view.collapsedFilePaths);
   if (collapsed.has(filePath)) {
     collapsed.delete(filePath);

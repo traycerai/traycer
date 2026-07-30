@@ -29,6 +29,9 @@ import {
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
+import { emptyTabStripLayout } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import { getTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   DesktopAuthSessionSnapshot,
@@ -44,6 +47,7 @@ interface FakeWindowsBridgeHandle {
   readonly bridge: DesktopWindowsBridge;
   readonly perWindowUpdates: readonly DesktopPerWindowStatePatch[];
   readonly authSessionSets: readonly DesktopAuthSessionSnapshot[];
+  emitPerWindowSnapshot(snapshot: DesktopPerWindowSnapshot): void;
 }
 
 function createDesktopWindowsBridge(): FakeWindowsBridgeHandle {
@@ -140,6 +144,9 @@ function createDesktopWindowsBridge(): FakeWindowsBridgeHandle {
     },
     perWindowUpdates,
     authSessionSets,
+    emitPerWindowSnapshot: (snapshot) => {
+      perWindowHandlers.forEach((handler) => handler(snapshot));
+    },
   };
 }
 
@@ -202,6 +209,13 @@ function emptyPerWindowSnapshot(): DesktopPerWindowSnapshot {
     landingDrafts: [],
     activeLandingDraftId: null,
   };
+}
+
+function tabsStorageKey(): string {
+  const name = useTabsStore.persist.getOptions().name;
+  if (name === undefined)
+    throw new Error("tabs persistence storage key missing");
+  return name;
 }
 
 function landingTextContent(text: string): JsonContent {
@@ -330,6 +344,91 @@ describe("<WindowsBridgeProvider />", () => {
         "hydrated",
       );
     });
+  });
+
+  it("fails closed when the capability handshake acknowledges an older revision", async () => {
+    const fake = createDesktopWindowsBridge();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const staleHandshakeBridge = {
+      ...fake.bridge,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () =>
+          Promise.resolve({ ...emptyPerWindowSnapshot(), revision: 5 }),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 4 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(staleHandshakeBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    expect(getTabSplitCompatibility().supported).toBe(false);
+  });
+
+  it("keeps a subscribed newer snapshot when the initial get resolves stale", async () => {
+    const fake = createDesktopWindowsBridge();
+    const deferredSnapshot = createDeferred<DesktopPerWindowSnapshot>();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const racedBridge = {
+      ...fake.bridge,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () => deferredSnapshot.promise,
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 3 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider runnerHost={createRunnerHostWithWindows(racedBridge)}>
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    fake.emitPerWindowSnapshot({
+      ...emptyPerWindowSnapshot(),
+      revision: 2,
+      epicTabs: [{ id: "tab-new", epicId: "epic-new", name: "New" }],
+      activeTabId: "tab-new",
+    });
+    await act(async () => {
+      deferredSnapshot.resolve({
+        ...emptyPerWindowSnapshot(),
+        revision: 1,
+        epicTabs: [{ id: "tab-old", epicId: "epic-old", name: "Old" }],
+        activeTabId: "tab-old",
+      });
+      await deferredSnapshot.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+    });
+    expect(useEpicCanvasStore.getState().tabsById["tab-new"]).toBeDefined();
+    expect(useEpicCanvasStore.getState().tabsById["tab-old"]).toBeUndefined();
   });
 
   it("still marks hydration complete when the per-window snapshot fetch rejects", async () => {
@@ -462,6 +561,15 @@ describe("<WindowsBridgeProvider />", () => {
     );
     expect(observed.at(-1)).toBeNull();
     expect(getDesktopEpicOwnershipBridge()).toBeNull();
+
+    const storageKey = tabsStorageKey();
+    window.localStorage.removeItem(storageKey);
+    useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
+    useTabsStore
+      .getState()
+      .setStripOrder([{ kind: "epic", id: "browser-tab" }]);
+    expect(getTabSplitCompatibility().supported).toBe(true);
+    expect(window.localStorage.getItem(storageKey)).not.toBeNull();
   });
 
   it("coalesces bursty desktop per-window projections into one bridge write", async () => {
@@ -483,7 +591,7 @@ describe("<WindowsBridgeProvider />", () => {
     act(() => {
       tabId = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
       useEpicCanvasStore.getState().renameTab(tabId, "A Prime");
-      draftId = useLandingDraftStore.getState().createDraft(null, undefined);
+      draftId = useLandingDraftStore.getState().createDraft(null);
       useLandingDraftStore
         .getState()
         .setDraftContent(draftId, landingTextContent("first prompt"), null);
@@ -527,7 +635,7 @@ describe("<WindowsBridgeProvider />", () => {
     act(() => {
       tabA = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
       tabB = useEpicCanvasStore.getState().openEpicTab("epic-b", "B");
-      draftId = useLandingDraftStore.getState().createDraft(null, undefined);
+      draftId = useLandingDraftStore.getState().createDraft(null);
       useLandingDraftStore
         .getState()
         .setDraftContent(draftId, landingTextContent("old prompt"), null);
@@ -588,7 +696,7 @@ describe("<WindowsBridgeProvider />", () => {
     act(() => {
       tabA = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
       tabB = useEpicCanvasStore.getState().openEpicTab("epic-b", "B");
-      draftId = useLandingDraftStore.getState().createDraft(null, undefined);
+      draftId = useLandingDraftStore.getState().createDraft(null);
       useLandingDraftStore
         .getState()
         .setDraftContent(draftId, landingTextContent("final prompt"), null);

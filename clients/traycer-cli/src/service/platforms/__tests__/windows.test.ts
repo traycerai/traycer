@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  buildScheduledTaskXml,
   buildWindowsSlotProcessScanScript,
   createWindowsController,
   parseSchtasksLastRunResult,
@@ -225,6 +226,35 @@ describe("Windows service stale host cleanup", () => {
     await controller.stop(serviceLabelFor("staging"));
 
     expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
+  });
+});
+
+describe("Scheduled Task XML identity", () => {
+  it("names Traycer as the task Author", () => {
+    // Probed live on Windows 11: a task registered from this XML without an
+    // <Author> shows `Author: N/A` in `schtasks /Query /V` and in the Task
+    // Scheduler UI - anonymous provenance for the one entry that starts a
+    // background process at every login. Same defect class as the macOS
+    // "sh from Unknown Developer" login item, one field cheaper to fix.
+    const prevDomain = process.env.USERDOMAIN;
+    const prevUser = process.env.USERNAME;
+    process.env.USERDOMAIN = "TESTBOX";
+    process.env.USERNAME = "testuser";
+    try {
+      const xml = buildScheduledTaskXml({
+        label: serviceLabelFor("staging"),
+        cli: {
+          command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
+          args: [],
+        },
+      });
+      expect(xml).toContain("<Author>Traycer</Author>");
+    } finally {
+      if (prevDomain === undefined) delete process.env.USERDOMAIN;
+      else process.env.USERDOMAIN = prevDomain;
+      if (prevUser === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = prevUser;
+    }
   });
 });
 

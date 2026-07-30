@@ -420,22 +420,22 @@ describe("useLandingDraftStore", () => {
 
   it("createDraft always creates a new draft and sets it active", () => {
     const { createDraft } = useLandingDraftStore.getState();
-    const first = createDraft(null, undefined);
+    const first = createDraft(null);
     expect(first.length).toBeGreaterThan(0);
     expect(useLandingDraftStore.getState().activeDraftId).toBe(first);
 
-    const second = createDraft(null, undefined);
+    const second = createDraft(null);
     expect(second).not.toBe(first);
     expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
     expect(useLandingDraftStore.getState().activeDraftId).toBe(second);
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
   });
 
-  it("createDraft uses a pre-minted id verbatim when provided", () => {
-    const { createDraft } = useLandingDraftStore.getState();
+  it("createDraftWithId uses a pre-minted id verbatim", () => {
+    const { createDraftWithId } = useLandingDraftStore.getState();
     const preMintedId = "pre-minted-id-123";
 
-    const id = createDraft(null, preMintedId);
+    const id = createDraftWithId(preMintedId, null);
 
     expect(id).toBe(preMintedId);
     expect(useLandingDraftStore.getState().activeDraftId).toBe(preMintedId);
@@ -446,7 +446,7 @@ describe("useLandingDraftStore", () => {
   it("setDraftContent stores content on the target draft and bails on no-op writes", () => {
     const { createDraft, setDraftContent } = useLandingDraftStore.getState();
 
-    const id = createDraft(null, undefined);
+    const id = createDraft(null);
     setDraftContent(id, textContent("hello world"), null);
     expect(useLandingDraftStore.getState().drafts[0].content).toEqual(
       textContent("hello world"),
@@ -464,8 +464,8 @@ describe("useLandingDraftStore", () => {
     const { createDraft, setDraftSettings } = useLandingDraftStore.getState();
     const mutableHaikuSettings = { ...HAIKU_SETTINGS };
     const mutableSonnetSettings = { ...SONNET_SETTINGS };
-    const haikuDraftId = createDraft(mutableHaikuSettings, undefined);
-    const sonnetDraftId = createDraft(mutableSonnetSettings, undefined);
+    const haikuDraftId = createDraft(mutableHaikuSettings);
+    const sonnetDraftId = createDraft(mutableSonnetSettings);
 
     setDraftSettings(sonnetDraftId, mutableSonnetSettings);
     mutableHaikuSettings.model = "mutated-haiku";
@@ -483,8 +483,8 @@ describe("useLandingDraftStore", () => {
   it("keeps composer mode independent per draft", () => {
     const { createDraft, setDraftComposerMode } =
       useLandingDraftStore.getState();
-    const a = createDraft(null, undefined);
-    const b = createDraft(null, undefined);
+    const a = createDraft(null);
+    const b = createDraft(null);
 
     setDraftComposerMode(a, "terminal");
 
@@ -500,7 +500,7 @@ describe("useLandingDraftStore", () => {
   it("seeds new drafts with the global last-used composer mode", () => {
     useSettingsStore.setState({ composerMode: "terminal" });
 
-    const id = useLandingDraftStore.getState().createDraft(null, undefined);
+    const id = useLandingDraftStore.getState().createDraft(null);
 
     expect(
       useLandingDraftStore.getState().drafts.find((draft) => draft.id === id)
@@ -513,13 +513,13 @@ describe("useLandingDraftStore", () => {
       folders: [WORKSPACE_A.path],
       folderInfoByPath: { [WORKSPACE_A.path]: WORKSPACE_A },
     });
-    const draftA = useLandingDraftStore.getState().createDraft(null, undefined);
+    const draftA = useLandingDraftStore.getState().createDraft(null);
 
     useWorkspaceFoldersStore.setState({
       folders: [WORKSPACE_B.path],
       folderInfoByPath: { [WORKSPACE_B.path]: WORKSPACE_B },
     });
-    const draftB = useLandingDraftStore.getState().createDraft(null, undefined);
+    const draftB = useLandingDraftStore.getState().createDraft(null);
     useLandingDraftStore
       .getState()
       .addDraftResolvedFolders(draftB, [WORKSPACE_C]);
@@ -579,9 +579,7 @@ describe("useLandingDraftStore", () => {
   });
 
   it("caps draft-added workspace folders to the newest 50 entries, never evicting primary", () => {
-    const draftId = useLandingDraftStore
-      .getState()
-      .createDraft(null, undefined);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
     const folders = Array.from({ length: 55 }, (_, index) =>
       numberedWorkspace(index),
     );
@@ -606,9 +604,7 @@ describe("useLandingDraftStore", () => {
   });
 
   it("50->51 cap transition never silently moves an EXPLICIT primary that isn't the oldest folder", () => {
-    const draftId = useLandingDraftStore
-      .getState()
-      .createDraft(null, undefined);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
     const folders = Array.from({ length: 50 }, (_, index) =>
       numberedWorkspace(index),
     );
@@ -633,9 +629,7 @@ describe("useLandingDraftStore", () => {
   });
 
   it("setDraftWorkspacePrimary scopes primary to the draft, leaving the global workspace store untouched", () => {
-    const draftId = useLandingDraftStore
-      .getState()
-      .createDraft(null, undefined);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
     useLandingDraftStore
       .getState()
       .addDraftResolvedFolders(draftId, [WORKSPACE_A, WORKSPACE_B]);
@@ -652,9 +646,7 @@ describe("useLandingDraftStore", () => {
   });
 
   it("a folder outside the draft's workspace is not settable as primary (no-op)", () => {
-    const draftId = useLandingDraftStore
-      .getState()
-      .createDraft(null, undefined);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
     useLandingDraftStore
       .getState()
       .addDraftResolvedFolders(draftId, [WORKSPACE_A]);
@@ -671,9 +663,9 @@ describe("useLandingDraftStore", () => {
   it("closeDraft removes the draft and picks another as active", () => {
     const { createDraft, setDraftContent, closeDraft } =
       useLandingDraftStore.getState();
-    const a = createDraft(null, undefined);
+    const a = createDraft(null);
     setDraftContent(a, textContent("wip"), null);
-    const b = createDraft(null, undefined);
+    const b = createDraft(null);
 
     closeDraft(a);
     expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
@@ -684,7 +676,7 @@ describe("useLandingDraftStore", () => {
 
   it("closeDraft sets activeDraftId to null when last draft is removed", () => {
     const { createDraft, closeDraft } = useLandingDraftStore.getState();
-    const id = createDraft(null, undefined);
+    const id = createDraft(null);
     closeDraft(id);
     expect(useLandingDraftStore.getState().drafts).toHaveLength(0);
     expect(useLandingDraftStore.getState().activeDraftId).toBeNull();
@@ -699,8 +691,8 @@ describe("useLandingDraftStore", () => {
 
   it("setActiveDraft switches the active draft", () => {
     const { createDraft, setActiveDraft } = useLandingDraftStore.getState();
-    const a = createDraft(null, undefined);
-    const b = createDraft(null, undefined);
+    const a = createDraft(null);
+    const b = createDraft(null);
     expect(useLandingDraftStore.getState().activeDraftId).toBe(b);
     setActiveDraft(a);
     expect(useLandingDraftStore.getState().activeDraftId).toBe(a);
@@ -708,7 +700,7 @@ describe("useLandingDraftStore", () => {
 
   it("clearActiveDraft clears the active marker without removing drafts", () => {
     const { createDraft, clearActiveDraft } = useLandingDraftStore.getState();
-    const draftId = createDraft(null, undefined);
+    const draftId = createDraft(null);
 
     clearActiveDraft();
 
@@ -723,8 +715,8 @@ describe("useLandingDraftStore", () => {
     const epicTabId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-a", "Epic A");
-    const a = createDraft(null, undefined);
-    const b = createDraft(null, undefined);
+    const a = createDraft(null);
+    const b = createDraft(null);
 
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([epicTabId]);
     expect(useLandingDraftStore.getState().drafts.map((tab) => tab.id)).toEqual(
@@ -758,7 +750,7 @@ describe("useLandingDraftStore", () => {
       activeDraftId: "draft-old",
     });
 
-    const next = useLandingDraftStore.getState().createDraft(null, undefined);
+    const next = useLandingDraftStore.getState().createDraft(null);
 
     expect(
       useLandingDraftStore.getState().drafts.map((draft) => draft.id),
@@ -911,7 +903,7 @@ describe("useLandingDraftStore", () => {
 
   it("keeps the initial landing-draft projection clean for a new window", () => {
     const { createDraft, setDraftContent } = useLandingDraftStore.getState();
-    const id = createDraft(null, undefined);
+    const id = createDraft(null);
     setDraftContent(id, textContent("do not inherit me"), null);
 
     const initial = useLandingDraftStore.getInitialState();
@@ -1008,7 +1000,7 @@ describe("useLandingDraftStore", () => {
     });
 
     try {
-      const id = useLandingDraftStore.getState().createDraft(null, undefined);
+      const id = useLandingDraftStore.getState().createDraft(null);
       useLandingDraftStore
         .getState()
         .setDraftContent(id, imageContent, { from: 2, to: 5 });
@@ -1105,7 +1097,7 @@ describe("useLandingDraftStore", () => {
 
   it("persists drafts to localStorage under the versioned key", async () => {
     const { createDraft, setDraftContent } = useLandingDraftStore.getState();
-    const id = createDraft(null, undefined);
+    const id = createDraft(null);
     setDraftContent(id, textContent("survives reload"), null);
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -1189,7 +1181,7 @@ describe("useLandingDraftStore", () => {
     };
 
     it("setDraftContent keeps the pending b64 node in the canonical in-memory draft", () => {
-      const id = useLandingDraftStore.getState().createDraft(null, undefined);
+      const id = useLandingDraftStore.getState().createDraft(null);
       useLandingDraftStore
         .getState()
         .setDraftContent(id, mixedPendingContent, null);
@@ -1212,7 +1204,7 @@ describe("useLandingDraftStore", () => {
         dispose: () => undefined,
       });
       try {
-        const id = useLandingDraftStore.getState().createDraft(null, undefined);
+        const id = useLandingDraftStore.getState().createDraft(null);
         useLandingDraftStore
           .getState()
           .setDraftContent(id, mixedPendingContent, null);
@@ -1225,7 +1217,7 @@ describe("useLandingDraftStore", () => {
     });
 
     it("the localStorage partialize strips the pending b64 node (keeping text + hash)", async () => {
-      const id = useLandingDraftStore.getState().createDraft(null, undefined);
+      const id = useLandingDraftStore.getState().createDraft(null);
       useLandingDraftStore
         .getState()
         .setDraftContent(id, mixedPendingContent, null);
@@ -1271,7 +1263,7 @@ describe("useLandingDraftStore", () => {
         dispose: () => undefined,
       });
       try {
-        const id = useLandingDraftStore.getState().createDraft(null, undefined);
+        const id = useLandingDraftStore.getState().createDraft(null);
         useLandingDraftStore.getState().setDraftContent(id, onlyPending, null);
         // In-memory keeps the pending group verbatim...
         expect(
@@ -1317,7 +1309,7 @@ describe("useLandingDraftStore", () => {
         // The first host-owned snapshot is authoritative even when empty. Only
         // later empty updates may be rejected as spurious live-window churn.
         applyLandingDraftDesktopProjection(emptyWindowSnapshot({}));
-        const id = useLandingDraftStore.getState().createDraft(null, undefined);
+        const id = useLandingDraftStore.getState().createDraft(null);
         useLandingDraftStore
           .getState()
           .setDraftContent(id, textContent("alive draft"), null);
@@ -1369,9 +1361,7 @@ describe("useLandingDraftStore", () => {
       });
 
       try {
-        const staleId = useLandingDraftStore
-          .getState()
-          .createDraft(null, undefined);
+        const staleId = useLandingDraftStore.getState().createDraft(null);
         useLandingDraftStore
           .getState()
           .setDraftContent(staleId, textContent("stale local draft"), null);

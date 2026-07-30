@@ -4,6 +4,7 @@ import {
 } from "../../ipc-contracts/ipc-channels";
 import {
   listUserSessionsViaHttp,
+  mintHostCredentialViaHttp,
   requestStepUpChallengeViaHttp,
   revokeAllSessionsViaHttp,
   revokeUserSessionViaHttp,
@@ -17,10 +18,12 @@ import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-type
 import {
   assertString,
   parseDesktopAuthSession,
+  parseMintHostCredentialRequest,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
   parseTokenRotateExpected,
   parseUpdateHostVersionPolicyInput,
+  readSenderWebContentsId,
 } from "./ipc-parsers";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
 
@@ -40,14 +43,15 @@ function assertBoolean(
   }
 }
 
-function activeRetainedStepUpToken(
-  credential: RetainedStepUpCredential | null,
-  nowMs: number,
-): string | null {
-  if (credential === null) {
-    return null;
-  }
-  return credential.expiresAtMs > nowMs ? credential.accessToken : null;
+/**
+ * The identity the provisioning memo is scoped to. Only a fully signed-in
+ * session names one: `signing-in` and `signed-out` both collapse to null, so a
+ * sign-out clears the memo and a sign-in as the same user restores it.
+ */
+function signedInUserId(snapshot: DesktopAuthSessionSnapshot): string | null {
+  return snapshot.status === "signed-in"
+    ? (snapshot.profile?.userId ?? null)
+    : null;
 }
 
 /**
@@ -60,6 +64,28 @@ function activeRetainedStepUpToken(
  */
 export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   let retainedStepUpCredential: RetainedStepUpCredential | null = null;
+  /**
+   * The retained step-up bearer if it is still usable, dropping an expired one
+   * on the way out.
+   *
+   * The drop is the point. An expired token is already refused by the server, so
+   * holding it grants nothing - but it is still a secret sitting in main-process
+   * memory with no remaining reason to be there, kept alive until some later
+   * `step-up-required`, `revokeAllSessions`, or session change happens to clear
+   * it. `MockRunnerHost.activeRetainedStepUpToken` self-nulls for the same
+   * reason; a closure rather than a free function is what lets this one do it
+   * too, so the pair cannot drift.
+   */
+  const activeRetainedStepUpToken = (nowMs: number): string | null => {
+    if (retainedStepUpCredential === null) {
+      return null;
+    }
+    if (retainedStepUpCredential.expiresAtMs <= nowMs) {
+      retainedStepUpCredential = null;
+      return null;
+    }
+    return retainedStepUpCredential.accessToken;
+  };
 
   bridge.handleInvoke(
     RunnerHostInvoke.validateAuthTokenIdentity,
@@ -127,6 +153,31 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
   );
 
   bridge.handleInvoke(
+    RunnerHostInvoke.updateHostVersionPolicy,
+    async (_event, bearerToken: unknown, hostId: unknown, input: unknown) => {
+      assertString(bearerToken, "updateHostVersionPolicy.bearerToken");
+      assertString(hostId, "updateHostVersionPolicy.hostId");
+      // Run in main so renderer-origin CORS does not block authn-v3's
+      // `PATCH /api/v3/hosts/:hostId` (Remote Host Support §13, T16).
+      return updateHostVersionPolicyViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        hostId,
+        parseUpdateHostVersionPolicyInput(input),
+      );
+    },
+  );
+
+  // Fan the owned-watcher change events out to every window (source lands in §4;
+  // a live registration that never fires until then). Torn down on dispose,
+  // which also disposes the underlying mutation store.
+  const unsubscribeTokenStore = bridge.authTokenStore.subscribe((change) => {
+    bridge.fanOut(RunnerHostEvent.authTokenStoreChange, change);
+  });
+  bridge.disposeFns.push(unsubscribeTokenStore);
+  bridge.disposeFns.push(() => bridge.authTokenStore.dispose());
+
+  bridge.handleInvoke(
     RunnerHostInvoke.listUserSessions,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "listUserSessions.bearerToken");
@@ -149,7 +200,7 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
         "revokeUserSession.useStepUpCredential",
       );
       const stepUpToken = useStepUpCredential
-        ? activeRetainedStepUpToken(retainedStepUpCredential, Date.now())
+        ? activeRetainedStepUpToken(Date.now())
         : null;
       const result = await revokeUserSessionViaHttp(
         bridge.options.authnBaseUrl,
@@ -167,16 +218,28 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
     RunnerHostInvoke.revokeAllSessions,
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "revokeAllSessions.bearerToken");
-      const stepUpToken = activeRetainedStepUpToken(
-        retainedStepUpCredential,
-        Date.now(),
-      );
+      const stepUpToken = activeRetainedStepUpToken(Date.now());
       const result = await revokeAllSessionsViaHttp(
         bridge.options.authnBaseUrl,
         stepUpToken ?? bearerToken,
       );
       retainedStepUpCredential = null;
       return result;
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.mintHostCredential,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "mintHostCredential.bearerToken");
+      // The caller's own bearer, never the retained step-up credential. The
+      // mint is not step-up gated, so substituting one here would have let an
+      // IPC caller spend a step-up bearer for a dialog nobody ever saw.
+      return mintHostCredentialViaHttp(
+        bridge.options.authnBaseUrl,
+        bearerToken,
+        parseMintHostCredentialRequest(request),
+      );
     },
   );
 
@@ -215,31 +278,6 @@ export function registerAuthIpc(bridge: RunnerIpcBridge): void {
       return toRetainedStepUpVerifyResult(result);
     },
   );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.updateHostVersionPolicy,
-    async (_event, bearerToken: unknown, hostId: unknown, input: unknown) => {
-      assertString(bearerToken, "updateHostVersionPolicy.bearerToken");
-      assertString(hostId, "updateHostVersionPolicy.hostId");
-      // Run in main so renderer-origin CORS does not block authn-v3's
-      // `PATCH /api/v3/hosts/:hostId` (Remote Host Support §13, T16).
-      return updateHostVersionPolicyViaHttp(
-        bridge.options.authnBaseUrl,
-        bearerToken,
-        hostId,
-        parseUpdateHostVersionPolicyInput(input),
-      );
-    },
-  );
-
-  // Fan the owned-watcher change events out to every window (source lands in §4;
-  // a live registration that never fires until then). Torn down on dispose,
-  // which also disposes the underlying mutation store.
-  const unsubscribeTokenStore = bridge.authTokenStore.subscribe((change) => {
-    bridge.fanOut(RunnerHostEvent.authTokenStoreChange, change);
-  });
-  bridge.disposeFns.push(unsubscribeTokenStore);
-  bridge.disposeFns.push(() => bridge.authTokenStore.dispose());
 
   bridge.handleInvoke(RunnerHostInvoke.authSessionGet, () => {
     return bridge.authSession.get();

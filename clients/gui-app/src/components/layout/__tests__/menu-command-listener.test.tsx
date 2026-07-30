@@ -44,17 +44,35 @@ import {
   type TileFindStateSnapshot,
 } from "@/stores/tile-find";
 import { useTabsStore } from "@/stores/tabs/store";
+import { tabItemId } from "@/stores/tabs/layout";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
 import type { DesktopMenuCommandPayload } from "@/lib/windows/types";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 
-const navigateMock = vi.hoisted(() => vi.fn());
+interface CapturedNavigate {
+  readonly to: string;
+  readonly params: unknown;
+  readonly replace: boolean;
+  readonly search: unknown;
+  readonly state: unknown;
+}
+
+const navigateMock = vi.hoisted(() =>
+  vi.fn<(options: CapturedNavigate) => void>(),
+);
 const routerState = vi.hoisted(() => ({ pathname: "/" }));
 const authMock = vi.hoisted(() => ({
   signIn: vi.fn(() => Promise.resolve()),
   signOut: vi.fn(() => Promise.resolve()),
 }));
+
+function latestNavigation(): CapturedNavigate {
+  const call = navigateMock.mock.calls.at(-1);
+  if (call === undefined) throw new Error("expected navigation");
+  return call[0];
+}
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigateMock,
@@ -144,7 +162,9 @@ function createRunnerHost(menu: FakeDesktopMenu): FakeRunnerHost {
         requestClose: vi.fn(),
         onChange: () => ({ dispose: () => undefined }),
       },
-      requestHostRespawn: vi.fn(() => Promise.resolve()),
+      requestHostRespawn: vi.fn(() =>
+        Promise.resolve({ kind: "restarted" as const }),
+      ),
     }),
     {
       menu,
@@ -166,19 +186,30 @@ function openEpicFixture(tab: EpicTab): string {
   const tabId = useEpicCanvasStore.getState().openEpicTab(tab.id, tab.name);
   useTabsStore.setState((state) => ({
     ...state,
+    version: 2,
+    items: useEpicCanvasStore.getState().openTabOrder.map((id) => ({
+      kind: "tab" as const,
+      id: tabItemId({ kind: "epic", id }),
+      ref: { kind: "epic" as const, id },
+    })),
+    activeItemId: tabItemId({ kind: "epic", id: tabId }),
     stripOrder: useEpicCanvasStore
       .getState()
-      .openTabOrder.map((id) => ({ kind: "epic", id })),
+      .openTabOrder.map((id) => ({ kind: "epic" as const, id })),
   }));
   return tabId;
 }
 
 function resetStores(): void {
+  __resetTabNavigationControllerForTesting();
   setEpicCanvasDesktopProjectionBridge(null);
   setLandingDraftDesktopProjectionBridge(null);
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   useTabsStore.setState({
+    version: 2,
+    items: [],
+    activeItemId: null,
     stripOrder: [],
     systemTabs: { history: null, settings: null },
   });
@@ -321,7 +352,10 @@ describe("<MenuCommandListener />", () => {
       menu.emit("epic.newWindow");
     });
 
-    expect(navigateMock).toHaveBeenCalledWith({ to: "/settings/general" });
+    const navigation = latestNavigation();
+    expect(navigation.to).toBe("/settings/general");
+    expect(navigation.replace).toBe(false);
+    expect(navigation.state).toEqual(expect.any(Function));
     expect(authMock.signIn).toHaveBeenCalledTimes(1);
     expect(useDesktopDialogStore.getState().activeDialog).toBe(
       "open-epic-in-new-window",
@@ -518,7 +552,7 @@ describe("<MenuCommandListener />", () => {
       ),
       installVersion: vi.fn(() => Promise.reject(new Error("not used"))),
       uninstallHost: vi.fn(() => Promise.reject(new Error("not used"))),
-      restartHost: vi.fn(() => Promise.resolve()),
+      restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
       uninstallTraycer: vi.fn(() => Promise.reject(new Error("not used"))),
       getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
       clearRemoval: vi.fn(() => Promise.resolve()),
@@ -698,7 +732,9 @@ describe("<MenuCommandListener />", () => {
 
   it("opens a confirmation dialog for host.restart and only respawns after confirm", async () => {
     const menu = createMenu();
-    const requestHostRespawn = vi.fn(() => Promise.resolve());
+    const requestHostRespawn = vi.fn(() =>
+      Promise.resolve({ kind: "restarted" as const }),
+    );
     const runnerHost = Object.assign(createRunnerHost(menu), {
       requestHostRespawn,
     });
@@ -753,7 +789,19 @@ describe("<MenuCommandListener />", () => {
     });
     useTabsStore.setState((state) => ({
       ...state,
-      stripOrder: [...state.stripOrder, { kind: "draft", id: "draft-a" }],
+      items: [
+        ...state.items,
+        {
+          kind: "tab",
+          id: tabItemId({ kind: "draft", id: "draft-a" }),
+          ref: { kind: "draft", id: "draft-a" },
+        },
+      ],
+      activeItemId: tabItemId({ kind: "draft", id: "draft-a" }),
+      stripOrder: [
+        ...state.stripOrder,
+        { kind: "draft" as const, id: "draft-a" },
+      ],
     }));
     const menu = createMenu();
 
@@ -771,15 +819,23 @@ describe("<MenuCommandListener />", () => {
 
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([tabId]);
-    expect(navigateMock).toHaveBeenCalledWith({
-      to: "/epics/$epicId/$tabId",
-      params: { epicId: "e-a", tabId },
-      search: {
-        focusedAt: undefined,
-        focusArtifactId: undefined,
-        focusThreadId: undefined,
-        migrationSource: undefined,
-      },
+    const navigation = latestNavigation();
+    expect(navigation.to).toBe("/epics/$epicId/$tabId");
+    expect(navigation.params).toEqual({ epicId: "e-a", tabId });
+    // T10: closing the draft now routes through
+    // `tabCommandCoordinator.closeRefAfterConfirmed`, which synchronously
+    // promotes the epic tab to `activeItemId` as part of the close itself
+    // (survivor-at-group-position). By the time the navigation controller
+    // runs, the epic is already the coordinator's active item, so it
+    // correctly resolves this as a replace (syncing the URL to already-
+    // settled layout state) rather than a push.
+    expect(navigation.replace).toBe(true);
+    expect(navigation.state).toEqual(expect.any(Function));
+    expect(navigation.search).toMatchObject({
+      focusedAt: undefined,
+      focusArtifactId: undefined,
+      focusThreadId: undefined,
+      migrationSource: undefined,
     });
   });
 });

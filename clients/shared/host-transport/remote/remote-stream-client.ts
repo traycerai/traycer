@@ -76,6 +76,16 @@ export class RemoteStreamClient<
   reconnectAll(_reason: string): void {}
 
   /**
+   * Never fires (see {@link IHostStreamClient.subscribeAvailabilityRecovered}):
+   * remote availability is owned by the registry's presence lease and the
+   * relay session's resume machinery, so there is no socket-level recovery
+   * evidence to surface from this client.
+   */
+  subscribeAvailabilityRecovered(_listener: () => void): () => void {
+    return () => undefined;
+  }
+
+  /**
    * Always `"unknown"` (see {@link IHostStreamClient.getMethodSupport}): the
    * mux session resolves an incompatible method as a fatal error on that
    * stream's subscribe attempt, not a queryable pre-check, so there is no

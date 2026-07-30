@@ -48,6 +48,10 @@ const runnerHostRef = vi.hoisted(() => {
   };
 });
 
+const streamFactorySpy = vi.hoisted(() => ({
+  build: vi.fn(),
+}));
+
 vi.mock("@/lib/host/runtime", () => ({
   useHostBinding: () => bindingRef.value,
   useAuthService: () => authServiceRef.value,
@@ -82,8 +86,29 @@ vi.mock(
   },
 );
 
+vi.mock("@/hooks/host/use-host-stream-client-for", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/hooks/host/use-host-stream-client-for")
+    >();
+  return {
+    ...actual,
+    buildHostStreamClient: (
+      params: Parameters<typeof actual.buildHostStreamClient>[0],
+    ) => {
+      streamFactorySpy.build();
+      return actual.buildHostStreamClient(params);
+    },
+  };
+});
+
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import {
+  HostReadinessControllerContext,
+  type DefaultHostReadinessPresentation,
+  type HostReadinessController,
+} from "@/components/layout/host-readiness-controller-context";
 
 function buildClient(): HostClient<HostRpcRegistry> {
   const client = new HostClient<HostRpcRegistry>({
@@ -180,12 +205,45 @@ function remoteIdentity(publicKey: string): RemoteSessionIdentity {
   };
 }
 
+const DEFAULT_PRESENTATION: DefaultHostReadinessPresentation = {
+  localTarget: false,
+  localHostState: "unknown",
+  stage: "loading",
+  progress: null,
+  provisioningError: null,
+  provisioning: false,
+  removed: false,
+  hostBusy: false,
+  canManageHost: false,
+  retryProvisioning: () => undefined,
+  forceProvisioning: () => undefined,
+  reinstall: () => undefined,
+  configureShell: () => undefined,
+  requestRespawn: () => undefined,
+  respawnPending: false,
+  compatibility: {
+    status: "compatible",
+    errorMessage: null,
+    retrying: false,
+    retry: () => undefined,
+  },
+};
+
+function streamController(ready: boolean): HostReadinessController {
+  return {
+    readinessFor: () =>
+      ready ? { kind: "ready" } : { kind: "unavailable-host" },
+    defaultHostPresentation: DEFAULT_PRESENTATION,
+  };
+}
+
 describe("HostStreamProvider", () => {
   afterEach(() => {
     cleanup();
     bindingRef.value = null;
     runnerHostRef.handlers.clear();
     mocks.createRemoteHostTransport.mockReset();
+    streamFactorySpy.build.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -395,5 +453,52 @@ describe("HostStreamProvider", () => {
     expect(mocks.createRemoteHostTransport).toHaveBeenCalledTimes(2);
     expect(remoteSessionRefCountForTest(remoteIdentity("pubkey-b"))).toBe(1);
     expect(sessionForKeyB.closeCalls).toBe(0);
+  });
+
+  it("stops stream work for a same-id unavailable host and recreates it only on recovery", () => {
+    const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+    const hostClient = buildClient();
+    bindingRef.value = { hostClient };
+    act(() => {
+      hostClient.bind(mockLocalHostEntry);
+    });
+    let controller = streamController(true);
+    const readinessWrapper = (props: {
+      readonly children: ReactNode;
+    }): ReactNode => (
+      <HostReadinessControllerContext.Provider value={controller}>
+        <HostStreamProvider>{props.children}</HostStreamProvider>
+      </HostReadinessControllerContext.Provider>
+    );
+
+    const { result, rerender } = renderHook(() => useWsStreamClient(), {
+      wrapper: readinessWrapper,
+    });
+    const first = result.current;
+    expect(first).toBeInstanceOf(WsStreamClient);
+    expect(streamFactorySpy.build).toHaveBeenCalledTimes(1);
+
+    controller = streamController(false);
+    act(() => {
+      hostClient.bind({
+        ...mockLocalHostEntry,
+        websocketUrl: null,
+        status: "unavailable",
+      });
+      rerender();
+    });
+    expect(result.current).toBeNull();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(closeSpy.mock.contexts[0]).toBe(first);
+
+    controller = streamController(true);
+    act(() => {
+      hostClient.bind(mockLocalHostEntry);
+      rerender();
+    });
+    expect(result.current).toBeInstanceOf(WsStreamClient);
+    expect(result.current).not.toBe(first);
+    expect(streamFactorySpy.build).toHaveBeenCalledTimes(2);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 });

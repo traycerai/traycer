@@ -50,6 +50,7 @@ const FAKE_TARGET: HostDirectoryEntry = {
 
 function buildParams(closeWs: () => void) {
   const order: string[] = [];
+  let availabilityListener: (() => void) | null = null;
   const fakeWs = {
     close: vi.fn(() => {
       order.push("ws");
@@ -57,11 +58,22 @@ function buildParams(closeWs: () => void) {
     }),
     reconnectAll: vi.fn(),
     notifyBearerRotated: vi.fn(),
+    subscribeAvailabilityRecovered: vi.fn((listener: () => void) => {
+      availabilityListener = listener;
+      return () => {
+        availabilityListener = null;
+      };
+    }),
   };
   mocks.buildHostStreamClient.mockReturnValue(fakeWs);
+  const notifyAvailabilityRecovered = vi.fn();
   return {
     order,
     fakeWs,
+    notifyAvailabilityRecovered,
+    fireAvailabilityRecovered: (): void => {
+      availabilityListener?.();
+    },
     params: {
       target: FAKE_TARGET,
       userId: "user-a",
@@ -76,6 +88,7 @@ function buildParams(closeWs: () => void) {
       },
       // No endpoint ever moves in these assembly tests; return a no-op disposer.
       subscribeEndpointChange: () => () => undefined,
+      notifyAvailabilityRecovered,
     },
   };
 }
@@ -172,9 +185,32 @@ describe("openDurableStreamTransport", () => {
     expect(order).toEqual(["bearer", "ws"]);
   });
 
+  it("wires the transport's recovery evidence to the bound-host notify callback", () => {
+    const built = buildParams(() => undefined);
+    mocks.subscribeStreamWakeReconnect.mockReturnValue(() => undefined);
+
+    const transport = openDurableStreamTransport(built.params);
+
+    // Evidence from THIS transport's heartbeat reaches the caller's notify -
+    // this is the only wiring that covers a tab bound to a non-active host.
+    expect(built.fakeWs.subscribeAvailabilityRecovered).toHaveBeenCalledTimes(
+      1,
+    );
+    built.fireAvailabilityRecovered();
+    expect(built.notifyAvailabilityRecovered).toHaveBeenCalledTimes(1);
+
+    transport.close();
+    built.fireAvailabilityRecovered();
+    expect(built.notifyAvailabilityRecovered).toHaveBeenCalledTimes(1);
+  });
+
   it("re-dials at once when the host's dialable endpoint moves, not on benign re-emits", () => {
     const reconnectAll = vi.fn();
-    const fakeWs = { close: vi.fn(), reconnectAll };
+    const fakeWs = {
+      close: vi.fn(),
+      reconnectAll,
+      subscribeAvailabilityRecovered: () => () => undefined,
+    };
     mocks.buildHostStreamClient.mockReturnValue(fakeWs);
     mocks.subscribeStreamWakeReconnect.mockReturnValue(() => undefined);
 
@@ -193,6 +229,7 @@ describe("openDurableStreamTransport", () => {
         fireDirectoryChange = onChange;
         return () => undefined;
       },
+      notifyAvailabilityRecovered: () => undefined,
     };
 
     const transport = openDurableStreamTransport(params);

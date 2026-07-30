@@ -47,7 +47,7 @@ export function SettingsModalContent(
   );
 }
 
-function SettingsPanelForSection(props: {
+export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
   switch (props.section) {

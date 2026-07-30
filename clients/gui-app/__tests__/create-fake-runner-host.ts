@@ -23,6 +23,8 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const }),
     revokeAllSessions: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    mintHostCredential: () =>
+      Promise.resolve({ kind: "network-error" as const }),
     requestStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>
@@ -78,7 +80,7 @@ export function createFakeRunnerHost(
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
-    requestHostRespawn: () => Promise.resolve(),
+    requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     service: null,
     traycerCli: null,
     migration: null,

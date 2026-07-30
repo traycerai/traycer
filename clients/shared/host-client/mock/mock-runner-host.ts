@@ -4,6 +4,7 @@ import type {
   DeviceFlowAuthorization,
   DeviceFlowResult,
   DeviceFlowSession,
+  HostRestartRequestResult,
   IDeviceFlowHost,
   IHostPicker,
   IHostManagement,
@@ -33,16 +34,19 @@ import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import {
   listUserSessionsViaHttp,
   requestStepUpChallengeViaHttp,
+  mintHostCredentialViaHttp,
   revokeAllSessionsViaHttp,
   revokeUserSessionViaHttp,
   toRetainedStepUpVerifyResult,
   verifyStepUpChallengeViaHttp,
   type ListUserSessionsFetchResult,
+  type MintHostCredentialFetchResult,
   type RetainedStepUpVerifyFetchResult,
   type RevokeAllSessionsFetchResult,
   type RevokeUserSessionFetchResult,
   type StepUpChallengeFetchResult,
 } from "../../auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import {
   credentialsIdentityFromAuthenticatedUser,
   refreshOnceAbortable,
@@ -229,7 +233,7 @@ export class MockRunnerHost implements IRunnerHost {
     return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken);
   }
 
-  revokeUserSession(
+  async revokeUserSession(
     bearerToken: string,
     familyId: string,
     useStepUpCredential: boolean,
@@ -237,11 +241,19 @@ export class MockRunnerHost implements IRunnerHost {
     const stepUpToken = useStepUpCredential
       ? this.activeRetainedStepUpToken()
       : null;
-    return revokeUserSessionViaHttp(
+    const result = await revokeUserSessionViaHttp(
       this.authnBaseUrl,
       stepUpToken ?? bearerToken,
       familyId,
     );
+    // Parity with the desktop main-process handler (`auth-ipc.ts`): a
+    // step-up-required verdict on a retained credential means the server just
+    // rejected it, so holding it would make the next revoke re-send a
+    // credential known to be dead and re-prompt in a loop.
+    if (result.kind === "step-up-required" && useStepUpCredential) {
+      this.retainedStepUpCredential = null;
+    }
+    return result;
   }
 
   async revokeAllSessions(
@@ -253,6 +265,15 @@ export class MockRunnerHost implements IRunnerHost {
     );
     this.retainedStepUpCredential = null;
     return result;
+  }
+
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult> {
+    // The caller's own bearer: the mint is not step-up gated, so this double
+    // must not substitute a retained step-up credential either.
+    return mintHostCredentialViaHttp(this.authnBaseUrl, bearerToken, request);
   }
 
   requestStepUpChallenge(
@@ -487,8 +508,9 @@ export class MockRunnerHost implements IRunnerHost {
     });
   }
 
-  async requestHostRespawn(): Promise<void> {
+  async requestHostRespawn(): Promise<HostRestartRequestResult> {
     this.requestHostRespawnCalls += 1;
+    return { kind: "restarted" };
   }
 
   readonly notifications: INotificationHost = {

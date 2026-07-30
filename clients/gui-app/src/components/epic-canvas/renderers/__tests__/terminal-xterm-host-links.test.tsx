@@ -55,6 +55,10 @@ vi.mock("@xterm/xterm", () => ({
     readonly buffer = {
       active: { baseY: 0, length: 24, type: "normal" as const },
     };
+    // Real cell-width behaviour is covered in
+    // terminal-xterm-host-unicode-width.test.tsx against a real Terminal; here
+    // the addon just needs somewhere to register.
+    readonly unicode = { activeVersion: "6", register: vi.fn() };
     readonly focus = vi.fn();
     readonly scrollPages = vi.fn();
     readonly scrollToTop = vi.fn();

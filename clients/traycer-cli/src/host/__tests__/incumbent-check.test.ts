@@ -38,6 +38,7 @@ const VALID_META = {
   version: "1.1.8",
   websocketUrl: "ws://127.0.0.1:58036/rpc",
   startedAt: "2026-01-01T00:00:00.000Z",
+  processStartIdentity: "linux:boot-a 4242",
 };
 
 // `probeHostReachable` is a plain loopback GET, so driving global fetch keeps
@@ -90,9 +91,13 @@ describe("findLiveIncumbentHost", () => {
       version: "1.1.8",
       websocketUrl: "ws://127.0.0.1:58036/rpc",
     });
+    // The kernel creation stamp, NOT `startedAt`. Passing the publication
+    // timestamp here is what made this verdict answer "mismatch" for healthy
+    // hosts whose machine adjusted its clock (traycerai/traycer#740), so the
+    // operand itself is worth pinning.
     expect(mocks.identityVerdictMock).toHaveBeenCalledWith(
       4242,
-      "2026-01-01T00:00:00.000Z",
+      "linux:boot-a 4242",
     );
   });
 

@@ -5,7 +5,7 @@ import {
 } from "@traycer/protocol/host/registry";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  type HostNotificationEntry,
+  type HostNotificationEntryV21,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
   type HostNotificationsSubscribeClientFrame,
@@ -15,12 +15,18 @@ import type {
   IStreamSession,
   ServerFrameHandler,
   StatusChangeHandler,
+  StreamCloseReason,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   WsStreamClient,
   type ParamsOf,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import {
+  NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS,
+  NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS,
+} from "@/lib/notifications/notification-stream-reopen";
 import {
   __resetHostNotificationsStoreForTests,
   compareHostNotificationEntries,
@@ -39,7 +45,7 @@ function entry(
   id: string,
   updatedAt: number,
   readAt: number | null,
-): HostNotificationEntry {
+): HostNotificationEntryV21 {
   return {
     id,
     updatedAt,
@@ -58,14 +64,14 @@ function entry(
   };
 }
 
-function promptEntry(id: string): HostNotificationEntry {
+function promptEntry(id: string): HostNotificationEntryV21 {
   return promptOccurrence(id, 10);
 }
 
 function promptOccurrence(
   id: string,
   updatedAt: number,
-): HostNotificationEntry {
+): HostNotificationEntryV21 {
   return {
     id,
     updatedAt,
@@ -96,7 +102,7 @@ function attentionCursor(
 }
 
 function defaultSummaryFor(
-  entries: ReadonlyArray<HostNotificationEntry>,
+  entries: ReadonlyArray<HostNotificationEntryV21>,
 ): HostNotificationsSummary {
   return {
     unreadCount: entries.filter((item) => item.readAt === null).length,
@@ -106,7 +112,7 @@ function defaultSummaryFor(
 }
 
 function applySimpleSnapshot(input: {
-  readonly entries: ReadonlyArray<HostNotificationEntry>;
+  readonly entries: ReadonlyArray<HostNotificationEntryV21>;
   readonly summary: HostNotificationsSummary;
   readonly recentCursor: HostNotificationsChronologicalCursor | null;
   readonly attentionNext: HostNotificationsAttentionCursor | null;
@@ -175,6 +181,11 @@ class MockStreamSession implements IStreamSession {
     if (this.statusChangeHandler === null) return;
     this.statusChangeHandler(status, null);
   }
+
+  emitClosed(reason: StreamCloseReason | null): void {
+    if (this.statusChangeHandler === null) return;
+    this.statusChangeHandler("closed", reason);
+  }
 }
 
 class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
@@ -189,6 +200,7 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
       endpoint: () => null,
       bearer: () => null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: {
         create: () => {
           throw new Error("MockWsStreamClient should not open a websocket");
@@ -1505,7 +1517,7 @@ describe("host notifications store", () => {
 
   it("uses channelEmission as the only host-source display path", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntry>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntryV21>> = [];
     const liveEntry = entry("live", 200, null);
 
     const close = openHostNotificationsStream(client, null, {
@@ -1548,12 +1560,12 @@ describe("host notifications store", () => {
 
   it("uses the latest feed copy for renderer channel emissions", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntry>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntryV21>> = [];
     const staleEmissionEntry = entry("live", 200, null);
     if (staleEmissionEntry.kind !== "agent.stopped") {
       throw new Error("Expected an agent-stopped notification fixture");
     }
-    const richFeedEntry: HostNotificationEntry = {
+    const richFeedEntry: HostNotificationEntryV21 = {
       ...staleEmissionEntry,
       updatedAt: 201,
       payload: {
@@ -1597,7 +1609,7 @@ describe("host notifications store", () => {
 
   it("ignores non-renderer channelEmission frames for in-app display", () => {
     const client = new MockWsStreamClient();
-    const displayed: Array<ReadonlyArray<HostNotificationEntry>> = [];
+    const displayed: Array<ReadonlyArray<HostNotificationEntryV21>> = [];
     const liveEntry = entry("webhook-live", 240, null);
 
     const close = openHostNotificationsStream(client, null, {
@@ -1693,6 +1705,271 @@ describe("host notifications store", () => {
       close();
       vi.advanceTimersByTime(3 * HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
       expect(client.session.clientFrames).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("notifies presence locally on focus changes while the stream is not open", () => {
+    const client = new MockWsStreamClient();
+    const notified: HostNotificationsSubscribeClientFrame[] = [];
+    const close = openHostNotificationsStream(client, null, {
+      windowId: "window-1",
+      now: () => 456,
+      displayChannelEmission: () => undefined,
+      onFeedFrame: () => undefined,
+      onPresenceChanged: (frame) => {
+        notified.push(frame);
+      },
+      onStreamOpened: () => undefined,
+    });
+    try {
+      // No open ack ever arrives: the transport send is impossible, but the
+      // local consumer (unary-channel read-consumption) must still hear the
+      // focus change — this is what keeps tab clicks clearing indicators
+      // while the stream is down.
+      useEpicCanvasStore.getState().openEpicTab("epic-presence-1", "Epic");
+
+      expect(notified.length).toBeGreaterThan(0);
+      expect(notified.every((frame) => frame.kind === "presence")).toBe(true);
+      expect(client.session.clientFrames).toHaveLength(0);
+    } finally {
+      close();
+      useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    }
+  });
+
+  it("reopens a replacement session with backoff after a terminal close", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new MockWsStreamClient();
+      const close = openHostNotificationsStream(client, null, {
+        windowId: "window-1",
+        now: () => 456,
+        displayChannelEmission: () => undefined,
+        onFeedFrame: () => undefined,
+        onPresenceChanged: () => undefined,
+        onStreamOpened: () => undefined,
+      });
+      expect(client.subscribeCount).toBe(1);
+      client.session.emitOpen();
+
+      client.session.emitClosed({
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "gave up after bounded reconnects",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+      expect(useHostNotificationsStore.getState().connectionStatus).toBe(
+        "closed",
+      );
+      // The reopen waits out the backoff — no synchronous redial storm.
+      expect(client.subscribeCount).toBe(1);
+      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      expect(client.subscribeCount).toBe(2);
+
+      // The replacement session owns the store projection from here.
+      client.session.emitOpen();
+      expect(useHostNotificationsStore.getState().connectionStatus).toBe(
+        "open",
+      );
+      close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-sends presence and re-notifies the consumer when a replacement session opens", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new MockWsStreamClient();
+      const notified: HostNotificationsSubscribeClientFrame[] = [];
+      const close = openHostNotificationsStream(client, null, {
+        windowId: "window-1",
+        now: () => 456,
+        displayChannelEmission: () => undefined,
+        onFeedFrame: () => undefined,
+        onPresenceChanged: (frame) => {
+          notified.push(frame);
+        },
+        onStreamOpened: () => undefined,
+      });
+      const firstSession = client.session;
+      firstSession.emitOpen();
+      expect(firstSession.clientFrames).toHaveLength(1);
+      expect(notified).toHaveLength(1);
+
+      firstSession.emitClosed({
+        kind: "fatalError",
+        details: {
+          code: "INTERNAL",
+          reason: "host terminated the stream",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      const replacementSession = client.session;
+      expect(replacementSession).not.toBe(firstSession);
+
+      // Nothing about the local presence content changed across the reopen,
+      // but the replacement session still needs the frame (its host-side
+      // record starts empty) and the consumer still needs the notify:
+      // `onStreamOpened` cleared its active entity, so an unchanged-key
+      // dedupe would leave the focused entity permanently unconsumed.
+      replacementSession.emitOpen();
+      expect(replacementSession.clientFrames).toHaveLength(1);
+      expect(replacementSession.clientFrames[0]).toMatchObject({
+        kind: "presence",
+        windowId: "window-1",
+      });
+      expect(notified).toHaveLength(2);
+      expect(notified[1]).toMatchObject({ kind: "presence" });
+
+      close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("escalates the reopen backoff while closes repeat and resets it on a valid snapshot", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new MockWsStreamClient();
+      const close = openHostNotificationsStream(client, null, {
+        windowId: "window-1",
+        now: () => 456,
+        displayChannelEmission: () => undefined,
+        onFeedFrame: () => undefined,
+        onPresenceChanged: () => undefined,
+        onStreamOpened: () => undefined,
+      });
+      const terminalClose = (): void => {
+        client.session.emitClosed({
+          kind: "fatalError",
+          details: {
+            code: "INTERNAL",
+            reason: "host terminated the stream",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        });
+      };
+
+      terminalClose();
+      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      expect(client.subscribeCount).toBe(2);
+
+      // Second consecutive terminal close: the delay has doubled.
+      terminalClose();
+      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      expect(client.subscribeCount).toBe(2);
+      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      expect(client.subscribeCount).toBe(3);
+
+      // A raw transport `open` is NOT proof of a usable stream (the host
+      // resolver can still terminate during async init) — the backoff keeps
+      // escalating: this close waits the quadrupled delay.
+      client.session.emitOpen();
+      terminalClose();
+      vi.advanceTimersByTime(
+        3 * NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS,
+      );
+      expect(client.subscribeCount).toBe(3);
+      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      expect(client.subscribeCount).toBe(4);
+
+      // A schema-valid snapshot resets the backoff to the initial delay.
+      client.session.emitOpen();
+      client.session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: [], nextCursor: null },
+        summary: EMPTY_SUMMARY,
+      });
+      terminalClose();
+      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_INITIAL_BACKOFF_MS);
+      expect(client.subscribeCount).toBe(5);
+
+      close();
+      vi.advanceTimersByTime(NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS);
+      expect(client.subscribeCount).toBe(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never reopens after caller, client-closed, or incompatible closes", () => {
+    vi.useFakeTimers();
+    try {
+      for (const reason of [
+        { kind: "caller" } as const,
+        {
+          kind: "fatalError" as const,
+          details: {
+            code: "CLIENT_CLOSED",
+            reason: "stream client was already closed",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        },
+        {
+          kind: "fatalError" as const,
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "method not supported by this host",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        },
+      ]) {
+        const client = new MockWsStreamClient();
+        const close = openHostNotificationsStream(client, null, {
+          windowId: "window-1",
+          now: () => 456,
+          displayChannelEmission: () => undefined,
+          onFeedFrame: () => undefined,
+          onPresenceChanged: () => undefined,
+          onStreamOpened: () => undefined,
+        });
+        client.session.emitClosed(reason);
+        vi.advanceTimersByTime(4 * NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS);
+        expect(client.subscribeCount).toBe(1);
+        close();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending reopen on dispose", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new MockWsStreamClient();
+      const close = openHostNotificationsStream(client, null, {
+        windowId: "window-1",
+        now: () => 456,
+        displayChannelEmission: () => undefined,
+        onFeedFrame: () => undefined,
+        onPresenceChanged: () => undefined,
+        onStreamOpened: () => undefined,
+      });
+      client.session.emitClosed({
+        kind: "fatalError",
+        details: {
+          code: "INTERNAL",
+          reason: "host terminated the stream",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+      close();
+      vi.advanceTimersByTime(4 * NOTIFICATIONS_STREAM_REOPEN_MAX_BACKOFF_MS);
+      expect(client.subscribeCount).toBe(1);
     } finally {
       vi.useRealTimers();
     }

@@ -25,6 +25,7 @@ import {
   buildTerminalTileRef,
   type TerminalLaunchTarget,
 } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
@@ -35,6 +36,17 @@ interface NewTerminalPickerProps {
 
 export function NewTerminalPicker(props: NewTerminalPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
+  // The picker's `PopoverContent` (a modal Radix popover) un-presents by
+  // unmounting when its pane is backgrounded, which silently resets the cmdk
+  // folder-search query inside `WorktreeFolderListBody` while the root stays
+  // logically open. Dismiss the picker on focus loss (the approved semantic) so
+  // it never reappears as a logically-open root with reset content.
+  const paneFocused = usePaneFocused();
+  const [focusedLastRender, setFocusedLastRender] = useState(paneFocused);
+  if (paneFocused !== focusedLastRender) {
+    setFocusedLastRender(paneFocused);
+    if (!paneFocused) setIsOpen(false);
+  }
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,

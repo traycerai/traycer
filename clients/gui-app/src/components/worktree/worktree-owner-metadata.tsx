@@ -54,6 +54,7 @@ const CLOSED_HOVER_STATE: OwnerMetadataHoverState = {
 
 export function WorktreeOwnerMetadataTooltip(props: {
   readonly trigger: ReactElement;
+  readonly title: string;
   readonly hostId: string;
   readonly epicId: string;
   readonly ownerId: string;
@@ -116,18 +117,26 @@ export function WorktreeOwnerMetadataTooltip(props: {
   return (
     <HoverPreviewCard
       content={
-        // Sized by its FIRST ROW, between a floor and a ceiling. The settings
-        // line is a single unbreakable unit - model, reasoning, permission mode
-        // - and wrapping it onto a second line was worse than a wider card: it
-        // pushed the permission mode, the one value here with a safety
-        // consequence, below the fold of the eye. So the card grows to fit it
-        // instead, from the old fixed 24rem (now the floor, so a short line
-        // still gets a card that reads as a card) up to a viewport-capped
-        // ceiling, past which the header ellipsizes rather than growing further.
+        // Sized by the run-settings row, between a floor and a ceiling. The
+        // title and workspace blocks stretch to that resolved width without
+        // voting on it. The settings line is a single unbreakable unit - model,
+        // reasoning, permission mode - and wrapping it onto a second line was
+        // worse than a wider card: it pushed the permission mode, the one value
+        // here with a safety consequence, below the fold of the eye. So the
+        // card grows to fit it instead, from the old fixed 24rem (now the floor,
+        // so a short line still gets a card that reads as a card) up to a
+        // viewport-capped ceiling, past which the header ellipsizes rather than
+        // growing further.
         <div
           className="block w-fit min-w-[min(92vw,24rem)] max-w-[min(92vw,36rem)]"
           data-testid={`chat-navigator-worktree-hover-${props.ownerId}`}
         >
+          <span
+            className="block w-0 min-w-full break-words border-b border-border/70 px-3 py-2 text-ui-sm font-medium text-foreground"
+            data-testid={`chat-navigator-hover-title-${props.ownerId}`}
+          >
+            {props.title}
+          </span>
           <WorktreeOwnerSettingsHeader
             ownerId={props.ownerId}
             hostId={props.hostId}

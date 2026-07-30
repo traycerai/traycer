@@ -69,4 +69,14 @@ export interface IHostStreamClient<
   getMethodSchemaVersion<Method extends keyof Registry & string>(
     method: Method,
   ): SchemaVersion | null;
+  /**
+   * Positive host-recovery evidence: fires when a session (re)opens after a
+   * drop or a stall-length silent gap - see
+   * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
+   * points. Consumers drive `HostClient.notifyAvailabilityRecovered()` off it
+   * so stranded unary queries refetch. `RemoteStreamClient` never fires it
+   * today: remote availability is owned by the registry's presence lease and
+   * the relay resume machinery, not socket-level evidence.
+   */
+  subscribeAvailabilityRecovered(listener: () => void): () => void;
 }

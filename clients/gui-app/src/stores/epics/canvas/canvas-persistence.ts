@@ -117,11 +117,22 @@ function parsePersistedEpicViewTab(value: unknown): EpicViewTab | null {
   // (see `readPersistedCanvasByTabId`), not stored on the tab record. Any legacy
   // `lastSeenAt` in persisted data is ignored - the field was removed (it was
   // write-only; restore ordering uses `mostRecentTabIdByEpicId`).
+  const surfaceMode = parsePersistedSurfaceMode(value.surfaceMode);
   return {
     tabId: value.tabId,
     epicId: value.epicId,
     name: value.name,
+    ...(surfaceMode === undefined ? {} : { surfaceMode }),
   };
+}
+
+function parsePersistedSurfaceMode(value: unknown): EpicViewTab["surfaceMode"] {
+  if (!isRecord(value)) return undefined;
+  if (value.kind === "epic") return { kind: "epic" };
+  if (value.kind !== "phase-migration" || typeof value.phaseId !== "string") {
+    return undefined;
+  }
+  return { kind: "phase-migration", phaseId: value.phaseId };
 }
 
 function readPersistedOpenTabOrder(

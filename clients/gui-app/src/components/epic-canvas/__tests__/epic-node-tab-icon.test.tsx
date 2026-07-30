@@ -1,7 +1,10 @@
 import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { AGENT_WORKING_AWARENESS_FIELD } from "@traycer/protocol/host/epic/subscribe";
+import {
+  publishAgentActivity,
+  resetAgentActivityPresence,
+} from "@/__tests__/agent-activity-presence-harness";
 import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
@@ -104,43 +107,63 @@ describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
+    resetAgentActivityPresence();
     __resetAppLocalNotificationsStoreForTests();
   });
 
   // Regression: the TUI-agent tab used to hardcode `running={false}`, so a
   // working agent spun in the sidebar but never in its own tab.
   it("swaps the idle icon for the spinner while the agent is working", () => {
-    const handle = registerEpicSession("epic-1");
+    registerEpicSession("epic-1");
 
     renderTuiAgentTabIcon();
 
     expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
 
     act(() => {
-      handle.awareness.setLocalState({
-        [AGENT_WORKING_AWARENESS_FIELD]: [TUI_AGENT_NODE.id],
-      });
+      publishWorking([TUI_AGENT_NODE.id]);
     });
 
     expect(screen.getByRole("status", { name: SPINNER_LABEL })).toBeTruthy();
 
     act(() => {
-      handle.awareness.setLocalState({
-        [AGENT_WORKING_AWARENESS_FIELD]: [],
-      });
+      publishWorking([]);
     });
 
     expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
   });
 
   // The shared icon renders outside an open-epic session too (drag previews,
-  // mount-lifecycle tests); an unregistered Epic must read as idle, not throw.
+  // mount-lifecycle tests); an Epic with no presence must read as idle, not
+  // throw.
   it("renders the idle icon with no registered Epic session", () => {
     renderTuiAgentTabIcon();
 
     expect(screen.queryByRole("status", { name: SPINNER_LABEL })).toBeNull();
   });
+
+  // The defect this whole signal move fixes: activity for an Epic this window
+  // has NEVER opened. There is no session and no per-epic room here, so the
+  // spinner can only come from the per-user notification room.
+  it("spins for an Epic that was never opened in this window", () => {
+    renderTuiAgentTabIcon();
+
+    act(() => {
+      publishWorking([TUI_AGENT_NODE.id]);
+    });
+
+    expect(screen.getByRole("status", { name: SPINNER_LABEL })).toBeTruthy();
+  });
 });
+
+function publishWorking(agentIds: readonly string[]): void {
+  publishAgentActivity([
+    {
+      hostId: "host-1",
+      byEpic: { "epic-1": { working: agentIds, turn: agentIds } },
+    },
+  ]);
+}
 
 function registerEpicSession(epicId: string): OpenEpicStoreHandle {
   return __getOpenEpicRegistryForTests().acquire(epicId, () =>

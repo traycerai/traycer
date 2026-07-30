@@ -11,6 +11,7 @@ import {
   HostDirectoryService,
   type HostDirectoryServiceOptions,
 } from "@/lib/host/host-directory-service";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { lastSelectedHostKey } from "@/lib/persist";
 
 const HOST_DIRECTORY_REFRESH_POLL_MS = 15_000;
@@ -133,6 +134,10 @@ function queuedFetcher(outcomes: readonly RemoteHostFetchOutcome[]): {
 }
 
 describe("HostDirectoryService", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("seeds the local entry from the runner-host onLocalHostChange subscription", async () => {
     const host = makeHost(localSnapshot);
     const directory = makeDirectory({
@@ -967,5 +972,136 @@ describe("HostDirectoryService", () => {
 
     expect(calls).toBe(2);
     expect(await directory.list()).toHaveLength(1);
+  });
+
+  /**
+   * A transient activation (today: a native notification whose row was minted
+   * on another host) has to move the app WITHOUT claiming the user picked
+   * that host. Same binding authority, no durable intent - which is exactly
+   * what makes it recoverable when that host goes away.
+   */
+  describe("selectTransientById", () => {
+    it("binds through the same selection listener as an explicit pick", async () => {
+      const host = makeHost(localSnapshot);
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
+      });
+      await directory.start();
+
+      const observed: Array<HostDirectoryEntry | null> = [];
+      directory.onSelectionChange((entry) => {
+        observed.push(entry);
+      });
+
+      directory.selectTransientById(mockRemoteHostEntry.hostId, "notification");
+
+      expect(observed.map((entry) => entry?.hostId ?? null)).toEqual([
+        mockRemoteHostEntry.hostId,
+      ]);
+      expect(directory.getSelected()?.hostId).toBe(mockRemoteHostEntry.hostId);
+    });
+
+    it("hands back to the default host when the activated entry leaves the directory", async () => {
+      // The whole point of the transient seam. `selectById` would have pinned
+      // `explicitSelection` here, and the app would sit unbound for the rest
+      // of the session with a perfectly good local host in the directory.
+      const host = makeHost(localSnapshot);
+      let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+
+      directory.selectTransientById(mockRemoteHostEntry.hostId, "notification");
+      expect(directory.getSelected()?.hostId).toBe(mockRemoteHostEntry.hostId);
+
+      const observed: Array<HostDirectoryEntry | null> = [];
+      directory.onSelectionChange((entry) => {
+        observed.push(entry);
+      });
+
+      remotes = [];
+      await directory.refresh();
+
+      // One transition, straight to the default - not an unbind followed by a
+      // later re-promotion, which would flap the app-wide host binding.
+      expect(observed.map((entry) => entry?.hostId ?? null)).toEqual([
+        localSnapshot.hostId,
+      ]);
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+    });
+
+    it("keeps an explicit pick pinned when ITS host leaves the directory", async () => {
+      // The contrast case, asserted so the transient seam cannot be
+      // generalised into "always fall back": a user who chose a host is not
+      // silently moved to another one.
+      const host = makeHost(localSnapshot);
+      let remotes: readonly HostDirectoryEntry[] = [mockRemoteHostEntry];
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: remotes }),
+      });
+      await directory.start();
+
+      directory.selectById(mockRemoteHostEntry.hostId);
+      remotes = [];
+      await directory.refresh();
+
+      expect(directory.getSelected()).toBeNull();
+    });
+
+    it("is a no-op for an id the directory does not hold, never an unbind", async () => {
+      const host = makeHost(localSnapshot);
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: null,
+      });
+      await directory.start();
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+
+      const observed: Array<HostDirectoryEntry | null> = [];
+      directory.onSelectionChange((entry) => {
+        observed.push(entry);
+      });
+
+      directory.selectTransientById("host-that-left", "notification");
+
+      expect(observed).toEqual([]);
+      expect(directory.getSelected()?.hostId).toBe(localSnapshot.hostId);
+    });
+
+    it("attributes the selection to the caller's analytics source", async () => {
+      const track = vi.spyOn(Analytics.getInstance(), "track");
+      const host = makeHost(localSnapshot);
+      const directory = makeDirectory({
+        runnerHost: host,
+        remoteFetcher: () =>
+          Promise.resolve({ kind: "hosts", entries: [mockRemoteHostEntry] }),
+      });
+      await directory.start();
+
+      directory.selectTransientById(mockRemoteHostEntry.hostId, "notification");
+      directory.selectById(localSnapshot.hostId);
+
+      expect(
+        track.mock.calls.filter(
+          (call) => call[0] === AnalyticsEvent.HostSelected,
+        ),
+      ).toEqual([
+        [
+          AnalyticsEvent.HostSelected,
+          { source: "notification", host_kind: "remote" },
+        ],
+        [
+          AnalyticsEvent.HostSelected,
+          { source: "direct_ui", host_kind: "local" },
+        ],
+      ]);
+    });
   });
 });

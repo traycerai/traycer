@@ -50,8 +50,9 @@ function traycerHostStatusQueryOptions(
  * Reads `traycer host status` through the runner-host CLI bridge. Host-
  * independent: works whether the host is up, starting, or wedged.
  * Consumers:
- *   - `LocalHostLoading` - polls while the gate is in `loading` / `slow`
- *     so the live bootstrap.log tail and recent markers stay fresh.
+ *   - `LocalHostLoadingContent` - polls while the host-ready gate is in
+ *     `loading` / `slow` so the live bootstrap.log tail and recent markers
+ *     stay fresh.
  *   - `LocalHostUnavailable` (failure card) - single read; the renderer
  *     stops driving updates while the user reads the diagnostics.
  *

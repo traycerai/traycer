@@ -8,7 +8,10 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
 import { TerminalGridMeasureProbe } from "@/components/epic-canvas/renderers/terminal-grid-measure-probe";
@@ -91,6 +94,10 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     options: Record<string, unknown>;
     readonly buffer = { active: { baseY: 0, length: 24 } };
+    // Real cell-width behaviour is covered in
+    // terminal-xterm-host-unicode-width.test.tsx against a real Terminal; here
+    // the addon just needs somewhere to register.
+    readonly unicode = { activeVersion: "6", register: vi.fn() };
     readonly textarea = document.createElement("textarea");
     readonly focus = vi.fn(() => this.textarea.focus());
     readonly paste = vi.fn((data: string) => {
@@ -504,6 +511,71 @@ describe("<TerminalXtermHost /> terminal find", () => {
     // theme instead of painting from a stale/cleared atlas - the blank-grid /
     // default-color regression after returning from `display:none`.
     expect(xtermMocks.repaintLog).toEqual(["clearAtlas", "refresh"]);
+  });
+
+  it("repairs both visible split terminals while only the focused member owns find and DOM focus", () => {
+    vi.useFakeTimers();
+    render(
+      <>
+        <PaneSurfaceActivityContext.Provider
+          value={{ visible: true, focused: true }}
+        >
+          <PaneVisibilityContext value>
+            <TerminalXtermHost
+              sessionId="split-left"
+              tileKind="terminal"
+              instanceId="split-left-instance"
+              effectiveCols={80}
+              effectiveRows={24}
+              onUserInput={vi.fn()}
+              onContainerResize={vi.fn()}
+              onWriterReady={vi.fn()}
+              shouldFocusOnActivePane
+              registerImperativeFocus
+              findTargetId="terminal:split-left"
+              keepAlive={false}
+              chrome="padded"
+            />
+          </PaneVisibilityContext>
+        </PaneSurfaceActivityContext.Provider>
+        <PaneSurfaceActivityContext.Provider
+          value={{ visible: true, focused: false }}
+        >
+          <PaneVisibilityContext value>
+            <TerminalXtermHost
+              sessionId="split-right"
+              tileKind="terminal"
+              instanceId="split-right-instance"
+              effectiveCols={80}
+              effectiveRows={24}
+              onUserInput={vi.fn()}
+              onContainerResize={vi.fn()}
+              onWriterReady={vi.fn()}
+              shouldFocusOnActivePane
+              registerImperativeFocus
+              findTargetId="terminal:split-right"
+              keepAlive={false}
+              chrome="padded"
+            />
+          </PaneVisibilityContext>
+        </PaneSurfaceActivityContext.Provider>
+      </>,
+    );
+
+    expect(xtermMocks.repaintLog).toEqual([
+      "clearAtlas",
+      "refresh",
+      "clearAtlas",
+      "refresh",
+    ]);
+    act(() => {
+      vi.runAllTimers();
+    });
+    expect(xtermMocks.terminals[0]?.focus).toHaveBeenCalledTimes(1);
+    expect(xtermMocks.terminals[1]?.focus).not.toHaveBeenCalled();
+    expect(useTerminalFindStore.getState().activeController?.id).toBe(
+      "terminal:split-left",
+    );
   });
 
   it("searches the terminal without taking focus from the find input", async () => {

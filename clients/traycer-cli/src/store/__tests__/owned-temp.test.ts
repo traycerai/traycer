@@ -53,6 +53,7 @@ vi.mock("../paths", async () => {
 });
 
 import { createOwnedTempDir, sweepOwnedTempDirs } from "../owned-temp";
+import { readProcessStartIdentity } from "../process-identity";
 import { isProcessAlive } from "../process-identity";
 
 const TWENTY_FIVE_HOURS_MS = 25 * 60 * 60 * 1000;
@@ -205,8 +206,11 @@ describe("createOwnedTempDir / sweepOwnedTempDirs", () => {
           join(mismatchedDir, ".owner.json"),
           JSON.stringify({
             pid,
-            // Deliberately far from the real process's actual start time.
             startedAtMs: Date.now() - 10 * 60 * 1000,
+            // A well-formed creation stamp from this platform that is
+            // positively NOT the live process's - the only evidence that
+            // entitles a sweep of a young dir whose pid is alive.
+            startIdentity: `${readProcessStartIdentity(pid) ?? "linux:boot-a 1"} 0`,
           }),
         );
         const swept = await sweepOwnedTempDirs("production");

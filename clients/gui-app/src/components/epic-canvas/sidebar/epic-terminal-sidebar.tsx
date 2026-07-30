@@ -53,6 +53,7 @@ import { SnapshotGate } from "@/components/epic-canvas/snapshots/snapshot-loadin
 import { TerminalsPanelSkeleton } from "@/components/epic-canvas/skeletons/terminals-panel-skeleton";
 import {
   getTerminalTileDragId,
+  getPaneScopedDndId,
   TERMINAL_TILE_DND_TYPE,
   type EpicCanvasTerminalTileDragData,
 } from "@/components/epic-canvas/dnd/dnd";
@@ -107,6 +108,14 @@ function TerminalsPanelBodyLive(props: {
   const { epicId, tabId } = props;
   const hostClient = useHostClient();
   const list = useTerminalList({ kind: "epic", epicId }, hostClient);
+  // Manual escape hatch for a stranded error state: host-scoped queries get
+  // no automatic retry/refetch routes (transport already retried), so without
+  // this the only recoveries are accidental (collapse/re-expand remounts the
+  // body) or the stream-driven `availability-recovered` invalidation.
+  const refetchList = list.refetch;
+  const retryList = useCallback(() => {
+    void refetchList();
+  }, [refetchList]);
   const navigateNested = useEpicNestedFocusNavigation();
   const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
     (s) => s.prepareOpenTileInTabFocusTarget,
@@ -160,6 +169,8 @@ function TerminalsPanelBodyLive(props: {
             isLoading={list.isPending}
             isError={list.isError}
             errorMessage={list.error?.message ?? null}
+            isRetrying={list.isFetching}
+            onRetry={retryList}
             sessions={sessions}
             epicId={epicId}
             tabId={tabId}
@@ -187,6 +198,8 @@ interface TerminalSidebarBodyProps {
   readonly isLoading: boolean;
   readonly isError: boolean;
   readonly errorMessage: string | null;
+  readonly isRetrying: boolean;
+  readonly onRetry: () => void;
   readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
   readonly epicId: string;
   readonly tabId: string;
@@ -210,22 +223,41 @@ function TerminalSidebarBody(props: TerminalSidebarBodyProps) {
   if (props.isError) {
     return (
       <div
-        className="flex items-center gap-2 px-2 py-1.5 text-ui-sm text-destructive"
+        className="flex flex-col gap-2 px-2 py-1.5 text-ui-sm text-destructive"
         data-testid="epic-terminal-sidebar-error"
       >
-        <span className="min-w-0 flex-1">
+        <span className="min-w-0">
           {props.errorMessage ?? "Failed to load terminals."}
         </span>
-        <ReportIssueAction
-          context={createReportIssueContext({
-            title: "Failed to load terminals",
-            message: "The terminal list could not be loaded.",
-            code: null,
-            source: "Terminals",
-          })}
-          presentation="icon"
-          className="text-current"
-        />
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={props.isRetrying}
+            data-testid="epic-terminal-sidebar-retry"
+            onClick={props.onRetry}
+          >
+            {props.isRetrying ? (
+              <AgentSpinningDots
+                className="shrink-0"
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+            Retry
+          </Button>
+          <ReportIssueAction
+            context={createReportIssueContext({
+              title: "Failed to load terminals",
+              message: "The terminal list could not be loaded.",
+              code: null,
+              source: "Terminals",
+            })}
+            presentation="icon"
+            className="text-current"
+          />
+        </div>
       </div>
     );
   }
@@ -305,7 +337,7 @@ function TerminalRow(props: TerminalRowProps) {
     setNodeRef: dragRef,
     isDragging,
   } = useDraggable({
-    id: getTerminalTileDragId(session.sessionId),
+    id: getPaneScopedDndId(tabId, getTerminalTileDragId(session.sessionId)),
     data: dragData,
     disabled: isRenaming,
   });

@@ -17,14 +17,16 @@ import {
   taskMergeRollupLabel,
 } from "@/lib/worktree/task-merge-rollup";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { cn } from "@/lib/utils";
 
 const EMPTY_ENTRIES: readonly WorktreeHostEntryV12[] = [];
 
 /**
  * Icon-only Sweep affordance in the Epic status row (top-right), next to the
- * sync pill. Shown whenever the Task owns worktrees on this host; the dialog
- * does the judging - it lists every worktree with its proof state and
- * pre-checks only the ones proven safe.
+ * sync pill. Always present - faded and non-actionable when the Task owns no
+ * worktrees - so the row keeps a stable shape; the dialog does the judging,
+ * listing every worktree with its proof state and pre-checking only the ones
+ * proven safe.
  *
  * Host-backed, so callers must only mount it where the host runtime and the
  * Epic session exist (the status row gates on `snapshotLoaded`, which implies
@@ -61,13 +63,21 @@ function EpicSweepActionBody(props: {
     return tab?.epicId === epicId ? tab.name : null;
   });
   const [sweepOpen, setSweepOpen] = useState(false);
-
-  if (entries.length === 0) return null;
+  // Kept in place (faded, non-actionable) when there is nothing to sweep, so
+  // the status row does not gain and lose a control as worktrees come and go -
+  // the same treatment History's row action and bulk button use. `aria-disabled`
+  // rather than `disabled`: a truly disabled button swallows the pointer events
+  // the tooltip needs, and the tooltip is where the reason lives.
+  const hasWorktrees = entries.length > 0;
 
   return (
     <>
       <TooltipWrapper
-        label={sweepTooltip(entries.length, taskMergeRollupLabel(rollup))}
+        label={
+          hasWorktrees
+            ? sweepTooltip(entries.length, taskMergeRollupLabel(rollup))
+            : "No worktrees to sweep for this task"
+        }
         side="bottom"
         sideOffset={undefined}
         align="end"
@@ -76,17 +86,30 @@ function EpicSweepActionBody(props: {
           type="button"
           variant="ghost"
           size="icon-xs"
-          aria-label="Sweep worktrees"
-          aria-haspopup="dialog"
+          aria-disabled={hasWorktrees ? undefined : true}
+          aria-label={
+            hasWorktrees ? "Sweep worktrees" : "No worktrees to sweep"
+          }
+          // Only claimed when the button can actually open the dialog -
+          // announcing a popup that cannot appear misdescribes it to AT.
+          aria-haspopup={hasWorktrees ? "dialog" : undefined}
           data-testid="epic-sweep-action"
-          className="text-muted-foreground hover:text-foreground"
-          onClick={() => setSweepOpen(true)}
+          className={cn(
+            "text-muted-foreground",
+            hasWorktrees
+              ? "hover:text-foreground"
+              : "cursor-not-allowed text-muted-foreground/50 hover:text-muted-foreground/50",
+          )}
+          onClick={() => {
+            if (!hasWorktrees) return;
+            setSweepOpen(true);
+          }}
         >
           <Paintbrush className="size-3.5" />
         </Button>
       </TooltipWrapper>
       <SweepWorktreesDialog
-        epicId={sweepOpen ? epicId : null}
+        epicIds={sweepOpen ? epicIds : null}
         taskTitle={tabName}
         onOpenChange={(open) => {
           if (!open) setSweepOpen(false);

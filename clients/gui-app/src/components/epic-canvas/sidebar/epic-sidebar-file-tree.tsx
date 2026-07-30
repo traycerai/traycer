@@ -49,6 +49,7 @@ import type {
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
+  getPaneScopedDndId,
   getWorkspaceFileDragId,
   WORKSPACE_FILE_DND_TYPE,
   type EpicCanvasDragSourceData,
@@ -597,7 +598,12 @@ export function FileTreePanelBodyForWorkspace(props: {
     [epicId, viewTabId, workspaceFileRefForTreePath],
   );
   const bridge = usePierreCanvasDragBridge({
-    id: getWorkspaceFileDragId(props.workspacePath),
+    // Pane-scoped: the same workspace file tree can be open in both sides of a
+    // split, and an unscoped drag id would collide between the two panes.
+    id: getPaneScopedDndId(
+      props.tabId,
+      getWorkspaceFileDragId(props.workspacePath),
+    ),
     resolveSourceData: resolveDragSourceData,
   });
 

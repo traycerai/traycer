@@ -28,6 +28,7 @@ export function WorktreePickerHostSection() {
         entries={directoryList.data ?? []}
         activeHostId={activeHostId}
         onSelect={handleSelectHost}
+        disabled={false}
       />
     </div>
   );

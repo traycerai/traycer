@@ -2,11 +2,13 @@ import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
 import type {
   ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
   RevokeAllSessionsFetchResult,
   RevokeUserSessionFetchResult,
   StepUpChallengeFetchResult,
   RetainedStepUpVerifyFetchResult,
 } from "../auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { HostListFetchResult } from "../host-client/remote-fetcher";
 import type {
   UpdateHostVersionPolicyFetchResult,
@@ -105,8 +107,8 @@ export interface IRunnerHost {
 
   /**
    * Fetches the signed-in user's account sessions from authn-v3. Desktop shells
-   * run this in Electron main for the same CORS reason as host registry reads.
-   * Never throws: transport failures collapse into the discriminated result.
+   * run this in Electron main for the same renderer-origin CORS reason as token
+   * validation. Never throws: transport failures collapse into the result.
    */
   listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
 
@@ -130,8 +132,21 @@ export interface IRunnerHost {
   revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
 
   /**
-   * Sends the signed-in user's email OTP step-up challenge.
+   * Mints a device credential for a connected host, so the host can keep
+   * working on the user's behalf after this client disconnects. The renderer
+   * passes its ordinary bearer; there is no step-up variant, because the mint is
+   * not step-up gated (see the mint route's doc comment).
+   *
+   * Unlike the revoke calls, the RESULT here carries live credentials (a
+   * host-audience access JWS and a refresh JWE). They necessarily cross back
+   * into the renderer, because the stream socket that must carry them to the
+   * host lives there.
    */
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult>;
+
   requestStepUpChallenge(
     bearerToken: string,
   ): Promise<StepUpChallengeFetchResult>;
@@ -298,10 +313,14 @@ export interface IRunnerHost {
    * Asks the shell to re-spawn its detached local host. Desktop delegates
    * to `HostLifecycle.respawn()` via the preload IPC bridge; mobile shells
    * (and any shell without a local host) implement this as a resolved
-   * no-op. `gui-app` drives this from the host-Retry UX so the renderer
-   * never touches the lifecycle process directly.
+   * `restarted` no-op. `gui-app` drives this from the host-Retry UX so the
+   * renderer never touches the lifecycle process directly. Resolves
+   * `declined` when the host was deliberately not restarted (busy with
+   * in-progress work, removed by the user, lock contention) - callers
+   * present that as information, not as an error; the promise rejects only
+   * on genuine failures.
    */
-  requestHostRespawn(): Promise<void>;
+  requestHostRespawn(): Promise<HostRestartRequestResult>;
 
   /**
    * OS-service control surface used by the Service Health settings pane.
@@ -1135,6 +1154,20 @@ export interface HostControllerStatus {
 // of the consumed apply/pin.
 export type BusyContinuation = "retry-with-force" | "activate";
 
+// Result of an explicit restart request (`requestHostRespawn` /
+// `IHostManagement.restartHost`). `declined` is a resolved value, not an
+// error: the host was deliberately NOT restarted - it denied the shutdown
+// claim to protect in-progress work, was removed by the user, or another
+// Traycer process holds the management lock - and the condition clears on
+// its own or on a later retry. Surfaces render `declined` as plain
+// information; only a rejected promise means something actually broke and
+// deserves an error affordance (field RCA 2026-07-28: a busy denial inside
+// the SMAppService-register fallback surfaced as a reportable error toast,
+// inviting issue reports for a self-recovering condition).
+export type HostRestartRequestResult =
+  | { readonly kind: "restarted" }
+  | { readonly kind: "declined"; readonly message: string };
+
 // Per-intent result. Every mutation intent resolves ONE of these - the
 // lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
 // outcome is a normal resolved value the calling surface renders.
@@ -1303,7 +1336,10 @@ export interface IHostManagement {
   // Clears the removal sentinel so a subsequent `ensureHost` reinstalls the
   // host (the Reinstall escape hatch on the removed surface).
   readonly clearRemoval: () => Promise<void>;
-  readonly restartHost: () => Promise<void>;
+  // Explicit "restart the host now" (Settings / tray). Same contract as
+  // `IRunnerHost.requestHostRespawn`: resolves `declined` when the host
+  // was deliberately not restarted; rejects only on genuine failures.
+  readonly restartHost: () => Promise<HostRestartRequestResult>;
   readonly getHostLogs: (input: {
     readonly tailLines: number;
   }) => Promise<HostLogsTailResult>;

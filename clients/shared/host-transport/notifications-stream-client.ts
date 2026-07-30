@@ -23,7 +23,7 @@ export interface NotificationsSnapshotMeta {
 }
 
 /**
- * Typed handlers for a `notifications.subscribe@1.0` session.
+ * Typed handlers for a `notifications.subscribe@1.0` / `@1.1` session.
  *
  * Symmetric to `EpicStreamCallbacks` but with no `epicId` - the host
  * infers `userId` from the authenticated `/stream` connection, so the
@@ -35,6 +35,15 @@ export interface NotificationsStreamCallbacks {
     snapshotBytes: Uint8Array,
   ) => void;
   readonly onUpdate: (updateBytes: Uint8Array) => void;
+  /**
+   * A y-protocols awareness update for the per-user notification room,
+   * carrying each host's agent-activity presence. Only ever fires on a
+   * session that negotiated `@1.1`: against a `@1.0` host the transport
+   * declares `1.0` on the wire and the host never emits the frame, so the
+   * consumer simply sees no presence (and every activity surface reads
+   * idle from this source).
+   */
+  readonly onAwareness: (awarenessBytes: Uint8Array) => void;
   /**
    * Connection-status changes. `reason` is non-null only on the
    * `closed` transition; see `EpicStreamCallbacks.onConnectionStatus`.
@@ -51,12 +60,18 @@ export interface NotificationsStreamClientOptions {
 }
 
 /**
- * Typed wrapper over `WsStreamClient` for `notifications.subscribe@1.0`.
+ * Typed wrapper over `WsStreamClient` for `notifications.subscribe`.
  *
  * Opens exactly one session on construction, binds the callback surface,
  * and exposes the fire-and-forget `applyUpdate` path plus `close`. Zod
  * parse on inbound frames is the boundary where the raw envelope becomes
  * a typed variant of `NotificationsSubscribeServerFrame`.
+ *
+ * The negotiated minor is chosen by `WsStreamClient` from the shared
+ * registry (canonical `1.1`, downgraded on the wire to `1.0` against an
+ * older host), so nothing here plumbs a version: parsing against the
+ * latest installed frame schema is safe because a `@1.0` peer simply never
+ * sends the `awareness` kind.
  */
 export class NotificationsStreamClient {
   private readonly session: IStreamSession;
@@ -127,6 +142,13 @@ export class NotificationsStreamClient {
           return;
         }
         this.callbacks.onUpdate(binaryPayload);
+        return;
+      }
+      case "awareness": {
+        if (binaryPayload === null) {
+          return;
+        }
+        this.callbacks.onAwareness(binaryPayload);
         return;
       }
       case "pong": {

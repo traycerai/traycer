@@ -451,7 +451,6 @@ vi.mock("@/stores/epics/left-panel-store", () => ({
   useChatShowArchived: () => testState.showArchived,
   useChatSort: () => ({ field: "updated", direction: "desc" }),
   useCommentsPanelRevealed: () => false,
-  usePanelVisibilityOverrides: () => ({}),
   useEpicLeftPanelStore: (selector: (state: unknown) => unknown) =>
     selector({
       clearAcknowledgedRootCreatePending: vi.fn(),
@@ -817,6 +816,18 @@ describe("epic sidebar selection mode", () => {
       screen.getByText("Add an agent and choose a Chat or Terminal interface."),
     ).not.toBeNull();
     expect(screen.queryByText("No agents use this interface.")).toBeNull();
+  });
+
+  it("exposes each full agent title on hover without worktree metadata", () => {
+    seedChatTree();
+    testState.rowHostId = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.getByRole("tooltip", { name: "Root chat" })).toBeTruthy();
+    expect(
+      screen.getByRole("tooltip", { name: "Terminal agent" }),
+    ).toBeTruthy();
   });
 
   it("blames the interface filter, not the Task, when a filter hides every agent", () => {

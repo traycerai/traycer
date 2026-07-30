@@ -14,6 +14,10 @@ import {
   withConfiguredHostName,
   withDefaultHostName,
 } from "./host-display-name";
+import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
 import type { DesktopLocalHostSnapshot } from "../../ipc-contracts/host-types";
 import {
   isCurrentHostWebsocketUrl,
@@ -342,14 +346,14 @@ export class HostLifecycle extends EventEmitter {
       this.options.layout.pidMetadataFile,
     );
     const raw = readState.kind === "parsed" ? readState.snapshot : null;
-    const publishedAt =
-      readState.kind === "parsed" ? readState.startedAt : null;
+    const startIdentity =
+      readState.kind === "parsed" ? readState.startIdentity : null;
     // Filter an unreachable / wrong-shaped host out of what the renderer sees,
     // so the host gate treats it as not-ready and fires `ensureHost`. A
     // reachable host is surfaced regardless of its version stamp - the renderer
     // negotiates protocol compatibility over the WS handshake and prompts for a
     // restart only if the running host is genuinely incompatible.
-    const next = await this.toReachableSnapshot(raw, publishedAt);
+    const next = await this.toReachableSnapshot(raw, startIdentity);
     // Superseded by a newer reload (or disposed): skip the emit so we never
     // clobber newer state, but still RETURN what THIS read derived. A caller
     // awaiting us - the host-busy surfacing in host-ensure-ipc - must judge
@@ -424,7 +428,7 @@ export class HostLifecycle extends EventEmitter {
 
   private async toReachableSnapshot(
     raw: DesktopLocalHostSnapshot | null,
-    publishedAt: string | null,
+    startIdentity: ProcessStartIdentity | null,
   ): Promise<DesktopLocalHostSnapshot | null> {
     if (raw === null) {
       return null;
@@ -434,7 +438,7 @@ export class HostLifecycle extends EventEmitter {
       !(await isPublishedHostEndpointReachable(
         raw.websocketUrl,
         raw.pid,
-        publishedAt,
+        startIdentity,
         probe,
       ))
     ) {
@@ -619,6 +623,13 @@ type PidMetadataRead =
       readonly kind: "parsed";
       readonly snapshot: DesktopLocalHostSnapshot;
       readonly startedAt: string | null;
+      /**
+       * The publishing process's kernel-recorded creation stamp, when the
+       * host that wrote this file was new enough to publish one. `null` for
+       * every `pid.json` written before the field existed - which readers
+       * must treat as "cannot compare identity", never as a mismatch.
+       */
+      readonly startIdentity: ProcessStartIdentity | null;
     }
   | { readonly kind: "absent" }
   | { readonly kind: "indeterminate" };
@@ -668,6 +679,9 @@ export async function readPidMetadataState(
     kind: "parsed",
     snapshot: withDefaultHostName({ hostId, websocketUrl, version, pid }),
     startedAt: typeof startedAt === "string" ? startedAt : null,
+    startIdentity: isProcessStartIdentity(obj.processStartIdentity)
+      ? obj.processStartIdentity
+      : null,
   };
 }
 

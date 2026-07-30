@@ -577,6 +577,7 @@ describe.skipIf(baselines.length === 0)(
           endpoint: () => mockLocalHostEntry,
           bearer: () => ctx.credentials,
           auth: null,
+          hostCredentialMint: null,
           webSocketFactory: factory,
           dialTimeoutMs: 1000,
           openAckTimeoutMs: 1000,

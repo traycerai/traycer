@@ -9,11 +9,13 @@ import { hrefPathname } from "@/lib/routes";
 import { useTabsStore } from "@/stores/tabs/store";
 import { useSettingsSectionStore } from "@/stores/tabs/settings-section-store";
 import {
-  ensureHistoryTab,
-  ensureSettingsTab,
+  resolveHistoryTabIntent,
+  resolveSettingsTabIntent,
 } from "@/lib/commands/actions/open-system-tab";
-import { type TabNavigationIntent } from "@/lib/tab-navigation";
-import { tabActivate, tabRouteOptions } from "@/stores/tabs/registry";
+import {
+  activateTabIntent,
+  type TabNavigationIntent,
+} from "@/lib/tab-navigation";
 import {
   parseSystemTabOverlayView,
   withOverlayCleared,
@@ -72,7 +74,7 @@ export function useSystemTabModalActions(): SystemTabModalActions {
       const settingsTab = useTabsStore.getState().systemTabs.settings;
       if (settingsTab !== null) {
         navigateToTabClearingOverlay(
-          ensureSettingsTab({
+          resolveSettingsTabIntent({
             subSection: opts.section,
             resetToGeneral: opts.resetToGeneral,
           }),
@@ -100,7 +102,7 @@ export function useSystemTabModalActions(): SystemTabModalActions {
   const openHistory = useCallback(() => {
     const historyTab = useTabsStore.getState().systemTabs.history;
     if (historyTab !== null) {
-      navigateToTabClearingOverlay(ensureHistoryTab());
+      navigateToTabClearingOverlay(resolveHistoryTabIntent());
       return;
     }
     void router.navigate({
@@ -220,9 +222,7 @@ function useNavigateToTabClearingOverlay(): (
   const router = useRouter();
   return useCallback(
     (target: TabNavigationIntent): void => {
-      tabActivate(target);
-      void router.navigate({
-        ...tabRouteOptions(target),
+      activateTabIntent(router.navigate, target, {
         search: (prev) => withOverlayCleared(prev),
       });
     },
@@ -234,12 +234,12 @@ function overlayPromotionIntent(
   active: SystemModalActive,
 ): TabNavigationIntent {
   if (active.kind === "settings") {
-    return ensureSettingsTab({
+    return resolveSettingsTabIntent({
       subSection: active.section,
       resetToGeneral: false,
     });
   }
-  return ensureHistoryTab();
+  return resolveHistoryTabIntent();
 }
 
 /**
@@ -379,23 +379,19 @@ export function useSystemTabModalRefreshGuard(): void {
     }
     const systemTabs = useTabsStore.getState().systemTabs;
     if (isColdLoad && overlay.settingsOverlay && systemTabs.settings !== null) {
-      const target = ensureSettingsTab({
+      const target = resolveSettingsTabIntent({
         subSection: useSettingsSectionStore.getState().section,
         resetToGeneral: false,
       });
-      tabActivate(target);
-      void router.navigate({
-        ...tabRouteOptions(target),
+      activateTabIntent(router.navigate, target, {
         replace: true,
         search: (prev) => withOverlayCleared(prev),
       });
       return;
     }
     if (isColdLoad && overlay.historyOverlay && systemTabs.history !== null) {
-      const target = ensureHistoryTab();
-      tabActivate(target);
-      void router.navigate({
-        ...tabRouteOptions(target),
+      const target = resolveHistoryTabIntent();
+      activateTabIntent(router.navigate, target, {
         replace: true,
         search: (prev) => withOverlayCleared(prev),
       });

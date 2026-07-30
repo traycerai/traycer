@@ -15,6 +15,29 @@ import { z } from "zod";
  */
 
 /**
+ * The exact ISO-8601 form `Date#toISOString()` emits: a calendar date-time
+ * qualified by `Z` or an explicit numeric offset, always carrying exactly three
+ * fractional-second digits.
+ *
+ * Millisecond precision is the contract here, not decoration. The credential
+ * `provisionedAt` timestamps validated with this schema are half of the host's
+ * `(provisionedAt, familyId)` adoption tuple, and the `familyId` tie-break only
+ * earns its place because equal timestamps are reachable at exactly this
+ * resolution. A `Date.parse` parseability check is much looser than that: it
+ * accepts date-only strings, unqualified local times, arbitrary sub-second
+ * precision, and - per spec - whatever else the engine chooses to recognise. All
+ * of those still `Date.parse` to a number, so they pass silently while ordering
+ * at a resolution the adoption rule was never written for.
+ *
+ * One schema, both boundaries - the HTTP mint response and the stream provision
+ * frame carry the same field and must not drift apart.
+ */
+export const isoMillisecondTimestampSchema = z.iso.datetime({
+  offset: true,
+  precision: 3,
+});
+
+/**
  * Sub-schema reused by the recursive `json-content` record. Not a
  * record itself - it has no independent lifecycle and is embedded only
  * inside `jsonContentSchema`.

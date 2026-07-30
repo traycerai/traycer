@@ -148,6 +148,7 @@ function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
     getMethodSupport: () => "unknown",
     subscribeMethodSupport: () => () => undefined,
     getMethodSchemaVersion: () => null,
+    subscribeAvailabilityRecovered: () => () => undefined,
     getClosedReason: () => null,
     onClosed: () => () => undefined,
     instanceId: "fake-stream-client",

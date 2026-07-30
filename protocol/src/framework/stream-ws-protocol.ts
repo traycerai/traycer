@@ -7,6 +7,7 @@ import {
   type FatalErrorDetails,
 } from "@traycer/protocol/framework/ws-protocol";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { isoMillisecondTimestampSchema } from "@traycer/protocol/common/schemas";
 
 /**
  * Control frames exchanged on the `/stream` WS before (and alongside) the
@@ -44,6 +45,37 @@ import type { SchemaVersion } from "@traycer/protocol/framework/index";
  */
 export const STREAM_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";
 
+/**
+ * Capability tag a host advertises in `openAck.capabilities` when it accepts the
+ * `hostCredentialProvision` control frame - the delegated host-credential
+ * handoff. Same contract as `credentialUpdate`: a client MUST NOT send the frame
+ * without seeing this tag, so a newer client against an older host stays silent
+ * instead of tripping the unknown-frame guard.
+ *
+ * The two capabilities are deliberately independent. `credentialUpdate` pushes
+ * the USER's rotated bearer onto a live connection; this one hands the host its
+ * OWN long-lived credential, which it then refreshes autonomously.
+ */
+export const STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION =
+  "hostCredentialProvision";
+
+/**
+ * What the host reports about its own device credential in `openAck`.
+ *
+ *   - `missing`      - the host holds no credential and can accept a handoff.
+ *   - `active`       - the host holds one it believes is usable; do not mint.
+ *   - `needs-reauth` - the host held one and its refresh family is dead
+ *                      (revoked, superseded, or expired); a fresh handoff is
+ *                      the recovery door.
+ */
+export type HostCredentialState = "missing" | "active" | "needs-reauth";
+
+export const hostCredentialStateSchema = z.enum([
+  "missing",
+  "active",
+  "needs-reauth",
+]);
+
 /** First frame sent by the client: bearer token + per-method canonicals. */
 export type ClientStreamOpenFrame = {
   readonly kind: "open";
@@ -61,6 +93,40 @@ export type ClientStreamOpenFrame = {
 export type ClientStreamCredentialUpdateFrame = {
   readonly kind: "credentialUpdate";
   readonly token: string;
+};
+
+/**
+ * Hands the host a freshly minted device credential of its own. Sent at most
+ * once per acquisition, only after the host advertised
+ * `hostCredentialProvision` AND reported a `hostCredentialState` other than
+ * `active`. The client mints it against authn-v3 with its own step-up-fresh
+ * bearer; the host verifies the access JWS (own `hostId`, connection's verified
+ * user) and treats `refreshToken` as OPAQUE - only authn-v3 can decrypt it, so
+ * the host's first scheduled rotation is its real validation.
+ *
+ * Fire-and-forget by design: there is no host->client ack in v1. Whether the
+ * handoff stuck is reported by the NEXT connection's `openAck.hostCredentialState`.
+ */
+export type ClientStreamHostCredentialProvisionFrame = {
+  readonly kind: "hostCredentialProvision";
+  readonly token: string;
+  readonly refreshToken: string;
+  /**
+   * The credential's own refresh family, and when the server recorded it
+   * (ISO-8601, millisecond resolution).
+   *
+   * **These two ARE the adoption rule.** A host handed two credentials keeps the
+   * one with the greater `(provisionedAt, familyId)` tuple - the same total
+   * order the server's supersede sweep uses, with `familyId` as the tie-break at
+   * equal timestamps. They are on the frame rather than left to be read out of
+   * the token because neither is derivable from it: the access JWS carries no
+   * `familyId`, and its `iat` is a DIFFERENT order (a mint records its row
+   * before it signs, so a stalled request carries the later `iat` on the earlier
+   * row) at one-second resolution. A host ordering by `iat` can adopt exactly
+   * the credential the server retired and then sit tokenless.
+   */
+  readonly familyId: string;
+  readonly provisionedAt: string;
 };
 
 /**
@@ -96,6 +162,17 @@ export type HostStreamOpenAckFrame = {
    * so a newer client safely reads "none supported".
    */
   readonly capabilities: readonly string[];
+  /**
+   * What the host reports about its own device credential, or `null` when it
+   * did not report at all (every host predating the delegated-credential work).
+   *
+   * `null` is NOT "missing". A client provisions only on an explicit
+   * `missing` / `needs-reauth`, so an unreported state can never trigger the
+   * interactive mint - the failure mode of guessing wrong here is an
+   * unprompted-for OTP challenge, which is exactly what must not happen by
+   * accident.
+   */
+  readonly hostCredentialState: HostCredentialState | null;
 };
 
 /** Fatal error from the host (auth or compat rejection). */
@@ -122,6 +199,19 @@ export const clientStreamCredentialUpdateFrameSchema = z.object({
   token: z.string().min(1),
 });
 
+export const clientStreamHostCredentialProvisionFrameSchema = z.object({
+  kind: z.literal("hostCredentialProvision"),
+  token: z.string().min(1),
+  refreshToken: z.string().min(1),
+  familyId: z.string().min(1),
+  // The exact wire form is enforced here, not left to the host: the adoption
+  // rule ORDERS by this value, so a shape it was not written for - a date-only
+  // string, a coarser or finer sub-second resolution - orders wrongly rather
+  // than loudly, and would strand a host on a credential the server had already
+  // retired. Same schema as the HTTP mint response, so the two cannot drift.
+  provisionedAt: isoMillisecondTimestampSchema,
+});
+
 export const clientStreamFatalErrorFrameSchema = z.object({
   kind: z.literal("fatalError"),
   details: fatalErrorDetailsSchema,
@@ -134,6 +224,10 @@ export const hostStreamOpenAckFrameSchema = z.object({
   // newer client parsing an older host's ack still succeeds and treats every
   // capability as unsupported.
   capabilities: z.array(z.string()).default([]),
+  // Backward-compat: an older host omits `hostCredentialState`. It defaults to
+  // `null` ("did not report"), which the client treats as "do not provision" —
+  // see the field's doc comment on `HostStreamOpenAckFrame`.
+  hostCredentialState: hostCredentialStateSchema.nullable().default(null),
 });
 
 export const hostStreamFatalErrorFrameSchema = z.object({

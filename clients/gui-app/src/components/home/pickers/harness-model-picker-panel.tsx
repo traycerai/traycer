@@ -15,6 +15,7 @@ import type {
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
+import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
 import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
@@ -52,8 +53,13 @@ interface HarnessModelPickerPanelProps {
   readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
   readonly lockedHarnessId: ProviderId | null;
   readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
+  readonly preparingByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ProviderPackPreparing
+  >;
   readonly catalogHarnessesLoading: boolean;
   readonly onEntryChange: (providerId: ProviderId) => void;
+  readonly onRetryPack: (providerId: ProviderId) => void;
   readonly onProfileChange: (
     providerId: ProviderId,
     profileId: string | null,
@@ -113,8 +119,10 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
     activeProviderProfiles,
     lockedHarnessId,
     degradedHarnessIds,
+    preparingByHarnessId,
     catalogHarnessesLoading,
     onEntryChange,
+    onRetryPack,
     onProfileChange,
     onRefreshCatalog,
     onOpenProviderSettings,
@@ -200,8 +208,10 @@ export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
           activeProfileIdByHarnessId={activeProfileIdByHarnessId}
           lockedHarnessId={lockedHarnessId}
           degradedHarnessIds={degradedHarnessIds}
+          preparingByHarnessId={preparingByHarnessId}
           pending={catalogHarnessesLoading}
           onEntryChange={onEntryChange}
+          onRetryPack={onRetryPack}
           onRefresh={onRefreshCatalog}
           onOpenProviderSettings={onOpenProviderSettings}
         />

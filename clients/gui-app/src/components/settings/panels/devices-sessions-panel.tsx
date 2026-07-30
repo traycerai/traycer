@@ -1,16 +1,14 @@
-import type { ReactNode, SyntheticEvent } from "react";
-import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+import type { ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
 import {
   Clock,
   Globe,
   Laptop,
   LogOut,
-  Mail,
   Monitor,
-  RefreshCcw,
+  Server,
   ShieldAlert,
-  ShieldCheck,
   Smartphone,
   Terminal,
 } from "lucide-react";
@@ -18,68 +16,37 @@ import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   type RevokeUserSessionInput,
-  useRevokeUserSession,
+  useAuthRevokeUserSession,
 } from "@/hooks/auth/use-revoke-user-session-mutation";
-import { useRevokeAllSessions } from "@/hooks/auth/use-revoke-all-sessions-mutation";
+import { useAuthRevokeAllSessions } from "@/hooks/auth/use-revoke-all-sessions-mutation";
+import { useAuthFetchUserSessions } from "@/hooks/auth/use-user-sessions-query";
 import {
-  useRequestStepUpChallenge,
-  useVerifyStepUpChallenge,
-} from "@/hooks/auth/use-step-up-challenge-mutations";
-import { useUserSessions } from "@/hooks/auth/use-user-sessions-query";
-import {
-  createStepUpCredential,
   isStepUpRequiredError,
   runStepUpProtectedAction,
   type StepUpCredential,
 } from "@/lib/auth/step-up-flow";
+import { StepUpChallengeDialog } from "@/components/auth/step-up-challenge-dialog";
+import {
+  actionErrorFromStepUpError,
+  StepUpCanceledError,
+  type StepUpPromptPurpose,
+  type StepUpPromptRequest,
+} from "@/lib/auth/step-up-prompt";
 import { useHostBinding } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-const STEP_UP_CODE_LENGTH = 6;
 const SESSION_ABSOLUTE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
   timeStyle: "short",
 });
 
-type StepUpPromptPurpose = "session-revoke" | "global-revoke";
-
-interface StepUpPromptRequest {
-  readonly id: number;
-  readonly purpose: StepUpPromptPurpose;
-  readonly resolve: (credential: StepUpCredential) => void;
-  readonly reject: (error: Error) => void;
-}
-
 interface SessionMutation {
   readonly isPending: boolean;
   readonly mutateAsync: (input: RevokeUserSessionInput) => Promise<unknown>;
-}
-
-function normalizeStepUpCodeInput(value: string): string {
-  return value.replace(/\D/g, "").slice(0, STEP_UP_CODE_LENGTH);
-}
-
-function messageFromError(error: unknown): string {
-  if (isStepUpRequiredError(error)) {
-    return "Verification expired. Try again.";
-  }
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message;
-  }
-  return "Action failed. Try again.";
 }
 
 function sessionClientLabel(session: UserSessionListItem): string {
@@ -92,6 +59,8 @@ function sessionClientLabel(session: UserSessionListItem): string {
       return "CLI";
     case "extension":
       return "Extension";
+    case "host":
+      return "Host";
     default:
       return "Unknown";
   }
@@ -102,6 +71,9 @@ function sessionDisplayLine(session: UserSessionListItem): string {
     session.displayLabel,
     session.platform,
     session.appVersion === null ? null : `App ${session.appVersion}`,
+    // Coarse (city/region-level) and the strongest "is this me?" signal on the
+    // row - a session in the wrong place is what a user actually scans for.
+    session.location,
   ].filter((part): part is string => part !== null && part.trim().length > 0);
   return parts.length === 0 ? "No device details recorded" : parts.join(" / ");
 }
@@ -161,6 +133,8 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
       return <Terminal className={className} />;
     case "extension":
       return <Smartphone className={className} />;
+    case "host":
+      return <Server className={className} />;
     default:
       return <Laptop className={className} />;
   }
@@ -169,8 +143,8 @@ function sessionIcon(session: UserSessionListItem): ReactNode {
 export function DevicesSessionsPanel() {
   const signedIn = useAuthStore((s) => s.status === "signed-in");
   const binding = useHostBinding();
-  const query = useUserSessions();
-  const revokeAllSessions = useRevokeAllSessions();
+  const query = useAuthFetchUserSessions();
+  const revokeAllSessions = useAuthRevokeAllSessions();
   const [actionError, setActionError] = useState<string | null>(null);
   const [stepUpPrompt, setStepUpPrompt] = useState<StepUpPromptRequest | null>(
     null,
@@ -195,7 +169,7 @@ export function DevicesSessionsPanel() {
       const id = stepUpPromptIdRef.current + 1;
       stepUpPromptIdRef.current = id;
       return new Promise((resolve, reject) => {
-        setStepUpPrompt({ id, purpose, resolve, reject });
+        setStepUpPrompt({ id, purpose, subjectLabel: null, resolve, reject });
       });
     },
     [],
@@ -216,7 +190,7 @@ export function DevicesSessionsPanel() {
     if (stepUpPrompt === null) {
       return;
     }
-    stepUpPrompt.reject(new Error("Verification canceled."));
+    stepUpPrompt.reject(new StepUpCanceledError());
     setStepUpPrompt(null);
   }, [stepUpPrompt]);
 
@@ -248,7 +222,7 @@ export function DevicesSessionsPanel() {
           await binding.auth.signOut();
         }
       } catch (error) {
-        setActionError(messageFromError(error));
+        setActionError(actionErrorFromStepUpError(error));
       } finally {
         setActiveSessionFamilyId(null);
       }
@@ -274,7 +248,7 @@ export function DevicesSessionsPanel() {
       }
       await binding.auth.signOut();
     } catch (error) {
-      setActionError(messageFromError(error));
+      setActionError(actionErrorFromStepUpError(error));
     }
   }, [binding, requestStepUpCredential, revokeAllSessions]);
 
@@ -289,7 +263,8 @@ export function DevicesSessionsPanel() {
             <div className="min-w-0 space-y-1">
               <h2 className="text-ui font-medium">Sessions</h2>
               <p className="text-ui-xs text-muted-foreground">
-                Browser, desktop, CLI, and extension access for this account.
+                Browser, desktop, CLI, extension, and host access for this
+                account.
               </p>
             </div>
             <Button
@@ -415,7 +390,7 @@ function SessionRow(props: {
   ) => Promise<void>;
 }) {
   const { session } = props;
-  const mutation = useRevokeUserSession(session.familyId);
+  const mutation = useAuthRevokeUserSession(session.familyId);
   const pending =
     mutation.isPending || props.activeSessionFamilyId === session.familyId;
   const disabled = session.revoked || (props.actionBusy && !pending);
@@ -472,212 +447,5 @@ function SessionRow(props: {
         ) : null}
       </Button>
     </li>
-  );
-}
-
-function StepUpChallengeDialog(props: {
-  readonly request: StepUpPromptRequest | null;
-  readonly onVerified: (credential: StepUpCredential) => void;
-  readonly onCancel: () => void;
-}) {
-  if (props.request === null) {
-    return null;
-  }
-  return (
-    <StepUpChallengeDialogActive
-      key={props.request.id}
-      request={props.request}
-      onVerified={props.onVerified}
-      onCancel={props.onCancel}
-    />
-  );
-}
-
-function StepUpChallengeDialogActive(props: {
-  readonly request: StepUpPromptRequest;
-  readonly onVerified: (credential: StepUpCredential) => void;
-  readonly onCancel: () => void;
-}) {
-  const requestChallenge = useRequestStepUpChallenge();
-  const verifyChallenge = useVerifyStepUpChallenge();
-  const [code, setCode] = useState("");
-  const [challengeSent, setChallengeSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const busy = requestChallenge.isPending || verifyChallenge.isPending;
-  const requestChallengeMutateAsync = requestChallenge.mutateAsync;
-  const mountedRef = useRef(true);
-  const title =
-    props.request.purpose === "global-revoke"
-      ? "Verify sign out everywhere"
-      : "Verify session sign-out";
-  const description =
-    props.request.purpose === "global-revoke"
-      ? "Enter the code sent to your email before signing out every session."
-      : "Enter the code sent to your email to continue signing out sessions.";
-
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    void requestChallengeMutateAsync()
-      .then(() => {
-        if (active) {
-          setChallengeSent(true);
-        }
-      })
-      .catch((caught: unknown) => {
-        if (active) {
-          setError(messageFromError(caught));
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [requestChallengeMutateAsync]);
-
-  const handleResend = (): void => {
-    setError(null);
-    setChallengeSent(false);
-    void requestChallenge
-      .mutateAsync()
-      .then(() => {
-        setChallengeSent(true);
-      })
-      .catch((caught: unknown) => {
-        setError(messageFromError(caught));
-      });
-  };
-
-  const handleSubmit = (event: SyntheticEvent<HTMLFormElement>): void => {
-    event.preventDefault();
-    const normalized = normalizeStepUpCodeInput(code);
-    if (!challengeSent || normalized.length !== STEP_UP_CODE_LENGTH || busy) {
-      setError("Enter the 6-digit verification code.");
-      return;
-    }
-    setError(null);
-    void verifyChallenge
-      .mutateAsync(normalized)
-      .then((response) => {
-        if (mountedRef.current) {
-          props.onVerified(createStepUpCredential(response, Date.now()));
-        }
-      })
-      .catch((caught: unknown) => {
-        setError(messageFromError(caught));
-      });
-  };
-
-  return (
-    <Dialog
-      open
-      onOpenChange={
-        busy
-          ? undefined
-          : (nextOpen) => {
-              if (!nextOpen) {
-                props.onCancel();
-              }
-            }
-      }
-    >
-      <DialogContent
-        showCloseButton={!busy}
-        className="w-[min(92vw,26rem)] sm:max-w-md"
-      >
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <form className="space-y-4" onSubmit={handleSubmit}>
-          <div className="space-y-2">
-            <label
-              htmlFor="step-up-code"
-              className="text-ui-xs font-medium text-muted-foreground"
-            >
-              Email code
-            </label>
-            <div className="flex items-center gap-2">
-              <Mail className="size-4 shrink-0 text-muted-foreground" />
-              <Input
-                id="step-up-code"
-                value={code}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={STEP_UP_CODE_LENGTH}
-                disabled={!challengeSent || busy}
-                aria-invalid={error !== null}
-                onChange={(event) => {
-                  setCode(normalizeStepUpCodeInput(event.currentTarget.value));
-                }}
-              />
-            </div>
-            {requestChallenge.isPending ? (
-              <p className="flex items-center gap-2 text-ui-xs text-muted-foreground">
-                <AgentSpinningDots
-                  className="text-current"
-                  testId={undefined}
-                  variant="orbit"
-                />
-                Sending code
-              </p>
-            ) : null}
-            {challengeSent && error === null ? (
-              <p className="text-ui-xs text-muted-foreground">
-                Check your email for the verification code.
-              </p>
-            ) : null}
-            {error === null ? null : (
-              <p className="text-ui-xs text-destructive" role="alert">
-                {error}
-              </p>
-            )}
-          </div>
-
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={busy}
-              onClick={props.onCancel}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={busy}
-              onClick={handleResend}
-            >
-              <RefreshCcw className="size-3.5" />
-              Resend code
-            </Button>
-            <Button
-              type="submit"
-              size="sm"
-              disabled={
-                !challengeSent || code.length !== STEP_UP_CODE_LENGTH || busy
-              }
-            >
-              <ShieldCheck className="size-3.5" />
-              Verify
-              {verifyChallenge.isPending ? (
-                <AgentSpinningDots
-                  className="text-current"
-                  testId={undefined}
-                  variant="orbit"
-                />
-              ) : null}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }

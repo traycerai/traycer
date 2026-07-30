@@ -6,6 +6,7 @@ import type {
   ActivateInstalledOk,
   ApplyStagedOk,
   BusyContinuation,
+  HostRestartRequestResult,
   HostTrayCommand,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -13,7 +14,10 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { runnerMutationKeys, runnerQueryKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
+import { activateTabIntent } from "@/lib/tab-navigation";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
 import { HostBusyForceDeferDialog } from "@/components/host/host-busy-force-defer-dialog";
 import { useRunnerHostControllerStatusQuery } from "@/hooks/runner/use-runner-host-controller-status-query";
@@ -151,7 +155,7 @@ export function HostTrayCommandListener() {
     );
   };
 
-  const restartMutation = useMutation<void>({
+  const restartMutation = useMutation<HostRestartRequestResult>({
     mutationKey: runnerMutationKeys.hostRestart(),
     mutationFn: () => {
       if (management === null) {
@@ -159,9 +163,16 @@ export function HostTrayCommandListener() {
       }
       return management.restartHost();
     },
-    onSuccess: () => {
-      toast.success("Host restart requested");
+    onSuccess: (result) => {
       setPendingRestart(false);
+      // `declined` resolves (rather than rejecting) because it is not an
+      // error - the host deliberately was not restarted and a later retry
+      // succeeds on its own; see `toastHostRestartDeclined`.
+      if (result.kind === "declined") {
+        toastHostRestartDeclined(result.message);
+        return;
+      }
+      toast.success("Host restart requested");
       if (management !== null) {
         void queryClient.invalidateQueries({
           queryKey: runnerQueryKeys.hostInstalledRecord(management),
@@ -187,7 +198,14 @@ export function HostTrayCommandListener() {
             source: "system_tray",
             command: "open_settings",
           });
-          void navigate({ to: "/settings/host" });
+          activateTabIntent(
+            navigate,
+            resolveSettingsTabIntent({
+              subSection: "host",
+              resetToGeneral: false,
+            }),
+            undefined,
+          );
           return;
         case "restartHost":
           Analytics.getInstance().track(AnalyticsEvent.CommandExecuted, {
@@ -206,7 +224,14 @@ export function HostTrayCommandListener() {
           // Logs surface lives inside Settings → Host; navigate there and
           // also open the legacy logs dialog so the user gets the fastest
           // path to the tail regardless of which surface they prefer.
-          void navigate({ to: "/settings/host" });
+          activateTabIntent(
+            navigate,
+            resolveSettingsTabIntent({
+              subSection: "host",
+              resetToGeneral: false,
+            }),
+            undefined,
+          );
           openLogs();
           return;
         case "installUpdate":

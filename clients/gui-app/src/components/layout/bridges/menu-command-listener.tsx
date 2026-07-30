@@ -6,6 +6,7 @@ import type {
   ActivateInstalledOk,
   ApplyStagedOk,
   BusyContinuation,
+  HostRestartRequestResult,
   IRunnerHost,
   MutationOutcome,
 } from "@traycer-clients/shared/platform/runner-host";
@@ -17,6 +18,7 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { toastHostRestartDeclined } from "@/lib/host-restart-toast";
 import { resolveDesktopMenuBridge } from "@/lib/windows/desktop-capabilities";
 import type {
   DesktopMenuCommandId,
@@ -26,6 +28,8 @@ import {
   advanceActiveTileFind,
   openActiveTileFind,
 } from "@/lib/commands/tile-find";
+import { resolveSettingsTabIntent } from "@/lib/commands/actions/open-system-tab";
+import { activateTabIntent } from "@/lib/tab-navigation";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { RestartHostConfirmDialog } from "@/components/host/restart-host-confirm-dialog";
@@ -102,12 +106,19 @@ export function MenuCommandListener() {
   const [pendingHostRestart, setPendingHostRestart] = useState<boolean>(false);
   const [busy, setBusy] = useState<MenuBusyState | null>(null);
 
-  const restartHostMutation = useMutation<void>({
+  const restartHostMutation = useMutation<HostRestartRequestResult>({
     mutationKey: runnerMutationKeys.requestHostRespawn(),
     mutationFn: () => runnerHost.requestHostRespawn(),
-    onSuccess: () => {
-      toast.success("Host restart requested");
+    onSuccess: (result) => {
       setPendingHostRestart(false);
+      // `declined` resolves (rather than rejecting) because it is not an
+      // error - the host deliberately was not restarted and a later retry
+      // succeeds on its own; see `toastHostRestartDeclined`.
+      if (result.kind === "declined") {
+        toastHostRestartDeclined(result.message);
+        return;
+      }
+      toast.success("Host restart requested");
       if (traycerCli !== null) {
         void queryClient.invalidateQueries({
           queryKey: runnerQueryKeys.traycerHostStatus(traycerCli),
@@ -240,7 +251,14 @@ export function MenuCommandListener() {
       handleMenuCommand(payload, {
         authService,
         navigateSettings: () => {
-          void navigate({ to: "/settings/general" });
+          activateTabIntent(
+            navigate,
+            resolveSettingsTabIntent({
+              subSection: "general",
+              resetToGeneral: true,
+            }),
+            undefined,
+          );
         },
         openAboutDetails,
         closeActiveTab: closeTabFlow.closeActiveTab,

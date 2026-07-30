@@ -2,6 +2,7 @@ import * as React from "react";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
 
 function ContextMenu({
   ...props
@@ -19,8 +20,15 @@ function ContextMenuTrigger({
 
 function ContextMenuContent({
   className,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
+  // A modal context menu drives `hideOthers` + scroll-lock while open, so a
+  // background split pane un-presents it by unmounting. That unmount runs Radix
+  // The close-autofocus half lives in `usePaneAwareContentGuard`.
+  const { paneFocused, handleCloseAutoFocus } =
+    usePaneAwareContentGuard(onCloseAutoFocus);
+  if (!paneFocused) return null;
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
@@ -29,6 +37,7 @@ function ContextMenuContent({
           "z-50 min-w-40 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className,
         )}
+        onCloseAutoFocus={handleCloseAutoFocus}
         {...props}
       />
     </ContextMenuPrimitive.Portal>

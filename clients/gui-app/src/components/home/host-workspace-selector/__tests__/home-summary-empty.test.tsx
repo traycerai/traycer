@@ -17,7 +17,7 @@ import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
-import { useLandingComposerStore } from "@/stores/composer/landing-composer-store";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
@@ -283,6 +283,7 @@ function renderControl(layout: "inline" | "stacked") {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ActiveHostWorkspaceControls
+          disabled={false}
           stagingKey={{ surface: "landing", draftId: null }}
           workspaceSeed={null}
           seedIntent={null}
@@ -301,6 +302,7 @@ function DelayedBranchValidationHarness() {
   return (
     <>
       <ActiveHostWorkspaceControls
+        disabled={false}
         stagingKey={{ surface: "landing", draftId: null }}
         workspaceSeed={null}
         seedIntent={null}
@@ -312,6 +314,7 @@ function DelayedBranchValidationHarness() {
         type="button"
         onClick={() => {
           actions.submit({
+            draftId: null,
             editor: editorHandleForPrompt("Investigate the worktree race"),
             toolbar: {
               selection: {
@@ -379,7 +382,7 @@ describe("landing workspace summary empty state", () => {
     };
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
-    useLandingComposerStore.getState().reset();
+    draftRuntimeRegistry.resetForTesting();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useEpicCanvasStore.setState({
       tabsById: {},
@@ -403,7 +406,7 @@ describe("landing workspace summary empty state", () => {
     cleanup();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
-    useLandingComposerStore.getState().reset();
+    draftRuntimeRegistry.resetForTesting();
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useEpicCanvasStore.setState({
       tabsById: {},

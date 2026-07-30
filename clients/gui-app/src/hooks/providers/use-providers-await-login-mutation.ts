@@ -111,7 +111,19 @@ export function useProvidersAwaitLoginForClient(args: {
             if (prev === undefined) return prev;
             return {
               providers: prev.providers.map((p) =>
-                p.providerId === next.providerId ? next : p,
+                p.providerId === next.providerId
+                  ? // Overlay the echo onto the cached entry rather than
+                    // replacing it. The echo is pinned to the frozen
+                    // `providerMutationCliStateSchemaV21`, so it does not
+                    // carry the provider-pack-registry fields
+                    // (`managedInstallState`, `versionVisibility`,
+                    // `advisory`) - only `providers.list@5.0` does. A
+                    // straight replace would blank whatever the last list
+                    // fetch established, since a login cannot change what is
+                    // installed. The echo stays authoritative for every
+                    // field it does model.
+                    { ...p, ...next }
+                  : p,
               ),
             };
           },

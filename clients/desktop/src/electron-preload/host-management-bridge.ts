@@ -18,6 +18,7 @@ import type {
   HostNameSettings,
   HostRegistryUpdateState,
   HostRemovalState,
+  HostRestartRequestResult,
   HostTrayCommand,
   HostUninstallResult,
   InstallVersionOk,
@@ -56,7 +57,7 @@ export interface HostManagementBridgeSurface {
   uninstallTraycer(): Promise<TraycerUninstallResult>;
   getRemovalState(): Promise<HostRemovalState>;
   clearRemoval(): Promise<void>;
-  restartHost(): Promise<void>;
+  restartHost(): Promise<HostRestartRequestResult>;
   getHostLogs(input: {
     readonly tailLines: number;
   }): Promise<HostLogsTailResult>;
@@ -121,7 +122,9 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
         RunnerHostInvoke.traycerHostRemovalClear,
       ) as Promise<void>,
     restartHost: () =>
-      ipcRenderer.invoke(RunnerHostInvoke.traycerHostRestart) as Promise<void>,
+      ipcRenderer.invoke(
+        RunnerHostInvoke.traycerHostRestart,
+      ) as Promise<HostRestartRequestResult>,
     getHostLogs: ({ tailLines }) =>
       ipcRenderer.invoke(RunnerHostInvoke.traycerHostLogs, {
         tailLines,

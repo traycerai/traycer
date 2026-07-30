@@ -7,7 +7,7 @@ import {
   type MergedNotificationRow,
 } from "@/stores/notifications/merged-notifications";
 import type { AppLocalNotificationEntry } from "@/stores/notifications/app-local-notifications-store";
-import type { HostNotificationEntry } from "@traycer/protocol/host/notifications/contracts";
+import type { HostNotificationEntryV21 } from "@traycer/protocol/host/notifications/contracts";
 import {
   notificationEntityFromHostEntry,
   notificationEntityMatchesPresence,
@@ -116,7 +116,7 @@ function renderNotificationToast(
  * its own activity; rows for other entities still display.
  */
 export function displayHostChannelEmission(
-  entries: ReadonlyArray<HostNotificationEntry>,
+  entries: ReadonlyArray<HostNotificationEntryV21>,
   target: NotificationDisplayTarget,
   originHostId: string | null,
 ): void {
@@ -225,6 +225,11 @@ function hostEntityReplaceKey(
     case "epic":
     case "terminal":
       return epicReplaceKey(payload.epicId);
+    // Falls through to the per-row id key. Coalescing by entity is right for
+    // repeated activity ON one chat or epic; two finished commands are two
+    // separate results, and replacing the first toast with the second would
+    // hide a failure behind a later success.
+    case "hostSurface":
     case "session":
       return null;
   }

@@ -13,6 +13,12 @@ import {
   type NetworkHeartbeat,
   type NetworkHeartbeatListener,
 } from "./fetch-resource";
+import { resolveCliVersion } from "../cli-version";
+import {
+  evaluateHostClientFloor,
+  hostClientFloorRefusalMessage,
+  isHostClientFloorRefusal,
+} from "./client-floor";
 import { parseHostVersionsManifestWithWarnings } from "./manifest-schema";
 import { resolveManifestUrl } from "./manifest-url";
 import { verifyMinisignArchive } from "./minisign";
@@ -252,6 +258,45 @@ export async function createRegistryClient(
           details: {
             resolvedVersion,
             deprecationReason: entry.deprecationReason,
+          },
+          exitCode: 1,
+        });
+      }
+      // The client floor, checked HERE because this is the one place a host
+      // version is selected - both `install` and `download-stage` come
+      // through it, so neither can acquire a path around it. Ordered after
+      // the yank refusal (a withdrawn version's floor is beside the point)
+      // and before the platform-asset lookup, so the answer is about the CLI
+      // rather than about which archives happened to publish.
+      const floor = evaluateHostClientFloor({
+        cliVersion: resolveCliVersion(process.env),
+        requiredCliVersion: entry.requiredCliVersion,
+      });
+      if (floor.kind === "unreleased-cli") {
+        // Named exemption, and loud on purpose: a dev build IS below every
+        // floor by SemVer, and refusing it would leave `make dev-desktop`
+        // unable to install a floored host at all. The machine that hits this
+        // is the one best placed to understand the consequence.
+        logger.warn("Registry client floor waived for an unreleased CLI", {
+          environment: opts.environment,
+          resolvedVersion,
+          requiredCliVersion: floor.requiredCliVersion,
+        });
+      }
+      if (isHostClientFloorRefusal(floor)) {
+        logger.warn("Registry refused a version this CLI cannot run", {
+          environment: opts.environment,
+          resolvedVersion,
+          requiredCliVersion: floor.requiredCliVersion,
+          verdict: floor.kind,
+        });
+        throw cliError({
+          code: CLI_ERROR_CODES.HOST_CLIENT_FLOOR_UNMET,
+          message: hostClientFloorRefusalMessage(floor, resolvedVersion),
+          details: {
+            resolvedVersion,
+            requiredCliVersion: floor.requiredCliVersion,
+            cliVersion: resolveCliVersion(process.env),
           },
           exitCode: 1,
         });

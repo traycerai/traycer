@@ -12,7 +12,6 @@ import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   FileDiff,
   FilePlus,
-  GitPullRequest,
   SplitSquareHorizontal,
   SplitSquareVertical,
   X,
@@ -57,8 +56,6 @@ import {
   isDiffTileRef,
   isGitDiffTileRef,
   isOpenableEpicNodeKind,
-  isPrDetailTileRef,
-  isPrDiffTileRef,
 } from "@/stores/epics/canvas/types";
 import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -296,7 +293,15 @@ export function TabStrip(props: TabStripProps) {
             </LayoutGroup>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5 border-l border-canvas-border/70 bg-canvas px-1">
+        <div
+          className={cn(
+            "flex shrink-0 items-center gap-0.5 bg-canvas px-1",
+            // Every tab already draws its own right border, so a border here
+            // too would stack two hairlines against each other. Only an empty
+            // strip has no preceding tab to supply the separator.
+            tabs.length === 0 && "border-l border-canvas-border/70",
+          )}
+        >
           <SplitGroupButton groupId={groupId} onSplit={onSplit} />
           <Button
             type="button"
@@ -913,13 +918,8 @@ function TabIcon(props: {
   readonly tab: EpicCanvasTileRef;
   readonly titleGenerationPending: boolean;
 }): ReactNode {
-  if (isDiffTileRef(props.tab) || isPrDiffTileRef(props.tab)) {
+  if (isDiffTileRef(props.tab)) {
     return <FileDiff className="size-3.5 shrink-0 text-muted-foreground" />;
-  }
-  if (isPrDetailTileRef(props.tab)) {
-    return (
-      <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
-    );
   }
   if (isBlankTileRef(props.tab)) {
     return <FilePlus className="size-3.5 shrink-0 text-muted-foreground" />;

@@ -78,11 +78,6 @@ function buildFakeBridge(
     sentryRendererDsn: "",
     validateAuthTokenIdentity: async () => ({ kind: "rejected" as const }),
     listRegisteredHosts: async () => ({ kind: "network-error" as const }),
-    listUserSessions: async () => ({ kind: "network-error" as const }),
-    revokeUserSession: async () => ({ kind: "network-error" as const }),
-    revokeAllSessions: async () => ({ kind: "network-error" as const }),
-    requestStepUpChallenge: async () => ({ kind: "network-error" as const }),
-    verifyStepUpChallenge: async () => ({ kind: "network-error" as const }),
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     tokenStore: ((): ITokenStore => {
       let stored: StoredCredentials | null = null;
@@ -105,6 +100,12 @@ function buildFakeBridge(
         migrateLegacyCredentials: async () => "identity-unknown" as const,
       };
     })(),
+    listUserSessions: async () => ({ kind: "network-error" as const }),
+    revokeUserSession: async () => ({ kind: "network-error" as const }),
+    revokeAllSessions: async () => ({ kind: "network-error" as const }),
+    mintHostCredential: async () => ({ kind: "network-error" as const }),
+    requestStepUpChallenge: async () => ({ kind: "network-error" as const }),
+    verifyStepUpChallenge: async () => ({ kind: "network-error" as const }),
     openExternalLink: async () => undefined,
     getRegisteredUrlSchemes: async () => [],
     requestMicrophoneAccess: async () => "granted" as const,
@@ -145,6 +146,7 @@ function buildFakeBridge(
     }),
     requestHostRespawn: async () => {
       respawnCounter.count += 1;
+      return { kind: "restarted" as const };
     },
     trayState: {
       setEpics: async (_epics: readonly TrayEpic[]) => undefined,
@@ -298,6 +300,7 @@ function buildFakeBridge(
           version: null,
           pid: null,
           hostId: null,
+          layer0: null,
         },
         logs: [],
         links: [],
@@ -503,7 +506,7 @@ function buildFakeBridge(
       },
       getRemovalState: async () => ({ removedByUser: false }),
       clearRemoval: async () => undefined,
-      restartHost: async () => undefined,
+      restartHost: async () => ({ kind: "restarted" as const }),
       getHostLogs: async () => ({ path: null, tail: "" }),
       runDoctor: async () => ({ issues: [], ranAt: "" }),
       availableVersions: async () => {

@@ -62,6 +62,18 @@ const testState = vi.hoisted<{
   },
 }));
 
+vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
+  // Host-backed readiness hook, stubbed to its fail-open answer - the same
+  // treatment this suite already gives every other host-dependent hook. It
+  // renders `LandingComposer`, which now consults the managed-pack gate.
+  useProviderPackGate: () => ({ blocked: false, hint: null, preparing: null }),
+  useProviderPackGateForClient: () => ({
+    blocked: false,
+    hint: null,
+    preparing: null,
+  }),
+}));
+
 vi.mock("@/components/home/composer/composer-body", async () => {
   const React = await import("react");
   return {
@@ -111,28 +123,6 @@ vi.mock(
     useRefreshProvidersListOnTurnDefaultHost: vi.fn(),
   }),
 );
-
-vi.mock("@/stores/composer/landing-composer-store", () => {
-  const dirtyContent = {
-    type: "doc",
-    content: [
-      { type: "paragraph", content: [{ type: "text", text: "dirty" }] },
-    ],
-  };
-  const state = {
-    currentContent: dirtyContent,
-    setSnapshot: vi.fn(),
-    openDraft: () => dirtyContent,
-  };
-  const useLandingComposerStore = Object.assign(
-    (selector: (value: typeof state) => unknown) => selector(state),
-    { getState: () => state },
-  );
-  return {
-    useLandingComposerStore,
-    flushPendingLandingDraftContent: vi.fn(),
-  };
-});
 
 vi.mock("@/stores/settings/settings-store", () => {
   const state = { composerMode: "chat", setComposerMode: vi.fn() };
@@ -283,7 +273,7 @@ function renderLandingComposer(): RenderResult {
       draftId={null}
       pendingCreateId={null}
       initialSettings={null}
-      workspaceControls={null}
+      workspaceControls={() => null}
     />,
   );
 }

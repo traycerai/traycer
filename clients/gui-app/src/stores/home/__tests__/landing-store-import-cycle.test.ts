@@ -14,32 +14,23 @@ vi.mock("idb-keyval", () => {
   };
 });
 
-const EMPTY_DOC = { type: "doc", content: [{ type: "paragraph" }] };
-
-// Regression: the landing stores form an import cycle
-//   landing-draft-store → landing-image-gc → landing-composer-store → landing-draft-store
-// `EMPTY_LANDING_DRAFT_CONTENT` must resolve from a dependency-free leaf module so
-// landing-composer-store's module-eval read of it can't hit a temporal-dead-zone
-// error — regardless of which module the app imports first. Pre-fix this crashed
-// at startup ("Cannot access 'EMPTY_LANDING_DRAFT_CONTENT' before initialization")
-// in an order the other unit tests happened not to exercise.
-describe("landing store import cycle", () => {
-  it("evaluates the cycle cleanly when landing-draft-store is imported first", async () => {
+// Regression: the runtime registry deliberately does not import the persisted
+// source. The draft store configures it only after construction, avoiding the
+// former composer-store cycle while still allowing GC to read live roots.
+describe("landing draft runtime wiring", () => {
+  it("evaluates the source and registry cleanly when the draft store is imported first", async () => {
     vi.resetModules();
-    // The app's failing order: importing the draft store evaluates the whole
-    // cycle (→ gc → composer-store) before the draft store's own body finishes.
-    await import("@/stores/home/landing-draft-store");
-    const composer = await import("@/stores/composer/landing-composer-store");
-    expect(composer.useLandingComposerStore.getState().currentContent).toEqual(
-      EMPTY_DOC,
-    );
+    const draft = await import("@/stores/home/landing-draft-store");
+    const runtime = await import("@/stores/home/draft-runtime-registry");
+    const id = draft.useLandingDraftStore.getState().createDraft(null);
+    expect(runtime.draftRuntimeRegistry.getOrHydrate(id)).not.toBeNull();
   });
 
-  it("evaluates the cycle cleanly when landing-composer-store is imported first", async () => {
+  it("evaluates the registry before the draft store without a temporal dead zone", async () => {
     vi.resetModules();
-    const composer = await import("@/stores/composer/landing-composer-store");
-    expect(composer.useLandingComposerStore.getState().currentContent).toEqual(
-      EMPTY_DOC,
-    );
+    const runtime = await import("@/stores/home/draft-runtime-registry");
+    const draft = await import("@/stores/home/landing-draft-store");
+    const id = draft.useLandingDraftStore.getState().createDraft(null);
+    expect(runtime.draftRuntimeRegistry.getOrHydrate(id)).not.toBeNull();
   });
 });

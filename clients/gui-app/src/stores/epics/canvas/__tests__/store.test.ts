@@ -15,13 +15,11 @@ import {
   makeSelectActiveEpicArtifactId,
   makeSelectIsActiveEpicArtifact,
   makeSelectIsActivePane,
-  makeSelectIsActiveTile,
   makeSelectTabActivation,
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { isBlankTileRef } from "@/stores/epics/canvas/types";
 import { epicCanvasKey } from "@/lib/persist";
-import { makePrDetailTile } from "@/lib/pr/pr-detail-tile";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
@@ -457,6 +455,33 @@ describe("epic canvas store header tabs", () => {
     expect(state.canvasByTabId[tabId]).toBe(beforeCloseCanvas);
     // Re-activation also leaves the tab record identity intact.
     expect(state.tabsById[tabId]).toBe(beforeCloseTab);
+  });
+
+  it("openEpicTabWithId reveals a preserved-but-closed record instead of no-op", () => {
+    // The id handed to this action is routinely a PRESERVED one (callers resolve
+    // it via `resolveTabIdForEpic`, which reads `mostRecentTabIdByEpicId` -
+    // a pointer `closeTab` sets). "Already have the record" must therefore not
+    // be read as "already open": the caller's postcondition is an open tab, and
+    // strip reconciliation drops any layout ref `openTabOrder` does not back.
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab("epic-preserved", "Preserved");
+    store.openTileInTab(tabId, SPEC_A);
+    const beforeCloseCanvas = requireCanvas(tabId);
+    store.closeTab(tabId);
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+
+    const reopenedTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(tabId, "epic-preserved", "Ignored");
+
+    const state = useEpicCanvasStore.getState();
+    expect(reopenedTabId).toBe(tabId);
+    expect(state.openTabOrder).toEqual([tabId]);
+    expect(state.activeTabId).toBe(tabId);
+    // Revealing must not resurrect the tab as a blank one: the preserved canvas
+    // and the stored name both survive, so the caller's `name` is ignored.
+    expect(state.canvasByTabId[tabId]).toBe(beforeCloseCanvas);
+    expect(state.tabsById[tabId]?.name).toBe("Preserved");
   });
 
   it("keeps hidden tabs when desktop projection refreshes the visible strip", () => {
@@ -1076,84 +1101,6 @@ describe("makeSelectIsActiveEpicArtifact", () => {
     expect(makeSelectIsActiveEpicArtifact(tabId, firstActive)(after)).toBe(
       false,
     );
-  });
-});
-
-describe("makeSelectIsActiveTile", () => {
-  it("resolves a renderer-only tile the artifact selector deliberately hides", () => {
-    const store = useEpicCanvasStore.getState();
-    const tabId = store.openEpicTab("epic-pr", "PR");
-    const tile = makePrDetailTile({
-      hostId: TEST_HOST_ID,
-      githubHost: "github.com",
-      owner: "traycerai",
-      repo: "traycer-internal",
-      prNumber: 4226,
-      name: "Remote Host Support",
-    });
-    store.openTileInTab(tabId, tile);
-
-    const state = useEpicCanvasStore.getState();
-    // The artifact selector returns null for a PR tile by design (its id must
-    // never become `lastFocusedArtifactId`), which is exactly why the PR panel
-    // cannot reuse it to light up its row.
-    expect(makeSelectActiveEpicArtifactId(tabId)(state)).toBeNull();
-    expect(makeSelectIsActiveTile(tabId, tile.id)(state)).toBe(true);
-  });
-
-  it("is false for another tile, a null id, and an unknown tab", () => {
-    const store = useEpicCanvasStore.getState();
-    const tabId = store.openEpicTab("epic-pr-2", "PR");
-    const shown = makePrDetailTile({
-      hostId: TEST_HOST_ID,
-      githubHost: "github.com",
-      owner: "traycerai",
-      repo: "traycer-internal",
-      prNumber: 4226,
-      name: "Shown",
-    });
-    const hidden = makePrDetailTile({
-      hostId: TEST_HOST_ID,
-      githubHost: "github.com",
-      owner: "traycerai",
-      repo: "traycer",
-      prNumber: 675,
-      name: "Hidden",
-    });
-    store.openTileInTab(tabId, shown);
-
-    const state = useEpicCanvasStore.getState();
-    expect(makeSelectIsActiveTile(tabId, hidden.id)(state)).toBe(false);
-    expect(makeSelectIsActiveTile(tabId, null)(state)).toBe(false);
-    expect(makeSelectIsActiveTile(undefined, shown.id)(state)).toBe(false);
-    expect(makeSelectIsActiveTile("tab-missing", shown.id)(state)).toBe(false);
-  });
-
-  it("follows the ACTIVE pane, so a tile parked in the other pane is not active", () => {
-    const store = useEpicCanvasStore.getState();
-    const tabId = store.openEpicTab("epic-pr-3", "PR");
-    const left = makePrDetailTile({
-      hostId: TEST_HOST_ID,
-      githubHost: "github.com",
-      owner: "traycerai",
-      repo: "traycer-internal",
-      prNumber: 4226,
-      name: "Left",
-    });
-    const right = makePrDetailTile({
-      hostId: TEST_HOST_ID,
-      githubHost: "github.com",
-      owner: "traycerai",
-      repo: "traycer",
-      prNumber: 675,
-      name: "Right",
-    });
-    store.openTileInTab(tabId, left);
-    store.openTileInTab(tabId, right);
-
-    const state = useEpicCanvasStore.getState();
-    expect(makeSelectIsActiveTile(tabId, right.id)(state)).toBe(true);
-    expect(makeSelectIsActiveTile(tabId, left.id)(state)).toBe(false);
   });
 });
 

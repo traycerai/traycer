@@ -8,12 +8,14 @@
 // identity`, `./process-identity`) keeps working unchanged.
 export {
   __parseElapsedSecondsForTest,
+  __setAsyncProcessStartIdentityReaderForTest,
   __setProcessStartTimeReaderForTest,
   computeProcessIdentityVerdict,
   currentProcessIdentityToken,
   getPublishedProcessIdentityVerdict,
   isProcessAlive,
   readLiveProcessStartTimeMs,
+  readProcessStartIdentity,
   readProcessStartTimeMs,
   verifyProcessIdentity,
   verifyProcessIdentityAsync,

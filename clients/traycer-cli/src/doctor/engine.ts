@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { access, stat } from "node:fs/promises";
+import { access, lstat, readlink, stat } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import { cliCredentialsPath } from "../store/paths";
 import {
@@ -11,7 +11,10 @@ import {
   readBootstrapMarkers,
   type BootstrapLogEntry,
 } from "../host/bootstrap-log";
-import { readHostPidMetadata } from "../host/pid-metadata";
+import {
+  readHostPidMetadata,
+  type HostPidMetadata,
+} from "../host/pid-metadata";
 import { callHostRpcAtEndpoint } from "../internal/host-rpc";
 import { resolveHostAuth } from "../internal/host-auth";
 import { HostRpcError } from "../../../shared/host-transport/host-messenger";
@@ -37,6 +40,15 @@ import {
   serviceLabelFor,
   type ServiceStatus,
 } from "../service";
+import { smAppServiceAgentLabelId } from "../service/label";
+import {
+  createRealLaunchdPrintRunner,
+  probeMacosWedgedJob,
+} from "./launchd-wedge";
+import {
+  createRealSystemdProbeRunner,
+  probeLinuxSystemdHealth,
+} from "./systemd-health";
 import { isProcessAlive } from "../store/cli-lock";
 import {
   DOCTOR_ISSUE_CODES,
@@ -173,9 +185,15 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         code: DOCTOR_ISSUE_CODES.SERVICE_EXTERNALLY_MANAGED,
         severity: "info",
         title: "Service managed by Traycer Desktop",
-        message: `The OS service for '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI does not manage it. Use the Traycer app to repair or remove the host on this machine.`,
+        message: `The OS service for '${label.id}' is registered by the Traycer Desktop app (SMAppService login item); the CLI manages the host's lifecycle cooperatively but not its registration. Use the Traycer app to repair or remove the host on this machine. If the app itself is the broken part, take registration over from the CLI with 'traycer host service install --takeover'.`,
+        // No `fixAction`: taking over Desktop's registration is an ownership
+        // change and must stay an explicit user act, not a button on an
+        // informational card - which is exactly what `--takeover` encodes.
+        // The command is still handed over, because a card that NAMES an
+        // escape hatch and gives you no way to copy it is the same dead end
+        // as one that names nothing.
         fixAction: null,
-        terminalCommand: null,
+        terminalCommand: `traycer host service install --takeover`,
         details: { label: label.id },
       });
     } else if (serviceStatus.state === "stopped") {
@@ -207,11 +225,20 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   }
 
   // ---- 3. Pid metadata freshness ----
-  // Desktop's SMAppService owns registration+recovery for an
-  // externally-managed label (see the info issue above); the CLI must not
-  // hand the user a `host-restart`/`host-free-port-and-restart` fix for a
-  // job it doesn't control. Diagnostics below still surface, but their
-  // fixAction/terminalCommand are suppressed in that case.
+  // These diagnostics used to drop their fixAction AND terminalCommand when
+  // Desktop owned the label, on the premise that "the CLI must not hand the
+  // user a fix for a job it doesn't control". That premise no longer holds:
+  // `host restart` on a Desktop-managed machine asks the running host to
+  // stand down over its own lifecycle RPCs and then kickstarts the agent
+  // label - it controls the host's LIFECYCLE while mutating none of
+  // Desktop's REGISTRATION. Ownership routes which mechanism runs; it is not
+  // a reason to withhold the repair.
+  //
+  // Suppressing them turned every terminal card on a Desktop-managed
+  // machine ("stale pid", "endpoint unreachable", "port held", "RPC failed")
+  // into a description of a broken host with nothing to press and nothing to
+  // copy - the dead end this whole change exists to remove. The card now
+  // carries the repair that actually works there.
   const isExternallyManaged = serviceStatus?.state === "externally-managed";
   const pidMetadata = await readHostPidMetadata(opts.environment);
   const hostProcessAlive =
@@ -238,11 +265,17 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
       severity: "warning",
       title: "Stale host pid metadata",
       message: `pid.json references pid=${pidMetadata.pid} which is no longer alive.`,
-      fixAction: isExternallyManaged ? null : "host-restart",
-      terminalCommand: isExternallyManaged ? null : `traycer host restart`,
+      fixAction: "host-restart",
+      terminalCommand: `traycer host restart`,
       details: { pid: pidMetadata.pid, version: pidMetadata.version },
     });
   } else {
+    // Independent of reachability: a degraded host is usually perfectly
+    // reachable, which is exactly why this would otherwise never be noticed.
+    const layer0Issue = layer0GuaranteeIssue(pidMetadata);
+    if (layer0Issue !== null) {
+      issues.push(layer0Issue);
+    }
     const reachable = await probeWebsocketUrl(pidMetadata.websocketUrl);
     if (!reachable) {
       // Both calls are independent network/subprocess I/O - run in parallel.
@@ -271,10 +304,11 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           severity: "error",
           title: "Host port held by another process",
           message: `Port ${portInfo.port} (${pidMetadata.websocketUrl}) is held by ${conflict.processName} (pid=${conflict.pid}), not the host (pid=${pidMetadata.pid}).`,
-          fixAction: isExternallyManaged ? null : "host-free-port-and-restart",
-          terminalCommand: isExternallyManaged
-            ? null
-            : `traycer host free-port-and-restart --pid ${conflict.pid} --port ${portInfo.port}`,
+          // Safe under Desktop management too: freeing the port kills the
+          // FOREIGN holder, and the restart that follows goes through the
+          // same cooperative controller path.
+          fixAction: "host-free-port-and-restart",
+          terminalCommand: `traycer host free-port-and-restart --pid ${conflict.pid} --port ${portInfo.port}`,
           details: {
             pid: pidMetadata.pid,
             websocketUrl: pidMetadata.websocketUrl,
@@ -293,8 +327,8 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
           severity: "error",
           title: "Host endpoint unreachable",
           message: `Host process (pid=${pidMetadata.pid}) is running but its endpoint ${pidMetadata.websocketUrl} did not accept a TCP connection. No identifiable foreign listener on this port - restart the service.`,
-          fixAction: isExternallyManaged ? null : "host-restart",
-          terminalCommand: isExternallyManaged ? null : `traycer host restart`,
+          fixAction: "host-restart",
+          terminalCommand: `traycer host restart`,
           details: {
             pid: pidMetadata.pid,
             websocketUrl: pidMetadata.websocketUrl,
@@ -321,11 +355,7 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
         opts.environment,
       );
       if (rpcIssue !== null) {
-        issues.push(
-          isExternallyManaged && rpcIssue.fixAction === "host-restart"
-            ? { ...rpcIssue, fixAction: null, terminalCommand: null }
-            : rpcIssue,
-        );
+        issues.push(rpcIssue);
       }
     }
   }
@@ -405,6 +435,43 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
     }
   }
 
+  // ---- 4a. macOS launchd job wedge ----
+  // Registration presence is not health: launchd can hold the label loaded
+  // while the job is unable to run, and every ownership-keyed check reads
+  // that as "healthy". Read the job's run state directly.
+  if (process.platform === "darwin") {
+    const wedgeIssue = await probeMacosWedgedJob({
+      labelId: label.id,
+      agentLabelId: smAppServiceAgentLabelId(label),
+      hasPidMetadata: pidMetadata !== null,
+      runner: createRealLaunchdPrintRunner(),
+    });
+    if (wedgeIssue !== null) issues.push(wedgeIssue);
+  }
+
+  // ---- 4a-linux. systemd user-manager health ----
+  // The Linux counterpart of the launchd wedge probe. Reads the manager's
+  // actual run state: no reachable user bus (WSL without systemd, sudo su),
+  // a failed / restart-looping unit ("stopped" everywhere else, since
+  // liveness deliberately keys off pid metadata), a start skipped because
+  // the CLI binary is gone, and disabled lingering.
+  if (process.platform === "linux") {
+    const systemdIssues = await probeLinuxSystemdHealth({
+      labelId: label.id,
+      unitFileInstalled:
+        serviceStatus !== null && serviceStatus.state !== "not-installed",
+      runner: createRealSystemdProbeRunner(),
+    });
+    issues.push(...systemdIssues);
+  }
+
+  // ---- 4b. CLI slot binary health ----
+  // The manifest's binaryPath may be a symlink into the Desktop app
+  // bundle; a bundle remove/replace leaves it dangling, and the only
+  // repair is the app's own cli-reconcile at its next successful launch.
+  const cliSlotIssue = await probeDanglingCliSlotBinary(opts.environment);
+  if (cliSlotIssue !== null) issues.push(cliSlotIssue);
+
   // ---- 5. Windows credentials ACL ----
   // Windows ignores POSIX mode bits on the credentials file. On a
   // shared / VDI host, other users may have read access via default
@@ -413,6 +480,21 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   if (process.platform === "win32") {
     const aclIssue = await probeWindowsCredentialsAcl(opts.environment);
     if (aclIssue !== null) issues.push(aclIssue);
+  }
+
+  // ---- 5b. Windows Script Host policy ----
+  // The scheduled task launches the host through wscript.exe. With the WSH
+  // Enabled=0 policy set (common enterprise hardening), the launcher never
+  // executes and nothing surfaces - probed live: `//B` suppresses even the
+  // block dialog, so the host silently never starts at login. Install-time
+  // verification can't see a policy applied later; this can.
+  if (
+    process.platform === "win32" &&
+    serviceStatus !== null &&
+    serviceStatus.state !== "not-installed"
+  ) {
+    const wshIssue = probeWindowsScriptHostPolicy();
+    if (wshIssue !== null) issues.push(wshIssue);
   }
 
   // ---- 6. Recent bootstrap markers ----
@@ -442,6 +524,59 @@ export async function runDoctor(opts: RunDoctorOptions): Promise<DoctorResult> {
   }
 
   return { issues };
+}
+
+/**
+ * Surfaces a running host that does NOT hold the Layer 0 single-writer
+ * guarantee.
+ *
+ * This is the only place a support engineer can learn the fact without log
+ * archaeology. The host records it in pid.json precisely because its other
+ * channels do not survive: the framed status pipe has no reader on an ordinary
+ * production start, and the `[host] layer0-degraded` stderr line is one line
+ * at the very top of a log whose diagnostic tail is 200 lines and whose
+ * support attachment is 500.
+ *
+ * `null` for an acquired host, and for a pid.json that predates the field -
+ * absence is "not recorded", and inventing a warning for every host older than
+ * this CLI would drown the real signal.
+ */
+function layer0GuaranteeIssue(
+  pidMetadata: HostPidMetadata,
+): DoctorIssue | null {
+  // `?? null` rather than a bare null check: a pid.json older than this field
+  // decodes without the key at all, and so does any in-process fixture that
+  // predates it. Both mean "not recorded".
+  const record = pidMetadata.layer0 ?? null;
+  if (record === null || record.status === "acquired") {
+    return null;
+  }
+  const detail =
+    record.status === "degraded"
+      ? `cause=${record.cause} evidence=${record.evidence}`
+      : `this CLI does not recognise the record it published (${record.raw})`;
+  return {
+    code: DOCTOR_ISSUE_CODES.HOST_LAYER0_NOT_GUARANTEED,
+    severity: "warning",
+    title: "Host is running without the single-writer guarantee",
+    message:
+      `Host pid=${pidMetadata.pid} started without Layer 0's single-writer ` +
+      `lock on its data directory: ${detail}. The host is serving normally - ` +
+      "this is a deliberate degradation, not a failure - but a second host " +
+      "started against the same data directory would not be refused, so " +
+      "quote this in any report of duplicated or corrupted host state.",
+    // No CLI fix exists: the remedy depends on the cause (a reinstall for a
+    // missing native addon, relocating the data directory off a network
+    // filesystem for fs-unsupported). Offering `host restart` would just
+    // reproduce the same degradation.
+    fixAction: null,
+    terminalCommand: null,
+    details: {
+      pid: pidMetadata.pid,
+      hostId: pidMetadata.hostId,
+      layer0: record,
+    },
+  };
 }
 
 function lastCrashMarker(
@@ -475,6 +610,48 @@ function formatMarkerMessage(entry: BootstrapLogEntry): string {
 // principal other than the file owner / well-known system principals
 // has read access. Returns null when the file is owner-only or when
 // the probe itself fails (icacls missing, transient error).
+/**
+ * Reads the Windows Script Host Enabled policy from both hives. `0` in
+ * either disables wscript.exe for this user, which kills the host's
+ * scheduled-task launch chain silently. HKCU wins over HKLM only in the
+ * sense that EITHER being 0 blocks; a missing value means enabled.
+ */
+function probeWindowsScriptHostPolicy(): DoctorIssue | null {
+  const disabledIn: string[] = [];
+  for (const hive of ["HKLM", "HKCU"]) {
+    let stdout: string;
+    try {
+      stdout = execFileSync(
+        "reg",
+        [
+          "query",
+          `${hive}\\Software\\Microsoft\\Windows Script Host\\Settings`,
+          "/v",
+          "Enabled",
+        ],
+        { encoding: "utf8", windowsHide: true, timeout: 5000 },
+      );
+    } catch {
+      // Key or value absent - WSH enabled by default.
+      continue;
+    }
+    if (/Enabled\s+REG_DWORD\s+0x0\b/i.test(stdout)) disabledIn.push(hive);
+  }
+  if (disabledIn.length === 0) return null;
+  return {
+    code: DOCTOR_ISSUE_CODES.WINDOWS_SCRIPT_HOST_DISABLED,
+    severity: "error",
+    title: "Windows Script Host is disabled by policy",
+    message:
+      `The host's scheduled task starts through wscript.exe, and the Windows Script Host Enabled=0 policy is set in ${disabledIn.join(" and ")}. ` +
+      "The launcher never executes and nothing surfaces an error, so the host silently never starts at login. " +
+      "Remove the policy (or have your administrator exempt this machine) to restore host auto-start.",
+    fixAction: null,
+    terminalCommand: `reg query "${disabledIn[0]}\\Software\\Microsoft\\Windows Script Host\\Settings" /v Enabled`,
+    details: { disabledIn },
+  };
+}
+
 async function probeWindowsCredentialsAcl(
   environment: Environment,
 ): Promise<DoctorIssue | null> {
@@ -732,6 +909,52 @@ export function routeIncompatibleRecovery(
         ? "traycer host restart"
         : null;
   return { fixAction, terminalCommand, plan };
+}
+
+// Detects the "file is both there and not found" field shape: the CLI
+// manifest's binaryPath is a symlink whose target no longer exists, so
+// lstat (and `ls`) succeed while exec fails ENOENT. Never throws -
+// doctor probes are advisory, and an unreadable manifest or a healthy
+// binary both read as "nothing to report".
+async function probeDanglingCliSlotBinary(
+  environment: Environment,
+): Promise<DoctorIssue | null> {
+  try {
+    const manifest = await readCliManifest(environment);
+    if (manifest === null) return null;
+    const linkStat = await lstat(manifest.binaryPath);
+    if (!linkStat.isSymbolicLink()) return null;
+    try {
+      await stat(manifest.binaryPath);
+      return null;
+    } catch {
+      // stat follows the link; failure after a successful lstat on a
+      // symlink is the dangling shape this probe exists to name.
+    }
+    const target = await readlink(manifest.binaryPath).catch(() => "unknown");
+    const repairAdvice =
+      manifest.source === "desktop"
+        ? "Launch the Traycer Desktop app to repair it (the app re-stages its bundled CLI at startup); if the app has been uninstalled, reinstall it, or remove the link and reinstall the CLI another way."
+        : "Reinstall the CLI, or remove the dangling link.";
+    return {
+      code: DOCTOR_ISSUE_CODES.CLI_SLOT_BINARY_DANGLING,
+      severity: "warning",
+      title: "CLI binary is a dangling symlink",
+      message:
+        `The CLI at ${manifest.binaryPath} is a symlink to ${target}, which no longer exists: ` +
+        "listing the file succeeds but executing it fails with 'no such file or directory'. " +
+        repairAdvice,
+      fixAction: null,
+      terminalCommand: null,
+      details: {
+        binaryPath: manifest.binaryPath,
+        linkTarget: target,
+        installSource: manifest.source,
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Best-effort install-vector read for recovery routing. A missing or malformed

@@ -69,7 +69,7 @@ export async function findLiveIncumbentHost(
   }
   const identity = await getPublishedProcessIdentityVerdict(
     metadata.pid,
-    metadata.startedAt,
+    metadata.processStartIdentity,
   );
   // `mismatch` - the pid was recycled onto an unrelated occupant, so whatever
   // answered the endpoint is not this record's host. `dead` - the recorded
