@@ -353,6 +353,18 @@ export function routeNotification(
   payload: NotificationPayload,
   receivedAt: number,
 ): void {
+  routeNotificationForHost(navigate, payload, receivedAt, null);
+}
+
+/** Cloud approvals/interviews must only reuse a tile bound to their origin.
+ * The regular entry point deliberately keeps its legacy host-agnostic route
+ * behavior for v1 notifications. */
+export function routeNotificationForHost(
+  navigate: NotificationNavigate,
+  payload: NotificationPayload,
+  receivedAt: number,
+  originHostId: string | null,
+): void {
   switch (payload.kind) {
     case "epic":
       navigateToTabIntent(
@@ -370,7 +382,7 @@ export function routeNotification(
       );
       return;
     case "chat":
-      routeEpicChatNotification(navigate, payload, receivedAt);
+      routeEpicChatNotification(navigate, payload, receivedAt, originHostId);
       return;
     case "terminal":
       routeTerminalNotification(navigate, payload, receivedAt);
@@ -387,6 +399,7 @@ export function routeNotification(
           chatId: payload.chatId,
         },
         receivedAt,
+        originHostId,
       );
       return;
     case "interview":
@@ -398,6 +411,7 @@ export function routeNotification(
           chatId: payload.chatId,
         },
         receivedAt,
+        originHostId,
       );
       return;
     case "artifact": {
@@ -526,9 +540,14 @@ function routeEpicChatNotification(
   navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
+  originHostId: string | null,
 ): void {
-  if (routeLegacyTerminalNotification(navigate, payload, receivedAt)) return;
-  if (routeOpenChatNotification(navigate, payload, receivedAt)) return;
+  if (
+    routeLegacyTerminalNotification(navigate, payload, receivedAt, originHostId)
+  )
+    return;
+  if (routeOpenChatNotification(navigate, payload, receivedAt, originHostId))
+    return;
   navigateToTabIntent(
     navigate,
     openOrFocusEpicIntent({
@@ -552,6 +571,7 @@ function routeOpenChatNotification(
   navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
+  originHostId: string | null,
 ): boolean {
   const chatId = payload.chatId;
   if (chatId === undefined) return false;
@@ -570,7 +590,11 @@ function routeOpenChatNotification(
       if (found === null) return [];
       const tile =
         state.canvasByTabId[tabId]?.tilesByInstanceId[found.instanceId];
-      if (!isChatArtifactTileType(tile?.type)) return [];
+      if (
+        !isChatArtifactTileType(tile?.type) ||
+        (originHostId !== null && tile?.hostId !== originHostId)
+      )
+        return [];
       return [{ tabId, ...found }];
     })
     .at(0);
@@ -582,7 +606,11 @@ function routeOpenChatNotification(
         (closed) => {
           const node = closed?.node;
           if (node === undefined) return false;
-          return node.id === chatId && isChatArtifactTileType(node.type);
+          return (
+            node.id === chatId &&
+            isChatArtifactTileType(node.type) &&
+            (originHostId === null || node.hostId === originHostId)
+          );
         },
       );
     });
@@ -632,6 +660,7 @@ function routeLegacyTerminalNotification(
   navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
   receivedAt: number,
+  originHostId: string | null,
 ): boolean {
   if (payload.chatId === undefined) return false;
   const terminalId = payload.chatId;
@@ -643,7 +672,10 @@ function routeLegacyTerminalNotification(
       if (found === null) return [];
       const tile =
         state.canvasByTabId[tab.tabId]?.tilesByInstanceId[found.instanceId];
-      return tile?.type === "terminal" ? [{ tab, found }] : [];
+      return tile?.type === "terminal" &&
+        (originHostId === null || tile.hostId === originHostId)
+        ? [{ tab, found }]
+        : [];
     })
     .at(0);
   if (match === undefined) return false;

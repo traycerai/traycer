@@ -14,7 +14,7 @@ const ENVELOPE_KIND = "notificationActivation";
 const ENVELOPE_VERSION = 1;
 
 export type NotificationActivationEnvelopeFeedSource =
-  "host" | "app-local" | "global";
+  "host" | "cloud" | "app-local" | "global";
 
 export interface NotificationActivationEnvelopeFeed {
   readonly source: NotificationActivationEnvelopeFeedSource;
@@ -47,11 +47,18 @@ export function buildNotificationActivationEnvelope(input: {
 
 /** Feed identity travels as a delimited string everywhere else in the
  * renderer (`merged-notifications.ts`'s `hostFeedId`/`appLocalFeedId`/
- * `globalFeedId`); this reconstructs the same shape from an envelope's
- * structured feed field without importing the store layer. */
+ * `globalFeedId`, `cloud-notifications-store.ts`'s `cloudNotificationFeedId`);
+ * this reconstructs the same shape from an envelope's structured feed field
+ * without importing the store layer. The cloud feed id is scoped to
+ * `notificationId` alone (server-owned identity) - `originHostId` is not
+ * part of it; it stays on the envelope for the focus-bridge's separate
+ * origin-availability guard. */
 export function feedIdFromEnvelopeFeed(
   feed: NotificationActivationEnvelopeFeed,
 ): string {
+  if (feed.source === "cloud") {
+    return `cloud:${encodeURIComponent(feed.id)}`;
+  }
   return `${feed.source}:${feed.id}`;
 }
 
@@ -69,7 +76,12 @@ function parseEnvelopeFeed(
 ): NotificationActivationEnvelopeFeed | null {
   if (!isRecord(value)) return null;
   const source = value.source;
-  if (source !== "host" && source !== "app-local" && source !== "global") {
+  if (
+    source !== "host" &&
+    source !== "cloud" &&
+    source !== "app-local" &&
+    source !== "global"
+  ) {
     return null;
   }
   const id = value.id;
