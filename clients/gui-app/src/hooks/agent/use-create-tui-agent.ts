@@ -364,6 +364,7 @@ export function useCreateTuiAgentForClient(
           agentMode: input.agentMode,
           tuiAgentId,
           profileId: input.profileId,
+          forkSourceHarnessSessionId: input.forkSourceHarnessSessionId,
         });
         // Hold the pending-create mark until the record actually projects, so
         // the close-tile reconcile can't close the optimistic tab in the window
