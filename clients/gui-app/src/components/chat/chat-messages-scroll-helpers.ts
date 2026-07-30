@@ -12,6 +12,23 @@ export const CHAT_ARROW_SCROLL_STEP_PX = 40;
  *  top, leaving a sliver of the preceding row visible for context. */
 export const CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX = 48;
 
+const CHAT_ANCHOR_MOVER_DEPARTURE_EPSILON_PX = 1;
+
+export function anchorMoverShouldYieldToReader(
+  currentScrollTop: number,
+  previousExpectedScrollTop: number | null,
+  currentExpectedScrollTop: number | null,
+): boolean {
+  if (previousExpectedScrollTop === null || currentExpectedScrollTop === null) {
+    return false;
+  }
+  return (
+    currentScrollTop <
+    Math.min(previousExpectedScrollTop, currentExpectedScrollTop) -
+      CHAT_ANCHOR_MOVER_DEPARTURE_EPSILON_PX
+  );
+}
+
 export function buildMessageIdToIndex(
   messages: ReadonlyArray<ChatMessageModel>,
 ): ReadonlyMap<string, number> {

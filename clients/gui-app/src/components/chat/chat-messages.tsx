@@ -8,6 +8,7 @@ import {
   type ChatTimelineInitialScrollAnchor,
 } from "@/components/chat/chat-timeline";
 import {
+  anchorMoverShouldYieldToReader,
   buildMessageIdToIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
   chatTimelineLocationForMessage,
@@ -188,6 +189,19 @@ function resolveOwnedAtEndReport(input: {
         ? currentScrollTop
         : previousOwnedScrollTop,
   };
+}
+
+function expectedAnchorScrollTop(
+  list: LegendListRef,
+  anchorIndex: number,
+  anchorOffset: number,
+  topOffsetAdjustment: number,
+): number | null {
+  const anchorTop = list.getState().positionAtIndex(anchorIndex);
+  if (typeof anchorTop !== "number" || !Number.isFinite(anchorTop)) {
+    return null;
+  }
+  return anchorTop + topOffsetAdjustment - anchorOffset;
 }
 
 type ChatKeyboardScrollAction =
@@ -471,11 +485,14 @@ function settleChatTimelineNavigation(input: {
   readonly reissue: () => void;
   readonly onSettledInvalid: () => void;
   readonly maxRetries: number;
-}): void {
+}): () => void {
+  let cancelled = false;
+  let cancelActiveWait = (): void => {};
   const attempt = (retriesLeft: number): void => {
-    awaitScrollSettle(
+    cancelActiveWait = awaitScrollSettle(
       input.scrollNode,
       () => {
+        if (cancelled) return;
         if (input.isAborted()) return;
         if (input.validate()) return;
         if (retriesLeft <= 0) {
@@ -489,6 +506,10 @@ function settleChatTimelineNavigation(input: {
     );
   };
   attempt(input.maxRetries);
+  return () => {
+    cancelled = true;
+    cancelActiveWait();
+  };
 }
 
 /**
@@ -606,6 +627,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   const [navigationHighlightedMessageId, setNavigationHighlightedMessageId] =
     useState<string | null>(null);
   const navigationHighlightTimeoutRef = useRef<number | null>(null);
+  const activeNavigationSettleCleanupRef = useRef<(() => void) | null>(null);
   const clearNavigationHighlight = useCallback((): void => {
     if (navigationHighlightTimeoutRef.current !== null) {
       window.clearTimeout(navigationHighlightTimeoutRef.current);
@@ -628,6 +650,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       if (navigationHighlightTimeoutRef.current !== null) {
         window.clearTimeout(navigationHighlightTimeoutRef.current);
       }
+      activeNavigationSettleCleanupRef.current?.();
     },
     [],
   );
@@ -671,6 +694,11 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // upward from content growth reopening the distance to end; their scrollTop
   // direction can.
   const lastOwnedScrollTopRef = useRef<number | null>(null);
+  // The anchor mover's last geometry-derived target. Content growth/shrink
+  // moves the current target, while a reader departure moves only scrollTop;
+  // comparing against both prevents either geometry change from looking like
+  // user intent.
+  const expectedAnchorScrollTopRef = useRef<number | null>(null);
   const pendingAnchorScrollRestoreRef = useRef<{
     readonly offset: number;
     readonly userScrollGeneration: number;
@@ -831,6 +859,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         liveFollowUserScrollGenerationRef.current = null;
         lastOwnedScrollTopRef.current = null;
       }
+      expectedAnchorScrollTopRef.current = null;
       setIsFollowingEnd(next === "following-end");
     },
     [cancelPillShow],
@@ -890,6 +919,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       }
       liveFollowUserScrollGenerationRef.current = null;
       lastOwnedScrollTopRef.current = null;
+      expectedAnchorScrollTopRef.current = null;
       pendingTimelineAnchorRef.current = null;
       positionedTimelineAnchorRef.current = null;
       settledTimelineAnchorRef.current = null;
@@ -991,6 +1021,14 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     [endInset, anchorOffset],
   );
 
+  const reconcileInvalidTimelineLanding = useCallback((): void => {
+    // A corrective operation that cannot safely land must never leave the
+    // controller claiming ownership from the wrong position.
+    setTimelineMode("free-scrolling");
+    cancelPillShow();
+    setShowScrollToBottom(true);
+  }, [cancelPillShow, setTimelineMode]);
+
   // scrollToEnd reset (pill click / any future explicit "go live" action).
   // Ticket 10: this is an explicit user action - the `setTimelineMode`
   // call below is decision-sanctioned and unconditional, same as before;
@@ -1006,7 +1044,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       void list?.scrollToEnd({ animated });
       if (!list) return;
       const scrollNode = list.getScrollableNode();
-      settleChatTimelineNavigation({
+      activeNavigationSettleCleanupRef.current = settleChatTimelineNavigation({
         scrollNode,
         isAborted: () =>
           anchorUserScrollGenerationRef.current !== generationAtIssue ||
@@ -1015,20 +1053,13 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         reissue: () => {
           void list.scrollToEnd({ animated: false });
         },
-        onSettledInvalid: () => {
-          // Ticket 10: the video-evidence stranded state - a failed
-          // end-landing must never leave `following-end` idling mid-list
-          // outside maintainScrollAtEnd's threshold. Reconcile honestly
-          // instead: free-scrolling with the pill visible beats silently
-          // claiming to follow from wherever this settled.
-          setTimelineMode("free-scrolling");
-          cancelPillShow();
-          setShowScrollToBottom(true);
-        },
+        // Ticket 10: free-scrolling with the pill visible beats silently
+        // claiming ownership from an invalid landing.
+        onSettledInvalid: reconcileInvalidTimelineLanding,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
     },
-    [cancelPillShow, setTimelineMode],
+    [reconcileInvalidTimelineLanding, setTimelineMode],
   );
 
   // Enters `anchoring-new-turn` for `messageId` using the ref sequence from
@@ -1046,6 +1077,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       timelineScrollModeRef.current = "anchoring-new-turn";
       liveFollowUserScrollGenerationRef.current =
         anchorUserScrollGenerationRef.current;
+      expectedAnchorScrollTopRef.current = null;
       pendingTimelineAnchorRef.current = messageId;
       positionedTimelineAnchorRef.current = null;
       settledTimelineAnchorRef.current = null;
@@ -1211,6 +1243,18 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           const currentAnchorIndex =
             activeTimelineAnchorIndexRef.current ?? anchorIndex;
           const scrollNode = list.getScrollableNode();
+          const scrollTopBeforeIssue = scrollNode.scrollTop;
+          const expectedScrollTopAtIssue = expectedAnchorScrollTop(
+            list,
+            currentAnchorIndex,
+            anchorOffsetRef.current,
+            listTopOffsetAdjustmentRef.current,
+          );
+          expectedAnchorScrollTopRef.current = expectedScrollTopAtIssue;
+          const minimumUndepartedScrollTop =
+            expectedScrollTopAtIssue === null
+              ? scrollTopBeforeIssue
+              : Math.min(scrollTopBeforeIssue, expectedScrollTopAtIssue);
           // Round-2 finding 1 (now covered by the mode-based freeze condition
           // in `cancelTimelineLiveFollowForUserNavigation`, overengineering-
           // audit collapse): every real send/steer/edit/queued-flush/A2A
@@ -1224,6 +1268,22 @@ function ChatMessagesInner(props: ChatMessagesProps) {
               if (positionedTimelineAnchorRef.current !== messageId) return;
               if (anchorUserScrollGenerationRef.current !== generationAtReady)
                 return;
+              const expectedScrollTopAtSettle = expectedAnchorScrollTop(
+                list,
+                currentAnchorIndex,
+                anchorOffsetRef.current,
+                listTopOffsetAdjustmentRef.current,
+              );
+              if (
+                anchorMoverShouldYieldToReader(
+                  scrollNode.scrollTop,
+                  minimumUndepartedScrollTop,
+                  expectedScrollTopAtSettle,
+                )
+              ) {
+                reconcileInvalidTimelineLanding();
+                return;
+              }
               // Re-issue the SAME positioning command, non-animated, rather
               // than re-pinning to wherever we happen to be. Two distinct
               // failure modes both need this by settle time: (1) the
@@ -1252,6 +1312,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
                 viewPosition: 0,
                 viewOffset: anchorOffsetRef.current,
               });
+              expectedAnchorScrollTopRef.current = expectedScrollTopAtSettle;
               settledTimelineAnchorRef.current = messageId;
               // The reveal-pass effect only re-measures overflow on a
               // `messages` change - a fresh-open anchor onto an already-
@@ -1280,7 +1341,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       };
       requestAnimationFrame(() => positionAnchor(12));
     },
-    [getActiveTimelineTurnMetrics],
+    [getActiveTimelineTurnMetrics, reconcileInvalidTimelineLanding],
   );
 
   const onTimelineAnchorSizeChanged = useCallback((messageId: string): void => {
@@ -1569,12 +1630,24 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           // can update LegendList's internal tracked position ahead of (or
           // independent of) the real DOM value actually moving.
           const currentScrollTop = list.getScrollableNode().scrollTop;
-          const anchorOffsetFromTop =
+          const currentExpectedScrollTop =
             metrics.anchorTop +
             listTopOffsetAdjustmentRef.current -
-            currentScrollTop;
+            anchorOffsetRef.current;
+          if (
+            anchorMoverShouldYieldToReader(
+              currentScrollTop,
+              expectedAnchorScrollTopRef.current,
+              currentExpectedScrollTop,
+            )
+          ) {
+            // A scroll-only upward departure leaves mode ownership intact,
+            // but the corrective mover must not pull the reader back.
+            return;
+          }
+          expectedAnchorScrollTopRef.current = currentExpectedScrollTop;
           const anchorPositionDrift =
-            anchorOffsetFromTop - anchorOffsetRef.current;
+            currentExpectedScrollTop - currentScrollTop;
           if (Math.abs(anchorPositionDrift) > 1) {
             void list.scrollToOffset({
               offset: currentScrollTop + anchorPositionDrift,
@@ -1901,7 +1974,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       const list = chatTimelineRef.current;
       if (!list) return;
       const scrollNode = list.getScrollableNode();
-      settleChatTimelineNavigation({
+      activeNavigationSettleCleanupRef.current = settleChatTimelineNavigation({
         scrollNode,
         isAborted: () =>
           anchorUserScrollGenerationRef.current !== generationAtIssue ||

@@ -15,6 +15,7 @@ import {
   type ChatMessageScrollRequest,
 } from "@/components/chat/chat-messages";
 import {
+  anchorMoverShouldYieldToReader,
   CHAT_ARROW_SCROLL_STEP_PX,
   CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
   chatTimelineGetItemType,
@@ -2510,6 +2511,15 @@ describe("ChatMessages scroll policy", () => {
       );
     });
 
+    it("distinguishes a scroll-only settle departure from an ordinary anchor undershoot", () => {
+      // The initial anchor started at 300 and targets 940. A landing between
+      // those positions is an ordinary animated undershoot and must be
+      // re-issued; only a position meaningfully ABOVE the starting/target
+      // floor means the reader moved upward during the settle window.
+      expect(anchorMoverShouldYieldToReader(100, 300, 940)).toBe(true);
+      expect(anchorMoverShouldYieldToReader(700, 300, 940)).toBe(false);
+    });
+
     it("overflowing anchored turn (from free-scroll send) shows streaming pill then New reply with no mode flip on completion (decision #10)", async () => {
       // Enough rows to free-scroll away from the would-be send, but not so many
       // that LegendList measurement of the anchor index is flaky under the
@@ -2864,6 +2874,48 @@ describe("ChatMessages scroll policy", () => {
       // the inserted row's height instead.
       const scrollAfterMetadata = getScrollNode().scrollTop;
       expect(scrollAfterMetadata - scrollAfterSettle).toBe(ROW_HEIGHT_PX);
+    });
+
+    it("does not re-assert anchor drift after a scroll-only upward departure", async () => {
+      const initial = makeCompletedTranscript(10);
+      const sendId = "anchor-drift-scroll-only-departure";
+      const { rerenderMessages } = renderChatMessages({
+        messages: initial,
+        scrollStateKey: "anchor-drift-scroll-only-departure",
+        localProvenanceMessageIds: new Set([sendId]),
+      });
+      await settleLegendList();
+
+      const afterSend = appendOptimisticUserSend(initial, sendId, 210_000);
+      rerenderMessages(afterSend);
+      await waitFor(() => {
+        expect(screen.getByTestId(`mock-message-${sendId}`)).toBeTruthy();
+      });
+      await waitForAnchorEngineSettle();
+
+      const scrollNode = getScrollNode();
+      const departedScrollTop = scrollNode.scrollTop - 180;
+      expect(departedScrollTop).toBeGreaterThan(0);
+      await fireScrollTopAndFlush(departedScrollTop);
+      expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
+
+      const anchorIndex = afterSend.length - 1;
+      const withLateMetadata: ReadonlyArray<ChatMessageModel> = [
+        ...afterSend.slice(0, anchorIndex),
+        {
+          ...makeMessageAt(0, "assistant", 210_001),
+          id: "anchor-drift-late-metadata",
+          content: "Thought for 4s",
+          completedAt: 210_002,
+          runState: null,
+        },
+        ...afterSend.slice(anchorIndex),
+      ];
+      rerenderMessages(withLateMetadata);
+      await waitForRevealPassTick();
+
+      expect(scrollNode.scrollTop).toBe(departedScrollTop);
+      expect(scrollNode.dataset.scrollMode).toBe("anchoring-new-turn");
     });
 
     describe("reveal pass stops advancing once the anchored turn overflows (live-E2E merge-blocker: decisions #1/#10/#16)", () => {
@@ -4453,6 +4505,47 @@ describe("ChatMessages scroll policy", () => {
       } finally {
         undershoot.dispose();
       }
+    });
+
+    it("cancels the active navigation settle timer and listener on unmount", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetId = messages[10]?.id;
+      expect(targetId).toBeTruthy();
+      const { rerenderWith, unmount } = renderChatMessages({
+        messages,
+        scrollStateKey: "t10-nav-unmount-cleanup",
+      });
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+      const removeEventListenerSpy = vi.spyOn(
+        scrollNode,
+        "removeEventListener",
+      );
+
+      rerenderWith({
+        scrollRequest: {
+          requestId: 10_002,
+          messageId: targetId,
+          blockId: "",
+        },
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      const clearCountBeforeUnmount = clearTimeoutSpy.mock.calls.length;
+
+      unmount();
+
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(
+        clearCountBeforeUnmount,
+      );
+      expect(removeEventListenerSpy).toHaveBeenCalledWith(
+        "scrollend",
+        expect.any(Function),
+      );
     });
 
     it("getItemType splits human-sent user rows from A2A agent-sent rows", () => {
