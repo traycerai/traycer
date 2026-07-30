@@ -108,34 +108,17 @@ function isMarkAllReadDisabled(input: {
   return input.unreadCount === 0 && actionableHostAttention === 0;
 }
 
-/** Header subtitle text. A partial host state is either transient (still
+/** Local-fallback header subtitle text. A partial host state is either
+ * transient (still
  * connecting - the exact wording carries no permanence claim) or confirmed
  * permanent for this session (the stream's mirror-compat check has already
  * resolved `host.notifications.feed.subscribe` as `"unsupported"` on an old
  * host) - only the confirmed case gets version-specific wording. */
-function notificationsSubtitle(input: {
-  readonly mode: "local" | "cloud" | "upgrade-required";
+function localNotificationsSubtitle(input: {
   readonly isPartial: boolean;
   readonly hostLabel: string | null;
   readonly notificationsSupport: StreamMethodSupport | null;
-  readonly cloudConnectionState:
-    "connecting" | "connected" | "reconnecting" | "unavailable" | null;
 }): string {
-  if (input.mode === "upgrade-required") {
-    return "Update this host to view cloud notifications";
-  }
-  if (input.mode === "cloud") {
-    switch (input.cloudConnectionState) {
-      case "connected":
-        return "Cloud notifications from your devices";
-      case "unavailable":
-        return "Cloud notifications are unavailable";
-      case "connecting":
-      case "reconnecting":
-      case null:
-        return "Cloud notifications are reconnecting";
-    }
-  }
   if (!input.isPartial) {
     return `Task activity from ${input.hostLabel ?? "this device"}`;
   }
@@ -146,7 +129,7 @@ function notificationsSubtitle(input: {
 }
 
 /**
- * Notification center surface content: header (title, active-device/partial
+ * Notification center surface content: header (title, optional local-host
  * subtitle, Filter, Mark all read, overflow Settings), a single scrolling
  * feed body (Needs attention, then Recent activity with temporal
  * separators), and a fixed "Load older activity" footer. Outer sizing is
@@ -181,7 +164,7 @@ export function NotificationsPopover(
   // check has already confirmed it will never support the notifications
   // feed) from a merely transient one (still connecting) - both leave
   // `hostState.isPartial` true, but only the confirmed case should be worded
-  // as permanent in the subtitle below.
+  // as permanent in the local fallback subtitle below.
   const notificationsSupport = useStreamMethodSupport(
     "host.notifications.feed.subscribe",
   );
@@ -427,13 +410,15 @@ export function NotificationsPopover(
           }
           onClearAll={handleClearAll}
           onOpenSettings={handleOpenSettings}
-          subtitle={notificationsSubtitle({
-            isPartial: hostState.isPartial,
-            mode: feedMode,
-            hostLabel: hostState.hostLabel,
-            notificationsSupport,
-            cloudConnectionState: cloudPresentationState,
-          })}
+          subtitle={
+            feedMode === "local"
+              ? localNotificationsSubtitle({
+                  isPartial: hostState.isPartial,
+                  hostLabel: hostState.hostLabel,
+                  notificationsSupport,
+                })
+              : null
+          }
         />
 
         <OriginUnavailableBanner />
@@ -558,7 +543,7 @@ interface NotificationsPopoverHeaderProps {
   readonly isClearAllDisabled: boolean;
   readonly onClearAll: () => void;
   readonly onOpenSettings: () => void;
-  readonly subtitle: string;
+  readonly subtitle: string | null;
 }
 
 function NotificationsPopoverHeader({
@@ -656,12 +641,14 @@ function NotificationsPopoverHeader({
           </TooltipWrapper>
         </div>
       </div>
-      <p
-        data-testid="notifications-subtitle"
-        className="truncate text-ui-xs text-muted-foreground"
-      >
-        {subtitle}
-      </p>
+      {subtitle === null ? null : (
+        <p
+          data-testid="notifications-subtitle"
+          className="truncate text-ui-xs text-muted-foreground"
+        >
+          {subtitle}
+        </p>
+      )}
     </header>
   );
 }
