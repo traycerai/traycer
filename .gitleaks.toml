@@ -10,6 +10,28 @@ title = "Traycer gitleaks config"
 useDefault = true
 
 [[allowlists]]
+description = "Stable scrollStateKey identifiers in chat-messages unit tests. These exact strings are cache-key test IDs, not credentials; require both the precise source path and value."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
+]
+regexes = [
+  '''^(?:h3-gesture-preempts-ownership|m3b-usable-hit-strip|t4-optimistic-anchor-key|t4-anchor-drift-key|t4-gated-follow-key|t11-e-strict-epsilon-2|t10-nav-abort-gesture|t12-anchor-drift|t12-follow-catchup)$''',
+]
+
+[[allowlists]]
+description = "Historical message-list license unit-test fixture. Its payload identifies it as a public test key, not a production credential; require both the exact source path and value."
+condition = "AND"
+regexTarget = "secret"
+paths = [
+  '''^clients/gui-app/src/components/chat/__tests__/chat-messages\.test\.tsx$''',
+]
+regexes = [
+  '''^eff2c8c42294f62b09cebd99d82c8c93b25URVNUO2V4OTk5OTk5OTk5OTk5OQ==$''',
+]
+
+[[allowlists]]
 description = "Minisign PUBLIC verification key fixture in the desktop download-resilience tests (v1.1.7 update-flow work). Decodes to exactly 42 bytes: 'Ed' algorithm tag + key id 847ef539119a1961 (matching the adjacent HOST_SIGNING_KEY_ID constant) + 32-byte public key. A verification key is public by design, never a credential. Scoped to the exact string and source path."
 condition = "AND"
 regexTarget = "secret"
