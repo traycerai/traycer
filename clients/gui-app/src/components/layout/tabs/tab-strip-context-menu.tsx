@@ -1,6 +1,10 @@
 import {
+  ArrowLeftRight,
   CopyPlus,
   ExternalLink,
+  Maximize2,
+  PanelLeftClose,
+  PanelRightClose,
   Pencil,
   Pin,
   SplitSquareHorizontal,
@@ -11,13 +15,14 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import type { HeaderTab } from "@/stores/tabs/types";
 import {
-  TAB_SPLIT_ARRANGE_MENU_LABEL,
   TAB_SPLIT_COMMANDS,
   resolveTabSplitCommandAvailability,
   type TabSplitCommandAvailability,
@@ -135,10 +140,9 @@ export function TabContextMenuContent(
 
 /**
  * The split-command section. Availability is resolved here at render time so
- * the menu reflects the live layout. The two creation commands stay at the top
- * level; the four group-scoped ones (separate / close-left / close-right /
- * reverse) sit behind the arrange submenu and only appear once the invoked tab
- * is in a group.
+ * the menu reflects the live layout. Group-scoped commands remain directly in
+ * the main menu: in a split, the creation commands above them are disabled, so
+ * a second arrangement submenu only adds an unnecessary navigation step.
  */
 function TabSplitMenuItems(props: {
   readonly tab: HeaderTab;
@@ -173,20 +177,14 @@ function TabSplitMenuItems(props: {
         {TAB_SPLIT_COMMANDS.pair.label}
       </ContextMenuItem>
       {showsGroupCommands ? (
-        <ContextMenuSub>
-          <ContextMenuSubTrigger
-            data-testid={`tab-arrange-split-${tab.kind}-${tab.id}`}
-          >
-            {TAB_SPLIT_ARRANGE_MENU_LABEL}
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            <TabSplitArrangeItems
-              tab={tab}
-              availability={splitAvailability}
-              onSplitCommand={onSplitCommand}
-            />
-          </ContextMenuSubContent>
-        </ContextMenuSub>
+        <>
+          <ContextMenuSeparator />
+          <TabSplitArrangeItems
+            tab={tab}
+            availability={splitAvailability}
+            onSplitCommand={onSplitCommand}
+          />
+        </>
       ) : null}
     </>
   );
@@ -210,6 +208,7 @@ function TabSplitArrangeItems(props: {
         onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.separate.id, tab)}
         data-testid={`tab-separate-split-${tab.kind}-${tab.id}`}
       >
+        <Maximize2 />
         {TAB_SPLIT_COMMANDS.separate.label}
       </ContextMenuItem>
       <ContextMenuSeparator />
@@ -218,6 +217,7 @@ function TabSplitArrangeItems(props: {
         onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.closeLeft.id, tab)}
         data-testid={`tab-close-left-${tab.kind}-${tab.id}`}
       >
+        <PanelLeftClose />
         {TAB_SPLIT_COMMANDS.closeLeft.label}
       </ContextMenuItem>
       <ContextMenuItem
@@ -225,6 +225,7 @@ function TabSplitArrangeItems(props: {
         onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.closeRight.id, tab)}
         data-testid={`tab-close-right-${tab.kind}-${tab.id}`}
       >
+        <PanelRightClose />
         {TAB_SPLIT_COMMANDS.closeRight.label}
       </ContextMenuItem>
       <ContextMenuSeparator />
@@ -233,6 +234,7 @@ function TabSplitArrangeItems(props: {
         onSelect={() => onSplitCommand(TAB_SPLIT_COMMANDS.swap.id, tab)}
         data-testid={`tab-swap-split-${tab.kind}-${tab.id}`}
       >
+        <ArrowLeftRight />
         {TAB_SPLIT_COMMANDS.swap.label}
       </ContextMenuItem>
     </>
@@ -261,5 +263,66 @@ export function SplitSlotMenuContent(props: {
         onSplitCommand={props.onSplitCommand}
       />
     </ContextMenuContent>
+  );
+}
+
+/** Click-menu counterpart to the flattened context-menu arrangement section. */
+export function SplitQuickActionsMenuContent(props: {
+  readonly tab: HeaderTab;
+  readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
+}): React.ReactNode {
+  const availability = resolveTabSplitCommandAvailability({
+    kind: props.tab.kind,
+    id: props.tab.id,
+  });
+  return (
+    <DropdownMenuContent
+      align="start"
+      className="w-52"
+      onCloseAutoFocus={(event) => event.preventDefault()}
+    >
+      <DropdownMenuItem
+        disabled={!availability.separate}
+        onSelect={() =>
+          props.onSplitCommand(TAB_SPLIT_COMMANDS.separate.id, props.tab)
+        }
+        data-testid={`split-quick-separate-${props.tab.kind}-${props.tab.id}`}
+      >
+        <Maximize2 />
+        {TAB_SPLIT_COMMANDS.separate.label}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        disabled={availability.closeLeft === null}
+        onSelect={() =>
+          props.onSplitCommand(TAB_SPLIT_COMMANDS.closeLeft.id, props.tab)
+        }
+        data-testid={`split-quick-close-left-${props.tab.kind}-${props.tab.id}`}
+      >
+        <PanelLeftClose />
+        {TAB_SPLIT_COMMANDS.closeLeft.label}
+      </DropdownMenuItem>
+      <DropdownMenuItem
+        disabled={availability.closeRight === null}
+        onSelect={() =>
+          props.onSplitCommand(TAB_SPLIT_COMMANDS.closeRight.id, props.tab)
+        }
+        data-testid={`split-quick-close-right-${props.tab.kind}-${props.tab.id}`}
+      >
+        <PanelRightClose />
+        {TAB_SPLIT_COMMANDS.closeRight.label}
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem
+        disabled={!availability.swap}
+        onSelect={() =>
+          props.onSplitCommand(TAB_SPLIT_COMMANDS.swap.id, props.tab)
+        }
+        data-testid={`split-quick-swap-${props.tab.kind}-${props.tab.id}`}
+      >
+        <ArrowLeftRight />
+        {TAB_SPLIT_COMMANDS.swap.label}
+      </DropdownMenuItem>
+    </DropdownMenuContent>
   );
 }

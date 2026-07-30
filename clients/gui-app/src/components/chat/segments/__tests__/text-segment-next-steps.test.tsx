@@ -68,6 +68,10 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   }),
 }));
 
+vi.mock("@/hooks/runner/use-runner-feature-settings-query", () => ({
+  useAgentRolesEnabled: () => true,
+}));
+
 const COMPLETE_BLOCK = [
   "<TRAYCER_NEXT_STEPS>",
   "Implementation is complete.",

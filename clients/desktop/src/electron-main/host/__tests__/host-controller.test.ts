@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 
 // Host Update Layer Redesign Tech Plan - Ticket: "Desktop main: HostController
 // two-lane scheduler + policy cutover". This is the ticket's own verification
@@ -150,8 +151,7 @@ let workHome: string;
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-controller-"));
-  process.env.HOME = workHome;
-  process.env.USERPROFILE = workHome;
+  sandboxHome(workHome);
   delete process.env[DEV_DESKTOP_SLOT_ENV];
   // `withDesktopCliLock`'s `open(path, "wx", ...)` needs the lock file's
   // parent directory to already exist (production always has it - the CLI
@@ -5701,6 +5701,38 @@ describe("packaged-mac register failure: CLI-owned LaunchAgent takeover fallback
       expect(outcome.message).toContain("service uninstall");
     }
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
+  // Field RCA 2026-07-28: the very restart that exercised this fallback in
+  // the field hit a live host that denied the takeover's shutdown claim
+  // (E_HOST_BUSY) - a self-recovering state (the retry 14s later
+  // succeeded), yet it surfaced as a `failed` outcome and therefore a
+  // reportable "Couldn't restart host" error toast. The denial must
+  // resolve `deferred` so restart surfaces present it as information.
+  it("activation cycle: a takeover denied by a busy host is deferred - retry-later information, not a reportable failure", async () => {
+    const controller = stagePackagedMacWorld();
+    vi.mocked(registerHostLoginItem).mockResolvedValue("not-found");
+    vi.mocked(runBundledTraycerCliJson).mockRejectedValue(
+      new TraycerCliError(
+        "E_HOST_BUSY",
+        "service install --takeover: the running host has work in progress and denied the shutdown claim; retry once the work completes.",
+      ),
+    );
+
+    const outcome = await controller.respawn();
+
+    expect(outcome.kind).toBe("deferred");
+    if (outcome.kind === "deferred") {
+      // User-facing retry copy - not the CLI's takeover jargon, and none
+      // of the failure message's escape-hatch instructions.
+      expect(outcome.message).toContain("work in progress");
+      expect(outcome.message).toContain("Try again");
+      expect(outcome.message).not.toContain("service uninstall");
+    }
+    // The denial still quarantines this SMAppService session: the register
+    // cycle is just as doomed as any other takeover-recoverable failure.
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+    expect(controller.isPendingRevisionRefreshQuarantined()).toBe(true);
   });
 
   it("activation cycle: a takeover that registered but never produced a ready host is a failure, not a silent success", async () => {

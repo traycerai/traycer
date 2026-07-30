@@ -1145,7 +1145,19 @@ export class HostController {
     readonly expectedRuntimeVersion: string | null;
   }): Promise<
     | { readonly recovered: true; readonly version: string | null }
-    | { readonly recovered: false; readonly message: string }
+    | {
+        readonly recovered: false;
+        // The takeover's cooperative stop was DENIED by a live host with
+        // work in progress - by the takeover contract that aborts rather
+        // than trample the work, and a later retry succeeds once the work
+        // drains. Callers resolve this as a deferred outcome, not a
+        // failure: surfacing it as an error invites issue reports for a
+        // self-recovering condition (field RCA 2026-07-28 - the very
+        // restart that validated this fallback in the field toasted
+        // "Report issue" while the host was healthy and protecting work).
+        readonly hostBusy: boolean;
+        readonly message: string;
+      }
   > {
     // SMAppService is unusable for the rest of this session - quarantine the
     // pending-revision refresh so it cannot boot the fallback host out for a
@@ -1166,8 +1178,22 @@ export class HostController {
         ...this.devServiceInstallExtras(),
       ]);
     } catch (err) {
+      if (err instanceof TraycerCliError && err.code === HOST_BUSY_CODE) {
+        log.info(
+          "[host-controller] CLI takeover declined - the running host has work in progress",
+          { status: args.failedStatus },
+        );
+        return {
+          recovered: false,
+          hostBusy: true,
+          message:
+            "The host has work in progress, so it was not restarted. " +
+            "Try again once the work completes.",
+        };
+      }
       return {
         recovered: false,
+        hostBusy: false,
         message: `Failed to register the host login item (status=${args.failedStatus}), and the fallback service registration failed: ${describeError(err)} Run 'traycer host service uninstall' and relaunch Traycer, or run 'traycer host doctor' to recover.`,
       };
     }
@@ -1181,6 +1207,7 @@ export class HostController {
     } catch (err) {
       return {
         recovered: false,
+        hostBusy: false,
         message: `Failed to register the host login item (status=${args.failedStatus}); the fallback service was registered but the host did not come up: ${describeError(err)}`,
       };
     }
@@ -1233,6 +1260,19 @@ export class HostController {
   ): Promise<MutationOutcome<T>> {
     await this.reloadAfterServiceCycleFailure();
     return { kind: "installed-not-converged", message };
+  }
+
+  // Deferred sibling of `failedAfterServiceCycle`, for the takeover's
+  // host-busy denial: the same snapshot healing applies (the cycle may
+  // have cleared the renderer-facing snapshot, and a busy denial proves
+  // the host is alive and publishing pid.json), but the outcome resolves
+  // `deferred` so restart surfaces present "not restarted, retry later"
+  // as information rather than a reportable failure.
+  private async deferredAfterServiceCycle<T>(
+    message: string,
+  ): Promise<MutationOutcome<T>> {
+    await this.reloadAfterServiceCycleFailure();
+    return { kind: "deferred", message };
   }
 
   // ---- Shared locked macOS SMAppService activation cycle ------------------
@@ -1463,7 +1503,9 @@ export class HostController {
         expectedRuntimeVersion: step.expectedRuntimeVersion,
       });
       if (!recovery.recovered) {
-        return this.failedAfterServiceCycle(recovery.message);
+        return recovery.hostBusy
+          ? this.deferredAfterServiceCycle(recovery.message)
+          : this.failedAfterServiceCycle(recovery.message);
       }
       return { kind: "ok", value: { activated: true } };
     }
@@ -1761,7 +1803,9 @@ export class HostController {
         expectedRuntimeVersion,
       });
       if (!recovery.recovered) {
-        return this.failedAfterServiceCycle(recovery.message);
+        return recovery.hostBusy
+          ? this.deferredAfterServiceCycle(recovery.message)
+          : this.failedAfterServiceCycle(recovery.message);
       }
       return {
         kind: "ok",
@@ -2797,7 +2841,9 @@ export class HostController {
               expectedRuntimeVersion: registration.expectedRuntimeVersion,
             });
             if (!recovery.recovered) {
-              return this.failedAfterServiceCycle(recovery.message);
+              return recovery.hostBusy
+                ? this.deferredAfterServiceCycle(recovery.message)
+                : this.failedAfterServiceCycle(recovery.message);
             }
             return { kind: "ok", value: { registered: true } };
           }

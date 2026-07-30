@@ -818,6 +818,18 @@ describe("epic sidebar selection mode", () => {
     expect(screen.queryByText("No agents use this interface.")).toBeNull();
   });
 
+  it("exposes each full agent title on hover without worktree metadata", () => {
+    seedChatTree();
+    testState.rowHostId = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    expect(screen.getByRole("tooltip", { name: "Root chat" })).toBeTruthy();
+    expect(
+      screen.getByRole("tooltip", { name: "Terminal agent" }),
+    ).toBeTruthy();
+  });
+
   it("blames the interface filter, not the Task, when a filter hides every agent", () => {
     seedGuiChatTree();
     testState.chatFilterOrigin = "tui";

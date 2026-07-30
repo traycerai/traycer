@@ -72,6 +72,11 @@ export interface FillSplitSideCommand {
   readonly ref: TabRef;
 }
 
+export interface PlaceSourceRefAtStripIndexCommand {
+  readonly ref: TabRef;
+  readonly targetIndex: number;
+}
+
 export interface CreateDraftForSplitCommand {
   readonly splitId: string;
   readonly side: SplitSideName;
@@ -183,14 +188,19 @@ const MAX_FINALIZATION_ITERATIONS = 8;
 
 let transactionDepth = 0;
 
-function currentLayout(): PersistedTabStripLayout {
+function authoritativeLayout(): PersistedTabStripLayout {
   const state = useTabsStore.getState();
-  const layout: PersistedTabStripLayout = {
+  return {
     version: 2,
     items: state.items,
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
   };
+}
+
+function currentLayout(): PersistedTabStripLayout {
+  const state = useTabsStore.getState();
+  const layout = authoritativeLayout();
   const projected = flattenLayoutRefs(layout);
   const matchesProjection =
     projected.length === state.stripOrder.length &&
@@ -207,6 +217,19 @@ function currentLayout(): PersistedTabStripLayout {
     activeItemId: null,
     systemTabs: state.systemTabs,
   });
+}
+
+function currentLayoutForFillableSplit(command: {
+  readonly splitId: string;
+  readonly side: SplitSideName;
+}): PersistedTabStripLayout {
+  const layout = authoritativeLayout();
+  const split = layout.items.find(
+    (item): item is Extract<StripItem, { readonly kind: "split" }> =>
+      item.kind === "split" && item.id === command.splitId,
+  );
+  if (split !== undefined && split[command.side].kind !== "tab") return layout;
+  return currentLayout();
 }
 
 function refsToLedger(
@@ -289,6 +312,13 @@ function sourceHasRef(ref: TabRef): boolean {
 function canSplitRef(ref: TabRef): boolean {
   return (
     canMutateTabSplits() &&
+    !isTabStructurallyLocked(ref) &&
+    tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible"
+  );
+}
+
+function canFillSplitRef(ref: TabRef): boolean {
+  return (
     !isTabStructurallyLocked(ref) &&
     tabSurfaceDescriptor(ref.kind).splitEligibility === "eligible"
   );
@@ -498,7 +528,7 @@ export class TabCommandCoordinator {
   }
 
   fillSplitSide(command: FillSplitSideCommand): boolean {
-    const layout = currentLayout();
+    const layout = currentLayoutForFillableSplit(command);
     if (!sourceHasRef(command.ref)) return false;
     const existing = findStripItemForRef(layout, command.ref);
     // A chooser may reuse an already-open, unpaired source. Remove its one
@@ -509,7 +539,7 @@ export class TabCommandCoordinator {
     const next = replaceFillableSide(
       withoutUngroupedSource,
       command,
-      canSplitRef,
+      canFillSplitRef,
     );
     if (next === withoutUngroupedSource) return false;
     this.execute({
@@ -582,6 +612,92 @@ export class TabCommandCoordinator {
       applyRemovals: () => undefined,
     });
     return true;
+  }
+
+  /**
+   * Places a source-owned ref at a top-level strip-item index. Canvas tear-off
+   * creates the source tab first; this command then makes its placement
+   * explicit in the authoritative split layout instead of relying on legacy
+   * flat-order reconciliation, which can only append a newly discovered ref.
+   */
+  placeSourceRefAtStripIndex(
+    command: PlaceSourceRefAtStripIndexCommand,
+  ): boolean {
+    if (!Number.isInteger(command.targetIndex) || command.targetIndex < 0) {
+      return false;
+    }
+    if (!sourceHasRef(command.ref)) return false;
+    if (isTabStructurallyLocked(command.ref)) return false;
+    const layout = currentLayout();
+    const existing = findStripItemForRef(layout, command.ref);
+    if (existing?.kind === "split") return false;
+    const withRef = createLayoutItem(layout, command.ref);
+    const item = findStripItemForRef(withRef, command.ref);
+    if (item?.kind !== "tab") return false;
+    const next = reorderStripItem(withRef, {
+      itemId: item.id,
+      targetIndex: command.targetIndex,
+    });
+    if (next === layout) return false;
+    this.execute({
+      layout: next,
+      reservedAdditions: existing === null ? [command.ref] : [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => undefined,
+      applyRemovals: () => undefined,
+    });
+    return true;
+  }
+
+  /**
+   * Creates a source-owned ref and places it in one suppressed transaction.
+   * The source callback runs only after reconciliation is suppressed; its
+   * freshly minted ref is then inserted into the authoritative layout before
+   * the transaction is finalized. This is the canvas tear-off path, where the
+   * source store owns id creation and cannot reserve the ref ahead of time.
+   */
+  createSourceRefAtStripIndex(
+    targetIndex: number,
+    createSource: () => TabRef | null,
+  ): TabRef | null {
+    if (!Number.isInteger(targetIndex) || targetIndex < 0) return null;
+    const knownBeforeCreate = new Set(tabSourceRefs().map(tabRefKey));
+    let createdRef: TabRef | null = null;
+    this.execute({
+      layout: () => {
+        if (createdRef === null) return currentLayout();
+        const layout = currentLayout();
+        const withRef = createLayoutItem(layout, createdRef);
+        const item = findStripItemForRef(withRef, createdRef);
+        if (item?.kind !== "tab") {
+          // Placement failed - the created ref is not part of the
+          // authoritative layout, so it must not be reported as placed.
+          // createSource() already minted it in the source store, so undo
+          // that here (before finalize's reconciliation runs) or it gets
+          // re-adopted as an orphaned, active tab on the next pass. Only
+          // roll back refs this call actually minted - a ref that already
+          // existed before createSource() ran must not be closed here.
+          if (!knownBeforeCreate.has(tabRefKey(createdRef))) {
+            this.removeSourceRef(createdRef);
+          }
+          createdRef = null;
+          return layout;
+        }
+        return reorderStripItem(withRef, {
+          itemId: item.id,
+          targetIndex,
+        });
+      },
+      reservedAdditions: [],
+      pendingRemovals: [],
+      projectSourceCompatibility: true,
+      applySources: () => {
+        createdRef = createSource();
+      },
+      applyRemovals: () => undefined,
+    });
+    return createdRef;
   }
 
   resizeSplit(command: ResizeSplitArgs): boolean {
@@ -673,8 +789,12 @@ export class TabCommandCoordinator {
 
   createDraftForSplit(command: CreateDraftForSplitCommand): TabRef | null {
     const ref: TabRef = { kind: "draft", id: uuidv4() };
-    const layout = currentLayout();
-    const next = replaceFillableSide(layout, { ...command, ref }, canSplitRef);
+    const layout = currentLayoutForFillableSplit(command);
+    const next = replaceFillableSide(
+      layout,
+      { ...command, ref },
+      canFillSplitRef,
+    );
     if (next === layout) return null;
     this.execute({
       layout: next,
@@ -693,8 +813,12 @@ export class TabCommandCoordinator {
 
   createEpicForSplit(command: CreateEpicForSplitCommand): TabRef | null {
     const ref: TabRef = { kind: "epic", id: uuidv4() };
-    const layout = currentLayout();
-    const next = replaceFillableSide(layout, { ...command, ref }, canSplitRef);
+    const layout = currentLayoutForFillableSplit(command);
+    const next = replaceFillableSide(
+      layout,
+      { ...command, ref },
+      canFillSplitRef,
+    );
     if (next === layout) return null;
     this.execute({
       layout: next,
@@ -717,8 +841,12 @@ export class TabCommandCoordinator {
     command: CreatePhaseMigrationForSplitCommand,
   ): TabRef | null {
     const ref: TabRef = { kind: "epic", id: uuidv4() };
-    const layout = currentLayout();
-    const next = replaceFillableSide(layout, { ...command, ref }, canSplitRef);
+    const layout = currentLayoutForFillableSplit(command);
+    const next = replaceFillableSide(
+      layout,
+      { ...command, ref },
+      canFillSplitRef,
+    );
     if (next === layout) return null;
     this.execute({
       layout: next,
@@ -739,7 +867,7 @@ export class TabCommandCoordinator {
 
   createSystemForSplit(command: CreateSystemForSplitCommand): TabRef | null {
     const ref: TabRef = { kind: command.systemKind, id: command.systemKind };
-    const layout = currentLayout();
+    const layout = currentLayoutForFillableSplit(command);
     if (layout.systemTabs[command.systemKind] !== null) return null;
     const withSystem = {
       ...layout,
@@ -756,7 +884,7 @@ export class TabCommandCoordinator {
     const next = replaceFillableSide(
       withSystem,
       { ...command, ref },
-      canSplitRef,
+      canFillSplitRef,
     );
     if (next === withSystem) return null;
     this.execute({
@@ -1346,7 +1474,7 @@ export class TabCommandCoordinator {
   }
 
   private execute(input: {
-    readonly layout: PersistedTabStripLayout;
+    readonly layout: PersistedTabStripLayout | (() => PersistedTabStripLayout);
     readonly reservedAdditions: ReadonlyArray<TabRef>;
     readonly pendingRemovals: ReadonlyArray<TabRef>;
     readonly projectSourceCompatibility: boolean;
@@ -1367,9 +1495,11 @@ export class TabCommandCoordinator {
       };
       this.notify();
       input.applySources();
-      const layoutFailure = this.replaceLayoutForTransaction(input.layout);
+      const layout =
+        typeof input.layout === "function" ? input.layout() : input.layout;
+      const layoutFailure = this.replaceLayoutForTransaction(layout);
       if (layoutFailure !== null) throw layoutFailure;
-      this.consumePlacedReservations(input.layout);
+      this.consumePlacedReservations(layout);
       this.notify();
       input.applyRemovals();
     } catch (error) {

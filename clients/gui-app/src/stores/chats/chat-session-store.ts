@@ -3,7 +3,9 @@ import {
   pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
+  reconcileTurnSettled,
   sweepStalePendingActions,
+  turnSettledFromStatus,
   withoutPendingAction,
 } from "@/stores/chats/chat-queue-reconciler";
 import {
@@ -932,6 +934,26 @@ export function createChatSessionStore(
             failedSendRestoration: state.failedSendRestoration,
             nowMs: now,
           });
+          // `reconcileSnapshotChange` only settles sends still awaiting their
+          // ack. A send whose accepted ack landed before the connection died
+          // has already left `pendingActions`, so its optimistic user message
+          // needs its own settled pass: when this authoritative snapshot
+          // reports no turn in progress, an entry with no remaining path to
+          // materialization will never be cleared by a later frame - drop it
+          // (restoring its content if the transcript never recorded it).
+          const settled = reconcileTurnSettled(
+            turnSettledFromStatus(
+              frame.snapshot.turnInProgress,
+              frame.snapshot.runStatus,
+            ),
+            {
+              pendingActions: pending.pendingActions,
+              pendingUserMessages: pending.pendingUserMessages,
+              messages,
+              queue: frame.snapshot.queue,
+              failedSendRestoration: pending.failedSendRestoration,
+            },
+          );
           // A changed persisted tuple is an authoritative host-side update
           // (for example `agent.configure`) and must replace the live picker.
           // An unchanged tuple is ordinary stream traffic, so keep any local
@@ -998,8 +1020,8 @@ export function createChatSessionStore(
               },
               now,
             ),
-            pendingUserMessages: pending.pendingUserMessages,
-            failedSendRestoration: pending.failedSendRestoration,
+            pendingUserMessages: settled.pendingUserMessages,
+            failedSendRestoration: settled.failedSendRestoration,
             restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
             snapshotLoaded: true,
             worktreeBinding: frame.snapshot.worktreeBinding,
@@ -1107,8 +1129,15 @@ export function createChatSessionStore(
               state.queue,
               frame.clientActionId,
             ),
+            // Single slot, first writer wins until `ackFailedSendRestoration`
+            // clears it - the same rule `reconcileSnapshotChange` and the
+            // settled-turn pass already follow. Two rejections landing before
+            // the composer consumes the first would otherwise leave the
+            // earlier (longer-waiting) content unreachable.
             failedSendRestoration:
-              pending?.action === "send" && pending.restoreContent !== null
+              state.failedSendRestoration === null &&
+              pending?.action === "send" &&
+              pending.restoreContent !== null
                 ? {
                     clientActionId: frame.clientActionId,
                     content: pending.restoreContent,
@@ -1212,7 +1241,24 @@ export function createChatSessionStore(
           const turnIdChanged = previousTurnId !== nextTurnId;
           const nextBackgroundItems =
             frame.backgroundItems ?? state.backgroundItems;
+          // A frame reporting the turn settled (the host's `turnInProgress`
+          // when present, `runStatus` idle for an older host) is the point
+          // where a send stopped during activation can be declared dead:
+          // its accepted ack kept the optimistic user message waiting for a
+          // `messageAccepted` that will now never arrive. Drop such stranded
+          // entries and restore their content to the composer.
+          const settledPatch = reconcileTurnSettled(
+            turnSettledFromStatus(frame.turnInProgress, frame.runStatus),
+            {
+              pendingActions: state.pendingActions,
+              pendingUserMessages: state.pendingUserMessages,
+              messages: nextMessages,
+              queue: state.queue,
+              failedSendRestoration: state.failedSendRestoration,
+            },
+          );
           return {
+            ...settledPatch,
             messages: nextMessages,
             runStatus: frame.runStatus,
             activeTurn: frame.activeTurn,
@@ -2757,9 +2803,11 @@ function findRestorableSendByMessageId<
 
 /**
  * A chat session is "fully settled" when no turn is running, none is active,
- * and the queue is empty/idle. Single source of truth for the
- * render-send-as-pending check and the turn-completion refresh subscribers
- * (`lib/chats/chat-turn-completions.ts`).
+ * and the queue is empty/idle. Used only by the render-send-as-pending check
+ * below - the turn-completion refresh subscribers
+ * (`lib/chats/chat-turn-completions.ts`) intentionally use their own looser
+ * `turnEnded` (idle + no active turn; the queue may still be paused), so an
+ * errored turn's parked queue still drives a completion refresh.
  */
 export function isChatSessionSettled(
   state: Pick<ChatSessionState, "runStatus" | "activeTurn" | "queue">,

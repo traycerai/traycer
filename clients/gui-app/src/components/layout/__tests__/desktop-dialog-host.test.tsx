@@ -212,6 +212,17 @@ function createBaseRunnerHost(): IRunnerHost {
     hasLocalHost: true,
     validateAuthTokenIdentity: () =>
       Promise.resolve({ kind: "rejected" as const }),
+    listUserSessions: () => Promise.resolve({ kind: "network-error" as const }),
+    revokeUserSession: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    revokeAllSessions: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    mintHostCredential: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    requestStepUpChallenge: () =>
+      Promise.resolve({ kind: "network-error" as const }),
+    verifyStepUpChallenge: () =>
+      Promise.resolve({ kind: "network-error" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
     requestMicrophoneAccess: () => Promise.resolve("granted" as const),
@@ -261,7 +272,7 @@ function createBaseRunnerHost(): IRunnerHost {
     },
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
-    requestHostRespawn: () => Promise.resolve(),
+    requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     service: null,
     traycerCli: null,
     migration: null,

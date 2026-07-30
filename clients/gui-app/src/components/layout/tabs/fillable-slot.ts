@@ -263,6 +263,7 @@ export function resolveFillableSlotDestination(
         name: destination.name,
       };
     }
+    if (isTabStructurallyLocked(migration)) return { kind: "invalid" };
     return resolveExistingRef(layout, migration);
   }
   const reusable = findUngroupedEpicRef(layout, destination.epicId);
@@ -402,13 +403,22 @@ function findUngroupedEpicRef(
   layout: PersistedTabStripLayout,
   epicId: string,
 ): TabRef | null {
-  const tab = getHeaderTabs().find(
-    (candidate) =>
-      candidate.kind === "epic" &&
-      candidate.epicId === epicId &&
-      findStripItemForRef(layout, refForTab(candidate))?.kind === "tab",
-  );
-  return tab === undefined ? null : refForTab(tab);
+  // Resolve reusable views from the authoritative grouped items, not the
+  // legacy `stripOrder` projection `getHeaderTabs` reads: an Epic visible as
+  // a standalone item must be moved into the slot - not duplicated - even
+  // while the flat compatibility order is stale.
+  const tabsById = useEpicCanvasStore.getState().tabsById;
+  for (const item of layout.items) {
+    if (item.kind !== "tab" || item.ref.kind !== "epic") continue;
+    const canvasTab = tabsById[item.ref.id];
+    if (canvasTab === undefined || canvasTab.epicId !== epicId) continue;
+    // A Phase-migration tab reuses `epicId` as its phaseId placeholder (see
+    // sameEpicCatalog) - it is never a reusable destination for an Epic row.
+    if (canvasTab.surfaceMode?.kind === "phase-migration") continue;
+    if (isTabStructurallyLocked(item.ref)) continue;
+    return item.ref;
+  }
+  return null;
 }
 
 function findPhaseMigrationRef(phaseId: string): TabRef | null {

@@ -84,7 +84,7 @@ function makeManagement(overrides: {
     activateInstalled: vi.fn(notImplemented("activateInstalled")),
     installVersion: vi.fn(notImplemented("installVersion")),
     uninstallHost: vi.fn(notImplemented("uninstallHost")),
-    restartHost: vi.fn(() => Promise.resolve()),
+    restartHost: vi.fn(() => Promise.resolve({ kind: "restarted" as const })),
     uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
     getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
     clearRemoval: vi.fn(() => Promise.resolve()),

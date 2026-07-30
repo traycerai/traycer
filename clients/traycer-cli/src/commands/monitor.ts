@@ -9,8 +9,10 @@ import {
   type AgentInboxNotice,
 } from "@traycer/protocol/host/agent/inbox";
 import type { RoleAwarenessEvent } from "@traycer/protocol/host/agent/roles";
-import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
-import { MutableBearerLease } from "../../../shared/auth/bearer-source";
+import {
+  MutableBearerLease,
+  readLeaseBearer,
+} from "../../../shared/auth/bearer-source";
 import type { RevalidateOutcome } from "../../../shared/auth/bearer-revalidator";
 import {
   createProactiveRefreshScheduler,
@@ -33,7 +35,9 @@ import {
   isValidLocalHostWebsocketUrl,
   readHostPidMetadata,
 } from "../host/pid-metadata";
+import { createCliHostCredentialMintFlow } from "../auth/host-credential-mint";
 import { resolveHostAuth } from "../internal/host-auth";
+import { writeStderr, writeStdout } from "../runner/std-write";
 import {
   createCliCredentialsStore,
   createStoreBackedRevalidator,
@@ -195,6 +199,15 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
     // back off and re-subscribe on `network-error`), so wiring the client
     // handler too would double up. Non-UNAUTHORIZED fatals stay terminal there.
     auth: null,
+    // Delegated host-credential provisioning. `monitor` is the CLI command that
+    // most needs it: the host it watches should keep serving after this process
+    // exits. Provisioning is silent, so this works the same whether `monitor` is
+    // run from a terminal or as the background command it usually is.
+    hostCredentialMint: createCliHostCredentialMintFlow({
+      authnBaseUrl: auth.authnBaseUrl,
+      bearer: () => readLeaseBearer(lease),
+      diag: (message) => diag(message),
+    }),
     webSocketFactory: createWhatwgStreamWebSocketFactory(),
     dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
     openAckTimeoutMs: OPEN_ACK_TIMEOUT_MS,
@@ -254,25 +267,6 @@ export async function runMonitor(args: MonitorArgs): Promise<void> {
       agentId,
       epicId,
     });
-  }
-}
-
-/**
- * Reads the lease's current bearer, mapping the "no bearer" throw
- * (`CredentialLeaseReleasedError`, raised on an empty token) to `null` so the
- * refresh scheduler treats it as "signed out, nothing to schedule".
- */
-function readLeaseBearer(lease: MutableBearerLease): string | null {
-  try {
-    return lease.getBearerToken();
-  } catch (cause) {
-    // Only the "no bearer / signed out" signal maps to null. Any other lease
-    // failure is a real bug; rethrow it rather than silently disabling the
-    // refresh scheduler and masking it as a benign signed-out state.
-    if (cause instanceof CredentialLeaseReleasedError) {
-      return null;
-    }
-    throw cause;
   }
 }
 
@@ -578,7 +572,7 @@ function printInboxMessage(item: AgentInboxMessage): void {
     reply: item.reply,
     body: item.prompt,
   });
-  process.stdout.write(`${output}\n`);
+  writeStdout(`${output}\n`);
 }
 
 /**
@@ -632,7 +626,7 @@ function printInboxNotice(notice: AgentInboxNotice): void {
     `[traycer inbox] based on your judgment decide how to proceed — read transcript, follow up, launch a new agent, etc.`,
     "",
   ];
-  process.stdout.write(`${lines.join("\n")}\n`);
+  writeStdout(`${lines.join("\n")}\n`);
 }
 
 /**
@@ -643,7 +637,7 @@ function printInboxNotice(notice: AgentInboxNotice): void {
 function printRoleAwareness(event: RoleAwarenessEvent): void {
   const verb =
     event.kind === "role-claimed" ? "claimed role" : "relinquished role";
-  process.stdout.write(
+  writeStdout(
     `[traycer roles] agent ${event.claim.agentId} ${verb} "${event.claim.role}" (scope: ${event.claim.scope})\n`,
   );
 }
@@ -681,9 +675,9 @@ function printReceiverCancelledNotice(
     `[traycer inbox] if you are working on the user's behalf, wait for their next instruction; if you are working on behalf of another agent, let that agent know`,
     "",
   ];
-  process.stdout.write(`${lines.join("\n")}\n`);
+  writeStdout(`${lines.join("\n")}\n`);
 }
 
 function diag(message: string): void {
-  process.stderr.write(`[traycer monitor] ${message}\n`);
+  writeStderr(`[traycer monitor] ${message}\n`);
 }

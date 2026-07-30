@@ -1,111 +1,61 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import {
-  AGENT_WORKING_AWARENESS_FIELD,
-  AGENT_WORKING_TURN_AWARENESS_FIELD,
-} from "@traycer/protocol/host/epic/subscribe";
 import { useRegisteredEpicAgentActivityTiers } from "@/lib/epic-selectors";
-import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
-import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import {
+  publishAgentActivity,
+  resetAgentActivityPresence,
+  type AgentActivityHostEntry,
+} from "@/__tests__/agent-activity-presence-harness";
 
 const EPIC_ID = "epic-awareness";
+const OTHER_EPIC_ID = "epic-other";
 
 /**
- * One awareness entry per host, exactly as the cloud merges them. Each entry
- * independently decides whether it carries the turn field, which is the whole
- * point of these tests: mixed shapes are the steady state, not a rollout
- * window.
+ * One awareness entry per host on the per-user notification room, exactly as
+ * the cloud merges them. Each entry independently decides whether it carries a
+ * usable `turn` list, which is the whole point of these tests: mixed shapes are
+ * the steady state, not a rollout window.
+ *
+ * The epic this suite asserts on is never opened in this window - no session,
+ * no per-epic collaboration room - so every reading here comes from the global
+ * source alone. That is the defect the per-user room exists to fix.
  */
 type HostEntry = {
   readonly working: unknown;
   readonly turn: unknown;
 };
 
-function awarenessStates(
-  entries: readonly HostEntry[],
-): Map<number, Record<string, unknown>> {
-  return new Map<number, Record<string, unknown>>(
-    entries.map((entry, index) => [
-      index,
-      entry.turn === undefined
-        ? { [AGENT_WORKING_AWARENESS_FIELD]: entry.working }
-        : {
-            [AGENT_WORKING_AWARENESS_FIELD]: entry.working,
-            [AGENT_WORKING_TURN_AWARENESS_FIELD]: entry.turn,
-          },
-    ]),
-  );
-}
-
-/**
- * A real emitter, not a no-op stub: `on`/`off` register listeners and
- * `publish` fires them, so a test can mutate awareness and assert the hook
- * re-subscribes, recomputes, and re-renders - covering the subscription wiring
- * and not just the first snapshot.
- */
-function buildAwarenessEmitter(initial: readonly HostEntry[]) {
-  const listeners = new Set<() => void>();
-  let states = awarenessStates(initial);
-  let onCalls = 0;
-  let offCalls = 0;
-  return {
-    awareness: {
-      getStates: () => states,
-      on: (_event: string, listener: () => void) => {
-        onCalls += 1;
-        listeners.add(listener);
-      },
-      off: (_event: string, listener: () => void) => {
-        offCalls += 1;
-        listeners.delete(listener);
-      },
+function entriesFor(
+  hosts: readonly HostEntry[],
+): readonly AgentActivityHostEntry[] {
+  return hosts.map((host, index) => ({
+    hostId: `host-${index}`,
+    byEpic: {
+      [EPIC_ID]:
+        host.turn === undefined
+          ? { working: host.working }
+          : { working: host.working, turn: host.turn },
     },
-    publish: (next: readonly HostEntry[]) => {
-      states = awarenessStates(next);
-      for (const listener of listeners) listener();
-    },
-    subscribeBalance: () => ({ onCalls, offCalls }),
-  };
+  }));
 }
 
-function buildEpicHandle(awareness: unknown): OpenEpicStoreHandle {
-  const state = { bindingVersion: 0 };
-  const storeCallable = (_selector: unknown): unknown => state;
-  const storeBase: unknown = Object.assign(storeCallable, {
-    getState: () => state as never,
-    subscribe: () => () => undefined,
-  });
-  return {
-    epicId: EPIC_ID,
-    userId: null,
-    doc: {} as never,
-    awareness: awareness as never,
-    store: storeBase as OpenEpicStoreHandle["store"],
-    dispose: () => undefined,
-    requestFreshSnapshot: () => undefined,
-    isClean: () => true,
-  };
+function publish(hosts: readonly HostEntry[]): void {
+  publishAgentActivity(entriesFor(hosts));
 }
 
-function renderTiers(entries: readonly HostEntry[]) {
-  const emitter = buildAwarenessEmitter(entries);
-  __getOpenEpicRegistryForTests().acquire(EPIC_ID, () =>
-    buildEpicHandle(emitter.awareness),
-  );
-  return {
-    ...renderHook(() => useRegisteredEpicAgentActivityTiers(EPIC_ID)),
-    emitter,
-  };
+function renderTiers(hosts: readonly HostEntry[]) {
+  publish(hosts);
+  return renderHook(() => useRegisteredEpicAgentActivityTiers(EPIC_ID));
 }
 
 afterEach(() => {
-  __getOpenEpicRegistryForTests().disposeAll();
+  resetAgentActivityPresence();
 });
 
-describe("agent activity tiers from awareness", () => {
+describe("agent activity tiers from notification-room presence", () => {
   it("resolves every working id to 'turn' for a host that omits the turn field", () => {
-    // An older host: no `agentWorkingTurn` at all. Its agents are unclassified,
-    // so they must keep the pre-existing conservative reading.
+    // An unclassified host: no `turn` list at all. Its agents keep the
+    // pre-existing conservative reading.
     const { result } = renderTiers([{ working: ["a", "b"], turn: undefined }]);
     expect(result.current.get("a")).toBe("turn");
     expect(result.current.get("b")).toBe("turn");
@@ -124,9 +74,9 @@ describe("agent activity tiers from awareness", () => {
   });
 
   it("applies the absence rule per host, not globally", () => {
-    // Old host and new host visible at the same time. The old host's agent
-    // must NOT be downgraded to background just because another host
-    // publishes the field.
+    // An unclassified host and a classifying host visible at the same time. The
+    // unclassified one's agent must NOT be downgraded to background just
+    // because another host publishes the field.
     const { result } = renderTiers([
       { working: ["old"], turn: undefined },
       { working: ["new-turn", "new-bg"], turn: ["new-turn"] },
@@ -144,13 +94,47 @@ describe("agent activity tiers from awareness", () => {
     expect(result.current.get("shared")).toBe("turn");
   });
 
-  it("ignores entries whose agentWorking is not an array", () => {
+  it("ignores entries whose activity field is not an object", () => {
+    publishAgentActivity([
+      { hostId: "host-broken", byEpic: "not an object" },
+      { hostId: "host-ok", byEpic: { [EPIC_ID]: { working: ["real"] } } },
+    ]);
+    const { result } = renderHook(() =>
+      useRegisteredEpicAgentActivityTiers(EPIC_ID),
+    );
+    expect(result.current.get("real")).toBe("turn");
+    expect(result.current.size).toBe(1);
+  });
+
+  it("ignores buckets whose working list is not an array", () => {
     const { result } = renderTiers([
       { working: { not: "an array" }, turn: ["x"] },
       { working: ["real"], turn: undefined },
     ]);
     expect(result.current.has("x")).toBe(false);
     expect(result.current.get("real")).toBe("turn");
+  });
+
+  it("skips only the malformed bucket, not the host's other epics", () => {
+    // Rule 3 of the frozen shape: one bad bucket must not blank out the rest of
+    // the SAME host's map.
+    publishAgentActivity([
+      {
+        hostId: "host-mixed",
+        byEpic: {
+          [EPIC_ID]: "garbage",
+          [OTHER_EPIC_ID]: { working: ["healthy"], turn: ["healthy"] },
+        },
+      },
+    ]);
+    const broken = renderHook(() =>
+      useRegisteredEpicAgentActivityTiers(EPIC_ID),
+    );
+    const healthy = renderHook(() =>
+      useRegisteredEpicAgentActivityTiers(OTHER_EPIC_ID),
+    );
+    expect(broken.result.current.size).toBe(0);
+    expect(healthy.result.current.get("healthy")).toBe("turn");
   });
 
   it("ignores a malformed turn field by falling back to 'turn'", () => {
@@ -168,38 +152,81 @@ describe("agent activity tiers from awareness", () => {
     expect(result.current.get("a")).toBe("turn");
   });
 
-  it("re-renders with the new tier when awareness changes", () => {
-    // Drives the real subscription path: the hook must re-read the snapshot on
-    // an awareness "change" event, not just on first render.
-    const { result, emitter } = renderTiers([{ working: ["a"], turn: ["a"] }]);
+  it("reads idle for an epic no host reports", () => {
+    const { result } = renderTiers([{ working: ["a"], turn: ["a"] }]);
+    const other = renderHook(() =>
+      useRegisteredEpicAgentActivityTiers(OTHER_EPIC_ID),
+    );
+    expect(result.current.size).toBe(1);
+    expect(other.result.current.size).toBe(0);
+  });
+
+  it("re-renders with the new tier when presence changes", () => {
+    // Drives the real subscription path: the hook must re-read on an inbound
+    // awareness frame, not just on first render.
+    const { result } = renderTiers([{ working: ["a"], turn: ["a"] }]);
     expect(result.current.get("a")).toBe("turn");
 
     // The turn ends but a background task keeps the agent working.
     act(() => {
-      emitter.publish([{ working: ["a"], turn: [] }]);
+      publish([{ working: ["a"], turn: [] }]);
     });
     expect(result.current.get("a")).toBe("background");
 
     // The agent goes fully idle.
     act(() => {
-      emitter.publish([{ working: [], turn: [] }]);
+      publish([{ working: [], turn: [] }]);
     });
     expect(result.current.has("a")).toBe(false);
   });
 
+  it("clears an epic's tiers when the publishing host drops out", () => {
+    // A host that dies or disconnects ages out of awareness; its spinners must
+    // clear with no cleanup protocol.
+    const { result } = renderTiers([{ working: ["a"], turn: ["a"] }]);
+    expect(result.current.get("a")).toBe("turn");
+    act(() => {
+      publishAgentActivity([]);
+    });
+    expect(result.current.size).toBe(0);
+  });
+
   it("keeps the same Map ref when a change leaves tiers untouched", () => {
-    // Ref stability is what lets useSyncExternalStore bail the re-render; an
-    // unrelated awareness event must not churn every consumer.
-    const { result, emitter } = renderTiers([{ working: ["a"], turn: ["a"] }]);
+    // Ref stability is what lets a consumer bail the re-render; an unrelated
+    // presence event must not churn every indicator.
+    const { result } = renderTiers([{ working: ["a"], turn: ["a"] }]);
     const first = result.current;
     act(() => {
-      emitter.publish([{ working: ["a"], turn: ["a"] }]);
+      publish([{ working: ["a"], turn: ["a"] }]);
     });
     expect(result.current).toBe(first);
   });
 
-  it("subscribes to awareness while mounted", () => {
-    const { emitter } = renderTiers([{ working: ["a"], turn: ["a"] }]);
-    expect(emitter.subscribeBalance().onCalls).toBeGreaterThan(0);
+  it("keeps one epic's slice stable while another epic changes", () => {
+    publishAgentActivity([
+      {
+        hostId: "host-0",
+        byEpic: {
+          [EPIC_ID]: { working: ["a"], turn: ["a"] },
+          [OTHER_EPIC_ID]: { working: ["b"], turn: ["b"] },
+        },
+      },
+    ]);
+    const { result } = renderHook(() =>
+      useRegisteredEpicAgentActivityTiers(EPIC_ID),
+    );
+    const first = result.current;
+    act(() => {
+      publishAgentActivity([
+        {
+          hostId: "host-0",
+          byEpic: {
+            [EPIC_ID]: { working: ["a"], turn: ["a"] },
+            [OTHER_EPIC_ID]: { working: [], turn: [] },
+          },
+        },
+      ]);
+    });
+    expect(result.current).toBe(first);
   });
 });

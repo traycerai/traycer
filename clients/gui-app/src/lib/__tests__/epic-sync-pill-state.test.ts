@@ -66,12 +66,12 @@ describe("deriveEpicSyncPillState", () => {
     expect(deriveEpicSyncPillState(HEALTHY_INPUTS)).toBe("synced");
   });
 
-  it("RCA case: known host-dirty work alone forces syncing even though every other leg reads healthy", () => {
+  it("distinguishes host-durable cloud-pending work from renderer-only work", () => {
     const result = deriveEpicSyncPillState({
       ...HEALTHY_INPUTS,
       hostDirtyState: "dirty",
     });
-    expect(result).toBe("syncing");
+    expect(result).toBe("hostPending");
   });
 
   it("unsynced local changes alone force syncing", () => {
@@ -82,13 +82,13 @@ describe("deriveEpicSyncPillState", () => {
     expect(result).toBe("syncing");
   });
 
-  it("cloud disconnected with known host-durable work reads offlineChangesSavedLocally", () => {
+  it("cloud disconnected with aggregate host-pending work makes no durability claim", () => {
     const result = deriveEpicSyncPillState({
       ...HEALTHY_INPUTS,
       cloudSyncStatus: "disconnected",
       hostDirtyState: "dirty",
     });
-    expect(result).toBe("offlineChangesSavedLocally");
+    expect(result).toBe("offlineWithHostPending");
   });
 
   it("cloud reconnecting with known host-durable work reads offlineChangesSavedLocally", () => {
@@ -97,17 +97,17 @@ describe("deriveEpicSyncPillState", () => {
       cloudSyncStatus: "reconnecting",
       hostDirtyState: "dirty",
     });
-    expect(result).toBe("offlineChangesSavedLocally");
+    expect(result).toBe("offlineWithHostPending");
   });
 
-  it("never calls renderer-only work saved locally while the cloud is down", () => {
+  it("warns immediately without calling renderer-only work saved locally while the cloud is down", () => {
     const result = deriveEpicSyncPillState({
       ...HEALTHY_INPUTS,
       cloudSyncStatus: "disconnected",
       hostDirtyState: "dirty",
       hasUnsyncedLocalChanges: true,
     });
-    expect(result).toBe("syncing");
+    expect(result).toBe("offlineWithUnsavedChanges");
   });
 
   it("uses neutral connected while the host-dirty snapshot is unknown", () => {
@@ -223,7 +223,7 @@ describe("deriveEpicSyncPillState", () => {
       expect(result).toBe("connected");
     });
 
-    it("keeps renderer-only work in the non-durability syncing state", () => {
+    it("warns about renderer-only work when the known cloud link is down", () => {
       const result = deriveEpicSyncPillState({
         hostTransportStatus: "open",
         cloudSyncStatus: "disconnected",
@@ -232,7 +232,7 @@ describe("deriveEpicSyncPillState", () => {
         hasUnsyncedLocalChanges: true,
         hasConnectedOnce: true,
       });
-      expect(result).toBe("syncing");
+      expect(result).toBe("offlineWithUnsavedChanges");
     });
   });
 });

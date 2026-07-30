@@ -9,6 +9,8 @@ import {
 } from "@/components/chat/chat-message";
 import {
   buildMessageIdToIndex,
+  CHAT_ARROW_SCROLL_STEP_PX,
+  chatMessageAlignmentDelta,
   chatScrollLocationForMessage,
   chatComputeItemKey,
   chatItemIdentity,
@@ -66,6 +68,7 @@ import {
 } from "@virtuoso.dev/message-list";
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -98,9 +101,24 @@ interface ChatMessagesProps {
   scrollRequest: ChatMessageScrollRequest | null;
 }
 
+/**
+ * How many frames a programmatic navigation keeps correcting its target as rows
+ * measure. Bounded for the same reason the restore retry is: a target that never
+ * settles must not spin forever.
+ */
+const MIN_SCROLL_CORRECTION_FRAMES = 30;
+const MAX_SCROLL_CORRECTION_FRAMES = 90;
+const STABLE_SCROLL_CORRECTION_FRAMES = 12;
+const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
+
 export interface ChatMessageScrollRequest {
   readonly messageId: string;
-  readonly blockId: string;
+  /**
+   * The card inside the message to expand on arrival, or `null` when the
+   * anchor IS the message (a delivered A2A message jumped to from the
+   * communication timeline has no owning card).
+   */
+  readonly blockId: string | null;
   readonly requestId: number;
 }
 
@@ -112,6 +130,7 @@ interface ChatListContext {
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler | null;
+  readonly navigationHighlightedMessageId: string | null;
 }
 
 // Keep the overscan conservative: every mounted row is ResizeObserver-measured
@@ -122,7 +141,11 @@ const SCROLLBAR_POINTER_HIT_SLOP_PX = 24;
 const TOUCH_SCROLL_DIRECTION_THRESHOLD_PX = 4;
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
-type ChatKeyboardScrollAction = "page-up" | "page-down" | "top" | "bottom";
+type ChatKeyboardScrollAction =
+  "page-up" | "page-down" | "line-up" | "line-down" | "top" | "bottom";
+
+const UPWARD_CHAT_SCROLL_ACTIONS: ReadonlySet<ChatKeyboardScrollAction> =
+  new Set<ChatKeyboardScrollAction>(["page-up", "line-up", "top"]);
 
 function isEditableTarget(target: EventTarget | null): boolean {
   return (
@@ -133,11 +156,96 @@ function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
+function isUnmodified(event: globalThis.KeyboardEvent): boolean {
+  return !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+}
+
+/**
+ * Controls whose own keyboard contract is bound to the arrows: text entry,
+ * value pickers, and anything that opens or steps a list on them (the
+ * composer's provider-reauth `SelectTrigger` is a `role="combobox"`; Radix
+ * dropdown triggers advertise `aria-haspopup` and open on ArrowDown). Arrows
+ * aimed at those must reach them, so the transcript does not claim them.
+ *
+ * Deliberately NOT listed: plain buttons, links, `role="tab"`, and focusable
+ * chrome in general. A canvas tab is a `role="tab"` div with `tabIndex={0}` and
+ * has no arrow behaviour of its own - focus parks there after a tab click, and
+ * that IS a transcript-scroll target.
+ */
+const ARROW_KEY_OWNER_SELECTOR = [
+  "input",
+  "select",
+  "textarea",
+  '[contenteditable="true"]',
+  '[role="combobox"]',
+  '[role="grid"]',
+  '[role="gridcell"]',
+  '[role="listbox"]',
+  '[role="menu"]',
+  '[role="menubar"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="option"]',
+  '[role="radio"]',
+  '[role="radiogroup"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="tablist"]',
+  '[role="textbox"]',
+  '[role="tree"]',
+  '[role="treeitem"]',
+  // Only popups the arrows actually open/step. A `dialog` popup (Radix
+  // `PopoverTrigger`, e.g. the composer's context-usage chip) activates on
+  // Enter/Space, so it must not hold the arrows hostage. Bare `true` is the
+  // legacy spelling of `menu`.
+  '[aria-haspopup="true"]',
+  '[aria-haspopup="menu"]',
+  '[aria-haspopup="listbox"]',
+  '[aria-haspopup="tree"]',
+  '[aria-haspopup="grid"]',
+].join(",");
+
+function ownsArrowKeys(target: EventTarget | null): boolean {
+  if (isEditableTarget(target)) return true;
+  if (!(target instanceof Element)) return false;
+  return target.closest(ARROW_KEY_OWNER_SELECTOR) !== null;
+}
+
+function canvasPaneIdOf(node: Node | null): string | null {
+  const element = node instanceof Element ? node : node?.parentElement;
+  return (
+    element?.closest("[data-group-id]")?.getAttribute("data-group-id") ?? null
+  );
+}
+
+/**
+ * Whether `target` sits in the same canvas pane as `tile` - the pane's tab
+ * strip is a SIBLING of the tile, so containment alone cannot tell "this pane's
+ * own chrome" apart from an unrelated surface.
+ */
+function sharesCanvasPane(tile: HTMLElement, target: Node): boolean {
+  const paneId = canvasPaneIdOf(tile);
+  return paneId !== null && canvasPaneIdOf(target) === paneId;
+}
+
 function chatKeyboardScrollAction(
   event: globalThis.KeyboardEvent,
 ): ChatKeyboardScrollAction | null {
   if (event.key === "PageUp") return "page-up";
   if (event.key === "PageDown") return "page-down";
+  // Plain arrows step the transcript. The transcript rows are not focusable, so
+  // the browser never adopts the scroller as its default keyboard scroller and
+  // would otherwise scroll nothing at all. Targets that own the arrows
+  // themselves keep them (see `ownsArrowKeys`), and any modifier makes it an
+  // editor/selection chord we must not claim.
+  if (
+    (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+    isUnmodified(event) &&
+    !ownsArrowKeys(event.target)
+  ) {
+    return event.key === "ArrowUp" ? "line-up" : "line-down";
+  }
   // Plain Home/End scroll the transcript. On macOS they scroll even from the
   // composer (Cocoa editors never use them for caret movement - that's
   // Cmd+arrows); elsewhere an editable target keeps them for line navigation
@@ -147,6 +255,23 @@ function chatKeyboardScrollAction(
     (isPlainBoundaryKey(event) && (isMac() || !isEditableTarget(event.target)));
   if (!boundary) return null;
   return event.key === "Home" ? "top" : "bottom";
+}
+
+/** The relative steps - `top`/`bottom` are absolute and carry no delta. */
+type ChatKeyboardScrollStep = Exclude<
+  ChatKeyboardScrollAction,
+  "top" | "bottom"
+>;
+
+function chatKeyboardScrollDelta(
+  scroller: HTMLElement,
+  action: ChatKeyboardScrollStep,
+): number {
+  if (action === "page-up") return -scroller.clientHeight;
+  if (action === "page-down") return scroller.clientHeight;
+  return action === "line-up"
+    ? -CHAT_ARROW_SCROLL_STEP_PX
+    : CHAT_ARROW_SCROLL_STEP_PX;
 }
 
 function applyChatKeyboardScroll(
@@ -165,11 +290,9 @@ function applyChatKeyboardScroll(
     scroller.scrollTop = maxScrollTop;
     return;
   }
-  const delta =
-    action === "page-up" ? -scroller.clientHeight : scroller.clientHeight;
   scroller.scrollTop = Math.min(
     maxScrollTop,
-    Math.max(0, scroller.scrollTop + delta),
+    Math.max(0, scroller.scrollTop + chatKeyboardScrollDelta(scroller, action)),
   );
 }
 
@@ -251,8 +374,19 @@ const ChatItemContent: ChatVirtuosoProps["ItemContent"] = ({
   return (
     <div
       data-message-id={message.id}
+      data-navigation-highlighted={
+        context.navigationHighlightedMessageId === message.id
+          ? "true"
+          : undefined
+      }
       className={cn(
-        "mx-auto w-full max-w-3xl px-6 pb-6 [contain:layout_paint_style]",
+        "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style]",
+        // Live-verified subtlety floor: at /10 background + /35 ring the pulse
+        // read as an ordinary hover wash and users reported never seeing it.
+        // The ring carries the signal (full-strength primary), the wash stays
+        // light so text contrast is untouched.
+        context.navigationHighlightedMessageId === message.id &&
+          "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse",
         message.role === "user"
           ? "[contain-intrinsic-size:auto_8rem]"
           : "[contain-intrinsic-size:auto_14rem]",
@@ -351,6 +485,27 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   );
   const [scrolledActiveUserMessageId, setScrolledActiveUserMessageId] =
     useState<string | null>(restoredScrollState.activeUserMessageId);
+  const [navigationHighlightedMessageId, setNavigationHighlightedMessageId] =
+    useState<string | null>(null);
+  const navigationHighlightTimeoutRef = useRef<number | null>(null);
+  const clearNavigationHighlight = useCallback((): void => {
+    if (navigationHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(navigationHighlightTimeoutRef.current);
+      navigationHighlightTimeoutRef.current = null;
+    }
+    setNavigationHighlightedMessageId(null);
+  }, []);
+  const showNavigationHighlight = useCallback((messageId: string): void => {
+    if (navigationHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(navigationHighlightTimeoutRef.current);
+    }
+    setNavigationHighlightedMessageId(messageId);
+    navigationHighlightTimeoutRef.current = window.setTimeout(() => {
+      navigationHighlightTimeoutRef.current = null;
+      setNavigationHighlightedMessageId(null);
+    }, NAVIGATION_HIGHLIGHT_DURATION_MS);
+  }, []);
+  useEffect(() => clearNavigationHighlight, [clearNavigationHighlight]);
 
   const hasContent = messages.length > 0;
   const backgroundToolBlockIds = useMemo<ReadonlySet<string>>(() => {
@@ -508,12 +663,14 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
+      navigationHighlightedMessageId,
     }),
     [
       backgroundToolBlockIds,
       getMessageActions,
       hasContent,
       nextStepActions,
+      navigationHighlightedMessageId,
       taskTitle,
     ],
   );
@@ -582,21 +739,37 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // Unpin gestures also cancel any in-flight programmatic smooth scroll:
   // Virtuoso's animation re-writes scrollTop every frame for up to ~50 frames,
   // so without the cancel the list physically fights the user's input.
+  // Declared above the correction loop, so the cancel is reached through a ref
+  // rather than reordering half this component.
+  const cancelScrollCorrectionRef = useRef<() => void>(() => undefined);
+
   const unpinFromUserGesture = useCallback((): void => {
+    clearNavigationHighlight();
     cancelScrollRestorationRetry();
+    cancelScrollCorrectionRef.current();
     lastScrollGestureRef.current = "up";
     virtuosoRef.current?.cancelSmoothScroll();
     setBottomFollowingIfChanged(false);
-  }, [cancelScrollRestorationRetry, setBottomFollowingIfChanged]);
+  }, [
+    cancelScrollRestorationRetry,
+    clearNavigationHighlight,
+    setBottomFollowingIfChanged,
+  ]);
 
   // A downward user gesture (wheel/keys/touch toward the tail) also takes over
   // from an in-flight restore: cancel the defend loop so it can't re-assert the
   // saved offset against the user's own scroll during the post-show window.
-  // No-op outside that window (no retry in flight).
+  // No-op outside that window (no retry in flight). It cancels an in-flight
+  // SMOOTH scroll for the same reason the unpin path does - a minimap jump
+  // rewrites `scrollTop` for ~50 frames, and a downward key pressed during that
+  // window would otherwise be painted over and read as a dead key.
   const markDownwardUserGesture = useCallback((): void => {
+    clearNavigationHighlight();
     cancelScrollRestorationRetry();
+    cancelScrollCorrectionRef.current();
     lastScrollGestureRef.current = "down";
-  }, [cancelScrollRestorationRetry]);
+    virtuosoRef.current?.cancelSmoothScroll();
+  }, [cancelScrollRestorationRetry, clearNavigationHighlight]);
 
   const handleScroll = useCallback(
     (location: ListScrollLocation): void => {
@@ -647,27 +820,15 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       const scroller = virtuosoRef.current?.scrollerElement();
       if (scroller === null || scroller === undefined) return;
       const scrollAction = chatKeyboardScrollAction(event);
-      if (scrollAction !== null) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (scrollAction === "page-up" || scrollAction === "top") {
-          unpinFromUserGesture();
-        } else {
-          markDownwardUserGesture();
-        }
-        applyChatKeyboardScroll(scroller, scrollAction);
-        return;
-      }
-      const targetInsideScroller =
-        event.target instanceof Node && scroller.contains(event.target);
-      if (!targetInsideScroller) return;
-      if (event.key === "ArrowUp" || event.key === "Home") {
+      if (scrollAction === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (UPWARD_CHAT_SCROLL_ACTIONS.has(scrollAction)) {
         unpinFromUserGesture();
-        return;
-      }
-      if (event.key === "ArrowDown" || event.key === "End") {
+      } else {
         markDownwardUserGesture();
       }
+      applyChatKeyboardScroll(scroller, scrollAction);
     },
     [markDownwardUserGesture, unpinFromUserGesture],
   );
@@ -676,9 +837,11 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   // transcript leaves the key event rooted above the tile - on `body` or on
   // canvas chrome like the pane tab layer / tab-group root (the canvas focus
   // management parks focus there). Listen at `window` so the active chat can
-  // claim navigation keys from those states: a target that CONTAINS the tile
-  // means no more-specific widget owns the keys. Events rooted in a sibling
-  // subtree (another pane's tile, a dialog, the sidebar) are never claimed.
+  // claim navigation keys from those states: a target that CONTAINS the tile,
+  // or that lives in the SAME pane's chrome (its tab strip - a sibling, which
+  // is exactly where focus lands after clicking a canvas tab to reach this
+  // chat), means no more-specific widget owns the keys. Events rooted anywhere
+  // else (another pane's tile, a dialog, the sidebar) are never claimed.
   useLayoutEffect(() => {
     const tile = transcriptContainerRef.current?.closest(
       "[data-chat-keyboard-scroll-scope]",
@@ -687,14 +850,12 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     const handleWindowKeyDown = (event: globalThis.KeyboardEvent): void => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      const targetInsideTile = tile.contains(target);
-      const targetIsTileAncestor = target.contains(tile);
-      if (
-        !targetInsideTile &&
-        !(tile.dataset.active === "true" && targetIsTileAncestor)
-      ) {
+      if (tile.contains(target)) {
+        handleKeyDownCapture(event);
         return;
       }
+      if (tile.dataset.active !== "true") return;
+      if (!target.contains(tile) && !sharesCanvasPane(tile, target)) return;
       handleKeyDownCapture(event);
     };
     window.addEventListener("keydown", handleWindowKeyDown, { capture: true });
@@ -707,12 +868,16 @@ function ChatMessagesInner(props: ChatMessagesProps) {
 
   const handlePointerDownCapture = useCallback<
     PointerEventHandler<HTMLDivElement>
-  >((event) => {
-    const distanceFromRightEdge =
-      event.currentTarget.clientWidth - event.clientX;
-    scrollbarPointerDragRef.current =
-      distanceFromRightEdge <= SCROLLBAR_POINTER_HIT_SLOP_PX;
-  }, []);
+  >(
+    (event) => {
+      clearNavigationHighlight();
+      const distanceFromRightEdge =
+        event.currentTarget.clientWidth - event.clientX;
+      scrollbarPointerDragRef.current =
+        distanceFromRightEdge <= SCROLLBAR_POINTER_HIT_SLOP_PX;
+    },
+    [clearNavigationHighlight],
+  );
 
   const handlePointerUpCapture = useCallback<
     PointerEventHandler<HTMLDivElement>
@@ -816,25 +981,123 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     requestMeasuredItemChangeRef.current = requestMeasuredItemChange;
   }, [requestMeasuredItemChange]);
 
+  // A virtualized list computes the offset for an index from the sizes it KNOWS.
+  // On a freshly mounted tile almost nothing is measured, so a deep target's
+  // computed offset is far too small and the scroll lands near the top - which
+  // is what a cross-tile jump hits, and what the restore defend loop used to
+  // mask by dragging the view to the bottom instead.
+  //
+  // First ask Virtuoso to materialize the index, then measure the target's real
+  // DOM position and correct scrollTop as variable-height rows settle. Re-issue
+  // only while the target is not mounted. The loop is bounded because a target
+  // that never settles must not spin.
+  const scrollCorrectionRef = useRef<{
+    rafId: number;
+    frame: number;
+    stableFrames: number;
+  }>({
+    rafId: 0,
+    frame: 0,
+    stableFrames: 0,
+  });
+
+  const cancelScrollCorrection = useCallback((): void => {
+    if (scrollCorrectionRef.current.rafId !== 0) {
+      cancelAnimationFrame(scrollCorrectionRef.current.rafId);
+      scrollCorrectionRef.current.rafId = 0;
+    }
+    scrollCorrectionRef.current.frame = 0;
+    scrollCorrectionRef.current.stableFrames = 0;
+  }, []);
+
+  useEffect(() => {
+    cancelScrollCorrectionRef.current = cancelScrollCorrection;
+  }, [cancelScrollCorrection]);
+  useEffect(() => cancelScrollCorrection, [cancelScrollCorrection]);
+
   const navigateToMessage = useCallback(
-    (messageId: string): void => {
+    (messageId: string, highlight: boolean): void => {
+      // CANCEL THE RESTORE DEFEND LOOP FIRST, for the same reason a wheel-up
+      // does. `useScrollRestoration` keeps re-applying its anchor for up to
+      // MAX_RESTORE_FRAMES whenever the restore reports `retry`/`defend`, and a
+      // freshly opened tile's anchor is "pinned at bottom". A navigation that
+      // did not cancel it would issue a ~50-frame smooth scroll INTO that loop
+      // and lose: the view would settle back at the bottom every time. That is
+      // invisible for a minimap click (the loop is long finished by the time a
+      // human clicks) and systematic for a cross-tile jump, which arrives while
+      // the tile is still mounting.
+      cancelScrollRestorationRetry();
       // This navigation is programmatic. If it parks inside the bottom
       // tolerance band, emitted scroll events must not read as user intent to
       // tail the latest message.
       lastScrollGestureRef.current = null;
       setBottomFollowingIfChanged(false);
       setScrolledActiveUserMessageIdIfChanged(messageId);
+      // The pulse marks a landing the reader could not otherwise identify -
+      // arriving cold from ANOTHER tile. An in-tile minimap click already
+      // shows its target parked at the top of the viewport, so pulsing it
+      // there is redundant noise.
+      if (highlight) showNavigationHighlight(messageId);
       // The full row history is mounted in Virtuoso, so every persisted
       // minimap target resolves; pending/live rows may briefly miss.
-      const location = chatScrollLocationForMessage(
-        messageId,
-        messageIndexByIdRef.current,
-        "smooth",
-      );
-      if (location === null) return;
-      virtuosoRef.current?.scrollToItem(location);
+      // INSTANT, not smooth. A smooth scroll animates from wherever the list
+      // currently is over ~50 frames, and re-issuing a corrected target mid
+      // animation restarts that animation - the two fight and the view crawls.
+      // Landing immediately and correcting is both faster and stable.
+      const issue = (): boolean => {
+        const location = chatScrollLocationForMessage(
+          messageId,
+          messageIndexByIdRef.current,
+          "auto",
+        );
+        if (location === null) return false;
+        virtuosoRef.current?.scrollToItem(location);
+        return true;
+      };
+      cancelScrollCorrection();
+      if (!issue()) return;
+      const step = (): void => {
+        scrollCorrectionRef.current.rafId = requestAnimationFrame(() => {
+          scrollCorrectionRef.current.rafId = 0;
+          scrollCorrectionRef.current.frame += 1;
+          const scroller = virtuosoRef.current?.scrollerElement() ?? null;
+          const delta = chatMessageAlignmentDelta(scroller, messageId);
+          if (delta === null) {
+            scrollCorrectionRef.current.stableFrames = 0;
+            if (!issue()) {
+              scrollCorrectionRef.current.frame = 0;
+              return;
+            }
+          } else if (Math.abs(delta) > 1) {
+            if (scroller !== null) scroller.scrollTop += delta;
+            scrollCorrectionRef.current.stableFrames = 0;
+          } else {
+            scrollCorrectionRef.current.stableFrames += 1;
+          }
+          const reachedStableMinimum =
+            scrollCorrectionRef.current.frame >= MIN_SCROLL_CORRECTION_FRAMES &&
+            scrollCorrectionRef.current.stableFrames >=
+              STABLE_SCROLL_CORRECTION_FRAMES;
+          if (
+            !reachedStableMinimum &&
+            scrollCorrectionRef.current.frame < MAX_SCROLL_CORRECTION_FRAMES
+          ) {
+            step();
+            return;
+          }
+          scrollCorrectionRef.current.frame = 0;
+          scrollCorrectionRef.current.stableFrames = 0;
+        });
+      };
+      step();
     },
-    [setBottomFollowingIfChanged, setScrolledActiveUserMessageIdIfChanged],
+    [
+      cancelScrollCorrection,
+      cancelScrollRestorationRetry,
+      setBottomFollowingIfChanged,
+      setScrolledActiveUserMessageIdIfChanged,
+      showNavigationHighlight,
+    ],
   );
 
   const handleRenderedDataChangeWithFind = useCallback((): void => {
@@ -843,7 +1106,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   }, [handleRenderedDataChange, onChatFindRenderedDataChange]);
 
   const onMinimapItemClick = useCallback(
-    (messageId: string): void => navigateToMessage(messageId),
+    (messageId: string): void => navigateToMessage(messageId, false),
     [navigateToMessage],
   );
 
@@ -852,16 +1115,19 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     if (request === null) return;
     if (handledScrollRequestIdRef.current === request.requestId) return;
     handledScrollRequestIdRef.current = request.requestId;
-    const activityGroupId = activityGroupIdForBlock(
-      messagesRef.current,
-      request.messageId,
-      request.blockId,
-      backgroundToolBlockIdsRef.current,
-    );
+    const activityGroupId =
+      request.blockId === null
+        ? null
+        : activityGroupIdForBlock(
+            messagesRef.current,
+            request.messageId,
+            request.blockId,
+            backgroundToolBlockIdsRef.current,
+          );
     if (activityGroupId !== null) {
       activityGroupOpenStore.getState().setOpen(activityGroupId, true);
     }
-    navigateToMessage(request.messageId);
+    navigateToMessage(request.messageId, true);
     scrollRequestRef.current = null;
   }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
 

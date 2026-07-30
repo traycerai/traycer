@@ -2,6 +2,7 @@ import * as Sentry from "@sentry/node";
 import { errorFromUnknown } from "../logger";
 import { toCliError } from "./errors";
 import { createOutput, type Output, type ProgressInfo } from "./output";
+import { flushStdio } from "./std-write";
 import {
   type RawRunnerFlags,
   readonlyEnv,
@@ -89,6 +90,9 @@ export async function runCommand(
       });
       // best-effort; do not let a flush failure prevent exit
     }
+    // The error envelope was just written to a possibly-piped stdout;
+    // `process.exit` would drop everything past the 64 KiB pipe buffer.
+    await flushStdio();
     process.exit(cliErr.exitCode);
   }
   runtime.logger.info("CLI command completed", {
@@ -101,5 +105,10 @@ export async function runCommand(
   } else if (result.human !== null && !runtime.quiet) {
     output.human(result.human);
   }
+  // Terminal `result` line just went out. This is the flush the
+  // `host available --include-pre-releases` truncation turned on: without
+  // it, any payload over 64 KiB reaches Desktop as half a JSON line with
+  // exit code 0. See std-write.ts.
+  await flushStdio();
   process.exit(result.exitCode);
 }

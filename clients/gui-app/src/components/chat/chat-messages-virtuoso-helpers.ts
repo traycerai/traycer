@@ -41,6 +41,13 @@ const MINIMAP_SCROLL_OFFSET_PX = -48;
 const MINIMAP_ACTIVE_ANCHOR_OFFSET_PX = Math.abs(MINIMAP_SCROLL_OFFSET_PX) + 1;
 const BOTTOM_FOLLOW_TOLERANCE_PX = 48;
 
+/**
+ * Per-press step for the transcript's arrow-key scrolling. Chromium's own
+ * arrow-key scroll step is 40px; matching it keeps the transcript feeling like
+ * any other scroll region.
+ */
+export const CHAT_ARROW_SCROLL_STEP_PX = 40;
+
 const INITIAL_SCROLL_MODIFIER: ScrollModifier = {
   type: "item-location",
   location: {
@@ -248,6 +255,40 @@ export function chatScrollLocationForMessage(
     offset: MINIMAP_SCROLL_OFFSET_PX,
     behavior,
   };
+}
+
+/**
+ * Measures how far a rendered target is from the same visual anchor used by
+ * `chatScrollLocationForMessage`. Unlike an index scroll, this reads the final
+ * DOM geometry after variable-height rows above the target have measured.
+ */
+export function chatMessageAlignmentDelta(
+  scroller: HTMLElement | null,
+  messageId: string,
+): number | null {
+  if (scroller === null) return null;
+  // One native lookup: this runs on every correction frame, and materializing
+  // the whole row list just to scan it would be per-frame garbage. Everything
+  // outside [A-Za-z0-9_-] is hex-escaped (the CSS `\XX ` form), so no id -
+  // quotes, backslashes, control characters included - can make
+  // `querySelector` throw. Inline rather than `CSS.escape`, which
+  // node-environment tests do not provide.
+  const escaped = messageId.replace(
+    /[^A-Za-z0-9_-]/gu,
+    (ch) => `\\${(ch.codePointAt(0) ?? 0).toString(16)} `,
+  );
+  const target = scroller.querySelector<HTMLElement>(
+    `[data-message-id="${escaped}"]`,
+  );
+  if (target === null) return null;
+
+  const scrollerRect = scroller.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  if (scrollerRect.height <= 0 || targetRect.height <= 0) return null;
+  // Negated, not `Math.abs`: `chatScrollLocationForMessage` passes the RAW
+  // offset, and the two anchors must move together if its sign ever changes.
+  const targetTop = scrollerRect.top - MINIMAP_SCROLL_OFFSET_PX;
+  return targetRect.top - targetTop;
 }
 
 export function selectActiveUserMessageId(

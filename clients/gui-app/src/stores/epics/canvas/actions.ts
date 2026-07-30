@@ -20,6 +20,7 @@
  */
 import { v4 as uuidv4 } from "uuid";
 import type {
+  CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
   GitDiffTileRef,
@@ -28,6 +29,7 @@ import type {
 } from "./types";
 import {
   isBlankTileRef,
+  isCommGraphTileRef,
   isGitDiffTileRef,
   isSnapshotDiffTileRef,
 } from "./types";
@@ -619,6 +621,28 @@ export function openTileInBackgroundTab(
 }
 
 /**
+ * Opener path for a SINGLETON tile - one whose content `id` is derived rather
+ * than per-instance (the comm graph is one per epic).
+ *
+ * {@link openTileInPane} deliberately bypasses dedup so two views of the same
+ * content can sit side by side. That is wrong for a singleton: a second tab
+ * would share the content id, so any per-tile state keyed on it (the comm
+ * graph's persisted viewport) would be written by both copies. Focus the
+ * existing tab wherever it lives, and only open into `paneId` when there is
+ * none.
+ */
+export function openSingletonTileInPane(
+  state: EpicCanvasState,
+  paneId: string,
+  ref: EpicCanvasTileRef,
+): EpicCanvasState {
+  if (state.root !== null && findPaneTabByContentId(state, ref.id) !== null) {
+    return openTile(state, ref, false, null);
+  }
+  return openTileInPane(state, paneId, ref);
+}
+
+/**
  * Open `ref` into an explicit `paneId` as a fresh tab instance, bypassing
  * global dedup. Unlike {@link openTile}, this is the opener's path: it
  * never focuses an already-open tab and never falls back to the active pane.
@@ -1156,23 +1180,23 @@ function resolveSplitSource(
   if (sourcePane === null) return null;
   const fromIndex = sourcePane.tabInstanceIds.indexOf(source.tabId);
   if (fromIndex === -1) return null;
-  // Splitting a single-tab source pane onto its own edge would just
-  // rearrange the same pane - reject as no-op.
-  if (
-    source.sourcePaneId === targetPaneId &&
-    sourcePane.tabInstanceIds.length === 1
-  ) {
-    return null;
-  }
   const ref = state.tilesByInstanceId[source.tabId];
   if (ref === undefined) return null;
   const removed = removeTabAtIndexWithSyntheticFallback(sourcePane, fromIndex);
   const root = replacePane(state.root, source.sourcePaneId, () => removed.pane);
+  // An emptied source pane normally collapses - a tab dragged OUT of a pane
+  // shouldn't leave a hole behind. But when the drop targets that same pane,
+  // collapsing would undo the very split the drop preview just promised (the
+  // sole-tab case: open a Git Diff or Terminal, drag it to the pane edge). Keep
+  // the emptied pane as the split's other half, where it renders the standard
+  // opener - the same shape the "Split group" button produces.
+  const emptiedSourcePane = removed.pane.tabInstanceIds.length === 0;
+  const splitsIntoItself = source.sourcePaneId === targetPaneId;
   return {
     state: { ...state, root },
     node: ref,
     collapseSourcePaneId:
-      removed.pane.tabInstanceIds.length === 0 ? source.sourcePaneId : null,
+      emptiedSourcePane && !splitsIntoItself ? source.sourcePaneId : null,
   };
 }
 
@@ -1381,7 +1405,10 @@ export function updateGitDiffTileView(
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isGitDiffTileRef(ref),
-    (ref) => ({ ...ref, view }),
+    // Re-narrowed here, not just in the predicate: `view` is per-kind now that
+    // the comm-graph tile carries a viewport-shaped one, so a bare spread over
+    // the union would type-check against the wrong kind.
+    (ref) => (isGitDiffTileRef(ref) ? { ...ref, view } : ref),
   );
 }
 
@@ -1393,7 +1420,34 @@ export function updateSnapshotDiffTileView(
   return updateTilesWhere(
     state,
     (ref) => ref.id === tileId && isSnapshotDiffTileRef(ref),
-    (ref) => ({ ...ref, view }),
+    (ref) => (isSnapshotDiffTileRef(ref) ? { ...ref, view } : ref),
+  );
+}
+
+/**
+ * Persist a comm-graph tile's viewport. Called on gesture END (React Flow's
+ * `onMoveEnd`), never per animation frame - the canvas snapshot is serialized
+ * on every write, so a per-frame pan would churn the whole persistence path.
+ */
+export function updateCommGraphTileView(
+  state: EpicCanvasState,
+  tileId: string,
+  view: CommGraphTileViewState,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isCommGraphTileRef(ref),
+    (ref) => {
+      if (!isCommGraphTileRef(ref)) return ref;
+      if (
+        ref.view.x === view.x &&
+        ref.view.y === view.y &&
+        ref.view.zoom === view.zoom
+      ) {
+        return ref;
+      }
+      return { ...ref, view };
+    },
   );
 }
 

@@ -48,6 +48,21 @@ import type {
 } from "../../../ipc-contracts/window-types";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 
+const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+const readFeatureSettingsMock = vi.hoisted(() =>
+  vi.fn(async () => ({ agentRoles: featureSettings.agentRoles })),
+);
+const setAgentRolesEnabledMock = vi.hoisted(() =>
+  vi.fn(async (enabled: boolean) => {
+    featureSettings.agentRoles = enabled;
+  }),
+);
+vi.mock("@traycer/protocol/config/store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@traycer/protocol/config/store")>()),
+  readFeatureSettings: readFeatureSettingsMock,
+  setAgentRolesEnabled: setAgentRolesEnabledMock,
+}));
+
 /**
  * Runner-IPC bridge tests. We mock `electron` so the bridge can install its
  * handlers against a plain-JS `ipcMain` double, then drive the host and
@@ -486,6 +501,13 @@ function bareEvent(): {
   return sender(0);
 }
 
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 function readQuitRequestId(message: SentMessage | undefined): string {
   if (message === undefined) {
     throw new Error("quitRequested message missing");
@@ -560,6 +582,9 @@ beforeEach(() => {
   ipcMainState.syncListeners.clear();
   sentMessages.length = 0;
   vi.unstubAllGlobals();
+  featureSettings.agentRoles = false;
+  readFeatureSettingsMock.mockClear();
+  setAgentRolesEnabledMock.mockClear();
 });
 
 afterEach(() => {
@@ -600,6 +625,12 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.authTokenStoreRotate,
         RunnerHostInvoke.authTokenStoreDelete,
         RunnerHostInvoke.authTokenStoreMigrateLegacy,
+        RunnerHostInvoke.listUserSessions,
+        RunnerHostInvoke.revokeUserSession,
+        RunnerHostInvoke.revokeAllSessions,
+        RunnerHostInvoke.mintHostCredential,
+        RunnerHostInvoke.requestStepUpChallenge,
+        RunnerHostInvoke.verifyStepUpChallenge,
         RunnerHostInvoke.notificationShow,
         RunnerHostInvoke.openExternalLink,
         RunnerHostInvoke.getRegisteredUrlSchemes,
@@ -728,6 +759,8 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.gpuAccelerationSet,
         RunnerHostInvoke.logLevelsGet,
         RunnerHostInvoke.logLevelsSet,
+        RunnerHostInvoke.featureSettingsGet,
+        RunnerHostInvoke.agentRolesEnabledSet,
         RunnerHostInvoke.fontsList,
         RunnerHostInvoke.zoomGet,
         RunnerHostInvoke.zoomSet,
@@ -736,6 +769,47 @@ describe("RunnerIpcBridge", () => {
         RunnerHostInvoke.zoomReset,
       ].sort(),
     );
+    bridge.dispose();
+  });
+
+  it("gets and sets agent roles through typed IPC, rejecting non-boolean payloads", async () => {
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const getHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.featureSettingsGet,
+    );
+    const setHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.agentRolesEnabledSet,
+    );
+    if (getHandler === undefined || setHandler === undefined) {
+      throw new Error("feature-settings IPC handlers were not registered");
+    }
+
+    await expect(getHandler(bareEvent())).resolves.toEqual({
+      agentRoles: false,
+    });
+    await expect(setHandler(bareEvent(), true)).resolves.toEqual({
+      agentRoles: true,
+    });
+    expect(setAgentRolesEnabledMock).toHaveBeenCalledWith(true);
+    await expect(getHandler(bareEvent())).resolves.toEqual({
+      agentRoles: true,
+    });
+    await expect(setHandler(bareEvent(), "yes")).rejects.toThrow(
+      "featureSettings:agentRoles:set requires a boolean",
+    );
+    expect(setAgentRolesEnabledMock).toHaveBeenCalledTimes(1);
     bridge.dispose();
   });
 
@@ -2132,6 +2206,145 @@ describe("RunnerIpcBridge", () => {
     bridge.dispose();
   });
 
+  it("retains step-up credentials in main and returns only expiry metadata to the renderer", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
+      const url = input.toString();
+      if (url.endsWith("/api/v3/user/step-up/verify")) {
+        return jsonResponse(200, {
+          access_token: "step-up-secret",
+          token_type: "Bearer",
+          expires_in: 900,
+        });
+      }
+      if (url.endsWith("/api/v3/user/sessions/family-1")) {
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          "Bearer step-up-secret",
+        );
+        return jsonResponse(200, {
+          familyId: "family-1",
+          revoked: true,
+        });
+      }
+      throw new Error(`unexpected authn URL ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const verifyHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.verifyStepUpChallenge,
+    );
+    const revokeHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.revokeUserSession,
+    );
+    if (verifyHandler === undefined || revokeHandler === undefined) {
+      throw new Error("step-up handlers missing");
+    }
+
+    await expect(
+      verifyHandler(bareEvent(), "user-jwt", "123456"),
+    ).resolves.toEqual({
+      kind: "ok",
+      response: { expires_in: 900 },
+    });
+    await expect(
+      revokeHandler(bareEvent(), "user-jwt", "family-1", true),
+    ).resolves.toEqual({
+      kind: "ok",
+      response: { familyId: "family-1", revoked: true },
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
+  it("mints a host credential with the caller's own bearer, never the retained step-up credential", async () => {
+    // Provisioning is not step-up gated: a retained step-up credential must
+    // never be substituted for the mint's Authorization header, even when one
+    // is sitting in main from a prior verify. This closes an exposure where
+    // an IPC caller could spend a step-up bearer for a mint no dialog ever
+    // authorized.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init) => {
+      const url = input.toString();
+      if (url.endsWith("/api/v3/user/step-up/verify")) {
+        return jsonResponse(200, {
+          access_token: "step-up-secret",
+          token_type: "Bearer",
+          expires_in: 900,
+        });
+      }
+      if (url.endsWith("/api/v3/hosts/token")) {
+        expect((init?.headers as Record<string, string>).Authorization).toBe(
+          "Bearer user-jwt",
+        );
+        return jsonResponse(200, {
+          token: "host-access-jws",
+          refreshToken: "host-refresh-jwe",
+          familyId: "family-host-1",
+          hostId: "host-abc",
+          expiresIn: 900,
+          provisionedAt: "2026-07-08T12:00:00.000Z",
+        });
+      }
+      throw new Error(`unexpected authn URL ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const mod = await import("../register-runner-ipc");
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      window: buildWindow(),
+    });
+    bridge.install();
+
+    const verifyHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.verifyStepUpChallenge,
+    );
+    const mintHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.mintHostCredential,
+    );
+    if (verifyHandler === undefined || mintHandler === undefined) {
+      throw new Error("mintHostCredential handlers missing");
+    }
+
+    // Establish a retained step-up credential in main first.
+    await verifyHandler(bareEvent(), "user-jwt", "123456");
+
+    const mintResult = await mintHandler(bareEvent(), "user-jwt", {
+      hostId: "host-abc",
+      hostLabel: "Mac",
+      platform: null,
+    });
+    expect(mintResult).toEqual({
+      kind: "ok",
+      response: {
+        token: "host-access-jws",
+        refreshToken: "host-refresh-jwe",
+        familyId: "family-host-1",
+        hostId: "host-abc",
+        expiresIn: 900,
+        provisionedAt: "2026-07-08T12:00:00.000Z",
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    bridge.dispose();
+  });
+
   it("awaits a terminal quit decision and defaults malformed payloads to proceed", async () => {
     const mod = await import("../register-runner-ipc");
     const bridge = new mod.RunnerIpcBridge({
@@ -2621,7 +2834,9 @@ describe("RunnerIpcBridge", () => {
     if (respawnHandler === undefined) {
       throw new Error("requestHostRespawn handler missing");
     }
-    await respawnHandler(bareEvent());
+    await expect(respawnHandler(bareEvent())).resolves.toEqual({
+      kind: "restarted",
+    });
     await respawnHandler(bareEvent());
     expect(hostController.respawnCalls).toBe(2);
     bridge.dispose();
@@ -2657,6 +2872,52 @@ describe("RunnerIpcBridge", () => {
     );
     bridge.dispose();
   });
+
+  // Field RCA 2026-07-28: the takeover fallback's host-busy denial resolves
+  // `deferred`, and the invoke must RESOLVE it as `declined` rather than
+  // reject - a rejected invoke lands on the renderer's reportable error
+  // toast, inviting "Report issue" for a self-recovering condition.
+  it.each([
+    {
+      kind: "deferred" as const,
+      message: "The host has work in progress, so it was not restarted.",
+    },
+    {
+      kind: "busy" as const,
+      continuation: "activate" as const,
+      message: "The host has work in progress; restart it to finish.",
+    },
+  ])(
+    "resolves requestHostRespawn as declined when respawn() resolves $kind",
+    async (outcome) => {
+      const mod = await import("../register-runner-ipc");
+      const hostController = new FakeHostController();
+      hostController.respawn = async () => outcome;
+      const bridge = new mod.RunnerIpcBridge({
+        host: new FakeHost(),
+        hostController,
+        authnBaseUrl: "http://localhost:5005",
+        authRedirectUri: null,
+        tray: null,
+        zoomController: undefined,
+        authTokenStore: undefined,
+        window: buildWindow(),
+      });
+      bridge.install();
+
+      const respawnHandler = ipcMainState.handlers.get(
+        RunnerHostInvoke.requestHostRespawn,
+      );
+      if (respawnHandler === undefined) {
+        throw new Error("requestHostRespawn handler missing");
+      }
+      await expect(respawnHandler(bareEvent())).resolves.toEqual({
+        kind: "declined",
+        message: outcome.message,
+      });
+      bridge.dispose();
+    },
+  );
 
   it("serves authnBaseUrl synchronously via ipcMain.on", async () => {
     const mod = await import("../register-runner-ipc");

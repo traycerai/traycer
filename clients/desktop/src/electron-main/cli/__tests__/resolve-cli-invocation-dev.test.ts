@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 
 import devWrapperPaths from "../dev-wrapper-paths.json";
 import { DEV_DESKTOP_SLOT_ENV } from "../../host/dev-desktop-slot";
@@ -90,10 +91,7 @@ beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), "traycer-cli-discovery-dev-"));
   homeDir = join(work, "home");
   mkdirSync(homeDir, { recursive: true });
-  process.env.HOME = homeDir;
-  if (process.platform === "win32") {
-    process.env.USERPROFILE = homeDir;
-  }
+  sandboxHome(homeDir);
 });
 
 afterEach(() => {
