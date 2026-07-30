@@ -3212,7 +3212,7 @@ describe("ChatMessages scroll policy", () => {
       expect(screen.queryByTestId("chat-messages-scroll")).toBeNull();
     });
 
-    describe("H1: empty -> non-empty edge (local provenance + fresh-open re-derive)", () => {
+    describe("H1: empty -> non-empty live edge", () => {
       it("local-provenance first message anchors even with a saved bottom-following state", async () => {
         // Mount empty with a cache entry (freshOpen: false default seed). The
         // mount-time fresh-open seed has nothing to target; the local send on
@@ -3245,34 +3245,11 @@ describe("ChatMessages scroll policy", () => {
         expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
       });
 
-      it("empty -> multi-message history with no local match re-derives fresh-open (decision #15 late load)", async () => {
-        // Tile mounts empty before snapshot loads; mount-time seed sees no
-        // user row. First non-empty transition with !hadSavedScrollState must
-        // re-derive fresh-open targeting the LAST user row.
-        const history = makeCompletedTranscript(8);
-        // last user = message-6 (indices 0..7, even = user)
-        const lastUserId = "message-6";
-        const { rerenderMessages } = renderChatMessages({
-          messages: [],
-          scrollStateKey: `t4-h1-fresh-late-${Math.random().toString(36).slice(2)}`,
-          freshOpen: true,
-        });
-        await settleLegendList();
-        expect(screen.getByText("Start the conversation")).toBeTruthy();
-
-        rerenderMessages(history);
-        await settleLegendList();
-
-        await waitFor(() => {
-          expect(screen.getByTestId(`mock-message-${lastUserId}`)).toBeTruthy();
-        });
-        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
-      });
-
-      it("empty -> multi-message with saved state and no local match stays following-end", async () => {
-        // Returning tab: hadSavedScrollState + following-end mode. Snapshot
-        // load must NOT spuriously anchor (would steal the restored follow
-        // intent).
+      it("saved empty chat anchors a live passive first turn while following", async () => {
+        // ChatMessages mounts only after ChatSessionMessagesSurface has an
+        // authoritative snapshot. An empty mount is therefore a real empty
+        // chat, and this later non-local batch is a live passive arrival
+        // governed by decision #9 rather than initial hydration.
         const history = makeCompletedTranscript(8);
         const { rerenderMessages } = renderChatMessages({
           messages: [],
@@ -3287,11 +3264,26 @@ describe("ChatMessages scroll policy", () => {
         await waitFor(() => {
           expect(screen.getByTestId("chat-messages-scroll")).toBeTruthy();
         });
-        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
-        // Not the fresh-open / local-send anchor path.
-        expect(getScrollNode().dataset.scrollMode).not.toBe(
-          "anchoring-new-turn",
-        );
+        expect(getScrollNode().dataset.scrollMode).toBe("anchoring-new-turn");
+      });
+
+      it("saved empty chat keeps a live passive first turn parked after a pointerdown relinquishes follow", async () => {
+        const history = makeCompletedTranscript(8);
+        const { rerenderMessages } = renderChatMessages({
+          messages: [],
+          scrollStateKey: "t4-h1-saved-user-departed-key",
+          freshOpen: false,
+        });
+        await settleLegendList();
+
+        fireEvent.pointerDown(screen.getByTestId("chat-transcript-container"));
+        rerenderMessages(history);
+        await settleLegendList();
+        await waitForPillVisible();
+
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+        expect(getScrollNode().scrollTop).toBe(0);
+        expect(isJumpPillVisible()).toBe(true);
       });
     });
 

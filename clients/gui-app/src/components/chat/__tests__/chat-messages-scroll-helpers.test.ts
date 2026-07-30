@@ -352,12 +352,12 @@ describe("classifyChatEdgeMutation", () => {
     });
 
     it("re-derives fresh-open (non-animated, last user message) when no saved state and no local match", () => {
-      // A chat tile can mount empty (before its snapshot loads); this
-      // transition is the snapshot finally bringing in real history - not a
-      // local action.
+      // ChatMessages mounts only after the authoritative snapshot. A null
+      // previous value is therefore the initial render whose fresh-open
+      // policy belongs here.
       expect(
         classify({
-          previousMessages: [],
+          previousMessages: null,
           nextMessages: base,
           isFollowingEnd: false,
           hadSavedScrollState: false,
@@ -369,7 +369,7 @@ describe("classifyChatEdgeMutation", () => {
       });
     });
 
-    it("does nothing when a saved scroll state exists and there is no local match (a restored free-scrolling mode must survive)", () => {
+    it("does nothing on the initial saved-state snapshot when there is no local match", () => {
       expect(
         classify({
           previousMessages: null,
@@ -379,12 +379,31 @@ describe("classifyChatEdgeMutation", () => {
           localProvenanceMessageIds: NO_PROVENANCE,
         }),
       ).toEqual({ action: { kind: "none" }, nextMode: null });
+    });
 
+    it("anchors a passive first turn arriving live after a saved empty snapshot only while following", () => {
       expect(
         classify({
           previousMessages: [],
           nextMessages: base,
           isFollowingEnd: true,
+          hadSavedScrollState: true,
+          localProvenanceMessageIds: NO_PROVENANCE,
+        }),
+      ).toEqual({
+        action: {
+          kind: "anchor-new-turn",
+          messageId: "u1",
+          animated: true,
+        },
+        nextMode: null,
+      });
+
+      expect(
+        classify({
+          previousMessages: [],
+          nextMessages: base,
+          isFollowingEnd: false,
           hadSavedScrollState: true,
           localProvenanceMessageIds: NO_PROVENANCE,
         }),

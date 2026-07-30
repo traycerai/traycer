@@ -977,6 +977,9 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     cancelTimelineLiveFollowForUserNavigationRef.current =
       cancelTimelineLiveFollowForRealUserGesture;
   }, [cancelTimelineLiveFollowForRealUserGesture]);
+  const handleTranscriptPointerDown = useCallback((): void => {
+    cancelTimelineLiveFollowForRealUserGesture(true);
+  }, [cancelTimelineLiveFollowForRealUserGesture]);
 
   // ChatTimeline unmounts LegendList entirely for an empty transcript
   // (ChatEmptyState instead), so this - not just `messages` identity - is
@@ -1110,16 +1113,17 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     [cancelPillShow],
   );
 
-  // Intent listeners (decision #5): passive wheel/touchmove/pointerdown on the
-  // scroll node cancel live-follow. `ChatTimeline` unmounts its `LegendList`
-  // entirely for an empty transcript (rendering `ChatEmptyState` instead), so
-  // the scroll node's lifecycle does not match this component's own mount:
-  // it may not exist yet at mount (an empty-then-first-message chat), and it
-  // is torn down and replaced by a NEW node across any non-empty -> empty ->
-  // repopulated cycle. Poll every frame until the node appears (cheap - one
-  // ref read + identity check), re-attaching whenever it changes; stop
-  // polling once attached. Re-armed whenever `hasContent` toggles so a later
-  // empty/repopulate cycle gets picked up again.
+  // Intent listeners (decision #5): passive wheel/touchmove on the scroll
+  // node cancel live-follow. Pointerdown is handled by the stable transcript
+  // container below (decision #6), including while `ChatTimeline` renders its
+  // empty state with no LegendList node. The scroll node's lifecycle does not
+  // match this component's own mount: it may not exist yet at mount (an
+  // empty-then-first-message chat), and it is torn down and replaced by a NEW
+  // node across any non-empty -> empty -> repopulated cycle. Poll every frame
+  // until the node appears (cheap - one ref read + identity check),
+  // re-attaching whenever it changes; stop polling once attached. Re-armed
+  // whenever `hasContent` toggles so a later empty/repopulate cycle gets
+  // picked up again.
   useLayoutEffect(() => {
     if (!hasContent) return;
     let cancelled = false;
@@ -1128,15 +1132,9 @@ function ChatMessagesInner(props: ChatMessagesProps) {
 
     // Wheel/touchmove already replace whatever the scroll was doing with
     // real, immediate movement of their own, so their own subsequent report
-    // must not be swallowed - plain release, no freeze. A bare pointerdown
-    // (selecting text, expanding a card) produces no scroll of its own, so
-    // a suppressed ANIMATED scroll (the browser's native smooth-scroll) keeps
-    // running unless explicitly frozen (see cancelTimelineLiveFollowForUserNavigation).
+    // must not be swallowed - plain release, no freeze.
     const handleManualNavigationWithMovement = () => {
       cancelTimelineLiveFollowForUserNavigationRef.current(false);
-    };
-    const handlePointerDownManualNavigation = () => {
-      cancelTimelineLiveFollowForUserNavigationRef.current(true);
     };
     const detach = (): void => {
       if (attachedNode === null) return;
@@ -1147,10 +1145,6 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       attachedNode.removeEventListener(
         "touchmove",
         handleManualNavigationWithMovement,
-      );
-      attachedNode.removeEventListener(
-        "pointerdown",
-        handlePointerDownManualNavigation,
       );
       attachedNode = null;
     };
@@ -1169,13 +1163,6 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       scrollNode.addEventListener(
         "touchmove",
         handleManualNavigationWithMovement,
-        {
-          passive: true,
-        },
-      );
-      scrollNode.addEventListener(
-        "pointerdown",
-        handlePointerDownManualNavigation,
         {
           passive: true,
         },
@@ -2282,6 +2269,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
           <div
             ref={transcriptContainerRef}
             data-testid="chat-transcript-container"
+            onPointerDown={handleTranscriptPointerDown}
             className="relative flex-1 overflow-hidden"
             style={
               {
@@ -2298,7 +2286,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
               listRef={chatTimelineRef}
               onScroll={handleScroll}
               topFadeEnabled
-              initialScrollAtEnd={initialModeSeed.isFollowingEnd}
+              initialScrollAtEnd={isFollowingEnd}
               initialScrollIndex={initialScrollIndexAnchor}
               anchorMessageId={timelineAnchorMessageId}
               anchorOffset={anchorOffset}

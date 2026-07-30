@@ -298,6 +298,20 @@ const NONE_OUTCOME: ChatEdgeMutationOutcome = {
   nextMode: null,
 };
 
+interface ChatEdgeMutationInput {
+  readonly previousMessages: ReadonlyArray<ChatMessageModel> | null;
+  readonly nextMessages: ReadonlyArray<ChatMessageModel>;
+  readonly isFollowingEnd: boolean;
+  /** No saved scroll-state cache entry existed for this tile (decision #15).
+   *  Re-checked on the initial render because the mount-time fresh-open seed
+   *  and this classifier share ownership of that first authoritative
+   *  snapshot. */
+  readonly hadSavedScrollState: boolean;
+  /** Message ids THIS client minted and successfully dispatched
+   *  (`chat-session-store.ts`) - the unconditional-anchor ground truth. */
+  readonly localProvenanceMessageIds: ReadonlySet<string>;
+}
+
 /**
  * Classifies a `previousMessages -> nextMessages` transition into a single
  * imperative scroll outcome. `isFollowingEnd` is the mode snapshot at
@@ -329,66 +343,20 @@ const NONE_OUTCOME: ChatEdgeMutationOutcome = {
  * unconditional vs gated once a candidate is found; that decision is
  * registry-only.
  */
-export function classifyChatEdgeMutation(input: {
-  readonly previousMessages: ReadonlyArray<ChatMessageModel> | null;
-  readonly nextMessages: ReadonlyArray<ChatMessageModel>;
-  readonly isFollowingEnd: boolean;
-  /** No saved scroll-state cache entry existed for this tile (decision #15).
-   *  Re-checked here (not just at mount) because a chat tile can mount with
-   *  an empty transcript before its snapshot loads - the mount-time fresh-
-   *  open seed sees nothing to anchor to in that case, so this transition
-   *  (the first one that actually brings in a real history) is the only
-   *  place left to apply the policy. */
-  readonly hadSavedScrollState: boolean;
-  /** Message ids THIS client minted and successfully dispatched
-   *  (`chat-session-store.ts`) - the unconditional-anchor ground truth. */
-  readonly localProvenanceMessageIds: ReadonlySet<string>;
-}): ChatEdgeMutationOutcome {
+export function classifyChatEdgeMutation(
+  input: ChatEdgeMutationInput,
+): ChatEdgeMutationOutcome {
   const {
     nextMessages,
     previousMessages,
     isFollowingEnd,
-    hadSavedScrollState,
     localProvenanceMessageIds,
   } = input;
   if (nextMessages.length === 0) {
     return { action: { kind: "none" }, nextMode: "following-end" };
   }
   if (previousMessages === null || previousMessages.length === 0) {
-    // First non-empty render for this component instance. Covers both "a
-    // brand-new, genuinely empty chat's first local send" (must still
-    // anchor unconditionally) and "an existing chat's snapshot loading real
-    // history into an already-mounted, transiently-empty transcript" (no
-    // local action here - apply the fresh-open policy once instead, since
-    // the mount-time seed had nothing to anchor to when it ran).
-    const localMessage = nextMessages.find(
-      (message) =>
-        isUserMessage(message) && localProvenanceMessageIds.has(message.id),
-    );
-    if (localMessage !== undefined) {
-      return {
-        action: {
-          kind: "anchor-new-turn",
-          messageId: localMessage.id,
-          animated: true,
-        },
-        nextMode: null,
-      };
-    }
-    if (!hadSavedScrollState) {
-      const lastUserMessage = nextMessages.findLast(isUserMessage);
-      if (lastUserMessage !== undefined) {
-        return {
-          action: {
-            kind: "anchor-new-turn",
-            messageId: lastUserMessage.id,
-            animated: false,
-          },
-          nextMode: null,
-        };
-      }
-    }
-    return { action: { kind: "none" }, nextMode: null };
+    return classifyFirstNonEmptyChatEdge(input);
   }
 
   const removedSuffixAnchorIndex = removedMessageSuffixAnchorIndex(
@@ -461,6 +429,72 @@ export function classifyChatEdgeMutation(input: {
   // comes from the reveal-pass effect + `maintainScrollAtEnd` while
   // following, so no explicit scroll-to-end is needed here either.
   return NONE_OUTCOME;
+}
+
+function classifyFirstNonEmptyChatEdge(
+  input: ChatEdgeMutationInput,
+): ChatEdgeMutationOutcome {
+  const {
+    nextMessages,
+    previousMessages,
+    isFollowingEnd,
+    hadSavedScrollState,
+    localProvenanceMessageIds,
+  } = input;
+  const localMessage = nextMessages.find(
+    (message) =>
+      isUserMessage(message) && localProvenanceMessageIds.has(message.id),
+  );
+  if (localMessage !== undefined) {
+    return {
+      action: {
+        kind: "anchor-new-turn",
+        messageId: localMessage.id,
+        animated: true,
+      },
+      nextMode: null,
+    };
+  }
+
+  if (previousMessages === null) {
+    // ChatMessages has one production mount path, gated behind the
+    // authoritative chat snapshot. `null` therefore means this is that
+    // initial render: saved-state restore owns it, while a genuinely fresh
+    // open anchors the last user row without animation (decision #15).
+    if (hadSavedScrollState) {
+      return { action: { kind: "none" }, nextMode: null };
+    }
+    const lastUserMessage = nextMessages.findLast(isUserMessage);
+    if (lastUserMessage !== undefined) {
+      return {
+        action: {
+          kind: "anchor-new-turn",
+          messageId: lastUserMessage.id,
+          animated: false,
+        },
+        nextMode: null,
+      };
+    }
+    return { action: { kind: "none" }, nextMode: null };
+  }
+
+  // An empty array can only occur after that snapshot-gated mount: a real
+  // empty chat has now received its first live turn. Treat a passive row
+  // exactly like any later queued/A2A arrival (decision #9) - anchor the
+  // tail-most user only while following; a reader who relinquished follow
+  // stays parked.
+  const gatedTarget = nextMessages.findLast(isUserMessage);
+  if (isFollowingEnd && gatedTarget !== undefined) {
+    return {
+      action: {
+        kind: "anchor-new-turn",
+        messageId: gatedTarget.id,
+        animated: true,
+      },
+      nextMode: null,
+    };
+  }
+  return { action: { kind: "none" }, nextMode: null };
 }
 
 function isAppendOnlyChange(
