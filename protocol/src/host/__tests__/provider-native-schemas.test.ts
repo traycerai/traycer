@@ -962,14 +962,17 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
   const responseMethods = fixtures.mutationResponseMethods;
   const requestMethods = fixtures.mutationRequestMethods;
   // Everything below that reads the tag itself needs this clone to actually
-  // have the host-v1.1.5 objects. `actions/checkout` fetches no tags, so in CI
-  // those two are skipped rather than reported as failures for evidence they
-  // could not obtain; the tag-independent assertions in this block keep
-  // running there, and `guarded-files-tripwire` is what stops the checked-in
-  // fixture being hand-edited where the regeneration guard cannot run.
-  const tagReachable = hostV115TagObjectsAvailable(
-    resolve(dirname(fileURLToPath(import.meta.url)), "../../../../"),
+  // have the host-v1.1.5 objects. `actions/checkout` fetches no tags, so the
+  // `@traycer/protocol` leg of `test.yml` fetches the one tag explicitly to
+  // keep these two live in CI — skipping them there would have left generator
+  // drift uncaught, since `guarded-files-tripwire` only stops the checked-in
+  // fixture being hand-edited. The skip remains for local clones without the
+  // tag, so a shallow checkout reports "no evidence" rather than a failure.
+  const traycerRoot = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../../",
   );
+  const tagReachable = hostV115TagObjectsAvailable(traycerRoot);
 
   it.skipIf(!tagReachable)(
     "regenerate-and-compare: checked-in fixture equals live generator output",
@@ -977,8 +980,6 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
       // Catches ANY hand-edit to the checked-in fixture (not just
       // enum/provenance fields): re-run the full generator against
       // host-v1.1.5 and deep-equal.
-      const fixtureDir = dirname(fileURLToPath(import.meta.url));
-      const traycerRoot = resolve(fixtureDir, "../../../../");
       const regenerated = await buildHostV115MutationV20Fixtures(traycerRoot);
       // Strip `as const` readonly by JSON round-trip for stable deep equality.
       expect(JSON.parse(JSON.stringify(fixtures))).toEqual(
@@ -1009,8 +1010,6 @@ describe("B1: mutation@2.0 is amp-inclusive (host-v1.1.5 oracle)", () => {
       // Generation-time guarantee: samples must parse against host-v1.1.5
       // schemas. A wrong field type fails the tag-era parser (not the current
       // branch).
-      const fixtureDir = dirname(fileURLToPath(import.meta.url));
-      const traycerRoot = resolve(fixtureDir, "../../../../");
       const taggedSource = gitShow(
         traycerRoot,
         `${HOST_V115_MUTATION_V20_TAG}:${HOST_V115_MUTATION_V20_SCHEMAS_PATH}`,

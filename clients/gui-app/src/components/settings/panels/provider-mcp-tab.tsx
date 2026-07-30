@@ -77,6 +77,20 @@ function resolveLockedScope(
 }
 
 /**
+ * The one definition of "this server's auth has not settled yet". Both the
+ * prune below and the pending-entry sweep effect decide settledness from the
+ * same list, so they have to agree by construction — two copies of the status
+ * set would silently diverge the moment a new pending-ish status appears.
+ * A server missing from the list has settled by disappearing.
+ */
+function isServerAuthPending(server: ProviderMcpServer | undefined): boolean {
+  return (
+    server !== undefined &&
+    (server.status === "connecting" || server.status === "needs_auth")
+  );
+}
+
+/**
  * Drop names that have settled (gone / not connecting|needs_auth).
  * Returns the same `awaiting` reference when nothing changed so render-time
  * state adjustment can compare by identity.
@@ -89,9 +103,7 @@ function pruneAuthAwaiting(
   const byName = new Map(servers.map((s) => [s.name, s]));
   const next = new Set<string>();
   for (const name of awaiting) {
-    const server = byName.get(name);
-    if (server === undefined) continue;
-    if (server.status === "connecting" || server.status === "needs_auth") {
+    if (isServerAuthPending(byName.get(name))) {
       next.add(name);
     }
   }
@@ -398,8 +410,8 @@ export function ProviderMcpTab(props: {
   // also cannot be handed down from the prune — `setAuthAwaitingNames` above
   // re-renders immediately with nothing left to diff, so by the time effects
   // run for the committed render the retired names are gone. So this reads the
-  // store directly and re-derives settledness from the list, applying exactly
-  // `pruneAuthAwaiting`'s rule. Self-limiting: removing an entry is what
+  // store directly and re-derives settledness from the list through the same
+  // `isServerAuthPending` rule the prune uses. Self-limiting: removing an entry is what
   // changes `pendingAuthEntries`, and the next pass finds nothing to remove.
   const listData = listQuery.data;
   useEffect(() => {
@@ -417,11 +429,9 @@ export function ProviderMcpTab(props: {
       ) {
         continue;
       }
-      const server = byName.get(key.serverName);
-      const stillPending =
-        server !== undefined &&
-        (server.status === "connecting" || server.status === "needs_auth");
-      if (!stillPending) pendingAuthRemove(key);
+      if (!isServerAuthPending(byName.get(key.serverName))) {
+        pendingAuthRemove(key);
+      }
     }
   }, [
     listData,
