@@ -15,6 +15,7 @@ import { useDiffOpenerItems } from "@/lib/commands/sources/open/diff-subpage";
 import { useFilesOpenerItems } from "@/lib/commands/sources/open/files-subpage";
 import { useSearchOpenerItems } from "@/lib/commands/sources/open/search-subpage";
 import { useTerminalsOpenerItems } from "@/lib/commands/sources/open/terminals-subpage";
+import { commGraphOpenerItem } from "@/lib/commands/sources/open/comm-graph-leaf";
 import type {
   CommandContext,
   CommandItem,
@@ -100,5 +101,11 @@ const CATEGORY_ENTRIES: ReadonlyArray<CommandItem> =
 
 export const openSource: CommandSource = {
   id: "open",
-  getItems: (ctx) => (ctx.targetGroupId === null ? [] : CATEGORY_ENTRIES),
+  getItems: (ctx) =>
+    ctx.targetGroupId === null
+      ? []
+      : // The communication graph is a LEAF, not a category: there is exactly
+        // one graph per epic, so a sub-page listing one row would be a wasted
+        // step. It also needs no host pick - the tile fans in across hosts.
+        [...CATEGORY_ENTRIES, commGraphOpenerItem(ctx)],
 };

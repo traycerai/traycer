@@ -1,5 +1,6 @@
 import type {
   BlankTileRef,
+  CommGraphTileRef,
   EpicArtifactRef,
   EpicTerminalRef,
   GitDiffTileRef,
@@ -27,6 +28,7 @@ export interface TileKindToRefMap {
   readonly "workspace-file": WorkspaceFileRef;
   readonly "git-diff": GitDiffTileRef;
   readonly "snapshot-diff": SnapshotDiffTileRef;
+  readonly "comm-graph": CommGraphTileRef;
   readonly blank: BlankTileRef;
 }
 
