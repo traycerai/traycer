@@ -4,6 +4,8 @@
  * renderers feature-detect `window.runnerHost.windows` before using them.
  */
 
+import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
   JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
@@ -189,16 +191,16 @@ export interface SupportLogDescriptor {
 
 /**
  * Plain-data mirror of `DesktopHostLayer0Record`
- * (`electron-main/host/host-state.ts`) - duplicated here rather than
- * imported, same rationale as `DesktopLocalHostSnapshot` above: this
- * contract must stay import-free of `electron-main`.
+ * (`electron-main/host/host-state.ts`). The record stays declared at the IPC
+ * boundary, while its cause comes from the protocol owner so additions cannot
+ * silently drift into a string-shaped desktop copy.
  */
 export type SupportHostLayer0Snapshot =
   | { readonly status: "acquired"; readonly attemptId: string }
   | {
       readonly status: "degraded";
       readonly attemptId: string;
-      readonly cause: string;
+      readonly cause: Layer0UnavailableCause;
       readonly evidence: string;
     }
   | { readonly status: "unrecognized"; readonly raw: string };

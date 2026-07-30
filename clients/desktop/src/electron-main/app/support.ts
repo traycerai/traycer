@@ -4,6 +4,7 @@ import { open, mkdir, readFile } from "node:fs/promises";
 import { arch, platform } from "node:process";
 import { dirname } from "node:path";
 import * as Sentry from "@sentry/electron/main";
+import type { Layer0UnavailableCause } from "@traycer/protocol/host/lifecycle/layer0-frame";
 import type { HostFsLayout } from "../host/host-paths";
 import { readHostLayer0Record } from "../host/host-state";
 import { log, resolveDesktopLogPath } from "./logger";
@@ -278,8 +279,12 @@ function layer0MessageLine(
 ): string | false {
   if (layer0 === null || layer0.status === "acquired") return false;
   if (layer0.status === "degraded")
-    return `Layer 0: degraded (${layer0.cause})`;
+    return `Layer 0: degraded (${formatLayer0Cause(layer0.cause)})`;
   return `Layer 0: unrecognized (${layer0.raw})`;
+}
+
+function formatLayer0Cause(cause: Layer0UnavailableCause): string {
+  return typeof cause === "string" ? cause : JSON.stringify(cause);
 }
 
 function splitLogLines(content: string): readonly string[] {

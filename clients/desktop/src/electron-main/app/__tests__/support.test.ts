@@ -217,4 +217,101 @@ describe("DesktopSupportService.submitReport layer0 routing", () => {
       expect(feedback.message).not.toContain("Layer 0:");
     });
   });
+
+  /**
+   * The structured `os-error` arm is the reason T1 stops flattening cause to
+   * a string: syscall/code/fsType must arrive intact in `contexts.layer0`,
+   * not as a pre-stringified blob that loses typed filtering later.
+   */
+  it("carries a structured os-error layer0 discriminant intact in Sentry contexts.layer0", async () => {
+    const osErrorCause = {
+      kind: "os-error" as const,
+      syscall: "open",
+      code: "EACCES",
+      fsType: null,
+    };
+    await withPidMetadataFile(
+      {
+        pid: 25149,
+        hostId: "36bee6d0-test",
+        version: "0.0.0-dev",
+        websocketUrl: "ws://127.0.0.1:63857/rpc",
+        layer0: {
+          status: "degraded",
+          attemptId: "host-os-error",
+          cause: osErrorCause,
+          evidence: "kernel lifecycle lock acquisition was not determinable",
+        },
+      },
+      async (hostLayout) => {
+        const service = buildService(hostLayout);
+        await service.submitReport(EMPTY_REPORT_FORM);
+
+        expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
+        const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock
+          .calls[0];
+        expect(hint?.captureContext).toMatchObject({
+          tags: expect.objectContaining({ layer0Status: "degraded" }),
+          contexts: {
+            layer0: {
+              status: "degraded",
+              attemptId: "host-os-error",
+              cause: osErrorCause,
+              evidence:
+                "kernel lifecycle lock acquisition was not determinable",
+            },
+          },
+        });
+        // Nested fields must still be objects on the wire, not a JSON string.
+        const layer0Context = (
+          hint?.captureContext as {
+            contexts?: { layer0?: { cause?: unknown } };
+          }
+        )?.contexts?.layer0;
+        expect(typeof layer0Context?.cause).toBe("object");
+        expect(layer0Context?.cause).toEqual(osErrorCause);
+        expect(feedback.message).toContain(
+          `Layer 0: degraded (${JSON.stringify(osErrorCause)})`,
+        );
+      },
+    );
+  });
+
+  it("tags an unrecognized newer-host layer0 and preserves the raw payload in Sentry context", async () => {
+    const newerHostLayer0 = {
+      status: "degraded",
+      attemptId: "future-host-attempt",
+      cause: "future-unknown-cause",
+      evidence: "host emits a cause this desktop build does not list yet",
+    };
+    await withPidMetadataFile(
+      {
+        pid: 25149,
+        hostId: "36bee6d0-test",
+        version: "0.0.0-dev",
+        websocketUrl: "ws://127.0.0.1:63857/rpc",
+        layer0: newerHostLayer0,
+      },
+      async (hostLayout) => {
+        const service = buildService(hostLayout);
+        await service.submitReport(EMPTY_REPORT_FORM);
+
+        expect(Sentry.captureFeedback).toHaveBeenCalledTimes(1);
+        const [feedback, hint] = vi.mocked(Sentry.captureFeedback).mock
+          .calls[0];
+        expect(hint?.captureContext).toMatchObject({
+          tags: expect.objectContaining({ layer0Status: "unrecognized" }),
+          contexts: {
+            layer0: {
+              status: "unrecognized",
+              raw: JSON.stringify(newerHostLayer0),
+            },
+          },
+        });
+        expect(feedback.message).toContain(
+          `Layer 0: unrecognized (${JSON.stringify(newerHostLayer0)})`,
+        );
+      },
+    );
+  });
 });
