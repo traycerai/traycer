@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 
 // Host Update Layer Redesign Tech Plan - Ticket: "Desktop main: HostController
 // two-lane scheduler + policy cutover". This is the ticket's own verification
@@ -150,8 +151,7 @@ let workHome: string;
 
 beforeEach(() => {
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-controller-"));
-  process.env.HOME = workHome;
-  process.env.USERPROFILE = workHome;
+  sandboxHome(workHome);
   delete process.env[DEV_DESKTOP_SLOT_ENV];
   // `withDesktopCliLock`'s `open(path, "wx", ...)` needs the lock file's
   // parent directory to already exist (production always has it - the CLI

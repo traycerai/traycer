@@ -639,6 +639,7 @@ function SubagentResultPanel(props: {
           markdown={result}
           proseSize="compact"
           quotable={false}
+          components={null}
         />
       </div>
     </SegmentPanel>

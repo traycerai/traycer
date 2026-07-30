@@ -85,6 +85,7 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { useSubagentOpenStore } from "@/stores/chats/subagent-open-store";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import {
@@ -510,6 +511,57 @@ function messageIdForBlock(
   return owner?.id ?? null;
 }
 
+/**
+ * Resolves a `sent-message` transcript jump: the message holding this chat's
+ * own "Sent message" card for one A2A exchange. Matched on receiver + the
+ * VERBATIM text because those are the only identifiers the send block and the
+ * comm-event row durably share - the sender's block id never reaches the
+ * host's capture (origin refs are receiver-side). When the same text went to
+ * the same receiver more than once, the send whose start time is nearest the
+ * event's capture time wins; both clocks are the same host's.
+ */
+function sentMessageAnchorId(
+  messages: ReadonlyArray<ChatMessageModel>,
+  target: {
+    readonly receiverAgentId: string;
+    readonly messageText: string;
+    readonly timestamp: number;
+  },
+): string | null {
+  const candidates: Array<{
+    readonly messageId: string;
+    readonly distance: number;
+  }> = [];
+  const visit = (messageId: string, node: BackgroundBlockSearchNode): void => {
+    if (
+      "kind" in node &&
+      node.kind === "tool" &&
+      node.agentMessageSend !== null &&
+      node.agentMessageSend.receiverAgentId === target.receiverAgentId &&
+      node.agentMessageSend.message === target.messageText
+    ) {
+      candidates.push({
+        messageId,
+        distance: Math.abs(node.startedAt - target.timestamp),
+      });
+    }
+    for (const child of backgroundBlockSearchChildren(node)) {
+      visit(messageId, child);
+    }
+  };
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      visit(message.id, segment);
+    }
+  }
+  let best: { readonly messageId: string; readonly distance: number } | null =
+    null;
+  for (const candidate of candidates) {
+    if (best === null || candidate.distance < best.distance) best = candidate;
+  }
+  return best?.messageId ?? null;
+}
+
 interface BackgroundClickTarget {
   readonly blockId: string;
   readonly card: ChatScrollCardKind;
@@ -554,6 +606,28 @@ function resolveBackgroundClickTarget(
     blockId: current.blockId,
     card: backgroundItemCardKind(current.kind),
   };
+}
+
+/**
+ * How long a parked cross-tile transcript jump waits for its target row to
+ * stream in before it is dropped. Generous enough to cover a cold tile pulling
+ * a large transcript, short enough that a stale request cannot fire minutes
+ * later and yank the reader somewhere they no longer expect.
+ */
+const TRANSCRIPT_JUMP_TTL_MS = 30_000;
+
+/**
+ * Which open-store a cross-tile block jump should expand. A block that names a
+ * live background item follows that item's card kind; anything else (a settled
+ * tool card - the usual shape for a file-write anchor) opens as a tool card.
+ */
+function transcriptJumpCardKind(
+  blockId: string,
+  backgroundItems: ReadonlyArray<BackgroundItem>,
+): ChatScrollCardKind {
+  const item = backgroundItems.find((entry) => entry.blockId === blockId);
+  if (item === undefined) return "tool";
+  return backgroundItemCardKind(item.kind);
 }
 
 function ChatTileSessionView(props: ChatTileSessionViewProps) {
@@ -626,6 +700,100 @@ function ChatTileSessionView(props: ChatTileSessionViewProps) {
     },
     [scrollToBlock, view.lower.backgroundItems],
   );
+  // Anchor on a message rather than on a card. The transcript's scroll request
+  // wants a message id either way; `blockId: null` says "there is no card to
+  // expand here", which is the shape a delivered A2A message has.
+  const scrollToMessage = useCallback((messageId: string): void => {
+    backgroundScrollRequestIdRef.current += 1;
+    setBackgroundScrollRequest({
+      messageId,
+      blockId: null,
+      requestId: backgroundScrollRequestIdRef.current,
+    });
+  }, []);
+  // Cross-tile transcript jumps (today: the communication-graph timeline).
+  // Parked in a store rather than called directly because the jump is issued
+  // from another tile, possibly before this one exists - `openTileInEpic`
+  // mounts it and the request is waiting here when it renders.
+  const transcriptJump = useChatTranscriptJumpStore(
+    (s) => s.requestsByChatId[props.node.id],
+  );
+  const consumeTranscriptJump = useChatTranscriptJumpStore(
+    (s) => s.consumeJump,
+  );
+  // HOLD UNTIL THE TARGET RESOLVES, not merely until the snapshot loaded. The
+  // chat transcript streams independently of the graph stream, so a warm tile
+  // routinely learns about a message from the timeline BEFORE its own stream
+  // delivers the row. Installing the scroll request then would burn it: the
+  // transcript marks the request handled and only afterwards discovers it has
+  // no index entry for that message, and the row arrives to find nothing
+  // parked. So the request stays in the store until the row is actually
+  // present; `view.messages` changing re-runs this, which is the retry.
+  useEffect(() => {
+    if (transcriptJump === undefined) return;
+    if (!view.snapshotLoaded) return;
+    const target = transcriptJump.target;
+    const resolveTargetMessageId = (): string | null => {
+      if (target.kind === "message") {
+        return (
+          view.messages.find((message) => message.id === target.messageId)
+            ?.id ?? null
+        );
+      }
+      if (target.kind === "sent-message") {
+        return sentMessageAnchorId(view.messages, target);
+      }
+      if (target.kind === "first-message") {
+        return view.messages[0]?.id ?? null;
+      }
+      if (target.kind === "last-message") {
+        return view.messages.at(-1)?.id ?? null;
+      }
+      return messageIdForBlock(view.messages, target.blockId);
+    };
+    const messageId = resolveTargetMessageId();
+    if (messageId === null) return;
+    if (target.kind === "block") {
+      scrollToBlock(
+        target.blockId,
+        transcriptJumpCardKind(
+          target.blockId,
+          view.lower.backgroundItems ?? [],
+        ),
+      );
+    } else {
+      // Both a delivered-message anchor and a resolved sent-message anchor
+      // land the same way: scroll to the owning row, no card to expand.
+      scrollToMessage(messageId);
+    }
+    consumeTranscriptJump(props.node.id, transcriptJump.requestId);
+  }, [
+    consumeTranscriptJump,
+    props.node.id,
+    scrollToBlock,
+    scrollToMessage,
+    transcriptJump,
+    view.lower.backgroundItems,
+    view.messages,
+    view.snapshotLoaded,
+  ]);
+  // ...but a target that never arrives must not wait forever. One timer per
+  // request id (transcript churn does not restart it): if the row has not shown
+  // up by then the request is dropped QUIETLY. A jump that cannot land is not
+  // an error worth interrupting the user over - the tile is open on the right
+  // agent either way, which is the degrade this feature already accepts for
+  // anchor-less rows.
+  const pendingTranscriptJumpId = transcriptJump?.requestId ?? null;
+  useEffect(() => {
+    if (pendingTranscriptJumpId === null) return;
+    const chatId = props.node.id;
+    const timer = setTimeout(() => {
+      consumeTranscriptJump(chatId, pendingTranscriptJumpId);
+    }, TRANSCRIPT_JUMP_TTL_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [consumeTranscriptJump, pendingTranscriptJumpId, props.node.id]);
   // Canvas-owned implementation of the chat file-change click contract. The
   // chat components receive only inert row handlers; they do not know about
   // canvas stores, tab ids, or tile factories.

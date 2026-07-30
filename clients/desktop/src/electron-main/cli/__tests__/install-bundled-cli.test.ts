@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sandboxHome } from "../../__tests__/sandbox-home";
 
 // The slot used to be a POSIX symlink into the .app bundle - field report
 // 5's "file exists but won't run": remove or replace the bundle and the
@@ -58,10 +59,7 @@ beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), "traycer-install-bundled-cli-"));
   homeDir = join(work, "home");
   mkdirSync(homeDir, { recursive: true });
-  process.env.HOME = homeDir;
-  if (process.platform === "win32") {
-    process.env.USERPROFILE = homeDir;
-  }
+  sandboxHome(homeDir);
   vi.resetModules();
 });
 

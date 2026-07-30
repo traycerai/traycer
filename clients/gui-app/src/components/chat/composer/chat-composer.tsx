@@ -66,6 +66,7 @@ import {
   type ProviderReauthGate,
   type ProviderReauthReason,
 } from "./use-provider-reauth-gate";
+import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
 import {
@@ -270,10 +271,16 @@ function ChatComposerImpl(props: ChatComposerProps) {
     focused,
     seedSource.kind,
   );
-  const sendBlocked = sendDisabled === true || reauthGate.signedOut;
-  const sendBlockedHint = resolveSendBlockedHint({
+  // Managed-pack gate, scoped to the TAB's host - a tab bound to another host
+  // must gate on that host's packs, never the app-wide default's. Same shape as
+  // the reauth gate above: block send and say why, so a doomed turn can't
+  // start. The host resolver still refuses independently; this is the UX half.
+  const packGate = useProviderPackGateForClient(hostClient, harnessId, focused);
+  const { sendBlocked, sendBlockedHint } = resolveSendBlock({
     workspaceDisabledHint: workspaceAvailability.disabledHint,
     signedOut: reauthGate.signedOut,
+    packPreparingHint: packGate.hint,
+    packBlocked: packGate.blocked,
     sendDisabled,
     sendDisabledHint,
   });
@@ -686,15 +693,38 @@ interface CanSubmitDraftArgs {
 }
 
 /**
- * Every blocked-send reason gets a hover/focus hint on the send button — a
- * silently grey button reads as broken. Priority mirrors severity: the
- * workspace gate (can't run anywhere), then the signed-out gate (the reauth
- * banner has the full story), then the caller's reason (connection loss /
- * view-only access).
+ * Whether send is blocked, and the one hint that explains it. Returned together
+ * so a reason can never block send without also supplying its copy — a silently
+ * grey button reads as broken.
+ */
+function resolveSendBlock(args: {
+  readonly workspaceDisabledHint: string | null;
+  readonly signedOut: boolean;
+  readonly packPreparingHint: string | null;
+  readonly packBlocked: boolean;
+  readonly sendDisabled: boolean | undefined;
+  readonly sendDisabledHint: string | null | undefined;
+}): {
+  readonly sendBlocked: boolean;
+  readonly sendBlockedHint: string | null;
+} {
+  return {
+    sendBlocked:
+      args.sendDisabled === true || args.signedOut || args.packBlocked,
+    sendBlockedHint: resolveSendBlockedHint(args),
+  };
+}
+
+/**
+ * Priority mirrors severity: the workspace gate (can't run anywhere), then the
+ * signed-out gate (the reauth banner has the full story), then the managed-pack
+ * gate (self-resolving — it says so, and ranks below the two the user must act
+ * on), then the caller's reason (connection loss / view-only access).
  */
 function resolveSendBlockedHint(args: {
   readonly workspaceDisabledHint: string | null;
   readonly signedOut: boolean;
+  readonly packPreparingHint: string | null;
   readonly sendDisabled: boolean | undefined;
   readonly sendDisabledHint: string | null | undefined;
 }): string | null {
@@ -702,6 +732,7 @@ function resolveSendBlockedHint(args: {
   if (args.signedOut) {
     return "Signed out of the provider — sign in to send messages";
   }
+  if (args.packPreparingHint !== null) return args.packPreparingHint;
   if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
   return null;
 }

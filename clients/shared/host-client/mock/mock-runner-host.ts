@@ -32,6 +32,22 @@ import type {
 } from "../../platform/runner-host";
 import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
 import {
+  listUserSessionsViaHttp,
+  requestStepUpChallengeViaHttp,
+  mintHostCredentialViaHttp,
+  revokeAllSessionsViaHttp,
+  revokeUserSessionViaHttp,
+  toRetainedStepUpVerifyResult,
+  verifyStepUpChallengeViaHttp,
+  type ListUserSessionsFetchResult,
+  type MintHostCredentialFetchResult,
+  type RetainedStepUpVerifyFetchResult,
+  type RevokeAllSessionsFetchResult,
+  type RevokeUserSessionFetchResult,
+  type StepUpChallengeFetchResult,
+} from "../../auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
+import {
   credentialsIdentityFromAuthenticatedUser,
   refreshOnceAbortable,
   validateAuthTokenIdentityAccessOnceAbortable,
@@ -64,6 +80,12 @@ export interface MockRunnerHostOptions {
 }
 
 const MOCK_TOKEN_STORE_KEY = "traycer.token";
+const STEP_UP_EXPIRY_SKEW_MS = 5_000;
+
+interface RetainedStepUpCredential {
+  readonly accessToken: string;
+  readonly expiresAtMs: number;
+}
 
 /** Ordered flag-list equality, for the mock's family-default canonicalisation. */
 function sameFlags(a: readonly string[], b: readonly string[]): boolean {
@@ -113,6 +135,7 @@ export class MockRunnerHost implements IRunnerHost {
   >();
   private readonly systemResumedHandlers = new Set<() => void>();
   private localHost: LocalHostSnapshot | null;
+  private retainedStepUpCredential: RetainedStepUpCredential | null = null;
 
   readonly tray: MockTrayState = new MockTrayState();
   readonly hostPicker: MockHostPicker = new MockHostPicker();
@@ -184,6 +207,95 @@ export class MockRunnerHost implements IRunnerHost {
     // Access-only (§3): the mock mirrors the desktop IPC, which no longer
     // refreshes on a failed lookup — the spend routes through `tokenStore.rotate`.
     return validateAuthTokenIdentityAccessOnly(this.authnBaseUrl, token);
+  }
+
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult> {
+    // The in-memory shell has no CORS boundary, so it calls the shared HTTP
+    // helper directly (browser/dev parity with the auth validators above).
+    return listUserSessionsViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  async revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult> {
+    const stepUpToken = useStepUpCredential
+      ? this.activeRetainedStepUpToken()
+      : null;
+    const result = await revokeUserSessionViaHttp(
+      this.authnBaseUrl,
+      stepUpToken ?? bearerToken,
+      familyId,
+    );
+    // Parity with the desktop main-process handler (`auth-ipc.ts`): a
+    // step-up-required verdict on a retained credential means the server just
+    // rejected it, so holding it would make the next revoke re-send a
+    // credential known to be dead and re-prompt in a loop.
+    if (result.kind === "step-up-required" && useStepUpCredential) {
+      this.retainedStepUpCredential = null;
+    }
+    return result;
+  }
+
+  async revokeAllSessions(
+    bearerToken: string,
+  ): Promise<RevokeAllSessionsFetchResult> {
+    const result = await revokeAllSessionsViaHttp(
+      this.authnBaseUrl,
+      this.activeRetainedStepUpToken() ?? bearerToken,
+    );
+    this.retainedStepUpCredential = null;
+    return result;
+  }
+
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult> {
+    // The caller's own bearer: the mint is not step-up gated, so this double
+    // must not substitute a retained step-up credential either.
+    return mintHostCredentialViaHttp(this.authnBaseUrl, bearerToken, request);
+  }
+
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult> {
+    return requestStepUpChallengeViaHttp(this.authnBaseUrl, bearerToken);
+  }
+
+  async verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult> {
+    const result = await verifyStepUpChallengeViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      code,
+    );
+    if (result.kind === "ok") {
+      this.retainedStepUpCredential = {
+        accessToken: result.response.access_token,
+        expiresAtMs:
+          Date.now() +
+          Math.max(
+            0,
+            result.response.expires_in * 1_000 - STEP_UP_EXPIRY_SKEW_MS,
+          ),
+      };
+    }
+    return toRetainedStepUpVerifyResult(result);
+  }
+
+  private activeRetainedStepUpToken(): string | null {
+    if (this.retainedStepUpCredential === null) {
+      return null;
+    }
+    if (this.retainedStepUpCredential.expiresAtMs <= Date.now()) {
+      this.retainedStepUpCredential = null;
+      return null;
+    }
+    return this.retainedStepUpCredential.accessToken;
   }
 
   async openExternalLink(url: string): Promise<void> {

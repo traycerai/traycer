@@ -29,8 +29,16 @@ describe("settings tab kind - host section", () => {
     expect(settingsSectionFromPath("/settings/agents")).toBe("agents");
   });
 
+  it("settingsSectionFromPath maps /settings/devices to the devices section", () => {
+    expect(settingsSectionFromPath("/settings/devices")).toBe("devices");
+  });
+
   it("settingsSectionPath builds /settings/host for the host section", () => {
     expect(settingsSectionPath("host")).toBe("/settings/host");
+  });
+
+  it("settingsSectionPath builds /settings/devices for the devices section", () => {
+    expect(settingsSectionPath("devices")).toBe("/settings/devices");
   });
 
   it("settingsTabDescriptor.routeOptions for the host intent navigates to /settings/host", () => {
@@ -43,6 +51,12 @@ describe("settings tab kind - host section", () => {
     const intent = settingsTabIntent("providers");
     const options = settingsTabDescriptor.routeOptions(intent);
     expect(options).toEqual({ to: "/settings/providers" });
+  });
+
+  it("settingsTabDescriptor.routeOptions for the devices intent navigates to /settings/devices", () => {
+    const intent = settingsTabIntent("devices");
+    const options = settingsTabDescriptor.routeOptions(intent);
+    expect(options).toEqual({ to: "/settings/devices" });
   });
 
   it("settingsTabDescriptor.resolveIntent returns the Host intent for a remembered legacy /settings/service path", () => {

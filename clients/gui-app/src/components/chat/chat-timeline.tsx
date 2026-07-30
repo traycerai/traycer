@@ -42,6 +42,7 @@ interface ChatTimelineRowSharedState {
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler | null;
+  readonly navigationHighlightedMessageId: string | null | undefined;
 }
 
 const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
@@ -151,6 +152,8 @@ export interface ChatTimelineProps {
    * `size:false` semantics unless they opt in.
    */
   readonly sizePreservationEnabled?: boolean;
+  /** Message row receiving the temporary external-navigation highlight. */
+  readonly navigationHighlightedMessageId?: string | null;
   /**
    * Ticket 5: LegendList's measured header/footer sizes. The free-scrolling
    * save path needs `headerSize` as the top-offset adjustment that
@@ -190,6 +193,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   onIsAtEndChange,
   followEnabled = true,
   sizePreservationEnabled,
+  navigationHighlightedMessageId,
   onListMetricsChange,
   ...rest
 }: ChatTimelineProps) {
@@ -201,8 +205,15 @@ export const ChatTimeline = memo(function ChatTimeline({
       backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
+      navigationHighlightedMessageId,
     }),
-    [taskTitle, backgroundToolBlockIds, getMessageActions, nextStepActions],
+    [
+      taskTitle,
+      backgroundToolBlockIds,
+      getMessageActions,
+      nextStepActions,
+      navigationHighlightedMessageId,
+    ],
   );
 
   // Stable renderItem - no closure deps. ChatTimelineRow reads shared state
@@ -379,8 +390,13 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   return (
     <div
       data-message-id={message.id}
+      data-navigation-highlighted={
+        ctx?.navigationHighlightedMessageId === message.id ? "true" : undefined
+      }
       className={cn(
-        "mx-auto w-full max-w-3xl px-6 pb-6 [contain:layout_paint_style]",
+        "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style]",
+        ctx?.navigationHighlightedMessageId === message.id &&
+          "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse",
         message.role === "user"
           ? "[contain-intrinsic-size:auto_8rem]"
           : "[contain-intrinsic-size:auto_14rem]",

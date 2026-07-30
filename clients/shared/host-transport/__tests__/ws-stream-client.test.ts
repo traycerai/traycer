@@ -11,9 +11,16 @@ import {
   identityFromAuthenticatedUser,
   type RequestContext,
 } from "@traycer/protocol/auth/request-context";
-import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "../../host-client/mock/mock-host-directory";
 import { createAuthenticatedUserFixture } from "../../test-fixtures/authenticated-user";
 import type { HostDirectoryEntry } from "../../host-client/host-directory";
+import type {
+  HostCredentialMintFlow,
+  HostCredentialMintOutcome,
+} from "../host-credential-mint-flow";
 import {
   hostNotificationsSubscribeServerFrameSchema,
   type HostNotificationEntry,
@@ -154,6 +161,7 @@ function makeClient(options: {
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx?.credentials ?? null,
     auth: null,
+    hostCredentialMint: null,
     webSocketFactory: options.factory,
     dialTimeoutMs: 1000,
     openAckTimeoutMs: 1000,
@@ -194,6 +202,7 @@ function makeRotatableClient(
     endpoint: () => mockLocalHostEntry,
     bearer: () => ctx.credentials,
     auth: null,
+    hostCredentialMint: null,
     webSocketFactory: factory,
     dialTimeoutMs: 1000,
     openAckTimeoutMs: 1000,
@@ -526,6 +535,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 1000,
       openAckTimeoutMs: 1000,
@@ -924,6 +934,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -977,6 +988,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1103,6 +1115,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1159,6 +1172,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1206,6 +1220,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1239,6 +1254,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1284,6 +1300,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1320,6 +1337,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1393,6 +1411,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1428,6 +1447,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1469,6 +1489,7 @@ describe("WsStreamClient", () => {
       endpoint: () => mockLocalHostEntry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 10_000,
       openAckTimeoutMs: 10_000,
@@ -1575,6 +1596,7 @@ describe("WsStreamClient", () => {
       endpoint: () => entry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
       openAckTimeoutMs: 1_000,
@@ -1608,6 +1630,7 @@ describe("WsStreamClient", () => {
       endpoint: () => entry,
       bearer: () => makeRequestContext("t")?.credentials ?? null,
       auth: null,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
       openAckTimeoutMs: 1_000,
@@ -1795,6 +1818,7 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
       // actually rotates it), which is what lets the no-progress bound trip.
       bearer: () => makeRequestContext("expired").credentials,
       auth,
+      hostCredentialMint: null,
       webSocketFactory: factory,
       dialTimeoutMs: 1_000,
       openAckTimeoutMs: 1_000,
@@ -2235,5 +2259,636 @@ describe("WsStreamClient UNAUTHORIZED auth recovery", () => {
     expect(statuses).not.toContain("closed");
     expect(socket1.closed).toBeNull();
     session.close();
+  });
+});
+
+/**
+ * Phase-2 delegated host credentials: the client mints a device credential for
+ * a connected host that reports it has none, then hands it over the `/stream`
+ * socket. Pins capability gating, UUID preflight, one-attempt-per-host, per-host
+ * pending delivery (adoption tuple on the wire), expiry via server expiresIn,
+ * never-cross-host, and close teardown.
+ */
+describe("WsStreamClient host credential provisioning", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const CAP_PROVISION = "hostCredentialProvision";
+  // Server requires UUID hostIds; fixtures like "mock-local" never enter the mint.
+  const HOST_A: HostDirectoryEntry = {
+    hostId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    label: "Host A",
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:4917/rpc",
+    version: "0.0.0-mock",
+    status: "available",
+  };
+  const HOST_B: HostDirectoryEntry = {
+    hostId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    label: "Host B",
+    kind: "remote",
+    websocketUrl: "wss://mock-remote.traycer.invalid/rpc",
+    version: "0.0.0-mock",
+    status: "available",
+  };
+
+  type Provisioned = Extract<
+    HostCredentialMintOutcome,
+    { readonly kind: "provisioned" }
+  >;
+
+  function wait(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function provisioned(
+    overrides: Partial<Provisioned> &
+      Pick<Provisioned, "token" | "refreshToken">,
+  ): Provisioned {
+    return {
+      kind: "provisioned",
+      familyId: "family-host-1",
+      provisionedAt: "2026-07-08T12:00:00.123Z",
+      expiresIn: 900,
+      ...overrides,
+    };
+  }
+
+  function provisionFrames(socket: StubStreamWebSocket): Array<{
+    readonly kind: string;
+    readonly token: string;
+    readonly refreshToken: string;
+    readonly familyId: string;
+    readonly provisionedAt: string;
+  }> {
+    return socket.textSent
+      .map((raw) => parseText(raw))
+      .filter((frame) => frame.kind === "hostCredentialProvision")
+      .map((frame) => ({
+        kind: String(frame.kind),
+        token: String(frame.token),
+        refreshToken: String(frame.refreshToken),
+        familyId: String(frame.familyId),
+        provisionedAt: String(frame.provisionedAt),
+      }));
+  }
+
+  function allProvisionFrames(sockets: readonly RecordedSocket[]): Array<{
+    readonly token: string;
+    readonly familyId: string;
+  }> {
+    return sockets.flatMap((entry) =>
+      provisionFrames(entry.socket).map((frame) => ({
+        token: frame.token,
+        familyId: frame.familyId,
+      })),
+    );
+  }
+
+  function pendingMap(
+    client: WsStreamClient<typeof hostStreamRpcRegistry>,
+  ): Map<string, unknown> {
+    // Private transport state: needed for expiry/close/two-host assertions.
+    const value = Reflect.get(client, "pendingProvisions");
+    if (!(value instanceof Map)) {
+      throw new Error("expected pendingProvisions Map");
+    }
+    return value;
+  }
+
+  function makeProvisioningClient(options: {
+    readonly factory: IStreamWebSocketFactory;
+    readonly mint: HostCredentialMintFlow | null;
+    readonly endpoint: () => HostDirectoryEntry | null;
+    readonly authToken: string | undefined;
+  }): WsStreamClient<typeof hostStreamRpcRegistry> {
+    const token = options.authToken ?? "token-abc";
+    const ctx = makeRequestContext(token);
+    return new WsStreamClient({
+      registry: hostStreamRpcRegistry,
+      endpoint: options.endpoint,
+      bearer: () => ctx.credentials,
+      auth: null,
+      hostCredentialMint: options.mint,
+      webSocketFactory: options.factory,
+      dialTimeoutMs: 1000,
+      openAckTimeoutMs: 1000,
+      pingIntervalMs: 25_000,
+      pongTimeoutMs: 50_000,
+      initialBackoffMs: 10,
+      maxBackoffMs: 1_000,
+    });
+  }
+
+  function completeProvisionHandshake(
+    socket: StubStreamWebSocket,
+    state: "missing" | "active" | "needs-reauth" | null | "omit",
+  ): void {
+    socket.fireOpen();
+    const openRaw = socket.textSent[0];
+    const openParsed = JSON.parse(openRaw) as {
+      readonly manifest: Record<string, { major: number; minor: number }>;
+    };
+    if (state === "omit") {
+      socket.fireText(streamOpenAck(openParsed.manifest, undefined));
+      return;
+    }
+    if (state === null) {
+      socket.fireText({
+        ...streamOpenAck(openParsed.manifest, [CAP_PROVISION]),
+        hostCredentialState: null,
+      });
+      return;
+    }
+    socket.fireText({
+      ...streamOpenAck(openParsed.manifest, [CAP_PROVISION]),
+      hostCredentialState: state,
+    });
+  }
+
+  it("does not mint when hostCredentialMint is null (opt-out)", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint: null,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    session.close();
+  });
+
+  it("does not mint when an older host omits the capability and state (still parses)", async () => {
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "omit");
+    await flush();
+    expect(mint).not.toHaveBeenCalled();
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    session.close();
+  });
+
+  it("does not mint when hostCredentialState is null even if capability is advertised", async () => {
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, null);
+    await flush();
+    expect(mint).not.toHaveBeenCalled();
+    session.close();
+  });
+
+  it("does not mint when hostCredentialState is active", async () => {
+    const mint = vi.fn(async () =>
+      provisioned({ token: "should-not", refreshToken: "should-not" }),
+    );
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "active");
+    await flush();
+    expect(mint).not.toHaveBeenCalled();
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    session.close();
+  });
+
+  it("skips mint when hostId is not a UUID (marks attempted, no OTP)", async () => {
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+    const { factory, sockets } = makeFactory();
+    // mockLocalHostEntry.hostId is "mock-local" — not a UUID.
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => mockLocalHostEntry,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(mint).not.toHaveBeenCalled();
+
+    // Attempt marker set: further reconnects still never mint.
+    sockets[0].socket.fireClose(1000, "drop", false);
+    await wait(30);
+    completeProvisionHandshake(sockets[sockets.length - 1].socket, "missing");
+    await flush();
+    expect(mint).not.toHaveBeenCalled();
+    session.close();
+  });
+
+  it("mints once and pushes hostCredentialProvision carrying the adoption tuple verbatim", async () => {
+    const outcome = provisioned({
+      token: "host-access-jws",
+      refreshToken: "refresh-jwe-1",
+      familyId: "family-adopt-1",
+      provisionedAt: "2026-07-08T15:30:00.456Z",
+      expiresIn: 900,
+    });
+    const mint = vi.fn(async () => outcome);
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(mint).toHaveBeenCalledWith({
+      hostId: HOST_A.hostId,
+      reason: "missing",
+    });
+    const frames = provisionFrames(sockets[0].socket);
+    expect(frames).toHaveLength(1);
+    // Phase 3 adoption depends on these fields surviving the client boundary.
+    expect(frames[0]).toEqual({
+      kind: "hostCredentialProvision",
+      token: outcome.token,
+      refreshToken: outcome.refreshToken,
+      familyId: outcome.familyId,
+      provisionedAt: outcome.provisionedAt,
+    });
+    session.close();
+  });
+
+  it("never sends a hostCredentialProvision frame when mint returns unavailable (409 path)", async () => {
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    session.close();
+  });
+
+  it("attempts the mint flow exactly once per hostId across many reconnects reporting missing", async () => {
+    const mint = vi.fn(async () => ({ kind: "unavailable" as const }));
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 4; i += 1) {
+      sockets[sockets.length - 1].socket.fireClose(1000, "drop", false);
+      await wait(30);
+      const latest = sockets[sockets.length - 1].socket;
+      completeProvisionHandshake(latest, "missing");
+      await flush();
+    }
+
+    expect(mint).toHaveBeenCalledTimes(1);
+    session.close();
+  });
+
+  it("holds a pending credential across a reconnect and delivers it exactly once", async () => {
+    const deferred: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const mint = vi.fn(
+      () =>
+        new Promise<Provisioned>((resolve) => {
+          deferred.resolve = resolve;
+        }),
+    );
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    sockets[0].socket.fireClose(1000, "user-still-typing-otp", false);
+    await wait(30);
+
+    const outcome = provisioned({
+      token: "tok-pending",
+      refreshToken: "refresh-pending",
+      familyId: "family-pending",
+      provisionedAt: "2026-07-08T16:00:00.000Z",
+    });
+    const resolvePending = deferred.resolve;
+    if (resolvePending === null) {
+      throw new Error("mint was never started");
+    }
+    resolvePending(outcome);
+    await flush();
+
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    expect(pendingMap(client).has(HOST_A.hostId)).toBe(true);
+
+    const next = sockets[sockets.length - 1].socket;
+    completeProvisionHandshake(next, "missing");
+    await flush();
+
+    expect(provisionFrames(next)).toHaveLength(1);
+    expect(provisionFrames(next)[0]).toEqual({
+      kind: "hostCredentialProvision",
+      token: outcome.token,
+      refreshToken: outcome.refreshToken,
+      familyId: outcome.familyId,
+      provisionedAt: outcome.provisionedAt,
+    });
+    expect(pendingMap(client).size).toBe(0);
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(allProvisionFrames(sockets)).toHaveLength(1);
+
+    session.close();
+  });
+
+  it("never delivers a credential minted for host A to host B", async () => {
+    const deferred: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const mint = vi.fn(
+      () =>
+        new Promise<Provisioned>((resolve) => {
+          deferred.resolve = resolve;
+        }),
+    );
+
+    let currentEntry: HostDirectoryEntry = HOST_A;
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => currentEntry,
+      authToken: undefined,
+    });
+
+    const sessionA = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    await flush();
+    const localSocketIndex = sockets.length - 1;
+    completeProvisionHandshake(sockets[localSocketIndex].socket, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledWith({
+      hostId: HOST_A.hostId,
+      reason: "missing",
+    });
+
+    sockets[localSocketIndex].socket.fireClose(1000, "switch-host", false);
+    await wait(20);
+    sessionA.close();
+
+    currentEntry = HOST_B;
+    const sessionB = client.subscribe("epic.subscribe", { epicId: "epic-b" });
+    await flush();
+    const remoteSocket = sockets[sockets.length - 1].socket;
+    completeProvisionHandshake(remoteSocket, "active");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+
+    const resolvePending = deferred.resolve;
+    if (resolvePending === null) {
+      throw new Error("mint was never started");
+    }
+    resolvePending(
+      provisioned({
+        token: "tok-a",
+        refreshToken: "refresh-for-a",
+        familyId: "family-a",
+      }),
+    );
+    await flush();
+
+    expect(provisionFrames(remoteSocket)).toHaveLength(0);
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    expect(pendingMap(client).has(HOST_A.hostId)).toBe(true);
+    expect(pendingMap(client).has(HOST_B.hostId)).toBe(false);
+
+    sessionB.close();
+  });
+
+  it("keeps pending credentials for two hosts without overwriting either", async () => {
+    // Regression: a single-slot pending field would drop host A's credential
+    // when host B's mint resolved.
+    const deferredA: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const deferredB: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const mint = vi.fn(async (request: { hostId: string }) => {
+      if (request.hostId === HOST_A.hostId) {
+        return await new Promise<Provisioned>((resolve) => {
+          deferredA.resolve = resolve;
+        });
+      }
+      return await new Promise<Provisioned>((resolve) => {
+        deferredB.resolve = resolve;
+      });
+    });
+
+    let currentEntry: HostDirectoryEntry = HOST_A;
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => currentEntry,
+      authToken: undefined,
+    });
+
+    const sessionA = client.subscribe("epic.subscribe", { epicId: "epic-a" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+    // Dispose A so it cannot redial; mint for A is already in flight.
+    sessionA.close();
+
+    currentEntry = HOST_B;
+    const sessionB = client.subscribe("epic.subscribe", { epicId: "epic-b" });
+    await flush();
+    const socketB = sockets[sockets.length - 1].socket;
+    completeProvisionHandshake(socketB, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(2);
+    // Dispose B before mints resolve so both credentials stay pending.
+    sessionB.close();
+
+    const resolveA = deferredA.resolve;
+    const resolveB = deferredB.resolve;
+    if (resolveA === null || resolveB === null) {
+      throw new Error("both mints must have started");
+    }
+    resolveA(
+      provisioned({
+        token: "tok-a",
+        refreshToken: "ref-a",
+        familyId: "family-a",
+        provisionedAt: "2026-07-08T10:00:00.000Z",
+      }),
+    );
+    resolveB(
+      provisioned({
+        token: "tok-b",
+        refreshToken: "ref-b",
+        familyId: "family-b",
+        provisionedAt: "2026-07-08T11:00:00.000Z",
+      }),
+    );
+    await flush();
+
+    const pending = pendingMap(client);
+    expect(pending.has(HOST_A.hostId)).toBe(true);
+    expect(pending.has(HOST_B.hostId)).toBe(true);
+    expect(pending.size).toBe(2);
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+
+    client.close("two-host-teardown");
+    expect(pendingMap(client).size).toBe(0);
+  });
+
+  it("discards a pending credential when expiresIn elapses and does not re-mint", async () => {
+    const deferred: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const mint = vi.fn(
+      () =>
+        new Promise<Provisioned>((resolve) => {
+          deferred.resolve = resolve;
+        }),
+    );
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+
+    sockets[0].socket.fireClose(1000, "otp-slow", false);
+    await wait(30);
+
+    const resolveExpired = deferred.resolve;
+    if (resolveExpired === null) {
+      throw new Error("mint was never started");
+    }
+    // Server-stated lifetime drives the hold timer (not JWS exp). expiresIn:0
+    // schedules an immediate setTimeout(0) discard.
+    resolveExpired(
+      provisioned({
+        token: "tok-exp",
+        refreshToken: "refresh-expired",
+        expiresIn: 0,
+      }),
+    );
+    await flush();
+    await wait(10);
+    expect(pendingMap(client).size).toBe(0);
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+
+    // Next reconnect still missing: attempt marker stays set → no second OTP.
+    const next = sockets[sockets.length - 1].socket;
+    completeProvisionHandshake(next, "missing");
+    await flush();
+    expect(mint).toHaveBeenCalledTimes(1);
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+
+    session.close();
+  });
+
+  it("drops all pending credentials on close()", async () => {
+    const deferred: { resolve: ((outcome: Provisioned) => void) | null } = {
+      resolve: null,
+    };
+    const mint = vi.fn(
+      () =>
+        new Promise<Provisioned>((resolve) => {
+          deferred.resolve = resolve;
+        }),
+    );
+    const { factory, sockets } = makeFactory();
+    const client = makeProvisioningClient({
+      factory,
+      mint,
+      endpoint: () => HOST_A,
+      authToken: undefined,
+    });
+    const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+    await flush();
+    completeProvisionHandshake(sockets[0].socket, "missing");
+    await flush();
+
+    sockets[0].socket.fireClose(1000, "gone", false);
+    await wait(20);
+
+    const resolvePending = deferred.resolve;
+    if (resolvePending === null) {
+      throw new Error("mint was never started");
+    }
+    resolvePending(
+      provisioned({
+        token: "tok-drop",
+        refreshToken: "refresh-will-drop",
+      }),
+    );
+    await flush();
+    expect(pendingMap(client).size).toBe(1);
+
+    client.close("test-teardown");
+    expect(pendingMap(client).size).toBe(0);
+    expect(allProvisionFrames(sockets)).toHaveLength(0);
+    void session;
   });
 });

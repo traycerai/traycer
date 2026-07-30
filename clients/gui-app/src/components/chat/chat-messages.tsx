@@ -71,6 +71,7 @@ import {
   type CSSProperties,
   use,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -112,12 +113,14 @@ interface ChatMessagesProps {
 
 export interface ChatMessageScrollRequest {
   readonly messageId: string;
-  readonly blockId: string;
+  /** Card to open within the target row, or `null` for a row-level jump. */
+  readonly blockId: string | null;
   readonly requestId: number;
 }
 
 const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 const PILL_SHOW_DEBOUNCE_MS = 150;
+const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
 /** `awaitScrollSettle`'s fallback timeout when `scrollend` never fires
  *  (jsdom, some browsers) - exported so tests can wait past it rather than
  *  hardcoding a copy of this number. */
@@ -572,6 +575,27 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   );
   const previousMessagesForEdgeMutationRef =
     useRef<ReadonlyArray<ChatMessageModel> | null>(null);
+  const [navigationHighlightedMessageId, setNavigationHighlightedMessageId] =
+    useState<string | null>(null);
+  const navigationHighlightTimeoutRef = useRef<number | null>(null);
+  const showNavigationHighlight = useCallback((messageId: string): void => {
+    if (navigationHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(navigationHighlightTimeoutRef.current);
+    }
+    setNavigationHighlightedMessageId(messageId);
+    navigationHighlightTimeoutRef.current = window.setTimeout(() => {
+      navigationHighlightTimeoutRef.current = null;
+      setNavigationHighlightedMessageId(null);
+    }, NAVIGATION_HIGHLIGHT_DURATION_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (navigationHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(navigationHighlightTimeoutRef.current);
+      }
+    },
+    [],
+  );
 
   // --- Three-mode scroll policy (decision log #1) ---------------------------
   //
@@ -1856,7 +1880,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
   );
 
   const navigateToMessage = useCallback(
-    (messageId: string): void => {
+    (messageId: string, highlight: boolean): void => {
       // Decision #21: minimap/find/deep-link navigation all perform
       // manual-navigation cancellation first. Not a real gesture - a plain
       // release, no freeze: the navigation's own scroll (right below, via
@@ -1870,13 +1894,22 @@ function ChatMessagesInner(props: ChatMessagesProps) {
         true,
       );
       if (location === null) return;
+      if (highlight) {
+        showNavigationHighlight(messageId);
+      }
       scrollToTimelineLocationSuppressingFollowRestore(location);
     },
     [
       cancelTimelineLiveFollowForUserNavigation,
       scrollToTimelineLocationSuppressingFollowRestore,
       setScrolledActiveUserMessageIdIfChanged,
+      showNavigationHighlight,
     ],
+  );
+
+  const onMinimapItemSelect = useCallback(
+    (messageId: string): void => navigateToMessage(messageId, false),
+    [navigateToMessage],
   );
 
   // Find navigation is not a real gesture (like navigateToMessage) - a plain
@@ -1998,12 +2031,15 @@ function ChatMessagesInner(props: ChatMessagesProps) {
     if (request === null) return;
     if (handledScrollRequestIdRef.current === request.requestId) return;
     handledScrollRequestIdRef.current = request.requestId;
-    const activityGroupId = activityGroupIdForBlock(
-      messagesRef.current,
-      request.messageId,
-      request.blockId,
-      backgroundToolBlockIdsRef.current,
-    );
+    const activityGroupId =
+      request.blockId === null
+        ? null
+        : activityGroupIdForBlock(
+            messagesRef.current,
+            request.messageId,
+            request.blockId,
+            backgroundToolBlockIdsRef.current,
+          );
     if (activityGroupId !== null) {
       // NOT routed through requestMeasuredItemChange: this effect always
       // runs from a layout effect, and flushSync is a documented no-op (with
@@ -2018,7 +2054,10 @@ function ChatMessagesInner(props: ChatMessagesProps) {
       // it added a warning without actually closing the race.
       activityGroupOpenStore.getState().setOpen(activityGroupId, true);
     }
-    navigateToMessage(request.messageId);
+    // Cross-tile jumps use the same programmatic-navigation choke point as
+    // every in-tile navigation: suppression, settle validation, and bounded
+    // re-issue are all armed before the scroll. The highlight is visual only.
+    navigateToMessage(request.messageId, true);
     scrollRequestRef.current = null;
   }, [activityGroupOpenStore, navigateToMessage, scrollRequest?.requestId]);
 
@@ -2127,6 +2166,9 @@ function ChatMessagesInner(props: ChatMessagesProps) {
               onIsAtEndChange={onIsAtEndChange}
               followEnabled={isFollowingEnd}
               sizePreservationEnabled={isFreeScrolling}
+              navigationHighlightedMessageId={
+                navigationHighlightedMessageId
+              }
               onListMetricsChange={onListMetricsChange}
               data-testid="chat-messages-scroll"
               data-scroll-mode={chatScrollModeDataAttribute(
@@ -2141,7 +2183,7 @@ function ChatMessagesInner(props: ChatMessagesProps) {
                 topOffsetAdjustmentRef={listTopOffsetAdjustmentRef}
                 viewportRef={transcriptContainerRef}
                 bottomInset={endInset}
-                onSelect={navigateToMessage}
+                onSelect={onMinimapItemSelect}
               />
             ) : null}
             {hasContent ? (

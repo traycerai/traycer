@@ -1,5 +1,14 @@
 import type { Disposable } from "./uri-callback";
 import type { AuthIdentityValidationResult } from "../auth/auth-validation-types";
+import type {
+  ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+  RetainedStepUpVerifyFetchResult,
+} from "../auth/devices-sessions-fetcher";
+import type { MintHostCredentialRequest } from "@traycer/protocol/auth/devices-sessions";
 import type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
@@ -68,6 +77,62 @@ export interface IRunnerHost {
   validateAuthTokenIdentity(
     token: string,
   ): Promise<AuthIdentityValidationResult>;
+
+  /**
+   * Fetches the signed-in user's account sessions from authn-v3. Desktop shells
+   * run this in Electron main for the same renderer-origin CORS reason as token
+   * validation. Never throws: transport failures collapse into the result.
+   */
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+
+  /**
+   * Revokes one session family. Callers pass the user's normal session bearer
+   * plus whether the runner-host boundary should attach its retained step-up
+   * credential. Renderer callers never pass the raw step-up bearer.
+   */
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult>;
+
+  /**
+   * Revokes all other sessions and broadcasts host/session invalidation. This
+   * is the panic lever: callers verify a fresh step-up challenge for every
+   * invocation, then the runner-host boundary attaches the retained step-up
+   * credential internally.
+   */
+  revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+
+  /**
+   * Mints a device credential for a connected host, so the host can keep
+   * working on the user's behalf after this client disconnects. The renderer
+   * passes its ordinary bearer; there is no step-up variant, because the mint is
+   * not step-up gated (see the mint route's doc comment).
+   *
+   * Unlike the revoke calls, the RESULT here carries live credentials (a
+   * host-audience access JWS and a refresh JWE). They necessarily cross back
+   * into the renderer, because the stream socket that must carry them to the
+   * host lives there.
+   */
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult>;
+
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult>;
+
+  /**
+   * Verifies a step-up OTP and retains the short-TTL bearer credential inside
+   * the runner-host boundary. Returns only expiry metadata for renderer batch
+   * window logic.
+   */
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult>;
 
   openExternalLink(url: string): Promise<void>;
 

@@ -24,11 +24,18 @@ import {
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
+  STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
   type ClientStreamOpenFrame,
   type ClientStreamSubscribeFrame,
   type ClientStreamFatalErrorFrame,
   type ClientStreamCredentialUpdateFrame,
+  type ClientStreamHostCredentialProvisionFrame,
+  type HostCredentialState,
 } from "@traycer/protocol/framework/stream-ws-protocol";
+import type {
+  HostCredentialMintFlow,
+  HostCredentialMintOutcome,
+} from "./host-credential-mint-flow";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -71,6 +78,18 @@ export interface WsStreamClientOptions<
    * cannot recover an auth rejection by retrying the same bearer.
    */
   readonly auth: StreamAuthRevalidator | null;
+  /**
+   * Mints a device credential when a connected host reports it has none, so the
+   * host can act on the user's behalf after the client disconnects. `null` opts
+   * the client out entirely - correct for dev mocks and tests. An opted-out
+   * client never sends the provision frame; the host stays on this connection's
+   * credential lease, exactly as before the capability existed.
+   *
+   * See `HostCredentialMintFlow` for the obligation the implementor owns:
+   * app-wide single-flight per hostId, so concurrent mints cannot supersede one
+   * another and leave the host with nothing.
+   */
+  readonly hostCredentialMint: HostCredentialMintFlow | null;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly dialTimeoutMs: number;
   readonly openAckTimeoutMs: number;
@@ -163,6 +182,34 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
   private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
   private readonly methodSupportListeners = new Set<() => void>();
   private readonly closedListeners = new Set<() => void>();
+  /**
+   * Hosts this client has already run the mint flow for, successfully or not.
+   * ONE attempt per host per client, for the life of the client.
+   *
+   * The bound is deliberately blunt, because the failure it prevents is worse
+   * than the one it causes. A host that stays un-provisioned reports `missing`
+   * on EVERY reconnect, so an unbounded policy turns a reconnect loop (an
+   * expired sign-in, a flapping network) into a stream of mint requests, each
+   * superseding the last. Giving up instead costs only the delegated credential,
+   * and the host keeps running on the connection's client lease until the app is
+   * restarted.
+   */
+  private readonly provisionAttemptedHostIds = new Set<string>();
+  /**
+   * Minted credentials waiting for a live connection to carry them, keyed by
+   * host. The socket that triggered the mint can be gone by the time it
+   * resolves - dropping the credential there would waste a mint that has
+   * ALREADY superseded whatever the host was using.
+   *
+   * Keyed rather than a single slot because one client can hold sessions against
+   * several hosts at once: two mints resolving close together would otherwise
+   * overwrite each other, silently losing one credential and stranding its
+   * session row as a host row nobody holds.
+   */
+  private readonly pendingProvisions = new Map<
+    string,
+    PendingHostCredentialProvision
+  >();
   private readonly availabilityRecoveredListeners = new Set<() => void>();
   private closed = false;
   private closedReason: string | null = null;
@@ -222,6 +269,9 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
       onMethodSupport: (nextMethod, support, schemaVersion) => {
         this.setMethodSupport(nextMethod, support, schemaVersion);
       },
+      onHostCredentialAck: (hostId, state) => {
+        this.handleHostCredentialAck(hostId, state);
+      },
       onAvailabilityRecovered: () => {
         this.emitAvailabilityRecovered();
       },
@@ -245,6 +295,9 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     }
     this.closed = true;
     this.closedReason = reason;
+    // Never outlive the transport with a live credential in memory: there is no
+    // socket left to deliver it on, and the next client mints its own.
+    this.discardAllPendingProvisions();
     console.info(
       `[stream] WsStreamClient closed (client=${this.instanceId}, reason=${reason}, sessions=${this.ownedSessions.size})`,
     );
@@ -380,6 +433,148 @@ export class WsStreamClient<Registry extends VersionedStreamRpcRegistry> {
     }
   }
 
+  /**
+   * Runs on every `openAck` from a host that advertised the provisioning
+   * capability. Two jobs, in this order:
+   *
+   *   1. deliver a credential minted earlier that never found a live socket;
+   *   2. otherwise start one mint for a host reporting it has none.
+   *
+   * Delivery comes first so a reconnect finishes an interrupted handoff rather
+   * than minting a second credential and orphaning the first as a phantom row in
+   * Devices & Sessions.
+   */
+  private handleHostCredentialAck(
+    hostId: string,
+    state: HostCredentialState,
+  ): void {
+    if (this.closed) {
+      return;
+    }
+    if (this.flushPendingProvision(hostId)) {
+      return;
+    }
+    if (state === "active") {
+      return;
+    }
+    const mint = this.options.hostCredentialMint;
+    if (mint === null) {
+      return;
+    }
+    if (this.provisionAttemptedHostIds.has(hostId)) {
+      return;
+    }
+    if (!HOST_ID_UUID_PATTERN.test(hostId)) {
+      // The server rejects a non-UUID hostId outright - such a host cannot hold
+      // a delegated credential at all. Checked here so a legacy host does not
+      // spend a mint request on every app run to be told 400.
+      this.provisionAttemptedHostIds.add(hostId);
+      console.debug(
+        `[stream] host credential provisioning skipped, hostId is not a UUID (client=${this.instanceId}, host=${hostId})`,
+      );
+      return;
+    }
+    this.provisionAttemptedHostIds.add(hostId);
+    void this.runMintFlow(mint, hostId, state);
+  }
+
+  private async runMintFlow(
+    mint: HostCredentialMintFlow,
+    hostId: string,
+    state: Exclude<HostCredentialState, "active">,
+  ): Promise<void> {
+    let outcome: HostCredentialMintOutcome;
+    try {
+      outcome = await mint({ hostId, reason: state });
+    } catch (cause) {
+      console.warn(
+        `[stream] host-credential mint flow threw (client=${this.instanceId}, host=${hostId})`,
+        cause,
+      );
+      return;
+    }
+    if (outcome.kind !== "provisioned") {
+      return;
+    }
+    if (this.closed) {
+      // Nothing can deliver it and nothing will collect it later.
+      return;
+    }
+    // The access JWS the host verifies on handoff is short-lived, so a
+    // credential that cannot be delivered inside its own lifetime is dead on
+    // arrival. The deadline comes from the SERVER's `expiresIn` rather than from
+    // decoding the token: an undecodable token would otherwise yield "no
+    // deadline", which is precisely the case that must not be held forever.
+    const holdForMs = Math.max(0, outcome.expiresIn * 1_000);
+    this.discardPendingProvision(hostId);
+    const pending: PendingHostCredentialProvision = {
+      hostId,
+      token: outcome.token,
+      refreshToken: outcome.refreshToken,
+      familyId: outcome.familyId,
+      provisionedAt: outcome.provisionedAt,
+      // Armed rather than checked lazily. A credential whose host never comes
+      // back produces no further `openAck`, so a lazy check would never run and
+      // the refresh JWE - a 30-day credential - would sit in renderer memory for
+      // the life of the process.
+      expiryTimer: setTimeout(() => {
+        this.onPendingProvisionExpired(hostId);
+      }, holdForMs),
+    };
+    this.pendingProvisions.set(hostId, pending);
+    this.flushPendingProvision(hostId);
+  }
+
+  private onPendingProvisionExpired(hostId: string): void {
+    if (!this.pendingProvisions.has(hostId)) {
+      return;
+    }
+    // The server-side row lives on as a host session nobody holds; the next
+    // successful provisioning of this host supersedes it, so it self-heals
+    // rather than needing cleanup here. The attempt marker stays set on purpose:
+    // re-minting from this same client would supersede a credential that may
+    // since have been delivered by another one.
+    this.discardPendingProvision(hostId);
+    console.warn(
+      `[stream] discarded host credential that expired before delivery (client=${this.instanceId}, host=${hostId})`,
+    );
+  }
+
+  /** Drops one held credential and disarms its timer. Safe to call twice. */
+  private discardPendingProvision(hostId: string): void {
+    const pending = this.pendingProvisions.get(hostId);
+    if (pending === undefined) {
+      return;
+    }
+    clearTimeout(pending.expiryTimer);
+    this.pendingProvisions.delete(hostId);
+  }
+
+  private discardAllPendingProvisions(): void {
+    for (const hostId of Array.from(this.pendingProvisions.keys())) {
+      this.discardPendingProvision(hostId);
+    }
+  }
+
+  /**
+   * Hands the credential held for `hostId` to the first live session bound to
+   * that host. Returns whether anything was delivered - `false` also covers
+   * "there was nothing held", which is the common path.
+   */
+  private flushPendingProvision(hostId: string): boolean {
+    const pending = this.pendingProvisions.get(hostId);
+    if (pending === undefined) {
+      return false;
+    }
+    for (const session of Array.from(this.ownedSessions)) {
+      if (session.pushHostCredentialProvision(hostId, pending)) {
+        this.discardPendingProvision(hostId);
+        return true;
+      }
+    }
+    return false;
+  }
+
   private emitAvailabilityRecovered(): void {
     if (this.closed) {
       return;
@@ -440,6 +635,26 @@ export type ParamsOf<
 
 export type StreamMethodSupport = "unknown" | "supported" | "unsupported";
 
+/** A minted host credential held only until a live session can carry it. */
+interface PendingHostCredentialProvision {
+  readonly hostId: string;
+  readonly token: string;
+  readonly refreshToken: string;
+  readonly familyId: string;
+  readonly provisionedAt: string;
+  /** Disarmed on delivery, on replacement, and on client close. */
+  readonly expiryTimer: TimerHandle;
+}
+
+/**
+ * The server requires a UUID hostId (`Host.hostId` is a Postgres `uuid`, so a
+ * non-UUID cannot even be looked up on refresh) and answers 400 otherwise.
+ * Mirrored client-side purely to avoid entering the INTERACTIVE mint for a host
+ * that can never hold a credential.
+ */
+const HOST_ID_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function schemaVersionEqual(
   a: SchemaVersion | null,
   b: SchemaVersion | null,
@@ -484,6 +699,16 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     method: keyof Registry & string,
     support: StreamMethodSupport,
     schemaVersion: SchemaVersion | null,
+  ) => void;
+  /**
+   * Reports the connected host's own credential state, once per successful
+   * handshake, and ONLY when that host advertised the provisioning capability
+   * and actually reported a state. The owning client decides what to do; the
+   * session just carries the frame.
+   */
+  readonly onHostCredentialAck: (
+    hostId: string,
+    state: HostCredentialState,
   ) => void;
   /**
    * Reports positive host-recovery evidence to the owning client - see
@@ -554,10 +779,20 @@ class StreamSession<
 
   private activeSocket: StreamWebSocketLike | null = null;
   private openFrameToken: string | null = null;
+  /**
+   * The hostId of the endpoint THIS connection dialed, captured at dial time.
+   * Read from the live socket rather than from `endpoint()` on demand, because
+   * the endpoint provider can already point at a different host by the time an
+   * asynchronous mint resolves - and handing host A's credential to host B is
+   * the one mistake this path must not make.
+   */
+  private openFrameHostId: string | null = null;
   // Whether the host advertised `credentialUpdate` support in the current
   // connection's openAck. Gates `pushCredentialUpdate`; reset on every
   // reconnect and re-read from the next openAck.
   private supportsCredentialUpdate = false;
+  /** Same contract as `supportsCredentialUpdate`, for the provision frame. */
+  private supportsHostCredentialProvision = false;
   private phase: SessionPhase = "idle";
   private pendingBinaryEnvelope: StreamFrameEnvelope | null = null;
   private dialTimer: TimerHandle | null = null;
@@ -671,6 +906,52 @@ class StreamSession<
     }
   }
 
+  /**
+   * Hands a minted credential to the host on the other end of THIS connection.
+   * Returns whether the frame actually went out, so the owning client can keep
+   * the credential pending and try the next session instead of dropping it.
+   *
+   * Refuses unless the connection is fully `subscribed`, the host advertised the
+   * capability, and this connection is bound to the very host the credential was
+   * minted for - a client can hold sessions against several hosts at once, and
+   * the credential names its host in a claim the wrong host would reject anyway.
+   */
+  pushHostCredentialProvision(
+    hostId: string,
+    credential: {
+      readonly token: string;
+      readonly refreshToken: string;
+      readonly familyId: string;
+      readonly provisionedAt: string;
+    },
+  ): boolean {
+    if (this.disposed) {
+      return false;
+    }
+    if (this.phase !== "subscribed" || !this.supportsHostCredentialProvision) {
+      return false;
+    }
+    if (this.openFrameHostId !== hostId) {
+      return false;
+    }
+    const socket = this.activeSocket;
+    if (socket === null) {
+      return false;
+    }
+    const frame: ClientStreamHostCredentialProvisionFrame = {
+      kind: "hostCredentialProvision",
+      token: credential.token,
+      refreshToken: credential.refreshToken,
+      familyId: credential.familyId,
+      provisionedAt: credential.provisionedAt,
+    };
+    if (!this.sendControlText(socket, frame)) {
+      this.onSendFailure(socket);
+      return false;
+    }
+    return true;
+  }
+
   // ---- Internal wiring -------------------------------------------------- //
 
   private connect(): void {
@@ -745,6 +1026,7 @@ class StreamSession<
     const socket = this.config.webSocketFactory.create(dialUrl);
     this.activeSocket = socket;
     this.openFrameToken = token;
+    this.openFrameHostId = selected.hostId;
     this.phase = "dialing";
     this.pendingBinaryEnvelope = null;
 
@@ -963,6 +1245,10 @@ class StreamSession<
     this.supportsCredentialUpdate = ackParse.data.capabilities.includes(
       STREAM_CAPABILITY_CREDENTIAL_UPDATE,
     );
+    this.supportsHostCredentialProvision = ackParse.data.capabilities.includes(
+      STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
+    );
+    const hostCredentialState = ackParse.data.hostCredentialState;
 
     const myManifest = buildStreamManifest(this.config.registry);
     const theirManifest = ackParse.data.manifest;
@@ -1045,6 +1331,17 @@ class StreamSession<
       this.currentBearerToken() !== this.openFrameToken
     ) {
       this.pushCredentialUpdate();
+    }
+    // Reported last, once the connection can actually carry a provision frame:
+    // the owning client may respond to this synchronously by flushing a
+    // credential minted on an earlier, now-dead socket.
+    const hostId = this.openFrameHostId;
+    if (
+      this.supportsHostCredentialProvision &&
+      hostCredentialState !== null &&
+      hostId !== null
+    ) {
+      this.config.onHostCredentialAck(hostId, hostCredentialState);
     }
   }
 
@@ -1322,7 +1619,9 @@ class StreamSession<
     }
     this.activeSocket = null;
     this.openFrameToken = null;
+    this.openFrameHostId = null;
     this.supportsCredentialUpdate = false;
+    this.supportsHostCredentialProvision = false;
     this.phase = "idle";
     this.pendingBinaryEnvelope = null;
     this.transitionTo("reconnecting", null);
@@ -1373,6 +1672,7 @@ class StreamSession<
     const socket = this.activeSocket;
     this.activeSocket = null;
     this.openFrameToken = null;
+    this.openFrameHostId = null;
     this.pendingBinaryEnvelope = null;
     if (socket === null) {
       return;
@@ -1394,7 +1694,8 @@ class StreamSession<
       | ClientStreamOpenFrame
       | ClientStreamSubscribeFrame
       | ClientStreamFatalErrorFrame
-      | ClientStreamCredentialUpdateFrame,
+      | ClientStreamCredentialUpdateFrame
+      | ClientStreamHostCredentialProvisionFrame,
   ): boolean {
     try {
       socket.send(JSON.stringify(frame));

@@ -10,6 +10,7 @@ import type {
 } from "./tile-tree";
 import {
   TILE_KIND_BLANK,
+  TILE_KIND_COMM_GRAPH,
   TILE_KIND_GIT_DIFF,
   TILE_KIND_SNAPSHOT_DIFF,
 } from "./tile-kinds";
@@ -249,6 +250,45 @@ export interface SnapshotDiffTileRef {
 }
 
 /**
+ * Persisted view state of a comm-graph tile: the canvas viewport ONLY.
+ *
+ * Node positions are deliberately NOT persisted - the graph is auto-laid-out
+ * from the epic's live agent set on every data change, so a stored position
+ * would go stale the moment an agent is created, archived, or reparented.
+ * Zoom/pan is the user's own framing of that layout and is worth keeping.
+ */
+export interface CommGraphTileViewState {
+  readonly x: number;
+  readonly y: number;
+  readonly zoom: number;
+}
+
+/**
+ * The per-epic communication graph tile.
+ *
+ * Non-record-backed (there is no Y.Doc artifact behind it) with a COMPUTED,
+ * epic-scoped id, following the `git-diff` precedent: reopening the graph for
+ * the same epic dedups onto the same tile rather than stacking duplicates.
+ *
+ * NO HOST BINDING. Every other tile kind is bound to one `hostId` for life
+ * because its content lives on exactly one host. The communication graph is the
+ * exception: an epic's agents can live on several hosts, each holding its own
+ * disjoint slice of the event log, so the tile opens one subscription PER host
+ * and merges them. `hostId` is therefore the same inert placeholder the blank
+ * tile carries (the field is structural - `renderTile` wraps every tile in a
+ * `TabHostProvider`) and the tile body must never read `useTabHostId()`.
+ */
+export interface CommGraphTileRef {
+  readonly id: string;
+  readonly instanceId: string;
+  readonly type: typeof TILE_KIND_COMM_GRAPH;
+  readonly name: string;
+  readonly hostId: string;
+  readonly epicId: string;
+  readonly view: CommGraphTileViewState;
+}
+
+/**
  * A blank tab. A real strip tab (titled "New tab", closable) whose body renders
  * the inline opener; picking content replaces it in place. `hostId` is a
  * placeholder - the opener binds the real default host at create time, and
@@ -263,12 +303,22 @@ export interface BlankTileRef {
 }
 
 export type EpicCanvasTileRef =
-  EpicNodeRef | GitDiffTileRef | SnapshotDiffTileRef | BlankTileRef;
+  | EpicNodeRef
+  | GitDiffTileRef
+  | SnapshotDiffTileRef
+  | CommGraphTileRef
+  | BlankTileRef;
 
 export function isBlankTileRef(
   value: EpicCanvasTileRef,
 ): value is BlankTileRef {
   return value.type === TILE_KIND_BLANK;
+}
+
+export function isCommGraphTileRef(
+  value: EpicCanvasTileRef,
+): value is CommGraphTileRef {
+  return value.type === TILE_KIND_COMM_GRAPH;
 }
 
 export function isGitDiffTileRef(

@@ -77,3 +77,26 @@ export class MutableBearerLease implements BearerLease {
     this.token = token;
   }
 }
+
+/**
+ * Reads a lease's current bearer, mapping the "no bearer" throw
+ * (`CredentialLeaseReleasedError`, raised on an empty token) to `null` so
+ * callers can treat it as "signed out, nothing to do".
+ *
+ * Lives here rather than in either command that needs it: `monitor` and
+ * `worktree-delete` both feed this into the CLI's host-credential mint flow,
+ * and two copies of a fail-closed auth predicate are exactly the thing that
+ * drifts. Only the signed-out signal maps to `null`; any other lease failure is
+ * a real bug and is rethrown rather than being masked as a benign signed-out
+ * state.
+ */
+export function readLeaseBearer(lease: BearerLease): string | null {
+  try {
+    return lease.getBearerToken();
+  } catch (cause) {
+    if (cause instanceof CredentialLeaseReleasedError) {
+      return null;
+    }
+    throw cause;
+  }
+}

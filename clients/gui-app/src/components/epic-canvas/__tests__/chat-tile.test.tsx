@@ -135,6 +135,9 @@ import { ChatTile } from "@/components/epic-canvas/renderers/chat-tile";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import { scopedChatOpenId } from "@/stores/chats/open-store-scope";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
@@ -477,6 +480,20 @@ function hostUserMessage(): Message {
     },
     timestamp: 1,
     sessionAnchor: null,
+  };
+}
+
+const DELIVERED_A2A_MESSAGE_ID = "message-delivered-a2a";
+
+/**
+ * The shape a communication-graph `gui_message` origin ref points at: an A2A
+ * message delivered into the RECEIVING chat, which lands as a user row.
+ */
+function deliveredA2aUserMessage(): Message {
+  return {
+    ...hostUserMessage(),
+    messageId: DELIVERED_A2A_MESSAGE_ID,
+    timestamp: 5,
   };
 }
 
@@ -834,6 +851,7 @@ describe("<ChatTile />", () => {
     cleanup();
     vi.restoreAllMocks();
     resetFocusedComposerControlsForTests();
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
     harness.teardown();
     chatHarness.teardown();
     useInitialChatHandoffStore.getState().resetForTests();
@@ -2580,6 +2598,145 @@ describe("<ChatTile />", () => {
     expect(screen.getByTestId("composer-editor").textContent).toBe(
       "pending message",
     );
+  });
+
+  /**
+   * Cross-tile transcript jumps (the communication-graph timeline parks one,
+   * this tile performs it).
+   *
+   * The load-bearing case is a WARM tile: the graph stream and the chat stream
+   * are independent, so the timeline routinely exposes a row before this tile's
+   * own transcript has it. Consuming the request then would burn it - the
+   * transcript marks the request handled and only afterwards finds it has no
+   * index entry - and the row would arrive with nothing left parked.
+   */
+  it("holds a parked transcript jump until its target message streams in", async () => {
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
+        kind: "message",
+        // A2A rows anchor on the DELIVERED message, which reaches the receiving
+        // chat as a user row - and user rows are the ones keyed by `messageId`.
+        messageId: DELIVERED_A2A_MESSAGE_ID,
+      });
+    });
+
+    // Warm tile, target absent: the request must SURVIVE, not be swallowed.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ARTIFACT.id],
+    ).not.toBeUndefined();
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), deliveredA2aUserMessage()],
+        activeTurn: null,
+      });
+    });
+
+    await waitFor(() => {
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          CHAT_ARTIFACT.id
+        ],
+      ).toBeUndefined();
+    });
+  });
+
+  it("expands the target card once a parked block jump resolves", async () => {
+    useToolOpenStore.getState().reset(CHAT_ARTIFACT.instanceId);
+    renderChatTile();
+    await waitForChatTileLoaded();
+
+    act(() => {
+      useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
+        kind: "block",
+        blockId: "next-steps-block",
+      });
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Nothing opened yet - the block's message has not arrived.
+    expect(
+      useToolOpenStore
+        .getState()
+        .openIds.has(
+          scopedChatOpenId(CHAT_ARTIFACT.instanceId, "next-steps-block"),
+        ),
+    ).toBe(false);
+
+    act(() => {
+      emitChatSnapshotWithMessages({
+        callbacks: chatHarness.callbacks(),
+        access: "owner",
+        queueItems: [],
+        settings: SESSION_SETTINGS,
+        messages: [hostUserMessage(), nextStepsAssistantMessage()],
+        activeTurn: null,
+      });
+    });
+
+    // The scroll path ran: landing on a card expands it.
+    await waitFor(() => {
+      expect(
+        useToolOpenStore
+          .getState()
+          .openIds.has(
+            scopedChatOpenId(CHAT_ARTIFACT.instanceId, "next-steps-block"),
+          ),
+      ).toBe(true);
+    });
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[CHAT_ARTIFACT.id],
+    ).toBeUndefined();
+  });
+
+  it("drops a parked jump quietly when its target never arrives", async () => {
+    // `shouldAdvanceTime` keeps every other timer in the tile running on the
+    // real clock; only the jump's TTL is fast-forwarded.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderChatTile();
+      await waitForChatTileLoaded();
+
+      act(() => {
+        useChatTranscriptJumpStore.getState().requestJump(CHAT_ARTIFACT.id, {
+          kind: "message",
+          messageId: "message-that-never-arrives",
+        });
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          CHAT_ARTIFACT.id
+        ],
+      ).not.toBeUndefined();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+
+      // Cleared, with no error surfaced: the tile is open on the right agent,
+      // which is the degrade this feature already accepts for anchor-less rows.
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[
+          CHAT_ARTIFACT.id
+        ],
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`

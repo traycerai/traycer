@@ -4,7 +4,9 @@ import {
   clientStreamOpenFrameSchema,
   hostStreamOpenAckFrameSchema,
   clientStreamCredentialUpdateFrameSchema,
+  clientStreamHostCredentialProvisionFrameSchema,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
+  STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
 } from "@traycer/protocol/framework/stream-ws-protocol";
 
 /**
@@ -98,6 +100,33 @@ describe("stream-ws-protocol cross-version compatibility", () => {
         expect("capabilities" in parsed.data).toBe(false);
       }
     });
+
+    it("defaults hostCredentialState to null when an older host omits it", () => {
+      // Pre-delegated-credential hosts send neither the capability nor the
+      // state field. null means "did not report" — never trigger a mint.
+      const parsed = hostStreamOpenAckFrameSchema.safeParse({
+        kind: "openAck",
+        manifest,
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.hostCredentialState).toBe(null);
+        expect(parsed.data.capabilities).toEqual([]);
+      }
+    });
+
+    it("preserves an explicit hostCredentialState when present", () => {
+      const parsed = hostStreamOpenAckFrameSchema.safeParse({
+        kind: "openAck",
+        manifest,
+        capabilities: [STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION],
+        hostCredentialState: "missing",
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.hostCredentialState).toBe("missing");
+      }
+    });
   });
 
   describe("clientStreamCredentialUpdateFrame (client -> host)", () => {
@@ -127,5 +156,116 @@ describe("stream-ws-protocol cross-version compatibility", () => {
   it("pins the wire value of the credentialUpdate capability tag", () => {
     // This string is on the wire; changing it silently breaks negotiation.
     expect(STREAM_CAPABILITY_CREDENTIAL_UPDATE).toBe("credentialUpdate");
+  });
+
+  it("pins the wire value of the hostCredentialProvision capability tag", () => {
+    expect(STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION).toBe(
+      "hostCredentialProvision",
+    );
+  });
+
+  describe("clientStreamHostCredentialProvisionFrame (client -> host)", () => {
+    const validFrame = {
+      kind: "hostCredentialProvision" as const,
+      token: "host-access-jws",
+      refreshToken: "host-refresh-jwe",
+      familyId: "family-host-1",
+      provisionedAt: "2026-07-08T12:00:00.123Z",
+    };
+
+    it("accepts a valid provision frame including the adoption tuple", () => {
+      const parsed =
+        clientStreamHostCredentialProvisionFrameSchema.safeParse(validFrame);
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.familyId).toBe("family-host-1");
+        expect(parsed.data.provisionedAt).toBe("2026-07-08T12:00:00.123Z");
+      }
+    });
+
+    it("rejects empty token, refreshToken, or familyId", () => {
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          token: "",
+        }).success,
+      ).toBe(false);
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          refreshToken: "",
+        }).success,
+      ).toBe(false);
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          familyId: "",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("rejects an unparseable provisionedAt (phase-3 adoption must not see NaN)", () => {
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          provisionedAt: "not-a-timestamp",
+        }).success,
+      ).toBe(false);
+    });
+
+    // `Date.parse` accepts all four of the following, so a permissive
+    // `refine(!Number.isNaN(Date.parse(value)))` schema would let them
+    // through. `isoMillisecondTimestampSchema` requires an offset and
+    // millisecond precision instead, so this is what actually pins the
+    // tightening rather than re-testing what the old schema already rejected.
+    it("rejects date-only, human-readable, and non-millisecond-precision provisionedAt", () => {
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          provisionedAt: "2026-07-08",
+        }).success,
+      ).toBe(false);
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          provisionedAt: "Tue, 08 Jul 2026 12:00:00 GMT",
+        }).success,
+      ).toBe(false);
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          provisionedAt: "2026-07-08T12:00:00.123456Z",
+        }).success,
+      ).toBe(false);
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse({
+          ...validFrame,
+          provisionedAt: "2026-07-08T12:00:00Z",
+        }).success,
+      ).toBe(false);
+    });
+
+    it("accepts the canonical toISOString() millisecond-precision form", () => {
+      const parsed = clientStreamHostCredentialProvisionFrameSchema.safeParse({
+        ...validFrame,
+        provisionedAt: new Date("2026-07-08T12:00:00.123Z").toISOString(),
+      });
+      expect(parsed.success).toBe(true);
+    });
+
+    it("rejects a frame missing familyId or provisionedAt", () => {
+      const { familyId: _f, ...withoutFamily } = validFrame;
+      void _f;
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse(withoutFamily)
+          .success,
+      ).toBe(false);
+      const { provisionedAt: _p, ...withoutAt } = validFrame;
+      void _p;
+      expect(
+        clientStreamHostCredentialProvisionFrameSchema.safeParse(withoutAt)
+          .success,
+      ).toBe(false);
+    });
   });
 });

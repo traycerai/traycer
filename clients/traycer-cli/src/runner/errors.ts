@@ -66,6 +66,11 @@ export const CLI_ERROR_CODES = {
   HOST_SOURCE_MISSING: "E_HOST_SOURCE_MISSING",
   HOST_ALREADY_RUNNING: "E_HOST_ALREADY_RUNNING",
   HOST_UPDATE_NOT_NEWER: "E_HOST_UPDATE_NOT_NEWER",
+  // The selected host version declares a `requiredCliVersion` this CLI does
+  // not meet (or one it cannot parse). Distinct from HOST_INCOMPATIBLE, which
+  // is a RUNNING host answering a handshake: this fires before anything is
+  // downloaded, and the remedy is to update Traycer rather than the host.
+  HOST_CLIENT_FLOOR_UNMET: "E_HOST_CLIENT_FLOOR_UNMET",
   REGISTRY_UNAVAILABLE: "E_REGISTRY_UNAVAILABLE",
   REGISTRY_VERSION_NOT_FOUND: "E_REGISTRY_VERSION_NOT_FOUND",
   REGISTRY_NOT_IMPLEMENTED: "E_REGISTRY_NOT_IMPLEMENTED",

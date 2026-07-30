@@ -1709,6 +1709,62 @@ describe("ChatMessages scroll policy", () => {
   });
 
   describe("scrollRequest wiring (coverage restore)", () => {
+    it("routes row-only external jumps through navigation and highlights for three seconds", async () => {
+      const messages = makeCompletedTranscript(6);
+      const target = messages[2];
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-row-only",
+      });
+      await settleLegendList();
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        rerenderWith({
+          scrollRequest: {
+            messageId: target.id,
+            blockId: null,
+            requestId: 41,
+          },
+        });
+
+        const targetRow = document.querySelector<HTMLElement>(
+          `[data-message-id="${target.id}"]`,
+        );
+        expect(targetRow?.dataset.navigationHighlighted).toBe("true");
+        expect(activityGroupOpenIds.setOpenCalls).toHaveLength(0);
+        // The request shares navigateToMessage's suppression/settle choke
+        // point rather than creating an external raw-scroll side channel.
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+        act(() => {
+          vi.advanceTimersByTime(2_999);
+        });
+        expect(targetRow?.dataset.navigationHighlighted).toBe("true");
+
+        act(() => {
+          vi.advanceTimersByTime(1);
+        });
+        expect(targetRow?.dataset.navigationHighlighted).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not highlight an in-tile minimap navigation", async () => {
+      renderChatMessages({
+        messages: makeCompletedTranscript(6),
+        scrollStateKey: "scroll-req-minimap-no-highlight",
+      });
+      await settleLegendList();
+
+      await selectLastChatTurnMinimapItem();
+
+      expect(
+        document.querySelector("[data-navigation-highlighted]"),
+      ).toBeNull();
+    });
+
     it("opens the owning activity group and navigates once per requestId", async () => {
       const commandId = "cmd-block-1";
       const assistant = {
