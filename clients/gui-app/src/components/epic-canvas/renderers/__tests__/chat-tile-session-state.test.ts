@@ -35,12 +35,14 @@ vi.mock("sonner", () => ({
 }));
 
 import {
+  canModifyChatMessages,
   chatActivityIndicator,
   chatMessageEditingForInlineEdit,
   resolvedTurnStatus,
   showRestoreResultToast,
   type InlineEditState,
 } from "../chat-tile-session-state";
+import type { PendingUserMessage } from "@/stores/chats/chat-session-store";
 
 beforeEach(() => {
   toastSuccess.mockClear();
@@ -639,5 +641,135 @@ describe("chatActivityIndicator", () => {
         turnInProgress: undefined,
       }),
     ).toBe("turn");
+  });
+});
+
+describe("canModifyChatMessages", () => {
+  const PENDING_USER_MESSAGE: PendingUserMessage = {
+    clientActionId: "action-1",
+    messageId: "message-1",
+    content: CONTENT,
+    sender: { type: "user", userId: "owner-1" },
+    settings: SETTINGS,
+    timestamp: 0,
+  };
+
+  function gateState(
+    overrides: Partial<Parameters<typeof canModifyChatMessages>[0]["state"]>,
+  ): Parameters<typeof canModifyChatMessages>[0]["state"] {
+    return {
+      runStatus: "idle",
+      activeTurn: null,
+      queue: EMPTY_QUEUE,
+      backgroundItems: undefined,
+      turnInProgress: undefined,
+      pendingUserMessages: [],
+      pendingActions: {},
+      ...overrides,
+    };
+  }
+
+  it("allows edit/delete on a fully idle chat", () => {
+    expect(canModifyChatMessages({ canAct: true, state: gateState({}) })).toBe(
+      true,
+    );
+  });
+
+  it("denies when the viewer cannot act", () => {
+    expect(canModifyChatMessages({ canAct: false, state: gateState({}) })).toBe(
+      false,
+    );
+  });
+
+  it("denies while the host reports a turn genuinely in progress (pre-turn activating window included)", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({ runStatus: "running", turnInProgress: true }),
+      }),
+    ).toBe(false);
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({ runStatus: "stopping", turnInProgress: true }),
+      }),
+    ).toBe(false);
+  });
+
+  it("allows when runStatus is running purely because visible background work outlives the settled turn - the reported regression", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: false,
+          backgroundItems: [
+            {
+              taskId: "t1",
+              kind: "command",
+              title: "bun test",
+              blockId: "t1",
+              parentTaskId: null,
+              scheduledFor: null,
+            },
+          ],
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("older-host fallback: background-only running phase opens the gate without turnInProgress", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: undefined,
+          backgroundItems: [
+            {
+              taskId: "t1",
+              kind: "monitor",
+              title: "Monitor",
+              blockId: "t1",
+              parentTaskId: null,
+              scheduledFor: null,
+            },
+          ],
+        }),
+      }),
+    ).toBe(true);
+  });
+
+  it("older-host fallback: an unexplained running status (activating window) keeps the gate closed", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({ runStatus: "running", turnInProgress: undefined }),
+      }),
+    ).toBe(false);
+  });
+
+  it("denies while a queued item is pending, even with no turn in progress", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          runStatus: "running",
+          turnInProgress: false,
+          queue: runnableQueue(1),
+        }),
+      }),
+    ).toBe(false);
+  });
+
+  it("denies while an optimistic user message is still unconfirmed", () => {
+    expect(
+      canModifyChatMessages({
+        canAct: true,
+        state: gateState({
+          pendingUserMessages: [PENDING_USER_MESSAGE],
+        }),
+      }),
+    ).toBe(false);
   });
 });
